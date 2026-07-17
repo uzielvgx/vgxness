@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vgxness.dev/schemas/skills.schema.json",
+  "title": "VGXNESS Skills Registry",
+  "description": "Generated registry of skills available to VGXNESS managers and executors.",
+  "type": "object",
+  "required": ["schemaVersion", "version", "generatedAt", "sourceRoots", "skills"],
+  "properties": {
+    "schemaVersion": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Registry format or generation version."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the registry was generated."
+    },
+    "sourceRoots": {
+      "type": "array",
+      "description": "Skill source directories scanned to generate this registry.",
+      "items": {
+        "$ref": "common.schema.json#/$defs/skillSource"
+      },
+      "uniqueItems": true
+    },
+    "skills": {
+      "type": "array",
+      "description": "Discovered skill entries.",
+      "items": {
+        "$ref": "#/$defs/skill"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "skill": {
+      "type": "object",
+      "required": ["schemaVersion", "id", "name", "version", "source", "description", "triggers", "scope", "provenance"],
+      "properties": {
+        "schemaVersion": {
+          "$ref": "common.schema.json#/$defs/schemaVersion"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable skill identifier used by registries and agent references."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable skill name."
+        },
+        "source": {
+          "$ref": "common.schema.json#/$defs/skillSource",
+          "description": "Provider-native source resolved within an allowed scope."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short description of what the skill is for."
+        },
+        "triggers": {
+          "type": "array",
+          "description": "Phrases, domains, or conditions that should cause the manager to load this skill.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["user", "project", "runtime", "shared"],
+          "description": "Scope where this skill is intended to be used."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact skill version; version ranges are not delegation identities."
+        },
+        "provenance": {
+          "$ref": "common.schema.json#/$defs/skillProvenance"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

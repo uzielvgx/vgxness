@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vgxness.dev/schemas/execution.schema.json",
+  "title": "VGXNESS Execution Contracts",
+  "description": "Thin execution packets, bounded work, cancellation, continuity, background safety, and structured results.",
+  "oneOf": [
+    { "$ref": "#/$defs/executionPacket" },
+    { "$ref": "#/$defs/contextPacket" },
+    { "$ref": "#/$defs/continuityCapsule" },
+    { "$ref": "#/$defs/backgroundTask" },
+    { "$ref": "#/$defs/loopControl" },
+    { "$ref": "#/$defs/cancellation" },
+    { "$ref": "#/$defs/agentResult" }
+  ],
+  "$defs": {
+    "exactSkillReference": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "id", "version", "source", "provenance"],
+      "properties": {
+        "kind": { "const": "skill.reference" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "version": { "type": "string", "minLength": 1 },
+        "source": { "$ref": "common.schema.json#/$defs/skillSource" },
+        "provenance": { "$ref": "common.schema.json#/$defs/skillProvenance" }
+      },
+      "additionalProperties": false
+    },
+    "executionPolicy": {
+      "type": "object",
+      "required": ["foregroundSequential", "mayRunBackground", "backgroundReadOnly", "mayDelegate"],
+      "properties": {
+        "foregroundSequential": { "const": true },
+        "mayRunBackground": { "type": "boolean" },
+        "backgroundReadOnly": { "const": true },
+        "mayDelegate": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "contextPacket": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "packetId", "runId", "taskId", "phase", "goal", "scope", "inputs", "allowedPaths", "allowedTools", "artifactRefs", "skillRefs", "acceptanceCriteria", "approvalState", "returnContract"],
+      "properties": {
+        "kind": { "const": "context.packet" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "packetId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "runId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "taskId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "phase": { "type": "string", "minLength": 1 },
+        "goal": { "type": "string", "minLength": 1 },
+        "scope": {
+          "type": "object",
+          "required": ["included", "excluded"],
+          "properties": {
+            "included": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "excluded": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          },
+          "additionalProperties": false
+        },
+        "inputs": { "type": "object" },
+        "allowedPaths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "allowedTools": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/identifier" }, "uniqueItems": true },
+        "artifactRefs": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/artifactReference" } },
+        "skillRefs": { "type": "array", "items": { "$ref": "#/$defs/exactSkillReference" }, "uniqueItems": true },
+        "acceptanceCriteria": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "approvalState": { "type": "string", "enum": ["not-required", "pending", "approved", "denied"] },
+        "returnContract": { "const": "https://vgxness.dev/schemas/execution.schema.json#/$defs/agentResult" }
+      },
+      "additionalProperties": false
+    },
+    "loopControl": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "loopId", "loopType", "maxIterations", "currentIteration", "terminal"],
+      "properties": {
+        "kind": { "const": "loop.control" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "loopId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "loopType": { "type": "string", "enum": ["retry", "clarification", "routing", "agent"] },
+        "maxIterations": { "type": "integer", "minimum": 1 },
+        "currentIteration": { "type": "integer", "minimum": 0 },
+        "deadline": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "terminal": { "type": "boolean" },
+        "terminalReason": { "type": "string", "enum": ["completed", "blocked", "failed", "cancelled", "budget_exhausted", "deadline_exceeded"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "terminal": { "const": true } }, "required": ["terminal"] },
+          "then": { "required": ["terminalReason"] },
+          "else": { "not": { "required": ["terminalReason"] } }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "backgroundTask": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "taskId", "runId", "managerAgentId", "readOnly", "mayDelegate", "mayAdvanceRun", "status", "cancellationId", "createdAt"],
+      "properties": {
+        "kind": { "const": "background.task" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "taskId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "runId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "managerAgentId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "readOnly": { "const": true },
+        "mayDelegate": { "const": false },
+        "mayAdvanceRun": { "const": false },
+        "status": { "type": "string", "enum": ["queued", "running", "completed", "failed", "cancelled"] },
+        "cancellationId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "contextPacketId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "resultId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "startedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "finishedAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      },
+      "additionalProperties": false
+    },
+    "cancellation": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "cancellationId", "targetKind", "targetId", "status", "requestedAt"],
+      "properties": {
+        "kind": { "const": "execution.cancellation" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "cancellationId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "targetKind": { "type": "string", "enum": ["run", "task", "background-task"] },
+        "targetId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "status": { "type": "string", "enum": ["requested", "accepted", "completed", "rejected"] },
+        "requestedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "completedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "resultError": {
+      "type": "object",
+      "required": ["code", "message", "recoverable"],
+      "properties": {
+        "code": { "$ref": "common.schema.json#/$defs/identifier" },
+        "message": { "type": "string", "minLength": 1 },
+        "recoverable": { "type": "boolean" },
+        "schemaUri": { "type": "string", "minLength": 1 },
+        "pointer": { "type": "string" },
+        "details": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "agentResult": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "resultId", "taskId", "agentId", "status", "summary", "artifacts", "nextRecommended", "risks", "errors"],
+      "properties": {
+        "kind": { "const": "agent.result" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "resultId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "taskId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "agentId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "status": { "type": "string", "enum": ["success", "blocked", "failed", "needs_followup", "unsupported"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "artifacts": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/artifactReference" } },
+        "nextRecommended": { "type": "string", "minLength": 1 },
+        "risks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "errors": { "type": "array", "items": { "$ref": "#/$defs/resultError" } }
+      },
+      "additionalProperties": false
+    },
+    "continuityCapsule": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "capsuleId", "runId", "stateVersion", "status", "decisionIds", "taskStates", "artifactRefs", "nextActions", "provenance"],
+      "properties": {
+        "kind": { "const": "continuity.capsule" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "capsuleId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "runId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "stateVersion": { "type": "integer", "minimum": 1 },
+        "status": { "type": "string", "enum": ["active", "blocked", "paused", "terminal"] },
+        "decisionIds": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/identifier" }, "uniqueItems": true },
+        "taskStates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["taskId", "status"],
+            "properties": {
+              "taskId": { "$ref": "common.schema.json#/$defs/identifier" },
+              "status": { "type": "string", "enum": ["pending", "running", "blocked", "completed", "failed", "cancelled"] },
+              "resultId": { "$ref": "common.schema.json#/$defs/identifier" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "artifactRefs": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/artifactReference" } },
+        "nextActions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "provenance": { "$ref": "common.schema.json#/$defs/provenance" }
+      },
+      "additionalProperties": false
+    },
+    "executionPacket": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "executionId", "selectionId", "decisionId", "context", "loop", "languagePolicy"],
+      "properties": {
+        "kind": { "const": "execution.packet" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "executionId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "selectionId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "decisionId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "context": { "$ref": "#/$defs/contextPacket" },
+        "loop": { "$ref": "#/$defs/loopControl" },
+        "languagePolicy": { "$ref": "common.schema.json#/$defs/languagePolicy" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
