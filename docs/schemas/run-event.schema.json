@@ -208,7 +208,7 @@
     },
     "memoryWriteRef": {
       "type": "object",
-      "required": ["id", "backend"],
+      "required": ["id", "backend", "provenance"],
       "properties": {
         "id": {
           "type": "string",
@@ -216,7 +216,7 @@
         },
         "backend": {
           "type": "string",
-          "minLength": 1
+          "const": "memory"
         },
         "topicKey": {
           "type": "string",
@@ -225,7 +225,8 @@
         "type": {
           "type": "string",
           "minLength": 1
-        }
+        },
+        "provenance": { "$ref": "common.schema.json#/$defs/provenance" }
       },
       "additionalProperties": false
     },
