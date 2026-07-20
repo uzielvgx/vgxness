@@ -1,17 +1,21 @@
 # VGXNESS Go Implementation Architecture
 
+**Planned:** This document owns future Go package, interface, dependency, and testing boundaries. The [VGXNESS Product Blueprint](product-blueprint.md) is the canonical product vision, taxonomy, status, and roadmap; no Go implementation is present in this repository today.
+
 VGXNESS is designed as a small, explicit Go control plane for adaptive agent orchestration. It will ship as a globally installed system on the user's machine. Go fits because the system needs a dependable local binary, readable storage, auditable workflow state, and testable package boundaries more than a framework-heavy stack.
 
 OpenCode is the first preferred runtime adapter. At run start, a provider-neutral selector compares declared capabilities, versions, constraints, and policy; OpenCode is used only when eligible. The same thin boundary permits future Hermes, Claude, Codex, and other adapters without changing core contracts.
 
-This document defines future package and interface boundaries only. The adaptive-contract change adds no Go source, provider execution, configuration mutation, or runtime migration branch.
+Capability names such as Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger belong to the canonical product taxonomy. Names such as explore, design, apply, and verify describe SDD phase-agent operating modes that use those capabilities; they are not additional product capabilities.
+
+This document defines future package and interface boundaries only. The current documentation/schema repository adds no Go source, provider execution, configuration mutation, or runtime migration branch.
 
 ## Quick path
 
 1. Build and globally install a single `vgxness` binary from `cmd/vgxness`.
 2. Keep orchestration, run storage, memory, provider, skill, and permission logic in focused `internal/` packages.
 3. Persist operational truth as JSON snapshots plus JSONL events first.
-4. Use Engram for initial semantic memory behind a replaceable memory-store interface.
+4. Build the initial owned semantic `MemoryStore` incrementally on SQLite/FTS5; keep Engram behind an optional compatibility/import/reference adapter.
 5. Make a keyboard-first OpenCode setup wizard the primary installation experience while keeping it separate from normal runtime logic.
 6. Keep terminal interfaces as adapters over readable files and application services.
 7. Keep foreground run advancement sequential; permit only manager-owned, read-only background tasks.
@@ -32,10 +36,10 @@ This document defines future package and interface boundaries only. The adaptive
 - No clever framework-heavy architecture. VGXNESS should be boring, inspectable Go.
 - No hidden global mutable state. Dependencies should be passed through constructors or explicit wiring.
 - No prompt behavior hardcoded into random packages. Prompt contracts belong in agent, skill, provider, or orchestration boundaries where they can be reviewed.
-- No database-first design for v1. Start with readable files; add SQLite only if the file model becomes insufficient.
+- No database replacement for operational truth. Chronicle starts with readable JSON/JSONL files; SQLite/FTS5 is intentionally limited to the initial semantic `MemoryStore`.
 - No CLI lock-in. Users and recovery flows should still understand the state by reading files.
 - No TUI-owned business logic. Setup screens render state and collect decisions; installation, memory, and orchestration remain independent services.
-- No Engram coupling in orchestration contracts. Engram is the initial adapter and will be replaced by VGXNESS's own persistence and memory system later.
+- No Engram coupling in orchestration contracts. VGXNESS-owned memory is authoritative; Engram is an optional compatibility/import/reference adapter.
 - No provider execution, runtime configuration mutation, nested delegation, or owned memory implementation in the schema/documentation phase.
 
 ## Proposed package layout
@@ -64,7 +68,7 @@ internal/tui
 | `internal/app` | Composition root. Wire config, stores, providers, orchestrator, validation, and CLI commands. |
 | `internal/config` | Load defaults, user config, project config, environment overrides, and storage-root settings. |
 | `internal/runstore` | Own operational truth: current run, run snapshots, JSONL events, artifact references, checkpoints, and recovery reads. |
-| `internal/memory` | Define the replaceable semantic-memory contract and adapters. The initial adapter uses Engram; later adapters can use VGXNESS-owned persistence without changing consumers. |
+| `internal/memory` | Define semantic-memory contracts, the owned SQLite/FTS5 implementation, lifecycle and retrieval policy, plus optional compatibility/import/reference adapters such as Engram. |
 | `internal/agents` | Define agent manifests, subagent contracts, result envelopes, capability metadata, and prompt contract references. |
 | `internal/orchestrator` | Coordinate phases, context packets, delegation decisions, approval gates, and final summaries. |
 | `internal/skills` | Resolve skills by explicit path, registry entry, trigger, and scoped fallback. Avoid paraphrasing skill contracts. |
@@ -95,7 +99,7 @@ Keep dependencies pointed toward stable contracts, not convenience shortcuts.
 
 ## Storage choices
 
-Start with readable local files:
+Keep Chronicle operational truth in readable local files:
 
 - `current-run.json` for the active run pointer and current phase.
 - `runs/<run-id>.json` for the full run snapshot.
@@ -103,7 +107,7 @@ Start with readable local files:
 - `artifacts/<change-id>/...` for generated SDD or workflow artifacts when file storage is selected.
 - `registry/skills.json` and `registry/agents.json` for generated registries.
 
-Use JSON snapshots plus JSONL events first because they are easy to inspect, diff, validate, back up, and recover after interruption. SQLite can be added later only if queries, concurrency, or file-size pressure become real problems. If SQLite is added, keep the JSON/JSONL export or readback story so the CLI remains convenience, not lock-in.
+Use JSON snapshots plus JSONL events for Chronicle because they are easy to inspect, diff, validate, back up, and recover after interruption. Separately, introduce SQLite/FTS5 in the initial foundation for owned semantic records and deterministic lexical retrieval. The two stores may cross-reference IDs, but semantic memory never resolves operational state; Chronicle receipts and events control when authorities disagree.
 
 ## Interfaces
 
@@ -142,7 +146,7 @@ If a caller only needs `AppendEvent`, define an even smaller interface in that c
 
 The orchestrator consumes these small interfaces. Provider selection records the neutral provider reference and capability evidence, never mutable provider configuration. `ContractValidator` returns `contract.invalid` details with schema URI and JSON Pointer before delegation or state mutation.
 
-The first `MemoryStore` implementation delegates to Engram. Engram-specific identifiers, request types, and lifecycle behavior must be translated inside that adapter rather than exposed through orchestrator or agent contracts. Memory artifacts use immutable provider/id references and do not require filesystem paths.
+The first `MemoryStore` implementation is VGXNESS-owned and SQLite/FTS5-first. It stores durable decisions, preferences, conventions, discoveries, bug causes, constraints, approval rationale, lessons, summaries, continuity capsules, and artifact references with provenance and lifecycle state. Engram-specific IDs and lifecycle behavior are translated only inside the optional adapter and never exposed as core authority.
 
 ## Adaptive execution boundaries
 
@@ -215,7 +219,7 @@ Build the smallest useful product slice:
 3. Detect OpenCode, back up its existing configuration, project VGXNESS through the OpenCode adapter, report progress, read the result back for validation, and expose actionable retry, repair, or rollback recovery.
 4. Add `internal/config` storage-root resolution for project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/`.
 5. Add `internal/runstore` support for `current-run.json`, `runs/<run-id>.json`, and `logs/<run-id>.jsonl` using the existing schemas.
-6. Add Engram as the initial `MemoryStore` adapter for semantic save, search, and session summaries.
+6. Add the owned SQLite/FTS5 `MemoryStore` for semantic save, filtered search, lifecycle state, and session summaries; add Engram only as an optional compatibility/import/reference adapter.
 7. Add `internal/validation` readback checks and minimal `status`, `run inspect <run-id>`, and `doctor` commands.
 
-The first version does not include a graphical installer, multi-user sync, distributed scheduling, autonomous destructive actions, VGXNESS's eventual proprietary memory engine, or runtime adapters beyond OpenCode. Its orchestration, installation services, run-store, memory, and permission contracts must already permit additional runtimes and replacement of Engram without changing core contracts.
+The first version does not include a graphical installer, multi-user sync, distributed scheduling, autonomous destructive actions, advanced embedding infrastructure, or runtime adapters beyond OpenCode. Its orchestration, installation, Chronicle, memory, adapter, and permission contracts must permit later runtimes and optional Engram interoperability without changing core authority.

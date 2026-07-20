@@ -1,6 +1,12 @@
 # VGXNESS Orchestration Flow
 
-VGXNESS coordinates work through a configurable, provider-neutral orchestrator and scoped agents. The selected manager owns intent, routing, safety, and summaries; agents execute inside narrow boundaries and return structured results. OpenCode is the first preferred adapter, not a core dependency. The run store is operational truth, while replaceable semantic memory records only what should matter later.
+**Planned:** This document owns the future request lifecycle, gates, phase operating modes, and recovery flow. The [VGXNESS Product Blueprint](product-blueprint.md) is the canonical product vision, taxonomy, status, and roadmap; no orchestration runtime is present today.
+
+VGXNESS coordinates work through a configurable, provider-neutral orchestrator and scoped agents. The selected manager owns intent, routing, safety, and summaries; agents execute inside narrow boundaries and return structured results. OpenCode is the first preferred runtime adapter, not a core dependency. Chronicle is operational truth, while the VGXNESS-owned SQLite/FTS5 `MemoryStore` is semantic authority for durable meaning; Engram is an optional compatibility/import/reference adapter.
+
+Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger are product capabilities; Registry, Chronicle, and Gatekeeper are deterministic services. The explore, propose, spec, design, tasks, apply, verify, archive, fix, and recovery agents described here are operating modes that use those capabilities, not a competing capability taxonomy.
+
+In this workflow, “manager” or “orchestrator” denotes Navigator's coordinating context; it is not an additional product capability.
 
 ## Quick path
 
@@ -29,7 +35,7 @@ Normal flow should stay quiet. Inspection commands such as `vgxness status`, `vg
 | Subagent role | Scoped executor or reviewer. It should do the assigned work and return structured results. |
 | Subagent nesting | No subagent should silently create another subagent in v1. The manager owns delegation. |
 | Operational truth | The run store records phases, events, artifacts, checkpoints, failures, and validation. |
-| Semantic truth | Engram initially records durable decisions, discoveries, summaries, bug fixes, and preferences behind a replaceable memory-store interface. |
+| Semantic authority | The owned `MemoryStore` records durable decisions, preferences, conventions, discoveries, bug causes, constraints, approval rationale, lessons, summaries, capsules, and artifact references. Engram may import or reference compatible records but does not control authority. |
 | Recovery source | Readable files remain the recovery source. The CLI/binary is convenience, not lock-in. |
 | User experience | Happy path is quiet. Detailed inspection is available on demand. |
 | Provider selection | Compare run needs with declared capabilities, versions, constraints, and policy; fail closed before execution. |
@@ -54,11 +60,15 @@ The selection record is immutable evidence. Provider-native configuration and mu
 
 Routing classifies difficulty and risk, records candidate agents, chooses the smallest capable agent, and explains why. SDD is `required`, `skipped`, or `overridden` by policy—not automatically invoked for every request. Overrides include the approving identity and reason.
 
+The classifier route `plan` produces a bounded approach when implementation is not authorized or full SDD is unnecessary. It is distinct from the SDD `tasks` operating mode, which converts approved requirements and design into implementation work units. A planning route must not be reported as an approved tasks artifact.
+
 SDD preflight modes are deterministic:
+
+Current contract backend tokens are `engram`, `openspec`, `hybrid`, and `none`; they cannot cleanly represent the planned owned-memory default. The planned migration adds a provider-neutral/configured `memory` token. Required SDD backed by the owned `MemoryStore` cannot ship until that migration occurs; `engram` remains transitional and identifies only the optional Engram compatibility/import adapter.
 
 | Mode | Backend behavior | Failure behavior |
 | --- | --- | --- |
-| `required` | Use the configured `engram`, `openspec`, or `hybrid` backend. | Block with a recoverable structured error. |
+| `required` | Current: use configured `engram`, `openspec`, or `hybrid`; do not label owned memory as `engram`. Planned after migration: resolve `memory` through the configured `MemoryStore`. | Block with a recoverable structured error, including while required owned-memory SDD lacks the migrated schema token. |
 | `auto` | Check the configured backend only when routing selects SDD. | Record an explicit fallback decision. |
 | `off` | Use backend `none` and perform no artifact access. | Continue without SDD artifacts. |
 
@@ -125,7 +135,7 @@ Subagents are hidden by default and purpose-built. They should advertise capabil
 
 | Subagent type | Purpose | Typical output |
 | --- | --- | --- |
-| Capability agents | Execute a workflow phase such as explore, propose, spec, design, plan, apply, verify, or archive. | Structured phase result plus artifacts. |
+| Capability agents | Execute a workflow phase such as explore, propose, spec, design, `tasks`, apply, verify, or archive. | Structured phase result plus artifacts. The classifier's `plan` route is not a phase alias for `tasks`. |
 | Review agents | Inspect work through one review lens such as risk, reliability, resilience, or readability. | Findings, severity, evidence, and verdict. |
 | Fix agents | Apply narrowly scoped fixes after validation or review findings. | Patch summary, changed files, and retest notes. |
 | Future specialized agents | Handle domains such as iOS, Android, TypeScript, database migrations, release, or security. | Domain-specific result following the same structured envelope. |
@@ -247,7 +257,7 @@ Memory is for meaning. Run events are for operations.
 | Write target | Save here | Do not save here |
 | --- | --- | --- |
 | Run store | Phase starts/completions, artifact refs, tool-level operational status, validation results, checkpoints, failures. | Durable decisions without explanation. |
-| Semantic memory (`MemoryStore`; initially Engram) | Architecture decisions, tradeoffs, user preferences, bug root causes, non-obvious discoveries, final session summaries. | Raw command output, every event, temporary logs, repeated phase noise. |
+| Semantic memory (owned `MemoryStore`; SQLite/FTS5-first) | Decisions, tradeoffs, preferences, conventions, discoveries, bug causes, constraints, approval rationale, lessons, summaries, capsules, and artifact references. | Raw command output, every event, temporary logs, repeated phase noise, or operational state resolution. |
 
 ### Save semantic memory when
 
@@ -280,6 +290,8 @@ The manager must stop before risky actions unless the current request explicitly
 | Permission expansion | Granting a subagent broader paths, tools, network, or write access than originally scoped. |
 
 Approval should be recorded as a checkpoint with the approved action, scope, and any user-provided wording.
+
+The [canonical autonomy profiles and capability-lease contract](product-blueprint.md#autonomy-profiles) reduce repeated prompts for ordinary scoped work. They never waive the gates above. A lease is least-privilege, revocable, limited to one work unit, roots, tools, risk ceiling, and deadline, and cannot expand or renew itself.
 
 ## 10. Review and validation gates
 
