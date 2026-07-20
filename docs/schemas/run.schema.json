@@ -253,7 +253,7 @@
     },
     "memoryWrite": {
       "type": "object",
-      "required": ["id", "backend", "at"],
+      "required": ["id", "backend", "provenance", "at"],
       "properties": {
         "id": {
           "type": "string",
@@ -261,8 +261,7 @@
         },
         "backend": {
           "type": "string",
-          "minLength": 1,
-          "description": "Memory backend identifier, such as engram."
+          "const": "memory"
         },
         "topicKey": {
           "type": "string",
@@ -275,6 +274,9 @@
         "phase": {
           "type": "string",
           "minLength": 1
+        },
+        "provenance": {
+          "$ref": "common.schema.json#/$defs/provenance"
         },
         "at": {
           "$ref": "#/$defs/timestamp"

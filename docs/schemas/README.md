@@ -7,7 +7,7 @@ These Draft 2020-12 schemas define runtime-neutral orchestration, execution, reg
 | Schema | File | Stable URI | Validates |
 | --- | --- | --- | --- |
 | Common library | `common.schema.json` | `https://vgxness.dev/schemas/common.schema.json` | Provider/artifact refs, provenance, skill sources, checksums, language policy, and `contract.invalid`. |
-| Orchestration library | `orchestration.schema.json` | `https://vgxness.dev/schemas/orchestration.schema.json` | Capability selection, routing, SDD preflight, questions, and answers. |
+| Orchestration library | `orchestration.schema.json` | `https://vgxness.dev/schemas/orchestration.schema.json` | Capability selection, routing, provider-neutral memory SDD preflight, questions, and answers. |
 | Execution library | `execution.schema.json` | `https://vgxness.dev/schemas/execution.schema.json` | Packets, capsules, bounded loops, cancellation, background tasks, exact skill refs, and agent results. |
 | Current run | `current-run.schema.json` | `https://vgxness.dev/schemas/current-run.schema.json` | Lightweight active-run projection and correlated IDs. |
 | Run snapshot | `run.schema.json` | `https://vgxness.dev/schemas/run.schema.json` | Authoritative run record and composed durable contracts. |
@@ -72,6 +72,8 @@ JSON Schema proves record shape. The manager or run-store service must additiona
 ## Compatibility
 
 Canonical writers always emit provider-neutral objects with `schemaVersion: "1"`.
+
+Owned semantic-memory records use backend `memory` and retain provenance. Legacy backend `engram` is invalid for owned memory; external references may still identify Engram with `provider: "engram"`. No Engram import or compatibility adapter is implied.
 
 Readers may temporarily accept only these deprecated artifact alternatives through `common.schema.json#/$defs/artifactReferenceInput`:
 

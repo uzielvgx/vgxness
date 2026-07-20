@@ -129,7 +129,7 @@
         "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
         "preflightId": { "$ref": "common.schema.json#/$defs/identifier" },
         "mode": { "type": "string", "enum": ["auto", "required", "off"] },
-        "backend": { "type": "string", "enum": ["engram", "openspec", "hybrid", "none"] },
+        "backend": { "type": "string", "enum": ["memory", "openspec", "hybrid", "none"] },
         "status": { "type": "string", "enum": ["ready", "fallback", "blocked", "not-run"] },
         "artifactAccess": { "type": "boolean" },
         "fallbackDecision": { "type": "string", "minLength": 1 },
@@ -157,7 +157,7 @@
           "if": { "properties": { "mode": { "const": "required" } }, "required": ["mode"] },
           "then": {
             "properties": {
-              "backend": { "type": "string", "enum": ["engram", "openspec", "hybrid"] },
+              "backend": { "type": "string", "enum": ["memory", "openspec", "hybrid"] },
               "status": { "type": "string", "enum": ["ready", "blocked"] }
             },
             "not": { "required": ["fallbackDecision"] },
@@ -187,7 +187,7 @@
                 "if": { "properties": { "status": { "const": "ready" } }, "required": ["status"] },
                 "then": {
                   "properties": {
-                    "backend": { "type": "string", "enum": ["engram", "openspec", "hybrid"] },
+                    "backend": { "type": "string", "enum": ["memory", "openspec", "hybrid"] },
                     "artifactAccess": { "const": true }
                   },
                   "not": {
