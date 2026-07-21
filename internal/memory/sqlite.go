@@ -76,6 +76,32 @@ func Open(ctx context.Context, path string, now func() time.Time) (*Store, error
 	}
 	return store, nil
 }
+
+func OpenRead(ctx context.Context, path string) (*Store, error) {
+	if err := cancelled(ctx); err != nil {
+		return nil, err
+	}
+	if err := rejectSymlink(path); err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, fmt.Errorf("%w: memory storage is absent", ErrCorrupt)
+	} else if err != nil {
+		return nil, fmt.Errorf("%w: memory storage is unavailable", ErrCorrupt)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("%w: memory storage is unavailable", ErrCorrupt)
+	}
+	db.SetMaxOpenConns(1)
+	store := &Store{db: db, now: time.Now}
+	if _, err := store.Health(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
 func HealthFile(ctx context.Context, path string) (int, error) {
 	if err := cancelled(ctx); err != nil {
 		return 0, err
@@ -178,7 +204,7 @@ func (s *Store) Save(ctx context.Context, item Observation) (Observation, error)
 			if existing.Project != item.Project || existing.Scope != item.Scope {
 				return Observation{}, fmt.Errorf("%w: topic key belongs to another boundary", ErrConflict)
 			}
-			item.ID, item.CreatedAt = existing.ID, existing.CreatedAt
+			item.ID = existing.ID
 			return s.updateTx(ctx, tx, existing, item)
 		}
 	}
@@ -237,7 +263,7 @@ func (s *Store) updateTx(ctx context.Context, tx *sql.Tx, existing, item Observa
 	}
 	item.ID, item.CreatedAt, item.UpdatedAt = existing.ID, existing.CreatedAt, s.now().UTC()
 	review := nullableTime(item.ReviewAfter)
-	_, err := tx.ExecContext(ctx, `UPDATE observations SET session_id=?,type=?,content=?,topic_key=?,producer=?,source_provider=?,source_id=?,state=?,updated_at=?,review_after=? WHERE id=?`, nullable(item.Session), item.Type, item.Content, nullable(item.TopicKey), item.Provenance.Producer, item.Provenance.SourceProvider, item.Provenance.SourceID, item.State, item.UpdatedAt.UnixNano(), review, item.ID)
+	_, err := tx.ExecContext(ctx, `UPDATE observations SET title=?,session_id=?,type=?,content=?,topic_key=?,producer=?,source_provider=?,source_id=?,state=?,updated_at=?,review_after=? WHERE id=?`, item.Title, nullable(item.Session), item.Type, item.Content, nullable(item.TopicKey), item.Provenance.Producer, item.Provenance.SourceProvider, item.Provenance.SourceID, item.State, item.UpdatedAt.UnixNano(), review, item.ID)
 	if err != nil {
 		return Observation{}, conflictOrWrite(ctx, err)
 	}
@@ -282,6 +308,10 @@ func (s *Store) Search(ctx context.Context, filter Search) ([]Observation, error
 		args = append(args, filter.Scope)
 	}
 	query, args = addStrings(query, args, "o.type", filter.Types)
+	if filter.TopicKey != "" {
+		query += ` AND o.topic_key=?`
+		args = append(args, filter.TopicKey)
+	}
 	states := make([]string, len(filter.States))
 	for i, state := range filter.States {
 		states[i] = string(state)
@@ -314,6 +344,23 @@ func (s *Store) Search(ctx context.Context, filter Search) ([]Observation, error
 	}
 	return found, nil
 }
+
+func (s *Store) Get(ctx context.Context, id, project string, scope Scope) (Observation, error) {
+	if err := cancelled(ctx); err != nil {
+		return Observation{}, err
+	}
+	if id == "" || project == "" || scope != ScopeProject && scope != ScopePersonal {
+		return Observation{}, fmt.Errorf("%w: invalid get input", ErrInvalid)
+	}
+	item, found, err := loadOne(s.db.QueryRowContext(ctx, observationSelect+` WHERE o.id=? AND o.project_id=? AND o.scope=?`, id, project, scope))
+	if err != nil {
+		return Observation{}, err
+	}
+	if !found {
+		return Observation{}, fmt.Errorf("%w: observation not found", ErrNotFound)
+	}
+	return item, nil
+}
 func validateObservation(item Observation) error {
 	if item.Project == "" || item.Scope != ScopeProject && item.Scope != ScopePersonal || strings.TrimSpace(item.Type) == "" || strings.TrimSpace(item.Content) == "" || item.Provenance.Producer == "" || item.State != StateActive && item.State != StateNeedsReview && item.State != StateArchived {
 		return fmt.Errorf("%w: observation fields are invalid", ErrInvalid)
@@ -344,7 +391,7 @@ func validateReferences(ctx context.Context, tx *sql.Tx, item Observation) error
 	return nil
 }
 func insertObservation(ctx context.Context, tx *sql.Tx, item Observation) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO observations(id,project_id,session_id,scope,type,content,topic_key,producer,source_provider,source_id,state,created_at,updated_at,review_after) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, item.ID, item.Project, nullable(item.Session), item.Scope, item.Type, item.Content, nullable(item.TopicKey), item.Provenance.Producer, item.Provenance.SourceProvider, item.Provenance.SourceID, item.State, item.CreatedAt.UnixNano(), item.UpdatedAt.UnixNano(), nullableTime(item.ReviewAfter))
+	_, err := tx.ExecContext(ctx, `INSERT INTO observations(id,title,project_id,session_id,scope,type,content,topic_key,producer,source_provider,source_id,state,created_at,updated_at,review_after) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, item.ID, item.Title, item.Project, nullable(item.Session), item.Scope, item.Type, item.Content, nullable(item.TopicKey), item.Provenance.Producer, item.Provenance.SourceProvider, item.Provenance.SourceID, item.State, item.CreatedAt.UnixNano(), item.UpdatedAt.UnixNano(), nullableTime(item.ReviewAfter))
 	if err != nil {
 		return conflictOrWrite(ctx, err)
 	}
@@ -362,7 +409,7 @@ func insertReferences(ctx context.Context, tx *sql.Tx, item Observation) error {
 	return nil
 }
 
-const observationColumns = `SELECT o.id,o.project_id,COALESCE(o.session_id,''),o.scope,o.type,o.content,COALESCE(o.topic_key,''),o.producer,o.source_provider,o.source_id,o.state,o.created_at,o.updated_at,o.review_after,COALESCE((SELECT group_concat(target_id,char(31)) FROM observation_refs WHERE observation_id=o.id),'')`
+const observationColumns = `SELECT o.id,o.title,o.project_id,COALESCE(o.session_id,''),o.scope,o.type,o.content,COALESCE(o.topic_key,''),o.producer,o.source_provider,o.source_id,o.state,o.created_at,o.updated_at,o.review_after,COALESCE((SELECT group_concat(target_id,char(31)) FROM observation_refs WHERE observation_id=o.id),'')`
 const observationSelect = observationColumns + ` FROM observations o`
 
 type scanner interface{ Scan(...any) error }
@@ -382,7 +429,7 @@ func scanObservation(row scanner) (Observation, error) {
 	var created, updated int64
 	var review sql.NullInt64
 	var refs string
-	err := row.Scan(&item.ID, &item.Project, &item.Session, &item.Scope, &item.Type, &item.Content, &item.TopicKey, &item.Provenance.Producer, &item.Provenance.SourceProvider, &item.Provenance.SourceID, &item.State, &created, &updated, &review, &refs)
+	err := row.Scan(&item.ID, &item.Title, &item.Project, &item.Session, &item.Scope, &item.Type, &item.Content, &item.TopicKey, &item.Provenance.Producer, &item.Provenance.SourceProvider, &item.Provenance.SourceID, &item.State, &created, &updated, &review, &refs)
 	if err != nil {
 		return Observation{}, err
 	}

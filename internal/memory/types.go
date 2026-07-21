@@ -32,6 +32,7 @@ type Provenance struct{ Producer, SourceProvider, SourceID string }
 
 type Observation struct {
 	ID          string
+	Title       string
 	Project     string
 	Session     string
 	Scope       Scope
@@ -48,6 +49,7 @@ type Observation struct {
 
 type Search struct {
 	Query, Project string
+	TopicKey       string
 	Scope          Scope
 	Types          []string
 	States         []State
