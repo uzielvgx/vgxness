@@ -12,12 +12,15 @@ import (
 //go:embed migrations/001_memory.sql
 var schemaV1 string
 
+//go:embed migrations/002_observation_title.sql
+var schemaV2 string
+
 type migration struct {
 	version int
 	sql     string
 }
 
-var migrations = []migration{{version: 1, sql: schemaV1}}
+var migrations = []migration{{version: 1, sql: schemaV1}, {version: 2, sql: schemaV2}}
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
 	conn, err := db.Conn(ctx)

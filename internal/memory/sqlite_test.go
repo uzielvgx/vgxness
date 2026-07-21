@@ -43,12 +43,38 @@ func observation(id, project, content string) Observation {
 	return Observation{ID: id, Project: project, Scope: ScopeProject, Type: "learning", Content: content, Provenance: Provenance{Producer: "test"}, State: StateActive}
 }
 
+func TestMemoryRuntime_LiteralV1UpgradeRestartPreservesDataAndTitles(t *testing.T) {
+	const schemaV1Hash = "966bbade809fb4e68767c87e2e8aa1a96c35b0dd20f07a67108f8bb28baeb364"
+	testutil.Require(t, fmt.Sprintf("%x", sha256.Sum256([]byte(schemaV1))) == schemaV1Hash, "migration 001 changed")
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(schemaV1 + ` PRAGMA user_version=1; INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at) VALUES('old','p','project','learning','literal old token','legacy','active',1,1); INSERT INTO observations_fts(id,content) VALUES('old','literal old token');`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+
+	store := openPath(t, path)
+	titled := observation("new", "p", "new restart token")
+	titled.Title = "Durable title"
+	mustSave(t, store, titled)
+	mustSave(t, store, observation("untitled", "p", "untitled restart token"))
+	testutil.NoError(t, store.Close())
+	store = openPath(t, path)
+	defer store.Close()
+	for id, title := range map[string]string{"old": "", "new": "Durable title", "untitled": ""} {
+		got, err := store.Get(context.Background(), id, "p", ScopeProject)
+		testutil.Require(t, err == nil && got.ID == id && got.Title == title && (id != "old" || got.Content == "literal old token"), "get %s: %+v %v", id, got, err)
+	}
+	version, err := store.Health(context.Background())
+	testutil.Require(t, err == nil && version == 2, "health=%d %v", version, err)
+}
+
 func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	store := openPath(t, path)
 	mustSave(t, store, observation("obs-1", "project-a", "restart token"))
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 1, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 2, "health=%d %v", version, err)
 	_ = store.Close()
 	store = openPath(t, path)
 	defer store.Close()
@@ -116,21 +142,24 @@ func TestMigrate_RollsBackAndReportsVersion(t *testing.T) {
 	testutil.Require(t, err == nil && count == 0, "migration was not rolled back: count=%d err=%v", count, err)
 }
 
-func TestStore_SaveUpdateScopedTopicUpsert(t *testing.T) {
+func TestSQLiteMemoryStore_SaveTopicUpsertsSameBoundaryAtomically(t *testing.T) {
 	store := openTestStore(t)
 	first := observation("obs-1", "project-a", "first topic")
+	first.Title = "First"
 	first.TopicKey = "architecture/store"
-	saved, err := store.Save(context.Background(), first)
-	testutil.NoError(t, err)
+	first = mustSave(t, store, first)
 	second := first
-	second.ID = "ignored"
+	second.ID = "other"
+	second.Title = "Second"
 	second.Content = "second topic"
-	upserted, err := store.Save(context.Background(), second)
-	testutil.Require(t, err == nil && upserted.ID == saved.ID && upserted.CreatedAt.Equal(saved.CreatedAt), "topic upsert changed identity: %+v %v", upserted, err)
-	fixedTime = fixedTime.Add(time.Second)
-	upserted.Content = "explicit update"
-	updated, err := store.Update(context.Background(), upserted)
-	testutil.Require(t, err == nil && updated.UpdatedAt.After(updated.CreatedAt), "update failed: %+v %v", updated, err)
+	second.Session = "updated"
+	got, err := store.Save(context.Background(), second)
+	testutil.Require(t, err == nil && got.ID == first.ID && got.CreatedAt == first.CreatedAt && got.Title == "Second" && got.Content == "second topic" && got.Session == "updated", "upsert mismatch: %+v %v", got, err)
+	second.References = []string{first.ID}
+	_, err = store.Save(context.Background(), second)
+	testutil.Require(t, errors.Is(err, ErrInvalid), "resolved self-reference accepted: %v", err)
+	got, err = store.Get(context.Background(), first.ID, first.Project, first.Scope)
+	testutil.Require(t, err == nil && got.Content == second.Content && len(got.References) == 0, "rejected upsert mutated original: %+v %v", got, err)
 }
 
 func TestStore_RejectsInvalidDuplicateBoundaryAndCancelledWrites(t *testing.T) {
@@ -147,6 +176,9 @@ func TestStore_RejectsInvalidDuplicateBoundaryAndCancelledWrites(t *testing.T) {
 	cross.TopicKey = "shared"
 	_, err = store.Save(context.Background(), cross)
 	testutil.Require(t, errors.Is(err, ErrConflict), "expected boundary conflict, got %v", err)
+	cross.Project, cross.Scope = "project-a", ScopePersonal
+	_, err = store.Save(context.Background(), cross)
+	testutil.Require(t, errors.Is(err, ErrConflict), "expected scope conflict, got %v", err)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = store.Save(ctx, observation("obs-3", "project-a", "cancelled"))
@@ -195,6 +227,28 @@ func TestStore_SearchFiltersAndStableTies(t *testing.T) {
 	testutil.Require(t, first[0].ID == second[0].ID && first[1].ID == second[1].ID, "search order is not stable")
 }
 
+func TestSQLiteMemoryStore_SearchGetIsolationAndOrder(t *testing.T) {
+	store := openTestStore(t)
+	for _, item := range []Observation{
+		{ID: "a", Title: "A", Project: "p", Scope: ScopeProject, Type: "learning", TopicKey: "topic/a", Content: "shared token", Provenance: Provenance{Producer: "test"}, State: StateActive},
+		{ID: "b", Title: "B", Project: "p", Scope: ScopeProject, Type: "decision", TopicKey: "topic/b", Content: "shared token", Provenance: Provenance{Producer: "test"}, State: StateActive},
+		{ID: "c", Title: "C", Project: "p", Scope: ScopePersonal, Type: "learning", Content: "shared token", Provenance: Provenance{Producer: "test"}, State: StateActive},
+		{ID: "d", Title: "D", Project: "foreign", Scope: ScopeProject, Type: "learning", Content: "shared token", Provenance: Provenance{Producer: "test"}, State: StateActive},
+	} {
+		mustSave(t, store, item)
+	}
+	found, err := store.Search(context.Background(), Search{Query: "shared", Project: "p", Scope: ScopeProject, Types: []string{"learning"}, TopicKey: "topic/a"})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "a" && found[0].Title == "A", "isolated search: %+v %v", found, err)
+	got, err := store.Get(context.Background(), "a", "p", ScopeProject)
+	testutil.Require(t, err == nil && got.Title == "A" && got.Content == "shared token", "get: %+v %v", got, err)
+	_, err = store.Get(context.Background(), "a", "foreign", ScopeProject)
+	testutil.Require(t, errors.Is(err, ErrNotFound) && !strings.Contains(err.Error(), "p"), "foreign metadata leaked: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = store.Get(ctx, "a", "p", ScopeProject)
+	testutil.Require(t, errors.Is(err, context.Canceled), "get cancellation: %v", err)
+}
+
 func TestStore_SearchRejectsUnsafeInputAndCancellation(t *testing.T) {
 	store := openTestStore(t)
 	for _, search := range []Search{{Project: "p"}, {Query: `"`, Project: "p"}, {Query: "ok", Project: "p", Scope: "global"}} {
@@ -211,7 +265,7 @@ func TestEnvironmentIsolation_NoAmbientHomeOrNetwork(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 1, "isolated health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 2, "isolated health=%d %v", version, err)
 }
 
 func healthSnapshot(t *testing.T, path string) string {
@@ -248,7 +302,7 @@ func healthWithoutMutation(t *testing.T, path string) (int, error) {
 func TestHealthFile_HealthyDatabaseWithoutMutation(t *testing.T) {
 	path := migratedPath(t)
 	version, err := healthWithoutMutation(t, path)
-	testutil.Require(t, err == nil && version == 1, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 2, "health=%d err=%v", version, err)
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	version, err = HealthFile(context.Background(), missing)
 	testutil.Require(t, err == nil && version == 0, "missing health=%d err=%v", version, err)
@@ -328,7 +382,7 @@ func TestOpen_ConcurrentFreshProcesses(t *testing.T) {
 		testutil.NoError(t, command.Wait())
 	}
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, err == nil && version == 1, "concurrent health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 2, "concurrent health=%d err=%v", version, err)
 }
 
 func TestOpen_MigrationRetryBoundAndCancellation(t *testing.T) {
@@ -352,17 +406,4 @@ func TestOpen_MigrationRetryBoundAndCancellation(t *testing.T) {
 	testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'`).Scan(&tables))
 	testutil.Require(t, version == 0 && tables == 0, "partial schema version=%d tables=%d", version, tables)
 	testutil.NoError(t, db.Close())
-}
-
-func TestStore_TopicUpsertRejectsSelfReferenceAtomically(t *testing.T) {
-	store := openTestStore(t)
-	original := observation("original", "project-a", "original token")
-	original.TopicKey = "architecture/self-reference"
-	saved := mustSave(t, store, original)
-	upsert := observation("incoming", "project-a", "changed token")
-	upsert.TopicKey, upsert.References = original.TopicKey, []string{saved.ID}
-	_, err := store.Save(context.Background(), upsert)
-	testutil.Require(t, errors.Is(err, ErrInvalid), "expected self-reference rejection, got %v", err)
-	found, err := store.Search(context.Background(), Search{Query: "original", Project: "project-a"})
-	testutil.Require(t, err == nil && len(found) == 1 && found[0].Content == original.Content && len(found[0].References) == 0, "upsert mutated record: %+v %v", found, err)
 }

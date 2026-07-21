@@ -10,6 +10,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/inspection"
+	"github.com/vgxness/vgxness/internal/memory"
 )
 
 type Inspector interface {
@@ -18,8 +19,15 @@ type Inspector interface {
 }
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, inspector Inspector) int {
+	return RunIO(ctx, args, strings.NewReader(""), stdout, stderr, inspector, nil)
+}
+
+func RunIO(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime) int {
+	if len(args) > 0 && args[0] == "memory" {
+		return runMemory(ctx, args[1:], stdin, stdout, stderr, memories)
+	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <status|doctor> [--storage-root PATH] [--project-local]")
+		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory>")
 		return 2
 	}
 	command := args[0]
@@ -79,8 +87,16 @@ func terminalSafe(value string) string {
 
 func failure(err error) (int, string) {
 	switch {
-	case errors.Is(err, context.Canceled):
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return 130, "cancelled: operation cancelled"
+	case errors.Is(err, memory.ErrInvalid):
+		return 2, "invalid: memory request is invalid"
+	case errors.Is(err, memory.ErrConflict):
+		return 1, "conflict: memory already exists"
+	case errors.Is(err, memory.ErrNotFound):
+		return 1, "not_found: memory was not found"
+	case errors.Is(err, memory.ErrCorrupt), errors.Is(err, memory.ErrMigration):
+		return 1, "operational: memory storage failed"
 	case errors.Is(err, inspection.ErrCorrupt):
 		return 1, "corrupt: storage inspection failed"
 	case errors.Is(err, config.ErrInvalid):

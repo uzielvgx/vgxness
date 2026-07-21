@@ -5,10 +5,66 @@ import (
 	"io"
 
 	"github.com/vgxness/vgxness/internal/cli"
+	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/memory"
 )
 
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	return cli.Run(ctx, args, stdout, stderr, inspection.Service{Health: memory.HealthFile})
+func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return cli.RunIO(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, memoryRuntime{})
+}
+
+type memoryRuntime struct{}
+
+func (memoryRuntime) Save(ctx context.Context, opts config.Options, request memory.SaveRequest) (memory.MemoryResult, error) {
+	return memory.NewMemoryService(storeRuntime{opts}, "cli", nil).Save(ctx, request)
+}
+
+func (memoryRuntime) Search(ctx context.Context, opts config.Options, request memory.SearchRequest) ([]memory.MemoryResult, error) {
+	return memory.NewMemoryService(storeRuntime{opts}, "cli", nil).Search(ctx, request)
+}
+
+func (memoryRuntime) Get(ctx context.Context, opts config.Options, request memory.GetRequest) (memory.MemoryResult, error) {
+	return memory.NewMemoryService(storeRuntime{opts}, "cli", nil).Get(ctx, request)
+}
+
+type storeRuntime struct{ opts config.Options }
+
+func (runtime storeRuntime) Save(ctx context.Context, item memory.Observation) (memory.Observation, error) {
+	paths, err := config.Prepare(ctx, runtime.opts)
+	if err != nil {
+		return memory.Observation{}, err
+	}
+	store, err := memory.Open(ctx, paths.Database, nil)
+	if err != nil {
+		return memory.Observation{}, err
+	}
+	defer store.Close()
+	return store.Save(ctx, item)
+}
+
+func (runtime storeRuntime) Search(ctx context.Context, query memory.Search) ([]memory.Observation, error) {
+	store, err := openRead(ctx, runtime.opts)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return store.Search(ctx, query)
+}
+
+func (runtime storeRuntime) Get(ctx context.Context, id, project string, scope memory.Scope) (memory.Observation, error) {
+	store, err := openRead(ctx, runtime.opts)
+	if err != nil {
+		return memory.Observation{}, err
+	}
+	defer store.Close()
+	return store.Get(ctx, id, project, scope)
+}
+
+func openRead(ctx context.Context, opts config.Options) (*memory.Store, error) {
+	paths, err := config.PathsFor(opts)
+	if err != nil {
+		return nil, err
+	}
+	return memory.OpenRead(ctx, paths.Database)
 }
