@@ -2,12 +2,14 @@ package chronicle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"github.com/vgxness/vgxness/internal/testutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vgxness/vgxness/internal/testutil"
 )
 
 func TestChronicle_RestartReadOnlyPresentOrAbsent(t *testing.T) {
@@ -50,6 +52,73 @@ func TestChronicle_AcceptsOnlyCurrentStatuses(t *testing.T) {
 			if !valid {
 				testutil.Require(t, errors.Is(err, ErrCorrupt), "expected corrupt, got %v", err)
 			}
+		})
+	}
+}
+
+func currentRunJSON(t *testing.T, changes map[string]any) []byte {
+	t.Helper()
+	run := map[string]any{
+		"schemaVersion": "1", "id": "run-1", "project": "vgxness", "goal": "test",
+		"status": "running", "phase": "apply", "selectionId": "selection-1", "decisionId": "decision-1",
+		"preflightId": "preflight-1", "taskId": "task-1", "lastEventId": "event-1", "artifactIds": []string{},
+		"storageMode": "project-local", "startedAt": "2026-07-20T12:00:00Z", "updatedAt": "2026-07-20T12:01:00Z",
+	}
+	for key, value := range changes {
+		run[key] = value
+	}
+	data, err := json.Marshal(run)
+	testutil.NoError(t, err)
+	return data
+}
+
+func TestChronicle_AcceptsValidRegularFileAndStorageModes(t *testing.T) {
+	for _, mode := range []string{"project-local", "user-global"} {
+		t.Run(mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "current-run.json")
+			testutil.NoError(t, os.WriteFile(path, currentRunJSON(t, map[string]any{"storageMode": mode}), 0o600))
+			run, present, err := ReadCurrent(context.Background(), path)
+			testutil.Require(t, err == nil && present && run.StorageMode == mode, "run=%+v present=%v err=%v", run, present, err)
+		})
+	}
+}
+
+func TestChronicle_RejectsUnsafeOrInvalidCurrentRun(t *testing.T) {
+	t.Run("child symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.json")
+		testutil.NoError(t, os.WriteFile(target, currentRunJSON(t, nil), 0o600))
+		path := filepath.Join(dir, "current-run.json")
+		testutil.NoError(t, os.Symlink(target, path))
+		_, _, err := ReadCurrent(context.Background(), path)
+		testutil.Require(t, errors.Is(err, ErrCorrupt), "expected symlink corruption, got %v", err)
+	})
+	for name, changes := range map[string]map[string]any{
+		"unknown field": {"unexpected": true}, "invalid status": {"status": "done"}, "invalid storage": {"storageMode": "global"},
+		"empty optional path": {"runFile": ""}, "empty optional id": {"resultId": ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "current-run.json")
+			testutil.NoError(t, os.WriteFile(path, currentRunJSON(t, changes), 0o600))
+			_, _, err := ReadCurrent(context.Background(), path)
+			testutil.Require(t, errors.Is(err, ErrCorrupt), "expected corruption, got %v", err)
+		})
+	}
+}
+
+func TestChronicle_RejectsInvalidTemporalAndArtifactMetadata(t *testing.T) {
+	for name, changes := range map[string]map[string]any{
+		"invalid startedAt":     {"startedAt": "yesterday"},
+		"invalid updatedAt":     {"updatedAt": "later"},
+		"decreasing timestamps": {"updatedAt": "2026-07-20T11:59:59Z"},
+		"blank artifact":        {"artifactIds": []string{""}},
+		"duplicate artifact":    {"artifactIds": []string{"artifact-1", "artifact-1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "current-run.json")
+			testutil.NoError(t, os.WriteFile(path, currentRunJSON(t, changes), 0o600))
+			_, _, err := ReadCurrent(context.Background(), path)
+			testutil.Require(t, errors.Is(err, ErrCorrupt), "expected corruption, got %v", err)
 		})
 	}
 }

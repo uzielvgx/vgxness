@@ -58,3 +58,21 @@ func TestCLI_CancellationHasNoPartialOutput(t *testing.T) {
 	code := Run(context.Background(), []string{"status"}, &out, &stderr, &fakeInspector{err: context.Canceled})
 	testutil.Require(t, code == 130 && out.Len() == 0 && errors.Is(context.Canceled, context.Canceled), "exit=%d out=%q", code, out.String())
 }
+
+func TestCLI_EscapesDynamicControlCharacters(t *testing.T) {
+	controls := "line\ncarriage\rtab\tescape\x1bdel\x7f"
+	for _, command := range []string{"status", "doctor"} {
+		t.Run(command, func(t *testing.T) {
+			result := inspection.Result{Root: "/root/" + controls, Database: "/db/" + controls, Migration: 1, ChroniclePresent: true, RunID: controls}
+			var out, stderr bytes.Buffer
+			code := Run(context.Background(), []string{command}, &out, &stderr, &fakeInspector{result: result})
+			testutil.Require(t, code == 0 && stderr.Len() == 0, "exit=%d stderr=%q", code, stderr.String())
+			for _, r := range out.String() {
+				if (r < ' ' && r != '\n') || r == 0x7f {
+					t.Fatalf("unsafe control %U in %q", r, out.String())
+				}
+			}
+			testutil.Require(t, strings.Contains(out.String(), `\n`) && strings.Contains(out.String(), `\x1b`), "controls were not escaped: %q", out.String())
+		})
+	}
+}

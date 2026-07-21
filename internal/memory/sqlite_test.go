@@ -2,9 +2,12 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,7 +69,7 @@ func TestMigrate_RejectsNewerSchema(t *testing.T) {
 	testutil.Require(t, errors.Is(err, ErrMigration), "expected newer-schema rejection, got %v", err)
 }
 
-func TestHealthFile_RejectsNewerSchemaWithoutMutation(t *testing.T) {
+func TestHealthFile_RejectsFutureSchemaWithoutMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	store := openPath(t, path)
 	testutil.NoError(t, store.Close())
@@ -75,8 +78,10 @@ func TestHealthFile_RejectsNewerSchemaWithoutMutation(t *testing.T) {
 	_, err = db.Exec(`PRAGMA user_version=99`)
 	testutil.NoError(t, err)
 	testutil.NoError(t, db.Close())
+	before := healthSnapshot(t, path)
 	_, err = HealthFile(context.Background(), path)
 	testutil.Require(t, errors.Is(err, ErrMigration), "expected newer-schema rejection, got %v", err)
+	testutil.Require(t, before == healthSnapshot(t, path), "health mutated future schema")
 	db, err = sql.Open("sqlite", path)
 	testutil.NoError(t, err)
 	defer db.Close()
@@ -207,4 +212,157 @@ func TestEnvironmentIsolation_NoAmbientHomeOrNetwork(t *testing.T) {
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
 	testutil.Require(t, err == nil && version == 1, "isolated health=%d %v", version, err)
+}
+
+func healthSnapshot(t *testing.T, path string) string {
+	t.Helper()
+	hash := sha256.New()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, err := os.ReadFile(path + suffix)
+		fmt.Fprintf(hash, "%s:%t:", suffix, err == nil)
+		if err == nil {
+			_, _ = hash.Write(data)
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func migratedPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store := openPath(t, path)
+	testutil.NoError(t, store.Close())
+	return path
+}
+
+func healthWithoutMutation(t *testing.T, path string) (int, error) {
+	t.Helper()
+	before := healthSnapshot(t, path)
+	version, err := HealthFile(context.Background(), path)
+	testutil.Require(t, before == healthSnapshot(t, path), "health mutated %s", path)
+	return version, err
+}
+
+func TestHealthFile_HealthyDatabaseWithoutMutation(t *testing.T) {
+	path := migratedPath(t)
+	version, err := healthWithoutMutation(t, path)
+	testutil.Require(t, err == nil && version == 1, "health=%d err=%v", version, err)
+	missing := filepath.Join(t.TempDir(), "missing.db")
+	version, err = HealthFile(context.Background(), missing)
+	testutil.Require(t, err == nil && version == 0, "missing health=%d err=%v", version, err)
+	_, statErr := os.Stat(missing)
+	testutil.Require(t, os.IsNotExist(statErr), "health created missing database")
+}
+
+func TestHealthFile_RejectsMissingRequiredTableWithoutMutation(t *testing.T) {
+	for _, table := range []string{"projects", "sessions", "observations", "observation_refs"} {
+		t.Run(table, func(t *testing.T) {
+			path := migratedPath(t)
+			db, err := sql.Open("sqlite", path)
+			testutil.NoError(t, err)
+			_, err = db.Exec(`PRAGMA foreign_keys=OFF; DROP TABLE ` + table)
+			testutil.NoError(t, err)
+			testutil.NoError(t, db.Close())
+			_, err = healthWithoutMutation(t, path)
+			testutil.Require(t, errors.Is(err, ErrCorrupt), "expected missing-table corruption, got %v", err)
+		})
+	}
+}
+
+func TestHealthFile_RejectsUnusableFTSWithoutMutation(t *testing.T) {
+	path := migratedPath(t)
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(`DROP TABLE observations_fts; CREATE TABLE observations_fts(id TEXT, content TEXT)`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+	_, err = healthWithoutMutation(t, path)
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "expected unusable FTS corruption, got %v", err)
+}
+
+func TestHealthFile_RejectsIntegrityFailureWithoutMutation(t *testing.T) {
+	path := migratedPath(t)
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	testutil.NoError(t, err)
+	_, err = file.WriteAt(make([]byte, 32), 100)
+	testutil.NoError(t, err)
+	testutil.NoError(t, file.Close())
+	_, err = healthWithoutMutation(t, path)
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "expected integrity corruption, got %v", err)
+}
+
+func TestHealthFile_RejectsForeignKeyViolationWithoutMutation(t *testing.T) {
+	path := migratedPath(t)
+	store := openPath(t, path)
+	source := mustSave(t, store, observation("source", "project-a", "source token"))
+	testutil.NoError(t, store.Close())
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO observation_refs(observation_id,target_id) VALUES(?,?)`, source.ID, "missing")
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+	_, err = healthWithoutMutation(t, path)
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "expected foreign-key corruption, got %v", err)
+}
+
+func TestOpenHelperProcess(t *testing.T) {
+	if os.Getenv("VGXNESS_OPEN_HELPER") != "1" {
+		return
+	}
+	store, err := Open(context.Background(), os.Getenv("VGXNESS_DB_PATH"), nil)
+	testutil.NoError(t, err)
+	testutil.NoError(t, store.Close())
+}
+
+func TestOpen_ConcurrentFreshProcesses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	commands := make([]*exec.Cmd, 4)
+	for index := range commands {
+		commands[index] = exec.Command(os.Args[0], "-test.run=^TestOpenHelperProcess$")
+		commands[index].Env = append(os.Environ(), "VGXNESS_OPEN_HELPER=1", "VGXNESS_DB_PATH="+path)
+		testutil.NoError(t, commands[index].Start())
+	}
+	for _, command := range commands {
+		testutil.NoError(t, command.Wait())
+	}
+	version, err := HealthFile(context.Background(), path)
+	testutil.Require(t, err == nil && version == 1, "concurrent health=%d err=%v", version, err)
+}
+
+func TestOpen_MigrationRetryBoundAndCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(`PRAGMA journal_mode=WAL`)
+	testutil.NoError(t, err)
+	conn, err := db.Conn(context.Background())
+	testutil.NoError(t, err)
+	_, err = conn.ExecContext(context.Background(), `BEGIN IMMEDIATE`)
+	testutil.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = Open(ctx, path, nil)
+	testutil.Require(t, errors.Is(err, context.DeadlineExceeded), "expected bounded cancellation, got %v", err)
+	_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+	testutil.NoError(t, conn.Close())
+	var version, tables int
+	testutil.NoError(t, db.QueryRow(`PRAGMA user_version`).Scan(&version))
+	testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'`).Scan(&tables))
+	testutil.Require(t, version == 0 && tables == 0, "partial schema version=%d tables=%d", version, tables)
+	testutil.NoError(t, db.Close())
+}
+
+func TestStore_TopicUpsertRejectsSelfReferenceAtomically(t *testing.T) {
+	store := openTestStore(t)
+	original := observation("original", "project-a", "original token")
+	original.TopicKey = "architecture/self-reference"
+	saved := mustSave(t, store, original)
+	upsert := observation("incoming", "project-a", "changed token")
+	upsert.TopicKey, upsert.References = original.TopicKey, []string{saved.ID}
+	_, err := store.Save(context.Background(), upsert)
+	testutil.Require(t, errors.Is(err, ErrInvalid), "expected self-reference rejection, got %v", err)
+	found, err := store.Search(context.Background(), Search{Query: "original", Project: "project-a"})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].Content == original.Content && len(found[0].References) == 0, "upsert mutated record: %+v %v", found, err)
 }

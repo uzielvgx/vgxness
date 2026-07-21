@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/inspection"
@@ -45,14 +46,35 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, inspector
 	}
 	chronicle := "absent"
 	if result.ChroniclePresent {
-		chronicle = "present run=" + result.RunID
+		chronicle = "present run=" + terminalSafe(result.RunID)
 	}
 	doctor := ""
 	if command == "doctor" {
 		doctor = "doctor=healthy\n"
 	}
-	fmt.Fprintf(stdout, "storage_root=%s\ndatabase=%s\nmigration=%d\nchronicle=%s\n%s", result.Root, result.Database, result.Migration, chronicle, doctor)
+	fmt.Fprintf(stdout, "storage_root=%s\ndatabase=%s\nmigration=%d\nchronicle=%s\n%s", terminalSafe(result.Root), terminalSafe(result.Database), result.Migration, chronicle, doctor)
 	return 0
+}
+
+func terminalSafe(value string) string {
+	var safe strings.Builder
+	for _, character := range value {
+		switch character {
+		case '\n':
+			safe.WriteString(`\n`)
+		case '\r':
+			safe.WriteString(`\r`)
+		case '\t':
+			safe.WriteString(`\t`)
+		default:
+			if character < ' ' || character == 0x7f {
+				fmt.Fprintf(&safe, `\x%02x`, character)
+			} else {
+				safe.WriteRune(character)
+			}
+		}
+	}
+	return safe.String()
 }
 
 func failure(err error) (int, string) {
