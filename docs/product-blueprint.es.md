@@ -7,18 +7,24 @@
 
 Este documento es una traducción completa para navegación y comprensión. El documento en inglés es la única fuente canónica de la visión, el vocabulario, los límites y la hoja de ruta de VGXNESS. Los documentos complementarios describen contratos y flujos de trabajo más acotados; no redefinen este plan maestro. Si la versión en español difiere, prevalece la versión en inglés.
 
-Las etiquetas de estado tienen significados precisos:
+Las etiquetas de entrega de capacidades tienen significados precisos y respaldados por evidencia:
 
-- **Current (Actual)** — presente y verificable ahora en este repositorio.
-- **Planned (Planificado)** — dirección de producto aprobada que todavía no está implementada.
-- **Deferred (Diferido)** — dirección aprobada que queda intencionalmente fuera del primer horizonte de entrega.
-- **Non-goal (No objetivo)** — comportamiento excluido que requiere una nueva decisión de alcance antes de ingresar en la hoja de ruta.
+- **Implemented (Implementado)** — el comportamiento entregado está presente y puede verificarse en `main` fusionado.
+- **Partial (Parcial)** — se entregó un subconjunto delimitado; el ciclo de vida o servicio indicado no está completo.
+- **Contracts-only (Solo contratos)** — existen esquemas o reglas semánticas, pero no proporcionan el comportamiento de runtime que describen.
+- **Planned (Planificado)** — dirección de producto aprobada sin comportamiento de runtime entregado.
+
+**Deferred (Diferido)** y **Non-goal (No objetivo)** siguen siendo etiquetas de alcance, no afirmaciones de entrega. El trabajo diferido está aprobado pero fuera del horizonte actual; un no objetivo requiere una nueva decisión de alcance. «Current» solo describe la vigencia de este documento.
 
 ## 1. Propósito y audiencia
 
-VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por IA siga siendo comprensible, delimitado y recuperable. Está destinado a convertirse en un plano de control con prioridad local que coordina agentes, habilidades, memoria semántica, estado operativo, herramientas estructurales y de diseño, y salvaguardas de entrega sin ocultar decisiones importantes dentro de prompts.
+VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por IA siga siendo comprensible, delimitado y recuperable. Está evolucionando desde una base local implementada hacia un plano de control que coordina agentes, habilidades, memoria semántica, estado operativo, herramientas estructurales y de diseño, y salvaguardas de entrega sin ocultar decisiones importantes dentro de prompts.
 
-**Current:** El repositorio ofrece documentación de producto de autoría independiente y esquemas de contrato Draft 2020-12. No ofrece un producto ejecutable. La conformidad de los esquemas puede comprobarse con validadores compatibles, pero todavía no existen un validador completo de entregas de VGXNESS ni una aplicación integral de extremo a extremo en tiempo de ejecución.
+**Implemented:** El repositorio compila un binario `vgxness` con composición de la aplicación, resolución de raíces de almacenamiento, `status`/`doctor`, un almacén de memoria propio SQLite/FTS5 con dos migraciones, `memory save/search/get`, pruebas enfocadas y CI de Go.
+
+**Partial:** Chronicle tiene análisis estricto y de solo lectura de `current-run.json`; no anexa eventos, escribe instantáneas ni recupera ejecuciones.
+
+**Contracts-only:** Esquemas Draft 2020-12 de autoría independiente y validación semántica del backend definen registros y reglas. No constituyen orquestación ni una validación completa de entregas.
 
 **Planned:** VGXNESS guiará silenciosamente el trabajo ordinario dentro del alcance y conservará evidencia de enrutamiento, aprobaciones, artefactos, validación y recuperación. La persona define la intención y aprueba las acciones importantes; el sistema facilita planificar, ejecutar, revisar y reanudar trabajo delimitado.
 
@@ -34,14 +40,16 @@ VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por 
 
 | Estado | Alcance |
 | --- | --- |
-| **Current** | Documentación y esquemas JSON Draft 2020-12 neutrales respecto del runtime para orquestación, ejecución, registros, instantáneas de ejecución y eventos de solo anexado. |
-| **Planned** | Un plano de control Go instalado globalmente; configuración mediante teclado; capacidades delimitadas; almacenamiento operativo Chronicle; memoria semántica propia SQLite/FTS5; aprobaciones; validación; recuperación; entrega segura; y adaptadores opcionales de runtime, inteligencia estructural, diseño, MCP y compatibilidad. |
+| **Implemented** | Binario Go y raíz de composición; configuración de almacenamiento; inspección status/doctor; memoria propia SQLite/FTS5 con dos migraciones y operaciones CLI save/search/get; pruebas y CI de Go. |
+| **Partial** | Análisis e inspección estrictos y de solo lectura de `current-run.json` de Chronicle; sin anexado de eventos, escritor de instantáneas, reproducción ni ciclo de recuperación. |
+| **Contracts-only** | Esquemas Draft 2020-12 y validación semántica de backend/referencias, incluidos `memory` para memoria propia y `engram` para referencias externas; no implican un servicio de orquestación. |
+| **Planned** | Validación de contratos en rutas de runtime, eventos Chronicle, instantáneas/recuperación, máquina de estados de tareas, Gatekeeper/Registry, proveedores, coordinación delimitada, configuración mediante teclado y adaptadores opcionales. |
 | **Deferred** | Adaptadores de runtime adicionales, exposición MCP local opcional, más clientes MCP externos, recuperación semántica avanzada y superficies gráficas de producto. |
 | **Non-goal** | Artefactos copiados de terceros, autonomía destructiva silenciosa, verdad operativa oculta, dependencia rígida de un runtime o herramienta, bucles de agentes sin límites, promoción automática de prototipos a producción o una interfaz propietaria de la política de negocio. |
 
-**Current:** Este repositorio no entrega código Go, binario, instalador, catálogo de habilidades incluido, adaptador de runtime, servidor o cliente MCP, implementación de persistencia, automatización Git ni mutación de configuración del producto.
+**Límite de la evidencia:** La base implementada no es un runtime de orquestación. No se entregan máquina de estados de tareas, servicios Gatekeeper/Registry, ejecución de proveedores, coordinación delimitada, instalador, TUI, servidor o cliente MCP, automatización Git ni mutación de configuración del producto.
 
-**Current — limitación:** Los esquemas bajo [`schemas/`](schemas/README.md) son contratos actuales para implementaciones futuras. Sus declaraciones `$schema` y su compatibilidad con herramientas Draft 2020-12 no demuestran corrección semántica completa ni aplicación en tiempo de ejecución.
+**Contracts-only — limitación:** Los esquemas bajo [`schemas/`](schemas/README.md) describen comportamientos futuros y parciales. Sus declaraciones `$schema` y su compatibilidad con herramientas Draft 2020-12 no demuestran corrección semántica completa ni aplicación en runtime.
 
 ## 3. Principios de producto
 
@@ -65,7 +73,7 @@ VGXNESS puede estudiar sistemas como Gentle AI, Engram, OpenCode, CodeGraph, Ope
 | Límite | Decisión |
 | --- | --- |
 | **Planned — paridad de capacidades** | Proporcionar de forma independiente resultados útiles de orquestación, memoria, habilidades, análisis estructural, diseño, revisión, recuperación y entrega. |
-| **Current — regla de autoría** | La prosa y los esquemas de este repositorio son contratos propios de VGXNESS y mantienen autoría independiente. |
+| **Implemented — regla de autoría** | La prosa y los esquemas de este repositorio son contratos propios de VGXNESS y mantienen autoría independiente. |
 | **Non-goal: artefactos copiados** | No copiar código, prompts, esquemas, nombres, habilidades, manifiestos, estructuras de base de datos ni flujos exactos de terceros. |
 | **Non-goal: acoplamiento oculto** | No convertir el comportamiento privado de un runtime, herramienta o almacén externo en el modelo de dominio de VGXNESS. |
 | **Planned — interoperabilidad** | Integrar mediante adaptadores documentados, contratos de capacidades, referencias estables y procedencia explícita. |
@@ -85,34 +93,38 @@ VGXNESS utiliza cuatro grupos de conceptos distintos. No deben agruparse como un
 
 **Planned:** Los nombres de capacidades describen responsabilidades estables del producto, no un proceso por nombre ni archivos de prompts específicos de un proveedor. `sdd-design` es un modo de Blueprint, `sdd-apply` es un modo de Forge y `sdd-verify` es un modo de Sentinel.
 
-**Current:** Los términos de los esquemas existentes siguen siendo normativos para registros legibles por máquinas. Este plan maestro controla la taxonomía para personas, no las definiciones de campos de los esquemas.
+**Contracts-only:** Los términos de los esquemas existentes siguen siendo normativos para registros legibles por máquinas. Este plan maestro controla la taxonomía para personas, no las definiciones de campos de los esquemas.
+
+La división de entrega es intencional: la memoria propia está **Implemented**, la lectura de Chronicle es **Partial**, los esquemas y reglas semánticas son **Contracts-only**, y Registry, Gatekeeper, las capacidades, los modos operativos y la ejecución de proveedores están **Planned**.
 
 ## 6. Modelo del sistema
 
-**Planned:** VGXNESS será un plano de control Go con prioridad local, instalado globalmente y con límites explícitos de paquetes y dependencias. La arquitectura Go se detalla en [`go-implementation.md`](go-implementation.md).
+VGXNESS tiene una base Go local **Implemented** y un plano de control **Planned** con límites explícitos de paquetes y dependencias. La arquitectura Go se detalla en [`go-implementation.md`](go-implementation.md).
 
 ```text
-TUI mediante teclado / CLI / MCP local opcional
-                       |
-              servicios de aplicación
-                       |
- Navigator + capacidades y modos delimitados
-                       |
-          Registry + Chronicle + Gatekeeper
-                       |
- MemoryStore propio + adaptadores externos opcionales
+TUI planificada / CLI implementada / MCP local planificado
+                            |
+       composición y almacenamiento implementados
+                            |
+ coordinación delimitada y proveedores planificados
+                            |
+ Registry/Gatekeeper planificados + Chronicle parcial
+                            |
+ MemoryStore implementado + adaptadores externos planificados
 ```
 
 | Límite | Estado y responsabilidad |
 | --- | --- |
-| Plano de control Go | **Planned:** Controlar política de aplicación, orquestación, servicios de instalación, validación y composición. |
+| Binario Go y composición | **Implemented:** Compilar un binario local y conectar configuración, inspección, lectura de Chronicle y comandos de memoria. No existe política de orquestación. |
+| CLI y raíces de almacenamiento | **Implemented:** Resolver almacenamiento de proyecto/persona y ofrecer status, doctor y memory save/search/get. La recuperación y automatización siguen planificadas. |
+| MemoryStore propio | **Implemented:** Almacenamiento semántico SQLite/FTS5, migraciones, campos de ciclo de vida, búsqueda filtrada y registros con procedencia. |
+| Chronicle | **Partial:** Solo análisis e inspección estrictos y de solo lectura de la ejecución actual; eventos, instantáneas, reproducción y recuperación siguen planificados. |
+| Esquemas y reglas semánticas | **Contracts-only:** Definen formas legibles por máquinas e invariantes de backend/referencias sin crear comportamiento de orquestación. |
 | TUI mediante teclado | **Planned:** Ofrecer configuración e interacción enfocada sin controlar la política de instalación u orquestación. |
-| CLI | **Planned:** Ofrecer inspección, recuperación y automatización; es una comodidad, no una dependencia. |
+| Coordinación delimitada | **Planned:** Agregar estado de tareas, política Registry/Gatekeeper, proveedores, enrutamiento, aprobaciones y bucles finitos de coordinación. |
 | Adaptador OpenCode | **Planned:** Primer adaptador de runtime preferido, elegido solo cuando supera controles de capacidad y política. |
 | Adaptador CodeGraph | **Planned, opcional:** Ruta preferida de inteligencia estructural cuando está saludable y aprobado; se mantiene el análisis del sistema de archivos. |
 | Adaptador OpenPencil | **Planned, opcional:** Ruta de diseño y prototipado; los artefactos son propuestas hasta implementarse y verificarse por separado. |
-| MemoryStore propio | **Planned desde la base inicial:** Autoridad semántica SQLite/FTS5 bajo control de VGXNESS. |
-| Archivos Chronicle | **Planned:** Instantáneas legibles, eventos JSONL, comprobantes, artefactos y evidencia de recuperación. |
 | Otros adaptadores de runtime/MCP | **Deferred:** Pueden agregarse sin cambiar los contratos centrales. |
 
 **Non-goal:** Ningún adaptador puede omitir Gatekeeper, redefinir la taxonomía, convertirse en verdad operativa o incluir política que corresponde al plano de control.
@@ -178,14 +190,14 @@ El modo operativo `tasks` pertenece a SDD y transforma requisitos y diseño apro
 
 **Planned:** El preflight automático utiliza política y evidencia del repositorio, y solo pregunta ante una ambigüedad importante. El preflight interactivo explica la decisión relevante antes del trabajo de fase.
 
-**Requisito previo de migración del esquema:** El esquema actual de preflight SDD acepta `engram`, `openspec`, `hybrid` y `none`. Su token `engram` es transitorio y no puede representar con claridad el valor predeterminado planificado de memoria propia. Antes de la primera implementación en Go, el esquema debe agregar un token de backend `memory` neutral respecto del proveedor/configurado; el SDD requerido con el `MemoryStore` propio no puede publicarse hasta entonces. Engram sigue siendo solo un adaptador opcional de compatibilidad/importación.
+**Contracts-only:** El contrato del backend propio ya usa `memory`; `engram` identifica solo una referencia a un proveedor externo. No queda ninguna migración del esquema del backend de memoria como requisito previo de implementación. La resolución de preflight y la persistencia de artefactos SDD en runtime siguen planificadas.
 
-| Almacén visible | Backend planificado tras la migración | Comportamiento |
+| Almacén visible | Mapeo del contrato | Entrega y comportamiento |
 | --- | --- | --- |
-| `memory` | `memory` → `MemoryStore` configurado | Persiste artefactos SDD mediante referencias de memoria inmutables. La memoria propia de VGXNESS es el valor predeterminado planificado; esta fila solo pasa a ser válida para el contrato después de la migración requerida, no al renombrar la memoria propia como `engram`. |
-| `openspec` | `openspec` | Persiste artefactos en la estructura OpenSpec del repositorio. |
-| `both` | `hybrid` | Mantiene sincronizados memoria y artefactos del sistema de archivos. |
-| desactivado | `none` | No accede a artefactos SDD cuando la política permite omitirlos. |
+| `memory` | `memory` → `MemoryStore` configurado | **Contracts-only para artefactos SDD:** usa referencias inmutables de memoria propia; el MemoryStore general está implementado, pero la integración como almacén SDD no. |
+| `openspec` | `openspec` | **Contracts-only:** persiste artefactos en la estructura OpenSpec cuando se implemente el preflight de runtime. |
+| `both` | `hybrid` | **Contracts-only:** mantiene sincronizados memoria y artefactos del sistema de archivos cuando se implemente el preflight de runtime. |
+| desactivado | `none` | **Contracts-only:** no accede a artefactos SDD cuando la política permite omitirlos. |
 
 El orden de fases se basa en evidencia, no en ceremonia. Una fase solo se omite cuando su artefacto o decisión requerida existe y sigue siendo válida. Apply sigue requisitos y diseño aprobados; verify demuestra el resultado; archive cierra y sincroniza el estado final.
 
@@ -193,17 +205,17 @@ El orden de fases se basa en evidencia, no en ceremonia. Una fase solo se omite 
 
 ### Contexto reducido
 
-**Planned:** Cada tarea delimitada recibe objetivo, alcance, rutas y herramientas permitidas, referencias inmutables de artefactos, referencias exactas de habilidades, criterios de aceptación, estado de aprobación y contrato de retorno. Una cápsula de continuidad conserva decisiones, referencias de estado, procedencia, acciones completadas y siguientes, bloqueos y guía de recuperación sin copiar la transcripción.
+**Contracts-only:** Los esquemas definen paquetes pequeños y registros de continuidad con objetivo, alcance, rutas y herramientas permitidas, referencias inmutables de artefactos, referencias exactas de habilidades, criterios de aceptación, estado de aprobación y contratos de retorno. Su construcción y aplicación en runtime están **Planned**.
 
 ### Autoridad semántica y verdad operativa
 
 | Asunto | Estado y propietario |
 | --- | --- |
-| Chronicle | **Planned:** Autoridad operativa para eventos, estado de ejecución, instantáneas, comprobantes, aprobaciones, referencias de artefactos, puntos de control, resultados, cancelaciones y reproducción. |
-| MemoryStore de VGXNESS | **Planned desde la base Go inicial:** Autoridad semántica para conocimiento duradero: decisiones, preferencias, convenciones, descubrimientos, causas de errores, restricciones, aprobaciones y su justificación, lecciones, resúmenes, cápsulas de continuidad y referencias de artefactos. |
-| SQLite/FTS5 | **Planned desde la base Go inicial:** Persistencia local propia y recuperación léxica, introducida gradualmente detrás de `MemoryStore`; puede seguir una indexación semántica avanzada. |
+| Chronicle | **Partial:** Lee y valida estrictamente el `current-run.json` activo. El anexado de eventos, estado de ejecución, instantáneas, comprobantes, puntos de control, reproducción y recuperación siguen planificados. |
+| MemoryStore de VGXNESS | **Implemented:** Autoridad semántica para observaciones duraderas tipadas con identidad, alcance, tema, procedencia, ciclo de vida, referencias, save/search/get y metadatos de sesión. Los flujos superiores de aprobación y continuidad siguen planificados. |
+| SQLite/FTS5 | **Implemented:** Persistencia local propia, dos migraciones, filtrado determinista y recuperación léxica detrás de `MemoryStore`; la indexación semántica avanzada sigue planificada. |
 | Adaptador Engram | **Planned, opcional:** Puente de compatibilidad, importación y referencia. Puede conservar identificadores externos y procedencia, pero no controla la semántica de VGXNESS. |
-| Raíces de proyecto/persona | **Planned:** Política explícita de almacenamiento local del proyecto en `.vgxness/` o global de la persona usuaria en `~/.vgxness/projects/<project-id>/`. |
+| Raíces de proyecto/persona | **Implemented:** Resuelve almacenamiento local del proyecto en `.vgxness/` o global de la persona en `~/.vgxness/projects/<project-id>/`. |
 
 Las entradas de memoria tienen identificador estable, tipo, tema, contenido, procedencia, marcas de tiempo, alcance, estado de ciclo de vida y referencias. La búsqueda comienza con filtros deterministas y FTS5; resúmenes y embeddings pueden complementar la recuperación más adelante sin sustituir registros fuente.
 
@@ -213,19 +225,19 @@ Chronicle y la memoria semántica pueden referenciarse, pero no sustituirse. Si 
 
 | Etapa | Comportamiento del almacén propio |
 | --- | --- |
-| Captura | Aceptar una observación duradera tipada con fuente, alcance y evidencia; rechazar ruido operativo sin procesar. |
-| Normalización | Asignar identidad estable, tema, marcas de tiempo, metadatos de ciclo de vida y referencias inmutables de fuente. |
-| Recuperación | Aplicar filtros de alcance/tipo/ciclo antes del ranking FTS5 y devolver procedencia con cada resultado. |
-| Comparación | Conservar relaciones compatibles, relacionadas, delimitadas, conflictivas o de sustitución sin borrar el historial silenciosamente. |
-| Revisión | Mostrar conocimiento obsoleto o pendiente de revisión antes de confiar en él como hecho actual. |
-| Resumen | Crear resúmenes derivados que referencian las entradas fuente en lugar de sustituirlas. |
-| Importación | Traducir registros Engram opcionales con ID de fuente y procedencia de importación; nunca sobrescribir autoridad silenciosamente. |
+| Captura | **Implemented:** Acepta una observación duradera tipada con fuente, alcance y evidencia; rechaza entrada inválida. |
+| Normalización | **Implemented:** Asigna identidad estable, tema, marcas de tiempo, metadatos de ciclo de vida y referencias de fuente. |
+| Recuperación | **Implemented:** Aplica filtros deterministas antes del ranking FTS5 y devuelve procedencia. |
+| Comparación | **Planned:** Conserva relaciones compatibles, relacionadas, delimitadas, conflictivas o de sustitución sin borrar el historial silenciosamente. |
+| Revisión | **Planned:** Muestra conocimiento obsoleto o pendiente de revisión antes de confiar en él como hecho actual. |
+| Resumen | **Planned:** Crea resúmenes derivados que referencian las entradas fuente en lugar de sustituirlas. |
+| Importación | **Planned:** Traduce registros Engram opcionales con ID de fuente y procedencia de importación; nunca sobrescribe autoridad silenciosamente. |
 
 La retención, la supresión selectiva de datos, la exportación, la copia de seguridad y la migración siguen siendo servicios de aplicación explícitos. Las escrituras de memoria respetan el alcance del proyecto o de la persona y la política de secretos. Eliminar o reescribir conocimiento duradero es una acción de consecuencias relevantes y no puede ocultarse dentro de un arrendamiento de edición ordinaria.
 
 ### Recuperación y conflictos de autoridad
 
-La recuperación primero reconstruye el estado operativo desde instantáneas, eventos, comprobantes, artefactos y cancelaciones de Chronicle. Luego recupera contexto semántico para explicar intención, restricciones, lecciones y siguientes acciones esperadas. Si las fuentes difieren, VGXNESS registra una referencia del conflicto, conserva el último estado operativo válido y solicita corrección o aprobación cuando la evidencia no lo resuelve. Un resumen semántico nunca repara ni avanza una ejecución por sí mismo.
+**Planned:** La recuperación primero reconstruye el estado operativo desde instantáneas, eventos, comprobantes, artefactos y cancelaciones de Chronicle. Luego recupera contexto semántico para explicar intención, restricciones, lecciones y siguientes acciones esperadas. El lector Chronicle actual no realiza por sí solo este ciclo. Si las fuentes difieren, la recuperación conservará el último estado operativo válido y exigirá corrección o aprobación; la memoria semántica nunca repara ni avanza una ejecución por sí misma.
 
 ## 10. Capacidades, servicios y adaptadores opcionales
 
@@ -244,9 +256,9 @@ La recuperación primero reconstruye el estado operativo desde instantáneas, ev
 
 | Servicio | Responsabilidad planificada | Límite estricto |
 | --- | --- | --- |
-| Registry | Resolver agente, habilidad, adaptador, versión, fuente, procedencia, capacidad, permiso y alcance exactos. | Rechaza referencias no resueltas o fuera de alcance. |
-| Chronicle | Registrar hechos operativos correlacionados y exponer estado consistente para inspección y recuperación. | Nunca inventa estado faltante ni se convierte en memoria semántica. |
-| Gatekeeper | Aplicar elegibilidad, esquemas, permisos, arrendamientos, aprobaciones, raíces/herramientas, presupuestos de bucles y transiciones. | Se cierra de forma segura y nunca pide a un LLM improvisar política. |
+| Registry | **Planned:** Resolver agente, habilidad, adaptador, versión, fuente, procedencia, capacidad, permiso y alcance exactos. | Rechaza referencias no resueltas o fuera de alcance. |
+| Chronicle | **Partial:** Leer y validar el puntero de la ejecución actual. El registro de eventos y el estado de recuperación siguen planificados. | Nunca inventa estado faltante ni se convierte en memoria semántica. |
+| Gatekeeper | **Planned:** Aplicar elegibilidad, esquemas, permisos, arrendamientos, aprobaciones, raíces/herramientas, presupuestos de bucles y transiciones. | Se cierra de forma segura y nunca pide a un LLM improvisar política. |
 
 ### Adaptador de inteligencia estructural CodeGraph
 
@@ -309,11 +321,14 @@ Navigator solo inicia trabajo concurrente cuando es seguro. Cada tarea en segund
 
 ### Horizontes de entrega
 
+La entrega sigue un solo orden de dependencias: **validación de contratos → eventos Chronicle → instantáneas/recuperación → máquina de estados de tareas → Gatekeeper/Registry → proveedores → coordinación delimitada**. Las bases implementadas de memoria y CLI apoyan esta secuencia, pero no omiten ninguna dependencia de orquestación.
+
 | Horizonte | Estado | Resultado |
 | --- | --- | --- |
-| Base de contratos | **Current** | Mantener documentación bilingüe de autoría independiente y esquemas Draft 2020-12 como contratos revisables, sin afirmar una validación completa de una entrega. |
-| Base local del producto | **Planned** | Construir composición Go, resolución de almacenamiento, Chronicle, Gatekeeper, `MemoryStore` SQLite/FTS5 propio, inspección CLI y configuración mediante teclado con recuperación mediante copia de seguridad y relectura. |
-| Orquestación delimitada | **Planned** | Agregar enrutamiento Navigator, paquetes pequeños, modos operativos, resolución Registry, aprobaciones, continuidad y compatibilidad Engram opcional. |
+| Base local del producto | **Implemented** | Composición Go, resolución de almacenamiento, memoria propia SQLite/FTS5, CLI de memoria, status/doctor, pruebas y CI. |
+| Base de contratos | **Contracts-only** | Mantener documentación bilingüe, esquemas Draft 2020-12 y validación semántica sin afirmar orquestación. |
+| Lector Chronicle | **Partial** | Inspeccionar estrictamente el puntero de la ejecución actual; la escritura del historial operativo no está entregada. |
+| Base de orquestación ordenada | **Planned** | Agregar validación de contratos, eventos Chronicle, instantáneas/recuperación, máquina de estados de tareas, Gatekeeper/Registry, proveedores y luego coordinación delimitada. |
 | Adaptadores estructurales y de diseño | **Planned** | Agregar detección opcional de CodeGraph y OpenPencil, instalación por asistente, procedencia, alternativas seguras y validación Sentinel enfocada. |
 | Entrega segura | **Planned** | Agregar ciclo de vida de habilidades, soporte de worktrees/unidades de trabajo, presupuestos de revisión, salvaguardas Git, trabajo supervisado en segundo plano, revisiones delimitadas y recuperación. |
 | Expansión del ecosistema | **Deferred** | Agregar runtimes elegibles además de OpenCode, MCP local opcional, más clientes, recuperación semántica avanzada y superficies gráficas cuando los contratos sean estables. |
@@ -334,28 +349,28 @@ Este es un mapa de revisión, no un sustituto de las definiciones anteriores.
 
 | Área acordada | Autoridad en el plan maestro | Clasificación |
 | --- | --- | --- |
-| Resultado, estado, canonicidad y contrato bilingüe | Secciones 1-2 | Documentación **Current**; producto **Planned**. |
+| Resultado, estado, canonicidad y contrato bilingüe | Secciones 1-2 | **Implemented**, **Partial**, **Contracts-only** y **Planned** están respaldados por evidencia; el inglés es canónico. |
 | Control humano, enseñanza, orientación crítica e idioma | Secciones 3 y 7 | **Planned**. |
-| Paridad limpia, procedencia y copia prohibida | Sección 4 | Regla **Current**; copiar es **Non-goal**. |
+| Paridad limpia, procedencia y copia prohibida | Sección 4 | Regla documental **Implemented**; copiar es **Non-goal**. |
 | Capacidades, servicios, modos y adaptadores | Secciones 5, 6 y 10 | Taxonomía **Planned**. |
-| Plano Go, estado con prioridad local, TUI, CLI y OpenCode | Secciones 6-7 | **Planned**. |
+| Plano Go, estado con prioridad local, TUI, CLI y OpenCode | Secciones 6-7 | Go/CLI/almacenamiento **Implemented**; TUI, OpenCode y orquestación **Planned**. |
 | Safe, Balanced, Autonomous, Custom y arrendamientos | Secciones 7 y 11 | **Planned**; se mantienen controles estrictos. |
 | `direct`, `explore`, `plan`, `sdd`, `recovery`; `plan` frente a `tasks` | Sección 8 | **Planned** y explícitamente distintos. |
-| Preflight automático/interactivo y backends de artefactos | Sección 8 | **Planned**. |
+| Preflight automático/interactivo y backends de artefactos | Sección 8 | Identidad de backend **Contracts-only**; preflight de runtime **Planned**. |
 | Paquetes pequeños y cápsulas de continuidad | Sección 9 | **Planned**. |
-| Verdad operativa Chronicle y JSON/JSONL legible | Secciones 6 y 9 | **Planned**. |
-| Autoridad semántica SQLite/FTS5 propia y alcance del conocimiento duradero | Sección 9 | **Planned desde la base inicial**. |
+| Verdad operativa Chronicle y JSON/JSONL legible | Secciones 6 y 9 | Lector de ejecución actual **Partial**; eventos, instantáneas y recuperación **Planned**. |
+| Autoridad semántica SQLite/FTS5 propia y alcance del conocimiento duradero | Sección 9 | Base save/search/get **Implemented**; ciclo avanzado **Planned**. |
 | Adaptador opcional Engram de compatibilidad/importación/referencia | Secciones 6 y 9 | **Planned, opcional**. |
 | Inteligencia estructural CodeGraph e instalación por asistente | Secciones 7 y 10 | **Planned, opcional**, con alternativa. |
 | Diseño/prototipado OpenPencil e instalación por asistente | Secciones 7, 10 y 11 | **Planned, opcional**; sin promoción automática. |
 | Habilidades, resolución exacta, aprobaciones, revisiones y entrega | Sección 11 | **Planned**. |
 | Fallos, cancelación, recuperación y supervisión en segundo plano | Secciones 3, 9 y 11 | **Planned**. |
-| Esquemas Draft 2020-12 y límite de validación | Secciones 1-2 y [`schemas/README.md`](schemas/README.md) | Contratos **Current**; no se afirma la validación completa de una entrega. |
-| Entrega documental del plan maestro | Secciones 1-2 y este mapa | **Current**; no se entrega capacidad de runtime. |
+| Esquemas Draft 2020-12 y límite de validación | Secciones 1-2 y [`schemas/README.md`](schemas/README.md) | **Contracts-only**; no se afirma la validación completa de una entrega. |
+| Base de runtime entregada | Secciones 1-2 y este mapa | Binario, almacenamiento, CLI/almacén de memoria, inspección, pruebas y CI están **Implemented**; la orquestación no. |
 
 ## Documentos complementarios
 
 - [`../README.md`](../README.md) — estado del repositorio y entrada bilingüe a la documentación.
-- [`go-implementation.md`](go-implementation.md) — paquetes Go, interfaces, almacenamiento y límites de pruebas planificados.
-- [`orchestration-flow.md`](orchestration-flow.md) — ciclo de solicitud, controles, modos, autoridad de memoria y recuperación planificados.
-- [`schemas/README.md`](schemas/README.md) — índice actual de contratos legibles por máquinas y guía de validación disponible.
+- [`go-implementation.md`](go-implementation.md) — bases Go entregadas, paquetes planificados, interfaces, almacenamiento y límites de pruebas.
+- [`orchestration-flow.md`](orchestration-flow.md) — límites entregados de lector/memoria frente al ciclo de solicitud, controles, modos y recuperación planificados.
+- [`schemas/README.md`](schemas/README.md) — índice de contratos legibles por máquinas y guía de validación disponible; los contratos no implican entrega de runtime.
