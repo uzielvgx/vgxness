@@ -7,18 +7,24 @@
 
 This document is the sole canonical source for the VGXNESS product vision, vocabulary, boundaries, and roadmap. Supporting documents describe narrower contracts and workflows; they do not redefine this blueprint. If the Spanish companion differs, this English version controls.
 
-Status labels have precise meanings:
+Capability delivery labels have precise, evidence-backed meanings:
 
-- **Current** — present and verifiable in this repository now.
-- **Planned** — approved product direction that is not implemented yet.
-- **Deferred** — approved direction intentionally outside the first delivery horizon.
-- **Non-goal** — excluded behavior that requires a new scope decision before it can enter the roadmap.
+- **Implemented** — delivered behavior is present and verifiable on merged `main`.
+- **Partial** — a bounded subset is delivered; the named lifecycle or service is not complete.
+- **Contracts-only** — schemas or semantic rules exist, but they do not provide the runtime behavior they describe.
+- **Planned** — approved product direction has no delivered runtime behavior yet.
+
+**Deferred** and **Non-goal** remain scope labels, not delivery claims. Deferred work is approved but outside the current horizon; a non-goal requires a new scope decision before entering the roadmap. “Current” describes this document's freshness only.
 
 ## 1. Purpose and audience
 
-VGXNESS is for developers who want AI-assisted work to remain understandable, bounded, and recoverable. It is intended to become a local-first control plane that coordinates agents, skills, semantic memory, operational state, structural and design tools, and delivery safeguards without hiding consequential decisions inside prompts.
+VGXNESS is for developers who want AI-assisted work to remain understandable, bounded, and recoverable. It is growing from an implemented local foundation into a control plane that coordinates agents, skills, semantic memory, operational state, structural and design tools, and delivery safeguards without hiding consequential decisions inside prompts.
 
-**Current:** The repository provides independently authored product documentation and Draft 2020-12 contract schemas. It does not provide an executable product. Schema conformance can be checked with compatible validators, but a complete VGXNESS release validator and end-to-end runtime enforcement do not exist yet.
+**Implemented:** The repository builds a `vgxness` binary with application wiring, storage-root resolution, `status`/`doctor`, an owned SQLite/FTS5 memory store with two migrations, `memory save/search/get`, focused tests, and Go CI.
+
+**Partial:** Chronicle has strict, read-only parsing for `current-run.json`; it does not append events, write snapshots, or recover runs.
+
+**Contracts-only:** Independently authored Draft 2020-12 schemas and semantic backend validation define records and rules. They do not constitute orchestration or complete release validation.
 
 **Planned:** VGXNESS will guide ordinary scoped work quietly while preserving evidence for routing, approvals, artifacts, validation, and recovery. The human sets intent and approves consequential actions; the system makes bounded work easier to plan, execute, review, and resume.
 
@@ -34,14 +40,16 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 
 | Status | Scope |
 | --- | --- |
-| **Current** | Documentation plus runtime-neutral Draft 2020-12 JSON Schemas for orchestration, execution, registries, run snapshots, and append-only events. |
-| **Planned** | A globally installed Go control plane; keyboard-first setup; bounded capabilities; Chronicle operational storage; VGXNESS-owned SQLite/FTS5 semantic memory; approvals; validation; recovery; safe delivery; and optional runtime, structural-intelligence, design, MCP, and compatibility adapters. |
+| **Implemented** | Go binary and composition root; storage configuration; status/doctor inspection; owned SQLite/FTS5 memory with two migrations and save/search/get CLI operations; tests and Go CI. |
+| **Partial** | Strict read-only Chronicle `current-run.json` parsing and inspection; no event append, snapshot writer, replay, or recovery lifecycle. |
+| **Contracts-only** | Draft 2020-12 schemas and semantic backend/reference validation, including `memory` for owned memory and `engram` for external references; no orchestration service is implied. |
+| **Planned** | Contract validation in runtime paths, Chronicle events, snapshots/recovery, task state machine, Gatekeeper/Registry, providers, bounded coordination, keyboard-first setup, and optional adapters. |
 | **Deferred** | Additional runtime adapters, optional local MCP exposure, broader external MCP clients, richer semantic retrieval, and graphical product surfaces. |
 | **Non-goal** | Copied third-party artifacts, silent destructive autonomy, hidden operational truth, runtime or tool lock-in, unbounded agent loops, automatic prototype-to-production promotion, or a UI that owns business policy. |
 
-**Current:** No Go source, binary, installer, bundled skill catalog, runtime adapter, MCP server/client, persistence implementation, Git automation, or product configuration mutation is delivered by this repository.
+**Evidence boundary:** The implemented foundation is not an orchestration runtime. No task state machine, Gatekeeper/Registry service, provider execution, bounded coordination, installer, TUI, MCP server/client, Git automation, or product configuration mutation is delivered.
 
-**Current limitation:** The schemas under [`schemas/`](schemas/README.md) are current contracts for future implementations. Their `$schema` declarations and compatibility with Draft 2020-12 tooling do not prove complete semantic correctness or runtime enforcement.
+**Contracts-only limitation:** The schemas under [`schemas/`](schemas/README.md) describe future and partial behaviors. Their `$schema` declarations and compatibility with Draft 2020-12 tooling do not prove complete semantic correctness or runtime enforcement.
 
 ## 3. Product principles
 
@@ -65,7 +73,7 @@ VGXNESS may study systems such as Gentle AI, Engram, OpenCode, CodeGraph, OpenPe
 | Boundary | Decision |
 | --- | --- |
 | **Planned capability parity** | Independently provide useful orchestration, memory, skill, structural-analysis, design, review, recovery, and delivery outcomes. |
-| **Current authorship rule** | Product prose and schemas in this repository are VGXNESS-owned contracts and remain independently authored. |
+| **Implemented authorship rule** | Product prose and schemas in this repository are VGXNESS-owned contracts and remain independently authored. |
 | **Non-goal: copied artifacts** | Do not copy third-party code, prompts, schemas, names, skills, manifests, database layouts, or exact workflows. |
 | **Non-goal: disguised coupling** | Do not make a third-party runtime, tool, or store's private behavior the VGXNESS domain model. |
 | **Planned interoperability** | Integrate through documented adapters, capability contracts, stable references, and explicit provenance. |
@@ -85,34 +93,38 @@ VGXNESS uses four distinct concept groups. They must not be collapsed into a sin
 
 **Planned:** Capability names describe stable product responsibilities, not one process per name and not provider-specific prompt files. `sdd-design` is a Blueprint operating mode, `sdd-apply` is a Forge operating mode, and `sdd-verify` is a Sentinel operating mode.
 
-**Current:** Existing schema terms remain normative for machine-readable records. This blueprint owns the human-facing taxonomy, not schema field definitions.
+**Contracts-only:** Existing schema terms remain normative for machine-readable records. This blueprint owns the human-facing taxonomy, not schema field definitions.
+
+The delivery split is intentional: owned memory is **Implemented**, Chronicle reading is **Partial**, schemas and semantic rules are **Contracts-only**, and Registry, Gatekeeper, capabilities, operating modes, and provider execution are **Planned**.
 
 ## 6. System model
 
-**Planned:** VGXNESS will be a globally installed, local-first Go control plane with explicit package and dependency boundaries. The Go architecture is detailed in [`go-implementation.md`](go-implementation.md).
+VGXNESS has an **Implemented** local Go foundation and a **Planned** control plane with explicit package and dependency boundaries. The Go architecture is detailed in [`go-implementation.md`](go-implementation.md).
 
 ```text
-keyboard-first TUI / CLI / optional local MCP
-                    |
-             application services
-                    |
- Navigator + bounded capabilities and operating modes
-                    |
-       Registry + Chronicle + Gatekeeper
-                    |
- owned MemoryStore + optional external adapters
+planned TUI / implemented CLI / planned local MCP
+                         |
+          implemented composition and storage
+                         |
+      planned bounded coordination and providers
+                         |
+ planned Registry/Gatekeeper + partial Chronicle
+                         |
+ implemented MemoryStore + planned external adapters
 ```
 
 | Boundary | Status and responsibility |
 | --- | --- |
-| Go control plane | **Planned:** Own application policy, orchestration, installation services, validation, and composition. |
+| Go binary and composition | **Implemented:** Build a local binary and wire configuration, inspection, Chronicle reading, and memory commands. Orchestration policy is not present. |
+| CLI and storage roots | **Implemented:** Resolve project/user storage and provide status, doctor, and memory save/search/get. Recovery and automation commands remain planned. |
+| Owned MemoryStore | **Implemented:** SQLite/FTS5 semantic storage, migrations, lifecycle fields, filtered search, and provenance-backed records. |
+| Chronicle | **Partial:** Strict read-only current-run parsing and inspection only; events, snapshots, replay, and recovery remain planned. |
+| Schemas and semantic rules | **Contracts-only:** Define machine-readable shapes and backend/reference invariants without creating orchestration behavior. |
 | Keyboard-first TUI | **Planned:** Provide setup and focused interaction without owning installation or orchestration policy. |
-| CLI | **Planned:** Provide inspection, recovery, and automation; it is convenience, not lock-in. |
+| Bounded coordination | **Planned:** Add task state, Registry/Gatekeeper policy, providers, routing, approvals, and finite coordination loops. |
 | OpenCode adapter | **Planned:** First preferred runtime adapter, selected only when capability and policy checks pass. |
 | CodeGraph adapter | **Planned, optional:** Preferred structural-intelligence path when healthy and approved; filesystem analysis remains available. |
 | OpenPencil adapter | **Planned, optional:** Design and prototyping path; artifacts remain proposals until separately implemented and verified. |
-| Owned MemoryStore | **Planned from the initial foundation:** SQLite/FTS5-first semantic authority under VGXNESS control. |
-| Chronicle files | **Planned:** Readable snapshots, JSONL events, receipts, artifacts, and recovery evidence. |
 | Other runtime/MCP adapters | **Deferred:** Additional integrations may be added without changing core contracts. |
 
 **Non-goal:** No adapter may bypass Gatekeeper, redefine taxonomy, become operational truth, or embed policy that belongs in the control plane.
@@ -178,14 +190,14 @@ The `tasks` operating mode belongs inside SDD and converts approved requirements
 
 **Planned:** Automatic preflight uses policy and repository evidence and asks only on consequential ambiguity. Interactive preflight explains the meaningful choice before phase work.
 
-**Schema migration prerequisite:** The current SDD preflight schema accepts `engram`, `openspec`, `hybrid`, and `none`. Its `engram` token is transitional and cannot cleanly represent the planned owned-memory default. Before the first Go implementation, the schema must add a provider-neutral/configured `memory` backend token; required SDD with the owned `MemoryStore` cannot ship until then. Engram remains only an optional compatibility/import adapter.
+**Contracts-only:** The owned-backend contract already uses `memory`; `engram` identifies only an external-provider reference. No memory-backend schema migration remains as an implementation prerequisite. Runtime preflight resolution and SDD artifact persistence are still planned.
 
-| User-facing store | Planned backend after migration | Behavior |
+| User-facing store | Contract mapping | Delivery and behavior |
 | --- | --- | --- |
-| `memory` | `memory` → configured `MemoryStore` | Persist SDD artifacts through immutable memory references. VGXNESS-owned memory is the planned default; this row becomes contract-valid only after the prerequisite migration, not by relabeling owned memory as `engram`. |
-| `openspec` | `openspec` | Persist artifacts in the repository's OpenSpec structure. |
-| `both` | `hybrid` | Keep memory and filesystem artifacts synchronized. |
-| disabled | `none` | Perform no SDD artifact access when policy permits skipping it. |
+| `memory` | `memory` → configured `MemoryStore` | **Contracts-only for SDD artifacts:** use immutable owned-memory references; the general MemoryStore is implemented, but SDD artifact-store integration is not. |
+| `openspec` | `openspec` | **Contracts-only:** persist artifacts in the repository's OpenSpec structure when runtime preflight is implemented. |
+| `both` | `hybrid` | **Contracts-only:** keep memory and filesystem artifacts synchronized when runtime preflight is implemented. |
+| disabled | `none` | **Contracts-only:** perform no SDD artifact access when policy permits skipping it. |
 
 Phase order is evidence-driven rather than ceremonial. A phase may be skipped only when its required artifact or decision exists and remains valid. Apply follows approved requirements and design; verify proves the result; archive closes and synchronizes final state.
 
@@ -193,17 +205,17 @@ Phase order is evidence-driven rather than ceremonial. A phase may be skipped on
 
 ### Thin context
 
-**Planned:** Each bounded task receives the goal, scope, allowed paths and tools, immutable artifact references, exact skill references, acceptance criteria, approval state, and return contract. A continuity capsule preserves decisions, state references, provenance, completed and next actions, blockers, and recovery guidance without copying the transcript.
+**Contracts-only:** Schemas define thin packets and continuity records with goals, scope, allowed paths and tools, immutable artifact references, exact skill references, acceptance criteria, approval state, and return contracts. Runtime construction and enforcement are **Planned**.
 
 ### Semantic authority and operational truth
 
 | Concern | Status and owner |
 | --- | --- |
-| Chronicle | **Planned:** Operational authority for events, execution state, snapshots, receipts, approvals, artifact references, checkpoints, results, cancellations, and replay. |
-| VGXNESS MemoryStore | **Planned from the initial Go foundation:** Semantic authority for durable decisions, preferences, conventions, discoveries, bug causes, constraints, approvals and their rationale, lessons, summaries, continuity capsules, and artifact references. |
-| SQLite/FTS5 | **Planned from the initial Go foundation:** Owned local persistence and lexical retrieval, introduced incrementally behind `MemoryStore`; richer semantic indexing may follow. |
+| Chronicle | **Partial:** Strictly reads and validates the active `current-run.json`. Event append, execution state, snapshots, receipts, checkpoints, replay, and recovery remain planned. |
+| VGXNESS MemoryStore | **Implemented:** Semantic authority for typed durable observations with identity, scope, topic, provenance, lifecycle state, references, save/search/get, and session metadata. Higher-level approval and continuity workflows remain planned. |
+| SQLite/FTS5 | **Implemented:** Owned local persistence, two migrations, deterministic filtering, and lexical retrieval behind `MemoryStore`; richer semantic indexing remains planned. |
 | Engram adapter | **Planned, optional:** Compatibility, import, and reference bridge. It may preserve external IDs and provenance but does not own VGXNESS semantics. |
-| Project/user roots | **Planned:** Explicit project-local `.vgxness/` or user-global `~/.vgxness/projects/<project-id>/` storage policy. |
+| Project/user roots | **Implemented:** Resolve project-local `.vgxness/` or user-global `~/.vgxness/projects/<project-id>/` storage. |
 
 Memory entries carry stable IDs, type, topic, content, provenance, timestamps, scope, lifecycle state, and references. Search starts with deterministic filters and FTS5; summaries and embeddings may supplement retrieval later without replacing source records.
 
@@ -213,19 +225,19 @@ Chronicle and semantic memory may cross-reference each other but never substitut
 
 | Stage | Owned-store behavior |
 | --- | --- |
-| Capture | Accept a typed durable observation with source, scope, and evidence; reject raw operational noise. |
-| Normalize | Assign stable identity, topic, timestamps, lifecycle metadata, and immutable source references. |
-| Retrieve | Apply scope/type/lifecycle filters before FTS5 ranking and return provenance with every result. |
-| Compare | Preserve compatible, related, scoped, conflicting, or superseding relationships without deleting history silently. |
-| Review | Surface stale or review-due knowledge before it is trusted as current fact. |
-| Summarize | Create derived summaries that reference source entries rather than replacing them. |
-| Import | Translate optional Engram records with source IDs and import provenance; never overwrite authority silently. |
+| Capture | **Implemented:** Accept a typed durable observation with source, scope, and evidence; reject invalid input. |
+| Normalize | **Implemented:** Assign stable identity, topic, timestamps, lifecycle metadata, and source references. |
+| Retrieve | **Implemented:** Apply deterministic filters before FTS5 ranking and return provenance. |
+| Compare | **Planned:** Preserve compatible, related, scoped, conflicting, or superseding relationships without deleting history silently. |
+| Review | **Planned:** Surface stale or review-due knowledge before it is trusted as current fact. |
+| Summarize | **Planned:** Create derived summaries that reference source entries rather than replacing them. |
+| Import | **Planned:** Translate optional Engram records with source IDs and import provenance; never overwrite authority silently. |
 
 Retention, redaction, export, backup, and migration remain explicit application services. Memory writes respect project/user scope and secret policy. Deleting or rewriting durable knowledge is consequential and cannot be smuggled through an ordinary edit lease.
 
 ### Recovery and authority conflicts
 
-Recovery first reconstructs operational state from Chronicle snapshots, events, receipts, artifacts, and cancellations. It then retrieves semantic context to explain intent, constraints, prior lessons, and expected next actions. If the sources disagree, VGXNESS records a conflict reference, keeps the last valid operational state, and asks for correction or approval when evidence cannot resolve it. A semantic summary never repairs or advances a run by itself.
+**Planned:** Recovery first reconstructs operational state from Chronicle snapshots, events, receipts, artifacts, and cancellations. It then retrieves semantic context to explain intent, constraints, prior lessons, and expected next actions. The current Chronicle reader alone does not perform this lifecycle. If sources disagree, recovery will keep the last valid operational state and require correction or approval; semantic memory never repairs or advances a run by itself.
 
 ## 10. Capabilities, services, and optional adapters
 
@@ -244,9 +256,9 @@ Recovery first reconstructs operational state from Chronicle snapshots, events, 
 
 | Service | Planned responsibility | Hard boundary |
 | --- | --- | --- |
-| Registry | Resolve exact agent, skill, adapter, version, source, provenance, capability, permission, and scope. | Rejects unresolved or out-of-scope references. |
-| Chronicle | Record correlated operational facts and expose consistent state for inspection and recovery. | Never invents missing state or becomes semantic memory. |
-| Gatekeeper | Enforce eligibility, schemas, permissions, leases, approvals, roots/tools, loop budgets, and transitions. | Fails closed and never asks an LLM to improvise policy. |
+| Registry | **Planned:** Resolve exact agent, skill, adapter, version, source, provenance, capability, permission, and scope. | Rejects unresolved or out-of-scope references. |
+| Chronicle | **Partial:** Read and validate the current-run pointer. Event recording and recovery state remain planned. | Never invents missing state or becomes semantic memory. |
+| Gatekeeper | **Planned:** Enforce eligibility, schemas, permissions, leases, approvals, roots/tools, loop budgets, and transitions. | Fails closed and never asks an LLM to improvise policy. |
 
 ### CodeGraph structural-intelligence adapter
 
@@ -309,11 +321,14 @@ Navigator may start concurrent work only when safe. Every background task is man
 
 ### Delivery horizons
 
+Delivery follows one dependency order: **contract validation → Chronicle events → snapshots/recovery → task state machine → Gatekeeper/Registry → providers → bounded coordination**. Implemented memory and CLI foundations support this sequence but do not skip any orchestration dependency.
+
 | Horizon | Status | Outcome |
 | --- | --- | --- |
-| Contract foundation | **Current** | Maintain independently authored bilingual product documentation and Draft 2020-12 schemas as reviewable contracts, without claiming full release validation. |
-| Local product foundation | **Planned** | Build Go composition, storage resolution, Chronicle, Gatekeeper, owned SQLite/FTS5 `MemoryStore`, CLI inspection, and keyboard-first setup with backup/readback recovery. |
-| Bounded orchestration | **Planned** | Add Navigator routing, thin packets, operating modes, Registry resolution, approvals, continuity, and optional Engram compatibility. |
+| Local product foundation | **Implemented** | Go composition, storage resolution, owned SQLite/FTS5 memory, memory CLI, status/doctor, tests, and CI. |
+| Contract foundation | **Contracts-only** | Maintain bilingual documentation, Draft 2020-12 schemas, and semantic validation without claiming orchestration. |
+| Chronicle reader | **Partial** | Strictly inspect the current-run pointer; writing operational history is not delivered. |
+| Ordered orchestration foundation | **Planned** | Add contract validation, Chronicle events, snapshots/recovery, task state machine, Gatekeeper/Registry, providers, then bounded coordination. |
 | Structural and design adapters | **Planned** | Add optional CodeGraph and OpenPencil detection, wizard installation, provenance, safe fallbacks, and focused Sentinel validation. |
 | Safe delivery | **Planned** | Add skill lifecycle, worktree/work-unit support, review budgets, Git safeguards, supervised background work, bounded reviews, and recovery. |
 | Ecosystem expansion | **Deferred** | Add eligible runtimes beyond OpenCode, optional local MCP, broader clients, richer semantic retrieval, and graphical surfaces when contracts are stable. |
@@ -334,28 +349,28 @@ This is a review map, not a substitute for the definitions above.
 
 | Agreed area | Blueprint authority | Classification |
 | --- | --- | --- |
-| Product outcome, status, canonicality, and bilingual contract | Sections 1-2 | **Current** documentation; **Planned** product. |
+| Product outcome, status, canonicality, and bilingual contract | Sections 1-2 | **Implemented**, **Partial**, **Contracts-only**, and **Planned** are evidence-backed; English is canonical. |
 | Human control, pedagogy, critical guidance, and language | Sections 3 and 7 | **Planned**. |
-| Clean-room parity, provenance, and prohibited copying | Section 4 | **Current** rule; copying is a **Non-goal**. |
+| Clean-room parity, provenance, and prohibited copying | Section 4 | **Implemented** documentation rule; copying is a **Non-goal**. |
 | Capabilities, services, operating modes, and adapters | Sections 5, 6, and 10 | **Planned** taxonomy. |
-| Go control plane, local-first state, TUI, CLI, and OpenCode | Sections 6-7 | **Planned**. |
+| Go control plane, local-first state, TUI, CLI, and OpenCode | Sections 6-7 | Go/CLI/storage **Implemented**; TUI, OpenCode, and orchestration **Planned**. |
 | Safe, Balanced, Autonomous, Custom, and capability leases | Sections 7 and 11 | **Planned**; hard gates remain. |
 | `direct`, `explore`, `plan`, `sdd`, `recovery`; `plan` versus `tasks` | Section 8 | **Planned** and explicitly distinct. |
-| Automatic/interactive preflight and artifact backends | Section 8 | **Planned**. |
+| Automatic/interactive preflight and artifact backends | Section 8 | Backend identity **Contracts-only**; runtime preflight **Planned**. |
 | Thin packets and continuity capsules | Section 9 | **Planned**. |
-| Chronicle operational truth and readable JSON/JSONL | Sections 6 and 9 | **Planned**. |
-| Owned SQLite/FTS5 semantic authority and durable knowledge scope | Section 9 | **Planned from initial foundation**. |
+| Chronicle operational truth and readable JSON/JSONL | Sections 6 and 9 | Current-run reader **Partial**; events, snapshots, and recovery **Planned**. |
+| Owned SQLite/FTS5 semantic authority and durable knowledge scope | Section 9 | Core save/search/get foundation **Implemented**; advanced lifecycle **Planned**. |
 | Optional Engram compatibility/import/reference adapter | Sections 6 and 9 | **Planned, optional**. |
 | Optional CodeGraph structural intelligence and wizard install | Sections 7 and 10 | **Planned, optional**, with fallback. |
 | Optional OpenPencil design/prototyping and wizard install | Sections 7, 10, and 11 | **Planned, optional**; no automatic promotion. |
 | Skills, exact resolution, approvals, reviews, and delivery | Section 11 | **Planned**. |
 | Failure, cancellation, recovery, and background supervision | Sections 3, 9, and 11 | **Planned**. |
-| Draft 2020-12 schemas and validation limitation | Sections 1-2 and [`schemas/README.md`](schemas/README.md) | **Current** contracts; full release validation is not claimed. |
-| Documentation-only blueprint delivery | Sections 1-2 and this map | **Current**; no runtime capability is delivered. |
+| Draft 2020-12 schemas and validation limitation | Sections 1-2 and [`schemas/README.md`](schemas/README.md) | **Contracts-only**; full release validation is not claimed. |
+| Delivered runtime foundation | Sections 1-2 and this map | Binary, storage, memory CLI/store, inspection, tests, and CI are **Implemented**; orchestration is not. |
 
 ## Supporting documents
 
 - [`../README.md`](../README.md) — repository status and bilingual documentation entry point.
-- [`go-implementation.md`](go-implementation.md) — planned Go packages, interfaces, storage, and testing boundaries.
-- [`orchestration-flow.md`](orchestration-flow.md) — planned request lifecycle, gates, operating modes, memory authority, and recovery flow.
-- [`schemas/README.md`](schemas/README.md) — current machine-readable contract index and available validation guidance.
+- [`go-implementation.md`](go-implementation.md) — delivered Go foundations, planned packages, interfaces, storage, and testing boundaries.
+- [`orchestration-flow.md`](orchestration-flow.md) — delivered reader/memory boundaries versus planned request lifecycle, gates, operating modes, and recovery.
+- [`schemas/README.md`](schemas/README.md) — machine-readable contract index and available validation guidance; contracts do not imply runtime delivery.

@@ -1,6 +1,13 @@
 # VGXNESS Go Implementation Architecture
 
-**Planned:** This document owns future Go package, interface, dependency, and testing boundaries. The [VGXNESS Product Blueprint](product-blueprint.md) is the canonical product vision, taxonomy, status, and roadmap; no Go implementation is present in this repository today.
+This document owns Go package, interface, dependency, and testing boundaries. The [VGXNESS Product Blueprint](product-blueprint.md) is the canonical product vision, taxonomy, status, and roadmap.
+
+| Status | Merged-main evidence and boundary |
+| --- | --- |
+| **Implemented** | `cmd/vgxness`, application wiring, storage configuration, status/doctor inspection, owned SQLite/FTS5 memory with two migrations, memory save/search/get CLI operations, tests, and Go CI. |
+| **Partial** | `internal/chronicle` strictly reads `current-run.json`; it does not append events, write snapshots, replay, or recover runs. |
+| **Contracts-only** | Draft 2020-12 schemas and semantic backend/reference validation define shapes and rules without providing orchestration. |
+| **Planned** | Contract validation in runtime paths, Chronicle events, snapshots/recovery, task state machine, Gatekeeper/Registry, providers, bounded coordination, setup, and adapters. |
 
 VGXNESS is designed as a small, explicit Go control plane for adaptive agent orchestration. It will ship as a globally installed system on the user's machine. Go fits because the system needs a dependable local binary, readable storage, auditable workflow state, and testable package boundaries more than a framework-heavy stack.
 
@@ -8,17 +15,16 @@ OpenCode is the first preferred runtime adapter. At run start, a provider-neutra
 
 Capability names such as Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger belong to the canonical product taxonomy. Names such as explore, design, apply, and verify describe SDD phase-agent operating modes that use those capabilities; they are not additional product capabilities.
 
-This document defines future package and interface boundaries only. The current documentation/schema repository adds no Go source, provider execution, configuration mutation, or runtime migration branch.
+The implemented foundation is deliberately narrower than the target architecture. No provider execution, task state machine, Gatekeeper/Registry service, bounded coordination, setup workflow, or runtime configuration mutation is present.
 
 ## Quick path
 
-1. Build and globally install a single `vgxness` binary from `cmd/vgxness`.
-2. Keep orchestration, run storage, memory, provider, skill, and permission logic in focused `internal/` packages.
-3. Persist operational truth as JSON snapshots plus JSONL events first.
-4. Build the initial owned semantic `MemoryStore` incrementally on SQLite/FTS5; keep Engram behind an optional compatibility/import/reference adapter.
-5. Make a keyboard-first OpenCode setup wizard the primary installation experience while keeping it separate from normal runtime logic.
-6. Keep terminal interfaces as adapters over readable files and application services.
-7. Keep foreground run advancement sequential; permit only manager-owned, read-only background tasks.
+1. **Implemented:** Build a single `vgxness` binary from `cmd/vgxness`; resolve storage roots; expose status/doctor and memory save/search/get.
+2. **Implemented:** Keep owned semantic memory on SQLite/FTS5; `memory` is the owned-backend contract and `engram` is only an external-provider reference.
+3. **Partial:** Strictly read the Chronicle current-run pointer for inspection.
+4. **Contracts-only:** Maintain schemas and semantic validation without treating them as a runtime.
+5. **Planned:** Deliver in this dependency order: **contract validation → Chronicle events → snapshots/recovery → task state machine → Gatekeeper/Registry → providers → bounded coordination**.
+6. **Planned:** Add keyboard-first setup and optional adapters over application services without moving policy into terminal UI.
 
 ## Why Go fits VGXNESS
 
@@ -40,49 +46,49 @@ This document defines future package and interface boundaries only. The current 
 - No CLI lock-in. Users and recovery flows should still understand the state by reading files.
 - No TUI-owned business logic. Setup screens render state and collect decisions; installation, memory, and orchestration remain independent services.
 - No Engram coupling in orchestration contracts. VGXNESS-owned memory is authoritative; Engram is an optional compatibility/import/reference adapter.
-- No provider execution, runtime configuration mutation, nested delegation, or owned memory implementation in the schema/documentation phase.
+- No claim that schemas, the Chronicle reader, or implemented memory constitute provider execution, task-state, recovery, or orchestration behavior.
 
-## Proposed package layout
+## Package delivery map
 
 ```text
 cmd/vgxness
 internal/app
 internal/config
-internal/runstore
 internal/memory
-internal/agents
-internal/orchestrator
-internal/skills
-internal/providers
-internal/install
-internal/permissions
-internal/validation
 internal/cli
+internal/inspection
+internal/chronicle
+internal/contracts
+
+# planned additions
+internal/runstore
+internal/taskstate
+internal/registry
+internal/gatekeeper
+internal/providers
+internal/orchestrator
+internal/install
 internal/setup
 internal/tui
 ```
 
-| Package | Responsibility |
-| --- | --- |
-| `cmd/vgxness` | Binary entrypoint. Parse process startup concerns and call `internal/app`. |
-| `internal/app` | Composition root. Wire config, stores, providers, orchestrator, validation, and CLI commands. |
-| `internal/config` | Load defaults, user config, project config, environment overrides, and storage-root settings. |
-| `internal/runstore` | Own operational truth: current run, run snapshots, JSONL events, artifact references, checkpoints, and recovery reads. |
-| `internal/memory` | Define semantic-memory contracts, the owned SQLite/FTS5 implementation, lifecycle and retrieval policy, plus optional compatibility/import/reference adapters such as Engram. |
-| `internal/agents` | Define agent manifests, subagent contracts, result envelopes, capability metadata, and prompt contract references. |
-| `internal/orchestrator` | Coordinate phases, context packets, delegation decisions, approval gates, and final summaries. |
-| `internal/skills` | Resolve skills by explicit path, registry entry, trigger, and scoped fallback. Avoid paraphrasing skill contracts. |
-| `internal/providers` | Adapter boundary for supported agent runtimes and model/provider execution. OpenCode is first; no run-store policy decisions belong here. |
-| `internal/install` | Runtime-neutral installation services for backup, configuration projection, readback validation, and recovery; runtime adapters supply paths and schemas. |
-| `internal/permissions` | Centralize allowed actions, approval requirements, and deny-by-default policy checks. |
-| `internal/validation` | Validate schemas, readback consistency, phase results, recovery safety, and completion gates. |
-| `internal/cli` | Command definitions and user-facing formatting for `status`, `run inspect`, `doctor`, and future commands. |
-| `internal/setup` | Coordinate runtime-neutral detection, installation plans, progress, validation, and recovery independently of any UI; v1 is composed with the OpenCode adapter. |
-| `internal/tui` | Render the keyboard-first setup wizard and translate user input into setup application-service calls. Own no installation, memory, or orchestration policy. |
+| Package | Status | Responsibility |
+| --- | --- | --- |
+| `cmd/vgxness`, `internal/app` | **Implemented** | Binary entrypoint and composition for current configuration, inspection, Chronicle reader, and memory commands. |
+| `internal/config` | **Implemented** | Resolve defaults and explicit project-local or user-global storage roots. |
+| `internal/memory` | **Implemented** | Own SQLite/FTS5 persistence, migrations, typed records, lifecycle fields, save/search/get, and deterministic filtering. |
+| `internal/cli`, `internal/inspection` | **Implemented** | Expose status, doctor, and memory operations with safe output and operational error classes. |
+| `internal/chronicle` | **Partial** | Strictly read and validate `current-run.json`; no event or snapshot writes. |
+| `internal/contracts` | **Contracts-only** | Enforce owned `memory` versus external `engram` reference semantics; schema shapes remain contracts. |
+| `internal/runstore`, `internal/taskstate` | **Planned** | Add Chronicle events and snapshots/recovery before legal task transitions. |
+| `internal/registry`, `internal/gatekeeper` | **Planned** | Resolve exact identities and enforce permissions, approvals, capabilities, and transitions after task state exists. |
+| `internal/providers` | **Planned** | Execute eligible runtime/model providers only after Registry/Gatekeeper decisions. |
+| `internal/orchestrator` | **Planned** | Coordinate bounded phases only after all preceding operational dependencies exist. |
+| `internal/install`, `internal/setup`, `internal/tui` | **Planned** | Provide runtime-neutral setup services and a keyboard-first adapter without owning orchestration policy. |
 
 ## Dependency rules
 
-Keep dependencies pointed toward stable contracts, not convenience shortcuts.
+Keep dependencies pointed toward stable contracts, not convenience shortcuts. These are **Contracts-only** architecture rules until the named planned packages exist.
 
 | Rule | Reason |
 | --- | --- |
@@ -99,7 +105,7 @@ Keep dependencies pointed toward stable contracts, not convenience shortcuts.
 
 ## Storage choices
 
-Keep Chronicle operational truth in readable local files:
+Chronicle's target operational truth remains readable local files:
 
 - `current-run.json` for the active run pointer and current phase.
 - `runs/<run-id>.json` for the full run snapshot.
@@ -107,13 +113,15 @@ Keep Chronicle operational truth in readable local files:
 - `artifacts/<change-id>/...` for generated SDD or workflow artifacts when file storage is selected.
 - `registry/skills.json` and `registry/agents.json` for generated registries.
 
-Use JSON snapshots plus JSONL events for Chronicle because they are easy to inspect, diff, validate, back up, and recover after interruption. Separately, introduce SQLite/FTS5 in the initial foundation for owned semantic records and deterministic lexical retrieval. The two stores may cross-reference IDs, but semantic memory never resolves operational state; Chronicle receipts and events control when authorities disagree.
+**Partial:** The current implementation only reads and validates `current-run.json`; snapshot and JSONL writers do not exist. **Implemented:** SQLite/FTS5 stores owned semantic records with two migrations, deterministic filters, and lexical retrieval. The stores may eventually cross-reference IDs, but implemented semantic memory does not resolve operational state.
+
+Chronicle delivery must proceed from contract validation to event append, then snapshots/recovery. Task transitions cannot depend on operational state until those layers are verifiable.
 
 ## Interfaces
 
 Keep interfaces small and close to the package that consumes them. Do not create broad manager interfaces just because a concrete package exists.
 
-Example consumer-side interfaces for `internal/orchestrator`:
+The following are **Contracts-only** examples for the planned `internal/orchestrator`; no orchestrator currently consumes them:
 
 ```go
 type RunStore interface {
@@ -144,9 +152,9 @@ type ContractValidator interface {
 
 If a caller only needs `AppendEvent`, define an even smaller interface in that caller. Interfaces should describe what the consumer needs, not every method the provider can perform.
 
-The orchestrator consumes these small interfaces. Provider selection records the neutral provider reference and capability evidence, never mutable provider configuration. `ContractValidator` returns `contract.invalid` details with schema URI and JSON Pointer before delegation or state mutation.
+The planned orchestrator will consume these small interfaces. Provider selection will record a neutral provider reference and capability evidence, never mutable provider configuration. Runtime `ContractValidator` behavior must be delivered before delegation or state mutation.
 
-The first `MemoryStore` implementation is VGXNESS-owned and SQLite/FTS5-first. It stores durable decisions, preferences, conventions, discoveries, bug causes, constraints, approval rationale, lessons, summaries, continuity capsules, and artifact references with provenance and lifecycle state. Engram-specific IDs and lifecycle behavior are translated only inside the optional adapter and never exposed as core authority.
+The **Implemented** `MemoryStore` is VGXNESS-owned and SQLite/FTS5-first. It stores typed observations with provenance, scope, topic, lifecycle state, references, and save/search/get behavior. Richer approval, summary, capsule, comparison, review, and optional Engram import workflows remain **Planned**; the owned-backend contract already uses `memory`, so no backend migration is pending.
 
 ## Adaptive execution boundaries
 
@@ -161,7 +169,7 @@ The first `MemoryStore` implementation is VGXNESS-owned and SQLite/FTS5-first. I
 | Loops | Enforce finite iteration/deadline budgets and explicit terminal reasons. |
 | Continuity | Persist decisions, state references, provenance, and next actions in a capsule rather than a transcript. |
 
-Schema validation runs at registry/config ingestion, before delegation, before event append or snapshot write, and during readback. Semantic validation follows it for capability satisfaction, reference resolution, legal state transitions, background restrictions, ID consistency, and loop terminality. A failed check preserves the last valid state.
+**Contracts-only:** Schemas and semantic rules define validation points and legal records. **Planned:** Runtime validation will run at ingestion, before Chronicle event/snapshot writes, before delegation, and during readback; a failed check will preserve the last valid state.
 
 ## Setup wizard boundary
 
@@ -200,26 +208,26 @@ Use Go's standard `testing` package first.
 
 | Area | Test style |
 | --- | --- |
-| Config loading | Table-driven tests for defaults, overrides, invalid files, and storage-root resolution. |
-| Run store | Temporary directories, JSON snapshot readback, JSONL append/read behavior, interruption edge cases. |
-| Memory | Fakes for semantic save/search behavior and topic-key handling. |
-| Orchestrator | Fakes for stores, skills, agents, permissions, providers, and validation gates. Test phase decisions and blocked states. |
-| Permissions | Table-driven allow/deny cases for git, install, external, destructive, secret, and permission-expansion actions. |
-| Validation | Schema/readback consistency tests and snapshot/event mismatch cases. |
-| CLI | Output-focused tests against app service fakes; avoid coupling tests to terminal trivia. |
+| Config loading | **Implemented:** table-driven coverage for storage-root resolution and invalid input. |
+| Memory | **Implemented:** service and SQLite tests for save/search/get, validation, FTS5, migrations, and error handling. |
+| Chronicle reader | **Partial:** strict current-run parsing, malformed input, symlink, and cancellation cases. Event/snapshot tests await writers. |
+| Contract semantics | **Contracts-only:** tests verify owned `memory`, external `engram` references, and selected schema invariants. |
+| CLI/application | **Implemented:** output and wiring tests for status, doctor, and memory commands. |
+| Run store, task state, Registry/Gatekeeper, providers, orchestrator | **Planned:** add behavior tests with fakes as each dependency layer is delivered. |
 
 Prefer behavior tests over implementation trivia. Each package should be testable without real providers, real Engram, external network calls, package installation, or git operations.
 
 ## First version scope in Go
 
-Build the smallest useful product slice:
+Continue from the delivered foundation in dependency order:
 
-1. Create the globally installed `vgxness` binary and explicit dependency wiring.
-2. Add a keyboard-first OpenCode setup wizard backed by UI-independent, runtime-neutral setup services.
-3. Detect OpenCode, back up its existing configuration, project VGXNESS through the OpenCode adapter, report progress, read the result back for validation, and expose actionable retry, repair, or rollback recovery.
-4. Add `internal/config` storage-root resolution for project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/`.
-5. Add `internal/runstore` support for `current-run.json`, `runs/<run-id>.json`, and `logs/<run-id>.jsonl` using the existing schemas.
-6. Add the owned SQLite/FTS5 `MemoryStore` for semantic save, filtered search, lifecycle state, and session summaries; add Engram only as an optional compatibility/import/reference adapter.
-7. Add `internal/validation` readback checks and minimal `status`, `run inspect <run-id>`, and `doctor` commands.
+1. **Implemented:** Create the `vgxness` binary and explicit wiring.
+2. **Implemented:** Resolve project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/` storage.
+3. **Implemented:** Add SQLite/FTS5 memory save/search/get, lifecycle fields, migrations, status/doctor, tests, and CI.
+4. **Partial:** Read and validate `current-run.json` for inspection.
+5. **Planned:** Add runtime contract validation, then Chronicle event append.
+6. **Planned:** Add snapshots/recovery, then a legal task state machine.
+7. **Planned:** Add Gatekeeper/Registry, then provider execution, then bounded coordination.
+8. **Planned:** Add keyboard-first OpenCode setup and optional adapters after the core boundaries are enforceable.
 
 The first version does not include a graphical installer, multi-user sync, distributed scheduling, autonomous destructive actions, advanced embedding infrastructure, or runtime adapters beyond OpenCode. Its orchestration, installation, Chronicle, memory, adapter, and permission contracts must permit later runtimes and optional Engram interoperability without changing core authority.

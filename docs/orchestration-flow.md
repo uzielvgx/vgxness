@@ -1,14 +1,25 @@
 # VGXNESS Orchestration Flow
 
-**Planned:** This document owns the future request lifecycle, gates, phase operating modes, and recovery flow. The [VGXNESS Product Blueprint](product-blueprint.md) is the canonical product vision, taxonomy, status, and roadmap; no orchestration runtime is present today.
+This document owns the request lifecycle, gates, phase operating modes, and recovery contract. The [VGXNESS Product Blueprint](product-blueprint.md) is the canonical product vision, taxonomy, status, and roadmap.
 
-VGXNESS coordinates work through a configurable, provider-neutral orchestrator and scoped agents. The selected manager owns intent, routing, safety, and summaries; agents execute inside narrow boundaries and return structured results. OpenCode is the first preferred runtime adapter, not a core dependency. Chronicle is operational truth, while the VGXNESS-owned SQLite/FTS5 `MemoryStore` is semantic authority for durable meaning; Engram is an optional compatibility/import/reference adapter.
+| Status | Merged-main evidence and boundary |
+| --- | --- |
+| **Implemented** | Local binary, storage resolution, status/doctor, and owned SQLite/FTS5 memory save/search/get. |
+| **Partial** | Strict read-only Chronicle `current-run.json` parsing and inspection; no event append, snapshots, replay, or recovery. |
+| **Contracts-only** | Schemas and semantic backend/reference validation describe orchestration records and rules without executing them. |
+| **Planned** | Task state, Gatekeeper/Registry, provider execution, routing, approvals, recovery, and bounded coordination. |
+
+**Planned:** VGXNESS will coordinate work through a configurable, provider-neutral orchestrator and scoped agents. The selected manager will own intent, routing, safety, and summaries; agents will execute inside narrow boundaries and return structured results. OpenCode is the first preferred runtime adapter, not a core dependency.
+
+**Implemented:** The VGXNESS-owned SQLite/FTS5 `MemoryStore` provides local semantic persistence. **Partial:** Chronicle can inspect only the current-run pointer. **Planned:** Chronicle operational truth, optional Engram compatibility, and orchestration services.
 
 Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger are product capabilities; Registry, Chronicle, and Gatekeeper are deterministic services. The explore, propose, spec, design, tasks, apply, verify, archive, fix, and recovery agents described here are operating modes that use those capabilities, not a competing capability taxonomy.
 
 In this workflow, “manager” or “orchestrator” denotes Navigator's coordinating context; it is not an additional product capability.
 
 ## Quick path
+
+The flow below is **Planned**, not a description of the current binary. Its implementation order is fixed: **contract validation → Chronicle events → snapshots/recovery → task state machine → Gatekeeper/Registry → providers → bounded coordination**.
 
 ```text
 User request
@@ -25,18 +36,18 @@ User request
   -> manager returns a short summary in the user's language
 ```
 
-Normal flow should stay quiet. Inspection commands such as `vgxness status`, `vgxness run inspect <run-id>`, and `vgxness doctor` are for debugging, auditing, and recovery, not mandatory ceremony.
+`vgxness status` and `vgxness doctor` are **Implemented** inspection commands. `run inspect`, orchestration, and recovery are **Planned**; inspection remains debugging/auditing rather than mandatory ceremony.
 
 ## Core decisions
 
 | Area | Decision |
 | --- | --- |
-| Manager role | Coordinator, not executor. It should route work, enforce boundaries, and summarize outcomes. |
-| Subagent role | Scoped executor or reviewer. It should do the assigned work and return structured results. |
-| Subagent nesting | No subagent should silently create another subagent in v1. The manager owns delegation. |
-| Operational truth | The run store records phases, events, artifacts, checkpoints, failures, and validation. |
-| Semantic authority | The owned `MemoryStore` records durable decisions, preferences, conventions, discoveries, bug causes, constraints, approval rationale, lessons, summaries, capsules, and artifact references. Engram may import or reference compatible records but does not control authority. |
-| Recovery source | Readable files remain the recovery source. The CLI/binary is convenience, not lock-in. |
+| Manager role | **Planned:** Coordinator, not executor. It routes work, enforces boundaries, and summarizes outcomes. |
+| Subagent role | **Planned:** Scoped executor or reviewer that returns structured results. |
+| Subagent nesting | **Contracts-only:** No subagent silently creates another subagent in v1; runtime enforcement is planned. |
+| Operational truth | **Partial:** Chronicle reads the current-run pointer. Events, snapshots, artifacts, checkpoints, failures, and validation are planned. |
+| Semantic authority | **Implemented:** The owned `MemoryStore` persists typed observations with provenance and lifecycle state. Higher-level approval, summary, capsule, and optional Engram workflows are planned. |
+| Recovery source | **Planned:** Readable snapshots and events remain the recovery source; the CLI stays convenience, not lock-in. |
 | User experience | Happy path is quiet. Detailed inspection is available on demand. |
 | Provider selection | Compare run needs with declared capabilities, versions, constraints, and policy; fail closed before execution. |
 | Routing | Persist normalized inputs, candidates, selected route, rationale, policy version, SDD decision, and attributable overrides. |
@@ -44,7 +55,7 @@ Normal flow should stay quiet. Inspection commands such as `vgxness status`, `vg
 
 ## Adaptive contract gates
 
-These gates happen before a provider or agent can execute work.
+These **Contracts-only** gates define what must happen before provider or agent execution. Gatekeeper, Registry, provider execution, and runtime enforcement are **Planned**.
 
 ### 1. Capability negotiation and provider selection
 
@@ -62,13 +73,11 @@ Routing classifies difficulty and risk, records candidate agents, chooses the sm
 
 The classifier route `plan` produces a bounded approach when implementation is not authorized or full SDD is unnecessary. It is distinct from the SDD `tasks` operating mode, which converts approved requirements and design into implementation work units. A planning route must not be reported as an approved tasks artifact.
 
-SDD preflight modes are deterministic:
-
-Current contract backend tokens are `engram`, `openspec`, `hybrid`, and `none`; they cannot cleanly represent the planned owned-memory default. The planned migration adds a provider-neutral/configured `memory` token. Required SDD backed by the owned `MemoryStore` cannot ship until that migration occurs; `engram` remains transitional and identifies only the optional Engram compatibility/import adapter.
+SDD preflight modes are deterministic contracts. The owned-backend contract already uses `memory`; `engram` is only an external-provider reference. No memory-backend migration remains pending. Runtime preflight and SDD artifact-store resolution are still **Planned**.
 
 | Mode | Backend behavior | Failure behavior |
 | --- | --- | --- |
-| `required` | Current: use configured `engram`, `openspec`, or `hybrid`; do not label owned memory as `engram`. Planned after migration: resolve `memory` through the configured `MemoryStore`. | Block with a recoverable structured error, including while required owned-memory SDD lacks the migrated schema token. |
+| `required` | **Contracts-only:** resolve owned `memory`, repository `openspec`, or synchronized `hybrid`; never label owned memory as `engram`. | **Planned:** block with a recoverable structured error when the configured store is unavailable or invalid. |
 | `auto` | Check the configured backend only when routing selects SDD. | Record an explicit fallback decision. |
 | `off` | Use backend `none` and perform no artifact access. | Continue without SDD artifacts. |
 
@@ -85,6 +94,8 @@ A question carries `questionId`, prompt, expected answer shape, blocking status,
 - Unresolved, unprovenanced, or out-of-scope skills do not execute.
 
 ## 1. System flow: request to final summary
+
+The following table is a **Contracts-only** lifecycle specification. No merged service currently advances these steps or writes their events.
 
 | Step | Owner | What happens | Run-store event |
 | --- | --- | --- | --- |
@@ -234,7 +245,7 @@ The manager should not paraphrase a skill and call that sufficient. If a skill g
 
 ## 7. Run-store event lifecycle
 
-The run store records operational facts in append-only events plus readable snapshots.
+**Planned:** The run store records operational facts in append-only events plus readable snapshots. **Partial:** merged code only reads and validates `current-run.json`.
 
 | Phase | Log at minimum | Why it matters |
 | --- | --- | --- |
@@ -248,16 +259,16 @@ The run store records operational facts in append-only events plus readable snap
 | Recovery | `recovery.started` and `recovery.completed`. | Recovery itself becomes auditable. |
 | Completion | `run.completed` with final status and summary artifact reference. | The run has an explicit end. |
 
-Snapshots such as `current-run.json` and `runs/<run-id>.json` should be readable without the CLI. The CLI should validate and display them, not become the only way to understand them.
+The current-run pointer is readable and strictly validated today. Writing `runs/<run-id>.json`, JSONL events, and recovery evidence remains planned; the CLI must not become the only way to understand them.
 
 ## 8. Memory lifecycle
 
-Memory is for meaning. Run events are for operations.
+Memory is for meaning. Run events are for operations. The memory side is **Implemented** for typed save/search/get; the run-event side remains **Planned** beyond the **Partial** current-run reader.
 
 | Write target | Save here | Do not save here |
 | --- | --- | --- |
 | Run store | Phase starts/completions, artifact refs, tool-level operational status, validation results, checkpoints, failures. | Durable decisions without explanation. |
-| Semantic memory (owned `MemoryStore`; SQLite/FTS5-first) | Decisions, tradeoffs, preferences, conventions, discoveries, bug causes, constraints, approval rationale, lessons, summaries, capsules, and artifact references. | Raw command output, every event, temporary logs, repeated phase noise, or operational state resolution. |
+| Semantic memory (owned `MemoryStore`; SQLite/FTS5-first) | **Implemented:** typed observations with topic, scope, provenance, lifecycle state, references, and save/search/get. **Planned:** richer approval, summary, capsule, comparison, review, and import workflows. | Raw command output, every event, temporary logs, repeated phase noise, or operational state resolution. |
 
 ### Save semantic memory when
 
@@ -310,7 +321,7 @@ If validation fails, the manager should either route a scoped fix agent or retur
 
 ## 11. Failure and recovery flow
 
-Failures should stop guessing and preserve evidence.
+**Planned:** Failures stop guessing and preserve evidence. The current Chronicle reader can detect malformed current-run state, but it does not write failure events, checkpoints, or recovery state.
 
 ```text
 Failure detected
@@ -350,19 +361,18 @@ Failure detected
 
 ## 13. First implementation checklist
 
-- [ ] Define the canonical manager and subagent registry entries.
-- [ ] Add explicit subagent output contracts for `success`, `blocked`, `failed`, and `needs_followup`.
-- [ ] Implement manager-owned delegation only; reject subagent-created delegation in v1.
-- [ ] Create the context packet builder with scope, paths, tools, artifacts, skills, and return contract.
-- [ ] Implement skill resolution by explicit input, agent registry, skill registry triggers, then scoped fallback.
-- [ ] Log lifecycle events using the run-event schema.
-- [ ] Write readable `current-run.json`, run snapshots, JSONL events, and artifacts.
-- [ ] Add approval checkpoints for destructive, git, package, external, secret, and permission-expansion actions.
-- [ ] Add validation gates before run completion.
-- [ ] Save semantic memory only for durable decisions, discoveries, fixes, preferences, and final summaries.
-- [ ] Add recovery readback that compares snapshot, latest event, artifacts, and memory references.
-- [ ] Keep `status`, `run inspect`, and `doctor` focused on debugging/auditing, not happy-path ceremony.
+- [x] **Implemented:** Build the binary, storage resolution, status/doctor, owned SQLite/FTS5 memory, and memory save/search/get.
+- [x] **Partial:** Strictly read and validate `current-run.json` for inspection.
+- [x] **Contracts-only:** Define schemas plus owned `memory` and external `engram` reference semantics.
+- [ ] **Planned:** Enforce contract validation at runtime boundaries.
+- [ ] **Planned:** Append Chronicle events.
+- [ ] **Planned:** Write snapshots and implement recovery readback.
+- [ ] **Planned:** Add the legal task state machine.
+- [ ] **Planned:** Add Gatekeeper/Registry policy and exact resolution.
+- [ ] **Planned:** Add provider execution after policy eligibility.
+- [ ] **Planned:** Add bounded coordination, context packets, routing, approvals, and finite loops.
+- [ ] **Planned:** Keep future `run inspect` and recovery commands focused on debugging/auditing, not happy-path ceremony.
 
 ## Next step
 
-Use this document with the contract schemas in [`docs/schemas/README.md`](schemas/README.md) when implementing the first orchestration slice.
+Use this document with the contract schemas in [`docs/schemas/README.md`](schemas/README.md). The next implementation slice is runtime contract validation, followed by Chronicle events; do not jump from schemas or the reader directly to orchestration.
