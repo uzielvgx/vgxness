@@ -1,12 +1,14 @@
 package chronicle
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 var ErrCorrupt = errors.New("corrupt")
@@ -38,18 +40,40 @@ func ReadCurrent(ctx context.Context, path string) (CurrentRun, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return CurrentRun{}, false, err
 	}
-	f, err := os.Open(path)
+	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return CurrentRun{}, false, nil
 	}
 	if err != nil {
 		return CurrentRun{}, false, fmt.Errorf("read Chronicle: %w", err)
 	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return CurrentRun{}, false, fmt.Errorf("%w: current run must be a regular file", ErrCorrupt)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return CurrentRun{}, false, fmt.Errorf("read Chronicle: %w", err)
+	}
 	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return CurrentRun{}, false, fmt.Errorf("read Chronicle: %w", err)
+	}
 	var run CurrentRun
-	decoder := json.NewDecoder(f)
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&run); err != nil || decoder.Decode(&struct{}{}) != io.EOF || !valid(run) {
+	var optional struct {
+		CancellationID *string `json:"cancellationId"`
+		ResultID       *string `json:"resultId"`
+		CapsuleID      *string `json:"capsuleId"`
+		RunFile        *string `json:"runFile"`
+		LogFile        *string `json:"logFile"`
+	}
+	optionalInvalid := json.Unmarshal(data, &optional) != nil
+	for _, value := range []*string{optional.CancellationID, optional.ResultID, optional.CapsuleID, optional.RunFile, optional.LogFile} {
+		optionalInvalid = optionalInvalid || value != nil && *value == ""
+	}
+	if err := decoder.Decode(&run); err != nil || decoder.Decode(&struct{}{}) != io.EOF || optionalInvalid || !valid(run) {
 		return CurrentRun{}, false, fmt.Errorf("%w: malformed current run", ErrCorrupt)
 	}
 	return run, true, nil
@@ -61,5 +85,23 @@ func valid(run CurrentRun) bool {
 	default:
 		return false
 	}
-	return run.SchemaVersion == "1" && run.ID != "" && run.Project != "" && run.Goal != "" && run.Phase != "" && run.SelectionID != "" && run.DecisionID != "" && run.PreflightID != "" && run.TaskID != "" && run.LastEventID != "" && run.ArtifactIDs != nil && run.StorageMode != "" && run.StartedAt != "" && run.UpdatedAt != ""
+	if run.StorageMode != "project-local" && run.StorageMode != "user-global" {
+		return false
+	}
+	started, startErr := time.Parse(time.RFC3339, run.StartedAt)
+	updated, updateErr := time.Parse(time.RFC3339, run.UpdatedAt)
+	if startErr != nil || updateErr != nil || updated.Before(started) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(run.ArtifactIDs))
+	for _, id := range run.ArtifactIDs {
+		if id == "" {
+			return false
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return false
+		}
+		seen[id] = struct{}{}
+	}
+	return run.SchemaVersion == "1" && run.ID != "" && run.Project != "" && run.Goal != "" && run.Phase != "" && run.SelectionID != "" && run.DecisionID != "" && run.PreflightID != "" && run.TaskID != "" && run.LastEventID != "" && run.ArtifactIDs != nil
 }

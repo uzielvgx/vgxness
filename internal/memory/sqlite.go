@@ -43,15 +43,28 @@ func Open(ctx context.Context, path string, now func() time.Time) (*Store, error
 			_ = os.Remove(path + "-shm")
 		}
 	}
-	for _, pragma := range []string{`PRAGMA foreign_keys=ON`, `PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=5000`} {
-		if _, err := db.ExecContext(ctx, pragma); err != nil {
-			cleanup()
-			return nil, fmt.Errorf("configure memory store: %w", ErrCorrupt)
+	for _, pragma := range []string{`PRAGMA busy_timeout=25`, `PRAGMA foreign_keys=ON`, `PRAGMA journal_mode=WAL`} {
+		for attempt := 0; ; attempt++ {
+			_, err = db.ExecContext(ctx, pragma)
+			if err == nil {
+				break
+			}
+			if err = waitForSQLite(ctx, attempt, err); err != nil {
+				cleanup()
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return nil, fmt.Errorf("configure memory store: %w", ErrCorrupt)
+			}
 		}
 	}
 	if err := applyMigrations(ctx, db, migrations); err != nil {
 		cleanup()
 		return nil, err
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("configure memory store: %w", ErrCorrupt)
 	}
 	store := &Store{db: db, now: now}
 	if store.now == nil {
@@ -75,7 +88,7 @@ func HealthFile(ctx context.Context, path string) (int, error) {
 	} else if err != nil {
 		return 0, fmt.Errorf("open memory store: %w", ErrCorrupt)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return 0, err
@@ -99,12 +112,45 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if err := cancelled(ctx); err != nil {
 		return 0, err
 	}
+	rows, err := s.db.QueryContext(ctx, `PRAGMA integrity_check`)
+	if err != nil {
+		return 0, fmt.Errorf("%w: integrity check unavailable", ErrCorrupt)
+	}
+	integrityRows, integrityOK := 0, true
+	for rows.Next() {
+		var result string
+		integrityRows++
+		if rows.Scan(&result) != nil || result != "ok" {
+			integrityOK = false
+		}
+	}
+	rowsErr := rows.Err()
+	_ = rows.Close()
+	if rowsErr != nil || integrityRows != 1 || !integrityOK {
+		return 0, fmt.Errorf("%w: integrity check failed", ErrCorrupt)
+	}
+	rows, err = s.db.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return 0, fmt.Errorf("%w: foreign-key check unavailable", ErrCorrupt)
+	}
+	foreignKeyViolation := rows.Next()
+	rowsErr = rows.Err()
+	_ = rows.Close()
+	if rowsErr != nil || foreignKeyViolation {
+		return 0, fmt.Errorf("%w: foreign-key check failed", ErrCorrupt)
+	}
 	var version, probe int
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return 0, fmt.Errorf("%w: migration ledger unavailable", ErrCorrupt)
 	}
 	if version > migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: database schema version %d is newer than supported version %d", ErrMigration, version, migrations[len(migrations)-1].version)
+	}
+	if version != migrations[len(migrations)-1].version {
+		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs')`).Scan(&probe); err != nil || probe != 4 {
+		return 0, fmt.Errorf("%w: required schema unavailable", ErrCorrupt)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observations_fts WHERE observations_fts MATCH 'healthchecknomatch'`).Scan(&probe); err != nil {
 		return 0, fmt.Errorf("%w: FTS5 unavailable", ErrCorrupt)

@@ -1,6 +1,8 @@
 # VGXNESS
 
-**Current:** This repository contains product documentation and Draft 2020-12 contract schemas only. These are reviewable contracts, not a claim of complete release validation or runtime enforcement. The repository does not contain Go source, an executable, an installer, bundled skills, runtime adapters, persistence, Git automation, or configuration mutation.
+**Current:** This repository delivers a Go 1.26 foundation with the `vgxness` executable, read-only `status` and `doctor` inspection commands, strict Chronicle current-run reading, and an owned SQLite/FTS5 memory store. CI validates tests, race detection, coverage, vet, formatting, module integrity, and builds with Go 1.26.3.
+
+The inspection commands report resolved storage paths, the SQLite migration version, and an active Chronicle run when present. Inspection does not create a missing database or current-run file. Chronicle writing, lifecycle orchestration, product capabilities, installers, runtime adapters, and Git or branch-protection automation are not delivered by this foundation.
 
 VGXNESS is planned as a local-first agent orchestration system that keeps human control, operational state, permissions, and validation explicit. The canonical product purpose, vocabulary, boundaries, and roadmap live in the [VGXNESS Product Blueprint](docs/product-blueprint.md).
 
