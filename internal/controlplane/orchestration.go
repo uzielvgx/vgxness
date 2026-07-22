@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/config"
@@ -22,6 +24,9 @@ const (
 	orchestrationDocumentVersion = 1
 	orchestrationDocumentLimit   = 16 << 20
 	orchestrationDispatchTimeout = 45 * time.Second
+	dependencyEvidenceTextLimit  = 8 << 10
+	dependencyEvidenceJSONLimit  = 16 << 10
+	orchestrationTaskGoalLimit   = 24 << 10
 )
 
 type orchestrationDocument struct {
@@ -304,7 +309,7 @@ func (service *Service) JoinOrchestration(ctx context.Context, workspace string,
 		if openErr != nil {
 			return bridge.Response{}, openErr
 		}
-		if err := service.reconcileNativeTerminals(ctx, paths.Root, document, authority, scheduler); err != nil {
+		if err := service.reconcileNativeTerminals(ctx, paths.Root, &document, authority, scheduler); err != nil {
 			return bridge.Response{}, err
 		}
 		join, joinErr := scheduler.Join(ctx)
@@ -338,7 +343,7 @@ func (service *Service) StatusOrchestration(ctx context.Context, workspace strin
 		if openErr != nil {
 			return bridge.Response{}, openErr
 		}
-		if err := service.reconcileNativeTerminals(ctx, paths.Root, document, authority, scheduler); err != nil {
+		if err := service.reconcileNativeTerminals(ctx, paths.Root, &document, authority, scheduler); err != nil {
 			return bridge.Response{}, err
 		}
 		document.Status = string(scheduler.Status())
@@ -401,7 +406,7 @@ func (service *Service) ResumeOrchestration(ctx context.Context, workspace strin
 	if err != nil {
 		return bridge.Response{}, err
 	}
-	if err := service.reconcileNativeTerminals(ctx, paths.Root, document, authority, current); err != nil {
+	if err := service.reconcileNativeTerminals(ctx, paths.Root, &document, authority, current); err != nil {
 		return bridge.Response{}, err
 	}
 	checkpoint, err = authority.Snapshot(ctx, document.ScheduleID, document.Plan.PlanID, document.ParentSessionID)
@@ -447,7 +452,7 @@ func (service *Service) CancelOrchestration(ctx context.Context, workspace strin
 	if err != nil {
 		return bridge.Response{}, err
 	}
-	if err := service.reconcileNativeTerminals(ctx, paths.Root, document, authority, scheduler); err != nil {
+	if err := service.reconcileNativeTerminals(ctx, paths.Root, &document, authority, scheduler); err != nil {
 		return bridge.Response{}, err
 	}
 	if status := scheduler.Status(); status == orchestrator.ScheduleCompleted || status == orchestrator.ScheduleFailed || status == orchestrator.ScheduleCancelled {
@@ -520,12 +525,39 @@ func openDurableScheduler(ctx context.Context, storageRoot string, document orch
 func orchestrationResponse(root string, document orchestrationDocument, prepared []bridge.OrchestrationPreparedTask) bridge.Response {
 	return bridge.Response{
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
-		Status: document.Status, Orchestration: &bridge.OrchestrationView{
+		Status: document.Status, Result: finalOrchestrationResult(document), Orchestration: &bridge.OrchestrationView{
 			OrchestrationID: document.OrchestrationID, ScheduleID: document.ScheduleID, OwnerID: document.OwnerID,
 			Status: document.Status, CurrentWave: document.CurrentWave, Plan: document.Plan,
 			Prepared: prepared, Join: append(json.RawMessage(nil), document.Join...),
 		},
 	}
+}
+
+func finalOrchestrationResult(document orchestrationDocument) json.RawMessage {
+	if document.Status != string(orchestrator.ScheduleCompleted) {
+		return nil
+	}
+	dependedOn := make(map[string]bool, len(document.Plan.Tasks))
+	for _, task := range document.Plan.Tasks {
+		for _, dependency := range task.DependsOn {
+			dependedOn[dependency] = true
+		}
+	}
+	terminalTaskID := ""
+	for _, task := range document.Plan.Tasks {
+		if dependedOn[task.TaskID] {
+			continue
+		}
+		if terminalTaskID != "" {
+			return nil
+		}
+		terminalTaskID = task.TaskID
+	}
+	result := document.Results[terminalTaskID]
+	if len(result) == 0 || len(result) > bridge.MaxOrchestrationResultBytes {
+		return nil
+	}
+	return append(json.RawMessage(nil), result...)
 }
 
 func tasksByID(plan navigator.Plan) map[string]navigator.Task {
@@ -579,7 +611,7 @@ func normalizeOrchestrationError(err error) error {
 func orchestrationDirectory(root string) string { return filepath.Join(root, "orchestration-plans") }
 
 func orchestrationPath(root, orchestrationID string) (string, error) {
-	if orchestrationID == "" || filepath.Base(orchestrationID) != orchestrationID || strings.ContainsAny(orchestrationID, `/\\\x00`) {
+	if orchestrationID == "" || filepath.Base(orchestrationID) != orchestrationID || strings.ContainsAny(orchestrationID, "/\\\x00") {
 		return "", bridge.ErrInvalid
 	}
 	return filepath.Join(orchestrationDirectory(root), orchestrationID+".json"), nil
@@ -649,23 +681,89 @@ func orchestrationTaskGoal(task navigator.Task, results map[string]json.RawMessa
 	if len(task.DependsOn) == 0 {
 		return task.Goal, nil
 	}
-	dependencies := make(map[string]json.RawMessage, len(task.DependsOn))
+	dependencies := make(map[string]orchestrationDependencyEvidence, len(task.DependsOn))
+	textBudget := dependencyEvidenceTextLimit / len(task.DependsOn)
 	for _, dependency := range task.DependsOn {
 		result, ok := results[dependency]
 		if !ok || len(result) == 0 {
 			return "", bridge.ErrDenied
 		}
-		dependencies[dependency] = append(json.RawMessage(nil), result...)
+		evidence, err := compactOrchestrationDependency(result, textBudget)
+		if err != nil {
+			return "", err
+		}
+		dependencies[dependency] = evidence
 	}
 	data, err := json.Marshal(dependencies)
-	if err != nil || len(data) > 6<<10 {
+	if err != nil || len(data) > dependencyEvidenceJSONLimit {
 		return "", bridge.ErrDenied
 	}
-	goal := task.Goal + "\n\nValidated dependency results (JSON):\n" + string(data)
-	if len(goal) > 8<<10 {
+	goal := task.Goal + "\n\nValidated dependency evidence (bounded JSON):\n" + string(data)
+	if len(goal) > orchestrationTaskGoalLimit {
 		return "", bridge.ErrDenied
 	}
 	return goal, nil
+}
+
+type orchestrationDependencyEvidence struct {
+	Status          string   `json:"status"`
+	Summary         string   `json:"summary"`
+	NextRecommended string   `json:"nextRecommended"`
+	Risks           []string `json:"risks,omitempty"`
+	Truncated       bool     `json:"truncated,omitempty"`
+}
+
+func compactOrchestrationDependency(raw json.RawMessage, budget int) (orchestrationDependencyEvidence, error) {
+	var result struct {
+		Status          string   `json:"status"`
+		Summary         string   `json:"summary"`
+		NextRecommended string   `json:"nextRecommended"`
+		Risks           []string `json:"risks"`
+	}
+	if json.Unmarshal(raw, &result) != nil || result.Status == "" || strings.TrimSpace(result.Summary) == "" || strings.TrimSpace(result.NextRecommended) == "" {
+		return orchestrationDependencyEvidence{}, bridge.ErrDenied
+	}
+	if budget < 256 {
+		return orchestrationDependencyEvidence{}, bridge.ErrDenied
+	}
+	summaryBudget := budget * 5 / 8
+	nextBudget := budget / 8
+	riskBudget := budget - summaryBudget - nextBudget
+	evidence := orchestrationDependencyEvidence{
+		Status:          result.Status,
+		Summary:         boundedOrchestrationText(result.Summary, summaryBudget),
+		NextRecommended: boundedOrchestrationText(result.NextRecommended, nextBudget),
+	}
+	for _, risk := range result.Risks {
+		if len(evidence.Risks) == 2 {
+			break
+		}
+		evidence.Risks = append(evidence.Risks, boundedOrchestrationText(risk, riskBudget/2))
+	}
+	evidence.Truncated = evidence.Summary != strings.TrimSpace(result.Summary) || evidence.NextRecommended != strings.TrimSpace(result.NextRecommended) || len(evidence.Risks) != len(result.Risks)
+	for index := range evidence.Risks {
+		if evidence.Risks[index] != strings.TrimSpace(result.Risks[index]) {
+			evidence.Truncated = true
+		}
+	}
+	return evidence, nil
+}
+
+func boundedOrchestrationText(value string, limit int) string {
+	value = strings.TrimSpace(strings.Map(func(char rune) rune {
+		if unicode.IsControl(char) {
+			return ' '
+		}
+		return char
+	}, value))
+	if len(value) <= limit {
+		return value
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return strings.TrimSpace(value[:end])
 }
 
 func writeOrchestrationDocument(root string, document orchestrationDocument) error {
@@ -745,7 +843,7 @@ func (service *Service) openOrchestration(ctx context.Context, workspace, orches
 	return root, paths, document, lock.Release, nil
 }
 
-func (service *Service) reconcileNativeTerminals(ctx context.Context, storageRoot string, document orchestrationDocument, authority *orchestrator.DurableTicketAuthority, scheduler *orchestrator.WaveScheduler) error {
+func (service *Service) reconcileNativeTerminals(ctx context.Context, storageRoot string, document *orchestrationDocument, authority *orchestrator.DurableTicketAuthority, scheduler *orchestrator.WaveScheduler) error {
 	checkpoint, err := authority.Snapshot(ctx, document.ScheduleID, document.Plan.PlanID, document.ParentSessionID)
 	if err != nil {
 		return normalizeOrchestrationError(err)
@@ -772,6 +870,9 @@ func (service *Service) reconcileNativeTerminals(ctx context.Context, storageRoo
 		}
 		if err := scheduler.Record(ctx, outcome); err != nil {
 			return normalizeOrchestrationError(err)
+		}
+		if outcome.Status == orchestrator.TaskCompleted {
+			document.Results[item.TaskID] = append(json.RawMessage(nil), outcome.Result...)
 		}
 	}
 	return nil

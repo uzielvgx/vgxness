@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vgxness/vgxness/internal/bridge"
+	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/navigator"
 	"github.com/vgxness/vgxness/internal/providers"
 )
@@ -122,6 +124,48 @@ func TestAdaptiveOrchestrationPersistsParallelNativeWaveAndJoin(t *testing.T) {
 	}
 }
 
+func TestPlanOrchestrationUsesDefaultProjectStorage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	sequence := 0
+	service := New(Options{NewID: func(prefix string) (string, error) {
+		sequence++
+		return prefix + "-default-storage-0" + strconv.Itoa(sequence), nil
+	}})
+
+	planned, err := service.PlanOrchestration(context.Background(), workspace, bridge.OrchestratePlanRequest{
+		ProtocolVersion: bridge.ProtocolVersion,
+		Model:           "openai/gpt-5.6-sol",
+		Input: bridge.OrchestrateInput{
+			Goal:               "Inspect the project",
+			AcceptanceCriteria: []string{"Use repository evidence"},
+		},
+		ParentSessionID: "ses_parent",
+		ParentMessageID: "msg_parent",
+		CandidateTasks: []navigator.Task{
+			orchestrationReadTask("task-project", nil),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned.Orchestration == nil {
+		t.Fatal("missing orchestration response")
+	}
+	resolvedWorkspace, err := canonicalWorkspace(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := config.PathsFor(config.Options{HomeDir: home, ProjectDir: resolvedWorkspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.Root, "orchestration-plans", planned.Orchestration.OrchestrationID+".json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdaptiveOrchestrationCarriesBoundedDependencyResults(t *testing.T) {
 	workspace := t.TempDir()
 	storage := filepath.Join(t.TempDir(), "storage")
@@ -163,24 +207,9 @@ func TestAdaptiveOrchestrationCarriesBoundedDependencyResults(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
-		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
-		TaskID: firstBinding.TaskID, TicketID: firstBinding.TicketID, ChildSessionID: firstBinding.ChildSessionID,
-		Status: "completed", MessageID: "msg_first", ResultID: "result-first", Result: result,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// Simulate response loss after authority acceptance but before its document
-	// projection. Status must reconstruct both the ticket binding and result.
-	document, err := readOrchestrationDocument(storage, view.OrchestrationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	document.PreparedBindings = map[string]string{}
-	document.Results = map[string]json.RawMessage{}
-	if err := writeOrchestrationDocument(storage, document); err != nil {
-		t.Fatal(err)
-	}
+	// Simulate response loss after native completion but before orchestration
+	// acknowledgement. Status must reconcile and project the durable result in
+	// the same request so the dependent wave can consume it immediately.
 	if _, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
 	}); err != nil {
@@ -194,8 +223,67 @@ func TestAdaptiveOrchestrationCarriesBoundedDependencyResults(t *testing.T) {
 		t.Fatalf("prepared=%#v err=%v", prepared, err)
 	}
 	prompt := prepared.Orchestration.Prepared[0].Prepared.Prompt
-	if !strings.Contains(prompt, "Validated dependency results (JSON)") || !strings.Contains(prompt, "task-first") {
+	if !strings.Contains(prompt, "Validated dependency evidence (bounded JSON)") || !strings.Contains(prompt, "task-first") {
 		t.Fatalf("dependent prompt lacks bounded result evidence: %s", prompt)
+	}
+	secondNative, err := readNativeTicket(storage, secondBinding.TicketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalResult := nativeResult(t, secondNative.TaskID)
+	if _, err := service.Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: secondBinding.TicketID, ParentSessionID: "ses_parent", ChildSessionID: secondBinding.ChildSessionID, MessageID: "msg_second", Result: finalResult,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		TaskID: secondBinding.TaskID, TicketID: secondBinding.TicketID, ChildSessionID: secondBinding.ChildSessionID,
+		Status: "completed", MessageID: "msg_second", ResultID: "result-second", Result: finalResult,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	joined, err := service.JoinOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(joined.Result, finalResult) {
+		t.Fatalf("joined result=%s want=%s", joined.Result, finalResult)
+	}
+}
+
+func TestOrchestrationTaskGoalCompactsLargeParallelEvidence(t *testing.T) {
+	dependencies := []string{"task-purpose", "task-architecture", "task-quality", "task-risks"}
+	results := make(map[string]json.RawMessage, len(dependencies))
+	for _, dependency := range dependencies {
+		result, err := json.Marshal(map[string]any{
+			"kind": "agent.result", "schemaVersion": "1", "resultId": "result-" + dependency,
+			"taskId": dependency, "agentId": "vgxness-explorer", "status": "success",
+			"summary":   strings.Repeat("evidencia útil con ruta internal/controlplane/orchestration.go; ", 220),
+			"artifacts": []any{}, "nextRecommended": strings.Repeat("priorizar la siguiente validación; ", 80),
+			"risks":  []string{strings.Repeat("riesgo uno; ", 80), strings.Repeat("riesgo dos; ", 80), strings.Repeat("riesgo tres; ", 80)},
+			"errors": []any{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		results[dependency] = result
+	}
+	goal, err := orchestrationTaskGoal(navigator.Task{
+		TaskID: "task-synthesis", Goal: "Produce an executive synthesis", DependsOn: dependencies,
+	}, results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(goal) > orchestrationTaskGoalLimit || !strings.Contains(goal, "task-purpose") || !strings.Contains(goal, `"truncated":true`) {
+		t.Fatalf("unexpected bounded dependency goal bytes=%d: %s", len(goal), goal)
+	}
+	for _, dependency := range dependencies {
+		if !strings.Contains(goal, dependency) {
+			t.Fatalf("bounded dependency goal omitted %s", dependency)
+		}
 	}
 }
 
