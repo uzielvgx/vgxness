@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vgxness.dev/schemas/bridge.schema.json",
+  "title": "VGXNESS OpenCode Bridge Input",
+  "description": "Agent-controlled arguments accepted by the bounded vgxness_dispatch plugin tool before trusted context fields are added.",
+  "$ref": "#/$defs/dispatchInput",
+  "$defs": {
+    "dispatchInput": {
+      "type": "object",
+      "required": ["operation", "goal"],
+      "properties": {
+        "operation": { "type": "string", "enum": ["read-files", "write-files", "review-changes"] },
+        "goal": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "acceptanceCriteria": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "continuity": { "type": "string", "enum": ["start", "continue", "finish"] },
+        "runId": { "$ref": "common.schema.json#/$defs/identifier" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "continuity": { "enum": ["continue", "finish"] } }, "required": ["continuity"] },
+          "then": { "required": ["runId"] },
+          "else": { "not": { "required": ["runId"] } }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

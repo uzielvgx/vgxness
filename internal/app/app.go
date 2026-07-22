@@ -6,18 +6,30 @@ import (
 
 	"github.com/vgxness/vgxness/internal/cli"
 	"github.com/vgxness/vgxness/internal/config"
+	"github.com/vgxness/vgxness/internal/controlplane"
 	"github.com/vgxness/vgxness/internal/inspection"
+	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/vgxness/vgxness/internal/providers/opencode"
+	"github.com/vgxness/vgxness/internal/selfinstall"
+	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return cli.RunIO(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, memoryRuntime{})
+	installer := selfinstall.New(selfinstall.Config{})
+	integrationRuntime := opencode.NewIntegration()
+	cliMemory := memoryRuntime{producer: "cli"}
+	controlPlane := controlplane.New(controlplane.Options{Memory: memoryRuntime{producer: "vgxness-controlplane"}})
+	setupRuntime := setupflow.New(installer, integrationRuntime, func(executable string) (integration.Runtime, error) {
+		return opencode.NewManagedIntegration(executable)
+	}, controlPlane)
+	return cli.RunProductRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, controlPlane, installer, setupRuntime)
 }
 
-type memoryRuntime struct{}
+type memoryRuntime struct{ producer string }
 
-func (memoryRuntime) Save(ctx context.Context, opts config.Options, request memory.SaveRequest) (memory.MemoryResult, error) {
-	return memory.NewMemoryService(storeRuntime{opts}, "cli", nil).Save(ctx, request)
+func (runtime memoryRuntime) Save(ctx context.Context, opts config.Options, request memory.SaveRequest) (memory.MemoryResult, error) {
+	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Save(ctx, request)
 }
 
 func (memoryRuntime) Search(ctx context.Context, opts config.Options, request memory.SearchRequest) ([]memory.MemoryResult, error) {
@@ -26,6 +38,13 @@ func (memoryRuntime) Search(ctx context.Context, opts config.Options, request me
 
 func (memoryRuntime) Get(ctx context.Context, opts config.Options, request memory.GetRequest) (memory.MemoryResult, error) {
 	return memory.NewMemoryService(storeRuntime{opts}, "cli", nil).Get(ctx, request)
+}
+
+func (runtime memoryRuntime) producerName() string {
+	if runtime.producer == "" {
+		return "cli"
+	}
+	return runtime.producer
 }
 
 type storeRuntime struct{ opts config.Options }

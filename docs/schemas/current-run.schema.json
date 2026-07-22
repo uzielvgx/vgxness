@@ -105,7 +105,7 @@
     "runFile": {
       "type": "string",
       "minLength": 1,
-      "description": "Optional path to the full run snapshot, relative to the VGXNESS storage root."
+      "description": "Optional path to the exact full run snapshot, relative to the VGXNESS storage root. Active writers use an immutable SHA-256-addressed file."
     },
     "logFile": {
       "type": "string",

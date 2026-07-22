@@ -50,3 +50,16 @@ jobs:
         run: go mod verify
       - name: Build
         run: go build -trimpath ./...
+      - name: Hermetic clean-checkout E2E
+        run: go test -tags=e2e -count=1 ./internal/e2e
+      - name: Cross-build Windows
+        run: |
+          GOOS=windows GOARCH=amd64 go build -trimpath ./...
+          GOOS=windows GOARCH=arm64 go build -trimpath ./...
+      - name: Compile Windows tests
+        run: |
+          set -euo pipefail
+          while IFS= read -r package; do
+            GOOS=windows GOARCH=amd64 go test -c -o /dev/null "$package"
+          done < <(go list ./...)
+          GOOS=windows GOARCH=amd64 go test -tags=e2e -c -o /dev/null ./internal/e2e

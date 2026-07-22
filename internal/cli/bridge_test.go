@@ -1,0 +1,90 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/vgxness/vgxness/internal/bridge"
+)
+
+type fakeBridgeRuntime struct {
+	status     bridge.Response
+	response   bridge.Response
+	err        error
+	request    bridge.DispatchRequest
+	completion bridge.NativeCompletionRequest
+	failure    bridge.NativeFailureRequest
+	read       bridge.NativeReadRequest
+}
+
+func (runtime *fakeBridgeRuntime) Prepare(_ context.Context, _ string, request bridge.DispatchRequest) (bridge.Response, error) {
+	runtime.request = request
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) Complete(_ context.Context, _ string, request bridge.NativeCompletionRequest) (bridge.Response, error) {
+	runtime.completion = request
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) Fail(_ context.Context, _ string, request bridge.NativeFailureRequest) (bridge.Response, error) {
+	runtime.failure = request
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) ReadNative(_ context.Context, _ string, request bridge.NativeReadRequest) (bridge.Response, error) {
+	runtime.read = request
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) Status(context.Context, string) (bridge.Response, error) {
+	return runtime.status, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) Dispatch(_ context.Context, _ string, request bridge.DispatchRequest) (bridge.Response, error) {
+	runtime.request = request
+	return runtime.response, runtime.err
+}
+
+func TestBridgeRejectsLegacyDispatchRoute(t *testing.T) {
+	runtime := &fakeBridgeRuntime{}
+	var stdout, stderr bytes.Buffer
+	code := runBridge(context.Background(), []string{"dispatch", "--workspace", t.TempDir(), "--stdin"}, strings.NewReader(`{"protocolVersion":"1","model":"openai/gpt-5.6-sol","operation":"read-files","goal":"inspect"}`), &stdout, &stderr, runtime)
+	if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "status|prepare|complete|fail|read") || runtime.request.Operation != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q request=%#v", code, stdout.String(), stderr.String(), runtime.request)
+	}
+}
+
+func TestBridgeFailureIsNormalizedToJSON(t *testing.T) {
+	runtime := &fakeBridgeRuntime{err: errors.New("provider secret")}
+	var stdout, stderr bytes.Buffer
+	code := runBridge(context.Background(), []string{"status", "--workspace", t.TempDir()}, strings.NewReader(""), &stdout, &stderr, runtime)
+	if code != 1 || stderr.Len() != 0 || strings.Contains(stdout.String(), "provider secret") || !strings.Contains(stdout.String(), `"code":"execution_failed"`) {
+		t.Fatalf("unsafe failure: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestBridgeNativeLifecycleRoutesExactRequests(t *testing.T) {
+	runtime := &fakeBridgeRuntime{response: bridge.Response{ProtocolVersion: "1", OK: true, Bridge: "healthy", Provider: "opencode", Status: "completed"}}
+	workspace := t.TempDir()
+	for _, test := range []struct {
+		command string
+		input   string
+	}{
+		{"prepare", `{"protocolVersion":"1","ticketId":"ticket-1","model":"openai/gpt-5.6-sol","operation":"read-files","goal":"inspect","parentSessionId":"ses_parent","parentMessageId":"msg_parent","childSessionId":"ses_child"}`},
+		{"complete", `{"protocolVersion":"1","ticketId":"ticket-1","parentSessionId":"ses_parent","childSessionId":"ses_child","messageId":"msg_child","result":{}}`},
+		{"fail", `{"protocolVersion":"1","ticketId":"ticket-1","parentSessionId":"ses_parent","childSessionId":"ses_child","category":"native-subagent-failed"}`},
+		{"read", `{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","limit":4096}`},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := runBridge(context.Background(), []string{test.command, "--workspace", workspace, "--stdin"}, strings.NewReader(test.input), &stdout, &stderr, runtime); code != 0 {
+			t.Fatalf("%s code=%d stdout=%s stderr=%s", test.command, code, stdout.String(), stderr.String())
+		}
+	}
+	if runtime.request.ParentSessionID != "ses_parent" || runtime.completion.ChildSessionID != "ses_child" || runtime.failure.Category != "native-subagent-failed" || runtime.read.Path != "go.mod" {
+		t.Fatalf("native lifecycle was not routed: request=%#v completion=%#v failure=%#v read=%#v", runtime.request, runtime.completion, runtime.failure, runtime.read)
+	}
+}

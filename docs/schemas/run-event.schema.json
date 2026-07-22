@@ -96,6 +96,10 @@
       "type": "string",
       "minLength": 1
     },
+    "resultDigest": {
+      "$ref": "common.schema.json#/$defs/identifier",
+      "description": "Content digest that binds terminal and acceptance evidence to the exact native result bytes."
+    },
     "capsuleId": {
       "type": "string",
       "minLength": 1
@@ -178,6 +182,7 @@
       "required": ["category", "nextSafeAction"],
       "properties": {
         "category": { "$ref": "common.schema.json#/$defs/identifier" },
+        "digest": { "$ref": "common.schema.json#/$defs/identifier" },
         "nextSafeAction": { "type": "string", "minLength": 1 },
         "error": { "$ref": "common.schema.json#/$defs/contractError" }
       },
