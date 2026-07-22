@@ -61,6 +61,28 @@ type DispatchRequest struct {
 	ChildSessionID     string         `json:"childSessionId,omitempty"`
 }
 
+// OrchestrateInput is the complete untrusted public boundary. It intentionally
+// carries no model, session identity, agent choice, task graph, or parallelism
+// hint: those values come from trusted adapters or Navigator.
+type OrchestrateInput struct {
+	Goal               string   `json:"goal"`
+	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty"`
+}
+
+type OrchestrateContext struct {
+	Model           string
+	ParentSessionID string
+	ParentMessageID string
+}
+
+type OrchestrateRequest struct {
+	ProtocolVersion string
+	Model           string
+	Input           OrchestrateInput
+	ParentSessionID string
+	ParentMessageID string
+}
+
 type NativeCompletionRequest struct {
 	ProtocolVersion string          `json:"protocolVersion"`
 	TicketID        string          `json:"ticketId"`
@@ -186,6 +208,25 @@ func DecodeDispatch(reader io.Reader) (DispatchRequest, error) {
 	return request, nil
 }
 
+func DecodeOrchestrateInput(reader io.Reader) (OrchestrateInput, error) {
+	var input OrchestrateInput
+	if err := decodeExact(reader, MaxRequestBytes, &input); err != nil || ValidateOrchestrateInput(input) != nil {
+		return OrchestrateInput{}, ErrInvalid
+	}
+	return input, nil
+}
+
+func NewOrchestrateRequest(input OrchestrateInput, trusted OrchestrateContext) (OrchestrateRequest, error) {
+	request := OrchestrateRequest{
+		ProtocolVersion: ProtocolVersion, Model: trusted.Model, Input: input,
+		ParentSessionID: trusted.ParentSessionID, ParentMessageID: trusted.ParentMessageID,
+	}
+	if err := ValidateOrchestrateRequest(request); err != nil {
+		return OrchestrateRequest{}, err
+	}
+	return request, nil
+}
+
 func DecodeNativeCompletion(reader io.Reader) (NativeCompletionRequest, error) {
 	var request NativeCompletionRequest
 	if err := decodeExact(reader, MaxNativeCompletionBytes, &request); err != nil || ValidateNativeCompletion(request) != nil {
@@ -236,6 +277,17 @@ func ValidateNativeRead(request NativeReadRequest) error {
 	return nil
 }
 
+func ValidateOrchestrateRequest(request OrchestrateRequest) error {
+	if request.ProtocolVersion != ProtocolVersion || !validModel(request.Model) || !validNativeIdentity(request.ParentSessionID) || !validNativeIdentity(request.ParentMessageID) || ValidateOrchestrateInput(request.Input) != nil {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func ValidateOrchestrateInput(input OrchestrateInput) error {
+	return validateBoundedIntent(input.Goal, input.AcceptanceCriteria)
+}
+
 func decodeExact(reader io.Reader, limit int64, target any) error {
 	if reader == nil || limit <= 0 {
 		return ErrInvalid
@@ -264,21 +316,26 @@ func ValidateDispatch(request DispatchRequest) error {
 	if request.ProtocolVersion != ProtocolVersion || !validModel(request.Model) || !validOperation(request.Operation) {
 		return ErrInvalid
 	}
-	goal := strings.TrimSpace(request.Goal)
-	if goal == "" || utf8.RuneCountInString(request.Goal) > 8192 || len(request.AcceptanceCriteria) > 32 {
+	if validateBoundedIntent(request.Goal, request.AcceptanceCriteria) != nil {
 		return ErrInvalid
-	}
-	for index, criterion := range request.AcceptanceCriteria {
-		criterion = strings.TrimSpace(criterion)
-		if criterion == "" || utf8.RuneCountInString(request.AcceptanceCriteria[index]) > 2048 {
-			return ErrInvalid
-		}
 	}
 	if !validContinuity(request.Continuity, request.RunID) {
 		return ErrInvalid
 	}
 	if request.TicketID != "" && !validNativeIdentity(request.TicketID) || request.ParentSessionID != "" && !validNativeIdentity(request.ParentSessionID) || request.ParentMessageID != "" && !validNativeIdentity(request.ParentMessageID) || request.ChildSessionID != "" && !validNativeIdentity(request.ChildSessionID) {
 		return ErrInvalid
+	}
+	return nil
+}
+
+func validateBoundedIntent(goal string, criteria []string) error {
+	if strings.TrimSpace(goal) == "" || utf8.RuneCountInString(goal) > 8192 || len(criteria) > 32 {
+		return ErrInvalid
+	}
+	for _, criterion := range criteria {
+		if strings.TrimSpace(criterion) == "" || utf8.RuneCountInString(criterion) > 2048 {
+			return ErrInvalid
+		}
 	}
 	return nil
 }

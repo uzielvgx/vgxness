@@ -14,6 +14,7 @@ VGXNESS is planned as a local-first agent orchestration system that keeps human 
 | [Plan maestro de producto — Español](docs/product-blueprint.es.md) | Complete version 1.0 Spanish companion; explicitly non-canonical, with English controlling conflicts. |
 | [Go Implementation Architecture](docs/go-implementation.md) | Planned Go packages, interfaces, dependency rules, and testing boundaries. |
 | [Orchestration Flow](docs/orchestration-flow.md) | Planned request lifecycle, gates, SDD operating modes, and recovery flow. |
+| [Native Delegation and Delivery Authority Plan](docs/delegation-authority-implementation-plan.md) | Executable slices for adaptive native OpenCode subagents, wave scheduling, evidence, receipts, and delivery gates. |
 | [Versioned Self-installation](docs/self-install.md) | Permanent launcher, immutable SHA-256 versions, atomic activation, rollback, and safety behavior. |
 | [Guided OpenCode Setup](docs/opencode-setup-wizard.md) | Complete explanatory wizard, confirmation boundary, verification, status, and recovery behavior. |
 | [OpenCode Integration](docs/opencode-integration.md) | Current persistent manager installation, safety behavior, CLI, and remaining bridge boundary. |

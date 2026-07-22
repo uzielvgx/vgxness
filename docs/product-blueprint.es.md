@@ -26,7 +26,7 @@ VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por 
 
 **Contracts-only:** Los esquemas Draft 2020-12 de autoría independiente para rutas futuras de SDD, enrutamiento, artefactos y continuidad definen registros que el runtime delimitado actual aún no ejecuta. Los esquemas usados por el plano de control actual sí se validan en runtime.
 
-**Planned:** El enrutamiento Navigator, los flujos completos de fases/artefactos SDD, una UX de autonomía más rica, la TUI mediante teclado, adaptadores adicionales y operaciones avanzadas del ciclo de memoria amplían el runtime delimitado ya entregado.
+**Partial/Planned:** Solicitudes/planes de delegación validados por contrato, ondas deterministas de dependencias, factories delimitadas por ejecución, contratos de autoridad para slots lógicos y propietario/epoch, admisión atómica condicionada a prerrequisitos confirmados, replay preparado antes del dispatch delimitado, clasificación fail-closed pública por tarea, adopción de checkpoints consciente de revocación durante takeover, comprobaciones de linaje de sesiones nativas y snapshots atómicos de join aceptados por la autoridad forman ahora la primera base de Navigator. Estas garantías se ejercitan mediante un modelo de autoridad en memoria; el backend de autoridad durable de producción, la persistencia/reanudación de planes, el Navigator nativo visible para el manager, `vgxness_orchestrate`, los flujos completos de fases/artefactos SDD, una UX de autonomía más rica, la TUI mediante teclado, adaptadores adicionales y el ciclo avanzado de memoria siguen planificados.
 
 ### Contrato del documento y la traducción
 
@@ -41,7 +41,7 @@ VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por 
 | Estado | Alcance |
 | --- | --- |
 | **Implemented** | Binario/composición Go; launcher y auto-instalación/actualización/rollback; almacenamiento y memoria propia SQLite/FTS5; validación de contratos en runtime; eventos Chronicle, publicación crash-atomic de instantáneas inmutables, estado de tareas y recuperación terminal; Registry/Gatekeeper; runner de prompts/proveedores; coordinador/plano de control delimitado; adaptador/puente OpenCode; setup guiado; E2E hermético de setup/dispatch desde checkout limpio; pruebas y CI de Go. |
-| **Partial** | Continuidad amplia de puntos de control/artefactos Chronicle; cobertura de runtime solo con OpenCode; revisiones estrictas que dejan intencionalmente sin revisar el contenido no rastreado; compilación cruzada/compilación de paquetes de prueba para Windows sin smoke nativo de runtime/distribución. |
+| **Partial** | Base Navigator de contratos, planes ligados al contenido y waves/joins deterministas, todavía sin enrutamiento nativo visible para el manager; continuidad amplia de puntos de control/artefactos Chronicle; cobertura de runtime solo con OpenCode; revisiones estrictas que dejan intencionalmente sin revisar el contenido no rastreado; compilación cruzada/compilación de paquetes de prueba para Windows sin smoke nativo de runtime/distribución. |
 | **Contracts-only** | Formas Draft 2020-12 y reglas semánticas para rutas futuras de SDD, enrutamiento, artefactos y continuidad que el runtime delimitado aún no ejecuta. |
 | **Planned** | Enrutamiento Navigator, flujos SDD y backends de artefactos completos, UX de autonomía/aprobación más rica, TUI mediante teclado, adaptadores opcionales, validación nativa de Windows y recuperación/ciclo semántico avanzados. |
 | **Deferred** | Adaptadores de runtime adicionales, exposición MCP local opcional, más clientes MCP externos, recuperación semántica avanzada y superficies gráficas de producto. |
@@ -99,7 +99,7 @@ La división de entrega es intencional: la memoria propia, Registry, Gatekeeper,
 
 ## 6. Modelo del sistema
 
-VGXNESS tiene un plano de control Go local **Implemented y delimitado** con límites explícitos de paquetes y dependencias. El enrutamiento Navigator y el producto SDD completo siguen **Planned**. La arquitectura Go se detalla en [`go-implementation.md`](go-implementation.md).
+VGXNESS tiene un plano de control Go local **Implemented y delimitado** con límites explícitos de paquetes y dependencias. La base contractual y de scheduling determinista de Navigator es **Partial**; el enrutamiento de runtime y el producto SDD completo siguen **Planned**. La arquitectura Go se detalla en [`go-implementation.md`](go-implementation.md).
 
 ```text
 TUI planificada / CLI+puente implementados / MCP local planificado
@@ -321,14 +321,14 @@ Navigator solo inicia trabajo concurrente cuando es seguro. Cada tarea en segund
 
 ### Horizontes de entrega
 
-La secuencia original de dependencias —**validación de contratos → eventos Chronicle → instantáneas/recuperación → máquina de estados de tareas → Gatekeeper/Registry → proveedores → coordinación delimitada**— está implementada para la ruta acotada del plano de control OpenCode. Con la publicación crash-atomic de Chronicle, la compilación cruzada de Windows y el E2E hermético desde checkout limpio entregados, la siguiente secuencia de refuerzo es **smoke nativo de runtime/distribución en Windows → continuidad amplia de puntos de control/artefactos**, mientras Navigator/SDD continúa como expansión separada del producto.
+La secuencia original de dependencias —**validación de contratos → eventos Chronicle → instantáneas/recuperación → máquina de estados de tareas → Gatekeeper/Registry → proveedores → coordinación delimitada**— está implementada para la ruta acotada del plano de control OpenCode. La siguiente secuencia del producto es **delegación nativa adaptativa → Delivery Authority ligado al contenido → continuidad amplia de puntos de control/artefactos**. El smoke nativo de runtime/distribución en Windows queda diferido y no bloquea esta secuencia.
 
 | Horizonte | Estado | Resultado |
 | --- | --- | --- |
 | Base local del producto | **Implemented** | Composición Go, auto-instalación/actualización/rollback versionados, resolución de almacenamiento, memoria propia SQLite/FTS5, CLI/puente, status/doctor, pruebas y CI. |
 | Base de contratos de runtime | **Implemented/Contracts-only** | Valida contratos usados por el runtime delimitado; conserva formas futuras de SDD/continuidad solo como contratos hasta que existan sus rutas. |
 | Estado operativo Chronicle | **Implemented/Partial** | Entrega eventos verificados, reproducción de tareas/cancelaciones, instantáneas ligadas a digest, publicación atómica del puntero, reparación terminal y proyección de recuperación; falta ampliar la continuidad general de puntos de control/artefactos. |
-| Base de orquestación delimitada | **Implemented, acotada** | Entrega Registry/Gatekeeper, composición de prompts, selección de proveedor, ejecución OpenCode, recibos, coordinación finita y operaciones estrictas del puente. No implica enrutamiento Navigator/SDD. |
+| Base de orquestación delimitada | **Implemented/Partial** | Registry/Gatekeeper, composición de prompts, selección de proveedor, ejecución OpenCode, recibos, coordinación finita y operaciones estrictas del puente están entregados. Los planes de delegación validados, las ondas deterministas, las factories delimitadas por ejecución, las admisiones preparadas condicionadas a prerrequisitos, el fencing por slot lógico/epoch, la clasificación delimitada fail-closed del dispatch, la adopción de checkpoints consciente de revocación y los joins aceptados por la autoridad están implementados en un modelo de autoridad ejecutable en memoria; el backend de autoridad durable de producción, la persistencia de planes, el Navigator nativo y el runtime adaptativo visible para el manager siguen planificados. |
 | Adaptadores estructurales y de diseño | **Planned** | Agregar detección opcional de CodeGraph y OpenPencil, instalación por asistente, procedencia, alternativas seguras y validación Sentinel enfocada. |
 | Entrega segura | **Partial** | Existen unidades delimitadas, recibos de política, cancelación, restricciones de segundo plano de solo lectura, evidencia estricta de revisión, rollback de setup y controles de recuperación; el ciclo completo de habilidades, automatización Git/worktree y presupuestos de revisión del producto siguen planificados. |
 | Expansión del ecosistema | **Deferred** | Agregar runtimes elegibles además de OpenCode, MCP local opcional, más clientes, recuperación semántica avanzada y superficies gráficas cuando los contratos sean estables. |
@@ -352,7 +352,7 @@ Este es un mapa de revisión, no un sustituto de las definiciones anteriores.
 | Resultado, estado, canonicidad y contrato bilingüe | Secciones 1-2 | **Implemented**, **Partial**, **Contracts-only** y **Planned** están respaldados por evidencia; el inglés es canónico. |
 | Control humano, enseñanza, orientación crítica e idioma | Secciones 3 y 7 | **Planned**. |
 | Paridad limpia, procedencia y copia prohibida | Sección 4 | Regla documental **Implemented**; copiar es **Non-goal**. |
-| Capacidades, servicios, modos y adaptadores | Secciones 5, 6 y 10 | Registry/Gatekeeper/Chronicle y ejecución OpenCode están entregados en un runtime acotado; las capacidades con nombre y modos SDD completos siguen como taxonomía **Planned**. |
+| Capacidades, servicios, modos y adaptadores | Secciones 5, 6 y 10 | Registry/Gatekeeper/Chronicle y ejecución OpenCode están entregados en un runtime acotado; la base determinista de planeación/scheduling de Navigator es **Partial**, mientras su rol nativo en runtime, las demás capacidades con nombre y los modos SDD completos siguen como taxonomía **Planned**. |
 | Plano Go, estado con prioridad local, TUI, CLI y OpenCode | Secciones 6-7 | Go/CLI/almacenamiento/orquestación y el puente OpenCode **Implemented**; TUI **Planned**. |
 | Safe, Balanced, Autonomous, Custom y arrendamientos | Secciones 7 y 11 | **Planned**; se mantienen controles estrictos. |
 | `direct`, `explore`, `plan`, `sdd`, `recovery`; `plan` frente a `tasks` | Sección 8 | **Planned** y explícitamente distintos. |
@@ -366,7 +366,7 @@ Este es un mapa de revisión, no un sustituto de las definiciones anteriores.
 | Habilidades, resolución exacta, aprobaciones, revisiones y entrega | Sección 11 | La resolución/aprobación/evidencia de revisión delimitada es **Partial**; el ciclo completo de habilidades y la automatización de entrega siguen **Planned**. |
 | Fallos, cancelación, recuperación y supervisión en segundo plano | Secciones 3, 9 y 11 | La cancelación delimitada del proveedor, proyección de recuperación y restricciones de segundo plano de solo lectura están **Implemented/Partial**; la supervisión completa de Navigator sigue **Planned**. |
 | Esquemas Draft 2020-12 y límite de validación | Secciones 1-2 y [`schemas/README.md`](schemas/README.md) | Las rutas actuales de runtime se validan; las formas solo futuras son **Contracts-only** y no se afirma validación completa de release. |
-| Base de runtime entregada | Secciones 1-2 y este mapa | Binario, almacenamiento, memoria, Chronicle, Registry/Gatekeeper, runner de proveedores, coordinador delimitado, puente/setup OpenCode, pruebas y CI están **Implemented** dentro de los límites declarados. |
+| Base de runtime entregada | Secciones 1-2 y este mapa | Binario, almacenamiento, memoria, Chronicle, Registry/Gatekeeper, runner de proveedores, coordinador delimitado, puente/setup OpenCode, pruebas y CI están **Implemented** dentro de los límites declarados; el scheduler y el protocolo ejecutable de autoridad en memoria de Navigator son una base **Partial** pendiente del backend durable de producción y del enrutamiento de sesiones hijas nativas. |
 
 ## Documentos complementarios
 

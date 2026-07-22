@@ -26,7 +26,7 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 
 **Contracts-only:** Independently authored Draft 2020-12 schemas for future SDD, routing, artifact, and continuity paths define records that the current bounded runtime does not yet exercise. Schemas used by the current control plane are validated at runtime.
 
-**Planned:** Navigator routing, full SDD phase/artifact workflows, richer autonomy UX, the keyboard TUI, additional adapters, and advanced semantic-memory lifecycle operations extend the delivered bounded runtime.
+**Partial/Planned:** Contract-validated delegation requests/plans, deterministic dependency waves, execution-scoped scheduler factories, logical-slot and owner/epoch authority contracts, atomic confirmed-prerequisite admission, prepared replay before bounded dispatch, public fail-closed dispatch classification, revocation-aware checkpoint takeover adoption, native-session lineage checks, and authority-accepted atomic join snapshots now form the first Navigator foundation. These guarantees are exercised by an in-memory authority model; the production durable authority/backend, manager-facing native Navigator, plan persistence/restart UX, `vgxness_orchestrate`, full SDD phase/artifact workflows, richer autonomy UX, keyboard TUI, additional adapters, and advanced semantic-memory lifecycle remain planned.
 
 ### Document and translation contract
 
@@ -41,7 +41,7 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 | Status | Scope |
 | --- | --- |
 | **Implemented** | Go binary/composition; launcher and self-install/update/rollback; storage and owned SQLite/FTS5 memory; runtime contract validation; Chronicle events, immutable crash-atomic snapshot publication, task-state and terminal recovery; Registry/Gatekeeper; prompt/provider runner; bounded coordinator/control plane; OpenCode adapter/bridge; guided setup; hermetic clean-checkout setup/dispatch E2E; tests and Go CI. |
-| **Partial** | Chronicle's broader checkpoint/artifact continuity; OpenCode-only runtime coverage; strict reviews that intentionally leave untracked contents unreviewed; Windows cross-build/test-package compilation without native runtime/distribution smoke. |
+| **Partial** | Navigator's contract-validated, content-bound deterministic planner/wave/join foundation without manager-facing native runtime routing; Chronicle's broader checkpoint/artifact continuity; OpenCode-only runtime coverage; strict reviews that intentionally leave untracked contents unreviewed; Windows cross-build/test-package compilation without native runtime/distribution smoke. |
 | **Contracts-only** | Draft 2020-12 shapes and semantic rules for future SDD, routing, artifacts, and continuity paths not yet exercised by the bounded runtime. |
 | **Planned** | Navigator routing, complete SDD workflows and artifact backends, richer autonomy/approval UX, keyboard-first TUI, optional adapters, native Windows validation, and advanced semantic retrieval/lifecycle. |
 | **Deferred** | Additional runtime adapters, optional local MCP exposure, broader external MCP clients, richer semantic retrieval, and graphical product surfaces. |
@@ -99,7 +99,7 @@ The delivery split is intentional: owned memory, Registry, Gatekeeper, contract-
 
 ## 6. System model
 
-VGXNESS has an **Implemented, bounded** local Go control plane with explicit package and dependency boundaries. Navigator routing and the complete SDD product remain **Planned**. The Go architecture is detailed in [`go-implementation.md`](go-implementation.md).
+VGXNESS has an **Implemented, bounded** local Go control plane with explicit package and dependency boundaries. Navigator's contract and deterministic scheduling foundation is **Partial**; runtime routing and the complete SDD product remain **Planned**. The Go architecture is detailed in [`go-implementation.md`](go-implementation.md).
 
 ```text
 planned TUI / implemented CLI+bridge / planned local MCP
@@ -321,14 +321,14 @@ Navigator may start concurrent work only when safe. Every background task is man
 
 ### Delivery horizons
 
-The original dependency sequence—**contract validation → Chronicle events → snapshots/recovery → task state machine → Gatekeeper/Registry → providers → bounded coordination**—is implemented for the narrow OpenCode control-plane path. With crash-atomic Chronicle snapshot publication, Windows cross-compilation, and the hermetic clean-checkout E2E delivered, the next hardening sequence is **native Windows runtime/distribution smoke → broader checkpoint/artifact continuity**, while Navigator/SDD remains a separate product expansion.
+The original dependency sequence—**contract validation → Chronicle events → snapshots/recovery → task state machine → Gatekeeper/Registry → providers → bounded coordination**—is implemented for the narrow OpenCode control-plane path. The next product sequence is **adaptive native delegation → content-bound Delivery Authority → broader checkpoint/artifact continuity**. Native Windows runtime/distribution smoke is deferred and does not block this sequence.
 
 | Horizon | Status | Outcome |
 | --- | --- | --- |
 | Local product foundation | **Implemented** | Go composition, versioned self-install/update/rollback, storage resolution, owned SQLite/FTS5 memory, CLI/bridge, status/doctor, tests, and CI. |
 | Runtime contract foundation | **Implemented/Contracts-only** | Validate contracts used by the bounded runtime; retain future SDD/continuity shapes as contracts-only until their paths exist. |
 | Chronicle operational state | **Implemented/Partial** | Deliver verified events, task/cancellation replay, digest-bound snapshots, atomic pointer publication, terminal repair, and recovery projection; expand general checkpoint/artifact continuity. |
-| Bounded orchestration foundation | **Implemented, narrow** | Deliver Registry/Gatekeeper, prompt composition, provider selection, OpenCode execution, receipts, finite coordination, and strict bridge operations. Navigator/SDD routing is not implied. |
+| Bounded orchestration foundation | **Implemented/Partial** | Registry/Gatekeeper, prompt composition, provider selection, OpenCode execution, receipts, finite coordination, and strict bridge operations are delivered. Contract-validated delegation plans, deterministic waves, execution-scoped factories, prerequisite-gated prepared admissions, logical-slot/epoch fencing, bounded fail-closed dispatch classification, revocation-aware checkpoint adoption, and authority-accepted joins are implemented in an executable in-memory authority model; the production durable authority/backend, plan storage, native Navigator, and manager-facing adaptive runtime remain planned. |
 | Structural and design adapters | **Planned** | Add optional CodeGraph and OpenPencil detection, wizard installation, provenance, safe fallbacks, and focused Sentinel validation. |
 | Safe delivery | **Partial** | Bounded work units, policy receipts, cancellation, read-only background constraints, strict review evidence, setup rollback, and recovery checks exist; broader skill lifecycle, Git/worktree automation, and product-level review budgets remain planned. |
 | Ecosystem expansion | **Deferred** | Add eligible runtimes beyond OpenCode, optional local MCP, broader clients, richer semantic retrieval, and graphical surfaces when contracts are stable. |
@@ -352,7 +352,7 @@ This is a review map, not a substitute for the definitions above.
 | Product outcome, status, canonicality, and bilingual contract | Sections 1-2 | **Implemented**, **Partial**, **Contracts-only**, and **Planned** are evidence-backed; English is canonical. |
 | Human control, pedagogy, critical guidance, and language | Sections 3 and 7 | **Planned**. |
 | Clean-room parity, provenance, and prohibited copying | Section 4 | **Implemented** documentation rule; copying is a **Non-goal**. |
-| Capabilities, services, operating modes, and adapters | Sections 5, 6, and 10 | Registry/Gatekeeper/Chronicle and OpenCode execution are delivered in a narrow runtime; named capabilities and complete SDD modes remain **Planned** taxonomy. |
+| Capabilities, services, operating modes, and adapters | Sections 5, 6, and 10 | Registry/Gatekeeper/Chronicle and OpenCode execution are delivered in a narrow runtime; Navigator's deterministic planning/scheduling foundation is **Partial**, while its native runtime role, other named capabilities, and complete SDD modes remain **Planned** taxonomy. |
 | Go control plane, local-first state, TUI, CLI, and OpenCode | Sections 6-7 | Go/CLI/storage/orchestration and the OpenCode bridge **Implemented**; TUI **Planned**. |
 | Safe, Balanced, Autonomous, Custom, and capability leases | Sections 7 and 11 | **Planned**; hard gates remain. |
 | `direct`, `explore`, `plan`, `sdd`, `recovery`; `plan` versus `tasks` | Section 8 | **Planned** and explicitly distinct. |
@@ -366,7 +366,7 @@ This is a review map, not a substitute for the definitions above.
 | Skills, exact resolution, approvals, reviews, and delivery | Section 11 | Exact bounded resolution/approval/review evidence is **Partial**; full skill lifecycle and delivery automation remain **Planned**. |
 | Failure, cancellation, recovery, and background supervision | Sections 3, 9, and 11 | Bounded provider cancellation, recovery projection, and read-only background constraints are **Implemented/Partial**; full Navigator supervision remains **Planned**. |
 | Draft 2020-12 schemas and validation limitation | Sections 1-2 and [`schemas/README.md`](schemas/README.md) | Current runtime paths are validated; future-only shapes are **Contracts-only** and full release validation is not claimed. |
-| Delivered runtime foundation | Sections 1-2 and this map | Binary, storage, memory, Chronicle, Registry/Gatekeeper, provider runner, bounded coordinator, OpenCode bridge/setup, tests, and CI are **Implemented** within the stated limits. |
+| Delivered runtime foundation | Sections 1-2 and this map | Binary, storage, memory, Chronicle, Registry/Gatekeeper, provider runner, bounded coordinator, OpenCode bridge/setup, tests, and CI are **Implemented** within the stated limits; Navigator's scheduler and executable in-memory authority protocol are a **Partial** foundation pending the production durable backend and native child-session routing. |
 
 ## Supporting documents
 

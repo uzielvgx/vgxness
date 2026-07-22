@@ -7,8 +7,8 @@ These Draft 2020-12 schemas define runtime-neutral orchestration, execution, reg
 | Schema | File | Stable URI | Validates |
 | --- | --- | --- | --- |
 | Common library | `common.schema.json` | `https://vgxness.dev/schemas/common.schema.json` | Provider/artifact refs, provenance, skill sources, checksums, language policy, and `contract.invalid`. |
-| OpenCode bridge input | `bridge.schema.json` | `https://vgxness.dev/schemas/bridge.schema.json` | Agent-controlled bounded dispatch arguments before trusted OpenCode context is added. |
-| Orchestration library | `orchestration.schema.json` | `https://vgxness.dev/schemas/orchestration.schema.json` | Capability selection, routing, provider-neutral memory SDD preflight, questions, and answers. |
+| OpenCode bridge input | `bridge.schema.json` | `https://vgxness.dev/schemas/bridge.schema.json` | Agent-controlled bounded dispatch and high-level orchestration arguments before trusted OpenCode context is added. |
+| Orchestration library | `orchestration.schema.json` | `https://vgxness.dev/schemas/orchestration.schema.json` | Capability selection, routing, delegation requests/plans, execution waves, provider-neutral memory SDD preflight, questions, and answers. |
 | Execution library | `execution.schema.json` | `https://vgxness.dev/schemas/execution.schema.json` | Packets, capsules, bounded loops, cancellation, background tasks, exact skill refs, and agent results. |
 | Prompt library | `prompts.schema.json` | `https://vgxness.dev/schemas/prompts.schema.json` | Versioned system-prompt identities and bounded prompt receipts. |
 | Current run | `current-run.schema.json` | `https://vgxness.dev/schemas/current-run.schema.json` | Lightweight active-run projection and correlated IDs. |
@@ -33,6 +33,9 @@ The four libraries expose reusable contracts through `$defs`. Reference the exac
 | Capability declaration | `orchestration.schema.json#/$defs/capabilityDeclaration` |
 | Provider selection | `orchestration.schema.json#/$defs/providerSelection` |
 | Routing decision | `orchestration.schema.json#/$defs/routingDecision` |
+| Delegation request and validated plan | `orchestration.schema.json#/$defs/delegationRequest` and `#/$defs/delegationPlan` |
+| Planned task and execution wave | `orchestration.schema.json#/$defs/delegationTask` and `#/$defs/executionWave` |
+| Native task join and aggregate result | `orchestration.schema.json#/$defs/joinedTask` and `#/$defs/delegationJoin` |
 | SDD preflight | `orchestration.schema.json#/$defs/sddPreflight` |
 | Structured question/answer | `orchestration.schema.json#/$defs/structuredQuestion` and `#/$defs/structuredAnswer` |
 | Exact skill ref | `execution.schema.json#/$defs/exactSkillReference` |
@@ -42,8 +45,11 @@ The four libraries expose reusable contracts through `$defs`. Reference the exac
 | Continuity capsule | `execution.schema.json#/$defs/continuityCapsule` |
 | System prompt and exact reference | `prompts.schema.json#/$defs/prompt` and `#/$defs/promptReference` |
 | Bounded dispatch input | `bridge.schema.json#/$defs/dispatchInput` |
+| High-level orchestration input | `bridge.schema.json#/$defs/orchestrateInput` |
 
 Relative references resolve against each schema's stable `$id`. A schema loader should register every stable URI before validating composed schemas.
+
+`joinedTask.dispatchStatus` is required and preserves the authority's `confirmed`, `not_started`, or `uncertain` classification. A consumer must not infer confirmed native execution merely from a terminal task status. The current Go scheduler and in-memory executable authority model validate this shape and the atomic `AcceptJoin` contract; production durable admission/replay/Join persistence remains a planned runtime boundary rather than a guarantee supplied by JSON Schema.
 
 ## Validation order
 
@@ -71,7 +77,9 @@ JSON Schema proves record shape. The manager or run-store service must additiona
 - background work is read-only, non-delegating, non-advancing, and independently cancelable;
 - current iteration does not exceed the loop budget and exhausted/deadline loops are terminal;
 - current-run, snapshot, event, task, decision, cancellation, result, capsule, and artifact IDs agree;
-- lifecycle transitions and event order are legal.
+- lifecycle transitions and event order are legal;
+- each dependency admitted into a later wave has a current authority checkpoint showing `completed` with `dispatchStatus: confirmed`;
+- a published delegation join is the authoritative snapshot returned by the same owner/epoch authority transition that validated its revocation-aware terminal checkpoint.
 
 ## Compatibility
 

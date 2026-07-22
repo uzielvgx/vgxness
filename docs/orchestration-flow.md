@@ -5,11 +5,11 @@ This document owns the request lifecycle, gates, phase operating modes, and reco
 | Status | Current-candidate evidence and boundary |
 | --- | --- |
 | **Implemented** | Local binary/storage/memory; runtime contract validation; Chronicle events, task-state derivation, immutable crash-atomic snapshot publication and terminal repair; exact Registry/Gatekeeper decisions; prompt/provider runner; finite coordinator; OpenCode execution; strict bridge/setup; tests and receipts. |
-| **Partial** | The delivered coordinator exposes a narrow status/read/write/review path rather than the full Navigator/SDD lifecycle. Explicit `start`/`continue`/`finish` now preserves and closes one foreground run across processes with validated capsules and owned memory, while status/cancel controls, task-graph routing, and live background supervision remain planned. |
+| **Partial** | The delivered coordinator exposes a narrow status/read/write/review path rather than the full Navigator/SDD lifecycle. Explicit `start`/`continue`/`finish` preserves one foreground run. Validated delegation plans, deterministic dependency waves, execution-scoped factories, owner/epoch fencing, prerequisite-gated logical task-slot admission, prepared replay, revocation-aware checkpoint adoption, bounded fail-closed dispatch classification, public dispatch status, partial-failure stops, and authority-accepted joins are implemented in-process. Native planning-session execution, bridge projection, the production durable authority/backend, plan persistence/restart UX, status/cancel controls, and live supervision remain planned. |
 | **Contracts-only** | Schemas and rules for broader routing, SDD phases, artifact stores, continuity capsules, and event types not exercised by the delivered path. |
 | **Planned** | Navigator intent/routing, complete SDD workflows, richer approval/autonomy UX, artifact/checkpoint lifecycle, and additional providers/adapters. |
 
-**Implemented, bounded:** VGXNESS coordinates contract-validated executions through a provider-neutral runner, exact Registry identity, Gatekeeper policy, finite coordinator, and native OpenCode child sessions. Each child creates its ticket identity first, then a durable `recovery ticket → prepared execution → brokered reads → accept` lifecycle preserves Chronicle, memory, capsules, and receipts without launching a nested OpenCode process. Independent one-shot reads can fan out to four children per workspace; atomic pool membership keeps continuity, reviews, and mutation exclusive even during concurrent slot churn. **Planned:** Navigator will own general intent/routing, multi-phase SDD, task-graph joins, and continuity summaries. OpenCode is the first implemented runtime adapter, not a core domain dependency.
+**Implemented, bounded:** VGXNESS coordinates contract-validated executions through a provider-neutral runner, exact Registry identity, Gatekeeper policy, finite coordinator, and native OpenCode child sessions. Each child creates its ticket identity first, then a durable `recovery ticket → prepared execution → brokered reads → accept` lifecycle preserves Chronicle, memory, capsules, and receipts without launching a nested OpenCode process. Independent one-shot reads can fan out to four children per workspace; atomic pool membership keeps continuity, reviews, and mutation exclusive. **Implemented foundation:** Navigator validates advisory decompositions and owns legal dependency waves; caller-owned factories singleflight local opens without selecting authority by global ID; the authority contract/model atomically verifies confirmed prerequisites, reserves logical slots, and persists exact prepared replay before any bounded dispatch callback. Timeout is `uncertain`; late results are ignored, while unresolved callbacks keep takeover fenced until termination or proof-backed reconciliation. No automatic redelivery occurs, and takeover applies current revocation-aware checkpoints. Public joins preserve dispatch classification and are published only through atomic authority `AcceptJoin`, not through a lease read followed by local publication. **Planned:** the production durable authority/checkpoint backend, native planning child, `vgxness_orchestrate`, restart UX, full SDD, and continuity summaries. OpenCode is the first implemented runtime adapter, not a core domain dependency.
 
 **Implemented:** The VGXNESS-owned SQLite/FTS5 `MemoryStore` provides local semantic persistence; Registry, Gatekeeper, provider execution, bounded coordination, and crash-atomic Chronicle snapshot publication operate on validated contracts. **Partial:** Chronicle recovery remains bounded rather than implementing the future general checkpoint/artifact lifecycle. Optional Engram compatibility and full Navigator/SDD orchestration remain planned.
 
@@ -19,7 +19,7 @@ In this workflow, “manager” or “orchestrator” denotes Navigator's coordi
 
 ## Quick path
 
-The flow below is the **target full-product lifecycle**. The current binary implements its bounded execution core—**contract validation → Chronicle events/snapshots/task state → Gatekeeper/Registry → provider → finite coordination**—but not general Navigator routing, selective SDD, artifact stores, or continuity capsules.
+The flow below is the **target full-product lifecycle**. The current binary implements its bounded execution core plus the pure Navigator plan/wave/join foundation—**contract validation → Chronicle events/snapshots/task state → Gatekeeper/Registry → provider → finite coordination → deterministic delegation waves**—but not the manager-facing adaptive runtime, selective SDD, or general artifact stores.
 
 ```text
 User request
@@ -55,7 +55,7 @@ User request
 
 ## Adaptive contract gates
 
-These gates combine delivered and future behavior. Registry resolution, Gatekeeper eligibility/permission checks, prompt composition, provider execution, structured results, and finite coordinator limits are **Implemented** on the bounded path. Navigator routing, SDD preflight, general artifact stores, and the full approval UX remain **Planned/Contracts-only**.
+These gates combine delivered and future behavior. Registry resolution, Gatekeeper eligibility/permission checks, prompt composition, provider execution, structured results, finite coordinator limits, delegation-plan validation, and dependency-wave computation are **Implemented** on the bounded path. Native Navigator execution, Delivery Authority lifecycle gates, SDD preflight, general artifact stores, and the full approval UX remain **Planned/Partial**.
 
 ### 1. Capability negotiation and provider selection
 
@@ -371,9 +371,10 @@ Failure detected
 - [x] **Implemented:** Add Gatekeeper/Registry policy and exact resolution.
 - [x] **Implemented:** Execute the eligible OpenCode provider after policy evaluation.
 - [x] **Implemented, bounded:** Coordinate compact context packets, approvals, foreground/background constraints, cancellation, and finite loops for status/read/write/review operations.
-- [ ] **Planned:** Add Navigator routing, full SDD phases/artifact stores, richer approval UX, and additional adapters.
+- [x] **Implemented/Partial:** Add delegation request/plan/join contracts, deterministic dependency waves, execution-scoped factory singleflight, logical-slot and owner/epoch authority contracts, atomic confirmed-prerequisite admission, prepared replay, bounded per-task fail-closed dispatch classification, revocation-aware checkpoint adoption, public dispatch status, authority-accepted Join, and native child-session identity scheduling. These are implemented with an in-memory executable authority model; native Navigator execution and the production durable authority/backend remain.
+- [ ] **Planned:** Add `vgxness_orchestrate`, Delivery Authority, full SDD phases/artifact stores, richer approval UX, and additional adapters.
 - [ ] **Planned:** Keep future `run inspect` and recovery commands focused on debugging/auditing, not happy-path ceremony.
 
 ## Next step
 
-Use this document with the contract schemas in [`docs/schemas/README.md`](schemas/README.md). With crash-atomic Chronicle publication, Windows cross-compilation, and the hermetic clean-checkout setup/dispatch E2E delivered, the next hardening slice is native Windows runtime/distribution smoke, followed by broader checkpoint/artifact continuity. Navigator/SDD expansion should build on the delivered bounded path rather than bypassing its contracts.
+Use this document with the contract schemas in [`docs/schemas/README.md`](schemas/README.md) and the [native delegation/Delivery Authority implementation plan](delegation-authority-implementation-plan.md). The next slices are native Navigator/`vgxness_orchestrate`, durable wave execution/recovery, and content-bound Delivery Authority. Native Windows runtime/distribution smoke is deferred.

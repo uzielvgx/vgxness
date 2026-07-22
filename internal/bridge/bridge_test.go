@@ -18,6 +18,29 @@ func TestDecodeDispatchAcceptsOneBoundedExactRequest(t *testing.T) {
 	}
 }
 
+func TestDecodeOrchestrateAcceptsOnlyPublicIntentAndEnrichesTrustedContext(t *testing.T) {
+	input, err := DecodeOrchestrateInput(strings.NewReader(`{"goal":"Inspect memory and delegation independently","acceptanceCriteria":["Explain both boundaries"]}`))
+	if err != nil || input.Goal != "Inspect memory and delegation independently" || len(input.AcceptanceCriteria) != 1 {
+		t.Fatalf("input=%#v err=%v", input, err)
+	}
+	request, err := NewOrchestrateRequest(input, OrchestrateContext{Model: "openai/gpt-5.6-sol", ParentSessionID: "ses_parent", ParentMessageID: "msg_parent"})
+	if err != nil || request.Input.Goal != input.Goal || request.ParentSessionID != "ses_parent" {
+		t.Fatalf("request=%#v err=%v", request, err)
+	}
+	for _, input := range []string{
+		`{"goal":"inspect","tasks":[]}`,
+		`{"goal":"inspect","model":"openai/gpt-5.6-sol"}`,
+		`{"goal":"inspect","parentSessionId":"ses_parent"}`,
+	} {
+		if _, err := DecodeOrchestrateInput(strings.NewReader(input)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("input %q: expected ErrInvalid, got %v", input, err)
+		}
+	}
+	if _, err := NewOrchestrateRequest(input, OrchestrateContext{Model: "openai/gpt-5.6-sol", ParentSessionID: "../parent", ParentMessageID: "msg_parent"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("untrusted parent context accepted: %v", err)
+	}
+}
+
 func TestDecodeDispatchAcceptsBoundedChangeReview(t *testing.T) {
 	request, err := DecodeDispatch(strings.NewReader(`{"protocolVersion":"1","model":"openai/gpt-5.6-sol","operation":"review-changes","goal":"Review the current changes"}`))
 	if err != nil {
