@@ -43,7 +43,8 @@
         "skillRefs",
         "permissions",
         "executionPolicy",
-        "provenance"
+        "provenance",
+        "promptRef"
       ],
       "properties": {
         "schemaVersion": {
@@ -103,9 +104,8 @@
           "$ref": "common.schema.json#/$defs/provenance"
         },
         "promptRef": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Optional prompt template path or reference."
+          "$ref": "prompts.schema.json#/$defs/promptReference",
+          "description": "Exact versioned prompt identity resolved before provider execution."
         },
         "model": {
           "type": "string",

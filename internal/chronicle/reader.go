@@ -9,9 +9,13 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"github.com/vgxness/vgxness/internal/contracts"
 )
 
 var ErrCorrupt = errors.New("corrupt")
+
+const maxCurrentRunBytes int64 = 1 << 20
 
 type CurrentRun struct {
 	SchemaVersion  string   `json:"schemaVersion"`
@@ -24,16 +28,16 @@ type CurrentRun struct {
 	DecisionID     string   `json:"decisionId"`
 	PreflightID    string   `json:"preflightId"`
 	TaskID         string   `json:"taskId"`
-	CancellationID string   `json:"cancellationId"`
-	ResultID       string   `json:"resultId"`
-	CapsuleID      string   `json:"capsuleId"`
+	CancellationID string   `json:"cancellationId,omitempty"`
+	ResultID       string   `json:"resultId,omitempty"`
+	CapsuleID      string   `json:"capsuleId,omitempty"`
 	LastEventID    string   `json:"lastEventId"`
 	ArtifactIDs    []string `json:"artifactIds"`
 	StorageMode    string   `json:"storageMode"`
 	StartedAt      string   `json:"startedAt"`
 	UpdatedAt      string   `json:"updatedAt"`
-	RunFile        string   `json:"runFile"`
-	LogFile        string   `json:"logFile"`
+	RunFile        string   `json:"runFile,omitempty"`
+	LogFile        string   `json:"logFile,omitempty"`
 }
 
 func ReadCurrent(ctx context.Context, path string) (CurrentRun, bool, error) {
@@ -55,9 +59,15 @@ func ReadCurrent(ctx context.Context, path string) (CurrentRun, bool, error) {
 		return CurrentRun{}, false, fmt.Errorf("read Chronicle: %w", err)
 	}
 	defer f.Close()
-	data, err := io.ReadAll(f)
+	data, err := io.ReadAll(io.LimitReader(f, maxCurrentRunBytes+1))
 	if err != nil {
 		return CurrentRun{}, false, fmt.Errorf("read Chronicle: %w", err)
+	}
+	if int64(len(data)) > maxCurrentRunBytes {
+		return CurrentRun{}, false, fmt.Errorf("%w: current run exceeds size limit", ErrCorrupt)
+	}
+	if err := contracts.Validate(ctx, contracts.CurrentRunSchemaURI, data, false); err != nil {
+		return CurrentRun{}, false, fmt.Errorf("%w: %w", ErrCorrupt, err)
 	}
 	var run CurrentRun
 	decoder := json.NewDecoder(bytes.NewReader(data))

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vgxness.dev/schemas/prompts.schema.json",
+  "title": "VGXNESS Prompt Registry",
+  "description": "Versioned manager and subagent prompt templates resolved before provider execution.",
+  "type": "object",
+  "required": ["schemaVersion", "version", "generatedAt", "prompts"],
+  "properties": {
+    "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+    "version": { "type": "string", "minLength": 1 },
+    "generatedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "prompts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/prompt" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "promptReference": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "id", "version", "checksum"],
+      "properties": {
+        "kind": { "const": "prompt.reference" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "version": { "type": "string", "minLength": 1 },
+        "checksum": {
+          "type": "object",
+          "required": ["algorithm", "value"],
+          "properties": {
+            "algorithm": { "const": "sha256" },
+            "value": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "personality": {
+      "type": "object",
+      "required": ["identity", "voice", "traits", "interactionStyle"],
+      "properties": {
+        "identity": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "voice": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "traits": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "uniqueItems": true
+        },
+        "interactionStyle": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      },
+      "additionalProperties": false
+    },
+    "prompt": {
+      "type": "object",
+      "required": ["schemaVersion", "id", "version", "audience", "instructions", "provenance"],
+      "properties": {
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "version": { "type": "string", "minLength": 1 },
+        "audience": { "type": "string", "enum": ["manager", "subagent"] },
+        "instructions": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "personality": { "$ref": "#/$defs/personality" },
+        "provenance": { "$ref": "common.schema.json#/$defs/provenance" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "audience": { "const": "manager" } }, "required": ["audience"] },
+          "then": { "required": ["personality"] },
+          "else": { "not": { "required": ["personality"] } }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

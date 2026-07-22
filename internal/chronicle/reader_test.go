@@ -1,6 +1,7 @@
 package chronicle
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/contracts"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -121,4 +123,20 @@ func TestChronicle_RejectsInvalidTemporalAndArtifactMetadata(t *testing.T) {
 			testutil.Require(t, errors.Is(err, ErrCorrupt), "expected corruption, got %v", err)
 		})
 	}
+}
+
+func TestChronicle_ReportsSchemaFailureWithoutLosingCorruptionIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "current-run.json")
+	testutil.NoError(t, os.WriteFile(path, currentRunJSON(t, map[string]any{"startedAt": "yesterday"}), 0o600))
+	_, _, err := ReadCurrent(context.Background(), path)
+	var failure *contracts.ContractError
+	testutil.Require(t, errors.Is(err, ErrCorrupt) && errors.Is(err, contracts.ErrInvalid) && errors.As(err, &failure), "expected joined contract corruption, got %v", err)
+	testutil.Require(t, failure.SchemaURI == contracts.CurrentRunSchemaURI && failure.Pointer == "/startedAt" && !failure.Recoverable, "unexpected failure: %+v", failure)
+}
+
+func TestChronicle_RejectsOversizedCurrentRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "current-run.json")
+	testutil.NoError(t, os.WriteFile(path, bytes.Repeat([]byte("x"), int(maxCurrentRunBytes)+1), 0o600))
+	_, _, err := ReadCurrent(context.Background(), path)
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "expected oversized corruption, got %v", err)
 }

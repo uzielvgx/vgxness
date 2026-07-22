@@ -28,3 +28,16 @@ func TestMemoryRuntime_SaveCloseAndOfflineRestart(t *testing.T) {
 	code = Run(context.Background(), []string{"memory", "search", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"query":"restart","project":"p","scope":"project"}`), &out, &stderr)
 	testutil.Require(t, code == 0 && strings.Contains(out.String(), "T"), "restart exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
 }
+
+func TestOpenCodeIntegrationRuntime_InstallStatusAndRecoverableUninstall(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	var out, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"integrate", "opencode", "install", "--model", "openai/gpt-5.6-sol", "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
+	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=installed") && stderr.Len() == 0, "install exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	out.Reset()
+	code = Run(context.Background(), []string{"integrate", "opencode", "status", "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
+	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=installed") && strings.Contains(out.String(), "changed=false"), "status exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	out.Reset()
+	code = Run(context.Background(), []string{"integrate", "opencode", "uninstall", "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
+	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=absent") && strings.Contains(out.String(), "backup="), "uninstall exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
+}

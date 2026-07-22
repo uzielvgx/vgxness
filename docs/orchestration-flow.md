@@ -2,16 +2,16 @@
 
 This document owns the request lifecycle, gates, phase operating modes, and recovery contract. The [VGXNESS Product Blueprint](product-blueprint.md) is the canonical product vision, taxonomy, status, and roadmap.
 
-| Status | Merged-main evidence and boundary |
+| Status | Current-candidate evidence and boundary |
 | --- | --- |
-| **Implemented** | Local binary, storage resolution, status/doctor, and owned SQLite/FTS5 memory save/search/get. |
-| **Partial** | Strict read-only Chronicle `current-run.json` parsing and inspection; no event append, snapshots, replay, or recovery. |
-| **Contracts-only** | Schemas and semantic backend/reference validation describe orchestration records and rules without executing them. |
-| **Planned** | Task state, Gatekeeper/Registry, provider execution, routing, approvals, recovery, and bounded coordination. |
+| **Implemented** | Local binary/storage/memory; runtime contract validation; Chronicle events, task-state derivation, immutable crash-atomic snapshot publication and terminal repair; exact Registry/Gatekeeper decisions; prompt/provider runner; finite coordinator; OpenCode execution; strict bridge/setup; tests and receipts. |
+| **Partial** | The delivered coordinator exposes a narrow status/read/write/review path rather than the full Navigator/SDD lifecycle. Explicit `start`/`continue`/`finish` now preserves and closes one foreground run across processes with validated capsules and owned memory, while status/cancel controls, task-graph routing, and live background supervision remain planned. |
+| **Contracts-only** | Schemas and rules for broader routing, SDD phases, artifact stores, continuity capsules, and event types not exercised by the delivered path. |
+| **Planned** | Navigator intent/routing, complete SDD workflows, richer approval/autonomy UX, artifact/checkpoint lifecycle, and additional providers/adapters. |
 
-**Planned:** VGXNESS will coordinate work through a configurable, provider-neutral orchestrator and scoped agents. The selected manager will own intent, routing, safety, and summaries; agents will execute inside narrow boundaries and return structured results. OpenCode is the first preferred runtime adapter, not a core dependency.
+**Implemented, bounded:** VGXNESS coordinates contract-validated executions through a provider-neutral runner, exact Registry identity, Gatekeeper policy, finite coordinator, and native OpenCode child sessions. Each child creates its ticket identity first, then a durable `recovery ticket → prepared execution → brokered reads → accept` lifecycle preserves Chronicle, memory, capsules, and receipts without launching a nested OpenCode process. Independent one-shot reads can fan out to four children per workspace; atomic pool membership keeps continuity, reviews, and mutation exclusive even during concurrent slot churn. **Planned:** Navigator will own general intent/routing, multi-phase SDD, task-graph joins, and continuity summaries. OpenCode is the first implemented runtime adapter, not a core domain dependency.
 
-**Implemented:** The VGXNESS-owned SQLite/FTS5 `MemoryStore` provides local semantic persistence. **Partial:** Chronicle can inspect only the current-run pointer. **Planned:** Chronicle operational truth, optional Engram compatibility, and orchestration services.
+**Implemented:** The VGXNESS-owned SQLite/FTS5 `MemoryStore` provides local semantic persistence; Registry, Gatekeeper, provider execution, bounded coordination, and crash-atomic Chronicle snapshot publication operate on validated contracts. **Partial:** Chronicle recovery remains bounded rather than implementing the future general checkpoint/artifact lifecycle. Optional Engram compatibility and full Navigator/SDD orchestration remain planned.
 
 Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger are product capabilities; Registry, Chronicle, and Gatekeeper are deterministic services. The explore, propose, spec, design, tasks, apply, verify, archive, fix, and recovery agents described here are operating modes that use those capabilities, not a competing capability taxonomy.
 
@@ -19,7 +19,7 @@ In this workflow, “manager” or “orchestrator” denotes Navigator's coordi
 
 ## Quick path
 
-The flow below is **Planned**, not a description of the current binary. Its implementation order is fixed: **contract validation → Chronicle events → snapshots/recovery → task state machine → Gatekeeper/Registry → providers → bounded coordination**.
+The flow below is the **target full-product lifecycle**. The current binary implements its bounded execution core—**contract validation → Chronicle events/snapshots/task state → Gatekeeper/Registry → provider → finite coordination**—but not general Navigator routing, selective SDD, artifact stores, or continuity capsules.
 
 ```text
 User request
@@ -36,26 +36,26 @@ User request
   -> manager returns a short summary in the user's language
 ```
 
-`vgxness status` and `vgxness doctor` are **Implemented** inspection commands. `run inspect`, orchestration, and recovery are **Planned**; inspection remains debugging/auditing rather than mandatory ceremony.
+`vgxness status`, `vgxness doctor`, bridge status/dispatch, guided OpenCode setup, bounded orchestration, and recovery projection are **Implemented**. A general `run inspect` UX and full Navigator/SDD recovery workflow are **Planned**; inspection remains debugging/auditing rather than mandatory ceremony.
 
 ## Core decisions
 
 | Area | Decision |
 | --- | --- |
 | Manager role | **Planned:** Coordinator, not executor. It routes work, enforces boundaries, and summarizes outcomes. |
-| Subagent role | **Planned:** Scoped executor or reviewer that returns structured results. |
-| Subagent nesting | **Contracts-only:** No subagent silently creates another subagent in v1; runtime enforcement is planned. |
-| Operational truth | **Partial:** Chronicle reads the current-run pointer. Events, snapshots, artifacts, checkpoints, failures, and validation are planned. |
+| Subagent role | **Implemented, bounded:** Hidden native `explorer`, `implementer`, and `reviewer` profiles execute one authorized operation and return a validated structured result. Capability-specific SDD agents remain planned. |
+| Subagent nesting | **Implemented, bounded:** Each native child has `task: deny`; missing authority is reported instead of recursively delegating. |
+| Operational truth | **Implemented/Partial:** Chronicle records validated events, digest-bound snapshots, atomic pointer commits, terminal repair, task/cancellation state, results, and recovery projection. General artifacts/checkpoints remain planned. |
 | Semantic authority | **Implemented:** The owned `MemoryStore` persists typed observations with provenance and lifecycle state. Higher-level approval, summary, capsule, and optional Engram workflows are planned. |
-| Recovery source | **Planned:** Readable snapshots and events remain the recovery source; the CLI stays convenience, not lock-in. |
+| Recovery source | **Implemented/Partial:** Readable digest-bound snapshots and events drive bounded recovery reconstruction, including terminal commit repair; general artifacts/checkpoints and a dedicated UX remain planned. |
 | User experience | Happy path is quiet. Detailed inspection is available on demand. |
-| Provider selection | Compare run needs with declared capabilities, versions, constraints, and policy; fail closed before execution. |
+| Provider selection | **Implemented, bounded:** Compare exact capability/version/health evidence with policy and fail closed before execution. |
 | Routing | Persist normalized inputs, candidates, selected route, rationale, policy version, SDD decision, and attributable overrides. |
-| Concurrency | Foreground advancement is sequential. Only manager-owned, read-only background work may overlap. |
+| Concurrency | **Implemented, bounded:** Independent one-shot reads can use four native child sessions per workspace. A workspace admission guard serializes only pool membership changes; child execution remains parallel, while continuity advancement, reviews, and mutation remain exclusive. Unknown active lease state fails closed. Supervised background task graphs are still planned. |
 
 ## Adaptive contract gates
 
-These **Contracts-only** gates define what must happen before provider or agent execution. Gatekeeper, Registry, provider execution, and runtime enforcement are **Planned**.
+These gates combine delivered and future behavior. Registry resolution, Gatekeeper eligibility/permission checks, prompt composition, provider execution, structured results, and finite coordinator limits are **Implemented** on the bounded path. Navigator routing, SDD preflight, general artifact stores, and the full approval UX remain **Planned/Contracts-only**.
 
 ### 1. Capability negotiation and provider selection
 
@@ -95,7 +95,7 @@ A question carries `questionId`, prompt, expected answer shape, blocking status,
 
 ## 1. System flow: request to final summary
 
-The following table is a **Contracts-only** lifecycle specification. No merged service currently advances these steps or writes their events.
+The following table is the **target manager lifecycle**. The bounded bridge path currently implements scoped skill/risk resolution, compact context, native selection among explorer/implementer/reviewer, up to four independent one-shot read children, structured result validation, receipts, Chronicle task/run evidence, and opt-in cross-process `start`/`continue` continuity. It does not yet advance every Navigator/SDD phase, schedule supervised background work, or approve dependency-aware parallel task graphs.
 
 | Step | Owner | What happens | Run-store event |
 | --- | --- | --- | --- |
@@ -245,7 +245,7 @@ The manager should not paraphrase a skill and call that sufficient. If a skill g
 
 ## 7. Run-store event lifecycle
 
-**Planned:** The run store records operational facts in append-only events plus readable snapshots. **Partial:** merged code only reads and validates `current-run.json`.
+**Implemented/Partial:** Chronicle records the event types used by the bounded coordinator in append-only JSONL, validates task/cancellation ordering, publishes readable active snapshots through immutable SHA-256 files and an atomic pointer, repairs interrupted terminal publication, and reconstructs recovery state. The broader phase/artifact/checkpoint event lifecycle below remains planned.
 
 | Phase | Log at minimum | Why it matters |
 | --- | --- | --- |
@@ -259,11 +259,11 @@ The manager should not paraphrase a skill and call that sufficient. If a skill g
 | Recovery | `recovery.started` and `recovery.completed`. | Recovery itself becomes auditable. |
 | Completion | `run.completed` with final status and summary artifact reference. | The run has an explicit end. |
 
-The current-run pointer is readable and strictly validated today. Writing `runs/<run-id>.json`, JSONL events, and recovery evidence remains planned; the CLI must not become the only way to understand them.
+The current-run pointer, its immutable `runs/<run-id>.<sha256>.json` active snapshot, the stable terminal `runs/<run-id>.json`, and `logs/<run-id>.jsonl` are readable and strictly validated today. The CLI must not become the only way to understand them. General artifact/checkpoint evidence remains planned.
 
 ## 8. Memory lifecycle
 
-Memory is for meaning. Run events are for operations. The memory side is **Implemented** for typed save/search/get; the run-event side remains **Planned** beyond the **Partial** current-run reader.
+Memory is for meaning. Run events are for operations. Memory is **Implemented** for typed save/search/get, and Chronicle events are **Implemented** for the bounded coordinator; the complete product event taxonomy and continuity-memory workflows remain **Partial/Planned**.
 
 | Write target | Save here | Do not save here |
 | --- | --- | --- |
@@ -321,7 +321,7 @@ If validation fails, the manager should either route a scoped fix agent or retur
 
 ## 11. Failure and recovery flow
 
-**Planned:** Failures stop guessing and preserve evidence. The current Chronicle reader can detect malformed current-run state, but it does not write failure events, checkpoints, or recovery state.
+**Implemented/Partial:** The bounded coordinator records failure/cancellation evidence; Chronicle recovery validates digest-bound authority, completes an interrupted terminal pointer removal, and fails closed on malformed, corrupt, or inconsistent state. General phase checkpoints/artifacts remain planned.
 
 ```text
 Failure detected
@@ -362,17 +362,18 @@ Failure detected
 ## 13. First implementation checklist
 
 - [x] **Implemented:** Build the binary, storage resolution, status/doctor, owned SQLite/FTS5 memory, and memory save/search/get.
-- [x] **Partial:** Strictly read and validate `current-run.json` for inspection.
-- [x] **Contracts-only:** Define schemas plus owned `memory` and external `engram` reference semantics.
-- [ ] **Planned:** Enforce contract validation at runtime boundaries.
-- [ ] **Planned:** Append Chronicle events.
-- [ ] **Planned:** Write snapshots and implement recovery readback.
-- [ ] **Planned:** Add the legal task state machine.
-- [ ] **Planned:** Add Gatekeeper/Registry policy and exact resolution.
-- [ ] **Planned:** Add provider execution after policy eligibility.
-- [ ] **Planned:** Add bounded coordination, context packets, routing, approvals, and finite loops.
+- [x] **Implemented/Partial:** Read/write Chronicle events, publish digest-bound snapshots atomically, derive task/cancellation state, repair terminal publication, and reconstruct bounded recovery; general checkpoint/artifact continuity remains.
+- [x] **Implemented/Contracts-only:** Define embedded schemas plus owned `memory` and external `engram` reference semantics; validate the contracts used by current runtime paths.
+- [x] **Implemented:** Enforce contract validation at bounded runtime boundaries.
+- [x] **Implemented:** Append, sync, reread, validate, and roll back Chronicle events.
+- [x] **Implemented:** Write immutable active snapshots, commit through one atomic pointer replacement, and recover terminal pointer-removal failures.
+- [x] **Implemented:** Enforce the legal task/cancellation state machine used by the coordinator.
+- [x] **Implemented:** Add Gatekeeper/Registry policy and exact resolution.
+- [x] **Implemented:** Execute the eligible OpenCode provider after policy evaluation.
+- [x] **Implemented, bounded:** Coordinate compact context packets, approvals, foreground/background constraints, cancellation, and finite loops for status/read/write/review operations.
+- [ ] **Planned:** Add Navigator routing, full SDD phases/artifact stores, richer approval UX, and additional adapters.
 - [ ] **Planned:** Keep future `run inspect` and recovery commands focused on debugging/auditing, not happy-path ceremony.
 
 ## Next step
 
-Use this document with the contract schemas in [`docs/schemas/README.md`](schemas/README.md). The next implementation slice is runtime contract validation, followed by Chronicle events; do not jump from schemas or the reader directly to orchestration.
+Use this document with the contract schemas in [`docs/schemas/README.md`](schemas/README.md). With crash-atomic Chronicle publication, Windows cross-compilation, and the hermetic clean-checkout setup/dispatch E2E delivered, the next hardening slice is native Windows runtime/distribution smoke, followed by broader checkpoint/artifact continuity. Navigator/SDD expansion should build on the delivered bounded path rather than bypassing its contracts.

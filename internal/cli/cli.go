@@ -8,9 +8,13 @@ import (
 	"io"
 	"strings"
 
+	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/inspection"
+	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/vgxness/vgxness/internal/selfinstall"
+	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
 type Inspector interface {
@@ -23,11 +27,39 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, inspector
 }
 
 func RunIO(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime) int {
+	return RunRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, nil)
+}
+
+func RunRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime) int {
+	return RunControlPlaneRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, nil)
+}
+
+func RunControlPlaneRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime) int {
+	return RunAllRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, controlPlane, nil)
+}
+
+func RunAllRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime) int {
+	return RunProductRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, controlPlane, installer, nil)
+}
+
+func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime) int {
 	if len(args) > 0 && args[0] == "memory" {
 		return runMemory(ctx, args[1:], stdin, stdout, stderr, memories)
 	}
+	if len(args) > 0 && args[0] == "integrate" {
+		return runIntegration(ctx, args[1:], stdout, stderr, integrations)
+	}
+	if len(args) > 0 && args[0] == "bridge" {
+		return runBridge(ctx, args[1:], stdin, stdout, stderr, controlPlane)
+	}
+	if len(args) > 0 && args[0] == "self" {
+		return runSelfInstall(ctx, args[1:], stdout, stderr, installer)
+	}
+	if len(args) > 0 && args[0] == "setup" {
+		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
+	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory>")
+		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|self|setup>")
 		return 2
 	}
 	command := args[0]
@@ -99,6 +131,26 @@ func failure(err error) (int, string) {
 		return 1, "operational: memory storage failed"
 	case errors.Is(err, inspection.ErrCorrupt):
 		return 1, "corrupt: storage inspection failed"
+	case errors.Is(err, integration.ErrInvalid):
+		return 2, "invalid: integration request is invalid"
+	case errors.Is(err, integration.ErrConflict):
+		return 1, "conflict: integration artifact already exists"
+	case errors.Is(err, integration.ErrDrift):
+		return 1, "drift: integration artifact differs from the managed version"
+	case errors.Is(err, selfinstall.ErrInvalid):
+		return 2, "invalid: self-install request is invalid"
+	case errors.Is(err, selfinstall.ErrConflict):
+		return 1, "conflict: self-install target contains unmanaged content"
+	case errors.Is(err, selfinstall.ErrDrift):
+		return 1, "drift: managed self-install differs from its manifest"
+	case errors.Is(err, selfinstall.ErrNoRollback):
+		return 1, "not_found: no previous managed version is available"
+	case errors.Is(err, setupflow.ErrInvalid):
+		return 2, "invalid: setup request is invalid"
+	case errors.Is(err, setupflow.ErrPrerequisite):
+		return 1, "unavailable: setup prerequisites are not ready"
+	case errors.Is(err, setupflow.ErrVerification):
+		return 1, "operational: setup verification failed"
 	case errors.Is(err, config.ErrInvalid):
 		return 2, "invalid: storage configuration is invalid"
 	default:

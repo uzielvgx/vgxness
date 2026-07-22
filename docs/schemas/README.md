@@ -7,8 +7,10 @@ These Draft 2020-12 schemas define runtime-neutral orchestration, execution, reg
 | Schema | File | Stable URI | Validates |
 | --- | --- | --- | --- |
 | Common library | `common.schema.json` | `https://vgxness.dev/schemas/common.schema.json` | Provider/artifact refs, provenance, skill sources, checksums, language policy, and `contract.invalid`. |
+| OpenCode bridge input | `bridge.schema.json` | `https://vgxness.dev/schemas/bridge.schema.json` | Agent-controlled bounded dispatch arguments before trusted OpenCode context is added. |
 | Orchestration library | `orchestration.schema.json` | `https://vgxness.dev/schemas/orchestration.schema.json` | Capability selection, routing, provider-neutral memory SDD preflight, questions, and answers. |
 | Execution library | `execution.schema.json` | `https://vgxness.dev/schemas/execution.schema.json` | Packets, capsules, bounded loops, cancellation, background tasks, exact skill refs, and agent results. |
+| Prompt library | `prompts.schema.json` | `https://vgxness.dev/schemas/prompts.schema.json` | Versioned system-prompt identities and bounded prompt receipts. |
 | Current run | `current-run.schema.json` | `https://vgxness.dev/schemas/current-run.schema.json` | Lightweight active-run projection and correlated IDs. |
 | Run snapshot | `run.schema.json` | `https://vgxness.dev/schemas/run.schema.json` | Authoritative run record and composed durable contracts. |
 | Run event | `run-event.schema.json` | `https://vgxness.dev/schemas/run-event.schema.json` | One append-only JSONL event object. |
@@ -19,7 +21,7 @@ Storage schemas apply equally under project-local `.vgxness/` and user-global `~
 
 ## Use a stable fragment
 
-The three libraries expose reusable contracts through `$defs`. Reference the exact fragment instead of copying a shape:
+The four libraries expose reusable contracts through `$defs`. Reference the exact fragment instead of copying a shape:
 
 | Contract | Reference |
 | --- | --- |
@@ -38,6 +40,8 @@ The three libraries expose reusable contracts through `$defs`. Reference the exa
 | Loop/background/cancellation | `execution.schema.json#/$defs/loopControl`, `#/$defs/backgroundTask`, and `#/$defs/cancellation` |
 | Agent result | `execution.schema.json#/$defs/agentResult` |
 | Continuity capsule | `execution.schema.json#/$defs/continuityCapsule` |
+| System prompt and exact reference | `prompts.schema.json#/$defs/prompt` and `#/$defs/promptReference` |
+| Bounded dispatch input | `bridge.schema.json#/$defs/dispatchInput` |
 
 Relative references resolve against each schema's stable `$id`. A schema loader should register every stable URI before validating composed schemas.
 
@@ -95,6 +99,7 @@ Current examples map to:
 | `current-run.json` | `current-run.schema.json` |
 | Memory artifact reference | `common.schema.json#/$defs/artifactReference` |
 | Operational JSONL events | `run-event.schema.json` |
+| OpenCode bounded dispatch input | `bridge.schema.json#/$defs/dispatchInput` |
 
 ## Why events use JSONL
 

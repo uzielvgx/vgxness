@@ -1,0 +1,30 @@
+//go:build !windows
+
+package opencode
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"syscall"
+	"time"
+)
+
+func supportsDescendantCancellation() bool { return true }
+
+// configureProcessTree gives every OpenCode invocation its own process group.
+// Context cancellation can then terminate provider-spawned descendants too.
+func configureProcessTree(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	command.WaitDelay = 2 * time.Second
+}
