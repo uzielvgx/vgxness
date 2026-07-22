@@ -5,7 +5,7 @@ This document owns Go package, interface, dependency, and testing boundaries. Th
 | Status | Current-candidate evidence and boundary |
 | --- | --- |
 | **Implemented** | Binary/application wiring; versioned self-install/update/rollback; storage and SQLite/FTS5 memory; runtime contract validation; Chronicle JSONL events, crash-atomic snapshot publication, terminal recovery, and task-state derivation; Registry, Gatekeeper, prompt composition, provider runner, bounded coordinator, OpenCode adapter/bridge, guided setup, hermetic setup/dispatch E2E, tests, and Go CI. |
-| **Partial** | Chronicle recovery backs explicit cross-process `start`/`continue`/`finish` continuity with capsules and semantic-memory summaries. Navigator now has validated delegation request/plan/join contracts plus a deterministic dependency-wave planner, native-session scheduler, and in-memory executable authority model with prerequisite-gated admission, prepared replay, bounded dispatch classification, and authority-accepted Join. The production durable authority/backend, native planning child, manager-facing `vgxness_orchestrate`, plan persistence/recovery, explicit status/cancel controls, and complete checkpoint/artifact lifecycle remain planned. |
+| **Partial** | Chronicle recovery backs explicit cross-process `start`/`continue`/`finish` continuity with capsules and semantic-memory summaries. Navigator now has validated delegation request/plan/join contracts, a deterministic dependency-wave planner, a production file-backed owner/epoch authority, a native planning child, manager-facing `vgxness_orchestrate`, persisted plans/results, settled parallel native sessions, authoritative Join, and `status`/`resume`/`cancel`/`explain`. Chronicle plan events, complete SDD checkpoint/artifact lifecycle, and Delivery Authority remain planned. |
 | **Contracts-only** | Schemas for broader SDD, routing, artifact, and continuity behaviors that are not exercised by the delivered bounded runtime path. |
 | **Planned** | Runtime-connected Navigator routing, full SDD phase workflows and artifact backends, Delivery Authority gates, richer autonomy/approval UX, the keyboard TUI, optional adapters, and advanced semantic-memory lifecycle operations. |
 
@@ -15,7 +15,7 @@ OpenCode is the first preferred runtime adapter. At run start, a provider-neutra
 
 Capability names such as Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger belong to the canonical product taxonomy. Names such as explore, design, apply, and verify describe SDD phase-agent operating modes that use those capabilities; they are not additional product capabilities.
 
-The implemented control plane is deliberately narrower than the target product. It executes a bounded OpenCode path with exact Registry identities, Gatekeeper policy, contract-validated packets, crash-atomic Chronicle snapshot publication, and finite coordination. Navigator's pure contract/planning/scheduling foundation is delivered, but its native planning child, manager-facing runtime, full SDD workflows, richer TUI, and additional providers are not yet delivered.
+The implemented control plane is deliberately narrower than the target product. It executes a bounded OpenCode path with exact Registry identities, Gatekeeper policy, contract-validated packets, crash-atomic Chronicle snapshot publication, finite coordination, and a manager-facing native Navigator/wave runtime. Full SDD workflows, Delivery Authority, richer TUI, and additional providers are not yet delivered.
 
 ## Quick path
 
@@ -24,7 +24,7 @@ The implemented control plane is deliberately narrower than the target product. 
 3. **Implemented:** Validate runtime contracts; append and verify Chronicle events; write/read snapshots; derive legal task state; reconstruct bounded recovery state.
 4. **Implemented:** Resolve exact Registry identities, evaluate Gatekeeper policy, compose frozen prompts, execute eligible providers, and coordinate finite foreground/background work.
 5. **Implemented:** Install and operate the persistent OpenCode manager, strict bridge, runtime adapter, and six-step confirmation-gated setup workflow.
-6. **Partial/Planned:** Connect the native Navigator and adaptive wave runtime, add content-bound Delivery Authority, broaden Chronicle plan/artifact recovery, then add the keyboard TUI and optional adapters. Native Windows runtime/distribution smoke is deferred.
+6. **Partial/Planned:** Harden the delivered native Navigator/adaptive wave runtime, add content-bound Delivery Authority, broaden Chronicle plan/artifact recovery, then add the keyboard TUI and optional adapters. Native Windows runtime/distribution smoke is deferred.
 
 ## Why Go fits VGXNESS
 
@@ -90,7 +90,7 @@ internal/tui
 | `internal/registry`, `internal/gatekeeper` | **Implemented** | Resolve exact agent/skill/prompt identities and fail closed on capabilities, adapter health, operations, roots/tools, risk, leases, approvals, and task transitions. |
 | `internal/prompts`, `internal/providers` | **Implemented** | Compose frozen prompt contracts, select an exact eligible provider, execute it, validate structured results, and emit bounded receipts. |
 | `internal/providers/opencode` | **Implemented** | Execute the supported OpenCode provider with ephemeral fail-closed permissions, cancellation, bounded output, and strict review evidence. |
-| `internal/orchestrator`, `internal/controlplane` | **Implemented** | Coordinate finite foreground/background work and expose the bounded status/read/write/review operations used by the bridge. Full Navigator/SDD routing is planned. |
+| `internal/orchestrator`, `internal/controlplane` | **Implemented/Partial** | Coordinate finite foreground/background work; persist adaptive plans, authority leases, prepared dispatches, terminals, dependency results, and joins; expose bounded lifecycle operations. Full SDD routing and artifact projection remain planned. |
 | `internal/navigator` | **Implemented/Partial** | Validate advisory task decomposition, reject unsafe graphs, compute content-bound single/sequential/parallel decisions, and produce deterministic waves. Native planning-session execution and runtime routing are planned. |
 | `internal/setup` | **Implemented** | Compose self-installation, stable-path OpenCode projection, live verification, bounded rollback, and a complete explanatory plan without owning provider or installer policy. |
 | `internal/tui` | **Planned** | Render the implemented setup service as a richer keyboard-first interface without moving business logic into the UI. |
@@ -105,7 +105,7 @@ Keep dependencies pointed toward stable contracts, not convenience shortcuts. Th
 | `internal/app` may depend on every package for wiring. | Dependency construction belongs in one obvious place. |
 | `internal/cli` calls application services; it should not own orchestration policy. | CLI is convenience, not the workflow source of truth. |
 | `internal/navigator` is a pure deterministic planner over validated contracts; it does not create sessions, prepare tickets, or mutate Chronicle. | Advisory decomposition cannot become execution authority by itself. |
-| `internal/orchestrator` revalidates Navigator's content-bound plan; uses a caller-owned, execution-scoped factory; claims an owner/epoch lease; and requires its authority to atomically validate confirmed prerequisites, reserve logical task slots, persist prepared replay, classify bounded native dispatch, and accept the final Join against a revocation-aware checkpoint. | Runtime safety comes from the authority protocol, not a process-global registry or a read-then-publish lease check. `ValidateLease` is only a freshness probe; `AcceptJoin` is the publication linearization point. Confirmed dispatches run; not-started or uncertain dispatches remain public and fail closed without automatic redispatch. The current executable authority is in-memory test/reference infrastructure; production cross-process durability remains planned. |
+| `internal/orchestrator` revalidates Navigator's content-bound plan; uses a caller-owned, execution-scoped factory; claims an owner/epoch lease; and requires its file-backed authority to atomically validate confirmed prerequisites, reserve logical task slots, persist prepared replay, classify bounded native dispatch, and accept the final Join against a revocation-aware checkpoint. | Runtime safety comes from the durable authority protocol, not a process-global registry or a read-then-publish lease check. `ValidateLease` is only a freshness probe; `AcceptJoin` is the publication linearization point. Confirmed dispatches run; not-started or uncertain dispatches remain public and fail closed without automatic redispatch. |
 | `internal/orchestrator` depends on small interfaces for run storage, memory, agents, skills, providers, permissions, and validation. | The orchestration core stays testable with fakes. |
 | `internal/chronicle` does not depend on `internal/memory` or `internal/providers`. | Operational truth must stay deterministic and local-file readable. |
 | `internal/memory` does not depend on `internal/chronicle`. | Semantic memory should not become an event log. |
@@ -173,7 +173,7 @@ The **Implemented** `MemoryStore` is VGXNESS-owned and SQLite/FTS5-first. It sto
 | Boundary | Status | Go responsibility |
 | --- | --- | --- |
 | Selection | **Implemented** | Compare run needs with exact provider capabilities, health, and policy before calling `Run`. |
-| Routing | **Implemented/Partial** | Delegation request/plan contracts, stable request digests, rationales, dependency validation, safe parallel-wave computation, native child-session identity binding, prerequisite-gated prepared admissions, bounded dispatch classification, and authority-accepted joins are delivered in-process. Public joins preserve `confirmed`/`not_started`/`uncertain`. Native planning, production durable authority/persistence, and manager-facing execution remain planned. |
+| Routing | **Implemented/Partial** | Delegation contracts, stable request digests, rationales, dependency validation, safe parallel waves, native child-session identity binding, durable prerequisite-gated prepared admissions, dispatch classification, owner takeover, and authority-accepted joins are delivered. Public joins preserve `confirmed`/`not_started`/`uncertain`; full SDD routing remains planned. |
 | Thin context | **Implemented** | Validate and pass one task-scoped execution packet with exact scope, tools, criteria, and return contract. |
 | Skills | **Implemented** | Resolve exact identity, version, source, provenance, checksum, and allowed scope before dispatch. |
 | Foreground | **Implemented** | Advance one manager-owned foreground task at a time. |

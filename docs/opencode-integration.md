@@ -1,6 +1,6 @@
 # OpenCode integration
 
-VGXNESS installs a persistent OpenCode primary agent named `vgxness-manager`, three hidden permission-scoped subagents, and a managed plugin that exposes `vgxness_status` and `vgxness_dispatch`. OpenCode remains the user interface and native subagent runtime; VGXNESS remains the authority for prompt identity, permissions, routing, bounded coordination, evidence, and durable state.
+VGXNESS installs a persistent OpenCode primary agent named `vgxness-manager`, four hidden permission-scoped subagents, and a managed plugin that exposes `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate`. OpenCode remains the user interface and native subagent runtime; VGXNESS remains the authority for prompt identity, permissions, routing, deterministic waves, bounded coordination, evidence, and durable state.
 
 ## CLI
 
@@ -25,6 +25,17 @@ Install VGXNESS first, then invoke integration through the permanent launcher. T
 
 The launcher is accepted only when its managed sidecar, launcher hash, active-version hash, and running active binary all agree. Running `integrate` directly from an unmanaged development binary remains supported for controlled tests, but embeds that exact binary path.
 
+Adaptive orchestration normally runs entirely through `vgxness-manager`. If a Desktop process stops mid-plan, use the identities shown in the tool metadata or envelope to inspect and take over the durable schedule:
+
+```sh
+vgxness orchestrate status --workspace /absolute/project/path --id orchestration-...
+vgxness orchestrate explain --workspace /absolute/project/path --id orchestration-...
+vgxness orchestrate resume --workspace /absolute/project/path --id orchestration-... --owner owner-...
+vgxness orchestrate cancel --workspace /absolute/project/path --id orchestration-... --owner owner-...
+```
+
+`resume` advances the authority epoch and returns a new owner identity; the prior owner cannot prepare or publish more work. It repairs accepted projections and never silently redispatches an uncertain task. A confirmed native child must finish or be cancelled before takeover, so recovery cannot duplicate an in-flight execution.
+
 Preview the proposed global artifact without writing anything:
 
 ```sh
@@ -47,10 +58,11 @@ vgxness integrate opencode uninstall
 The default targets are:
 
 - `~/.config/opencode/agents/vgxness-manager.md` — the persistent primary agent.
+- `~/.config/opencode/agents/vgxness-navigator.md` — tool-denied candidate-task planning; it cannot inspect the workspace or choose execution policy.
 - `~/.config/opencode/agents/vgxness-explorer.md` — read-only native inspection whose file contents pass through the ticket-authenticated VGXNESS read broker.
 - `~/.config/opencode/agents/vgxness-implementer.md` — reserved read-only profile; native writes stay fail-closed until a ticket-authenticated edit broker exists.
 - `~/.config/opencode/agents/vgxness-reviewer.md` — review of immutable Git evidence with no direct tool access.
-- `~/.config/opencode/plugins/vgxness.ts` — the managed plugin whose public tools become `vgxness_status` and `vgxness_dispatch`; its hidden `vgxness_native_read` tool is usable only by an active ticket-bound child session.
+- `~/.config/opencode/plugins/vgxness.ts` — the managed plugin whose public tools become `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate`; its hidden `vgxness_native_read` tool is usable only by an active ticket-bound child session.
 
 ## Manager personality and language boundary
 
@@ -66,7 +78,7 @@ OpenCode CLI and OpenCode Desktop load the same global artifacts, but they do no
 
 Both surfaces launch only the lightweight VGXNESS bridge with an executable plus an argument vector and `shell: false`. Standard input, standard output, standard error, cancellation, exit status, terminal-call timeouts, and the 6,356,992-byte per-stream encoded-response bound remain enforced identically. The bound covers worst-case JSON expansion of an accepted two-megabyte native result. The bridge does not execute a model. The plugin asks the already-running OpenCode host to create a native child session, so the child uses the host's MCP connections and the selected managed subagent's permissions. Repository tests execute the generated plugin under both Node and Bun when those runtimes are available.
 
-The former nested `opencode run --pure` provider process and transient runtime-agent configuration are retired from the managed path. They remain temporarily in the binary only as an internal legacy implementation boundary during migration; the v6 manager and v9 plugin cannot call them and have no silent fallback to them.
+The former nested `opencode run --pure` provider process and transient runtime-agent configuration are retired from the managed path. They remain temporarily in the binary only as an internal legacy implementation boundary during migration; current managed artifacts cannot call them and have no silent fallback to them.
 
 After installing or updating the bridge, fully quit and reopen OpenCode Desktop and start a new session before testing `vgxness-manager`. Existing Desktop sessions may retain the agent and tool snapshot loaded when their local server started.
 
@@ -94,10 +106,10 @@ vgxness bridge status --workspace /absolute/project/path
 - Existing foreign or modified content is never overwritten.
 - Symlinked artifacts or OpenCode config directories are treated as drift.
 - Uninstall accepts only exact managed artifacts and preserves each one in `.vgxness-backups/` instead of deleting it permanently.
-- The manager permits only user questions, `vgxness_status`, and `vgxness_dispatch`. The child-only `vgxness_native_read` tool remains denied to it. It cannot call OpenCode Task directly; the managed plugin creates only the subagent profile selected by a prepared VGXNESS ticket.
+- The manager permits only user questions and the managed VGXNESS tools. The child-only `vgxness_native_read` tool remains denied to it. It cannot call OpenCode Task directly; the managed plugin creates the Navigator and task sessions as native children of the active manager session, using only the profile selected by an approved plan and prepared ticket.
 - Every subagent has its own fail-closed permissions and `task: deny`, so children cannot recursively delegate.
 - The configured execution model is embedded in the managed tool, validated as one exact `provider/model` value, and injected outside the LLM-controlled argument schema.
-- The plugin launches the trusted permanent VGXNESS launcher only for `status`, `prepare`, `read`, `complete`, and `fail` bridge calls. The legacy nested-process `dispatch` route is not callable. Workspace and parent-session identity come only from OpenCode's tool context; request and output sizes are bounded. Child-session identity and message identity are content-bound into completion evidence.
+- The plugin launches the trusted permanent VGXNESS launcher only for bounded status, native-ticket, and orchestration lifecycle bridge calls. The legacy nested-process `dispatch` route is not callable. Workspace and parent-session identity come only from OpenCode's tool context; request and output sizes are bounded. Child-session identity and message identity are content-bound into completion evidence.
 
 ## Bounded dispatch
 
@@ -131,7 +143,7 @@ Only `paused` or `blocked` runs may advance. If a process stopped while the curr
 
 The native subagent receives only the prepared prompt, prior validated capsule, and up to three lexically relevant project-memory records within a fixed context budget. It never receives the full manager conversation, raw run history, or unrestricted memory. Memory IDs returned in `memoryRefs` identify both the records injected into the phase and the new phase summary.
 
-Continuity is intentionally foreground-only and non-delegating. Only one bounded phase advances a continuity run at a time. Independent one-shot `read-files` dispatches may execute concurrently in at most four native child sessions per workspace; each owns a separate durable ticket, lease slot, Chronicle run, deadline, and terminal receipt, and the manager joins their returned envelopes only after every call settles. Slot membership changes pass through one short workspace-wide admission guard, so an exclusive continuity/review phase cannot overlap a shared read even when slots churn concurrently. Unreadable active membership fails closed until expiry recovery reconciles it, and material per-slot recovery failures stop new admission after the remaining slots are inspected. Parallel writes, parallel continuity phases, background supervision, explicit status/cancel controls, Navigator task graphs, and automatic multi-agent replanning remain deferred. A blocked run resumes through another validated `continue`; omitting `continuity` preserves one-shot behavior and creates no active-run pointer or automatic memory record.
+Continuity is intentionally foreground-only and non-delegating. Only one bounded phase advances a continuity run at a time. For adaptive work, a hidden tool-denied Navigator proposes at most sixteen tasks; VGXNESS validates identities, operations, dependencies, review ordering, and a maximum parallelism of four before persisting the plan. Independent read tasks run in native OpenCode child sessions with `Promise.allSettled`; dependent waves start only after accepted prerequisite results are available, and receive only a bounded JSON evidence projection. Durable owner/epoch authority fences stale managers and supports `vgxness orchestrate status|resume|cancel|explain`. Parallel writes, parallel continuity, automatic semantic replanning after a failed task, and full SDD artifact supervision remain deferred. A blocked continuity run still resumes through another validated `continue`; omitting `continuity` preserves one-shot behavior.
 
 Every dispatch passes through the exact Registry prompt and agent identity, balanced Gatekeeper policy, the provider-neutral Runner, bounded Coordinator, and Chronicle evidence. The plugin first creates a native child session and a collision-resistant ticket identity that it retains even if the preparation response is lost. Then `prepare` publishes the recovery ticket before recording the Chronicle task start and upgrades it to a prepared one-shot ticket bound to that child identity. `complete` accepts only a matching ticket, parent session, child session, message, agent result, prompt identity, and exact result digest before writing terminal evidence, memory, or a capsule. Duplicate terminal calls reconcile only their owned lease slot; expired unreturned tickets are terminalized independently without disturbing active siblings. `review-changes` still gives the reviewer only serialized Git evidence, so untracked contents remain explicitly unreviewed.
 

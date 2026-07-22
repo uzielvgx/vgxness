@@ -1,6 +1,6 @@
 # Guided OpenCode setup
 
-The OpenCode setup wizard explains the complete plan before it changes anything. It combines the versioned VGXNESS self-installer, the persistent OpenCode manager, three native subagent profiles, the managed plugin bridge, and a live provider handshake without moving policy into the CLI.
+The OpenCode setup wizard explains the complete plan before it changes anything. It combines the versioned VGXNESS self-installer, the persistent OpenCode manager, four native subagent profiles, the managed plugin bridge, and a live provider handshake without moving policy into the CLI.
 
 ## Prerequisites
 
@@ -22,8 +22,8 @@ Preview performs read-only inspection and explains all six steps:
 
 1. Check the candidate, explicit execution model, destinations, workspace, and OpenCode compatibility.
 2. Install or update the immutable VGXNESS version behind the stable launcher.
-3. Install `vgxness-manager` plus the hidden `vgxness-explorer`, `vgxness-implementer`, and `vgxness-reviewer` native subagents with separate fail-closed permissions.
-4. Install the bounded `vgxness_status` and `vgxness_dispatch` plugin with that model fixed outside the agent-controlled arguments. Dispatch uses `native child session → prepare → brokered reads → complete`; it does not launch a nested OpenCode worker. Repository reviews still receive only pre-collected Git evidence.
+3. Install `vgxness-manager` plus the hidden `vgxness-navigator`, `vgxness-explorer`, `vgxness-implementer`, and `vgxness-reviewer` native subagents with separate fail-closed permissions. Navigator has no workspace tools and only proposes candidate tasks; the VGXNESS runtime validates and schedules them.
+4. Install the bounded `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate` plugin with that model fixed outside agent-controlled arguments. Dispatch and orchestration use native child sessions, durable tickets, brokered reads, and accepted terminals; they do not launch a nested OpenCode worker.
 5. Read everything back and run the live OpenCode handshake.
 6. Explain recovery for the detected installation state.
 

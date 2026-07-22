@@ -18,6 +18,11 @@ type fakeBridgeRuntime struct {
 	completion bridge.NativeCompletionRequest
 	failure    bridge.NativeFailureRequest
 	read       bridge.NativeReadRequest
+	plan       bridge.OrchestratePlanRequest
+	wave       bridge.OrchestrateWaveRequest
+	terminal   bridge.OrchestrateTerminalRequest
+	reference  bridge.OrchestrateReferenceRequest
+	action     string
 }
 
 func (runtime *fakeBridgeRuntime) Prepare(_ context.Context, _ string, request bridge.DispatchRequest) (bridge.Response, error) {
@@ -47,6 +52,42 @@ func (runtime *fakeBridgeRuntime) Status(context.Context, string) (bridge.Respon
 func (runtime *fakeBridgeRuntime) Dispatch(_ context.Context, _ string, request bridge.DispatchRequest) (bridge.Response, error) {
 	runtime.request = request
 	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) PlanOrchestration(_ context.Context, _ string, request bridge.OrchestratePlanRequest) (bridge.Response, error) {
+	runtime.plan, runtime.action = request, "plan"
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) PrepareOrchestrationWave(_ context.Context, _ string, request bridge.OrchestrateWaveRequest) (bridge.Response, error) {
+	runtime.wave, runtime.action = request, "wave"
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) RecordOrchestrationTerminal(_ context.Context, _ string, request bridge.OrchestrateTerminalRequest) (bridge.Response, error) {
+	runtime.terminal, runtime.action = request, "terminal"
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) recordReference(action string, request bridge.OrchestrateReferenceRequest) (bridge.Response, error) {
+	runtime.reference, runtime.action = request, action
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) JoinOrchestration(_ context.Context, _ string, request bridge.OrchestrateReferenceRequest) (bridge.Response, error) {
+	return runtime.recordReference("join", request)
+}
+
+func (runtime *fakeBridgeRuntime) StatusOrchestration(_ context.Context, _ string, request bridge.OrchestrateReferenceRequest) (bridge.Response, error) {
+	return runtime.recordReference("status", request)
+}
+
+func (runtime *fakeBridgeRuntime) ResumeOrchestration(_ context.Context, _ string, request bridge.OrchestrateReferenceRequest) (bridge.Response, error) {
+	return runtime.recordReference("resume", request)
+}
+
+func (runtime *fakeBridgeRuntime) CancelOrchestration(_ context.Context, _ string, request bridge.OrchestrateReferenceRequest) (bridge.Response, error) {
+	return runtime.recordReference("cancel", request)
 }
 
 func TestBridgeRejectsLegacyDispatchRoute(t *testing.T) {
@@ -86,5 +127,32 @@ func TestBridgeNativeLifecycleRoutesExactRequests(t *testing.T) {
 	}
 	if runtime.request.ParentSessionID != "ses_parent" || runtime.completion.ChildSessionID != "ses_child" || runtime.failure.Category != "native-subagent-failed" || runtime.read.Path != "go.mod" {
 		t.Fatalf("native lifecycle was not routed: request=%#v completion=%#v failure=%#v read=%#v", runtime.request, runtime.completion, runtime.failure, runtime.read)
+	}
+}
+
+func TestBridgeOrchestrationLifecycleRoutesExactRequests(t *testing.T) {
+	runtime := &fakeBridgeRuntime{response: bridge.Response{ProtocolVersion: "1", OK: true, Bridge: "healthy", Provider: "opencode", Status: "running"}}
+	workspace := t.TempDir()
+	tests := []struct {
+		command string
+		action  string
+		input   string
+	}{
+		{"orchestrate-plan", "plan", `{"protocolVersion":"1","model":"openai/gpt-5.6-sol","input":{"goal":"inspect"},"parentSessionId":"ses_parent","parentMessageId":"msg_parent","candidateTasks":[{"taskId":"task-1","capability":"explore","operation":"read-files","goal":"inspect","acceptanceCriteria":[],"dependsOn":[],"continuity":"isolated"}]}`},
+		{"orchestrate-wave", "wave", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1"}]}`},
+		{"orchestrate-terminal", "terminal", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","taskId":"task-1","ticketId":"ticket-1","childSessionId":"ses_child","status":"completed","messageId":"msg_child","resultId":"result-1","result":{}}`},
+		{"orchestrate-join", "join", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1"}`},
+		{"orchestrate-status", "status", `{"protocolVersion":"1","orchestrationId":"orchestration-1"}`},
+		{"orchestrate-resume", "resume", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1"}`},
+		{"orchestrate-cancel", "cancel", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1"}`},
+	}
+	for _, test := range tests {
+		var stdout, stderr bytes.Buffer
+		if code := runBridge(context.Background(), []string{test.command, "--workspace", workspace, "--stdin"}, strings.NewReader(test.input), &stdout, &stderr, runtime); code != 0 || runtime.action != test.action {
+			t.Fatalf("%s code=%d action=%q stdout=%s stderr=%s", test.command, code, runtime.action, stdout.String(), stderr.String())
+		}
+	}
+	if runtime.plan.ParentSessionID != "ses_parent" || runtime.wave.Bindings[0].ChildSessionID != "ses_child" || runtime.terminal.ResultID != "result-1" || runtime.reference.OrchestrationID != "orchestration-1" {
+		t.Fatalf("orchestration lifecycle was not routed: plan=%#v wave=%#v terminal=%#v reference=%#v", runtime.plan, runtime.wave, runtime.terminal, runtime.reference)
 	}
 }

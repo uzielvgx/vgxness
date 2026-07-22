@@ -32,7 +32,7 @@ user goal
 
 ### Slice 1 — Delegation contracts and deterministic scheduler
 
-**Status: contract, scheduler, schemas, and in-memory executable authority model implemented in the current candidate; the production durable authority/backend remains Slice 3.**
+**Status: implemented, including the production file-backed authority used by Slice 3.**
 
 - Add `delegation.request`, `delegation.plan`, `delegationTask`, `executionWave`, and `delegation.join` contracts.
 - Accept only a high-level bridge orchestration goal; agent choice and parallelism are not tool arguments.
@@ -53,7 +53,7 @@ user goal
 
 ### Slice 2 — Native Navigator and `vgxness_orchestrate`
 
-**Status: next.**
+**Status: implemented.**
 
 - Add a hidden, tool-denied `vgxness-navigator` OpenCode subagent profile.
 - Add a frozen prompt/return contract for a bounded candidate-task proposal.
@@ -66,14 +66,14 @@ user goal
 
 ### Slice 3 — Native wave execution, visibility, and recovery
 
-**Status: planned.**
+**Status: implemented for deterministic native waves, durable plan state, owner/epoch recovery, status/resume/cancel, and settled parallel execution. Chronicle plan-event projection and richer UI remain hardening work.**
 
 - Extend the bridge with plan status/advance/cancel operations and idempotency keys.
 - Prepare tickets only for the current approved wave.
 - Create one distinct OpenCode-native child session per planned task and execute parallel waves with bounded `Promise.allSettled` behavior.
 - Display plan size, decision rationale, current wave, named child sessions, completion state, and blockers through tool metadata and the final envelope.
 - Add Chronicle events for `plan.created`, `wave.started`, `wave.completed`, `join.completed`, and plan failure/cancellation.
-- Implement the Slice 1 atomic admission state machine in durable storage: prerequisite checkpoint validation, logical-slot uniqueness, lease state, prepared replay identity, dispatch classifications, and accepted terminal results must commit consistently before callbacks can create native work. Wire authority-bounded callbacks, authoritative `AcceptJoin`, Chronicle, child-session identities, and restart commands to that backend. The in-process scheduler and executable authority model validate the protocol but are not production persistence. A takeover acquires a greater epoch before doing work; the previous owner stays fenced. An uncertain dispatch requires an explicit audited successor run unless later adapter work adds a proof-backed reconciliation protocol. Never retry semantic/schema failures automatically.
+- The file-backed Slice 1 authority now persists prerequisite validation, logical-slot uniqueness, prepared replay identity, owner epochs, callback fences, accepted terminal results, and authoritative joins before advancing the orchestration projection. Native child-session identities and restart commands use that authority. A takeover acquires a greater epoch before doing work; the previous owner stays fenced. An uncertain dispatch requires explicit audited resolution and is never silently redispatched. Chronicle plan-event projection remains separate hardening work, and semantic/schema failures are never retried automatically.
 
 **Exit evidence:** crash-point integration tests plus a real OpenCode smoke proving two independent reads overlap and a dependent task waits.
 
@@ -91,7 +91,7 @@ user goal
 
 ### Slice 5 — Product hardening and rollout
 
-**Status: planned.**
+**Status: partial. The lifecycle CLI and generated-runtime smoke are implemented; incident bundles, broader crash matrices, and release rollout remain.**
 
 - Add `vgxness orchestrate status|resume|cancel|explain` and review/gate inspection commands.
 - Export a sanitized incident bundle with plan, timeline, identities, failures, and digests but no secret values or unrestricted prompts.

@@ -11,16 +11,19 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/vgxness/vgxness/internal/navigator"
 )
 
 const (
-	ProtocolVersion          = "1"
-	MaxRequestBytes          = 64 << 10
-	MaxNativeResultBytes     = 2 << 20
-	MaxNativeCompletionBytes = MaxNativeResultBytes + MaxRequestBytes
-	MaxNativeReadBytes       = 256 << 10
-	MaxBridgeOutputBytes     = 3*MaxNativeResultBytes + MaxRequestBytes
-	maxModelBytes            = 512
+	ProtocolVersion             = "1"
+	MaxRequestBytes             = 64 << 10
+	MaxNativeResultBytes        = 2 << 20
+	MaxOrchestrationResultBytes = 64 << 10
+	MaxNativeCompletionBytes    = MaxNativeResultBytes + MaxRequestBytes
+	MaxNativeReadBytes          = 256 << 10
+	MaxBridgeOutputBytes        = 3*MaxNativeResultBytes + MaxRequestBytes
+	maxModelBytes               = 512
 )
 
 var (
@@ -81,6 +84,48 @@ type OrchestrateRequest struct {
 	Input           OrchestrateInput
 	ParentSessionID string
 	ParentMessageID string
+}
+
+type OrchestratePlanRequest struct {
+	ProtocolVersion string           `json:"protocolVersion"`
+	Model           string           `json:"model"`
+	Input           OrchestrateInput `json:"input"`
+	ParentSessionID string           `json:"parentSessionId"`
+	ParentMessageID string           `json:"parentMessageId"`
+	CandidateTasks  []navigator.Task `json:"candidateTasks"`
+}
+
+type OrchestrateWaveRequest struct {
+	ProtocolVersion string                 `json:"protocolVersion"`
+	OrchestrationID string                 `json:"orchestrationId"`
+	OwnerID         string                 `json:"ownerId"`
+	Bindings        []OrchestrationBinding `json:"bindings"`
+}
+
+type OrchestrationBinding struct {
+	TaskID         string `json:"taskId"`
+	ChildSessionID string `json:"childSessionId"`
+	TicketID       string `json:"ticketId"`
+}
+
+type OrchestrateTerminalRequest struct {
+	ProtocolVersion string          `json:"protocolVersion"`
+	OrchestrationID string          `json:"orchestrationId"`
+	OwnerID         string          `json:"ownerId"`
+	TaskID          string          `json:"taskId"`
+	TicketID        string          `json:"ticketId"`
+	ChildSessionID  string          `json:"childSessionId"`
+	Status          string          `json:"status"`
+	MessageID       string          `json:"messageId,omitempty"`
+	ResultID        string          `json:"resultId,omitempty"`
+	Result          json.RawMessage `json:"result,omitempty"`
+	Failure         string          `json:"failure,omitempty"`
+}
+
+type OrchestrateReferenceRequest struct {
+	ProtocolVersion string `json:"protocolVersion"`
+	OrchestrationID string `json:"orchestrationId"`
+	OwnerID         string `json:"ownerId,omitempty"`
 }
 
 type NativeCompletionRequest struct {
@@ -153,22 +198,39 @@ type Receipt struct {
 }
 
 type Response struct {
-	ProtocolVersion string            `json:"protocolVersion"`
-	OK              bool              `json:"ok"`
-	Bridge          string            `json:"bridge"`
-	Provider        string            `json:"provider"`
-	Workspace       string            `json:"workspace,omitempty"`
-	RunID           string            `json:"runId,omitempty"`
-	TaskID          string            `json:"taskId,omitempty"`
-	CapsuleID       string            `json:"capsuleId,omitempty"`
-	StateVersion    int               `json:"stateVersion,omitempty"`
-	MemoryRefs      []string          `json:"memoryRefs,omitempty"`
-	Status          string            `json:"status"`
-	Result          json.RawMessage   `json:"result,omitempty"`
-	Receipt         *Receipt          `json:"receipt,omitempty"`
-	Prepared        *PreparedDispatch `json:"prepared,omitempty"`
-	Read            *NativeReadResult `json:"read,omitempty"`
-	Error           *Error            `json:"error,omitempty"`
+	ProtocolVersion string             `json:"protocolVersion"`
+	OK              bool               `json:"ok"`
+	Bridge          string             `json:"bridge"`
+	Provider        string             `json:"provider"`
+	Workspace       string             `json:"workspace,omitempty"`
+	RunID           string             `json:"runId,omitempty"`
+	TaskID          string             `json:"taskId,omitempty"`
+	CapsuleID       string             `json:"capsuleId,omitempty"`
+	StateVersion    int                `json:"stateVersion,omitempty"`
+	MemoryRefs      []string           `json:"memoryRefs,omitempty"`
+	Status          string             `json:"status"`
+	Result          json.RawMessage    `json:"result,omitempty"`
+	Receipt         *Receipt           `json:"receipt,omitempty"`
+	Prepared        *PreparedDispatch  `json:"prepared,omitempty"`
+	Read            *NativeReadResult  `json:"read,omitempty"`
+	Orchestration   *OrchestrationView `json:"orchestration,omitempty"`
+	Error           *Error             `json:"error,omitempty"`
+}
+
+type OrchestrationPreparedTask struct {
+	TaskID   string           `json:"taskId"`
+	Prepared PreparedDispatch `json:"prepared"`
+}
+
+type OrchestrationView struct {
+	OrchestrationID string                      `json:"orchestrationId"`
+	ScheduleID      string                      `json:"scheduleId"`
+	OwnerID         string                      `json:"ownerId"`
+	Status          string                      `json:"status"`
+	CurrentWave     int                         `json:"currentWave"`
+	Plan            navigator.Plan              `json:"plan"`
+	Prepared        []OrchestrationPreparedTask `json:"prepared,omitempty"`
+	Join            json.RawMessage             `json:"join,omitempty"`
 }
 
 type Runtime interface {
@@ -182,6 +244,17 @@ type NativeRuntime interface {
 	Complete(context.Context, string, NativeCompletionRequest) (Response, error)
 	Fail(context.Context, string, NativeFailureRequest) (Response, error)
 	ReadNative(context.Context, string, NativeReadRequest) (Response, error)
+}
+
+type OrchestrationRuntime interface {
+	NativeRuntime
+	PlanOrchestration(context.Context, string, OrchestratePlanRequest) (Response, error)
+	PrepareOrchestrationWave(context.Context, string, OrchestrateWaveRequest) (Response, error)
+	RecordOrchestrationTerminal(context.Context, string, OrchestrateTerminalRequest) (Response, error)
+	JoinOrchestration(context.Context, string, OrchestrateReferenceRequest) (Response, error)
+	StatusOrchestration(context.Context, string, OrchestrateReferenceRequest) (Response, error)
+	ResumeOrchestration(context.Context, string, OrchestrateReferenceRequest) (Response, error)
+	CancelOrchestration(context.Context, string, OrchestrateReferenceRequest) (Response, error)
 }
 
 func DecodeDispatch(reader io.Reader) (DispatchRequest, error) {
@@ -214,6 +287,38 @@ func DecodeOrchestrateInput(reader io.Reader) (OrchestrateInput, error) {
 		return OrchestrateInput{}, ErrInvalid
 	}
 	return input, nil
+}
+
+func DecodeOrchestratePlan(reader io.Reader) (OrchestratePlanRequest, error) {
+	var request OrchestratePlanRequest
+	if err := decodeExact(reader, MaxNativeCompletionBytes, &request); err != nil || ValidateOrchestratePlan(request) != nil {
+		return OrchestratePlanRequest{}, ErrInvalid
+	}
+	return request, nil
+}
+
+func DecodeOrchestrateWave(reader io.Reader) (OrchestrateWaveRequest, error) {
+	var request OrchestrateWaveRequest
+	if err := decodeExact(reader, MaxRequestBytes, &request); err != nil || ValidateOrchestrateWave(request) != nil {
+		return OrchestrateWaveRequest{}, ErrInvalid
+	}
+	return request, nil
+}
+
+func DecodeOrchestrateTerminal(reader io.Reader) (OrchestrateTerminalRequest, error) {
+	var request OrchestrateTerminalRequest
+	if err := decodeExact(reader, MaxNativeCompletionBytes, &request); err != nil || ValidateOrchestrateTerminal(request) != nil {
+		return OrchestrateTerminalRequest{}, ErrInvalid
+	}
+	return request, nil
+}
+
+func DecodeOrchestrateReference(reader io.Reader) (OrchestrateReferenceRequest, error) {
+	var request OrchestrateReferenceRequest
+	if err := decodeExact(reader, MaxRequestBytes, &request); err != nil || ValidateOrchestrateReference(request) != nil {
+		return OrchestrateReferenceRequest{}, ErrInvalid
+	}
+	return request, nil
 }
 
 func NewOrchestrateRequest(input OrchestrateInput, trusted OrchestrateContext) (OrchestrateRequest, error) {
@@ -286,6 +391,53 @@ func ValidateOrchestrateRequest(request OrchestrateRequest) error {
 
 func ValidateOrchestrateInput(input OrchestrateInput) error {
 	return validateBoundedIntent(input.Goal, input.AcceptanceCriteria)
+}
+
+func ValidateOrchestratePlan(request OrchestratePlanRequest) error {
+	if request.ProtocolVersion != ProtocolVersion || !validModel(request.Model) || !validNativeIdentity(request.ParentSessionID) || !validNativeIdentity(request.ParentMessageID) || ValidateOrchestrateInput(request.Input) != nil || len(request.CandidateTasks) == 0 || len(request.CandidateTasks) > navigator.MaxTasks {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func ValidateOrchestrateWave(request OrchestrateWaveRequest) error {
+	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.OrchestrationID) || !validNativeIdentity(request.OwnerID) || len(request.Bindings) == 0 || len(request.Bindings) > navigator.DefaultMaxParallel {
+		return ErrInvalid
+	}
+	seenTasks, seenChildren, seenTickets := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, binding := range request.Bindings {
+		if !validNativeIdentity(binding.TaskID) || !validNativeIdentity(binding.ChildSessionID) || !validNativeIdentity(binding.TicketID) || seenTasks[binding.TaskID] || seenChildren[binding.ChildSessionID] || seenTickets[binding.TicketID] {
+			return ErrInvalid
+		}
+		seenTasks[binding.TaskID], seenChildren[binding.ChildSessionID], seenTickets[binding.TicketID] = true, true, true
+	}
+	return nil
+}
+
+func ValidateOrchestrateTerminal(request OrchestrateTerminalRequest) error {
+	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.OrchestrationID) || !validNativeIdentity(request.OwnerID) || !validNativeIdentity(request.TaskID) || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ChildSessionID) {
+		return ErrInvalid
+	}
+	switch request.Status {
+	case "completed":
+		if !validNativeIdentity(request.MessageID) || !validNativeIdentity(request.ResultID) || len(request.Result) == 0 || len(request.Result) > MaxOrchestrationResultBytes || !json.Valid(request.Result) || request.Failure != "" {
+			return ErrInvalid
+		}
+	case "failed", "cancelled":
+		if strings.TrimSpace(request.Failure) == "" || utf8.RuneCountInString(request.Failure) > 2048 || request.MessageID != "" || request.ResultID != "" || len(request.Result) != 0 {
+			return ErrInvalid
+		}
+	default:
+		return ErrInvalid
+	}
+	return nil
+}
+
+func ValidateOrchestrateReference(request OrchestrateReferenceRequest) error {
+	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.OrchestrationID) || request.OwnerID != "" && !validNativeIdentity(request.OwnerID) {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func decodeExact(reader io.Reader, limit int64, target any) error {

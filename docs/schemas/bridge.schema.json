@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vgxness.dev/schemas/bridge.schema.json",
   "title": "VGXNESS OpenCode Bridge Input",
-  "description": "Shared agent-controlled input for the bounded vgxness_dispatch tool and planned vgxness_orchestrate surface, before trusted adapter context is added.",
+  "description": "Shared agent-controlled input for the bounded vgxness_dispatch and vgxness_orchestrate tools, before trusted adapter context is added.",
   "oneOf": [
     { "$ref": "#/$defs/dispatchInput" },
     { "$ref": "#/$defs/orchestrateInput" }

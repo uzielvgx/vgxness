@@ -49,7 +49,7 @@ The four libraries expose reusable contracts through `$defs`. Reference the exac
 
 Relative references resolve against each schema's stable `$id`. A schema loader should register every stable URI before validating composed schemas.
 
-`joinedTask.dispatchStatus` is required and preserves the authority's `confirmed`, `not_started`, or `uncertain` classification. A consumer must not infer confirmed native execution merely from a terminal task status. The current Go scheduler and in-memory executable authority model validate this shape and the atomic `AcceptJoin` contract; production durable admission/replay/Join persistence remains a planned runtime boundary rather than a guarantee supplied by JSON Schema.
+`joinedTask.dispatchStatus` is required and preserves the authority's `confirmed`, `not_started`, or `uncertain` classification. A consumer must not infer confirmed native execution merely from a terminal task status. The Go scheduler and file-backed production authority validate this shape, persist admission/replay/terminal state, and linearize publication through atomic `AcceptJoin`; JSON Schema alone does not provide those runtime guarantees.
 
 ## Validation order
 

@@ -50,7 +50,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	toolInfo, err := os.Stat(installed.ToolPath)
 	testutil.NoError(t, err)
 	for name, expected := range map[string]string{
-		explorerAgentName: explorerPrompt, implementerAgentName: implementerPrompt, reviewerAgentName: reviewerPrompt,
+		navigatorAgentName: navigatorPrompt, explorerAgentName: explorerPrompt, implementerAgentName: implementerPrompt, reviewerAgentName: reviewerPrompt,
 	} {
 		content, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", name))
 		testutil.NoError(t, readErr)
@@ -111,9 +111,11 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 		`client.session.create`, `client.session.prompt`, `["bridge", "prepare", "--stdin"]`, `["bridge", "read", "--stdin"]`,
 		`["bridge", "complete", "--stdin"]`, `value.protocolVersion !== "1"`, `"review-changes"`,
 		`tool.schema.enum(["start", "continue", "finish"]).optional()`, `runId: tool.schema.string().optional()`,
-		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `return JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 10",
+		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `return JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 11",
 		"shell: false", `child?.kill("SIGKILL")`, "invokeBounded", "invokeTerminal", "nativeTickets.delete(childSessionId)",
 		"MAX_NATIVE_DISPATCHES = 4", "acquireNativeCapacity", "VGXNESS native dispatch capacity exhausted", "releaseCapacity()",
+		"vgxness_orchestrate", "vgxness-navigator", `["bridge", "orchestrate-plan", "--stdin"]`, `["bridge", "orchestrate-wave", "--stdin"]`,
+		`["bridge", "orchestrate-terminal", "--stdin"]`, `["bridge", "orchestrate-join", "--stdin"]`, "Promise.allSettled(bindings.map",
 	} {
 		testutil.Require(t, strings.Contains(tool, required), "bridge plugin missing %q: %s", required, content)
 	}
@@ -125,13 +127,14 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 
 func TestManagerPromptDefinesPersonalityLanguageAndAuthorityContracts(t *testing.T) {
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 7",
+		"artifact: opencode-agent/vgxness-manager; version: 8",
 		"managed VGXNESS plugin launches native OpenCode subagents",
 		"calm, attentive, technically discerning, and collaborative",
 		"has a point of view",
 		"Match the language and register of the user's direct conversation",
 		"technical artifacts neutral and in English by default",
 		"Use vgxness_status only to check bridge health and compatibility",
+		"Use vgxness_orchestrate for a goal that benefits from adaptive decomposition",
 		"vgxness_dispatch with read-files",
 		"Native write-files is fail-closed",
 		"vgxness_dispatch with review-changes",
@@ -160,7 +163,7 @@ func TestManagerPromptDefinesPersonalityLanguageAndAuthorityContracts(t *testing
 
 func TestManagedNativeSubagentsHaveRoleSpecificFailClosedPermissions(t *testing.T) {
 	for name, prompt := range map[string]string{
-		"explorer": explorerPrompt, "implementer": implementerPrompt, "reviewer": reviewerPrompt,
+		"navigator": navigatorPrompt, "explorer": explorerPrompt, "implementer": implementerPrompt, "reviewer": reviewerPrompt,
 	} {
 		for _, required := range []string{"mode: subagent", "hidden: true", `"*": deny`, "task: deny", "exact content-bound prompt"} {
 			if !strings.Contains(prompt, required) {
@@ -277,6 +280,74 @@ const tool = Object.assign((definition) => definition, {
 				t.Fatalf("generated plugin runtime failed: %v\n%s", runErr, output)
 			}
 			testutil.Require(t, string(output) == expected+"\n"+expected, "%s bridge output=%q", engine, output)
+		})
+	}
+}
+
+func TestIntegration_OrchestrateCreatesNativeNavigatorAndParallelChildren(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("portable runtime smoke helper uses a POSIX executable")
+	}
+	engines := make([]string, 0, 2)
+	for _, name := range []string{"node", "bun"} {
+		if executable, err := exec.LookPath(name); err == nil {
+			engines = append(engines, executable)
+		}
+	}
+	if len(engines) == 0 {
+		t.Skip("Node and Bun are not installed")
+	}
+
+	root := t.TempDir()
+	helper := filepath.Join(root, "vgxness-helper")
+	plan := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"pending","orchestration":{"orchestrationId":"orchestration-1","scheduleId":"schedule-1","ownerId":"owner-1","status":"pending","currentWave":0,"plan":{"kind":"delegation.plan","schemaVersion":"1","planId":"plan-1","requestDigest":"sha256-1","decision":"parallel","rationale":"two independent reads","policyVersion":"bridge-balanced-v1","maxParallel":4,"tasks":[{"taskId":"task-a","capability":"explore","operation":"read-files","goal":"inspect a","acceptanceCriteria":[],"dependsOn":[],"continuity":"isolated"},{"taskId":"task-b","capability":"explore","operation":"read-files","goal":"inspect b","acceptanceCriteria":[],"dependsOn":[],"continuity":"isolated"}],"waves":[{"waveId":"wave-1","index":0,"mode":"parallel","taskIds":["task-a","task-b"]}]}}}`
+	wave := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"running","orchestration":{"orchestrationId":"orchestration-1","scheduleId":"schedule-1","ownerId":"owner-1","status":"running","currentWave":0,"plan":{"kind":"delegation.plan","schemaVersion":"1","planId":"plan-1","requestDigest":"sha256-1","decision":"parallel","rationale":"two independent reads","policyVersion":"bridge-balanced-v1","maxParallel":4,"tasks":[{"taskId":"task-a","capability":"explore","operation":"read-files","goal":"inspect a","acceptanceCriteria":[],"dependsOn":[],"continuity":"isolated"},{"taskId":"task-b","capability":"explore","operation":"read-files","goal":"inspect b","acceptanceCriteria":[],"dependsOn":[],"continuity":"isolated"}],"waves":[{"waveId":"wave-1","index":0,"mode":"parallel","taskIds":["task-a","task-b"]}]},"prepared":[{"taskId":"task-a","prepared":{"ticketId":"ticket-1","executionId":"execution-1","agent":"vgxness-explorer","model":"openai/gpt-5.6-sol","prompt":"inspect a","promptSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","deadline":"2099-01-01T00:00:00Z","promptRef":{"id":"prompt-a","version":"1","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}},{"taskId":"task-b","prepared":{"ticketId":"ticket-2","executionId":"execution-2","agent":"vgxness-explorer","model":"openai/gpt-5.6-sol","prompt":"inspect b","promptSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","deadline":"2099-01-01T00:00:00Z","promptRef":{"id":"prompt-b","version":"1","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}]}}`
+	terminal := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"running","orchestration":{"orchestrationId":"orchestration-1","scheduleId":"schedule-1","ownerId":"owner-1","status":"running","currentWave":0,"plan":{"decision":"parallel","tasks":[],"waves":[]}}}`
+	joined := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"completed","orchestration":{"orchestrationId":"orchestration-1","scheduleId":"schedule-1","ownerId":"owner-1","status":"completed","currentWave":0,"plan":{"decision":"parallel","tasks":[],"waves":[]},"join":{"kind":"delegation.join","status":"completed"}}}`
+	helperSource := "#!/bin/sh\n" +
+		"cat >/dev/null\n" +
+		"case \"$2\" in\n" +
+		"  orchestrate-plan) printf '%s' '" + plan + "' ;;\n" +
+		"  orchestrate-wave) printf '%s' '" + wave + "' ;;\n" +
+		"  orchestrate-terminal|orchestrate-status) printf '%s' '" + terminal + "' ;;\n" +
+		"  orchestrate-join) printf '%s' '" + joined + "' ;;\n" +
+		"  complete|fail|orchestrate-cancel) printf '%s' '{\"protocolVersion\":\"1\",\"ok\":true,\"bridge\":\"healthy\",\"provider\":\"opencode\",\"status\":\"completed\"}' ;;\n" +
+		"  *) exit 9 ;;\n" +
+		"esac\n"
+	testutil.NoError(t, os.WriteFile(helper, []byte(helperSource), 0o700))
+	content, err := bridgeToolContent(helper, integrationTestModel)
+	testutil.NoError(t, err)
+	stub := `const optionalSchema = () => ({ optional() { return this } })
+const tool = Object.assign((definition) => definition, {
+  schema: { enum: optionalSchema, string: optionalSchema, array: optionalSchema },
+})`
+	source := strings.Replace(string(content), `import { tool } from "@opencode-ai/plugin"`, stub, 1)
+	source = strings.Replace(source, `import { randomUUID } from "node:crypto"`, `let uuidCounter = 0; const randomUUID = () => String(++uuidCounter)`, 1)
+	workspace, err := json.Marshal(root)
+	testutil.NoError(t, err)
+	source += "\nlet plugin, created = 0, active = 0, peak = 0\n"
+	source += "const parentIDs = []\n"
+	source += "const client = { session: {\n"
+	source += "  create: async (request) => { created++; parentIDs.push(request.body.parentID); return { data: { id: created === 1 ? 'ses_nav' : 'ses_task_' + (created - 1) } } },\n"
+	source += "  prompt: async (request) => { if (request.path.id === 'ses_nav') return { data: { info: { id: 'msg_nav' }, parts: [{ type: 'text', text: JSON.stringify({ tasks: [{ taskId: 'task-a', capability: 'explore', operation: 'read-files', goal: 'inspect a', acceptanceCriteria: [], dependsOn: [], continuity: 'isolated' }, { taskId: 'task-b', capability: 'explore', operation: 'read-files', goal: 'inspect b', acceptanceCriteria: [], dependsOn: [], continuity: 'isolated' }] }) }] } }; active++; peak = Math.max(peak, active); await new Promise((resolve) => setTimeout(resolve, 40)); active--; return { data: { info: { id: 'msg_' + request.path.id }, parts: [{ type: 'text', text: JSON.stringify({ kind: 'agent.result', status: 'success' }) }] } } },\n"
+	source += "  abort: async () => ({ data: true }),\n"
+	source += "} }\n"
+	source += "plugin = await VGXNESSPlugin({ client })\n"
+	source += "const context = { directory: " + string(workspace) + ", worktree: '', sessionID: 'ses_parent', messageID: 'msg_parent', abort: new AbortController().signal, metadata() {} }\n"
+	source += "const output = JSON.parse(await plugin.tool.vgxness_orchestrate.execute({ goal: 'inspect both' }, context))\n"
+	source += "if (!output.ok || output.status !== 'completed' || created !== 3 || peak !== 2 || parentIDs.some((id) => id !== 'ses_parent')) throw new Error(JSON.stringify({ output, created, peak, parentIDs }))\n"
+	source += "process.stdout.write('created=' + created + ' peak=' + peak)\n"
+	script := filepath.Join(root, "orchestrate.mjs")
+	testutil.NoError(t, os.WriteFile(script, []byte(source), 0o600))
+
+	for _, engine := range engines {
+		t.Run(filepath.Base(engine), func(t *testing.T) {
+			command := exec.Command(engine, script)
+			output, runErr := command.CombinedOutput()
+			if runErr != nil {
+				t.Fatalf("generated orchestration runtime failed: %v\n%s", runErr, output)
+			}
+			testutil.Require(t, string(output) == "created=3 peak=2", "%s orchestration output=%q", engine, output)
 		})
 	}
 }
@@ -405,7 +476,7 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 	_, targetErr := os.Stat(installed.Path)
 	_, toolTargetErr := os.Stat(installed.ToolPath)
 	subagentsRemoved := true
-	for _, name := range []string{explorerAgentName, implementerAgentName, reviewerAgentName} {
+	for _, name := range []string{navigatorAgentName, explorerAgentName, implementerAgentName, reviewerAgentName} {
 		if _, statErr := os.Stat(filepath.Join(configDirectory, "agents", name)); !os.IsNotExist(statErr) {
 			subagentsRemoved = false
 		}

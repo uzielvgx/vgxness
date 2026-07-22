@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/vgxness/vgxness/internal/navigator"
 )
 
 func TestDecodeDispatchAcceptsOneBoundedExactRequest(t *testing.T) {
@@ -38,6 +41,46 @@ func TestDecodeOrchestrateAcceptsOnlyPublicIntentAndEnrichesTrustedContext(t *te
 	}
 	if _, err := NewOrchestrateRequest(input, OrchestrateContext{Model: "openai/gpt-5.6-sol", ParentSessionID: "../parent", ParentMessageID: "msg_parent"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("untrusted parent context accepted: %v", err)
+	}
+}
+
+func TestDecodeOrchestrationLifecycleIsExactAndBounded(t *testing.T) {
+	planPayload := `{"protocolVersion":"1","model":"openai/gpt-5.6-sol","input":{"goal":"inspect"},"parentSessionId":"ses_parent","parentMessageId":"msg_parent","candidateTasks":[{"taskId":"task-1","capability":"explore","operation":"read-files","goal":"inspect","acceptanceCriteria":[],"dependsOn":[],"continuity":"isolated"}]}`
+	planned, err := DecodeOrchestratePlan(strings.NewReader(planPayload))
+	if err != nil || len(planned.CandidateTasks) != 1 || planned.CandidateTasks[0].Operation != navigator.OperationReadFiles {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	wave, err := DecodeOrchestrateWave(strings.NewReader(`{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1"}]}`))
+	if err != nil || len(wave.Bindings) != 1 || wave.Bindings[0].TicketID != "ticket-1" {
+		t.Fatalf("wave=%#v err=%v", wave, err)
+	}
+	terminal, err := DecodeOrchestrateTerminal(strings.NewReader(`{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","taskId":"task-1","ticketId":"ticket-1","childSessionId":"ses_child","status":"completed","messageId":"msg_child","resultId":"result-1","result":{}}`))
+	if err != nil || terminal.ResultID != "result-1" {
+		t.Fatalf("terminal=%#v err=%v", terminal, err)
+	}
+	reference, err := DecodeOrchestrateReference(strings.NewReader(`{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1"}`))
+	if err != nil || reference.OwnerID != "owner-1" {
+		t.Fatalf("reference=%#v err=%v", reference, err)
+	}
+	for _, invalid := range []struct {
+		decode func(io.Reader) error
+		input  string
+	}{
+		{func(reader io.Reader) error { _, err := DecodeOrchestratePlan(reader); return err }, strings.TrimSuffix(planPayload, "}") + `,"agent":"explorer"}`},
+		{func(reader io.Reader) error { _, err := DecodeOrchestrateWave(reader); return err }, `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1"},{"taskId":"task-1","childSessionId":"ses_other","ticketId":"ticket-2"}]}`},
+		{func(reader io.Reader) error { _, err := DecodeOrchestrateTerminal(reader); return err }, `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","taskId":"task-1","ticketId":"ticket-1","childSessionId":"ses_child","status":"completed","result":{}}`},
+		{func(reader io.Reader) error { _, err := DecodeOrchestrateReference(reader); return err }, `{"protocolVersion":"1","orchestrationId":"../escape"}`},
+	} {
+		if err := invalid.decode(strings.NewReader(invalid.input)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid orchestration input accepted: %s err=%v", invalid.input, err)
+		}
+	}
+	oversizedResult := json.RawMessage(`"` + strings.Repeat("x", MaxOrchestrationResultBytes) + `"`)
+	if err := ValidateOrchestrateTerminal(OrchestrateTerminalRequest{
+		ProtocolVersion: ProtocolVersion, OrchestrationID: "orchestration-1", OwnerID: "owner-1", TaskID: "task-1",
+		TicketID: "ticket-1", ChildSessionID: "ses_child", Status: "completed", MessageID: "msg_child", ResultID: "result-1", Result: oversizedResult,
+	}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversized aggregate result accepted: %v", err)
 	}
 }
 

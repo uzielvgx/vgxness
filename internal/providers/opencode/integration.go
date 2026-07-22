@@ -22,6 +22,7 @@ import (
 
 const (
 	managerAgentName     = "vgxness-manager.md"
+	navigatorAgentName   = "vgxness-navigator.md"
 	explorerAgentName    = "vgxness-explorer.md"
 	implementerAgentName = "vgxness-implementer.md"
 	reviewerAgentName    = "vgxness-reviewer.md"
@@ -31,14 +32,15 @@ const (
 description: VGXNESS manager — OpenCode interface to the VGXNESS control plane
 mode: primary
 color: primary
-permission:
-  "*": deny
-  question: allow
-  vgxness_status: allow
-  vgxness_dispatch: allow
+	permission:
+	  "*": deny
+	  question: allow
+	  vgxness_status: allow
+	  vgxness_dispatch: allow
+	  vgxness_orchestrate: allow
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 7 -->
+	<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 8 -->
 
 # Identity
 
@@ -63,8 +65,9 @@ You may discuss the user's goal and explain VGXNESS behavior from this contract.
 
 The available control-plane surface is exact:
 
-- Use vgxness_status only to check bridge health and compatibility. It does not inspect project state.
-- Use vgxness_dispatch with read-files for bounded workspace inspection.
+	- Use vgxness_status only to check bridge health and compatibility. It does not inspect project state.
+	- Use vgxness_orchestrate for a goal that benefits from adaptive decomposition. VGXNESS, not you, validates the Navigator proposal and decides the legal sequential or parallel waves.
+	- Use vgxness_dispatch with read-files for bounded workspace inspection.
 - Native write-files is fail-closed until a ticket-authenticated edit broker is available.
 - Use vgxness_dispatch with review-changes for current, staged, or uncommitted repository changes. Do not substitute read-files; only review-changes includes bounded Git status and diff evidence.
 For two or more independent read-only inspections, issue the vgxness_dispatch calls together so OpenCode can run their native child sessions in parallel. VGXNESS admits at most four active one-shot native dispatches per workspace; never parallelize writes, review phases, or any dispatch that uses continuity. If capacity is exhausted, report the bounded blocker instead of retrying in a loop.
@@ -84,7 +87,22 @@ Treat every VGXNESS receipt as bounded evidence. Never claim changes, verificati
 # Degraded mode
 
 If no vgxness_* tool is available, stop before acting. Explain that the OpenCode entrypoint is installed but the VGXNESS control-plane bridge is unavailable, and ask the user to run vgxness integrate opencode status.
-	`
+		`
+	navigatorPrompt = `---
+description: VGXNESS native Navigator for bounded task decomposition
+mode: subagent
+hidden: true
+permission:
+  "*": deny
+  task: deny
+---
+
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-navigator; version: 1 -->
+
+You are the native VGXNESS Navigator. Execute only the exact content-bound prompt supplied for planning and decompose its goal into the smallest useful set of bounded work units. You have no workspace, shell, network, file, or delegation access. Return exactly one JSON object with a tasks array and no Markdown.
+
+Each task must contain taskId, capability, operation, goal, acceptanceCriteria, dependsOn, and continuity. Use stable IDs matching task-[a-z0-9-]+. Allowed combinations are explore/verify with read-files, or review with review-changes. Native writes are unavailable. Use continuity isolated unless a true sequential dependency requires linked. Independent isolated reads may run in parallel; review must depend on every evidence task. Prefer one task when it is sufficient and never exceed sixteen tasks.
+`
 	explorerPrompt = `---
 description: VGXNESS native explorer for bounded structural and workspace inspection
 mode: subagent
@@ -384,6 +402,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		return inspection{}, err
 	}
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
+	navigatorPath := filepath.Join(configDirectory, "agents", navigatorAgentName)
 	explorerPath := filepath.Join(configDirectory, "agents", explorerAgentName)
 	implementerPath := filepath.Join(configDirectory, "agents", implementerAgentName)
 	reviewerPath := filepath.Join(configDirectory, "agents", reviewerAgentName)
@@ -420,6 +439,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	}
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: []byte(managerPrompt), backup: "vgxness-manager"},
+		{path: navigatorPath, content: []byte(navigatorPrompt), backup: "vgxness-navigator"},
 		{path: explorerPath, content: []byte(explorerPrompt), backup: "vgxness-explorer"},
 		{path: implementerPath, content: []byte(implementerPrompt), backup: "vgxness-implementer"},
 		{path: reviewerPath, content: []byte(reviewerPrompt), backup: "vgxness-reviewer"},
@@ -559,10 +579,11 @@ func bridgeToolContent(executable, model string) ([]byte, error) {
 	import { randomUUID } from "node:crypto"
 	import { tool } from "@opencode-ai/plugin"
 
-		// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 10
+		// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 11
 	const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 	const VGXNESS_MODEL = ` + string(quotedModel) + `
 	const MAX_OUTPUT_BYTES = __MAX_OUTPUT_BYTES__
+	const MAX_ORCHESTRATION_RESULT_BYTES = __MAX_ORCHESTRATION_RESULT_BYTES__
 	const TERMINAL_TIMEOUT_MS = 30_000
 	const MAX_NATIVE_DISPATCHES = 4
 	const nativeTickets = new Map()
@@ -692,6 +713,55 @@ async function readBounded(stream) {
 	  return value
 	}
 
+	function exactNavigatorProposal(parts) {
+	  const value = exactAgentResult(parts)
+	  if (!Array.isArray(value.tasks) || value.tasks.length < 1 || value.tasks.length > 16) {
+	    throw new Error("Native VGXNESS Navigator returned an invalid task proposal")
+	  }
+	  return value.tasks
+	}
+
+	async function createNativeChild(client, workspace, parentSessionId, title) {
+	  return responseData(await client.session.create({
+	    query: { directory: workspace },
+	    body: { parentID: parentSessionId, title },
+	  }), "OpenCode could not create a native VGXNESS subagent")
+	}
+
+	async function promptNativeChild(client, workspace, context, childSessionId, prepared) {
+	  nativeTickets.set(childSessionId, { ticketId: prepared.ticketId })
+	  const separator = prepared.model.indexOf("/")
+	  if (separator <= 0 || separator === prepared.model.length - 1) throw new Error("VGXNESS returned an invalid native model")
+	  const abortChild = () => client.session.abort({ path: { id: childSessionId }, query: { directory: workspace } }).catch(() => undefined)
+	  const abortChildOnContext = () => { void abortChild() }
+	  context.abort.addEventListener("abort", abortChildOnContext, { once: true })
+	  let timer
+	  try {
+	    const deadlineAt = Date.parse(prepared.deadline)
+	    if (!Number.isFinite(deadlineAt)) throw new Error("VGXNESS returned an invalid native deadline")
+	    const timeoutMs = Math.max(1, Math.min(2147483647, deadlineAt - Date.now()))
+	    const deadline = new Promise((_, reject) => {
+	      timer = setTimeout(() => {
+	        void abortChild()
+	        reject(new Error("Native VGXNESS subagent deadline exceeded"))
+	      }, timeoutMs)
+	    })
+	    return responseData(await Promise.race([client.session.prompt({
+	      path: { id: childSessionId },
+	      query: { directory: workspace },
+	      body: {
+	        agent: prepared.agent,
+	        model: { providerID: prepared.model.slice(0, separator), modelID: prepared.model.slice(separator + 1) },
+	        parts: [{ type: "text", text: prepared.prompt }],
+	      },
+	    }), deadline]), "Native VGXNESS subagent execution failed")
+	  } finally {
+	    if (timer) clearTimeout(timer)
+	    context.abort.removeEventListener("abort", abortChildOnContext)
+	    nativeTickets.delete(childSessionId)
+	  }
+	}
+
 	function acquireNativeCapacity(workspace, sharedRead) {
 	  const state = nativeCapacity.get(workspace) || { sharedReads: 0, exclusive: false }
 	  if (sharedRead) {
@@ -753,6 +823,169 @@ async function readBounded(stream) {
 	          return JSON.stringify(await invoke(["bridge", "status"], undefined, workspace, context.abort))
 	        },
 	      }),
+	      vgxness_orchestrate: tool({
+	        description: "Adaptively decompose one high-level goal with the native VGXNESS Navigator, validate the plan, execute legal dependency waves in native OpenCode child sessions, and return one durable join.",
+	        args: {
+	          goal: tool.schema.string(),
+	          acceptanceCriteria: tool.schema.array(tool.schema.string()).optional(),
+	        },
+	        async execute(args, context) {
+	          const workspace = context.worktree || context.directory
+	          const separator = VGXNESS_MODEL.indexOf("/")
+	          if (separator <= 0 || separator === VGXNESS_MODEL.length - 1) throw new Error("VGXNESS configured an invalid Navigator model")
+	          let navigatorSessionId = ""
+	          let orchestration
+	          const activeChildren = new Set()
+	          try {
+	            const navigator = await createNativeChild(client, workspace, context.sessionID, "VGXNESS Navigator")
+	            navigatorSessionId = navigator.id
+	            context.metadata({ title: "VGXNESS adaptive orchestration", metadata: { navigatorSessionId } })
+	            const planningPrompt = JSON.stringify({
+	              kind: "vgxness.navigator.request", schemaVersion: "1", goal: args.goal,
+	              acceptanceCriteria: args.acceptanceCriteria || [],
+	              constraints: { maxTasks: 16, maxParallel: 4, nativeWrites: false, agentChoice: "vgxness-authority" },
+	            })
+	            const plannedMessage = responseData(await client.session.prompt({
+	              path: { id: navigatorSessionId },
+	              query: { directory: workspace },
+	              body: {
+	                agent: "vgxness-navigator",
+	                model: { providerID: VGXNESS_MODEL.slice(0, separator), modelID: VGXNESS_MODEL.slice(separator + 1) },
+	                parts: [{ type: "text", text: planningPrompt }],
+	              },
+	            }), "Native VGXNESS Navigator execution failed")
+	            const candidateTasks = exactNavigatorProposal(plannedMessage.parts || [])
+	            let envelope = await invokeBounded(
+	              ["bridge", "orchestrate-plan", "--stdin"],
+	              {
+	                protocolVersion: "1", model: VGXNESS_MODEL,
+	                input: { goal: args.goal, acceptanceCriteria: args.acceptanceCriteria || [] },
+	                parentSessionId: context.sessionID, parentMessageId: context.messageID, candidateTasks,
+	              },
+	              workspace,
+	              TERMINAL_TIMEOUT_MS,
+	              context.abort,
+	            )
+	            orchestration = envelope.orchestration
+	            if (!envelope.ok || !orchestration || !orchestration.plan || !Array.isArray(orchestration.plan.waves)) {
+	              throw new Error("VGXNESS did not approve a valid orchestration plan")
+	            }
+	            context.metadata({
+	              title: "VGXNESS " + orchestration.plan.decision + " plan",
+	              metadata: { orchestrationId: orchestration.orchestrationId, scheduleId: orchestration.scheduleId, ownerId: orchestration.ownerId, taskCount: orchestration.plan.tasks.length },
+	            })
+	            const tasks = new Map(orchestration.plan.tasks.map((task) => [task.taskId, task]))
+	            for (const wave of orchestration.plan.waves) {
+	              if (orchestration.status === "failed" || orchestration.status === "cancelled") break
+	              const bindings = await Promise.all(wave.taskIds.map(async (taskId) => {
+	                if (!tasks.has(taskId)) throw new Error("VGXNESS approved a wave with an unknown task")
+	                const child = await createNativeChild(client, workspace, context.sessionID, "VGXNESS " + taskId)
+	                activeChildren.add(child.id)
+	                return { taskId, childSessionId: child.id, ticketId: "ticket-" + randomUUID() }
+	              }))
+	              envelope = await invokeBounded(
+	                ["bridge", "orchestrate-wave", "--stdin"],
+	                {
+	                  protocolVersion: "1", orchestrationId: orchestration.orchestrationId,
+	                  ownerId: orchestration.ownerId, bindings,
+	                },
+	                workspace,
+	                TERMINAL_TIMEOUT_MS,
+	                context.abort,
+	              )
+	              orchestration = envelope.orchestration
+	              if (!envelope.ok || !orchestration) throw new Error("VGXNESS could not prepare the approved execution wave")
+	              const prepared = new Map((orchestration.prepared || []).map((item) => [item.taskId, exactPrepared({ ok: true, prepared: item.prepared })]))
+	              const terminalSettlements = await Promise.allSettled(bindings.map(async (binding) => {
+	                const preparedTask = prepared.get(binding.taskId)
+	                if (!preparedTask) {
+	                  await client.session.abort({ path: { id: binding.childSessionId }, query: { directory: workspace } }).catch(() => undefined)
+	                  activeChildren.delete(binding.childSessionId)
+	                  return undefined
+	                }
+	                try {
+	                  const message = await promptNativeChild(client, workspace, context, binding.childSessionId, preparedTask)
+	                  const result = exactAgentResult(message.parts || [])
+	                  if (new TextEncoder().encode(JSON.stringify(result)).length > MAX_ORCHESTRATION_RESULT_BYTES) throw new Error("Native VGXNESS orchestration result exceeded its aggregate-safe bound")
+	                  const terminalMessageId = "message-" + binding.ticketId
+	                  const resultId = "result-" + binding.ticketId
+	                  const completed = await invokeTerminal(
+	                    ["bridge", "complete", "--stdin"],
+	                    {
+	                      protocolVersion: "1", ticketId: binding.ticketId, parentSessionId: context.sessionID,
+	                      childSessionId: binding.childSessionId, messageId: message.info.id, result,
+	                    },
+	                    workspace,
+	                  )
+	                  if (!completed.ok) throw new Error("VGXNESS rejected a native orchestration result")
+	                  return await invokeTerminal(
+	                    ["bridge", "orchestrate-terminal", "--stdin"],
+	                    {
+	                      protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId,
+	                      taskId: binding.taskId, ticketId: binding.ticketId, childSessionId: binding.childSessionId,
+	                      status: "completed", messageId: terminalMessageId, resultId, result,
+	                    },
+	                    workspace,
+	                  )
+	                } catch (cause) {
+	                  await client.session.abort({ path: { id: binding.childSessionId }, query: { directory: workspace } }).catch(() => undefined)
+	                  const cancelled = context.abort.aborted
+	                  await invokeTerminal(
+	                    ["bridge", "fail", "--stdin"],
+	                    {
+	                      protocolVersion: "1", ticketId: binding.ticketId, parentSessionId: context.sessionID,
+	                      childSessionId: binding.childSessionId,
+	                      category: cancelled ? "native-subagent-cancelled" : "native-subagent-failed",
+	                    },
+	                    workspace,
+	                  ).catch(() => undefined)
+	                  return await invokeTerminal(
+	                    ["bridge", "orchestrate-terminal", "--stdin"],
+	                    {
+	                      protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId,
+	                      taskId: binding.taskId, ticketId: binding.ticketId, childSessionId: binding.childSessionId,
+	                      status: cancelled ? "cancelled" : "failed",
+	                      failure: cancelled ? "native orchestration was cancelled" : "native subagent execution failed",
+	                    },
+	                    workspace,
+	                  )
+	                } finally {
+	                  activeChildren.delete(binding.childSessionId)
+	                }
+	              }))
+	              let terminalFailure
+	              for (const settlement of terminalSettlements) {
+	                if (settlement.status === "rejected") terminalFailure ||= settlement.reason
+	                else if (settlement.value?.orchestration) orchestration = settlement.value.orchestration
+	              }
+	              if (terminalFailure) throw terminalFailure
+	              envelope = await invokeTerminal(
+	                ["bridge", "orchestrate-status", "--stdin"],
+	                { protocolVersion: "1", orchestrationId: orchestration.orchestrationId },
+	                workspace,
+	              )
+	              if (!envelope.ok || !envelope.orchestration) throw new Error("VGXNESS could not refresh durable orchestration status")
+	              orchestration = envelope.orchestration
+	            }
+	            envelope = await invokeTerminal(
+	              ["bridge", "orchestrate-join", "--stdin"],
+	              { protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId },
+	              workspace,
+	            )
+	            return JSON.stringify(envelope)
+	          } catch (cause) {
+	            await Promise.all([...activeChildren].map((id) => client.session.abort({ path: { id }, query: { directory: workspace } }).catch(() => undefined)))
+	            if (orchestration?.orchestrationId && orchestration?.ownerId) {
+	              await invokeTerminal(
+	                ["bridge", "orchestrate-cancel", "--stdin"],
+	                { protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId },
+	                workspace,
+	              ).catch(() => undefined)
+	            }
+	            throw cause instanceof Error ? cause : new Error("VGXNESS adaptive orchestration failed")
+	          }
+	        },
+	      }),
 	      vgxness_dispatch: tool({
 	        description: "Prepare one bounded operation in VGXNESS, execute it in a native OpenCode child session, then durably accept its result. Use review-changes for current, staged, or uncommitted changes. Use continuity start, continue, and finish for multi-phase work.",
 	        args: {
@@ -789,37 +1022,8 @@ async function readBounded(stream) {
 	            }
 	            prepared = exactPrepared(envelope)
 	            if (prepared.ticketId !== ticketId) throw new Error("VGXNESS returned a mismatched native dispatch ticket")
-	            nativeTickets.set(childSessionId, { ticketId: prepared.ticketId })
 	            context.metadata({ title: "VGXNESS native subagent", metadata: { sessionId: childSessionId, ticketId: prepared.ticketId, agent: prepared.agent } })
-	            const separator = prepared.model.indexOf("/")
-	            if (separator <= 0 || separator === prepared.model.length - 1) throw new Error("VGXNESS returned an invalid native model")
-	            const abortChild = () => client.session.abort({ path: { id: childSessionId }, query: { directory: workspace } }).catch(() => undefined)
-	            const abortChildOnContext = () => { void abortChild() }
-	            context.abort.addEventListener("abort", abortChildOnContext, { once: true })
-	            let message
-	            let timer
-	            try {
-	              const timeoutMs = Math.max(1, Date.parse(prepared.deadline) - Date.now())
-	              const deadline = new Promise((_, reject) => {
-	                timer = setTimeout(() => {
-	                  deadlineExceeded = true
-	                  void abortChild()
-	                  reject(new Error("Native VGXNESS subagent deadline exceeded"))
-	                }, timeoutMs)
-	              })
-	              message = responseData(await Promise.race([client.session.prompt({
-	                path: { id: childSessionId },
-	                query: { directory: workspace },
-	                body: {
-	                  agent: prepared.agent,
-	                  model: { providerID: prepared.model.slice(0, separator), modelID: prepared.model.slice(separator + 1) },
-	                  parts: [{ type: "text", text: prepared.prompt }],
-	                },
-	              }), deadline]), "Native VGXNESS subagent execution failed")
-	            } finally {
-	              if (timer) clearTimeout(timer)
-	              context.abort.removeEventListener("abort", abortChildOnContext)
-	            }
+	            const message = await promptNativeChild(client, workspace, context, childSessionId, prepared)
 	            const result = exactAgentResult(message.parts || [])
 	            const completed = await invokeTerminal(
 	              ["bridge", "complete", "--stdin"],
@@ -834,6 +1038,7 @@ async function readBounded(stream) {
 	            let cleanupFailure
 	            if (childSessionId) await client.session.abort({ path: { id: childSessionId }, query: { directory: workspace } }).catch(() => undefined)
 	            if (ticketId) {
+	              deadlineExceeded = cause instanceof Error && cause.message === "Native VGXNESS subagent deadline exceeded"
 	              const category = context.abort.aborted
 	                ? "native-subagent-cancelled"
 	                : deadlineExceeded ? "native-subagent-deadline" : "native-subagent-failed"
@@ -864,6 +1069,7 @@ async function readBounded(stream) {
 	`
 	content = strings.ReplaceAll(content, "\n\t", "\n")
 	content = strings.ReplaceAll(content, "__MAX_OUTPUT_BYTES__", strconv.Itoa(bridge.MaxBridgeOutputBytes))
+	content = strings.ReplaceAll(content, "__MAX_ORCHESTRATION_RESULT_BYTES__", strconv.Itoa(bridge.MaxOrchestrationResultBytes))
 	return []byte(content), nil
 }
 

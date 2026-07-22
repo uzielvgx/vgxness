@@ -52,6 +52,9 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 	if len(args) > 0 && args[0] == "bridge" {
 		return runBridge(ctx, args[1:], stdin, stdout, stderr, controlPlane)
 	}
+	if len(args) > 0 && args[0] == "orchestrate" {
+		return runOrchestration(ctx, args[1:], stdout, stderr, controlPlane)
+	}
 	if len(args) > 0 && args[0] == "self" {
 		return runSelfInstall(ctx, args[1:], stdout, stderr, installer)
 	}
@@ -59,7 +62,7 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|self|setup>")
+		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|orchestrate|self|setup>")
 		return 2
 	}
 	command := args[0]
