@@ -126,6 +126,23 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 }
 
 func TestManagerPromptDefinesPersonalityLanguageAndAuthorityContracts(t *testing.T) {
+	expectedFrontmatter := `---
+description: VGXNESS manager — OpenCode interface to the VGXNESS control plane
+mode: primary
+color: primary
+permission:
+  "*": deny
+  question: allow
+  vgxness_status: allow
+  vgxness_dispatch: allow
+  vgxness_orchestrate: allow
+---
+
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 8 -->`
+	if !strings.HasPrefix(managerPrompt, expectedFrontmatter) {
+		t.Fatalf("manager prompt has invalid OpenCode frontmatter:\n%s", managerPrompt)
+	}
+
 	required := []string{
 		"artifact: opencode-agent/vgxness-manager; version: 8",
 		"managed VGXNESS plugin launches native OpenCode subagents",
