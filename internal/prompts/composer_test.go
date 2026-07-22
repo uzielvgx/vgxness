@@ -75,14 +75,15 @@ func TestComposerKeepsSubagentFocusedWithoutManagerPersonality(t *testing.T) {
 			AdditionalProperties bool   `json:"additionalProperties"`
 			Instructions         string `json:"instructions"`
 			Template             struct {
-				Kind    string `json:"kind"`
-				TaskID  string `json:"taskId"`
-				AgentID string `json:"agentId"`
-				Summary string `json:"summary"`
+				Kind            string `json:"kind"`
+				TaskID          string `json:"taskId"`
+				AgentID         string `json:"agentId"`
+				Summary         string `json:"summary"`
+				NextRecommended string `json:"nextRecommended"`
 			} `json:"template"`
 		} `json:"output"`
 	}
-	if err := json.Unmarshal([]byte(bundle.System), &payload); err != nil || !payload.Safety.EffectiveWorkScope.ReadOnly || payload.Safety.EffectiveWorkScope.MayAdvanceRun || len(payload.Safety.AgentCeiling.AllowedPaths) != 1 || payload.Work.Inputs["operation"] != "review-changes" || payload.Output.AdditionalProperties || payload.Output.Instructions == "" || payload.Output.Template.Kind != "agent.result" || payload.Output.Template.TaskID != "task-1" || payload.Output.Template.AgentID != "forge" || payload.Output.Template.Summary == "" {
+	if err := json.Unmarshal([]byte(bundle.System), &payload); err != nil || !payload.Safety.EffectiveWorkScope.ReadOnly || payload.Safety.EffectiveWorkScope.MayAdvanceRun || len(payload.Safety.AgentCeiling.AllowedPaths) != 1 || payload.Work.Inputs["operation"] != "review-changes" || payload.Output.AdditionalProperties || !strings.Contains(payload.Output.Instructions, "nextRecommended") || payload.Output.Template.Kind != "agent.result" || payload.Output.Template.TaskID != "task-1" || payload.Output.Template.AgentID != "forge" || payload.Output.Template.Summary == "" || payload.Output.Template.NextRecommended == "" {
 		t.Fatalf("effective background scope is ambiguous: %+v err=%v", payload.Safety, err)
 	}
 }
