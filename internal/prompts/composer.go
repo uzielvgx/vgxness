@@ -138,7 +138,7 @@ func (c *Composer) Compose(ctx context.Context, input Input) (Bundle, error) {
 		},
 		Output: outputSection{
 			Contract: input.Work.ReturnContract, RequireStructuredResult: true, AdditionalProperties: false,
-			Instructions:    "Return only one JSON object with exactly the template keys. Preserve kind, schemaVersion, resultId, taskId, and agentId; replace the outcome fields with valid values and add no prose or Markdown.",
+			Instructions:    "Return only one JSON object with exactly the template keys. Preserve kind, schemaVersion, resultId, taskId, and agentId; replace the outcome fields with valid values and add no prose or Markdown. Every required string, including summary and nextRecommended, must contain non-whitespace text; when no further work is needed, use a short terminal value such as 'No further action.'.",
 			AllowedStatuses: []string{"success", "blocked", "failed", "needs_followup", "unsupported"},
 			Template: agentResultTemplate{
 				Kind: "agent.result", SchemaVersion: "1", ResultID: "result-" + input.Work.TaskID,
