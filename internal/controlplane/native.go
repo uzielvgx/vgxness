@@ -16,6 +16,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/chronicle"
+	"github.com/vgxness/vgxness/internal/codegraph"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/gatekeeper"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -36,22 +37,26 @@ const (
 	nativeMaxConcurrentLeases = 4
 	nativeAdmissionWait       = 2 * time.Second
 	nativeAdmissionRetry      = 2 * time.Millisecond
+	nativeCodeGraphTimeout    = 30 * time.Second
+	nativeMaxCodeGraphQueries = 16
 )
 
 type nativeTicketDocument struct {
-	SchemaVersion string                    `json:"schemaVersion"`
-	TicketID      string                    `json:"ticketId"`
-	Workspace     string                    `json:"workspace"`
-	WorkspaceID   string                    `json:"workspaceIdentity"`
-	Input         bridge.DispatchRequest    `json:"input"`
-	RunID         string                    `json:"runId"`
-	TaskID        string                    `json:"taskId"`
-	Deadline      string                    `json:"deadline"`
-	State         string                    `json:"state"`
-	Coordinator   orchestrator.NativeTicket `json:"coordinator"`
-	Continuity    *nativeContinuityState    `json:"continuity,omitempty"`
-	CompletionSHA string                    `json:"completionSha256,omitempty"`
-	Response      *bridge.Response          `json:"response,omitempty"`
+	SchemaVersion string                          `json:"schemaVersion"`
+	TicketID      string                          `json:"ticketId"`
+	Workspace     string                          `json:"workspace"`
+	WorkspaceID   string                          `json:"workspaceIdentity"`
+	Input         bridge.DispatchRequest          `json:"input"`
+	RunID         string                          `json:"runId"`
+	TaskID        string                          `json:"taskId"`
+	Deadline      string                          `json:"deadline"`
+	State         string                          `json:"state"`
+	Coordinator   orchestrator.NativeTicket       `json:"coordinator"`
+	Continuity    *nativeContinuityState          `json:"continuity,omitempty"`
+	Memory        *nativeMemoryState              `json:"memory,omitempty"`
+	CompletionSHA string                          `json:"completionSha256,omitempty"`
+	Response      *bridge.Response                `json:"response,omitempty"`
+	CodeGraph     []bridge.NativeCodeGraphReceipt `json:"codegraph,omitempty"`
 }
 
 type nativeLease struct {
@@ -71,6 +76,11 @@ type nativeContinuityState struct {
 	DecisionID        string                `json:"decisionId"`
 	PreflightID       string                `json:"preflightId"`
 	RetrievedMemories []memory.MemoryResult `json:"retrievedMemories,omitempty"`
+}
+
+type nativeMemoryState struct {
+	Project      string   `json:"project"`
+	RetrievedIDs []string `json:"retrievedIds,omitempty"`
 }
 
 type nativeDeadline struct {
@@ -144,6 +154,13 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 		}
 		return bridge.Response{}, err
 	}
+	taskMemory := taskMemoryFromContinuity(continuity)
+	if taskMemory == nil {
+		taskMemory, err = service.openTaskMemory(ctx, root, input.Goal)
+		if err != nil {
+			return bridge.Response{}, err
+		}
+	}
 	adapter, err := service.newNativeAdapter(root)
 	if err != nil {
 		return bridge.Response{}, err
@@ -188,7 +205,7 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}
-	request, err := service.executionRequest(root, runID, taskID, executionID, identities, input, gitEvidence, continuity)
+	request, err := service.executionRequest(root, runID, taskID, executionID, identities, input, gitEvidence, continuity, taskMemory)
 	if err != nil {
 		return bridge.Response{}, err
 	}
@@ -212,6 +229,7 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 		RunID: runID, TaskID: taskID, Deadline: deadline, State: "preparing",
 		Coordinator: orchestrator.NativeTicket{RunID: runID, TaskID: taskID, Mode: request.Mode, Request: request},
 		Continuity:  freezeNativeContinuity(continuity),
+		Memory:      freezeNativeMemory(taskMemory),
 	}
 	if err := createNativeTicket(paths.Root, document); err != nil {
 		if existing, readErr := readNativeTicket(paths.Root, ticketID); readErr == nil && sameNativeTicketIdentity(existing, document) {
@@ -282,12 +300,16 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 	if err != nil {
 		return bridge.Response{}, err
 	}
+	taskMemory := thawNativeMemory(document.Memory, root)
 	receipt, err := coordinator.CompleteNative(ctx, document.Coordinator, input.Result)
 	if err != nil {
 		if errors.Is(err, orchestrator.ErrDurability) {
 			return bridge.Response{}, bridge.ErrDenied
 		}
 		continuityResult, continuityErr := service.completeContinuity(context.WithoutCancel(ctx), continuity, document.Input, document.TaskID, nil, true)
+		if continuity == nil {
+			continuityResult.memoryRefs, continuityErr = service.completeTaskMemory(context.WithoutCancel(ctx), taskMemory, document.Input, document.RunID, document.TaskID, nil, true)
+		}
 		if continuityErr != nil {
 			return bridge.Response{}, errors.Join(normalizeProviderError(err), continuityErr)
 		}
@@ -313,6 +335,12 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 	continuityResult, err := service.completeContinuity(context.WithoutCancel(ctx), continuity, document.Input, document.TaskID, result, false)
 	if err != nil {
 		return bridge.Response{}, err
+	}
+	if continuity == nil {
+		continuityResult.memoryRefs, err = service.completeTaskMemory(context.WithoutCancel(ctx), taskMemory, document.Input, document.RunID, document.TaskID, result, false)
+		if err != nil {
+			return bridge.Response{}, err
+		}
 	}
 	response := bridge.Response{
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
@@ -366,6 +394,7 @@ func (service *Service) Fail(ctx context.Context, workspace string, input bridge
 	if err != nil {
 		return bridge.Response{}, err
 	}
+	taskMemory := thawNativeMemory(document.Memory, root)
 	state, started, err := nativeChronicleTaskState(ctx, paths.Root, document)
 	if err != nil {
 		return bridge.Response{}, err
@@ -405,6 +434,12 @@ func (service *Service) Fail(ctx context.Context, workspace string, input bridge
 	if err != nil {
 		return bridge.Response{}, err
 	}
+	if continuity == nil {
+		continuityResult.memoryRefs, err = service.completeTaskMemory(context.WithoutCancel(ctx), taskMemory, document.Input, document.RunID, document.TaskID, nil, true)
+		if err != nil {
+			return bridge.Response{}, err
+		}
+	}
 	response := bridge.Response{
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
 		RunID: document.RunID, TaskID: document.TaskID, CapsuleID: continuityResult.capsuleID, StateVersion: continuityResult.stateVersion,
@@ -432,7 +467,7 @@ func (service *Service) ReadNative(ctx context.Context, workspace string, input 
 		return bridge.Response{}, err
 	}
 	defer release()
-	if document.State != "prepared" || document.Input.Operation != bridge.ReadFiles || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) || sensitivepaths.IsSensitive(input.Path) {
+	if document.State != "prepared" || document.Input.Operation != bridge.ReadFiles && document.Input.Operation != bridge.AnalyzeStructure || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) || sensitivepaths.IsSensitive(input.Path) {
 		return bridge.Response{}, bridge.ErrDenied
 	}
 	leaseGuard, err := acquireOwnedNativeLeaseGuard(paths.Root, document.TicketID)
@@ -447,6 +482,83 @@ func (service *Service) ReadNative(ctx context.Context, workspace string, input 
 	return bridge.Response{
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
 		RunID: document.RunID, TaskID: document.TaskID, Status: "reading", Read: &read,
+	}, nil
+}
+
+// QueryNativeCodeGraph serves one bounded structural query to the child session
+// that owns a prepared analyze-structure ticket. The child never receives
+// process, MCP, lifecycle, or index administration access.
+func (service *Service) QueryNativeCodeGraph(ctx context.Context, workspace string, input bridge.NativeCodeGraphRequest) (bridge.Response, error) {
+	if err := bridge.ValidateNativeCodeGraph(input); err != nil {
+		return bridge.Response{}, err
+	}
+	root, paths, document, release, err := service.openNativeTicket(ctx, workspace, input.TicketID)
+	if err != nil {
+		return bridge.Response{}, err
+	}
+	defer release()
+	if document.State != "prepared" || document.Input.Operation != bridge.AnalyzeStructure || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) {
+		return bridge.Response{}, bridge.ErrDenied
+	}
+	if len(document.CodeGraph) >= nativeMaxCodeGraphQueries {
+		return bridge.Response{}, bridge.ErrDenied
+	}
+	workspaceInfo, err := os.Lstat(root)
+	if err != nil || !workspaceInfo.IsDir() || workspaceInfo.Mode()&os.ModeSymlink != 0 {
+		return bridge.Response{}, bridge.ErrDenied
+	}
+	workspaceID, ok := nativeFileIdentity(workspaceInfo)
+	if !ok || workspaceID != document.WorkspaceID {
+		return bridge.Response{}, bridge.ErrDenied
+	}
+	leaseGuard, err := acquireOwnedNativeLeaseGuard(paths.Root, document.TicketID)
+	if err != nil {
+		return bridge.Response{}, err
+	}
+	defer leaseGuard.Release()
+	runtime, err := service.newCodeGraph()
+	if err != nil {
+		return bridge.Response{}, err
+	}
+	queryContext, cancel := context.WithTimeout(ctx, nativeCodeGraphTimeout)
+	defer cancel()
+	result, err := runtime.Query(queryContext, root, codegraph.Request{
+		Operation: codegraph.Operation(input.Operation), Query: input.Query, Symbol: input.Symbol,
+		Files: append([]string(nil), input.Files...), Depth: input.Depth, MaxFiles: input.MaxFiles,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return bridge.Response{}, err
+		case errors.Is(err, codegraph.ErrUnavailable):
+			return bridge.Response{}, bridge.ErrUnavailable
+		case errors.Is(err, codegraph.ErrInvalid):
+			return bridge.Response{}, bridge.ErrInvalid
+		default:
+			return bridge.Response{}, fmt.Errorf("%w: bounded CodeGraph query", bridge.ErrExecution)
+		}
+	}
+	requestData, err := json.Marshal(input)
+	if err != nil {
+		return bridge.Response{}, bridge.ErrExecution
+	}
+	inputDigest := sha256.Sum256(requestData)
+	receipt := bridge.NativeCodeGraphReceipt{
+		Operation: input.Operation, InputSHA256: "sha256-" + hex.EncodeToString(inputDigest[:]),
+		OutputSHA256: result.OutputSHA256, StartedAt: result.StartedAt.UTC().Format(time.RFC3339Nano),
+		FinishedAt: result.FinishedAt.UTC().Format(time.RFC3339Nano),
+	}
+	document.CodeGraph = append(document.CodeGraph, receipt)
+	if err := writeNativeTicket(paths.Root, document); err != nil {
+		return bridge.Response{}, fmt.Errorf("%w: persist CodeGraph receipt", bridge.ErrExecution)
+	}
+	return bridge.Response{
+		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
+		RunID: document.RunID, TaskID: document.TaskID, Status: "analyzing",
+		CodeGraph: &bridge.NativeCodeGraphResult{
+			Operation: input.Operation, Format: result.Format, Content: result.Content, OutputSHA256: result.OutputSHA256,
+			StartedAt: result.StartedAt.UTC().Format(time.RFC3339Nano), FinishedAt: result.FinishedAt.UTC().Format(time.RFC3339Nano),
+		},
 	}, nil
 }
 
@@ -475,7 +587,7 @@ func (service *Service) nativeCoordinator(ctx context.Context, paths config.Path
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}
-	continuity, err := thawNativeContinuity(ctx, paths, document.Continuity, document.TaskID)
+	continuity, err := thawNativeContinuity(ctx, paths, root, document.Continuity, document.TaskID)
 	return coordinator, continuity, err
 }
 
@@ -490,7 +602,25 @@ func freezeNativeContinuity(state *continuityState) *nativeContinuityState {
 	}
 }
 
-func thawNativeContinuity(ctx context.Context, paths config.Paths, frozen *nativeContinuityState, taskID string) (*continuityState, error) {
+func freezeNativeMemory(state *taskMemoryState) *nativeMemoryState {
+	if state == nil {
+		return nil
+	}
+	return &nativeMemoryState{Project: state.project, RetrievedIDs: memoryIDs(state.retrievedMemories)}
+}
+
+func thawNativeMemory(frozen *nativeMemoryState, workspace string) *taskMemoryState {
+	if frozen == nil {
+		return nil
+	}
+	items := make([]memory.MemoryResult, 0, len(frozen.RetrievedIDs))
+	for _, id := range frozen.RetrievedIDs {
+		items = append(items, memory.MemoryResult{ID: id, Project: frozen.Project, Scope: memory.ScopeProject})
+	}
+	return &taskMemoryState{project: frozen.Project, workspace: workspace, retrievedMemories: items}
+}
+
+func thawNativeContinuity(ctx context.Context, paths config.Paths, workspace string, frozen *nativeContinuityState, taskID string) (*continuityState, error) {
 	if frozen == nil {
 		return nil, nil
 	}
@@ -503,7 +633,7 @@ func thawNativeContinuity(ctx context.Context, paths config.Paths, frozen *nativ
 		return nil, fmt.Errorf("%w: continuity log", bridge.ErrExecution)
 	}
 	state := &continuityState{
-		mode: frozen.Mode, runID: frozen.RunID, project: frozen.Project, store: store, log: log,
+		mode: frozen.Mode, runID: frozen.RunID, project: frozen.Project, workspace: workspace, store: store, log: log,
 		snapshot: frozen.Snapshot, staged: frozen.Staged, selectionID: frozen.SelectionID, decisionID: frozen.DecisionID,
 		preflightID: frozen.PreflightID, retrievedMemories: append([]memory.MemoryResult(nil), frozen.RetrievedMemories...),
 	}
@@ -649,7 +779,7 @@ func acquireNativeLease(root, ticketID, deadline string) error {
 }
 
 func nativeDispatchMayShareLease(input bridge.DispatchRequest) bool {
-	return input.Operation == bridge.ReadFiles && input.Continuity == bridge.ContinuitySingle
+	return (input.Operation == bridge.ReadFiles || input.Operation == bridge.AnalyzeStructure) && input.Continuity == bridge.ContinuitySingle
 }
 
 func acquireNativeLeaseMode(root, ticketID, deadline string, sharedRead bool) error {
@@ -1292,8 +1422,11 @@ func (service *Service) openNativeTicket(ctx context.Context, workspace, ticketI
 		return "", config.Paths{}, nativeTicketDocument{}, nil, err
 	}
 	lockPath += ".lock"
-	lock, err := orchestrator.AcquireFileLock(lockPath)
+	lock, err := acquireBoundedControlPlaneLock(ctx, lockPath)
 	if err != nil {
+		if errors.Is(err, orchestrator.ErrCoordinatorBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return "", config.Paths{}, nativeTicketDocument{}, nil, bridge.ErrUnavailable
+		}
 		return "", config.Paths{}, nativeTicketDocument{}, nil, bridge.ErrDenied
 	}
 	release := lock.Release
@@ -1306,6 +1439,24 @@ func (service *Service) openNativeTicket(ctx context.Context, workspace, ticketI
 		return "", config.Paths{}, nativeTicketDocument{}, nil, err
 	}
 	return root, paths, document, release, nil
+}
+
+func acquireBoundedControlPlaneLock(ctx context.Context, path string) (orchestrator.FileLock, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, nativeAdmissionWait)
+	defer cancel()
+	for {
+		lock, err := orchestrator.AcquireFileLock(path)
+		if err == nil || !errors.Is(err, orchestrator.ErrCoordinatorBusy) {
+			return lock, err
+		}
+		timer := time.NewTimer(nativeAdmissionRetry)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return orchestrator.FileLock{}, waitCtx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 var _ bridge.NativeRuntime = (*Service)(nil)

@@ -19,9 +19,10 @@ type Options struct {
 }
 
 type Paths struct {
-	Root       string
-	Database   string
-	CurrentRun string
+	Root           string
+	Database       string
+	LegacyDatabase string
+	CurrentRun     string
 }
 
 func Prepare(ctx context.Context, opts Options) (Paths, error) {
@@ -49,7 +50,7 @@ func Prepare(ctx context.Context, opts Options) (Paths, error) {
 		}
 		return Paths{}, err
 	}
-	return Paths{Root: root, Database: filepath.Join(root, "memory.db"), CurrentRun: filepath.Join(root, "current-run.json")}, nil
+	return pathsForRoot(opts, root)
 }
 
 func PathsFor(opts Options) (Paths, error) {
@@ -57,7 +58,32 @@ func PathsFor(opts Options) (Paths, error) {
 	if err != nil {
 		return Paths{}, err
 	}
-	return Paths{Root: root, Database: filepath.Join(root, "memory.db"), CurrentRun: filepath.Join(root, "current-run.json")}, nil
+	return pathsForRoot(opts, root)
+}
+
+func pathsForRoot(opts Options, root string) (Paths, error) {
+	database := filepath.Join(root, "memory.db")
+	legacy := ""
+	if opts.StorageRoot == "" && !opts.ProjectLocal {
+		home := opts.HomeDir
+		var err error
+		if home == "" {
+			home, err = os.UserHomeDir()
+			if err != nil {
+				return Paths{}, fmt.Errorf("resolve home: %w", err)
+			}
+		}
+		database = filepath.Join(filepath.Clean(home), ".vgxness", "memory.db")
+		if database != filepath.Join(root, "memory.db") {
+			legacy = filepath.Join(root, "memory.db")
+		}
+	}
+	return Paths{
+		Root:           root,
+		Database:       database,
+		LegacyDatabase: legacy,
+		CurrentRun:     filepath.Join(root, "current-run.json"),
+	}, nil
 }
 
 func cleanupCreatedRoot(root string) { _ = os.Remove(root) }

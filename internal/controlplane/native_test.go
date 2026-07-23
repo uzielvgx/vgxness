@@ -16,12 +16,27 @@ import (
 
 	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/chronicle"
+	"github.com/vgxness/vgxness/internal/codegraph"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/gatekeeper"
+	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/orchestrator"
 	"github.com/vgxness/vgxness/internal/providers"
 	"github.com/vgxness/vgxness/internal/registry"
 )
+
+type fakeCodeGraphRuntime struct {
+	workspace string
+	request   codegraph.Request
+	result    codegraph.Result
+	err       error
+}
+
+func (runtime *fakeCodeGraphRuntime) Query(_ context.Context, workspace string, request codegraph.Request) (codegraph.Result, error) {
+	runtime.workspace = workspace
+	runtime.request = request
+	return runtime.result, runtime.err
+}
 
 func TestNativeDispatchPreparesChildAndAcceptsIdempotentlyWithoutRunningAdapter(t *testing.T) {
 	workspace := t.TempDir()
@@ -111,6 +126,172 @@ func TestNativeDispatchPreparesChildAndAcceptsIdempotentlyWithoutRunningAdapter(
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: next.Prepared.TicketID, ParentSessionID: "ses_parent", ChildSessionID: "ses_next", Category: "native-subagent-cancelled",
 	}); err != nil {
 		t.Fatalf("cleanup next dispatch: %v", err)
+	}
+}
+
+func TestNativeDispatchHydratesAndPersistsTaskMemory(t *testing.T) {
+	workspace := t.TempDir()
+	storage := filepath.Join(t.TempDir(), "storage")
+	if err := os.MkdirAll(storage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := memory.Open(context.Background(), filepath.Join(storage, "memory.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := store.ResolveProject(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := memory.NewMemoryService(store, "test", nil).Save(context.Background(), memory.SaveRequest{
+		Title: "Architecture discovery", Content: "Architecture uses a durable native ticket broker.", Project: project, Scope: memory.ScopeProject, Type: "discovery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	service := New(Options{
+		StorageRoot: storage, Memory: sqliteContinuityMemory{}, Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return nativeTestAdapter(now), nil },
+	})
+	prepared, err := service.Prepare(context.Background(), workspace, bridge.DispatchRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-memory", Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
+		Goal: "Inspect architecture", ParentSessionID: "ses_parent", ParentMessageID: "msg_parent", ChildSessionID: "ses_child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := readNativeTicket(storage, prepared.Prepared.TicketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packet struct {
+		Context struct {
+			Inputs struct {
+				MemoryContext []struct {
+					ID      string `json:"id"`
+					Content string `json:"content"`
+				} `json:"memoryContext"`
+			} `json:"inputs"`
+		} `json:"context"`
+	}
+	if err := json.Unmarshal(document.Coordinator.Prepared.Invocation.Packet, &packet); err != nil {
+		t.Fatal(err)
+	}
+	if len(packet.Context.Inputs.MemoryContext) != 1 || packet.Context.Inputs.MemoryContext[0].ID != seed.ID || packet.Context.Inputs.MemoryContext[0].Content != "Architecture uses a durable native ticket broker." {
+		t.Fatalf("native packet did not receive hydrated memory: context=%#v state=%#v packet=%s", packet.Context.Inputs.MemoryContext, document.Memory, document.Coordinator.Prepared.Invocation.Packet)
+	}
+	completed, err := service.Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ParentSessionID: "ses_parent",
+		ChildSessionID: "ses_child", MessageID: "msg_child", Result: nativeResult(t, prepared.TaskID),
+	})
+	if err != nil || len(completed.MemoryRefs) != 2 || completed.MemoryRefs[0] != seed.ID {
+		t.Fatalf("task memory refs=%#v err=%v", completed.MemoryRefs, err)
+	}
+	store, err = memory.OpenRead(context.Background(), filepath.Join(storage, "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	saved, err := store.Get(context.Background(), completed.MemoryRefs[1], project, memory.ScopeProject)
+	if err != nil || saved.Type != "task-result" || saved.TopicKey != "task/"+completed.RunID+"/"+completed.TaskID || len(saved.References) != 1 || saved.References[0] != seed.ID {
+		t.Fatalf("saved task memory=%#v err=%v", saved, err)
+	}
+}
+
+func TestTaskMemoryCandidatesAreValidatedAndContradictionsNeedReview(t *testing.T) {
+	workspace := t.TempDir()
+	storage := filepath.Join(t.TempDir(), "storage")
+	if err := os.MkdirAll(storage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime := sqliteContinuityMemory{}
+	project, err := runtime.ResolveProject(context.Background(), config.Options{StorageRoot: storage, ProjectDir: workspace}, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(Options{StorageRoot: storage, Memory: runtime})
+	state := &taskMemoryState{project: project, workspace: workspace}
+	result := func(taskID, content string, confidence float64) json.RawMessage {
+		data, marshalErr := json.Marshal(map[string]any{
+			"resultId": "result-" + taskID, "taskId": taskID, "status": "success",
+			"summary": "bounded work completed", "nextRecommended": "No further action.",
+			"memoryCandidates": []any{map[string]any{
+				"type": "architecture", "title": "Runtime authority", "content": content,
+				"topicKey": "runtime-authority", "reason": "Verified by the bounded workspace inspection.", "confidence": confidence,
+			}},
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return data
+	}
+	input := bridge.DispatchRequest{Goal: "Inspect runtime authority"}
+	firstRefs, err := service.completeTaskMemory(context.Background(), state, input, "run-first", "task-first", result("task-first", "VGXNESS owns runtime authority.", 0.95), false)
+	if err != nil || len(firstRefs) != 2 {
+		t.Fatalf("first governed candidate refs=%#v err=%v", firstRefs, err)
+	}
+	secondRefs, err := service.completeTaskMemory(context.Background(), state, input, "run-second", "task-second", result("task-second", "OpenCode owns runtime authority.", 0.95), false)
+	if err != nil || len(secondRefs) != 2 || secondRefs[1] != firstRefs[1] {
+		t.Fatalf("contradictory candidate refs=%#v first=%#v err=%v", secondRefs, firstRefs, err)
+	}
+	store, err := memory.OpenRead(context.Background(), filepath.Join(storage, "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := store.Get(context.Background(), secondRefs[1], project, memory.ScopeProject)
+	if err != nil || candidate.State != memory.StateNeedsReview || !strings.Contains(candidate.Content, "Previous value:") || candidate.TopicKey != "agent/architecture/runtime-authority" {
+		t.Fatalf("governed candidate=%#v err=%v", candidate, err)
+	}
+	originalProposal := candidate.Content
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	retryRefs, err := service.completeTaskMemory(context.Background(), state, input, "run-retry", "task-retry", result("task-retry", "OpenCode owns runtime authority.", 0.95), false)
+	if err != nil || len(retryRefs) != 2 || retryRefs[1] != secondRefs[1] {
+		t.Fatalf("candidate retry refs=%#v err=%v", retryRefs, err)
+	}
+	store, err = memory.OpenRead(context.Background(), filepath.Join(storage, "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err = store.Get(context.Background(), retryRefs[1], project, memory.ScopeProject)
+	if err != nil || candidate.Content != originalProposal || strings.Count(candidate.Content, "Proposed update:") != 1 {
+		t.Fatalf("candidate retry mutated proposal=%#v err=%v", candidate, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rejectedRefs, err := service.completeTaskMemory(context.Background(), state, input, "run-rejected", "task-rejected", result("task-rejected", "api_key=secret-value", 0.99), false)
+	if err != nil || len(rejectedRefs) != 1 {
+		t.Fatalf("sensitive candidate was not rejected: refs=%#v err=%v", rejectedRefs, err)
+	}
+	lowConfidenceRefs, err := service.completeTaskMemory(context.Background(), state, input, "run-low", "task-low", result("task-low", "An unverified guess.", 0.5), false)
+	if err != nil || len(lowConfidenceRefs) != 1 {
+		t.Fatalf("low-confidence candidate was not rejected: refs=%#v err=%v", lowConfidenceRefs, err)
+	}
+	sensitiveResult := result("task-sensitive", "safe candidate", 0.99)
+	var sensitiveDocument map[string]any
+	if err := json.Unmarshal(sensitiveResult, &sensitiveDocument); err != nil {
+		t.Fatal(err)
+	}
+	sensitiveDocument["summary"] = "authorization: bearer top-secret"
+	sensitiveResult, err = json.Marshal(sensitiveDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sensitiveRefs, err := service.completeTaskMemory(context.Background(), state, input, "run-sensitive", "task-sensitive", sensitiveResult, false)
+	if err != nil || len(sensitiveRefs) != 0 {
+		t.Fatalf("sensitive automatic task memory persisted: refs=%#v err=%v", sensitiveRefs, err)
+	}
+	for _, content := range []string{`{"password": "value"}`, "token = value", "-----BEGIN OPENSSH PRIVATE KEY-----"} {
+		if !containsSensitiveMaterial(content) {
+			t.Fatalf("sensitive material was not recognized: %q", content)
+		}
 	}
 }
 
@@ -226,6 +407,139 @@ func TestNativeReadBrokerBindsTicketAndRejectsSensitiveAliases(t *testing.T) {
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_forged", Path: "internal/app.go",
 	}); !errors.Is(err, bridge.ErrDenied) {
 		t.Fatalf("forged child read was not denied: %v", err)
+	}
+	if _, err := service.Fail(context.Background(), workspace, bridge.NativeFailureRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ParentSessionID: "ses_parent", ChildSessionID: "ses_child", Category: "native-subagent-failed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeReadWaitsForBriefTicketLockContention(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("bounded read\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	storageRoot := filepath.Join(t.TempDir(), "storage")
+	now := time.Now().UTC()
+	service := New(Options{
+		StorageRoot: storageRoot, Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return nativeTestAdapter(now), nil },
+	})
+	prepared, err := service.Prepare(context.Background(), workspace, bridge.DispatchRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-lock-wait", Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
+		Goal: "Read one safe source file", ParentSessionID: "ses_parent", ParentMessageID: "msg_parent", ChildSessionID: "ses_child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := config.PathsFor(config.Options{StorageRoot: storageRoot, ProjectDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticketPath, err := nativeTicketPath(paths.Root, prepared.Prepared.TicketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := orchestrator.AcquireFileLock(ticketPath + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		lock.Release()
+		close(released)
+	}()
+	read, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child", Path: "README.md",
+	})
+	<-released
+	if err != nil || read.Read == nil || read.Read.Content != "bounded read\n" {
+		t.Fatalf("read=%#v err=%v", read, err)
+	}
+	lock, err = orchestrator.AcquireFileLock(ticketPath + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	_, err = service.ReadNative(blockedCtx, workspace, bridge.NativeReadRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child", Path: "README.md",
+	})
+	lock.Release()
+	if !errors.Is(err, bridge.ErrUnavailable) {
+		t.Fatalf("ticket lock timeout should be recoverable, got %v", err)
+	}
+}
+
+func TestNativeCodeGraphBrokerBindsStructuralTicketAndPersistsReceipt(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	codegraphRuntime := &fakeCodeGraphRuntime{result: codegraph.Result{
+		Operation: codegraph.Explore, Format: "text", Content: "Dispatch calls Prepare",
+		OutputSHA256: "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		StartedAt:    now, FinishedAt: now.Add(time.Millisecond),
+	}}
+	service := New(Options{
+		StorageRoot: filepath.Join(t.TempDir(), "storage"), Now: func() time.Time { return now },
+		AdapterFactory:   func(string) (providers.Adapter, error) { return nativeTestAdapter(now), nil },
+		CodeGraphFactory: func() (codegraph.Runtime, error) { return codegraphRuntime, nil },
+	})
+	prepared, err := service.Prepare(context.Background(), workspace, bridge.DispatchRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-codegraph", Model: "openai/gpt-5.6-sol", Operation: bridge.AnalyzeStructure,
+		Goal: "Trace dispatch to native completion", ParentSessionID: "ses_parent", ParentMessageID: "msg_parent", ChildSessionID: "ses_child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.QueryNativeCodeGraph(context.Background(), workspace, bridge.NativeCodeGraphRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child",
+		Operation: bridge.CodeGraphExplore, Query: "Dispatch Prepare completion", MaxFiles: 8,
+	})
+	resolvedWorkspace, resolveErr := filepath.EvalSymlinks(workspace)
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	if err != nil || response.CodeGraph == nil || response.CodeGraph.Content != "Dispatch calls Prepare" || response.CodeGraph.OutputSHA256 != codegraphRuntime.result.OutputSHA256 || codegraphRuntime.workspace != resolvedWorkspace || codegraphRuntime.request.Operation != codegraph.Explore {
+		t.Fatalf("response=%#v runtime=%#v err=%v", response, codegraphRuntime, err)
+	}
+	if _, err := service.QueryNativeCodeGraph(context.Background(), workspace, bridge.NativeCodeGraphRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_forged",
+		Operation: bridge.CodeGraphStatus,
+	}); !errors.Is(err, bridge.ErrDenied) {
+		t.Fatalf("forged structural query was not denied: %v", err)
+	}
+	read, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child", Path: "go.mod",
+	})
+	if err != nil || read.Read == nil || read.Read.Content != "module example\n" {
+		t.Fatalf("analyze-structure native-read fallback failed: response=%#v err=%v", read, err)
+	}
+	_, _, document, release, err := service.openNativeTicket(context.Background(), workspace, prepared.Prepared.TicketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if len(document.CodeGraph) != 1 || document.CodeGraph[0].Operation != bridge.CodeGraphExplore || document.CodeGraph[0].InputSHA256 == "" {
+		t.Fatalf("CodeGraph receipt was not persisted: %#v", document.CodeGraph)
+	}
+	for query := 1; query < nativeMaxCodeGraphQueries; query++ {
+		if _, err := service.QueryNativeCodeGraph(context.Background(), workspace, bridge.NativeCodeGraphRequest{
+			ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child",
+			Operation: bridge.CodeGraphExplore, Query: "Dispatch Prepare completion", MaxFiles: 8,
+		}); err != nil {
+			t.Fatalf("bounded structural query %d failed: %v", query+1, err)
+		}
+	}
+	if _, err := service.QueryNativeCodeGraph(context.Background(), workspace, bridge.NativeCodeGraphRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child",
+		Operation: bridge.CodeGraphExplore, Query: "Dispatch Prepare completion", MaxFiles: 8,
+	}); !errors.Is(err, bridge.ErrDenied) {
+		t.Fatalf("structural query budget was not enforced: %v", err)
 	}
 	if _, err := service.Fail(context.Background(), workspace, bridge.NativeFailureRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ParentSessionID: "ses_parent", ChildSessionID: "ses_child", Category: "native-subagent-failed",

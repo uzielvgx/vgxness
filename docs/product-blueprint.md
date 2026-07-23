@@ -26,7 +26,7 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 
 **Contracts-only:** Independently authored Draft 2020-12 schemas for future SDD, routing, artifact, and continuity paths define records that the current bounded runtime does not yet exercise. Schemas used by the current control plane are validated at runtime.
 
-**Implemented/Partial:** Contract-validated delegation plans, deterministic dependency waves, native Navigator/task sessions, a file-backed logical-slot and owner/epoch authority, prerequisite-gated prepared admission, fail-closed dispatch classification, checkpoint takeover, persisted bounded dependency results, authority-accepted joins, and content-bound Delivery Authority receipts now power the bounded product path. Full SDD phase/artifact workflows, automatic delivery wiring, richer autonomy UX, keyboard TUI, additional adapters, and advanced semantic-memory lifecycle remain planned.
+**Implemented/Partial:** A goal-first `vgxness_run` facade with `fast`, `auto`, and `deep` profiles now reuses contract-validated delegation plans, deterministic dependency waves, native Navigator/task sessions, file-backed logical-slot and owner/epoch authority, prerequisite-gated prepared admission, fail-closed dispatch classification, checkpoint takeover, persisted bounded dependency results, authority-accepted joins, and content-bound Delivery Authority receipts. Agent-proposed durable memory is validated and persisted by VGXNESS, with contradictions held for review. Full write/shell/network capability brokers, SDD phase/artifact workflows, automatic delivery wiring, richer autonomy UX, keyboard TUI, additional adapters, and advanced semantic retrieval remain planned.
 
 ### Document and translation contract
 
@@ -58,7 +58,7 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 3. **Verify before agreeing.** Claims about code, tools, state, and completion require evidence.
 4. **Coordinate through boundaries.** Orchestration, execution, review, storage, skills, permissions, and adapters remain separable.
 5. **Keep state inspectable.** Chronicle records operational truth; semantic memory preserves durable meaning.
-6. **Use the smallest capable path.** Simple work stays direct; complexity and risk receive proportionate planning and validation.
+6. **Use the fastest sufficient path.** Simple work stays direct; one bounded concern defaults to one task; independent evidence overlaps only when it saves time; complexity and risk receive proportionate planning and validation.
 7. **Fail closed at unsafe boundaries.** Missing capabilities, invalid contracts, stale adapters, or absent approvals stop advancement.
 8. **Preserve continuity, not transcript bulk.** Pass thin packets and durable references rather than entire conversations.
 9. **Design for recovery.** Every bounded operation has visible failure, cancellation, and a safe next action.
@@ -117,7 +117,7 @@ planned TUI / implemented CLI+bridge / planned local MCP
 | --- | --- |
 | Go binary and composition | **Implemented:** Build a local binary and wire configuration, inspection, memory, Chronicle, Registry/Gatekeeper, providers, coordinator, setup, and bridge commands. |
 | CLI, self-installation, and storage roots | **Implemented:** Install immutable binary versions behind a permanent launcher, activate updates atomically, roll back one level, resolve project/user storage, and provide status, doctor, memory, guided setup, integration, and bounded bridge commands. |
-| Owned MemoryStore | **Implemented:** SQLite/FTS5 semantic storage, migrations, lifecycle fields, filtered search, and provenance-backed records. |
+| Owned MemoryStore | **Implemented:** SQLite/FTS5 semantic storage, migrations, lifecycle fields, filtered search, provenance-backed records, bounded automatic retrieval, and governed agent-proposed candidates with contradiction review. |
 | Chronicle | **Implemented/Partial:** Implements strict current-run reading, verified JSONL events, immutable content-addressed active snapshots, atomic pointer commits, terminal repair, task-state replay, cancellation evidence, and bounded recovery reconstruction. General checkpoint/artifact continuity remains planned. |
 | Schemas and semantic rules | **Implemented/Contracts-only:** Current packets, events, snapshots, registry records, prompts, and results are validated at runtime; future SDD/continuity shapes remain contracts-only. |
 | Keyboard-first TUI | **Planned:** Provide setup and focused interaction without owning installation or orchestration policy. |
@@ -141,7 +141,7 @@ The wizard may detect OpenCode, CodeGraph, and OpenPencil. It may offer to insta
 
 ### Navigator interaction
 
-**Planned:** Navigator matches the user's language, distinguishes facts from recommendations, asks one blocking question at a time, explains consequential decisions, keeps the happy path concise, and selects a bounded capability instead of performing every role itself.
+**Implemented/Partial:** The OpenCode manager matches the user's language, keeps the happy path concise, and uses `vgxness_run` to select the smallest sufficient bounded plan. `fast` forces one task, `auto` permits up to four proportional tasks, and `deep` permits up to sixteen bounded tasks. Broader adapter-independent autonomy and complete SDD routing remain planned.
 
 ### Autonomy profiles
 
@@ -212,10 +212,10 @@ Phase order is evidence-driven rather than ceremonial. A phase may be skipped on
 | Concern | Status and owner |
 | --- | --- |
 | Chronicle | **Implemented/Partial:** Reads the active pointer; validates, appends, rolls back, and rereads JSONL events; derives task/cancellation state; publishes active snapshots atomically through immutable content-addressed files; and repairs interrupted terminal publication. General checkpoints and richer artifact recovery remain planned. |
-| VGXNESS MemoryStore | **Implemented:** Semantic authority for typed durable observations with identity, scope, topic, provenance, lifecycle state, references, save/search/get, and session metadata. Higher-level approval and continuity workflows remain planned. |
-| SQLite/FTS5 | **Implemented:** Owned local persistence, two migrations, deterministic filtering, and lexical retrieval behind `MemoryStore`; richer semantic indexing remains planned. |
+| VGXNESS MemoryStore | **Implemented:** Semantic authority for typed durable observations with identity, scope, topic, provenance, lifecycle state, references, save/search/get, session metadata, automatic task retrieval/capture, and governed `memoryCandidates`. Conflicting candidate updates transition to `needs_review`; broader human review UX remains planned. |
+| SQLite/FTS5 | **Implemented:** One default user database, canonical workspace bindings, project-isolated records, four migrations, safe legacy imports, deterministic filtering, and lexical retrieval behind `MemoryStore`; richer semantic indexing remains planned. |
 | Engram adapter | **Planned, optional:** Compatibility, import, and reference bridge. It may preserve external IDs and provenance but does not own VGXNESS semantics. |
-| Project/user roots | **Implemented:** Resolve project-local `.vgxness/` or user-global `~/.vgxness/projects/<project-id>/` storage. |
+| Project/user roots | **Implemented:** Resolve project-local `.vgxness/` or user-global `~/.vgxness/projects/<project-id>/` operational storage; default semantic memory is shared at `~/.vgxness/memory.db`. |
 
 Memory entries carry stable IDs, type, topic, content, provenance, timestamps, scope, lifecycle state, and references. Search starts with deterministic filters and FTS5; summaries and embeddings may supplement retrieval later without replacing source records.
 
@@ -225,9 +225,9 @@ Chronicle and semantic memory may cross-reference each other but never substitut
 
 | Stage | Owned-store behavior |
 | --- | --- |
-| Capture | **Implemented:** Accept a typed durable observation with source, scope, and evidence; reject invalid input. |
+| Capture | **Implemented:** Accept a typed durable observation with source, scope, and evidence; every terminal bounded task also writes one idempotent result observation linked to the observations it used. |
 | Normalize | **Implemented:** Assign stable identity, topic, timestamps, lifecycle metadata, and source references. |
-| Retrieve | **Implemented:** Apply deterministic filters before FTS5 ranking and return provenance. |
+| Retrieve | **Implemented:** Apply deterministic filters before FTS5 ranking, hydrate at most three records into a fixed execution-context budget, and return provenance. |
 | Compare | **Planned:** Preserve compatible, related, scoped, conflicting, or superseding relationships without deleting history silently. |
 | Review | **Planned:** Surface stale or review-due knowledge before it is trusted as current fact. |
 | Summarize | **Planned:** Create derived summaries that reference source entries rather than replacing them. |

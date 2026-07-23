@@ -22,6 +22,7 @@ const (
 	MaxOrchestrationResultBytes = 64 << 10
 	MaxNativeCompletionBytes    = MaxNativeResultBytes + MaxRequestBytes
 	MaxNativeReadBytes          = 256 << 10
+	MaxNativeCodeGraphBytes     = 512 << 10
 	MaxBridgeOutputBytes        = 3*MaxNativeResultBytes + MaxRequestBytes
 	maxModelBytes               = 512
 )
@@ -36,11 +37,18 @@ var (
 
 type Operation string
 type ContinuityMode string
+type CodeGraphOperation string
 
 const (
-	ReadFiles     Operation = "read-files"
-	WriteFiles    Operation = "write-files"
-	ReviewChanges Operation = "review-changes"
+	ReadFiles        Operation = "read-files"
+	AnalyzeStructure Operation = "analyze-structure"
+	WriteFiles       Operation = "write-files"
+	ReviewChanges    Operation = "review-changes"
+
+	CodeGraphStatus   CodeGraphOperation = "status"
+	CodeGraphExplore  CodeGraphOperation = "explore"
+	CodeGraphImpact   CodeGraphOperation = "impact"
+	CodeGraphAffected CodeGraphOperation = "affected"
 
 	ContinuitySingle   ContinuityMode = ""
 	ContinuityStart    ContinuityMode = "start"
@@ -106,6 +114,7 @@ type OrchestrationBinding struct {
 	TaskID         string `json:"taskId"`
 	ChildSessionID string `json:"childSessionId"`
 	TicketID       string `json:"ticketId"`
+	ClaimToken     string `json:"claimToken"`
 }
 
 type OrchestrateTerminalRequest struct {
@@ -126,6 +135,9 @@ type OrchestrateReferenceRequest struct {
 	ProtocolVersion string `json:"protocolVersion"`
 	OrchestrationID string `json:"orchestrationId"`
 	OwnerID         string `json:"ownerId,omitempty"`
+	TaskID          string `json:"taskId,omitempty"`
+	ChildSessionID  string `json:"childSessionId,omitempty"`
+	ClaimToken      string `json:"claimToken,omitempty"`
 }
 
 type NativeCompletionRequest struct {
@@ -159,6 +171,35 @@ type NativeReadResult struct {
 	Content    string `json:"content"`
 	NextOffset int64  `json:"nextOffset,omitempty"`
 	Truncated  bool   `json:"truncated"`
+}
+
+type NativeCodeGraphRequest struct {
+	ProtocolVersion string             `json:"protocolVersion"`
+	TicketID        string             `json:"ticketId"`
+	ChildSessionID  string             `json:"childSessionId"`
+	Operation       CodeGraphOperation `json:"operation"`
+	Query           string             `json:"query,omitempty"`
+	Symbol          string             `json:"symbol,omitempty"`
+	Files           []string           `json:"files,omitempty"`
+	Depth           int                `json:"depth,omitempty"`
+	MaxFiles        int                `json:"maxFiles,omitempty"`
+}
+
+type NativeCodeGraphResult struct {
+	Operation    CodeGraphOperation `json:"operation"`
+	Format       string             `json:"format"`
+	Content      string             `json:"content"`
+	OutputSHA256 string             `json:"outputSha256"`
+	StartedAt    string             `json:"startedAt"`
+	FinishedAt   string             `json:"finishedAt"`
+}
+
+type NativeCodeGraphReceipt struct {
+	Operation    CodeGraphOperation `json:"operation"`
+	InputSHA256  string             `json:"inputSha256"`
+	OutputSHA256 string             `json:"outputSha256"`
+	StartedAt    string             `json:"startedAt"`
+	FinishedAt   string             `json:"finishedAt"`
 }
 
 type PreparedDispatch struct {
@@ -198,36 +239,40 @@ type Receipt struct {
 }
 
 type Response struct {
-	ProtocolVersion string             `json:"protocolVersion"`
-	OK              bool               `json:"ok"`
-	Bridge          string             `json:"bridge"`
-	Provider        string             `json:"provider"`
-	Workspace       string             `json:"workspace,omitempty"`
-	RunID           string             `json:"runId,omitempty"`
-	TaskID          string             `json:"taskId,omitempty"`
-	CapsuleID       string             `json:"capsuleId,omitempty"`
-	StateVersion    int                `json:"stateVersion,omitempty"`
-	MemoryRefs      []string           `json:"memoryRefs,omitempty"`
-	Status          string             `json:"status"`
-	Result          json.RawMessage    `json:"result,omitempty"`
-	Receipt         *Receipt           `json:"receipt,omitempty"`
-	Prepared        *PreparedDispatch  `json:"prepared,omitempty"`
-	Read            *NativeReadResult  `json:"read,omitempty"`
-	Orchestration   *OrchestrationView `json:"orchestration,omitempty"`
-	Error           *Error             `json:"error,omitempty"`
+	ProtocolVersion string                 `json:"protocolVersion"`
+	OK              bool                   `json:"ok"`
+	Bridge          string                 `json:"bridge"`
+	Provider        string                 `json:"provider"`
+	Workspace       string                 `json:"workspace,omitempty"`
+	RunID           string                 `json:"runId,omitempty"`
+	TaskID          string                 `json:"taskId,omitempty"`
+	CapsuleID       string                 `json:"capsuleId,omitempty"`
+	StateVersion    int                    `json:"stateVersion,omitempty"`
+	MemoryRefs      []string               `json:"memoryRefs,omitempty"`
+	Status          string                 `json:"status"`
+	Result          json.RawMessage        `json:"result,omitempty"`
+	Receipt         *Receipt               `json:"receipt,omitempty"`
+	Prepared        *PreparedDispatch      `json:"prepared,omitempty"`
+	Read            *NativeReadResult      `json:"read,omitempty"`
+	CodeGraph       *NativeCodeGraphResult `json:"codegraph,omitempty"`
+	Orchestration   *OrchestrationView     `json:"orchestration,omitempty"`
+	Error           *Error                 `json:"error,omitempty"`
 }
 
 type OrchestrationPreparedTask struct {
-	TaskID   string           `json:"taskId"`
-	Prepared PreparedDispatch `json:"prepared"`
+	TaskID         string           `json:"taskId"`
+	ChildSessionID string           `json:"childSessionId"`
+	Prepared       PreparedDispatch `json:"prepared"`
 }
 
 type OrchestrationView struct {
 	OrchestrationID string                      `json:"orchestrationId"`
 	ScheduleID      string                      `json:"scheduleId"`
 	OwnerID         string                      `json:"ownerId"`
+	ParentSessionID string                      `json:"parentSessionId"`
 	Status          string                      `json:"status"`
 	CurrentWave     int                         `json:"currentWave"`
+	NextWave        int                         `json:"nextWave"`
 	Plan            navigator.Plan              `json:"plan"`
 	Prepared        []OrchestrationPreparedTask `json:"prepared,omitempty"`
 	Join            json.RawMessage             `json:"join,omitempty"`
@@ -244,6 +289,7 @@ type NativeRuntime interface {
 	Complete(context.Context, string, NativeCompletionRequest) (Response, error)
 	Fail(context.Context, string, NativeFailureRequest) (Response, error)
 	ReadNative(context.Context, string, NativeReadRequest) (Response, error)
+	QueryNativeCodeGraph(context.Context, string, NativeCodeGraphRequest) (Response, error)
 }
 
 type OrchestrationRuntime interface {
@@ -356,6 +402,14 @@ func DecodeNativeRead(reader io.Reader) (NativeReadRequest, error) {
 	return request, nil
 }
 
+func DecodeNativeCodeGraph(reader io.Reader) (NativeCodeGraphRequest, error) {
+	var request NativeCodeGraphRequest
+	if err := decodeExact(reader, MaxRequestBytes, &request); err != nil || ValidateNativeCodeGraph(request) != nil {
+		return NativeCodeGraphRequest{}, ErrInvalid
+	}
+	return request, nil
+}
+
 func ValidateNativeCompletion(request NativeCompletionRequest) error {
 	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ParentSessionID) || !validNativeIdentity(request.ChildSessionID) || !validNativeIdentity(request.MessageID) || len(request.Result) == 0 || len(request.Result) > MaxNativeResultBytes || !json.Valid(request.Result) {
 		return ErrInvalid
@@ -377,6 +431,38 @@ func ValidateNativeFailure(request NativeFailureRequest) error {
 
 func ValidateNativeRead(request NativeReadRequest) error {
 	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ChildSessionID) || request.Path == "" || len(request.Path) > 4096 || strings.ContainsRune(request.Path, '\x00') || filepath.IsAbs(request.Path) || !filepath.IsLocal(request.Path) || filepath.Clean(request.Path) != request.Path || request.Path == "." || strings.HasSuffix(request.Path, "/") || strings.HasSuffix(request.Path, `\`) || request.Offset < 0 || request.Limit < 0 || request.Limit > MaxNativeReadBytes {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func ValidateNativeCodeGraph(request NativeCodeGraphRequest) error {
+	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ChildSessionID) || request.Depth < 0 || request.Depth > 5 || request.MaxFiles < 0 || request.MaxFiles > 12 {
+		return ErrInvalid
+	}
+	switch request.Operation {
+	case CodeGraphStatus:
+		if strings.TrimSpace(request.Query) != "" || strings.TrimSpace(request.Symbol) != "" || len(request.Files) != 0 {
+			return ErrInvalid
+		}
+	case CodeGraphExplore:
+		if strings.TrimSpace(request.Query) == "" || len(request.Query) > 4096 || strings.ContainsRune(request.Query, '\x00') || strings.TrimSpace(request.Symbol) != "" || len(request.Files) != 0 {
+			return ErrInvalid
+		}
+	case CodeGraphImpact:
+		if strings.TrimSpace(request.Symbol) == "" || len(request.Symbol) > 512 || strings.ContainsRune(request.Symbol, '\x00') || strings.ContainsAny(request.Symbol, "\r\n") || strings.TrimSpace(request.Query) != "" || len(request.Files) != 0 {
+			return ErrInvalid
+		}
+	case CodeGraphAffected:
+		if strings.TrimSpace(request.Query) != "" || strings.TrimSpace(request.Symbol) != "" || len(request.Files) == 0 || len(request.Files) > 32 {
+			return ErrInvalid
+		}
+		for _, path := range request.Files {
+			if path == "" || len(path) > 4096 || strings.ContainsRune(path, '\x00') || filepath.IsAbs(path) || !filepath.IsLocal(path) || filepath.Clean(path) != path || path == "." {
+				return ErrInvalid
+			}
+		}
+	default:
 		return ErrInvalid
 	}
 	return nil
@@ -406,7 +492,7 @@ func ValidateOrchestrateWave(request OrchestrateWaveRequest) error {
 	}
 	seenTasks, seenChildren, seenTickets := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, binding := range request.Bindings {
-		if !validNativeIdentity(binding.TaskID) || !validNativeIdentity(binding.ChildSessionID) || !validNativeIdentity(binding.TicketID) || seenTasks[binding.TaskID] || seenChildren[binding.ChildSessionID] || seenTickets[binding.TicketID] {
+		if !validNativeIdentity(binding.TaskID) || !validNativeIdentity(binding.ChildSessionID) || !validNativeIdentity(binding.TicketID) || !validNativeIdentity(binding.ClaimToken) || seenTasks[binding.TaskID] || seenChildren[binding.ChildSessionID] || seenTickets[binding.TicketID] {
 			return ErrInvalid
 		}
 		seenTasks[binding.TaskID], seenChildren[binding.ChildSessionID], seenTickets[binding.TicketID] = true, true, true
@@ -435,6 +521,18 @@ func ValidateOrchestrateTerminal(request OrchestrateTerminalRequest) error {
 
 func ValidateOrchestrateReference(request OrchestrateReferenceRequest) error {
 	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.OrchestrationID) || request.OwnerID != "" && !validNativeIdentity(request.OwnerID) {
+		return ErrInvalid
+	}
+	recoveryFields := 0
+	for _, value := range []string{request.TaskID, request.ChildSessionID, request.ClaimToken} {
+		if value != "" {
+			recoveryFields++
+			if !validNativeIdentity(value) {
+				return ErrInvalid
+			}
+		}
+	}
+	if recoveryFields != 0 && recoveryFields != 3 {
 		return ErrInvalid
 	}
 	return nil
@@ -560,5 +658,5 @@ func Encode(writer io.Writer, response Response) error {
 }
 
 func validOperation(operation Operation) bool {
-	return operation == ReadFiles || operation == WriteFiles || operation == ReviewChanges
+	return operation == ReadFiles || operation == AnalyzeStructure || operation == WriteFiles || operation == ReviewChanges
 }

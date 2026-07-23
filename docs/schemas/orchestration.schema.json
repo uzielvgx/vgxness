@@ -20,7 +20,7 @@
       "properties": {
         "taskId": { "$ref": "common.schema.json#/$defs/identifier" },
         "capability": { "type": "string", "enum": ["explore", "verify", "review", "implement"] },
-        "operation": { "type": "string", "enum": ["read-files", "review-changes", "write-files"] },
+        "operation": { "type": "string", "enum": ["read-files", "analyze-structure", "review-changes", "write-files"] },
         "goal": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "acceptanceCriteria": {
           "type": "array",

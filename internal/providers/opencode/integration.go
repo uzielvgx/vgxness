@@ -35,20 +35,25 @@ color: primary
 permission:
   "*": deny
   question: allow
+  task:
+    "*": deny
+    vgxness-explorer: allow
+    vgxness-reviewer: allow
   vgxness_status: allow
+  vgxness_run: allow
   vgxness_dispatch: allow
   vgxness_orchestrate: allow
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 8 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 16 -->
 
 # Identity
 
 You are VGXNESS Manager, the user-facing guide to the VGXNESS control plane inside OpenCode.
 
-Your presence is calm, attentive, technically discerning, and collaborative. Speak like a thoughtful partner who understands what the user is trying to accomplish, has a point of view, and makes the system's evidence easy to understand. Do not sound like a command router or a status console.
+Bring the judgment expected of a senior engineer with more than two decades of experience: recognize familiar patterns, separate signal from noise, prefer proven paths, and resist overengineering. Your presence is calm, attentive, technically discerning, pragmatic, and collaborative. Speak like a thoughtful partner who understands what the user is trying to accomplish, has a point of view, and makes the system's evidence easy to understand. Do not sound like a command router or a status console.
 
-Recommend the smallest sensible next move and briefly explain why it is the right move. Be confident when the evidence is clear and candid when it is incomplete. Avoid canned praise, theatrical enthusiasm, false familiarity, and needless verbosity.
+Recommend the smallest sensible next move and briefly explain why it is the right move. Be decisive without pretending certainty, surface consequential tradeoffs early, and challenge unnecessary complexity respectfully. Be confident when the evidence is clear and candid when it is incomplete. Avoid canned praise, theatrical enthusiasm, false familiarity, and needless verbosity.
 
 # Language and voice
 
@@ -57,21 +62,42 @@ Recommend the smallest sensible next move and briefly explain why it is the righ
 - Keep this conversational personality out of technical artifacts unless the user asks for that voice.
 - Preserve the user's intent and terminology without merely echoing their words.
 
+# Adaptive operating style
+
+Optimize for the user's outcome and time, not for visible orchestration activity. Choose the fastest sufficient path that preserves the same evidence and safety guarantees:
+
+1. Answer directly when the user is chatting, asking a conceptual question, requesting an explanation of already available evidence, or making a decision that does not require a new workspace claim. Do not call a tool merely to look busy.
+2. For actionable workspace goals, prefer the goal-first vgxness_run entrypoint. It selects one bounded task, parallel independent tasks, or dependent waves under the same authority.
+3. Select mode fast when the user explicitly prioritizes speed, deep when the user explicitly requests exhaustive analysis, and auto otherwise.
+4. Keep vgxness_dispatch and vgxness_orchestrate for explicit low-level control and backward compatibility. More steps are not evidence of better work.
+
+Do not run a health check by habit, repeat an inspection whose current receipt already answers the question, or add a synthesis pass when the durable join is sufficient. Treat memory supplied in an execution packet as reusable context, not unquestionable truth: verify only mutable or consequential claims against current bounded evidence. Scale verification to risk and uncertainty, and stop as soon as the acceptance criteria are satisfied.
+
+Flexibility changes route selection, not authority. Never trade away a permission, content-bound prompt, receipt, or durable-state guarantee to save time.
+
 # Authority boundary
 
 VGXNESS is the authority for intent routing, prompt identity, permissions, bounded coordination, execution evidence, and durable state. OpenCode is the interaction surface and provider runtime; it is not the control plane.
 
-You may discuss the user's goal and explain VGXNESS behavior from this contract. For every claim about workspace state, every repository review, and every requested action, use only the installed vgxness_* control-plane tools. The managed VGXNESS plugin launches native OpenCode subagents behind those tools; never bypass it with direct file, shell, network, task, or delegation tools.
+You may discuss the user's goal, answer from conversation context, and explain VGXNESS behavior from this contract. For every new claim about workspace state, every repository review, and every action that inspects or changes external state, use only the installed vgxness_* control-plane tools and the exact native Task directives returned by vgxness_run, vgxness_dispatch, or vgxness_orchestrate. Never invent a task directive, alter its prompt, use an unapproved subagent, or use direct file, shell, network, or other delegation tools.
 
 The available control-plane surface is exact:
 
 - Use vgxness_status only to check bridge health and compatibility. It does not inspect project state.
+- Use vgxness_run as the normal goal-first entrypoint. Start it with action=start, a goal, optional constraints, desiredOutcome, acceptanceCriteria, and mode fast, auto, or deep. VGXNESS decides whether the smallest sufficient plan is one task, parallel independent tasks, or dependent waves.
+- Issue every returned exact Task arguments object without rewriting it. After the wave terminates, call vgxness_run with action=advance and only the exact orchestrationId. Repeat until the durable join is returned.
 - Use vgxness_orchestrate for a goal that benefits from adaptive decomposition. VGXNESS, not you, validates the Navigator proposal and decides the legal sequential or parallel waves.
-- Use vgxness_dispatch with read-files for bounded workspace inspection.
+- Start an orchestration with action=start, goal, and optional acceptanceCriteria. Each task in the returned delegation contains VGXNESS metadata plus one exact arguments object for the built-in Task tool.
+- Issue one Task call with each exact arguments object. For a parallel wave, issue all calls together in one response so OpenCode displays and runs the subagents in parallel. Never pass the surrounding VGXNESS metadata to Task, and never omit, add, rewrite, or serialize the arguments.
+- After every Task call in the wave has terminated, call vgxness_orchestrate with action=advance and the exact orchestrationId. Repeat only when another delegation is returned. When a durable join is returned, stop and use it as the final result.
+- Never retry vgxness_orchestrate automatically after a tool failure. Check bridge health once, report any structured blocker, and use an orchestration identity only for explicit status or recovery; a blind retry can overlap work that is still terminating.
+- When vgxness_orchestrate returns a completed join, use that join as the final result. Do not launch a second vgxness_dispatch to re-synthesize completed orchestration evidence.
+- Use vgxness_dispatch action=start with read-files for one bounded workspace inspection. It returns exactly one native Task directive without invoking Navigator. Issue that exact Task call so OpenCode renders the child session, then call vgxness_dispatch action=join with the returned orchestrationId after the Task terminates.
+- Use vgxness_dispatch action=start with analyze-structure when one bounded request is about architecture, symbols, call paths, dependencies, blast radius, or affected tests. The explorer receives only the ticket-bound vgxness_codegraph broker and may fall back to bounded native reads when the local index is unavailable. Issue its exact Task call and finish with action=join.
 - Native write-files is fail-closed until a ticket-authenticated edit broker is available.
-- Use vgxness_dispatch with review-changes for current, staged, or uncommitted repository changes. Do not substitute read-files; only review-changes includes bounded Git status and diff evidence.
-For two or more independent read-only inspections, issue the vgxness_dispatch calls together so OpenCode can run their native child sessions in parallel. VGXNESS admits at most four active one-shot native dispatches per workspace; never parallelize writes, review phases, or any dispatch that uses continuity. If capacity is exhausted, report the bounded blocker instead of retrying in a loop.
-For one self-contained phase, omit continuity and use a normal isolated dispatch. For work that clearly needs more than one bounded phase, use continuity=start on the first dispatch, retain the exact runId and capsuleId returned by VGXNESS, use continuity=continue with that runId for intermediate phases, and use continuity=finish with the same runId for the final bounded phase. Never leave a successful multi-phase run active, invent an identity, reuse one across projects, or silently replace it. Continued phases receive only the validated prior capsule and curated VGXNESS memory context; they do not receive the full conversation or unrestricted history.
+- Use vgxness_dispatch action=start with review-changes for one bounded review of current, staged, or uncommitted repository changes. Do not substitute read-files; only review-changes includes bounded Git status and diff evidence.
+For two or more independent read-only inspections, issue the vgxness_dispatch action=start calls together, then issue all returned native Task calls together so OpenCode displays and runs the child sessions in parallel. Join each dispatch only after its Task terminates. Never parallelize writes or review phases. If capacity is exhausted, report the bounded blocker instead of retrying in a loop.
+For explicit low-level work that clearly needs more than one bounded phase, use vgxness_orchestrate so every phase remains visible. The continuity and runId fields remain available only for backward compatibility with older callers; do not select them in normal manager routing because their direct child session is not represented by a native Task row.
 
 # Conversation rhythm
 
@@ -97,11 +123,15 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-navigator; version: 1 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-navigator; version: 4 -->
 
-You are the native VGXNESS Navigator. Execute only the exact content-bound prompt supplied for planning and decompose its goal into the smallest useful set of bounded work units. You have no workspace, shell, network, file, or delegation access. Return exactly one JSON object with a tasks array and no Markdown.
+You are the native VGXNESS Navigator. Execute only the exact content-bound prompt supplied for planning and decompose its goal into the smallest sufficient set of bounded work units. Optimize for reliable elapsed time, not task count or visible activity. You have no workspace, shell, network, file, or delegation access. Return exactly one JSON object with a tasks array and no Markdown.
 
-Each task must contain taskId, capability, operation, goal, acceptanceCriteria, dependsOn, and continuity. Use stable IDs matching task-[a-z0-9-]+. Allowed combinations are explore/verify with read-files, or review with review-changes. Native writes are unavailable. Use continuity isolated unless a true sequential dependency requires linked. Independent isolated reads may run in parallel; review must depend on every evidence task. Prefer one task when it is sufficient and never exceed sixteen tasks.
+Each task must contain taskId, capability, operation, goal, acceptanceCriteria, dependsOn, and continuity. Use stable IDs matching task-[a-z0-9-]+. Allowed combinations are explore/verify with read-files or analyze-structure, or review with review-changes. Native writes are unavailable. Use continuity isolated unless a true sequential dependency requires linked. Independent isolated reads and structural analyses may run in parallel.
+
+Use explore/analyze-structure for architecture, symbol, dependency, call-path, blast-radius, or affected-test questions. Use explore/read-files for exact file-content inspection and for a final synthesis of evidence produced by prior tasks. A synthesis task must depend on every evidence task and use continuity linked. Reserve review/review-changes exclusively for goals that explicitly review current, staged, or uncommitted Git changes; it receives Git status and diff evidence rather than general workspace content. A clean-repository audit, architecture assessment, health check, or improvement analysis must not use review-changes.
+
+Honor the supplied operatingMode and numeric constraints. In fast mode return exactly one smallest-sufficient task with essential validation. In auto mode use proportional verification and at most four tasks. In deep mode inspect all material requested concerns while still avoiding duplicate work and never exceed sixteen tasks. Default to one task. Split only when distinct evidence can be gathered independently or a real dependency prevents one bounded task from succeeding. Parallelize independent tasks only when doing so reduces elapsed time; never create multiple tasks that inspect the same concern from slightly different wording. Add one linked synthesis task only when several results must be reconciled into a single answer and the durable join alone is insufficient.
 `
 	explorerPrompt = `---
 description: VGXNESS native explorer for bounded structural and workspace inspection
@@ -112,12 +142,20 @@ permission:
   glob: allow
   list: allow
   vgxness_native_read: allow
+  vgxness_codegraph: allow
+  vgxness_task_claim: allow
+  vgxness_task_complete: allow
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-explorer; version: 3 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-explorer; version: 9 -->
 
-You are the native VGXNESS explorer. Execute only the exact content-bound prompt supplied by the VGXNESS control plane. Use glob and list only to discover workspace-relative paths, and use vgxness_native_read for every file-content read. Never use an alternate content index, edit files, run shell commands, use the network, delegate, install packages, commit, or push. Return exactly one JSON object conforming to the agent.result contract in the supplied prompt, with no Markdown fence or commentary.
+You are the native VGXNESS explorer. There are exactly two top-level input envelopes:
+
+- For kind vgxness.visible-task.directive, first call vgxness_task_claim exactly once with its identities. Execute only the exact content-bound prompt returned by that claim, then call vgxness_task_complete exactly once with the compact agent.result JSON string. After successful completion, return one short plain-language completion sentence.
+- For kind vgxness.direct-dispatch.directive, execute only its preparedPrompt and return exactly one agent.result JSON object without calling vgxness_task_claim or vgxness_task_complete.
+
+Reject every other top-level input shape. In either mode, use supplied memory and dependency evidence before gathering more context, but verify mutable or consequential claims against the current workspace. Stop when the acceptance criteria are satisfied; do not repeat a structural query or exact read that existing bounded evidence already answers. Propose memoryCandidates only for durable reusable project knowledge supported by the bounded evidence; never include routine steps, transient status, speculation, duplicates, credentials, tokens, secrets, or personal data. VGXNESS, not you, decides whether a proposal is saved, updated, held for review, or rejected. Use glob and list only while the plugin has an active VGXNESS ticket for this session. For analyze-structure, use vgxness_codegraph first: explore for architecture/call-flow context, impact for one symbol's blast radius, affected for tests related to explicit changed files, and status only to explain index availability. Use vgxness_native_read for exact file content or as a bounded fallback when the broker reports CodeGraph unavailable. Call ticket-bound VGXNESS broker tools sequentially; do not issue vgxness_codegraph, vgxness_native_read, or vgxness_task_complete in parallel. Never invoke CodeGraph CLI/MCP directly, edit files, run shell commands, use the network, delegate, install packages, commit, or push.
 `
 	implementerPrompt = `---
 description: VGXNESS reserved read-only implementer profile
@@ -141,12 +179,19 @@ mode: subagent
 hidden: true
 permission:
   "*": deny
+  vgxness_task_claim: allow
+  vgxness_task_complete: allow
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-reviewer; version: 1 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-reviewer; version: 3 -->
 
-You are the native VGXNESS reviewer. Review only the immutable Git status and diff evidence embedded in the exact content-bound prompt. Do not access the filesystem, shell, network, other tools, or subagents. Return exactly one JSON object conforming to the agent.result contract in the supplied prompt, with no Markdown fence or commentary.
+You are the native VGXNESS reviewer. There are exactly two top-level input envelopes:
+
+- For kind vgxness.visible-task.directive, first call vgxness_task_claim exactly once with its identities. Review only the immutable Git status and diff evidence embedded in the exact content-bound prompt returned by that claim, then call vgxness_task_complete exactly once with the compact agent.result JSON string. After successful completion, return one short plain-language completion sentence.
+- For kind vgxness.direct-dispatch.directive, review only the immutable Git status and diff evidence embedded in its preparedPrompt and return exactly one agent.result JSON object without calling vgxness_task_claim or vgxness_task_complete.
+
+Reject every other top-level input shape. Do not access the filesystem, shell, network, other tools, or subagents.
 `
 )
 
@@ -579,15 +624,18 @@ func bridgeToolContent(executable, model string) ([]byte, error) {
 	import { randomUUID } from "node:crypto"
 	import { tool } from "@opencode-ai/plugin"
 
-		// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 12
+			// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 27
 	const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 	const VGXNESS_MODEL = ` + string(quotedModel) + `
 	const MAX_OUTPUT_BYTES = __MAX_OUTPUT_BYTES__
 	const MAX_ORCHESTRATION_RESULT_BYTES = __MAX_ORCHESTRATION_RESULT_BYTES__
 	const TERMINAL_TIMEOUT_MS = 30_000
+	const VISIBLE_CLAIM_TIMEOUT_MS = 300_000
 	const MAX_NATIVE_DISPATCHES = 4
 	const nativeTickets = new Map()
 	const nativeCapacity = new Map()
+	const visibleWaveClaims = new Map()
+	const visibleClaimTokens = new Map()
 
 async function readBounded(stream) {
   const chunks = []
@@ -628,6 +676,7 @@ async function readBounded(stream) {
 	  if (!workspace) throw new Error("OpenCode did not provide a workspace")
   let child
   let exited
+  let exitFailure
   try {
     child = spawn(VGXNESS_EXECUTABLE, [...args, "--workspace", workspace], {
 	      cwd: workspace,
@@ -637,11 +686,17 @@ async function readBounded(stream) {
       windowsHide: true,
     })
     if (!child.stdout || !child.stderr) throw new Error("VGXNESS bridge subprocess pipes are unavailable")
-    exited = new Promise((resolve, reject) => {
-      child.once("error", reject)
+    exited = new Promise((resolve) => {
+      child.once("error", (cause) => {
+        exitFailure = cause
+        resolve(undefined)
+      })
       child.once("close", (code) => {
         if (code === 0) resolve(undefined)
-        else reject(new Error("VGXNESS bridge subprocess exited unsuccessfully"))
+        else {
+          exitFailure ||= new Error("VGXNESS bridge subprocess exited unsuccessfully")
+          resolve(undefined)
+        }
       })
     })
     const input = payload === undefined
@@ -655,7 +710,9 @@ async function readBounded(stream) {
           child.stdin.end(JSON.stringify(payload), resolve)
         })
     const [stdout] = await Promise.all([readBounded(child.stdout), readBounded(child.stderr), input, exited])
-    return exactEnvelope(stdout)
+    const envelope = exactEnvelope(stdout)
+    if (!envelope.ok || !exitFailure) return envelope
+    throw exitFailure
   } catch {
     child?.kill("SIGKILL")
     await exited?.catch(() => undefined)
@@ -679,10 +736,30 @@ async function readBounded(stream) {
 
 	async function invokeTerminal(args, payload, workspace) {
 	  try {
-	    return await invokeBounded(args, payload, workspace)
+	    const first = await invokeBounded(args, payload, workspace)
+	    if (first?.ok !== false || first?.error?.recoverable !== true) return first
 	  } catch {
-	    return await invokeBounded(args, payload, workspace)
 	  }
+	  return await invokeBounded(args, payload, workspace)
+	}
+
+	async function withNativeTicketLane(active, work) {
+	  const previous = active.brokerTail || Promise.resolve()
+	  let release
+	  active.brokerTail = new Promise((resolve) => { release = resolve })
+	  await previous.catch(() => undefined)
+	  try {
+	    return await work()
+	  } finally {
+	    release()
+	  }
+	}
+
+	function bridgeFailure(envelope, fallback) {
+	  const code = typeof envelope?.error?.code === "string" ? envelope.error.code : ""
+	  const message = typeof envelope?.error?.message === "string" ? envelope.error.message : ""
+	  if (!code && !message) return fallback
+	  return fallback + ": " + [code, message].filter(Boolean).join(" — ")
 	}
 
 	function responseData(response, label) {
@@ -700,17 +777,47 @@ async function readBounded(stream) {
 	  return value
 	}
 
+	function normalizeAgentResult(value) {
+	  if (!value || Array.isArray(value) || typeof value !== "object") {
+	    throw new Error("Native VGXNESS subagent returned an invalid result")
+	  }
+	  if (Array.isArray(value.errors)) {
+	    value.errors = value.errors.map((entry) => {
+	      if (typeof entry !== "string") return entry
+	      return { code: "native-subagent-observation", message: entry.trim(), recoverable: true }
+	    })
+	  }
+	  if (Array.isArray(value.artifacts) && Array.isArray(value.risks)) {
+	    const inlineEvidence = []
+	    value.artifacts = value.artifacts.filter((entry) => {
+	      const provenance = entry?.provenance
+	      if (
+	        entry && typeof entry === "object" && !Array.isArray(entry) &&
+	        entry.kind === "artifact.reference" && entry.schemaVersion === "1" &&
+	        typeof entry.provider === "string" && typeof entry.id === "string" &&
+	        typeof entry.artifactType === "string" &&
+	        provenance && typeof provenance === "object" && !Array.isArray(provenance) &&
+	        typeof provenance.producer === "string" && typeof provenance.createdAt === "string"
+	      ) return true
+	      inlineEvidence.push("Native subagent evidence: " + (typeof entry === "string" ? entry : JSON.stringify(entry)))
+	      return false
+	    })
+	    value.risks.push(...inlineEvidence)
+	  }
+	  return value
+	}
+
 	function exactAgentResult(parts) {
 	  const output = parts
 	    .filter((part) => part?.type === "text" && typeof part.text === "string")
 	    .map((part) => part.text)
 	    .join("")
 	    .trim()
-	  const value = JSON.parse(output)
-	  if (!value || Array.isArray(value) || typeof value !== "object") {
-	    throw new Error("Native VGXNESS subagent returned an invalid result")
-	  }
-	  return value
+	  return normalizeAgentResult(JSON.parse(output))
+	}
+
+	function exactAgentResultInput(input) {
+	  return normalizeAgentResult(JSON.parse(input))
 	}
 
 	function exactNavigatorProposal(parts) {
@@ -719,6 +826,366 @@ async function readBounded(stream) {
 	    throw new Error("Native VGXNESS Navigator returned an invalid task proposal")
 	  }
 	  return value.tasks
+	}
+
+	function exactModelReference(model) {
+	  const separator = model.indexOf("/")
+	  if (separator <= 0 || separator === model.length - 1) throw new Error("VGXNESS returned an invalid native model")
+	  return { providerID: model.slice(0, separator), modelID: model.slice(separator + 1) }
+	}
+
+	function nativeAgentForTask(task) {
+	  if (task?.operation === "review-changes") return "vgxness-reviewer"
+	  return "vgxness-explorer"
+	}
+
+	function nativeChildTitle(taskId, agent) {
+	  const label = String(taskId || "bounded-task").replace(/^task-/, "").replaceAll("-", " ").slice(0, 80)
+	  return "VGXNESS " + label + " (@" + agent + " subagent)"
+	}
+
+	function exactOrchestration(envelope) {
+	  if (envelope?.ok === false) {
+	    throw new Error(bridgeFailure(envelope, "VGXNESS could not load the visible orchestration"))
+	  }
+	  const value = envelope?.orchestration
+	  if (
+	    !envelope?.ok || !value || typeof value.orchestrationId !== "string" ||
+	    typeof value.ownerId !== "string" || typeof value.parentSessionId !== "string" ||
+	    !Number.isInteger(value.currentWave) || !Number.isInteger(value.nextWave) ||
+	    !value.plan || !Array.isArray(value.plan.tasks) || !Array.isArray(value.plan.waves)
+	  ) throw new Error("VGXNESS returned an invalid visible orchestration")
+	  return value
+	}
+
+	function exactVisiblePrepared(orchestration, taskId, childSessionId, expectedAgent) {
+	  const item = Array.isArray(orchestration.prepared)
+	    ? orchestration.prepared.find((candidate) => candidate?.taskId === taskId)
+	    : undefined
+	  if (!item || item.childSessionId !== childSessionId) {
+	    throw new Error("VGXNESS did not return the prepared ticket for this visible native Task")
+	  }
+	  const prepared = exactPrepared({ ok: true, prepared: item.prepared })
+	  if (prepared.agent !== expectedAgent) {
+	    throw new Error("VGXNESS returned a mismatched visible native Task agent")
+	  }
+	  return prepared
+	}
+
+	function visibleDelegation(envelope, waveIndex) {
+	  const orchestration = exactOrchestration(envelope)
+	  const wave = orchestration.plan.waves.find((item) => item.index === waveIndex)
+	  if (!wave || !Array.isArray(wave.taskIds) || wave.taskIds.length < 1) {
+	    throw new Error("VGXNESS did not expose a legal visible execution wave")
+	  }
+	  const tasks = new Map(orchestration.plan.tasks.map((task) => [task.taskId, task]))
+	  const directives = wave.taskIds.map((taskId) => {
+	    const task = tasks.get(taskId)
+	    if (!task) throw new Error("VGXNESS visible wave references an unknown task")
+	    const agent = nativeAgentForTask(task)
+	    const claimToken = "claim-" + randomUUID()
+	    visibleClaimTokens.set(
+	      orchestration.orchestrationId + "\n" + taskId,
+	      claimToken,
+	    )
+	    const prompt = JSON.stringify({
+	      kind: "vgxness.visible-task.directive", schemaVersion: "1",
+	      orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId, taskId, claimToken,
+	    })
+	    return {
+	      taskId,
+	      arguments: {
+	        subagent_type: agent,
+	        description: ("VGXNESS " + taskId.replace(/^task-/, "").replaceAll("-", " ")).slice(0, 120),
+	        prompt,
+	      },
+	    }
+	  })
+	  return {
+	    protocolVersion: "1",
+	    ok: true,
+	    bridge: envelope.bridge,
+	    provider: envelope.provider,
+	    workspace: envelope.workspace,
+	    status: "delegation-required",
+	    orchestration,
+	    delegation: {
+	      waveId: wave.waveId,
+	      waveIndex: wave.index,
+	      mode: wave.mode,
+	      tasks: directives,
+	    },
+	  }
+	}
+
+	function visibleDelegationResult(context, envelope, waveIndex) {
+	  const value = visibleDelegation(envelope, waveIndex)
+	  const count = value.delegation.tasks.length
+	  const title = "VGXNESS · wave " + (waveIndex + 1) + " ready · " + count + " visible subagent" + (count === 1 ? "" : "s")
+	  const metadata = {
+	    orchestrationId: value.orchestration.orchestrationId,
+	    waveId: value.delegation.waveId,
+	    waveIndex,
+	    mode: value.delegation.mode,
+	    visibleTaskCount: count,
+	  }
+	  context.metadata({ title, metadata })
+	  return { title, metadata, output: JSON.stringify(value) }
+	}
+
+	async function advanceVisibleOrchestration(context, workspace, orchestrationId) {
+	  let envelope = await invokeTerminal(
+	    ["bridge", "orchestrate-status", "--stdin"],
+	    { protocolVersion: "1", orchestrationId },
+	    workspace,
+	  )
+	  let orchestration = exactOrchestration(envelope)
+	  if (orchestration.parentSessionId !== context.sessionID) {
+	    throw new Error("VGXNESS visible orchestration belongs to another parent session")
+	  }
+	  if (orchestration.status === "pending") {
+	    return visibleDelegationResult(context, envelope, orchestration.nextWave)
+	  }
+	  if (orchestration.status === "running") {
+	    const title = "VGXNESS · visible subagents still running"
+	    const metadata = {
+	      orchestrationId: orchestration.orchestrationId,
+	      currentWave: orchestration.currentWave,
+	      status: orchestration.status,
+	    }
+	    context.metadata({ title, metadata })
+	    return { title, metadata, output: JSON.stringify(envelope) }
+	  }
+	  if (orchestration.status === "cancelled") {
+	    const title = "VGXNESS · orchestration cancelled"
+	    const metadata = { orchestrationId: orchestration.orchestrationId, status: orchestration.status }
+	    context.metadata({ title, metadata })
+	    return { title, metadata, output: JSON.stringify(envelope) }
+	  }
+	  envelope = await invokeTerminal(
+	    ["bridge", "orchestrate-join", "--stdin"],
+	    {
+	      protocolVersion: "1", orchestrationId: orchestration.orchestrationId,
+	      ownerId: orchestration.ownerId,
+	    },
+	    workspace,
+	  )
+	  orchestration = exactOrchestration(envelope)
+	  const title = "VGXNESS · orchestration " + orchestration.status
+	  const metadata = {
+	    orchestrationId: orchestration.orchestrationId,
+	    taskCount: orchestration.plan.tasks.length,
+	    status: orchestration.status,
+	  }
+	  context.metadata({ title, metadata })
+	  return { title, metadata, output: JSON.stringify(envelope) }
+	}
+
+	function deferredClaim() {
+	  let resolve
+	  let reject
+	  const promise = new Promise((accept, deny) => {
+	    resolve = accept
+	    reject = deny
+	  })
+	  return { promise, resolve, reject }
+	}
+
+	function rejectVisibleWave(key, wave, cause) {
+	  if (!wave || wave.terminal) return
+	  wave.terminal = true
+	  if (wave.timer) clearTimeout(wave.timer)
+	  wave.controller.abort()
+	  visibleWaveClaims.delete(key)
+	  for (const taskId of wave.taskIds) {
+	    visibleClaimTokens.delete(wave.orchestrationId + "\n" + taskId)
+	  }
+	  for (const claim of wave.claims.values()) claim.deferred.reject(cause)
+	}
+
+	async function prepareVisibleWave(key, wave) {
+	  if (wave.preparing || wave.terminal) return
+	  wave.preparing = true
+	  try {
+	    const bindings = wave.taskIds.map((taskId) => {
+	      const claim = wave.claims.get(taskId)
+	      if (!claim) throw new Error("VGXNESS visible wave is missing a claimed native Task")
+	      return { taskId, childSessionId: claim.childSessionId, ticketId: claim.ticketId, claimToken: claim.claimToken }
+	    })
+	    try {
+	      const envelope = await invokeBounded(
+	        ["bridge", "orchestrate-wave", "--stdin"],
+	        {
+	          protocolVersion: "1", orchestrationId: wave.orchestrationId,
+	          ownerId: wave.ownerId, bindings,
+	        },
+	        wave.workspace,
+	        TERMINAL_TIMEOUT_MS,
+	        wave.controller.signal,
+	      )
+	      const candidate = exactOrchestration(envelope)
+	      if (!Array.isArray(candidate.prepared)) {
+	        throw new Error("VGXNESS visible wave response omitted prepared tasks")
+	      }
+	      wave.orchestration = candidate
+	    } catch {
+	      try {
+	        const replay = await invokeTerminal(
+	          ["bridge", "orchestrate-wave", "--stdin"],
+	          {
+	            protocolVersion: "1", orchestrationId: wave.orchestrationId,
+	            ownerId: wave.ownerId, bindings,
+	          },
+	          wave.workspace,
+	        )
+	        const candidate = exactOrchestration(replay)
+	        if (!Array.isArray(candidate.prepared)) {
+	          throw new Error("VGXNESS visible wave replay omitted prepared tasks")
+	        }
+	        wave.orchestration = candidate
+	      } catch {
+	      const recovered = []
+	      let candidate
+	      for (const taskId of wave.taskIds) {
+	        const claim = wave.claims.get(taskId)
+	        if (!claim) throw new Error("VGXNESS visible wave lost a claim during recovery")
+	        const envelope = await invokeTerminal(
+	          ["bridge", "orchestrate-status", "--stdin"],
+	          {
+	            protocolVersion: "1", orchestrationId: wave.orchestrationId,
+	            taskId, childSessionId: claim.childSessionId, claimToken: claim.claimToken,
+	          },
+	          wave.workspace,
+	        )
+	        candidate = exactOrchestration(envelope)
+	        const item = Array.isArray(candidate.prepared)
+	          ? candidate.prepared.find((prepared) => prepared?.taskId === taskId)
+	          : undefined
+	        if (item) recovered.push(item)
+	      }
+	      wave.orchestration = { ...candidate, prepared: recovered }
+	      }
+	    }
+	    const orchestration = wave.orchestration
+	    const prepared = new Map(orchestration.prepared.map((item) => [item.taskId, item]))
+	    wave.prepared = true
+	    if (wave.timer) clearTimeout(wave.timer)
+	    for (const taskId of wave.taskIds) {
+	      const claim = wave.claims.get(taskId)
+	      const item = prepared.get(taskId)
+	      if (!claim) {
+	        throw new Error("VGXNESS returned a mismatched visible Task ticket")
+	      }
+	      if (!item) {
+	        wave.remaining.delete(taskId)
+	        visibleClaimTokens.delete(wave.orchestrationId + "\n" + taskId)
+	        claim.deferred.reject(new Error("VGXNESS could not prepare this visible native Task"))
+	        continue
+	      }
+	      if (item.childSessionId !== claim.childSessionId) {
+	        throw new Error("VGXNESS returned a mismatched visible Task ticket")
+	      }
+	      const ticket = exactPrepared({ ok: true, prepared: item.prepared })
+	      if (ticket.ticketId !== claim.ticketId || ticket.agent !== claim.agent) {
+	        throw new Error("VGXNESS returned a mismatched visible Task ticket")
+	      }
+	      nativeTickets.set(claim.childSessionId, {
+	        ticketId: ticket.ticketId,
+	        orchestrationId: wave.orchestrationId,
+	        ownerId: wave.ownerId,
+	        taskId,
+	        parentSessionId: wave.parentSessionId,
+	        workspace: wave.workspace,
+	        waveKey: key,
+	      })
+	      visibleClaimTokens.delete(wave.orchestrationId + "\n" + taskId)
+	      claim.deferred.resolve(JSON.stringify(ticket))
+	    }
+	    if (wave.remaining.size === 0) {
+	      wave.terminal = true
+	      visibleWaveClaims.delete(key)
+	    }
+	  } catch (cause) {
+	    rejectVisibleWave(key, wave, cause instanceof Error ? cause : new Error("VGXNESS could not prepare the visible native Task wave"))
+	  }
+	}
+
+	async function failVisibleTask(sessionId, category) {
+	  const active = nativeTickets.get(sessionId)
+	  if (!active?.orchestrationId || active.cleanupInProgress) return
+	  active.cleanupInProgress = true
+	  const cancelled = category === "native-subagent-cancelled"
+	  try {
+	    await withNativeTicketLane(active, async () => {
+	      const failed = await invokeTerminal(
+	        ["bridge", "fail", "--stdin"],
+	        {
+	          protocolVersion: "1", ticketId: active.ticketId,
+	          parentSessionId: active.parentSessionId, childSessionId: sessionId, category,
+	        },
+	        active.workspace,
+	      )
+	      if (!failed.ok) throw new Error(bridgeFailure(failed, "VGXNESS rejected visible Task failure recovery"))
+	      const terminal = await invokeTerminal(
+	        ["bridge", "orchestrate-terminal", "--stdin"],
+	        {
+	          protocolVersion: "1", orchestrationId: active.orchestrationId, ownerId: active.ownerId,
+	          taskId: active.taskId, ticketId: active.ticketId, childSessionId: sessionId,
+	          status: cancelled ? "cancelled" : "failed",
+	          failure: cancelled ? "visible native Task was cancelled" : "visible native Task ended without durable completion",
+	        },
+	        active.workspace,
+	      )
+	      if (!terminal.ok) throw new Error(bridgeFailure(terminal, "VGXNESS rejected visible Task terminal recovery"))
+	    })
+	    nativeTickets.delete(sessionId)
+	    const claimWave = visibleWaveClaims.get(active.waveKey)
+	    claimWave?.remaining.delete(active.taskId)
+	    if (claimWave?.remaining.size === 0) {
+	      claimWave.terminal = true
+	      visibleWaveClaims.delete(active.waveKey)
+	    }
+	  } catch {
+	    active.cleanupInProgress = false
+	    active.cleanupAttempts = (active.cleanupAttempts || 0) + 1
+	    if (active.cleanupAttempts <= 2) {
+	      setTimeout(() => { void failVisibleTask(sessionId, category) }, active.cleanupAttempts * 250)
+	    }
+	  }
+	}
+
+	function publishNativeVisibility(context, children, phase, extra = {}) {
+	  const visible = children.map((child) => ({
+	    taskId: child.taskId,
+	    sessionId: child.sessionId,
+	    agent: child.agent,
+	    status: child.status,
+	  }))
+	  const active = visible.filter((child) => child.status === "preparing" || child.status === "running")
+	  const completed = visible.filter((child) => child.status === "completed").length
+	  const failed = visible.filter((child) => child.status === "failed").length
+	  const cancelled = visible.filter((child) => child.status === "cancelled").length
+	  const displayed = active.length ? active : visible
+	  const labels = displayed.map((child) => child.taskId.replace(/^task-/, "")).slice(0, 3)
+	  const suffix = displayed.length > 3 ? " +" + (displayed.length - 3) : ""
+	  const progress = active.length
+	    ? active.length + " active: " + labels.join(", ") + suffix
+	    : [
+	        completed + "/" + visible.length + " completed",
+	        failed ? failed + " failed" : "",
+	        cancelled ? cancelled + " cancelled" : "",
+	      ].filter(Boolean).join(" · ")
+	  const metadata = {
+	    parentSessionId: context.sessionID,
+	    model: exactModelReference(VGXNESS_MODEL),
+	    phase,
+	    subagents: visible,
+	    ...extra,
+	  }
+	  if (visible.length === 1) metadata.sessionId = visible[0].sessionId
+	  const presentation = { title: ("VGXNESS · " + progress).slice(0, 180), metadata }
+	  context.metadata(presentation)
+	  return presentation
 	}
 
 	async function createNativeChild(client, workspace, parentSessionId, title) {
@@ -730,8 +1197,7 @@ async function readBounded(stream) {
 
 	async function promptNativeChild(client, workspace, context, childSessionId, prepared) {
 	  nativeTickets.set(childSessionId, { ticketId: prepared.ticketId })
-	  const separator = prepared.model.indexOf("/")
-	  if (separator <= 0 || separator === prepared.model.length - 1) throw new Error("VGXNESS returned an invalid native model")
+	  const model = exactModelReference(prepared.model)
 	  const abortChild = () => client.session.abort({ path: { id: childSessionId }, query: { directory: workspace } }).catch(() => undefined)
 	  const abortChildOnContext = () => { void abortChild() }
 	  context.abort.addEventListener("abort", abortChildOnContext, { once: true })
@@ -751,8 +1217,15 @@ async function readBounded(stream) {
 	      query: { directory: workspace },
 	      body: {
 	        agent: prepared.agent,
-	        model: { providerID: prepared.model.slice(0, separator), modelID: prepared.model.slice(separator + 1) },
-	        parts: [{ type: "text", text: prepared.prompt }],
+	        model,
+	        parts: [{
+	          type: "text",
+	          text: JSON.stringify({
+	            kind: "vgxness.direct-dispatch.directive",
+	            schemaVersion: "1",
+	            preparedPrompt: prepared.prompt,
+	          }),
+	        }],
 	      },
 	    }), deadline]), "Native VGXNESS subagent execution failed")
 	  } finally {
@@ -789,8 +1262,123 @@ async function readBounded(stream) {
 	  }
 	}
 
-	export default async function VGXNESSPlugin({ client }) {
+	function boundedRunStrings(values, maxItems, maxRunes, label) {
+	  if (values === undefined) return []
+	  if (!Array.isArray(values) || values.length > maxItems) throw new Error("VGXNESS " + label + " exceeded its bound")
+	  return values.map((value) => {
+	    if (typeof value !== "string" || !value.trim() || Array.from(value).length > maxRunes) {
+	      throw new Error("VGXNESS " + label + " is invalid")
+	    }
+	    return value.trim()
+	  })
+	}
+
+	async function startVisibleOrchestration(client, context, workspace, args, mode) {
+	  const profiles = {
+	    fast: { maxTasks: 1, maxParallel: 1, verification: "essential" },
+	    auto: { maxTasks: 4, maxParallel: 4, verification: "proportional" },
+	    deep: { maxTasks: 16, maxParallel: 4, verification: "exhaustive" },
+	  }
+	  const profile = profiles[mode]
+	  if (!profile) throw new Error("VGXNESS run mode is invalid")
+	  if (typeof args.goal !== "string" || !args.goal.trim() || Array.from(args.goal).length > 8192) {
+	    throw new Error("VGXNESS run goal is invalid")
+	  }
+	  const goal = args.goal.trim()
+	  const userConstraints = boundedRunStrings(args.constraints, 16, 2048, "run constraints")
+	  const acceptanceCriteria = boundedRunStrings(args.acceptanceCriteria, 32, 2048, "acceptance criteria")
+	  for (const constraint of userConstraints) {
+	    if (acceptanceCriteria.length === 32) throw new Error("VGXNESS run constraints exceeded the durable criteria bound")
+	    const durableConstraint = "Constraint: " + constraint
+	    if (Array.from(durableConstraint).length > 2048) throw new Error("VGXNESS run constraint exceeded its durable bound")
+	    acceptanceCriteria.push(durableConstraint)
+	  }
+	  if (typeof args.desiredOutcome === "string" && args.desiredOutcome.trim()) {
+	    const desired = "Desired outcome: " + args.desiredOutcome.trim()
+	    if (Array.from(desired).length > 2048 || acceptanceCriteria.length === 32) {
+	      throw new Error("VGXNESS desired outcome exceeded its bound")
+	    }
+	    acceptanceCriteria.push(desired)
+	  } else if (args.desiredOutcome !== undefined) {
+	    throw new Error("VGXNESS desired outcome is invalid")
+	  }
+	  const navigatorModel = exactModelReference(VGXNESS_MODEL)
+	  let navigatorSessionId = ""
+	  try {
+	    const navigator = await createNativeChild(client, workspace, context.sessionID, "VGXNESS planning (@vgxness-navigator subagent)")
+	    navigatorSessionId = navigator.id
+	    const planningPrompt = JSON.stringify({
+	      kind: "vgxness.navigator.request", schemaVersion: "1", goal,
+	      acceptanceCriteria,
+	      userConstraints,
+	      operatingMode: mode,
+	      constraints: {
+	        maxTasks: profile.maxTasks, maxParallel: profile.maxParallel, verification: profile.verification,
+	        nativeWrites: false, agentChoice: "vgxness-authority",
+	      },
+	    })
+	    const plannedMessage = responseData(await client.session.prompt({
+	      path: { id: navigatorSessionId },
+	      query: { directory: workspace },
+	      body: {
+	        agent: "vgxness-navigator",
+	        model: navigatorModel,
+	        parts: [{ type: "text", text: planningPrompt }],
+	      },
+	    }), "Native VGXNESS Navigator execution failed")
+	    const candidateTasks = exactNavigatorProposal(plannedMessage.parts || []).map((task) => {
+	      const taskCriteria = boundedRunStrings(task?.acceptanceCriteria, 32, 2048, "Navigator acceptance criteria")
+	      const combined = [...new Set([...taskCriteria, ...acceptanceCriteria])]
+	      if (combined.length > 32) throw new Error("Native VGXNESS Navigator exceeded the durable criteria bound")
+	      return { ...task, acceptanceCriteria: combined }
+	    })
+	    if (candidateTasks.length > profile.maxTasks) {
+	      throw new Error("Native VGXNESS Navigator exceeded the selected run mode")
+	    }
+	    const envelope = await invokeBounded(
+	      ["bridge", "orchestrate-plan", "--stdin"],
+	      {
+	        protocolVersion: "1", model: VGXNESS_MODEL,
+	        input: { goal, acceptanceCriteria },
+	        parentSessionId: context.sessionID, parentMessageId: context.messageID, candidateTasks,
+	      },
+	      workspace,
+	      TERMINAL_TIMEOUT_MS,
+	      context.abort,
+	    )
+	    const orchestration = exactOrchestration(envelope)
+	    if (orchestration.nextWave !== 0 || orchestration.status !== "pending") {
+	      throw new Error("VGXNESS visible orchestration did not start at the initial wave")
+	    }
+	    return visibleDelegationResult(context, envelope, 0)
+	  } catch (cause) {
+	    if (navigatorSessionId) {
+	      await client.session.abort({ path: { id: navigatorSessionId }, query: { directory: workspace } }).catch(() => undefined)
+	    }
+	    throw cause instanceof Error ? cause : new Error("VGXNESS visible orchestration planning failed")
+	  }
+	}
+
+	export default async function VGXNESSPlugin({ client, directory }) {
 	  return {
+	    "tool.execute.before": async (input) => {
+	      if (input?.tool !== "glob" && input?.tool !== "list") return
+	      const session = responseData(await client.session.get({
+	        path: { id: input.sessionID },
+	        query: { directory },
+	      }), "OpenCode could not verify the native tool session")
+	      const unverifiedChild = !session.agent && typeof session.parentID === "string" && session.parentID
+	      if ((session.agent === "vgxness-explorer" || unverifiedChild) && !nativeTickets.has(input.sessionID)) {
+	        throw new Error("VGXNESS explorer discovery requires an active ticket")
+	      }
+	    },
+	    event: async ({ event }) => {
+	      if (event?.type === "session.idle") {
+	        await failVisibleTask(event.properties.sessionID, "native-subagent-failed")
+	      } else if (event?.type === "session.error" && event.properties.sessionID) {
+	        await failVisibleTask(event.properties.sessionID, "native-subagent-failed")
+	      }
+	    },
 	    tool: {
 	      vgxness_native_read: tool({
 	        description: "Read one bounded workspace-relative text file through the ticket-authenticated VGXNESS broker. Pass nextOffset as a decimal cursor to continue a truncated file.",
@@ -804,15 +1392,242 @@ async function readBounded(stream) {
 	          if (!active) throw new Error("No active VGXNESS native read ticket for this child session")
 	          const offset = args.cursor === undefined ? 0 : Number(args.cursor)
 	          if (!Number.isSafeInteger(offset) || offset < 0 || String(offset) !== (args.cursor ?? "0")) throw new Error("VGXNESS native read cursor is invalid")
-	          const envelope = await invokeBounded(
+	          const envelope = await withNativeTicketLane(active, () => invokeBounded(
 	            ["bridge", "read", "--stdin"],
 	            { protocolVersion: "1", ticketId: active.ticketId, childSessionId: context.sessionID, path: args.path, offset, limit: 65536 },
 	            workspace,
 	            TERMINAL_TIMEOUT_MS,
 	            context.abort,
-	          )
-	          if (!envelope.ok || !envelope.read) throw new Error("VGXNESS native read was denied")
+	          ))
+	          if (!envelope.ok || !envelope.read) throw new Error(bridgeFailure(envelope, "VGXNESS native read was denied"))
 	          return JSON.stringify(envelope.read)
+	        },
+	      }),
+	      vgxness_codegraph: tool({
+	        description: "Query the local CodeGraph index through the active ticket. Use explore for structural context, impact for one symbol, affected for tests related to explicit files, or status for index health.",
+	        args: {
+	          operation: tool.schema.enum(["status", "explore", "impact", "affected"]),
+	          query: tool.schema.string().optional(),
+	          symbol: tool.schema.string().optional(),
+	          files: tool.schema.array(tool.schema.string()).optional(),
+	          depth: tool.schema.number().optional(),
+	          maxFiles: tool.schema.number().optional(),
+	        },
+	        async execute(args, context) {
+	          const workspace = context.worktree || context.directory
+	          const active = nativeTickets.get(context.sessionID)
+	          if (!active) throw new Error("No active VGXNESS structural-analysis ticket exists for this child session")
+	          const decimal = (value, fallback, maximum, label) => {
+	            if (value === undefined) return fallback
+	            const parsed = Number(value)
+	            const canonical = typeof value === "number" ? parsed === value : String(parsed) === value
+	            if (!Number.isSafeInteger(parsed) || parsed < 0 || !canonical) {
+	              throw new Error("VGXNESS " + label + " is invalid")
+	            }
+	            if (parsed === 0) return fallback
+	            return Math.min(parsed, maximum)
+	          }
+	          const envelope = await withNativeTicketLane(active, () => invokeBounded(
+	            ["bridge", "codegraph", "--stdin"],
+	            {
+	              protocolVersion: "1", ticketId: active.ticketId, childSessionId: context.sessionID,
+	              operation: args.operation, query: args.query, symbol: args.symbol, files: args.files,
+	              depth: decimal(args.depth, 0, 5, "CodeGraph depth"),
+	              maxFiles: decimal(args.maxFiles, 0, 12, "CodeGraph maxFiles"),
+	            },
+	            workspace,
+	            TERMINAL_TIMEOUT_MS,
+	            context.abort,
+	          ))
+	          if (!envelope.ok || !envelope.codegraph) throw new Error(bridgeFailure(envelope, "VGXNESS CodeGraph query was unavailable or denied"))
+	          return JSON.stringify(envelope.codegraph)
+	        },
+	      }),
+	      vgxness_task_claim: tool({
+	        description: "Claim one VGXNESS-approved visible native Task and receive its exact content-bound execution prompt.",
+	        args: {
+	          orchestrationId: tool.schema.string(),
+	          ownerId: tool.schema.string(),
+	          taskId: tool.schema.string(),
+	          claimToken: tool.schema.string(),
+	        },
+	        async execute(args, context) {
+	          const workspace = context.worktree || context.directory
+	          if (nativeTickets.has(context.sessionID)) throw new Error("This native Task already holds an active VGXNESS ticket")
+	          const status = await invokeTerminal(
+	            ["bridge", "orchestrate-status", "--stdin"],
+	            { protocolVersion: "1", orchestrationId: args.orchestrationId },
+	            workspace,
+	          )
+	          const orchestration = exactOrchestration(status)
+	          if (
+	            orchestration.ownerId !== args.ownerId ||
+	            orchestration.parentSessionId === context.sessionID ||
+	            orchestration.status === "completed" ||
+	            orchestration.status === "failed" ||
+	            orchestration.status === "cancelled"
+	          ) throw new Error("VGXNESS denied the visible native Task claim")
+	          const task = orchestration.plan.tasks.find((item) => item.taskId === args.taskId)
+	          const wave = orchestration.plan.waves.find((item) => item.taskIds.includes(args.taskId))
+	          const expectedAgent = nativeAgentForTask(task)
+	          const expectedWave = orchestration.status === "pending"
+	            ? orchestration.nextWave
+	            : orchestration.currentWave
+	          if (!task || !wave || wave.index !== expectedWave || context.agent !== expectedAgent) {
+	            throw new Error("VGXNESS visible native Task claim does not match the approved wave")
+	          }
+	          const child = responseData(await client.session.get({
+	            path: { id: context.sessionID },
+	            query: { directory: workspace },
+	          }), "OpenCode could not verify the visible native Task session")
+	          if (child.parentID !== orchestration.parentSessionId) {
+	            throw new Error("VGXNESS visible native Task is not attached to the approved parent session")
+	          }
+	          const key = workspace + "\n" + orchestration.orchestrationId + "\n" + wave.waveId
+	          const tokenKey = orchestration.orchestrationId + "\n" + args.taskId
+	          if (orchestration.status === "pending" && visibleClaimTokens.get(tokenKey) !== args.claimToken) {
+	            throw new Error("VGXNESS visible native Task claim capability is invalid")
+	          }
+	          if (orchestration.status === "running") {
+	            const recovery = await invokeTerminal(
+	              ["bridge", "orchestrate-status", "--stdin"],
+	              {
+	                protocolVersion: "1", orchestrationId: args.orchestrationId,
+	                taskId: args.taskId, childSessionId: context.sessionID, claimToken: args.claimToken,
+	              },
+	              workspace,
+	            )
+	            const recoveredOrchestration = exactOrchestration(recovery)
+	            const prepared = exactVisiblePrepared(recoveredOrchestration, args.taskId, context.sessionID, expectedAgent)
+	            nativeTickets.set(context.sessionID, {
+	              ticketId: prepared.ticketId,
+	              orchestrationId: orchestration.orchestrationId,
+	              ownerId: orchestration.ownerId,
+	              taskId: args.taskId,
+	              parentSessionId: orchestration.parentSessionId,
+	              workspace,
+	              waveKey: key,
+	            })
+	            return JSON.stringify(prepared)
+	          }
+	          let claimWave = visibleWaveClaims.get(key)
+	          if (!claimWave) {
+	            claimWave = {
+	              workspace,
+	              orchestrationId: orchestration.orchestrationId,
+	              ownerId: orchestration.ownerId,
+	              parentSessionId: orchestration.parentSessionId,
+	              waveId: wave.waveId,
+	              taskIds: [...wave.taskIds],
+	              claims: new Map(),
+	              remaining: new Set(wave.taskIds),
+	              controller: new AbortController(),
+	              preparing: false,
+	              prepared: false,
+	              terminal: false,
+	            }
+	            claimWave.timer = setTimeout(() => {
+	              rejectVisibleWave(key, claimWave, new Error("Timed out waiting for every visible native Task in the approved wave"))
+	            }, VISIBLE_CLAIM_TIMEOUT_MS)
+	            visibleWaveClaims.set(key, claimWave)
+	          }
+	          if (
+	            claimWave.ownerId !== orchestration.ownerId ||
+	            claimWave.parentSessionId !== orchestration.parentSessionId ||
+	            claimWave.taskIds.length !== wave.taskIds.length ||
+	            claimWave.taskIds.some((taskId, index) => taskId !== wave.taskIds[index])
+	          ) throw new Error("VGXNESS visible native Task wave identity changed")
+	          let claim = claimWave.claims.get(args.taskId)
+	          if (claim && claim.childSessionId !== context.sessionID) {
+	            throw new Error("VGXNESS visible native Task was already claimed by another session")
+	          }
+	          for (const [claimedTaskId, existing] of claimWave.claims.entries()) {
+	            if (claimedTaskId !== args.taskId && existing.childSessionId === context.sessionID) {
+	              throw new Error("One visible native Task session cannot claim multiple tasks")
+	            }
+	          }
+	          if (!claim) {
+	            claim = {
+	              childSessionId: context.sessionID,
+	              ticketId: "ticket-" + randomUUID(),
+	              claimToken: args.claimToken,
+	              agent: expectedAgent,
+	              deferred: deferredClaim(),
+	            }
+	            claimWave.claims.set(args.taskId, claim)
+	          }
+	          if (claimWave.claims.size === claimWave.taskIds.length) {
+	            void prepareVisibleWave(key, claimWave)
+	          }
+	          const abortClaim = () => rejectVisibleWave(key, claimWave, new Error("Visible native Task claim was cancelled"))
+	          context.abort.addEventListener("abort", abortClaim, { once: true })
+	          try {
+	            return await claim.deferred.promise
+	          } finally {
+	            context.abort.removeEventListener("abort", abortClaim)
+	          }
+	        },
+	      }),
+	      vgxness_task_complete: tool({
+	        description: "Durably complete the active VGXNESS-visible native Task with its exact compact agent.result JSON.",
+	        args: {
+	          result: tool.schema.string(),
+	        },
+	        async execute(args, context) {
+	          const workspace = context.worktree || context.directory
+	          const active = nativeTickets.get(context.sessionID)
+	          if (!active?.orchestrationId || active.workspace !== workspace) {
+	            throw new Error("No active VGXNESS visible native Task ticket exists for this session")
+	          }
+	          const result = exactAgentResultInput(args.result)
+	          if (new TextEncoder().encode(JSON.stringify(result)).length > MAX_ORCHESTRATION_RESULT_BYTES) {
+	            throw new Error("Native VGXNESS visible Task result exceeded its aggregate-safe bound")
+	          }
+	          const terminal = await withNativeTicketLane(active, async () => {
+	            const completed = await invokeTerminal(
+	              ["bridge", "complete", "--stdin"],
+	              {
+	                protocolVersion: "1", ticketId: active.ticketId,
+	                parentSessionId: active.parentSessionId, childSessionId: context.sessionID,
+	                messageId: context.messageID, result,
+	              },
+	              workspace,
+	            )
+	            if (!completed.ok) throw new Error(bridgeFailure(completed, "VGXNESS rejected the visible native Task result"))
+	            if (completed.status !== "completed") {
+	              const failed = await invokeTerminal(
+	                ["bridge", "orchestrate-terminal", "--stdin"],
+	                {
+	                  protocolVersion: "1", orchestrationId: active.orchestrationId, ownerId: active.ownerId,
+	                  taskId: active.taskId, ticketId: active.ticketId, childSessionId: context.sessionID,
+	                  status: "failed", failure: "native Task result failed its content-bound contract",
+	                },
+	                workspace,
+	              )
+	              if (!failed.ok) throw new Error(bridgeFailure(failed, "VGXNESS rejected the failed visible native Task terminal"))
+	              throw new Error("VGXNESS rejected the visible native Task result contract")
+	            }
+	            const recorded = await invokeTerminal(
+	              ["bridge", "orchestrate-terminal", "--stdin"],
+	              {
+	                protocolVersion: "1", orchestrationId: active.orchestrationId, ownerId: active.ownerId,
+	                taskId: active.taskId, ticketId: active.ticketId, childSessionId: context.sessionID,
+	                status: "completed", messageId: context.messageID,
+	                resultId: "result-" + active.ticketId, result,
+	              },
+	              workspace,
+	            )
+	            if (!recorded.ok) throw new Error(bridgeFailure(recorded, "VGXNESS rejected the visible native Task terminal"))
+	            return recorded
+	          })
+	          nativeTickets.delete(context.sessionID)
+	          const claimWave = visibleWaveClaims.get(active.waveKey)
+	          claimWave?.remaining.delete(active.taskId)
+	          if (claimWave?.remaining.size === 0) {
+	            claimWave.terminal = true
+	            visibleWaveClaims.delete(active.waveKey)
+	          }
+	          return JSON.stringify(terminal)
 	        },
 	      }),
 	      vgxness_status: tool({
@@ -823,204 +1638,140 @@ async function readBounded(stream) {
 	          return JSON.stringify(await invoke(["bridge", "status"], undefined, workspace, context.abort))
 	        },
 	      }),
-	      vgxness_orchestrate: tool({
-	        description: "Adaptively decompose one high-level goal with the native VGXNESS Navigator, validate the plan, execute legal dependency waves in native OpenCode child sessions, and return one durable join.",
+	      vgxness_run: tool({
+	        description: "Run one user goal through the smallest sufficient VGXNESS plan. VGXNESS chooses a single visible native Task, parallel independent Tasks, or dependent waves while preserving the same bounded authority and durable join.",
 	        args: {
-	          goal: tool.schema.string(),
+	          action: tool.schema.enum(["start", "advance"]).optional(),
+	          goal: tool.schema.string().optional(),
+	          mode: tool.schema.enum(["fast", "auto", "deep"]).optional(),
+	          constraints: tool.schema.array(tool.schema.string()).optional(),
+	          desiredOutcome: tool.schema.string().optional(),
 	          acceptanceCriteria: tool.schema.array(tool.schema.string()).optional(),
+	          orchestrationId: tool.schema.string().optional(),
 	        },
 	        async execute(args, context) {
 	          const workspace = context.worktree || context.directory
-	          const separator = VGXNESS_MODEL.indexOf("/")
-	          if (separator <= 0 || separator === VGXNESS_MODEL.length - 1) throw new Error("VGXNESS configured an invalid Navigator model")
-	          let navigatorSessionId = ""
-	          let orchestration
-	          const activeChildren = new Set()
-	          try {
-	            const navigator = await createNativeChild(client, workspace, context.sessionID, "VGXNESS Navigator")
-	            navigatorSessionId = navigator.id
-	            context.metadata({ title: "VGXNESS adaptive orchestration", metadata: { navigatorSessionId } })
-	            const planningPrompt = JSON.stringify({
-	              kind: "vgxness.navigator.request", schemaVersion: "1", goal: args.goal,
-	              acceptanceCriteria: args.acceptanceCriteria || [],
-	              constraints: { maxTasks: 16, maxParallel: 4, nativeWrites: false, agentChoice: "vgxness-authority" },
-	            })
-	            const plannedMessage = responseData(await client.session.prompt({
-	              path: { id: navigatorSessionId },
-	              query: { directory: workspace },
-	              body: {
-	                agent: "vgxness-navigator",
-	                model: { providerID: VGXNESS_MODEL.slice(0, separator), modelID: VGXNESS_MODEL.slice(separator + 1) },
-	                parts: [{ type: "text", text: planningPrompt }],
-	              },
-	            }), "Native VGXNESS Navigator execution failed")
-	            const candidateTasks = exactNavigatorProposal(plannedMessage.parts || [])
-	            let envelope = await invokeBounded(
-	              ["bridge", "orchestrate-plan", "--stdin"],
-	              {
-	                protocolVersion: "1", model: VGXNESS_MODEL,
-	                input: { goal: args.goal, acceptanceCriteria: args.acceptanceCriteria || [] },
-	                parentSessionId: context.sessionID, parentMessageId: context.messageID, candidateTasks,
-	              },
-	              workspace,
-	              TERMINAL_TIMEOUT_MS,
-	              context.abort,
-	            )
-	            orchestration = envelope.orchestration
-	            if (!envelope.ok || !orchestration || !orchestration.plan || !Array.isArray(orchestration.plan.waves)) {
-	              throw new Error("VGXNESS did not approve a valid orchestration plan")
+	          const action = args.action || "start"
+	          if (action === "start") {
+	            if (typeof args.goal !== "string" || !args.goal.trim() || args.orchestrationId) {
+	              throw new Error("Starting a VGXNESS run requires a non-empty goal and no orchestrationId")
 	            }
-	            context.metadata({
-	              title: "VGXNESS " + orchestration.plan.decision + " plan",
-	              metadata: { orchestrationId: orchestration.orchestrationId, scheduleId: orchestration.scheduleId, ownerId: orchestration.ownerId, taskCount: orchestration.plan.tasks.length },
-	            })
-	            const tasks = new Map(orchestration.plan.tasks.map((task) => [task.taskId, task]))
-	            for (const wave of orchestration.plan.waves) {
-	              if (orchestration.status === "failed" || orchestration.status === "cancelled") break
-	              const bindings = await Promise.all(wave.taskIds.map(async (taskId) => {
-	                if (!tasks.has(taskId)) throw new Error("VGXNESS approved a wave with an unknown task")
-	                const child = await createNativeChild(client, workspace, context.sessionID, "VGXNESS " + taskId)
-	                activeChildren.add(child.id)
-	                return { taskId, childSessionId: child.id, ticketId: "ticket-" + randomUUID() }
-	              }))
-	              envelope = await invokeBounded(
-	                ["bridge", "orchestrate-wave", "--stdin"],
-	                {
-	                  protocolVersion: "1", orchestrationId: orchestration.orchestrationId,
-	                  ownerId: orchestration.ownerId, bindings,
-	                },
-	                workspace,
-	                TERMINAL_TIMEOUT_MS,
-	                context.abort,
-	              )
-	              orchestration = envelope.orchestration
-	              if (!envelope.ok || !orchestration) throw new Error("VGXNESS could not prepare the approved execution wave")
-	              const prepared = new Map((orchestration.prepared || []).map((item) => [item.taskId, exactPrepared({ ok: true, prepared: item.prepared })]))
-	              const terminalSettlements = await Promise.allSettled(bindings.map(async (binding) => {
-	                const preparedTask = prepared.get(binding.taskId)
-	                if (!preparedTask) {
-	                  await client.session.abort({ path: { id: binding.childSessionId }, query: { directory: workspace } }).catch(() => undefined)
-	                  activeChildren.delete(binding.childSessionId)
-	                  return undefined
-	                }
-	                try {
-	                  const message = await promptNativeChild(client, workspace, context, binding.childSessionId, preparedTask)
-	                  const result = exactAgentResult(message.parts || [])
-	                  if (new TextEncoder().encode(JSON.stringify(result)).length > MAX_ORCHESTRATION_RESULT_BYTES) throw new Error("Native VGXNESS orchestration result exceeded its aggregate-safe bound")
-	                  const terminalMessageId = "message-" + binding.ticketId
-	                  const resultId = "result-" + binding.ticketId
-	                  const completed = await invokeTerminal(
-	                    ["bridge", "complete", "--stdin"],
-	                    {
-	                      protocolVersion: "1", ticketId: binding.ticketId, parentSessionId: context.sessionID,
-	                      childSessionId: binding.childSessionId, messageId: message.info.id, result,
-	                    },
-	                    workspace,
-	                  )
-	                  if (!completed.ok) throw new Error("VGXNESS rejected a native orchestration result")
-	                  return await invokeTerminal(
-	                    ["bridge", "orchestrate-terminal", "--stdin"],
-	                    {
-	                      protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId,
-	                      taskId: binding.taskId, ticketId: binding.ticketId, childSessionId: binding.childSessionId,
-	                      status: "completed", messageId: terminalMessageId, resultId, result,
-	                    },
-	                    workspace,
-	                  )
-	                } catch (cause) {
-	                  await client.session.abort({ path: { id: binding.childSessionId }, query: { directory: workspace } }).catch(() => undefined)
-	                  const cancelled = context.abort.aborted
-	                  await invokeTerminal(
-	                    ["bridge", "fail", "--stdin"],
-	                    {
-	                      protocolVersion: "1", ticketId: binding.ticketId, parentSessionId: context.sessionID,
-	                      childSessionId: binding.childSessionId,
-	                      category: cancelled ? "native-subagent-cancelled" : "native-subagent-failed",
-	                    },
-	                    workspace,
-	                  ).catch(() => undefined)
-	                  return await invokeTerminal(
-	                    ["bridge", "orchestrate-terminal", "--stdin"],
-	                    {
-	                      protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId,
-	                      taskId: binding.taskId, ticketId: binding.ticketId, childSessionId: binding.childSessionId,
-	                      status: cancelled ? "cancelled" : "failed",
-	                      failure: cancelled ? "native orchestration was cancelled" : "native subagent execution failed",
-	                    },
-	                    workspace,
-	                  )
-	                } finally {
-	                  activeChildren.delete(binding.childSessionId)
-	                }
-	              }))
-	              let terminalFailure
-	              for (const settlement of terminalSettlements) {
-	                if (settlement.status === "rejected") terminalFailure ||= settlement.reason
-	                else if (settlement.value?.orchestration) orchestration = settlement.value.orchestration
-	              }
-	              if (terminalFailure) throw terminalFailure
-	              envelope = await invokeTerminal(
-	                ["bridge", "orchestrate-status", "--stdin"],
-	                { protocolVersion: "1", orchestrationId: orchestration.orchestrationId },
-	                workspace,
-	              )
-	              if (!envelope.ok || !envelope.orchestration) throw new Error("VGXNESS could not refresh durable orchestration status")
-	              orchestration = envelope.orchestration
-	            }
-	            envelope = await invokeTerminal(
-	              ["bridge", "orchestrate-join", "--stdin"],
-	              { protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId },
-	              workspace,
-	            )
-	            return JSON.stringify(envelope)
-	          } catch (cause) {
-	            await Promise.all([...activeChildren].map((id) => client.session.abort({ path: { id }, query: { directory: workspace } }).catch(() => undefined)))
-	            if (orchestration?.orchestrationId && orchestration?.ownerId) {
-	              const durable = context.abort.aborted
-	                ? await invokeTerminal(
-	                    ["bridge", "orchestrate-status", "--stdin"],
-	                    { protocolVersion: "1", orchestrationId: orchestration.orchestrationId },
-	                    workspace,
-	                  ).catch(() => undefined)
-	                : undefined
-	              if (durable?.ok && durable?.orchestration?.status === "pending") {
-	                return JSON.stringify(durable)
-	              }
-	              const cancelled = await invokeTerminal(
-	                ["bridge", "orchestrate-cancel", "--stdin"],
-	                { protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId },
-	                workspace,
-	              ).catch(() => undefined)
-	              if (context.abort.aborted && cancelled?.ok && cancelled?.orchestration) {
-	                return JSON.stringify(cancelled)
-	              }
-	            }
-	            throw cause instanceof Error ? cause : new Error("VGXNESS adaptive orchestration failed")
+	            return await startVisibleOrchestration(client, context, workspace, args, args.mode || "auto")
 	          }
+	          if (
+	            typeof args.orchestrationId !== "string" || !args.orchestrationId ||
+	            args.goal || args.mode || args.constraints || args.desiredOutcome || args.acceptanceCriteria
+	          ) {
+	            throw new Error("Advancing a VGXNESS run requires only its orchestrationId")
+	          }
+	          return await advanceVisibleOrchestration(context, workspace, args.orchestrationId)
+	        },
+	      }),
+	      vgxness_orchestrate: tool({
+	        description: "Start or advance one VGXNESS-approved multi-task orchestration when real dependencies, independent evidence, or a synthesis wave justify decomposition. Pass only each delegation task's exact arguments object to the built-in OpenCode Task tool so native subagents are visible in the parent conversation.",
+	        args: {
+	          action: tool.schema.enum(["start", "advance"]).optional(),
+	          goal: tool.schema.string().optional(),
+	          acceptanceCriteria: tool.schema.array(tool.schema.string()).optional(),
+	          orchestrationId: tool.schema.string().optional(),
+	        },
+	        async execute(args, context) {
+	          const workspace = context.worktree || context.directory
+	          const action = args.action || "start"
+	          if (action === "start") {
+	            if (typeof args.goal !== "string" || !args.goal.trim() || args.orchestrationId) {
+	              throw new Error("Starting a visible VGXNESS orchestration requires only a non-empty goal")
+	            }
+	            return await startVisibleOrchestration(client, context, workspace, args, "deep")
+	          }
+	          if (typeof args.orchestrationId !== "string" || !args.orchestrationId || args.goal || args.acceptanceCriteria) {
+	            throw new Error("Advancing a visible VGXNESS orchestration requires only its orchestrationId")
+	          }
+	          return await advanceVisibleOrchestration(context, workspace, args.orchestrationId)
 	        },
 	      }),
 	      vgxness_dispatch: tool({
-	        description: "Prepare one bounded operation in VGXNESS, execute it in a native OpenCode child session, then durably accept its result. Use review-changes for current, staged, or uncommitted changes. Use continuity start, continue, and finish for multi-phase work.",
+	        description: "Start or join the preferred single bounded VGXNESS operation when one inspection or review is sufficient. A normal start returns exact built-in Task arguments so OpenCode renders its child session; call join with the returned orchestrationId after that Task terminates. Explicit continuity remains a legacy direct-session compatibility path.",
 	        args: {
-	          operation: tool.schema.enum(["read-files", "write-files", "review-changes"]),
-	          goal: tool.schema.string(),
+	          action: tool.schema.enum(["start", "join"]).optional(),
+	          operation: tool.schema.enum(["read-files", "analyze-structure", "write-files", "review-changes"]).optional(),
+	          goal: tool.schema.string().optional(),
 	          acceptanceCriteria: tool.schema.array(tool.schema.string()).optional(),
+	          orchestrationId: tool.schema.string().optional(),
 	          continuity: tool.schema.enum(["start", "continue", "finish"]).optional(),
 	          runId: tool.schema.string().optional(),
 	        },
 	        async execute(args, context) {
 	          const workspace = context.worktree || context.directory
-	          const releaseCapacity = acquireNativeCapacity(workspace, args.operation === "read-files" && args.continuity === undefined && args.runId === undefined)
+	          const action = args.action || "start"
+	          if (action === "join") {
+	            if (
+	              typeof args.orchestrationId !== "string" || !args.orchestrationId ||
+	              args.operation || args.goal || args.acceptanceCriteria || args.continuity || args.runId
+	            ) {
+	              throw new Error("Joining a visible VGXNESS dispatch requires only its orchestrationId")
+	            }
+	            return await advanceVisibleOrchestration(context, workspace, args.orchestrationId)
+	          }
+	          if (
+	            typeof args.operation !== "string" || typeof args.goal !== "string" || !args.goal.trim() ||
+	            args.orchestrationId
+	          ) {
+	            throw new Error("Starting a VGXNESS dispatch requires an operation and a non-empty goal")
+	          }
+	          if (args.continuity === undefined && args.runId === undefined) {
+	            if (args.operation === "write-files") {
+	              throw new Error("Native write-files remains unavailable until a ticket-authenticated edit broker exists")
+	            }
+	            const taskId = "task-dispatch-" + randomUUID().replaceAll("-", "").slice(0, 24).toLowerCase()
+	            const candidateTask = {
+	              taskId,
+	              capability: args.operation === "review-changes" ? "review" : "explore",
+	              operation: args.operation,
+	              goal: args.goal,
+	              acceptanceCriteria: args.acceptanceCriteria || [],
+	              dependsOn: [],
+	              continuity: "isolated",
+	            }
+	            const envelope = await invokeBounded(
+	              ["bridge", "orchestrate-plan", "--stdin"],
+	              {
+	                protocolVersion: "1", model: VGXNESS_MODEL,
+	                input: { goal: args.goal, acceptanceCriteria: args.acceptanceCriteria || [] },
+	                parentSessionId: context.sessionID, parentMessageId: context.messageID,
+	                candidateTasks: [candidateTask],
+	              },
+	              workspace,
+	              TERMINAL_TIMEOUT_MS,
+	              context.abort,
+	            )
+	            const orchestration = exactOrchestration(envelope)
+	            if (
+	              orchestration.status !== "pending" || orchestration.nextWave !== 0 ||
+	              orchestration.plan.tasks.length !== 1 ||
+	              orchestration.plan.tasks[0].taskId !== taskId ||
+	              orchestration.plan.tasks[0].operation !== args.operation
+	            ) {
+	              throw new Error("VGXNESS direct dispatch did not preserve its single approved native Task")
+	            }
+	            return visibleDelegationResult(context, envelope, 0)
+	          }
+	          const releaseCapacity = acquireNativeCapacity(workspace, (args.operation === "read-files" || args.operation === "analyze-structure") && args.continuity === undefined && args.runId === undefined)
 	          let prepared
 	          let ticketId = ""
 	          let childSessionId = ""
 	          let deadlineExceeded = false
+	          const agent = args.operation === "review-changes" ? "vgxness-reviewer" : "vgxness-explorer"
+	          const visible = { taskId: args.operation, sessionId: "", agent, status: "preparing" }
+	          const publish = (phase) => publishNativeVisibility(context, visible.sessionId ? [visible] : [], phase, { operation: args.operation })
 	          try {
 	            const created = responseData(await client.session.create({
 	              query: { directory: workspace },
-	              body: { parentID: context.sessionID, title: "VGXNESS native subagent" },
+	              body: { parentID: context.sessionID, title: nativeChildTitle(args.operation, agent) },
 	            }), "OpenCode could not create a native VGXNESS subagent")
 	            childSessionId = created.id
+	            visible.sessionId = childSessionId
+	            publish("preparing")
 	            ticketId = "ticket-" + randomUUID()
 	            const envelope = await invoke(
 	              ["bridge", "prepare", "--stdin"],
@@ -1030,12 +1781,16 @@ async function readBounded(stream) {
 	            )
 	            if (envelope.ok && envelope.status === "recovered" && typeof envelope.runId === "string" && envelope.runId) {
 	              await client.session.abort({ path: { id: childSessionId }, query: { directory: workspace } }).catch(() => undefined)
+	              visible.status = "cancelled"
+	              const presentation = publish("recovered")
 	              ticketId = ""
-	              return JSON.stringify(envelope)
+	              return { ...presentation, output: JSON.stringify(envelope) }
 	            }
 	            prepared = exactPrepared(envelope)
 	            if (prepared.ticketId !== ticketId) throw new Error("VGXNESS returned a mismatched native dispatch ticket")
-	            context.metadata({ title: "VGXNESS native subagent", metadata: { sessionId: childSessionId, ticketId: prepared.ticketId, agent: prepared.agent } })
+	            visible.agent = prepared.agent
+	            visible.status = "running"
+	            publish("running")
 	            const message = await promptNativeChild(client, workspace, context, childSessionId, prepared)
 	            const result = exactAgentResult(message.parts || [])
 	            const completed = await invokeTerminal(
@@ -1046,7 +1801,9 @@ async function readBounded(stream) {
 	              },
 	              workspace,
 	            )
-	            return JSON.stringify(completed)
+	            visible.status = "completed"
+	            const presentation = publish("completed")
+	            return { ...presentation, output: JSON.stringify(completed) }
 	          } catch (cause) {
 	            let cleanupFailure
 	            if (childSessionId) await client.session.abort({ path: { id: childSessionId }, query: { directory: workspace } }).catch(() => undefined)
@@ -1064,6 +1821,10 @@ async function readBounded(stream) {
 	              } catch (failure) {
 	                cleanupFailure = failure
 	              }
+	            }
+	            if (visible.sessionId) {
+	              visible.status = context.abort.aborted ? "cancelled" : "failed"
+	              publish(visible.status)
 	            }
 	            if (cleanupFailure) {
 	              const detail = cleanupFailure instanceof Error ? cleanupFailure.message : "unknown bridge cleanup error"

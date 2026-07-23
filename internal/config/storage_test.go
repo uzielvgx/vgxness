@@ -13,7 +13,17 @@ func TestResolveStorageRoot_ProjectOverrideWins(t *testing.T) {
 	base, explicit := t.TempDir(), filepath.Join(t.TempDir(), "explicit")
 	paths, err := Prepare(context.Background(), Options{StorageRoot: explicit, ProjectDir: filepath.Join(base, "project"), ProjectLocal: true, HomeDir: filepath.Join(base, "home")})
 	testutil.NoError(t, err)
-	testutil.Require(t, paths.Root == explicit && paths.Database == filepath.Join(explicit, "memory.db"), "unexpected paths: %+v", paths)
+	testutil.Require(t, paths.Root == explicit && paths.Database == filepath.Join(explicit, "memory.db") && paths.LegacyDatabase == "", "unexpected paths: %+v", paths)
+}
+
+func TestPrepare_DefaultUsesUnifiedDatabaseAndProjectOperationalRoot(t *testing.T) {
+	home, project := t.TempDir(), filepath.Join(t.TempDir(), "project")
+	testutil.NoError(t, os.MkdirAll(project, 0o700))
+	paths, err := Prepare(context.Background(), Options{HomeDir: home, ProjectDir: project})
+	testutil.NoError(t, err)
+	testutil.Require(t, filepath.Dir(paths.Root) == filepath.Join(home, ".vgxness", "projects"), "unexpected project root: %+v", paths)
+	testutil.Require(t, paths.Database == filepath.Join(home, ".vgxness", "memory.db"), "database is not unified: %+v", paths)
+	testutil.Require(t, paths.LegacyDatabase == filepath.Join(paths.Root, "memory.db"), "legacy path missing: %+v", paths)
 }
 
 func TestOpen_InvalidRootLeavesNoPartialState(t *testing.T) {

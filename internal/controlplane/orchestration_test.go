@@ -44,9 +44,12 @@ func TestAdaptiveOrchestrationPersistsParallelNativeWaveAndJoin(t *testing.T) {
 		t.Fatalf("planned=%#v err=%v", planned, err)
 	}
 	view := planned.Orchestration
+	if view.ParentSessionID != "ses_parent" || view.NextWave != 0 {
+		t.Fatalf("planned visible wave projection=%#v", view)
+	}
 	bindings := []bridge.OrchestrationBinding{
-		{TaskID: "task-memory", ChildSessionID: "ses_child_memory", TicketID: "ticket-memory"},
-		{TaskID: "task-delegation", ChildSessionID: "ses_child_delegation", TicketID: "ticket-delegation"},
+		{TaskID: "task-memory", ChildSessionID: "ses_child_memory", TicketID: "ticket-memory", ClaimToken: "claim-memory"},
+		{TaskID: "task-delegation", ChildSessionID: "ses_child_delegation", TicketID: "ticket-delegation", ClaimToken: "claim-delegation"},
 	}
 	failed := bindings[1]
 	if os.MkdirAll(nativeTicketDirectory(storage), 0o700) != nil || os.WriteFile(filepath.Join(nativeTicketDirectory(storage), failed.TicketID+".json"), []byte("{}"), 0o600) != nil {
@@ -63,6 +66,7 @@ func TestAdaptiveOrchestrationPersistsParallelNativeWaveAndJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	document.PreparedBindings = map[string]string{}
+	document.ClaimTokens = map[string]string{}
 	if err := writeOrchestrationDocument(storage, document); err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +128,42 @@ func TestAdaptiveOrchestrationPersistsParallelNativeWaveAndJoin(t *testing.T) {
 	}
 }
 
+func TestStatusOrchestrationReopensMixedParallelReadWave(t *testing.T) {
+	workspace := t.TempDir()
+	storage := filepath.Join(t.TempDir(), "storage")
+	sequence := 0
+	service := New(Options{
+		StorageRoot: storage,
+		NewID: func(prefix string) (string, error) {
+			sequence++
+			return prefix + "-mixed-wave-" + strconv.Itoa(sequence), nil
+		},
+	})
+	analyze := orchestrationReadTask("task-analyze", nil)
+	analyze.Operation = navigator.OperationAnalyzeStructure
+	planned, err := service.PlanOrchestration(context.Background(), workspace, bridge.OrchestratePlanRequest{
+		ProtocolVersion: bridge.ProtocolVersion,
+		Model:           "openai/gpt-5.6-sol",
+		Input:           bridge.OrchestrateInput{Goal: "Inspect code and documentation independently"},
+		ParentSessionID: "ses_parent",
+		ParentMessageID: "msg_parent",
+		CandidateTasks: []navigator.Task{
+			analyze,
+			orchestrationReadTask("task-read", nil),
+		},
+	})
+	if err != nil || planned.Orchestration == nil || planned.Orchestration.Plan.Decision != "parallel" {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	status, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion,
+		OrchestrationID: planned.Orchestration.OrchestrationID,
+	})
+	if err != nil || status.Orchestration == nil || status.Status != "pending" || status.Orchestration.NextWave != 0 {
+		t.Fatalf("reopened mixed wave=%#v err=%v", status, err)
+	}
+}
+
 func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsAcrossServices(t *testing.T) {
 	workspace := t.TempDir()
 	storage := filepath.Join(t.TempDir(), "storage")
@@ -156,14 +196,32 @@ func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsA
 		t.Fatalf("planned=%#v err=%v", planned, err)
 	}
 	view := planned.Orchestration
-	completedBinding := bridge.OrchestrationBinding{TaskID: "task-completed", ChildSessionID: "ses_child_completed", TicketID: "ticket-completed"}
-	failedBinding := bridge.OrchestrationBinding{TaskID: "task-failed", ChildSessionID: "ses_child_failed", TicketID: "ticket-failed"}
+	completedBinding := bridge.OrchestrationBinding{TaskID: "task-completed", ChildSessionID: "ses_child_completed", TicketID: "ticket-completed", ClaimToken: "claim-completed"}
+	failedBinding := bridge.OrchestrationBinding{TaskID: "task-failed", ChildSessionID: "ses_child_failed", TicketID: "ticket-failed", ClaimToken: "claim-failed"}
 	prepared, err := reopen().PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
 		Bindings: []bridge.OrchestrationBinding{completedBinding, failedBinding},
 	})
 	if err != nil || prepared.Orchestration == nil || len(prepared.Orchestration.Prepared) != 2 {
 		t.Fatalf("prepared=%#v err=%v", prepared, err)
+	}
+	replayed, err := reopen().StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
+		TaskID: completedBinding.TaskID, ChildSessionID: completedBinding.ChildSessionID, ClaimToken: completedBinding.ClaimToken,
+	})
+	if err != nil || replayed.Orchestration == nil || len(replayed.Orchestration.Prepared) != 1 {
+		t.Fatalf("claim-bound prepared replay=%#v err=%v", replayed, err)
+	}
+	for _, item := range replayed.Orchestration.Prepared {
+		if item.ChildSessionID != completedBinding.ChildSessionID || item.Prepared.TicketID != completedBinding.TicketID {
+			t.Fatalf("prepared replay lost native binding: %#v", item)
+		}
+	}
+	publicStatus, err := reopen().StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
+	})
+	if err != nil || publicStatus.Orchestration == nil || len(publicStatus.Orchestration.Prepared) != 0 {
+		t.Fatalf("ownerless status exposed prepared prompts: %#v err=%v", publicStatus, err)
 	}
 	failed, err := reopen().Fail(context.Background(), workspace, bridge.NativeFailureRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: failedBinding.TicketID,
@@ -172,13 +230,11 @@ func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsA
 	if err != nil || !failed.OK {
 		t.Fatalf("failed=%#v err=%v", failed, err)
 	}
-	failedTerminal, err := reopen().RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
-		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
-		TaskID: failedBinding.TaskID, TicketID: failedBinding.TicketID, ChildSessionID: failedBinding.ChildSessionID,
-		Status: "failed", Failure: "native subagent execution failed",
+	failedTerminal, err := reopen().StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
 	})
-	if err != nil || failedTerminal.Orchestration == nil {
-		t.Fatalf("failed terminal=%#v err=%v", failedTerminal, err)
+	if err != nil || failedTerminal.Orchestration == nil || failedTerminal.Status != "running" {
+		t.Fatalf("reconciled failed terminal=%#v err=%v", failedTerminal, err)
 	}
 	native, err := readNativeTicket(storage, completedBinding.TicketID)
 	if err != nil {
@@ -201,6 +257,57 @@ func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsA
 	})
 	if err != nil || completedTerminal.Orchestration == nil || completedTerminal.Status != "failed" {
 		t.Fatalf("completed terminal=%#v err=%v", completedTerminal, err)
+	}
+}
+
+func TestStatusOrchestrationExpiresPreparedVisibleTask(t *testing.T) {
+	workspace := t.TempDir()
+	storage := filepath.Join(t.TempDir(), "storage")
+	now := time.Now().UTC()
+	adapter := nativeTestAdapter(now)
+	sequence := 0
+	service := New(Options{
+		StorageRoot: storage,
+		Now:         func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) {
+			return adapter, nil
+		},
+		NewID: func(prefix string) (string, error) {
+			sequence++
+			return prefix + "-expiry-" + strconv.Itoa(sequence), nil
+		},
+	})
+	planned, err := service.PlanOrchestration(context.Background(), workspace, bridge.OrchestratePlanRequest{
+		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol",
+		Input:           bridge.OrchestrateInput{Goal: "Inspect one bounded file"},
+		ParentSessionID: "ses_parent", ParentMessageID: "msg_parent",
+		CandidateTasks: []navigator.Task{orchestrationReadTask("task-expiry", nil)},
+	})
+	if err != nil || planned.Orchestration == nil {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	view := planned.Orchestration
+	binding := bridge.OrchestrationBinding{
+		TaskID: "task-expiry", ChildSessionID: "ses_child_expiry",
+		TicketID: "ticket-expiry", ClaimToken: "claim-expiry",
+	}
+	prepared, err := service.PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
+		OwnerID: view.OwnerID, Bindings: []bridge.OrchestrationBinding{binding},
+	})
+	if err != nil || prepared.Status != "running" {
+		t.Fatalf("prepared=%#v err=%v", prepared, err)
+	}
+	now = now.Add(11 * time.Minute)
+	expired, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
+	})
+	if err != nil || expired.Orchestration == nil || expired.Status != "failed" {
+		t.Fatalf("expired=%#v err=%v", expired, err)
+	}
+	native, err := readNativeTicket(storage, binding.TicketID)
+	if err != nil || native.State != "failed" || native.Response == nil {
+		t.Fatalf("expired native ticket=%#v err=%v", native, err)
 	}
 }
 
@@ -271,7 +378,7 @@ func TestAdaptiveOrchestrationCarriesBoundedDependencyResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	view := planned.Orchestration
-	firstBinding := bridge.OrchestrationBinding{TaskID: first.TaskID, ChildSessionID: "ses_child_first", TicketID: "ticket-first"}
+	firstBinding := bridge.OrchestrationBinding{TaskID: first.TaskID, ChildSessionID: "ses_child_first", TicketID: "ticket-first", ClaimToken: "claim-first"}
 	if _, err := service.PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID, Bindings: []bridge.OrchestrationBinding{firstBinding},
 	}); err != nil {
@@ -290,12 +397,13 @@ func TestAdaptiveOrchestrationCarriesBoundedDependencyResults(t *testing.T) {
 	// Simulate response loss after native completion but before orchestration
 	// acknowledgement. Status must reconcile and project the durable result in
 	// the same request so the dependent wave can consume it immediately.
-	if _, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+	reconciled, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if err != nil || reconciled.Orchestration == nil || reconciled.Orchestration.NextWave != 1 {
+		t.Fatalf("next visible wave projection=%#v err=%v", reconciled, err)
 	}
-	secondBinding := bridge.OrchestrationBinding{TaskID: second.TaskID, ChildSessionID: "ses_child_second", TicketID: "ticket-second"}
+	secondBinding := bridge.OrchestrationBinding{TaskID: second.TaskID, ChildSessionID: "ses_child_second", TicketID: "ticket-second", ClaimToken: "claim-second"}
 	prepared, err := service.PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID, Bindings: []bridge.OrchestrationBinding{secondBinding},
 	})
@@ -392,7 +500,7 @@ func TestAdaptiveOrchestrationResumeAdvancesOwnerAndKeepsCheckpoint(t *testing.T
 		t.Fatal(err)
 	}
 	initial := planned.Orchestration
-	binding := bridge.OrchestrationBinding{TaskID: first.TaskID, ChildSessionID: "ses_child_first", TicketID: "ticket-first"}
+	binding := bridge.OrchestrationBinding{TaskID: first.TaskID, ChildSessionID: "ses_child_first", TicketID: "ticket-first", ClaimToken: "claim-first"}
 	if _, err := service.PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: initial.OrchestrationID, OwnerID: initial.OwnerID, Bindings: []bridge.OrchestrationBinding{binding},
 	}); err != nil {
@@ -421,7 +529,7 @@ func TestAdaptiveOrchestrationResumeAdvancesOwnerAndKeepsCheckpoint(t *testing.T
 	if err != nil || resumed.Orchestration == nil || resumed.Orchestration.OwnerID == initial.OwnerID {
 		t.Fatalf("resumed=%#v err=%v", resumed, err)
 	}
-	next := bridge.OrchestrationBinding{TaskID: second.TaskID, ChildSessionID: "ses_child_second", TicketID: "ticket-second"}
+	next := bridge.OrchestrationBinding{TaskID: second.TaskID, ChildSessionID: "ses_child_second", TicketID: "ticket-second", ClaimToken: "claim-second"}
 	request := bridge.OrchestrateWaveRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: initial.OrchestrationID, OwnerID: initial.OwnerID, Bindings: []bridge.OrchestrationBinding{next},
 	}

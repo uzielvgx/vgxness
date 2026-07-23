@@ -73,8 +73,8 @@ func TestFoundationDeliveryContract(t *testing.T) {
 		}
 	}
 	migrations, err := filepath.Glob("../memory/migrations/*.sql")
-	if err != nil || len(migrations) != 2 {
-		t.Fatalf("foundation must retain exactly two migrations: %v %v", migrations, err)
+	if err != nil || len(migrations) != 4 {
+		t.Fatalf("foundation must retain exactly four migrations: %v %v", migrations, err)
 	}
 	_ = filepath.WalkDir("../../.github", func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr == nil && (strings.Contains(strings.ToLower(path), "ruleset") || strings.Contains(strings.ToLower(path), "branch-protection")) {

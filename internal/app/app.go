@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 
@@ -54,6 +55,15 @@ func (memoryRuntime) Get(ctx context.Context, opts config.Options, request memor
 	return memory.NewMemoryService(storeRuntime{opts}, "cli", nil).Get(ctx, request)
 }
 
+func (memoryRuntime) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	return store.ResolveProject(ctx, workspace)
+}
+
 func (runtime memoryRuntime) producerName() string {
 	if runtime.producer == "" {
 		return "cli"
@@ -64,11 +74,7 @@ func (runtime memoryRuntime) producerName() string {
 type storeRuntime struct{ opts config.Options }
 
 func (runtime storeRuntime) Save(ctx context.Context, item memory.Observation) (memory.Observation, error) {
-	paths, err := config.Prepare(ctx, runtime.opts)
-	if err != nil {
-		return memory.Observation{}, err
-	}
-	store, err := memory.Open(ctx, paths.Database, nil)
+	store, err := openStore(ctx, runtime.opts)
 	if err != nil {
 		return memory.Observation{}, err
 	}
@@ -77,7 +83,7 @@ func (runtime storeRuntime) Save(ctx context.Context, item memory.Observation) (
 }
 
 func (runtime storeRuntime) Search(ctx context.Context, query memory.Search) ([]memory.Observation, error) {
-	store, err := openRead(ctx, runtime.opts)
+	store, err := openStoreRead(ctx, runtime.opts)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +92,7 @@ func (runtime storeRuntime) Search(ctx context.Context, query memory.Search) ([]
 }
 
 func (runtime storeRuntime) Get(ctx context.Context, id, project string, scope memory.Scope) (memory.Observation, error) {
-	store, err := openRead(ctx, runtime.opts)
+	store, err := openStoreRead(ctx, runtime.opts)
 	if err != nil {
 		return memory.Observation{}, err
 	}
@@ -94,10 +100,42 @@ func (runtime storeRuntime) Get(ctx context.Context, id, project string, scope m
 	return store.Get(ctx, id, project, scope)
 }
 
-func openRead(ctx context.Context, opts config.Options) (*memory.Store, error) {
+func openStore(ctx context.Context, opts config.Options) (*memory.Store, error) {
+	paths, err := config.Prepare(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	store, err := memory.Open(ctx, paths.Database, nil)
+	if err != nil {
+		return nil, err
+	}
+	project, err := store.ResolveProject(ctx, opts.ProjectDir)
+	if err == nil {
+		err = store.ImportLegacy(ctx, paths.LegacyDatabase, project)
+	}
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func openStoreRead(ctx context.Context, opts config.Options) (*memory.Store, error) {
 	paths, err := config.PathsFor(opts)
 	if err != nil {
 		return nil, err
 	}
-	return memory.OpenRead(ctx, paths.Database)
+	if _, err := os.Stat(paths.Database); errors.Is(err, os.ErrNotExist) {
+		if paths.LegacyDatabase == "" {
+			return memory.OpenRead(ctx, paths.Database)
+		}
+		if _, legacyErr := os.Stat(paths.LegacyDatabase); errors.Is(legacyErr, os.ErrNotExist) {
+			return memory.OpenRead(ctx, paths.Database)
+		} else if legacyErr != nil {
+			return nil, legacyErr
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	return openStore(ctx, opts)
 }

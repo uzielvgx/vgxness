@@ -31,6 +31,21 @@ func TestKernel_CompilesEmbeddedDraft2020ContractsOffline(t *testing.T) {
 	}
 }
 
+func TestKernel_AgentResultAcceptsBoundedMemoryCandidates(t *testing.T) {
+	kernel, err := NewKernel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := []byte(`{"kind":"agent.result","schemaVersion":"1","resultId":"result-1","taskId":"task-1","agentId":"agent-1","status":"success","summary":"done","artifacts":[],"nextRecommended":"none","risks":[],"errors":[],"memoryCandidates":[{"type":"architecture","title":"Runtime authority","content":"VGXNESS owns runtime authority.","topicKey":"runtime-authority","reason":"Verified in bounded evidence.","confidence":0.95}]}`)
+	if err := kernel.Validate(context.Background(), ExecutionSchemaURI+"#/$defs/agentResult", valid, false); err != nil {
+		t.Fatal(err)
+	}
+	invalid := []byte(strings.Replace(string(valid), `"confidence":0.95`, `"confidence":2`, 1))
+	if err := kernel.Validate(context.Background(), ExecutionSchemaURI+"#/$defs/agentResult", invalid, false); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid candidate confidence was accepted: %v", err)
+	}
+}
+
 func TestKernel_ReturnsProviderNeutralContractFailure(t *testing.T) {
 	kernel, err := NewKernel()
 	if err != nil {

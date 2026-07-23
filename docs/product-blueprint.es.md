@@ -26,7 +26,7 @@ VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por 
 
 **Contracts-only:** Los esquemas Draft 2020-12 de autoría independiente para rutas futuras de SDD, enrutamiento, artefactos y continuidad definen registros que el runtime delimitado actual aún no ejecuta. Los esquemas usados por el plano de control actual sí se validan en runtime.
 
-**Implemented/Partial:** Los planes de delegación validados, waves deterministas, sesiones nativas de Navigator/tareas, autoridad durable de slots y propietario/epoch, admisión condicionada a prerrequisitos, replay preparado, clasificación fail-closed, takeover de checkpoints, resultados dependientes delimitados, joins aceptados por autoridad y recibos de Delivery Authority ligados al contenido ya impulsan la ruta delimitada del producto. Los flujos completos de fases/artefactos SDD, la integración automática de delivery, una UX de autonomía más rica, la TUI, adaptadores adicionales y el ciclo avanzado de memoria siguen planificados.
+**Implemented/Partial:** Una fachada orientada a objetivos `vgxness_run` con perfiles `fast`, `auto` y `deep` reutiliza planes de delegación validados, waves deterministas, sesiones nativas de Navigator/tareas, autoridad durable de slots y propietario/epoch, admisión condicionada a prerrequisitos, clasificación fail-closed, takeover de checkpoints, resultados dependientes delimitados, joins aceptados por autoridad y recibos de Delivery Authority ligados al contenido. VGXNESS valida y persiste la memoria duradera propuesta por agentes, dejando contradicciones en revisión. Los brokers reales de escritura/shell/red, los flujos completos SDD, la integración automática de delivery, una UX de autonomía más rica, la TUI, adaptadores adicionales y la recuperación semántica avanzada siguen planificados.
 
 ### Contrato del documento y la traducción
 
@@ -58,7 +58,7 @@ VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por 
 3. **Verificar antes de aceptar.** Las afirmaciones sobre código, herramientas, estado y finalización requieren evidencia.
 4. **Coordinar mediante límites.** La orquestación, ejecución, revisión, almacenamiento, habilidades, permisos y adaptadores siguen siendo separables.
 5. **Mantener el estado inspeccionable.** Chronicle registra la verdad operativa; la memoria semántica conserva significado duradero.
-6. **Usar la ruta capaz más pequeña.** El trabajo simple permanece directo; la complejidad y el riesgo reciben planificación y validación proporcionales.
+6. **Usar la ruta suficiente más rápida.** El trabajo simple permanece directo; un asunto delimitado usa una tarea por defecto; la evidencia independiente se solapa solo cuando ahorra tiempo; la complejidad y el riesgo reciben planificación y validación proporcionales.
 7. **Cerrar ante límites inseguros.** Capacidades ausentes, contratos inválidos, adaptadores obsoletos o aprobaciones faltantes detienen el avance.
 8. **Conservar continuidad, no el volumen de la transcripción.** Transferir paquetes pequeños y referencias duraderas.
 9. **Diseñar para recuperación.** Cada operación delimitada tiene fallos visibles, cancelación y una siguiente acción segura.
@@ -117,7 +117,7 @@ TUI planificada / CLI+puente implementados / MCP local planificado
 | --- | --- |
 | Binario Go y composición | **Implemented:** Compilar un binario local y conectar configuración, inspección, memoria, Chronicle, Registry/Gatekeeper, proveedores, coordinador, setup y comandos del puente. |
 | CLI, auto-instalación y raíces de almacenamiento | **Implemented:** Instalar versiones inmutables detrás de un launcher permanente, activar actualizaciones atómicamente, hacer rollback de un nivel, resolver almacenamiento de proyecto/persona y ofrecer status, doctor, memoria, setup guiado, integración y comandos delimitados del puente. |
-| MemoryStore propio | **Implemented:** Almacenamiento semántico SQLite/FTS5, migraciones, campos de ciclo de vida, búsqueda filtrada y registros con procedencia. |
+| MemoryStore propio | **Implemented:** Almacenamiento semántico SQLite/FTS5, migraciones, campos de ciclo de vida, búsqueda filtrada, registros con procedencia, recuperación automática delimitada y candidatos propuestos por agentes bajo gobierno de VGXNESS. |
 | Chronicle | **Implemented/Partial:** Implementa lectura estricta de la ejecución actual, eventos JSONL verificados, instantáneas activas inmutables direccionadas por contenido, commits atómicos del puntero, reparación terminal, reproducción del estado de tareas, evidencia de cancelación y reconstrucción delimitada de recuperación. La continuidad general de puntos de control/artefactos sigue planificada. |
 | Esquemas y reglas semánticas | **Implemented/Contracts-only:** Paquetes, eventos, instantáneas, registros Registry, prompts y resultados actuales se validan en runtime; las formas futuras de SDD/continuidad siguen solo como contratos. |
 | TUI mediante teclado | **Planned:** Ofrecer configuración e interacción enfocada sin controlar la política de instalación u orquestación. |
@@ -141,7 +141,7 @@ El asistente puede detectar OpenCode, CodeGraph y OpenPencil. Solo puede ofrecer
 
 ### Interacción con Navigator
 
-**Planned:** Navigator coincide con el idioma de la persona, diferencia hechos de recomendaciones, formula una pregunta bloqueante por vez, explica decisiones importantes, mantiene concisa la ruta normal y selecciona una capacidad delimitada en lugar de realizar todos los roles.
+**Implemented/Partial:** El manager de OpenCode coincide con el idioma de la persona, mantiene concisa la ruta normal y usa `vgxness_run` para seleccionar el plan delimitado más pequeño. `fast` fuerza una tarea, `auto` permite hasta cuatro tareas proporcionales y `deep` hasta dieciséis tareas delimitadas. La autonomía independiente de adaptador y el enrutamiento SDD completo siguen planificados.
 
 ### Perfiles de autonomía
 
@@ -212,10 +212,10 @@ El orden de fases se basa en evidencia, no en ceremonia. Una fase solo se omite 
 | Asunto | Estado y propietario |
 | --- | --- |
 | Chronicle | **Implemented/Partial:** Lee el puntero activo; valida, anexa, revierte y relee eventos JSONL; deriva estado de tareas/cancelaciones; publica instantáneas activas mediante archivos inmutables direccionados por contenido y repara una publicación terminal interrumpida. Los puntos de control generales y la recuperación rica de artefactos siguen planificados. |
-| MemoryStore de VGXNESS | **Implemented:** Autoridad semántica para observaciones duraderas tipadas con identidad, alcance, tema, procedencia, ciclo de vida, referencias, save/search/get y metadatos de sesión. Los flujos superiores de aprobación y continuidad siguen planificados. |
-| SQLite/FTS5 | **Implemented:** Persistencia local propia, dos migraciones, filtrado determinista y recuperación léxica detrás de `MemoryStore`; la indexación semántica avanzada sigue planificada. |
+| MemoryStore de VGXNESS | **Implemented:** Autoridad semántica para observaciones duraderas tipadas con identidad, alcance, tema, procedencia, ciclo de vida, referencias, save/search/get, metadatos de sesión, recuperación/captura automática de tareas y `memoryCandidates` gobernados. Las actualizaciones contradictorias pasan a `needs_review`; la UX amplia de revisión humana sigue planificada. |
+| SQLite/FTS5 | **Implemented:** Una base predeterminada por usuario, vínculos canónicos de workspace, registros aislados por proyecto, cuatro migraciones, importación segura de bases heredadas, filtrado determinista y recuperación léxica detrás de `MemoryStore`; la indexación semántica avanzada sigue planificada. |
 | Adaptador Engram | **Planned, opcional:** Puente de compatibilidad, importación y referencia. Puede conservar identificadores externos y procedencia, pero no controla la semántica de VGXNESS. |
-| Raíces de proyecto/persona | **Implemented:** Resuelve almacenamiento local del proyecto en `.vgxness/` o global de la persona en `~/.vgxness/projects/<project-id>/`. |
+| Raíces de proyecto/persona | **Implemented:** Resuelve almacenamiento operativo local en `.vgxness/` o global en `~/.vgxness/projects/<project-id>/`; la memoria semántica predeterminada se comparte en `~/.vgxness/memory.db`. |
 
 Las entradas de memoria tienen identificador estable, tipo, tema, contenido, procedencia, marcas de tiempo, alcance, estado de ciclo de vida y referencias. La búsqueda comienza con filtros deterministas y FTS5; resúmenes y embeddings pueden complementar la recuperación más adelante sin sustituir registros fuente.
 
@@ -225,9 +225,9 @@ Chronicle y la memoria semántica pueden referenciarse, pero no sustituirse. Si 
 
 | Etapa | Comportamiento del almacén propio |
 | --- | --- |
-| Captura | **Implemented:** Acepta una observación duradera tipada con fuente, alcance y evidencia; rechaza entrada inválida. |
+| Captura | **Implemented:** Acepta una observación duradera tipada con fuente, alcance y evidencia; cada tarea delimitada terminal también guarda una observación idempotente del resultado enlazada con las observaciones que utilizó. |
 | Normalización | **Implemented:** Asigna identidad estable, tema, marcas de tiempo, metadatos de ciclo de vida y referencias de fuente. |
-| Recuperación | **Implemented:** Aplica filtros deterministas antes del ranking FTS5 y devuelve procedencia. |
+| Recuperación | **Implemented:** Aplica filtros deterministas antes del ranking FTS5, hidrata como máximo tres registros dentro de un presupuesto fijo de contexto de ejecución y devuelve procedencia. |
 | Comparación | **Planned:** Conserva relaciones compatibles, relacionadas, delimitadas, conflictivas o de sustitución sin borrar el historial silenciosamente. |
 | Revisión | **Planned:** Muestra conocimiento obsoleto o pendiente de revisión antes de confiar en él como hecho actual. |
 | Resumen | **Planned:** Crea resúmenes derivados que referencian las entradas fuente en lugar de sustituirlas. |

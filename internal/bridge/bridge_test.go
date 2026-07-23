@@ -50,7 +50,7 @@ func TestDecodeOrchestrationLifecycleIsExactAndBounded(t *testing.T) {
 	if err != nil || len(planned.CandidateTasks) != 1 || planned.CandidateTasks[0].Operation != navigator.OperationReadFiles {
 		t.Fatalf("planned=%#v err=%v", planned, err)
 	}
-	wave, err := DecodeOrchestrateWave(strings.NewReader(`{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1"}]}`))
+	wave, err := DecodeOrchestrateWave(strings.NewReader(`{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1","claimToken":"claim-1"}]}`))
 	if err != nil || len(wave.Bindings) != 1 || wave.Bindings[0].TicketID != "ticket-1" {
 		t.Fatalf("wave=%#v err=%v", wave, err)
 	}
@@ -67,9 +67,10 @@ func TestDecodeOrchestrationLifecycleIsExactAndBounded(t *testing.T) {
 		input  string
 	}{
 		{func(reader io.Reader) error { _, err := DecodeOrchestratePlan(reader); return err }, strings.TrimSuffix(planPayload, "}") + `,"agent":"explorer"}`},
-		{func(reader io.Reader) error { _, err := DecodeOrchestrateWave(reader); return err }, `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1"},{"taskId":"task-1","childSessionId":"ses_other","ticketId":"ticket-2"}]}`},
+		{func(reader io.Reader) error { _, err := DecodeOrchestrateWave(reader); return err }, `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1","claimToken":"claim-1"},{"taskId":"task-1","childSessionId":"ses_other","ticketId":"ticket-2","claimToken":"claim-2"}]}`},
 		{func(reader io.Reader) error { _, err := DecodeOrchestrateTerminal(reader); return err }, `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","taskId":"task-1","ticketId":"ticket-1","childSessionId":"ses_child","status":"completed","result":{}}`},
 		{func(reader io.Reader) error { _, err := DecodeOrchestrateReference(reader); return err }, `{"protocolVersion":"1","orchestrationId":"../escape"}`},
+		{func(reader io.Reader) error { _, err := DecodeOrchestrateReference(reader); return err }, `{"protocolVersion":"1","orchestrationId":"orchestration-1","taskId":"task-1","claimToken":"claim-1"}`},
 	} {
 		if err := invalid.decode(strings.NewReader(invalid.input)); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("invalid orchestration input accepted: %s err=%v", invalid.input, err)
@@ -222,6 +223,24 @@ func TestDecodeNativeReadRequiresOneCleanBoundedLocalFile(t *testing.T) {
 		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","limit":262145}`,
 	} {
 		if _, err := DecodeNativeRead(strings.NewReader(input)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("input %q: expected ErrInvalid, got %v", input, err)
+		}
+	}
+}
+
+func TestDecodeNativeCodeGraphRequiresOneBoundedStructuralQuery(t *testing.T) {
+	request, err := DecodeNativeCodeGraph(strings.NewReader(`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"explore","query":"How does dispatch reach native completion?","maxFiles":8}`))
+	if err != nil || request.Operation != CodeGraphExplore || request.MaxFiles != 8 {
+		t.Fatalf("request=%#v err=%v", request, err)
+	}
+	for _, input := range []string{
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"explore"}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"impact","symbol":"bad\nsymbol"}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"affected","files":["../secret"]}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"status","query":"extra"}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"query","query":"Service"}`,
+	} {
+		if _, err := DecodeNativeCodeGraph(strings.NewReader(input)); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("input %q: expected ErrInvalid, got %v", input, err)
 		}
 	}

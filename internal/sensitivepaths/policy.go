@@ -4,6 +4,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // relativePatterns is the canonical repository-relative deny policy shared by
@@ -72,6 +73,30 @@ func IsSensitive(relative string) bool {
 			if matched, _ := path.Match(pattern, candidate); matched {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// ContainsSensitiveReference detects denied paths embedded in tool output.
+// Absolute paths inside root are normalized back to repository-relative form.
+func ContainsSensitiveReference(value, root string) bool {
+	for _, field := range strings.FieldsFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("\"'`[](){}<>,;:=", r)
+	}) {
+		candidate := strings.TrimSpace(field)
+		if candidate == "" {
+			continue
+		}
+		if filepath.IsAbs(candidate) {
+			relative, err := filepath.Rel(root, candidate)
+			if err != nil || !filepath.IsLocal(relative) {
+				return true
+			}
+			candidate = relative
+		}
+		if IsSensitive(candidate) {
+			return true
 		}
 	}
 	return false

@@ -46,9 +46,22 @@ func TestMemoryService_DelegatesValidatedCommandsAndCancellation(t *testing.T) {
 
 func TestMemoryService_SaveDefaultsAndCallerFieldBoundary(t *testing.T) {
 	store := &fakeMemoryStore{}
-	_, err := NewMemoryService(store, "cli", nil).Save(context.Background(), SaveRequest{Title: "Title", Content: "body", Session: "s", TopicKey: "topic"})
+	_, err := NewMemoryService(store, "cli", nil).Save(context.Background(), SaveRequest{Title: "Title", Content: "body", Session: "s", TopicKey: "topic", References: []string{"prior"}})
 	got := store.saved
-	testutil.Require(t, err == nil && got.Title == "Title" && got.Project == "default" && got.Scope == ScopeProject && got.Type == "learning" && got.State == StateActive && got.Provenance == (Provenance{Producer: "cli"}) && got.Session == "s" && got.TopicKey == "topic", "defaults/boundary: %+v %v", got, err)
+	testutil.Require(t, err == nil && got.Title == "Title" && got.Project == "default" && got.Scope == ScopeProject && got.Type == "learning" && got.State == StateActive && got.Provenance == (Provenance{Producer: "cli"}) && got.Session == "s" && got.TopicKey == "topic" && len(got.References) == 1 && got.References[0] == "prior", "defaults/boundary: %+v %v", got, err)
+}
+
+func TestMemoryService_AllowsGovernedNeedsReviewLifecycle(t *testing.T) {
+	store := &fakeMemoryStore{}
+	service := NewMemoryService(store, "controlplane", nil)
+	_, err := service.Save(context.Background(), SaveRequest{Content: "candidate", State: StateNeedsReview})
+	testutil.Require(t, err == nil && store.saved.State == StateNeedsReview, "needs-review save: %+v %v", store.saved, err)
+	_, err = service.Search(context.Background(), SearchRequest{
+		Query: "candidate", Project: "p", Scope: ScopeProject, States: []State{StateActive, StateNeedsReview},
+	})
+	testutil.Require(t, err == nil && len(store.search.States) == 2 && store.search.States[1] == StateNeedsReview, "governed states: %+v %v", store.search, err)
+	_, err = service.Save(context.Background(), SaveRequest{Content: "candidate", State: StateArchived})
+	testutil.Require(t, errors.Is(err, ErrInvalid), "caller created archived observation: %v", err)
 }
 
 func TestMemoryService_GetMissingHidesForeignMetadata(t *testing.T) {
@@ -80,6 +93,22 @@ func TestMemoryService_SearchPreviewBudgetsAreDeterministic(t *testing.T) {
 		total += len([]rune(item.Preview))
 	}
 	testutil.Require(t, err == nil && err2 == nil && store.search.Limit == 20 && total <= 4096 && len(first) == len(second) && first[19].Preview == second[19].Preview, "budget/order mismatch: %d %+v %+v", total, first, second)
+}
+
+func TestMemoryService_SearchCanUseBoundedAnyTermMatching(t *testing.T) {
+	store := &fakeMemoryStore{}
+	_, err := NewMemoryService(store, "cli", nil).Search(context.Background(), SearchRequest{
+		Query: "architecture reliability", Project: "p", Scope: ScopeProject, MatchAny: true,
+	})
+	testutil.Require(t, err == nil && store.search.Query == `"architecture" OR "reliability"`, "match-any query=%q err=%v", store.search.Query, err)
+}
+
+func TestMemoryService_SaveRejectsInvalidReferencesBeforeStore(t *testing.T) {
+	for _, references := range [][]string{{""}, {"same", "same"}} {
+		store := &fakeMemoryStore{}
+		_, err := NewMemoryService(store, "cli", nil).Save(context.Background(), SaveRequest{Content: "body", References: references})
+		testutil.Require(t, errors.Is(err, ErrInvalid) && store.calls == 0, "invalid references reached store: %#v err=%v", references, err)
+	}
 }
 
 func TestMemoryService_SourceClaimsRequireTrustedVerification(t *testing.T) {

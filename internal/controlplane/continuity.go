@@ -21,15 +21,31 @@ import (
 
 const continuityMemoryLimit = 3
 
+const memoryCandidateConfidence = 0.8
+
+var durableMemoryCandidateTypes = map[string]struct{}{
+	"decision": {}, "architecture": {}, "preference": {}, "convention": {}, "discovery": {},
+	"bugfix": {}, "constraint": {}, "learning": {}, "summary": {},
+}
+
 type MemoryRuntime interface {
 	Save(context.Context, config.Options, memory.SaveRequest) (memory.MemoryResult, error)
 	Search(context.Context, config.Options, memory.SearchRequest) ([]memory.MemoryResult, error)
+	Get(context.Context, config.Options, memory.GetRequest) (memory.MemoryResult, error)
+	ResolveProject(context.Context, config.Options, string) (string, error)
+}
+
+type taskMemoryState struct {
+	project           string
+	workspace         string
+	retrievedMemories []memory.MemoryResult
 }
 
 type continuityState struct {
 	mode              bridge.ContinuityMode
 	runID             string
 	project           string
+	workspace         string
 	store             *chronicle.SnapshotStore
 	log               *chronicle.EventLog
 	snapshot          runSnapshot
@@ -159,18 +175,28 @@ type capsuleTaskState struct {
 }
 
 type agentResult struct {
-	ResultID        string `json:"resultId"`
-	TaskID          string `json:"taskId"`
-	Status          string `json:"status"`
-	Summary         string `json:"summary"`
-	NextRecommended string `json:"nextRecommended"`
+	ResultID         string            `json:"resultId"`
+	TaskID           string            `json:"taskId"`
+	Status           string            `json:"status"`
+	Summary          string            `json:"summary"`
+	NextRecommended  string            `json:"nextRecommended"`
+	MemoryCandidates []memoryCandidate `json:"memoryCandidates,omitempty"`
+}
+
+type memoryCandidate struct {
+	Type       string  `json:"type"`
+	Title      string  `json:"title"`
+	Content    string  `json:"content"`
+	TopicKey   string  `json:"topicKey"`
+	Reason     string  `json:"reason"`
+	Confidence float64 `json:"confidence"`
 }
 
 func (service *Service) openContinuity(ctx context.Context, paths config.Paths, root string, input bridge.DispatchRequest) (*continuityState, error) {
 	if input.Continuity == bridge.ContinuitySingle {
 		return nil, nil
 	}
-	state := &continuityState{mode: input.Continuity, project: filepath.Base(root)}
+	state := &continuityState{mode: input.Continuity, workspace: root}
 	if input.Continuity == bridge.ContinuityStart {
 		if _, present, err := chronicle.ReadCurrent(ctx, paths.CurrentRun); err != nil {
 			return nil, fmt.Errorf("%w: inspect active run", bridge.ErrExecution)
@@ -219,18 +245,14 @@ func (service *Service) openContinuity(ctx context.Context, paths config.Paths, 
 	if service.memory == nil {
 		return nil, fmt.Errorf("%w: continuity memory", bridge.ErrUnavailable)
 	}
-	if _, err := os.Stat(paths.Database); err == nil {
-		query := memoryQuery(input.Goal)
-		found, searchErr := service.memory.Search(ctx, config.Options{StorageRoot: paths.Root}, memory.SearchRequest{
-			Query: query, Project: state.project, Scope: memory.ScopeProject, Limit: continuityMemoryLimit,
-		})
-		if searchErr != nil {
-			return nil, fmt.Errorf("%w: continuity memory search", bridge.ErrExecution)
-		}
-		state.retrievedMemories = found
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("%w: inspect continuity memory", bridge.ErrExecution)
+	taskMemory, err := service.openTaskMemory(ctx, root, input.Goal)
+	if err != nil {
+		return nil, err
 	}
+	if taskMemory == nil {
+		return nil, fmt.Errorf("%w: continuity memory", bridge.ErrUnavailable)
+	}
+	state.project, state.retrievedMemories = taskMemory.project, taskMemory.retrievedMemories
 	return state, nil
 }
 
@@ -290,6 +312,244 @@ func (service *Service) stageContinuity(ctx context.Context, state *continuitySt
 	return nil
 }
 
+func (service *Service) openTaskMemory(ctx context.Context, workspace, goal string) (*taskMemoryState, error) {
+	if service == nil || service.memory == nil {
+		return nil, nil
+	}
+	options := service.taskMemoryOptions(workspace)
+	project, err := service.memory.ResolveProject(ctx, options, workspace)
+	if err != nil {
+		return nil, fmt.Errorf("%w: resolve task memory project", bridge.ErrExecution)
+	}
+	found, err := service.memory.Search(ctx, options, memory.SearchRequest{
+		Query: memoryQuery(goal), Project: project, Scope: memory.ScopeProject, Limit: continuityMemoryLimit, MatchAny: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: task memory search", bridge.ErrExecution)
+	}
+	hydrated := make([]memory.MemoryResult, 0, len(found))
+	for _, candidate := range found {
+		item, getErr := service.memory.Get(ctx, options, memory.GetRequest{ID: candidate.ID, Project: project, Scope: memory.ScopeProject})
+		if getErr != nil {
+			if errors.Is(getErr, memory.ErrNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("%w: hydrate task memory", bridge.ErrExecution)
+		}
+		hydrated = append(hydrated, item)
+	}
+	return &taskMemoryState{project: project, workspace: workspace, retrievedMemories: hydrated}, nil
+}
+
+func taskMemoryFromContinuity(state *continuityState) *taskMemoryState {
+	if state == nil {
+		return nil
+	}
+	return &taskMemoryState{project: state.project, workspace: state.workspace, retrievedMemories: append([]memory.MemoryResult(nil), state.retrievedMemories...)}
+}
+
+func (service *Service) completeTaskMemory(ctx context.Context, state *taskMemoryState, input bridge.DispatchRequest, runID, taskID string, resultData json.RawMessage, failed bool) ([]string, error) {
+	if state == nil {
+		return nil, nil
+	}
+	result := agentResult{TaskID: taskID, Status: "failed", Summary: "The bounded task failed before producing a valid result.", NextRecommended: "Retry after inspecting the blocker."}
+	if !failed {
+		if err := json.Unmarshal(resultData, &result); err != nil || result.ResultID == "" || result.TaskID != taskID {
+			return nil, fmt.Errorf("%w: task memory result", bridge.ErrExecution)
+		}
+	}
+	topicKey := "task/" + runID + "/" + taskID
+	retrievedIDs := memoryIDs(state.retrievedMemories)
+	request := memory.SaveRequest{
+		Title:      boundedText("Task result: "+input.Goal, 256),
+		Content:    continuityMemoryContent(runID, taskID, input.Goal, result),
+		Project:    state.project,
+		Scope:      memory.ScopeProject,
+		Type:       "task-result",
+		TopicKey:   topicKey,
+		Session:    runID,
+		References: retrievedIDs,
+	}
+	if containsSensitiveMaterial(request.Title + "\n" + request.Content) {
+		return retrievedIDs, nil
+	}
+	saved, err := service.findTaskMemory(ctx, state, topicKey, "task-result")
+	if err == nil && saved.ID == "" {
+		saved, err = service.memory.Save(ctx, service.taskMemoryOptions(state.workspace), request)
+		if err != nil {
+			saved, _ = service.findTaskMemory(ctx, state, topicKey, "task-result")
+			if saved.ID != "" {
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: task memory save", bridge.ErrExecution)
+	}
+	if saved.ID == "" || saved.Project != state.project || saved.Scope != memory.ScopeProject || saved.Type != "task-result" || saved.TopicKey != topicKey || saved.Session != runID {
+		return nil, fmt.Errorf("%w: task memory identity", bridge.ErrExecution)
+	}
+	refs := append(retrievedIDs, saved.ID)
+	if !failed {
+		candidateRefs, candidateErr := service.persistMemoryCandidates(ctx, state, runID, result, saved)
+		if candidateErr != nil {
+			return nil, candidateErr
+		}
+		refs = append(refs, candidateRefs...)
+	}
+	return refs, nil
+}
+
+func (service *Service) persistMemoryCandidates(ctx context.Context, state *taskMemoryState, runID string, result agentResult, taskResult memory.MemoryResult) ([]string, error) {
+	if len(result.MemoryCandidates) == 0 {
+		return nil, nil
+	}
+	options := service.taskMemoryOptions(state.workspace)
+	refs := make([]string, 0, len(result.MemoryCandidates))
+	for _, candidate := range result.MemoryCandidates {
+		candidate.Type = strings.TrimSpace(candidate.Type)
+		candidate.Title = boundedText(candidate.Title, 256)
+		candidate.Content = boundedText(candidate.Content, 3000)
+		candidate.TopicKey = strings.TrimSpace(candidate.TopicKey)
+		candidate.Reason = boundedText(candidate.Reason, 512)
+		if !validMemoryCandidate(candidate) {
+			continue
+		}
+		topicKey := "agent/" + candidate.Type + "/" + candidate.TopicKey
+		content := memoryCandidateContent(candidate)
+		existing, err := service.findMemoryCandidate(ctx, state, topicKey, candidate.Type)
+		if err != nil {
+			return nil, fmt.Errorf("%w: memory candidate lookup", bridge.ErrExecution)
+		}
+		saveState := memory.StateActive
+		if existing.ID != "" {
+			if existing.Content == content {
+				refs = append(refs, existing.ID)
+				continue
+			}
+			if strings.HasPrefix(existing.Content, "Proposed update: "+content+" | Previous value: ") {
+				refs = append(refs, existing.ID)
+				continue
+			}
+			saveState = memory.StateNeedsReview
+			previous := existing.Content
+			if _, prior, ok := strings.Cut(previous, " | Previous value: "); ok && strings.HasPrefix(previous, "Proposed update: ") {
+				previous = prior
+			}
+			content = boundedText("Proposed update: "+content+" | Previous value: "+previous, 4096)
+		}
+		saved, err := service.memory.Save(ctx, options, memory.SaveRequest{
+			Title: candidate.Title, Content: content, Project: state.project, Scope: memory.ScopeProject,
+			Type: candidate.Type, TopicKey: topicKey, Session: runID, State: saveState, References: []string{taskResult.ID},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%w: memory candidate save", bridge.ErrExecution)
+		}
+		if saved.ID == "" || saved.TopicKey != topicKey || saved.State != saveState {
+			return nil, fmt.Errorf("%w: memory candidate identity", bridge.ErrExecution)
+		}
+		refs = append(refs, saved.ID)
+	}
+	return refs, nil
+}
+
+func (service *Service) findMemoryCandidate(ctx context.Context, state *taskMemoryState, topicKey, typeName string) (memory.MemoryResult, error) {
+	items, err := service.memory.Search(ctx, service.taskMemoryOptions(state.workspace), memory.SearchRequest{
+		Query: "candidate", Project: state.project, Scope: memory.ScopeProject, Type: typeName, TopicKey: topicKey,
+		States: []memory.State{memory.StateActive, memory.StateNeedsReview}, Limit: 2,
+	})
+	if err != nil {
+		return memory.MemoryResult{}, err
+	}
+	if len(items) == 0 {
+		return memory.MemoryResult{}, nil
+	}
+	if len(items) != 1 || items[0].TopicKey != topicKey {
+		return memory.MemoryResult{}, fmt.Errorf("ambiguous memory candidate topic")
+	}
+	return service.memory.Get(ctx, service.taskMemoryOptions(state.workspace), memory.GetRequest{
+		ID: items[0].ID, Project: state.project, Scope: memory.ScopeProject,
+	})
+}
+
+func validMemoryCandidate(candidate memoryCandidate) bool {
+	if _, ok := durableMemoryCandidateTypes[candidate.Type]; !ok || candidate.Confidence < memoryCandidateConfidence {
+		return false
+	}
+	if candidate.Title == "" || candidate.Content == "" || candidate.Reason == "" || !validCandidateTopic(candidate.TopicKey) {
+		return false
+	}
+	return !containsSensitiveMaterial(candidate.Title + "\n" + candidate.Content + "\n" + candidate.Reason)
+}
+
+func containsSensitiveMaterial(value string) bool {
+	combined := strings.ToLower(value)
+	compact := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == '"' || r == '\'' {
+			return -1
+		}
+		return r
+	}, combined)
+	for _, marker := range []string{
+		"-----begin private key", "-----begin rsa private key", "-----begin openssh private key",
+		"-----begin ec private key", "-----begin dsa private key", "authorization: bearer ",
+		"sk-proj-", "xoxb-", "aws_secret_access_key",
+	} {
+		if strings.Contains(combined, marker) {
+			return true
+		}
+	}
+	for _, marker := range []string{
+		"password=", "password:", "passwd=", "passwd:", "secret=", "secret:",
+		"api_key=", "api_key:", "apikey=", "apikey:", "token=", "token:", "ghp_",
+	} {
+		if strings.Contains(compact, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func validCandidateTopic(value string) bool {
+	runes := []rune(value)
+	if len(runes) == 0 || len(runes) > 200 || !unicode.IsLetter(runes[0]) && !unicode.IsNumber(runes[0]) {
+		return false
+	}
+	for _, r := range runes[1:] {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '.' && r != '_' && r != ':' && r != '/' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func memoryCandidateContent(candidate memoryCandidate) string {
+	return fmt.Sprintf(
+		"VGXNESS memory candidate | Type: %s | Reason: %s | Content: %s",
+		candidate.Type, candidate.Reason, candidate.Content,
+	)
+}
+
+func (service *Service) findTaskMemory(ctx context.Context, state *taskMemoryState, topicKey, typeName string) (memory.MemoryResult, error) {
+	items, err := service.memory.Search(ctx, service.taskMemoryOptions(state.workspace), memory.SearchRequest{
+		Query: "task", Project: state.project, Scope: memory.ScopeProject, Type: typeName, TopicKey: topicKey, Limit: 2,
+	})
+	if err != nil {
+		return memory.MemoryResult{}, err
+	}
+	if len(items) == 0 {
+		return memory.MemoryResult{}, nil
+	}
+	if len(items) != 1 || items[0].TopicKey != topicKey {
+		return memory.MemoryResult{}, fmt.Errorf("ambiguous task memory topic")
+	}
+	return items[0], nil
+}
+
+func (service *Service) taskMemoryOptions(workspace string) config.Options {
+	return config.Options{StorageRoot: service.storageRoot, ProjectDir: workspace}
+}
+
 func (service *Service) completeContinuity(ctx context.Context, state *continuityState, input bridge.DispatchRequest, taskID string, resultData json.RawMessage, failed bool) (continuityOutcome, error) {
 	return service.completeContinuityWithFailureStatus(ctx, state, input, taskID, resultData, failed, string(chronicle.TaskFailed))
 }
@@ -326,12 +586,13 @@ func (service *Service) completeContinuityWithFailureStatus(ctx context.Context,
 	topicKey := "run/" + state.runID + "/" + taskID
 	memoryRequest := memory.SaveRequest{
 		Title:   boundedText("Run continuity: "+state.snapshot.Goal, 256),
-		Content: continuityMemoryContent(state.runID, taskID, input.Goal, result),
+		Content: "Continuity | " + continuityMemoryContent(state.runID, taskID, input.Goal, result),
 		Project: state.project, Scope: memory.ScopeProject, Type: "continuity", TopicKey: topicKey, Session: state.runID,
+		References: memoryIDs(state.retrievedMemories),
 	}
 	memoryResult, err := service.findContinuityMemory(ctx, state, topicKey)
 	if err == nil && memoryResult.ID == "" {
-		memoryResult, err = service.memory.Save(ctx, config.Options{StorageRoot: filepath.Dir(state.store.CurrentPath())}, memoryRequest)
+		memoryResult, err = service.memory.Save(ctx, service.continuityMemoryOptions(state), memoryRequest)
 		if err != nil {
 			// Save may have committed before its caller observed the error.
 			memoryResult, _ = service.findContinuityMemory(ctx, state, topicKey)
@@ -457,13 +718,17 @@ func (service *Service) completeContinuityWithFailureStatus(ctx context.Context,
 }
 
 func (service *Service) findContinuityMemory(ctx context.Context, state *continuityState, topicKey string) (memory.MemoryResult, error) {
-	root := filepath.Dir(state.store.CurrentPath())
-	if _, err := os.Stat(filepath.Join(root, "memory.db")); errors.Is(err, os.ErrNotExist) {
+	options := service.continuityMemoryOptions(state)
+	paths, err := config.PathsFor(options)
+	if err != nil {
+		return memory.MemoryResult{}, err
+	}
+	if _, err := os.Stat(paths.Database); errors.Is(err, os.ErrNotExist) {
 		return memory.MemoryResult{}, nil
 	} else if err != nil {
 		return memory.MemoryResult{}, err
 	}
-	items, err := service.memory.Search(ctx, config.Options{StorageRoot: root}, memory.SearchRequest{
+	items, err := service.memory.Search(ctx, options, memory.SearchRequest{
 		Query: "continuity", Project: state.project, Scope: memory.ScopeProject, Type: "continuity", TopicKey: topicKey, Limit: 2,
 	})
 	if err != nil {
@@ -476,6 +741,10 @@ func (service *Service) findContinuityMemory(ctx context.Context, state *continu
 		return memory.MemoryResult{}, fmt.Errorf("ambiguous continuity memory topic")
 	}
 	return items[0], nil
+}
+
+func (service *Service) continuityMemoryOptions(state *continuityState) config.Options {
+	return service.taskMemoryOptions(state.workspace)
 }
 
 func (service *Service) appendCompletionEvent(ctx context.Context, state *continuityState, taskID, typeName string, fields map[string]any) (chronicle.Event, error) {
@@ -626,7 +895,11 @@ func newRunSnapshot(runID, project, goal, now, selectionID, decisionID, prefligh
 
 func memoryQuery(goal string) string {
 	seen := map[string]bool{}
-	reserved := map[string]bool{"and": true, "or": true, "not": true, "near": true}
+	reserved := map[string]bool{
+		"and": true, "or": true, "not": true, "near": true,
+		"a": true, "an": true, "the": true, "to": true, "of": true, "in": true, "on": true, "for": true, "with": true, "from": true, "is": true, "are": true, "be": true, "this": true, "that": true,
+		"un": true, "una": true, "el": true, "la": true, "los": true, "las": true, "de": true, "del": true, "y": true, "o": true, "en": true, "para": true, "con": true, "por": true, "que": true,
+	}
 	terms := make([]string, 0, 8)
 	for _, field := range strings.FieldsFunc(goal, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' }) {
 		field = strings.ToLower(field)
@@ -678,6 +951,22 @@ func memoryContext(items []memory.MemoryResult) []map[string]any {
 		}
 	}
 	return contextItems
+}
+
+func memoryIDs(items []memory.MemoryResult) []string {
+	ids := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if item.ID == "" {
+			continue
+		}
+		if _, exists := seen[item.ID]; exists {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+		ids = append(ids, item.ID)
+	}
+	return ids
 }
 
 func capsuleTaskStates(tasks []runTask) []capsuleTaskState {

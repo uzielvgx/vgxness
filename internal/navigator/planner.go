@@ -37,9 +37,10 @@ const (
 	CapabilityReview    Capability = "review"
 	CapabilityImplement Capability = "implement"
 
-	OperationReadFiles     Operation = "read-files"
-	OperationReviewChanges Operation = "review-changes"
-	OperationWriteFiles    Operation = "write-files"
+	OperationReadFiles        Operation = "read-files"
+	OperationAnalyzeStructure Operation = "analyze-structure"
+	OperationReviewChanges    Operation = "review-changes"
+	OperationWriteFiles       Operation = "write-files"
 
 	ContinuityIsolated Continuity = "isolated"
 	ContinuityLinked   Continuity = "linked"
@@ -210,6 +211,13 @@ func decisionFor(tasks []Task, waves []Wave) string {
 	return "sequential"
 }
 
+// IsParallelSafeTask is the canonical eligibility check shared by planning
+// and runtime topology validation.
+func IsParallelSafeTask(task Task) bool {
+	return (task.Operation == OperationReadFiles || task.Operation == OperationAnalyzeStructure) &&
+		task.Continuity == ContinuityIsolated
+}
+
 func contentBoundPlanID(plan Plan) (string, error) {
 	plan.PlanID = ""
 	data, err := json.Marshal(plan)
@@ -237,7 +245,7 @@ func validateTasks(tasks []Task) error {
 		}
 		byID[task.TaskID] = task
 		switch task.Operation {
-		case OperationReadFiles:
+		case OperationReadFiles, OperationAnalyzeStructure:
 			if task.Capability != CapabilityExplore && task.Capability != CapabilityVerify {
 				return fmt.Errorf("%w: read task capability", ErrInvalidRequest)
 			}
@@ -306,8 +314,7 @@ func buildWaves(tasks []Task, maxParallel int) ([]Wave, error) {
 		selected := ready[:1]
 		allShareable := true
 		for _, taskID := range ready {
-			task := byID[taskID]
-			if task.Operation != OperationReadFiles || task.Continuity != ContinuityIsolated {
+			if !IsParallelSafeTask(byID[taskID]) {
 				allShareable = false
 				break
 			}

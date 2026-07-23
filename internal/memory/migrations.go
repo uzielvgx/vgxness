@@ -15,12 +15,23 @@ var schemaV1 string
 //go:embed migrations/002_observation_title.sql
 var schemaV2 string
 
+//go:embed migrations/003_global_projects.sql
+var schemaV3 string
+
+//go:embed migrations/004_project_roots.sql
+var schemaV4 string
+
 type migration struct {
 	version int
 	sql     string
 }
 
-var migrations = []migration{{version: 1, sql: schemaV1}, {version: 2, sql: schemaV2}}
+var migrations = []migration{
+	{version: 1, sql: schemaV1},
+	{version: 2, sql: schemaV2},
+	{version: 3, sql: schemaV3},
+	{version: 4, sql: schemaV4},
+}
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
 	conn, err := db.Conn(ctx)

@@ -20,7 +20,7 @@ These Draft 2020-12 schemas define runtime-neutral orchestration, execution, reg
 | Delivery receipt | `delivery-receipt.schema.json` | `https://vgxness.dev/schemas/delivery-receipt.schema.json` | Immutable content-bound target, manifest bindings, and issued review receipt. |
 | Current delivery receipt | `delivery-current.schema.json` | `https://vgxness.dev/schemas/delivery-current.schema.json` | Atomic active/invalidated receipt pointer and receipt-file digest. |
 
-Storage schemas apply equally under project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/` roots.
+Operational storage schemas apply equally under project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/` roots. The default semantic-memory SQLite database is shared at `~/.vgxness/memory.db` and isolates records by project; explicit project-local and storage-root modes remain isolated.
 
 ## Use a stable fragment
 

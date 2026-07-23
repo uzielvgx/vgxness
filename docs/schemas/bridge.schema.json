@@ -25,7 +25,7 @@
       "type": "object",
       "required": ["operation", "goal"],
       "properties": {
-        "operation": { "type": "string", "enum": ["read-files", "write-files", "review-changes"] },
+        "operation": { "type": "string", "enum": ["read-files", "analyze-structure", "write-files", "review-changes"] },
         "goal": { "type": "string", "minLength": 1, "maxLength": 8192 },
         "acceptanceCriteria": {
           "type": "array",

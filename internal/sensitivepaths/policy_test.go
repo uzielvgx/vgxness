@@ -45,6 +45,20 @@ func TestIsSensitiveIsNestedAndCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestContainsSensitiveReferenceNormalizesToolOutput(t *testing.T) {
+	root := "/workspace"
+	for _, output := range []string{".env:1", `{"path":"nested/.ssh/config"}`, "/workspace/keys/private.pem"} {
+		if !ContainsSensitiveReference(output, root) {
+			t.Fatalf("output did not expose sensitive path %q", output)
+		}
+	}
+	for _, output := range []string{"internal/app.go:12", "/workspace/docs/secrets-guide.md", "credentials parser"} {
+		if ContainsSensitiveReference(output, root) {
+			t.Fatalf("safe output was rejected %q", output)
+		}
+	}
+}
+
 func stringSet(values []string) map[string]bool {
 	result := make(map[string]bool, len(values))
 	for _, value := range values {

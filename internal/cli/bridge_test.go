@@ -18,6 +18,7 @@ type fakeBridgeRuntime struct {
 	completion bridge.NativeCompletionRequest
 	failure    bridge.NativeFailureRequest
 	read       bridge.NativeReadRequest
+	codegraph  bridge.NativeCodeGraphRequest
 	plan       bridge.OrchestratePlanRequest
 	wave       bridge.OrchestrateWaveRequest
 	terminal   bridge.OrchestrateTerminalRequest
@@ -42,6 +43,11 @@ func (runtime *fakeBridgeRuntime) Fail(_ context.Context, _ string, request brid
 
 func (runtime *fakeBridgeRuntime) ReadNative(_ context.Context, _ string, request bridge.NativeReadRequest) (bridge.Response, error) {
 	runtime.read = request
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) QueryNativeCodeGraph(_ context.Context, _ string, request bridge.NativeCodeGraphRequest) (bridge.Response, error) {
+	runtime.codegraph = request
 	return runtime.response, runtime.err
 }
 
@@ -119,14 +125,15 @@ func TestBridgeNativeLifecycleRoutesExactRequests(t *testing.T) {
 		{"complete", `{"protocolVersion":"1","ticketId":"ticket-1","parentSessionId":"ses_parent","childSessionId":"ses_child","messageId":"msg_child","result":{}}`},
 		{"fail", `{"protocolVersion":"1","ticketId":"ticket-1","parentSessionId":"ses_parent","childSessionId":"ses_child","category":"native-subagent-failed"}`},
 		{"read", `{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","limit":4096}`},
+		{"codegraph", `{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"impact","symbol":"Service.Dispatch","depth":3}`},
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := runBridge(context.Background(), []string{test.command, "--workspace", workspace, "--stdin"}, strings.NewReader(test.input), &stdout, &stderr, runtime); code != 0 {
 			t.Fatalf("%s code=%d stdout=%s stderr=%s", test.command, code, stdout.String(), stderr.String())
 		}
 	}
-	if runtime.request.ParentSessionID != "ses_parent" || runtime.completion.ChildSessionID != "ses_child" || runtime.failure.Category != "native-subagent-failed" || runtime.read.Path != "go.mod" {
-		t.Fatalf("native lifecycle was not routed: request=%#v completion=%#v failure=%#v read=%#v", runtime.request, runtime.completion, runtime.failure, runtime.read)
+	if runtime.request.ParentSessionID != "ses_parent" || runtime.completion.ChildSessionID != "ses_child" || runtime.failure.Category != "native-subagent-failed" || runtime.read.Path != "go.mod" || runtime.codegraph.Symbol != "Service.Dispatch" {
+		t.Fatalf("native lifecycle was not routed: request=%#v completion=%#v failure=%#v read=%#v codegraph=%#v", runtime.request, runtime.completion, runtime.failure, runtime.read, runtime.codegraph)
 	}
 }
 
@@ -139,7 +146,7 @@ func TestBridgeOrchestrationLifecycleRoutesExactRequests(t *testing.T) {
 		input   string
 	}{
 		{"orchestrate-plan", "plan", `{"protocolVersion":"1","model":"openai/gpt-5.6-sol","input":{"goal":"inspect"},"parentSessionId":"ses_parent","parentMessageId":"msg_parent","candidateTasks":[{"taskId":"task-1","capability":"explore","operation":"read-files","goal":"inspect","acceptanceCriteria":[],"dependsOn":[],"continuity":"isolated"}]}`},
-		{"orchestrate-wave", "wave", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1"}]}`},
+		{"orchestrate-wave", "wave", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","bindings":[{"taskId":"task-1","childSessionId":"ses_child","ticketId":"ticket-1","claimToken":"claim-1"}]}`},
 		{"orchestrate-terminal", "terminal", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1","taskId":"task-1","ticketId":"ticket-1","childSessionId":"ses_child","status":"completed","messageId":"msg_child","resultId":"result-1","result":{}}`},
 		{"orchestrate-join", "join", `{"protocolVersion":"1","orchestrationId":"orchestration-1","ownerId":"owner-1"}`},
 		{"orchestrate-status", "status", `{"protocolVersion":"1","orchestrationId":"orchestration-1"}`},

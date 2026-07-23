@@ -14,6 +14,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/chronicle"
+	"github.com/vgxness/vgxness/internal/codegraph"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/gatekeeper"
 	"github.com/vgxness/vgxness/internal/orchestrator"
@@ -32,6 +33,7 @@ const (
 )
 
 type AdapterFactory func(string) (providers.Adapter, error)
+type CodeGraphFactory func() (codegraph.Runtime, error)
 
 type GitEvidence struct {
 	StatusShort  string `json:"statusShort"`
@@ -46,19 +48,21 @@ type GitInspector func(context.Context, string) (GitEvidence, error)
 type ContinuityFault func(string) error
 
 type Options struct {
-	StorageRoot     string
-	AdapterFactory  AdapterFactory
-	GitInspector    GitInspector
-	Memory          MemoryRuntime
-	Now             func() time.Time
-	NewID           func(string) (string, error)
-	StatusTimeout   time.Duration
-	ContinuityFault ContinuityFault
+	StorageRoot      string
+	AdapterFactory   AdapterFactory
+	CodeGraphFactory CodeGraphFactory
+	GitInspector     GitInspector
+	Memory           MemoryRuntime
+	Now              func() time.Time
+	NewID            func(string) (string, error)
+	StatusTimeout    time.Duration
+	ContinuityFault  ContinuityFault
 }
 
 type Service struct {
 	storageRoot     string
 	adapter         AdapterFactory
+	codegraph       CodeGraphFactory
 	now             func() time.Time
 	newID           func(string) (string, error)
 	inspectGit      GitInspector
@@ -71,6 +75,10 @@ func New(options Options) *Service {
 	factory := options.AdapterFactory
 	if factory == nil {
 		factory = openCodeAdapter
+	}
+	codegraphFactory := options.CodeGraphFactory
+	if codegraphFactory == nil {
+		codegraphFactory = func() (codegraph.Runtime, error) { return codegraph.New("") }
 	}
 	now := options.Now
 	if now == nil {
@@ -88,7 +96,7 @@ func New(options Options) *Service {
 	if statusTimeout <= 0 {
 		statusTimeout = defaultStatusTimeout
 	}
-	return &Service{storageRoot: options.StorageRoot, adapter: factory, now: now, newID: newID, inspectGit: inspectGit, memory: options.Memory, statusTimeout: statusTimeout, continuityFault: options.ContinuityFault}
+	return &Service{storageRoot: options.StorageRoot, adapter: factory, codegraph: codegraphFactory, now: now, newID: newID, inspectGit: inspectGit, memory: options.Memory, statusTimeout: statusTimeout, continuityFault: options.ContinuityFault}
 }
 
 func (service *Service) Status(ctx context.Context, workspace string) (bridge.Response, error) {
@@ -144,6 +152,13 @@ func (service *Service) Dispatch(ctx context.Context, workspace string, input br
 	if err != nil {
 		return bridge.Response{}, err
 	}
+	taskMemory := taskMemoryFromContinuity(continuity)
+	if taskMemory == nil {
+		taskMemory, err = service.openTaskMemory(ctx, root, input.Goal)
+		if err != nil {
+			return bridge.Response{}, err
+		}
+	}
 	adapter, err := service.newAdapter(root)
 	if err != nil {
 		return bridge.Response{}, err
@@ -190,7 +205,7 @@ func (service *Service) Dispatch(ctx context.Context, workspace string, input br
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}
-	request, err := service.executionRequest(root, runID, taskID, executionID, identities, input, gitEvidence, continuity)
+	request, err := service.executionRequest(root, runID, taskID, executionID, identities, input, gitEvidence, continuity, taskMemory)
 	if err != nil {
 		return bridge.Response{}, err
 	}
@@ -203,6 +218,8 @@ func (service *Service) Dispatch(ctx context.Context, workspace string, input br
 			if _, persistErr := service.completeContinuity(context.WithoutCancel(ctx), continuity, input, taskID, nil, true); persistErr != nil {
 				return bridge.Response{}, errors.Join(normalizeProviderError(err), persistErr)
 			}
+		} else if _, persistErr := service.completeTaskMemory(context.WithoutCancel(ctx), taskMemory, input, runID, taskID, nil, true); persistErr != nil {
+			return bridge.Response{}, errors.Join(normalizeProviderError(err), persistErr)
 		}
 		return bridge.Response{}, normalizeProviderError(err)
 	}
@@ -214,6 +231,12 @@ func (service *Service) Dispatch(ctx context.Context, workspace string, input br
 	continuityResult, err := service.completeContinuity(context.WithoutCancel(ctx), continuity, input, taskID, result, false)
 	if err != nil {
 		return bridge.Response{}, err
+	}
+	if continuity == nil {
+		continuityResult.memoryRefs, err = service.completeTaskMemory(context.WithoutCancel(ctx), taskMemory, input, runID, taskID, result, false)
+		if err != nil {
+			return bridge.Response{}, err
+		}
 	}
 	return bridge.Response{
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
@@ -241,7 +264,18 @@ func (service *Service) newAdapter(workspace string) (providers.Adapter, error) 
 	return adapter, nil
 }
 
-func (service *Service) executionRequest(workspace, runID, taskID, executionID string, identities executionIDs, input bridge.DispatchRequest, gitEvidence *GitEvidence, continuity *continuityState) (providers.Request, error) {
+func (service *Service) newCodeGraph() (codegraph.Runtime, error) {
+	if service == nil || service.codegraph == nil {
+		return nil, bridge.ErrUnavailable
+	}
+	runtime, err := service.codegraph()
+	if err != nil || runtime == nil {
+		return nil, bridge.ErrUnavailable
+	}
+	return runtime, nil
+}
+
+func (service *Service) executionRequest(workspace, runID, taskID, executionID string, identities executionIDs, input bridge.DispatchRequest, gitEvidence *GitEvidence, continuity *continuityState, taskMemory *taskMemoryState) (providers.Request, error) {
 	operation := effectiveOperation(input.Operation)
 	operations := []gatekeeper.OperationClass{gatekeeper.ReadFiles}
 	if operation != gatekeeper.ReadFiles {
@@ -265,7 +299,9 @@ func (service *Service) executionRequest(workspace, runID, taskID, executionID s
 			continuityInput["previousCapsule"] = continuity.previousCapsule
 		}
 		inputs["continuity"] = continuityInput
-		inputs["memoryContext"] = memoryContext(continuity.retrievedMemories)
+	}
+	if taskMemory != nil {
+		inputs["memoryContext"] = memoryContext(taskMemory.retrievedMemories)
 	}
 	packet := map[string]any{
 		"kind": "execution.packet", "schemaVersion": "1", "executionId": executionID, "selectionId": identities.selectionID, "decisionId": identities.decisionID,

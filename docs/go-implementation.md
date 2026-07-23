@@ -82,8 +82,8 @@ internal/tui
 | Package | Status | Responsibility |
 | --- | --- | --- |
 | `cmd/vgxness`, `internal/app` | **Implemented** | Binary entrypoint and composition for configuration, inspection, memory, setup, bridge, and bounded control-plane commands. |
-| `internal/config` | **Implemented** | Resolve defaults and explicit project-local or user-global storage roots. |
-| `internal/memory` | **Implemented** | Own SQLite/FTS5 persistence, migrations, typed records, lifecycle fields, save/search/get, and deterministic filtering. |
+| `internal/config` | **Implemented** | Resolve per-project operational roots plus the default unified user memory database and explicit isolated overrides. |
+| `internal/memory` | **Implemented** | Own unified SQLite/FTS5 persistence, project isolation, migrations/imports, typed records, lifecycle fields, save/search/get, and deterministic filtering. |
 | `internal/cli`, `internal/inspection`, `internal/bridge` | **Implemented** | Expose status, doctor, memory, setup, integration, and bounded dispatch with safe structured output and operational error classes. |
 | `internal/launcher`, `internal/selfinstall` | **Implemented** | Validate and forward through a permanent launcher; install immutable SHA-256 versions; atomically activate updates and roll back one level without overwriting foreign content. |
 | `internal/chronicle` | **Implemented/Partial** | Implement strict current-run reading, durable/verified JSONL event append, immutable SHA-256 active snapshots, atomic pointer publication, recoverable terminal finalization, task/cancellation state, and bounded recovery reconstruction. General checkpoint/artifact continuity remains planned. |
@@ -128,7 +128,7 @@ Chronicle's target operational truth remains readable local files:
 - `registry/skills.json` and `registry/agents.json` for generated registries.
 - `delivery/receipts/<receipt-id>.json` for immutable content-bound review receipts and `delivery/current.json` for the atomic active/invalidated pointer.
 
-**Implemented:** Chronicle validates JSONL append/readback and task-state replay, writes active snapshots under immutable SHA-256 names, commits an active transition with one atomic pointer replacement, and stages a terminal snapshot before atomically removing the pointer. Recovery validates the pointer's digest and completes an interrupted terminal removal. **Partial:** broader checkpoint/artifact continuity remains outside the bounded runtime. **Implemented:** SQLite/FTS5 stores owned semantic records with two migrations, deterministic filters, and lexical retrieval. Semantic memory does not replace Chronicle operational truth.
+**Implemented:** Chronicle validates JSONL append/readback and task-state replay, writes active snapshots under immutable SHA-256 names, commits an active transition with one atomic pointer replacement, and stages a terminal snapshot before atomically removing the pointer. Recovery validates the pointer's digest and completes an interrupted terminal removal. **Partial:** broader checkpoint/artifact continuity remains outside the bounded runtime. **Implemented:** one default user SQLite/FTS5 database stores owned semantic records for multiple projects with four migrations, a canonical workspace-to-project registry, project-scoped topic/session uniqueness, deterministic filters, bounded any-term lexical retrieval, and idempotent import of legacy project databases. Semantic memory does not replace Chronicle operational truth.
 
 The dependency sequence through bounded coordination is now delivered. Further Chronicle work focuses on broader checkpoint/artifact continuity and lifecycle cleanup rather than the now-delivered crash-atomic snapshot/pointer publication.
 
@@ -169,7 +169,7 @@ If a caller only needs `AppendEvent`, define an even smaller interface in that c
 
 The implemented coordinator and provider runner follow these small-boundary rules. Provider selection records a neutral provider reference and capability evidence, never mutable provider configuration. Runtime validation occurs before provider execution and Chronicle mutations on the delivered path.
 
-The **Implemented** `MemoryStore` is VGXNESS-owned and SQLite/FTS5-first. It stores typed observations with provenance, scope, topic, lifecycle state, references, and save/search/get behavior. Richer approval, summary, capsule, comparison, review, and optional Engram import workflows remain **Planned**; the owned-backend contract already uses `memory`, so no backend migration is pending.
+The **Implemented** `MemoryStore` is VGXNESS-owned and SQLite/FTS5-first. It stores typed observations with provenance, scope, topic, lifecycle state, references, and save/search/get behavior. Every bounded control-plane task resolves a durable project identity, retrieves and hydrates at most three relevant observations into a fixed 4,096-rune packet budget, and saves one idempotent terminal summary whose references identify the retrieved evidence. Richer approval, comparison, review, derived-summary, and optional Engram import workflows remain **Planned**; the owned-backend contract already uses `memory`, so no backend migration is pending.
 
 ## Adaptive execution boundaries
 
@@ -239,7 +239,7 @@ Prefer behavior tests over implementation trivia. Each package should be testabl
 Continue from the delivered foundation in dependency order:
 
 1. **Implemented:** Create the `vgxness` binary and explicit wiring.
-2. **Implemented:** Resolve project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/` storage.
+2. **Implemented:** Resolve project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/` operational storage, with shared semantic memory at `~/.vgxness/memory.db`.
 3. **Implemented:** Add SQLite/FTS5 memory save/search/get, lifecycle fields, migrations, status/doctor, tests, and CI.
 4. **Implemented:** Validate runtime contracts and Chronicle current-run/event/task-state records.
 5. **Implemented:** Append/read back Chronicle JSONL events and write/read/reconstruct snapshots and recovery state.

@@ -1034,7 +1034,7 @@ func validatePlanTopology(plan navigator.Plan) error {
 			if _, duplicate := waveByTask[taskID]; duplicate {
 				return ErrInvalidSchedule
 			}
-			if wave.Mode == "parallel" && (task.Operation != navigator.OperationReadFiles || task.Continuity != navigator.ContinuityIsolated) {
+			if wave.Mode == "parallel" && !navigator.IsParallelSafeTask(task) {
 				return ErrInvalidSchedule
 			}
 			waveByTask[taskID] = index

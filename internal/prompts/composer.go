@@ -138,12 +138,12 @@ func (c *Composer) Compose(ctx context.Context, input Input) (Bundle, error) {
 		},
 		Output: outputSection{
 			Contract: input.Work.ReturnContract, RequireStructuredResult: true, AdditionalProperties: false,
-			Instructions:    "Return only one JSON object with exactly the template keys. Preserve kind, schemaVersion, resultId, taskId, and agentId; replace the outcome fields with valid values and add no prose or Markdown. Every required string, including summary and nextRecommended, must contain non-whitespace text; when no further work is needed, use a short terminal value such as 'No further action.'.",
+			Instructions:    "Return only one JSON object with exactly the template keys. Preserve kind, schemaVersion, resultId, taskId, and agentId; replace the outcome fields with valid values and add no prose or Markdown. Every required string, including summary and nextRecommended, must contain non-whitespace text; when no further work is needed, use a short terminal value such as 'No further action.'. Propose memoryCandidates only for durable, reusable, evidence-backed project knowledge; omit routine steps, transient status, speculation, duplicates, credentials, tokens, secrets, and personal data. Each candidate needs type, title, content, stable topicKey, reason, and confidence. VGXNESS validates every proposal and may reject it.",
 			AllowedStatuses: []string{"success", "blocked", "failed", "needs_followup", "unsupported"},
 			Template: agentResultTemplate{
 				Kind: "agent.result", SchemaVersion: "1", ResultID: "result-" + input.Work.TaskID,
 				TaskID: input.Work.TaskID, AgentID: input.Agent.ID, Status: "success",
-				Summary: "replace with the bounded outcome", Artifacts: []any{}, NextRecommended: "replace with the next safe action", Risks: []string{}, Errors: []any{},
+				Summary: "replace with the bounded outcome", Artifacts: []any{}, NextRecommended: "replace with the next safe action", Risks: []string{}, Errors: []any{}, MemoryCandidates: []memoryCandidateTemplate{},
 			},
 		},
 	}
@@ -370,15 +370,25 @@ type outputSection struct {
 }
 
 type agentResultTemplate struct {
-	Kind            string   `json:"kind"`
-	SchemaVersion   string   `json:"schemaVersion"`
-	ResultID        string   `json:"resultId"`
-	TaskID          string   `json:"taskId"`
-	AgentID         string   `json:"agentId"`
-	Status          string   `json:"status"`
-	Summary         string   `json:"summary"`
-	Artifacts       []any    `json:"artifacts"`
-	NextRecommended string   `json:"nextRecommended"`
-	Risks           []string `json:"risks"`
-	Errors          []any    `json:"errors"`
+	Kind             string                    `json:"kind"`
+	SchemaVersion    string                    `json:"schemaVersion"`
+	ResultID         string                    `json:"resultId"`
+	TaskID           string                    `json:"taskId"`
+	AgentID          string                    `json:"agentId"`
+	Status           string                    `json:"status"`
+	Summary          string                    `json:"summary"`
+	Artifacts        []any                     `json:"artifacts"`
+	NextRecommended  string                    `json:"nextRecommended"`
+	Risks            []string                  `json:"risks"`
+	Errors           []any                     `json:"errors"`
+	MemoryCandidates []memoryCandidateTemplate `json:"memoryCandidates"`
+}
+
+type memoryCandidateTemplate struct {
+	Type       string  `json:"type"`
+	Title      string  `json:"title"`
+	Content    string  `json:"content"`
+	TopicKey   string  `json:"topicKey"`
+	Reason     string  `json:"reason"`
+	Confidence float64 `json:"confidence"`
 }

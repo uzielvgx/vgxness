@@ -129,14 +129,14 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
 		Goal: "Inspect continuity before implementation", Continuity: bridge.ContinuityStart,
 	})
-	if !started.OK || started.RunID == "" || started.CapsuleID == "" || started.StateVersion != 1 || len(started.MemoryRefs) != 1 {
+	if !started.OK || started.RunID == "" || started.CapsuleID == "" || started.StateVersion != 1 || len(started.MemoryRefs) != 2 {
 		t.Fatalf("unexpected continuity start: %#v", started)
 	}
 	continued := nativeDispatch(t, environment, workspace, launcher, "continue", bridge.DispatchRequest{
 		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
 		Goal: "Inspect continuity before implementation", Continuity: bridge.ContinuityContinue, RunID: started.RunID,
 	})
-	if !continued.OK || continued.RunID != started.RunID || continued.CapsuleID == started.CapsuleID || continued.StateVersion != 2 || len(continued.MemoryRefs) != 2 {
+	if !continued.OK || continued.RunID != started.RunID || continued.CapsuleID == started.CapsuleID || continued.StateVersion != 2 || len(continued.MemoryRefs) != 3 {
 		t.Fatalf("unexpected continuity continuation: %#v", continued)
 	}
 	projectRoots, err := filepath.Glob(filepath.Join(homeDirectory, ".vgxness", "projects", "*"))
@@ -147,14 +147,17 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 	if err != nil || !bytes.Contains(currentData, []byte(started.RunID)) || !bytes.Contains(currentData, []byte(continued.CapsuleID)) || !bytes.Contains(currentData, []byte(`"status": "paused"`)) {
 		t.Fatalf("continuity pointer was not persisted: err=%v\n%s", err, currentData)
 	}
-	if info, err := os.Stat(filepath.Join(projectRoots[0], "memory.db")); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("continuity memory store is missing: info=%v err=%v", info, err)
+	if info, err := os.Stat(filepath.Join(homeDirectory, ".vgxness", "memory.db")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("global project-isolated memory store is missing: info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(projectRoots[0], "memory.db")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy per-project memory store was recreated: %v", err)
 	}
 	finished := nativeDispatch(t, environment, workspace, launcher, "finish", bridge.DispatchRequest{
 		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
 		Goal: "Inspect continuity before implementation", Continuity: bridge.ContinuityFinish, RunID: started.RunID,
 	})
-	if !finished.OK || finished.RunID != started.RunID || finished.CapsuleID == continued.CapsuleID || finished.StateVersion != 3 || len(finished.MemoryRefs) != 3 {
+	if !finished.OK || finished.RunID != started.RunID || finished.CapsuleID == continued.CapsuleID || finished.StateVersion != 3 || len(finished.MemoryRefs) != 4 {
 		t.Fatalf("unexpected continuity finish: %#v", finished)
 	}
 	if _, err := os.Stat(filepath.Join(projectRoots[0], "current-run.json")); !errors.Is(err, os.ErrNotExist) {

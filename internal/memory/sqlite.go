@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -17,8 +18,9 @@ import (
 )
 
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db       *sql.DB
+	now      func() time.Time
+	readOnly bool
 }
 
 func Open(ctx context.Context, path string, now func() time.Time) (*Store, error) {
@@ -95,7 +97,7 @@ func OpenRead(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("%w: memory storage is unavailable", ErrCorrupt)
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db, now: time.Now}
+	store := &Store{db: db, now: time.Now, readOnly: true}
 	if _, err := store.Health(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -133,7 +135,18 @@ func rejectSymlink(path string) error {
 	}
 	return nil
 }
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.readOnly {
+		// Health inspection intentionally opens an immutable snapshot. Keep the
+		// main database complete by checkpointing committed WAL state whenever
+		// a writable application operation releases its store.
+		_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	}
+	return s.db.Close()
+}
 func (s *Store) Health(ctx context.Context) (int, error) {
 	if err := cancelled(ctx); err != nil {
 		return 0, err
@@ -175,7 +188,7 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs')`).Scan(&probe); err != nil || probe != 4 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots')`).Scan(&probe); err != nil || probe != 6 {
 		return 0, fmt.Errorf("%w: required schema unavailable", ErrCorrupt)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observations_fts WHERE observations_fts MATCH 'healthchecknomatch'`).Scan(&probe); err != nil {
@@ -183,6 +196,94 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	}
 	return version, nil
 }
+
+// ResolveProject binds one canonical workspace to one durable project identity.
+// A legacy basename identity is adopted once when it already owns observations;
+// new workspaces use a basename plus a path digest to avoid name collisions.
+func (s *Store) ResolveProject(ctx context.Context, workspace string) (string, error) {
+	if err := cancelled(ctx); err != nil {
+		return "", err
+	}
+	absolute, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid workspace", ErrInvalid)
+	}
+	absolute = filepath.Clean(absolute)
+	if absolute, err = filepath.EvalSymlinks(absolute); err != nil {
+		return "", fmt.Errorf("%w: invalid workspace", ErrInvalid)
+	}
+	if absolute == string(filepath.Separator) || filepath.Base(absolute) == "." || filepath.Base(absolute) == string(filepath.Separator) {
+		return "", fmt.Errorf("%w: invalid workspace", ErrInvalid)
+	}
+	digest := sha256.Sum256([]byte(absolute))
+	workspaceHash := hex.EncodeToString(digest[:])
+	legacyID := filepath.Base(absolute)
+	name := []rune(legacyID)
+	if len(name) > 243 {
+		name = name[:243]
+	}
+	stableID := fmt.Sprintf("%s-%x", string(name), digest[:6])
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return "", writeError(ctx, err)
+	}
+	defer conn.Close()
+	for attempt := 0; ; attempt++ {
+		_, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
+		if err == nil {
+			break
+		}
+		if err = waitForSQLite(ctx, attempt, err); err != nil {
+			return "", writeError(ctx, err)
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+
+	var projectID string
+	err = conn.QueryRowContext(ctx, `SELECT project_id FROM project_roots WHERE workspace_hash=?`, workspaceHash).Scan(&projectID)
+	if err == nil {
+		if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+			return "", writeError(ctx, err)
+		}
+		committed = true
+		return projectID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", writeError(ctx, err)
+	}
+
+	var legacyAvailable int
+	if err = conn.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM projects p
+			WHERE p.id=?
+			  AND NOT EXISTS(SELECT 1 FROM project_roots r WHERE r.project_id=p.id)
+		)`, legacyID).Scan(&legacyAvailable); err != nil {
+		return "", writeError(ctx, err)
+	}
+	projectID = stableID
+	if legacyAvailable == 1 {
+		projectID = legacyID
+	}
+	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO projects(id) VALUES(?)`, projectID); err == nil {
+		_, err = conn.ExecContext(ctx, `INSERT INTO project_roots(workspace_hash,project_id) VALUES(?,?)`, workspaceHash, projectID)
+	}
+	if err != nil {
+		return "", conflictOrWrite(ctx, err)
+	}
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return "", writeError(ctx, err)
+	}
+	committed = true
+	return projectID, nil
+}
+
 func (s *Store) Save(ctx context.Context, item Observation) (Observation, error) {
 	if err := validateObservation(item); err != nil {
 		return Observation{}, err
@@ -196,14 +297,11 @@ func (s *Store) Save(ctx context.Context, item Observation) (Observation, error)
 	}
 	defer tx.Rollback()
 	if item.TopicKey != "" {
-		existing, found, err := loadOne(tx.QueryRowContext(ctx, observationSelect+` WHERE topic_key=?`, item.TopicKey))
+		existing, found, err := loadOne(tx.QueryRowContext(ctx, observationSelect+` WHERE o.project_id=? AND o.scope=? AND o.topic_key=?`, item.Project, item.Scope, item.TopicKey))
 		if err != nil {
 			return Observation{}, err
 		}
 		if found {
-			if existing.Project != item.Project || existing.Scope != item.Scope {
-				return Observation{}, fmt.Errorf("%w: topic key belongs to another boundary", ErrConflict)
-			}
 			item.ID = existing.ID
 			return s.updateTx(ctx, tx, existing, item)
 		}

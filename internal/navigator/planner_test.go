@@ -57,6 +57,20 @@ func TestPlanRequestParallelizesOnlyIndependentIsolatedReads(t *testing.T) {
 	}
 }
 
+func TestPlanRequestParallelizesIndependentStructuralAnalysis(t *testing.T) {
+	first := readTask("task-call-path")
+	first.Operation = OperationAnalyzeStructure
+	second := readTask("task-impact")
+	second.Operation = OperationAnalyzeStructure
+	plan, err := PlanRequest(context.Background(), request(first, second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Decision != "parallel" || len(plan.Waves) != 1 || plan.Waves[0].Mode != "parallel" || len(plan.Waves[0].TaskIDs) != 2 {
+		t.Fatalf("unexpected structural plan: %#v", plan)
+	}
+}
+
 func TestPlanRequestKeepsDependenciesAndLinkedContinuitySequential(t *testing.T) {
 	first := readTask("task-a")
 	first.Continuity = ContinuityLinked

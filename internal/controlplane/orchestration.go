@@ -3,6 +3,8 @@ package controlplane
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +47,7 @@ type orchestrationDocument struct {
 	UpdatedAt        string                     `json:"updatedAt"`
 	Join             json.RawMessage            `json:"join,omitempty"`
 	PreparedBindings map[string]string          `json:"preparedBindings"`
+	ClaimTokens      map[string]string          `json:"claimTokens,omitempty"`
 	Results          map[string]json.RawMessage `json:"results"`
 }
 
@@ -88,6 +91,7 @@ func (service *Service) PlanOrchestration(ctx context.Context, workspace string,
 		ParentSessionID: request.ParentSessionID, ParentMessageID: request.ParentMessageID,
 		Plan: plan, Status: string(orchestrator.SchedulePending), CreatedAt: now, UpdatedAt: now,
 		PreparedBindings: make(map[string]string),
+		ClaimTokens:      make(map[string]string),
 		Results:          make(map[string]json.RawMessage),
 	}
 	if data, marshalErr := json.Marshal(document); marshalErr != nil || len(data) > orchestrationDocumentLimit {
@@ -131,7 +135,8 @@ func (service *Service) PrepareOrchestrationWave(ctx context.Context, workspace 
 	replayEligible := true
 	for _, binding := range request.Bindings {
 		item, ok := checkpointByTask[binding.TaskID]
-		if !ok || item.TicketID != binding.TicketID || item.ChildSessionID != binding.ChildSessionID {
+		storedClaimToken := document.ClaimTokens[binding.TaskID]
+		if !ok || item.TicketID != binding.TicketID || item.ChildSessionID != binding.ChildSessionID || storedClaimToken != "" && storedClaimToken != orchestrationClaimTokenDigest(binding.ClaimToken) {
 			replayEligible = false
 			break
 		}
@@ -144,11 +149,18 @@ func (service *Service) PrepareOrchestrationWave(ctx context.Context, workspace 
 			replayEligible = false
 			break
 		}
-		replayed = append(replayed, bridge.OrchestrationPreparedTask{TaskID: binding.TaskID, Prepared: prepared})
+		replayed = append(replayed, bridge.OrchestrationPreparedTask{TaskID: binding.TaskID, ChildSessionID: binding.ChildSessionID, Prepared: prepared})
 	}
 	if replayEligible && len(replayed) > 0 && scheduler.Status() == orchestrator.ScheduleRunning {
 		sort.Slice(replayed, func(i, j int) bool { return replayed[i].TaskID < replayed[j].TaskID })
 		document.Status = string(scheduler.Status())
+		for _, binding := range request.Bindings {
+			document.ClaimTokens[binding.TaskID] = orchestrationClaimTokenDigest(binding.ClaimToken)
+		}
+		document.UpdatedAt = service.now().UTC().Format(time.RFC3339Nano)
+		if err := writeOrchestrationDocument(paths.Root, document); err != nil {
+			return bridge.Response{}, fmt.Errorf("%w: repair prepared orchestration replay", bridge.ErrExecution)
+		}
 		return orchestrationResponse(root, document, replayed), nil
 	}
 	wave, ok := scheduler.NextWave()
@@ -208,6 +220,9 @@ func (service *Service) PrepareOrchestrationWave(ctx context.Context, workspace 
 	document.Status = string(scheduler.Status())
 	document.CurrentWave = wave.Index
 	document.UpdatedAt = service.now().UTC().Format(time.RFC3339Nano)
+	for _, binding := range request.Bindings {
+		document.ClaimTokens[binding.TaskID] = orchestrationClaimTokenDigest(binding.ClaimToken)
+	}
 	for taskID, item := range prepared {
 		document.PreparedBindings[taskID] = item.TicketID
 	}
@@ -216,7 +231,7 @@ func (service *Service) PrepareOrchestrationWave(ctx context.Context, workspace 
 	}
 	items := make([]bridge.OrchestrationPreparedTask, 0, len(prepared))
 	for taskID, item := range prepared {
-		items = append(items, bridge.OrchestrationPreparedTask{TaskID: taskID, Prepared: item})
+		items = append(items, bridge.OrchestrationPreparedTask{TaskID: taskID, ChildSessionID: bindingsByTask[taskID].ChildSessionID, Prepared: item})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].TaskID < items[j].TaskID })
 	return orchestrationResponse(root, document, items), nil
@@ -338,6 +353,10 @@ func (service *Service) StatusOrchestration(ctx context.Context, workspace strin
 		return bridge.Response{}, err
 	}
 	defer release()
+	if request.OwnerID != "" && document.OwnerID != request.OwnerID {
+		return bridge.Response{}, bridge.ErrDenied
+	}
+	var prepared []bridge.OrchestrationPreparedTask
 	if document.Status != "cancelled" && len(document.Join) == 0 {
 		authority, scheduler, openErr := openDurableScheduler(ctx, paths.Root, document)
 		if openErr != nil {
@@ -351,8 +370,17 @@ func (service *Service) StatusOrchestration(ctx context.Context, workspace strin
 		if err := writeOrchestrationDocument(paths.Root, document); err != nil {
 			return bridge.Response{}, bridge.ErrExecution
 		}
+		if request.ClaimToken != "" && document.Status == string(orchestrator.ScheduleRunning) {
+			if document.ClaimTokens[request.TaskID] != orchestrationClaimTokenDigest(request.ClaimToken) {
+				return bridge.Response{}, bridge.ErrDenied
+			}
+			prepared, err = runningOrchestrationPrepared(ctx, paths.Root, document, authority, request.TaskID, request.ChildSessionID)
+			if err != nil {
+				return bridge.Response{}, err
+			}
+		}
 	}
-	return orchestrationResponse(root, document, nil), nil
+	return orchestrationResponse(root, document, prepared), nil
 }
 
 // ResumeOrchestration transfers the durable schedule to a fresh owner epoch.
@@ -523,11 +551,15 @@ func openDurableScheduler(ctx context.Context, storageRoot string, document orch
 }
 
 func orchestrationResponse(root string, document orchestrationDocument, prepared []bridge.OrchestrationPreparedTask) bridge.Response {
+	nextWave := document.CurrentWave
+	if document.Status == string(orchestrator.SchedulePending) && len(document.PreparedBindings) > 0 {
+		nextWave++
+	}
 	return bridge.Response{
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
 		Status: document.Status, Result: finalOrchestrationResult(document), Orchestration: &bridge.OrchestrationView{
 			OrchestrationID: document.OrchestrationID, ScheduleID: document.ScheduleID, OwnerID: document.OwnerID,
-			Status: document.Status, CurrentWave: document.CurrentWave, Plan: document.Plan,
+			ParentSessionID: document.ParentSessionID, Status: document.Status, CurrentWave: document.CurrentWave, NextWave: nextWave, Plan: document.Plan,
 			Prepared: prepared, Join: append(json.RawMessage(nil), document.Join...),
 		},
 	}
@@ -593,6 +625,34 @@ func orchestrationPreparedReplay(document nativeTicketDocument) (bridge.Prepared
 		Model: document.Input.Model, Prompt: prepared.Invocation.Prompt.System, PromptSHA256: prepared.PromptSHA256, Deadline: document.Deadline,
 		PromptRef: bridge.PromptReceipt{ID: prepared.PromptRef.ID, Version: prepared.PromptRef.Version, SHA256: prepared.PromptSHA256},
 	}, true
+}
+
+func runningOrchestrationPrepared(ctx context.Context, storageRoot string, document orchestrationDocument, authority *orchestrator.DurableTicketAuthority, taskID, childSessionID string) ([]bridge.OrchestrationPreparedTask, error) {
+	checkpoint, err := authority.Snapshot(ctx, document.ScheduleID, document.Plan.PlanID, document.ParentSessionID)
+	if err != nil {
+		return nil, normalizeOrchestrationError(err)
+	}
+	items := make([]bridge.OrchestrationPreparedTask, 0)
+	for _, item := range checkpoint.Tasks {
+		if item.TaskID != taskID || item.ChildSessionID != childSessionID || item.Status != orchestrator.TaskRunning || item.DispatchStatus != orchestrator.NativeDispatchConfirmed {
+			continue
+		}
+		native, readErr := readNativeTicket(storageRoot, item.TicketID)
+		prepared, ok := orchestrationPreparedReplay(native)
+		if readErr != nil || !ok || native.Input.ChildSessionID != item.ChildSessionID {
+			continue
+		}
+		items = append(items, bridge.OrchestrationPreparedTask{
+			TaskID: item.TaskID, ChildSessionID: item.ChildSessionID, Prepared: prepared,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].TaskID < items[j].TaskID })
+	return items, nil
+}
+
+func orchestrationClaimTokenDigest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func normalizeOrchestrationError(err error) error {
@@ -673,6 +733,9 @@ func readOrchestrationDocument(root, orchestrationID string) (orchestrationDocum
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&document) != nil || document.Version != orchestrationDocumentVersion || document.OrchestrationID != orchestrationID || navigator.ValidatePlan(context.Background(), document.Plan) != nil || document.PreparedBindings == nil || document.Results == nil {
 		return orchestrationDocument{}, bridge.ErrDenied
+	}
+	if document.ClaimTokens == nil {
+		document.ClaimTokens = make(map[string]string)
 	}
 	return document, nil
 }
@@ -811,7 +874,7 @@ func (service *Service) openOrchestration(ctx context.Context, workspace, orches
 	if err != nil {
 		return "", config.Paths{}, orchestrationDocument{}, nil, err
 	}
-	lock, err := orchestrator.AcquireFileLock(path + ".lock")
+	lock, err := acquireBoundedControlPlaneLock(ctx, path+".lock")
 	if err != nil {
 		return "", config.Paths{}, orchestrationDocument{}, nil, bridge.ErrUnavailable
 	}
@@ -853,16 +916,26 @@ func (service *Service) reconcileNativeTerminals(ctx context.Context, storageRoo
 			continue
 		}
 		native, readErr := readNativeTicket(storageRoot, item.TicketID)
-		if readErr != nil || native.Response == nil || native.Input.ChildSessionID != item.ChildSessionID {
+		if readErr != nil || native.Input.ChildSessionID != item.ChildSessionID {
+			continue
+		}
+		if native.Response == nil && native.State == "prepared" && service.now().UTC().After(parseNativeDeadline(native.Deadline)) {
+			_, _ = service.Fail(context.WithoutCancel(ctx), document.Workspace, bridge.NativeFailureRequest{
+				ProtocolVersion: bridge.ProtocolVersion, TicketID: item.TicketID,
+				ParentSessionID: document.ParentSessionID, ChildSessionID: item.ChildSessionID,
+				Category: "native-subagent-deadline",
+			})
+			native, readErr = readNativeTicket(storageRoot, item.TicketID)
+		}
+		if readErr != nil || native.Response == nil {
 			continue
 		}
 		outcome := orchestrator.NativeTaskOutcome{
 			NativeTaskBinding: orchestrator.NativeTaskBinding{TaskID: item.TaskID, ParentSessionID: document.ParentSessionID, ChildSessionID: item.ChildSessionID, TicketID: item.TicketID},
-			MessageID:         "message-" + item.TicketID,
 		}
 		switch native.State {
 		case "completed":
-			outcome.Status, outcome.ResultID, outcome.Result = orchestrator.TaskCompleted, "result-"+item.TicketID, append(json.RawMessage(nil), native.Response.Result...)
+			outcome.Status, outcome.MessageID, outcome.ResultID, outcome.Result = orchestrator.TaskCompleted, "message-"+item.TicketID, "result-"+item.TicketID, append(json.RawMessage(nil), native.Response.Result...)
 		case "failed":
 			outcome.Status, outcome.Failure = orchestrator.TaskFailed, "native ticket completed with failure before orchestration acknowledgement"
 		default:

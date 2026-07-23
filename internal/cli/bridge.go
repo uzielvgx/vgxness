@@ -11,13 +11,13 @@ import (
 
 func runBridge(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime bridge.Runtime) int {
 	validCommands := map[string]bool{
-		"status": true, "prepare": true, "complete": true, "fail": true, "read": true,
+		"status": true, "prepare": true, "complete": true, "fail": true, "read": true, "codegraph": true,
 		"orchestrate-plan": true, "orchestrate-wave": true, "orchestrate-terminal": true,
 		"orchestrate-join": true, "orchestrate-status": true, "orchestrate-resume": true, "orchestrate-cancel": true,
 	}
 	if len(args) == 0 || !validCommands[args[0]] {
-		fmt.Fprintln(stderr, "usage: vgxness bridge <status|prepare|complete|fail|read|orchestrate-plan|orchestrate-wave|orchestrate-terminal|orchestrate-join|orchestrate-status|orchestrate-resume|orchestrate-cancel> --workspace PATH [--stdin]")
-		fmt.Fprintln(stderr, "note: native sessions create a child, then use prepare, read, complete, and fail")
+		fmt.Fprintln(stderr, "usage: vgxness bridge <status|prepare|complete|fail|read|codegraph|orchestrate-plan|orchestrate-wave|orchestrate-terminal|orchestrate-join|orchestrate-status|orchestrate-resume|orchestrate-cancel> --workspace PATH [--stdin]")
+		fmt.Fprintln(stderr, "note: native sessions create a child, then use prepare, bounded read or CodeGraph evidence, complete, and fail")
 		return 2
 	}
 	command := args[0]
@@ -85,6 +85,14 @@ func runBridge(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 				return 2
 			}
 			response, err = native.ReadNative(ctx, workspace, request)
+		case "codegraph":
+			request, decodeErr := bridge.DecodeNativeCodeGraph(stdin)
+			if decodeErr != nil {
+				response = bridge.ErrorResponse(decodeErr)
+				_ = bridge.Encode(stdout, response)
+				return 2
+			}
+			response, err = native.QueryNativeCodeGraph(ctx, workspace, request)
 		case "orchestrate-plan", "orchestrate-wave", "orchestrate-terminal", "orchestrate-join", "orchestrate-status", "orchestrate-resume", "orchestrate-cancel":
 			orchestration, ok := runtime.(bridge.OrchestrationRuntime)
 			if !ok {

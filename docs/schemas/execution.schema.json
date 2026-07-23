@@ -142,6 +142,22 @@
       },
       "additionalProperties": false
     },
+    "memoryCandidate": {
+      "type": "object",
+      "required": ["type", "title", "content", "topicKey", "reason", "confidence"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["decision", "architecture", "preference", "convention", "discovery", "bugfix", "constraint", "learning", "summary"]
+        },
+        "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "topicKey": { "$ref": "common.schema.json#/$defs/identifier" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
+    },
     "agentResult": {
       "type": "object",
       "required": ["kind", "schemaVersion", "resultId", "taskId", "agentId", "status", "summary", "artifacts", "nextRecommended", "risks", "errors"],
@@ -156,7 +172,12 @@
         "artifacts": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/artifactReference" } },
         "nextRecommended": { "type": "string", "minLength": 1 },
         "risks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "errors": { "type": "array", "items": { "$ref": "#/$defs/resultError" } }
+        "errors": { "type": "array", "items": { "$ref": "#/$defs/resultError" } },
+        "memoryCandidates": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/memoryCandidate" }
+        }
       },
       "additionalProperties": false
     },

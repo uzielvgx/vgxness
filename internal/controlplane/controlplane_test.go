@@ -62,6 +62,24 @@ func (sqliteContinuityMemory) Search(ctx context.Context, opts config.Options, r
 	return memory.NewMemoryService(store, "vgxness-controlplane", nil).Search(ctx, request)
 }
 
+func (sqliteContinuityMemory) Get(ctx context.Context, opts config.Options, request memory.GetRequest) (memory.MemoryResult, error) {
+	store, err := memory.OpenRead(ctx, filepath.Join(opts.StorageRoot, "memory.db"))
+	if err != nil {
+		return memory.MemoryResult{}, err
+	}
+	defer store.Close()
+	return memory.NewMemoryService(store, "vgxness-controlplane", nil).Get(ctx, request)
+}
+
+func (sqliteContinuityMemory) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
+	store, err := memory.Open(ctx, filepath.Join(opts.StorageRoot, "memory.db"), nil)
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	return store.ResolveProject(ctx, workspace)
+}
+
 func TestServiceStatusAndDispatchTraverseBoundedRuntime(t *testing.T) {
 	workspace := t.TempDir()
 	canonical, err := filepath.EvalSymlinks(workspace)
@@ -298,7 +316,7 @@ func TestContinuityCompletionRetriesEveryDurableBoundary(t *testing.T) {
 				t.Fatalf("duplicate completion evidence: %#v", counts)
 			}
 			memories, err := service.memory.Search(context.Background(), config.Options{StorageRoot: storage}, memory.SearchRequest{
-				Query: "continuity", Project: filepath.Base(workspace), Scope: memory.ScopeProject,
+				Query: "continuity", Project: state.project, Scope: memory.ScopeProject,
 				Type: "continuity", TopicKey: "run/" + state.runID + "/" + taskID, Limit: 2,
 			})
 			if err != nil || len(memories) != 1 {

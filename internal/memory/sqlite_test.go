@@ -66,7 +66,7 @@ func TestMemoryRuntime_LiteralV1UpgradeRestartPreservesDataAndTitles(t *testing.
 		testutil.Require(t, err == nil && got.ID == id && got.Title == title && (id != "old" || got.Content == "literal old token"), "get %s: %+v %v", id, got, err)
 	}
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 2, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 4, "health=%d %v", version, err)
 }
 
 func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
@@ -74,12 +74,104 @@ func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
 	store := openPath(t, path)
 	mustSave(t, store, observation("obs-1", "project-a", "restart token"))
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 2, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 4, "health=%d %v", version, err)
 	_ = store.Close()
 	store = openPath(t, path)
 	defer store.Close()
 	got, err := store.Search(context.Background(), Search{Query: "restart", Project: "project-a"})
 	testutil.Require(t, err == nil && len(got) == 1 && got[0].ID == "obs-1", "restart lost data: %+v %v", got, err)
+}
+
+func TestResolveProject_AdoptsLegacyOnceAndSeparatesSameNamedWorkspaces(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	mustSave(t, store, observation("legacy", "same", "legacy workspace memory"))
+
+	root := t.TempDir()
+	first := filepath.Join(root, "one", "same")
+	second := filepath.Join(root, "two", "same")
+	testutil.NoError(t, os.MkdirAll(first, 0o700))
+	testutil.NoError(t, os.MkdirAll(second, 0o700))
+	firstProject, err := store.ResolveProject(context.Background(), first)
+	testutil.Require(t, err == nil && firstProject == "same", "legacy adoption=%q err=%v", firstProject, err)
+	repeated, err := store.ResolveProject(context.Background(), first)
+	testutil.Require(t, err == nil && repeated == firstProject, "binding changed=%q err=%v", repeated, err)
+	secondProject, err := store.ResolveProject(context.Background(), second)
+	testutil.Require(t, err == nil && secondProject != "" && secondProject != firstProject && strings.HasPrefix(secondProject, "same-"), "collision project=%q err=%v", secondProject, err)
+}
+
+func TestImportLegacy_MergesProjectsIdempotentlyWithoutMutatingSource(t *testing.T) {
+	legacyPath := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", legacyPath)
+	testutil.NoError(t, err)
+	_, err = legacy.Exec(schemaV1 + schemaV2 + `
+		PRAGMA user_version=2;
+		INSERT INTO observations(
+			id,project_id,session_id,scope,type,content,topic_key,producer,state,created_at,updated_at,title
+		) VALUES(
+			'legacy-observation','project-a','shared-session','project','learning',
+			'legacy import token','shared-topic','legacy','active',1,1,'Legacy'
+		);
+		INSERT INTO observations_fts(id,content) VALUES('legacy-observation','legacy import token');
+	`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, legacy.Close())
+	before := healthSnapshot(t, legacyPath)
+
+	targetPath := filepath.Join(t.TempDir(), "global.db")
+	store := openPath(t, targetPath)
+	current := observation("current-observation", "project-b", "current token")
+	current.TopicKey = "shared-topic"
+	current.Session = "shared-session"
+	mustSave(t, store, current)
+
+	testutil.NoError(t, store.ImportLegacy(context.Background(), legacyPath))
+	testutil.NoError(t, store.ImportLegacy(context.Background(), legacyPath))
+	found, err := store.Search(context.Background(), Search{Query: "legacy", Project: "project-a", Scope: ScopeProject})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "legacy-observation" && found[0].Title == "Legacy", "legacy import mismatch: %+v %v", found, err)
+	var imports, sessions int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM legacy_imports`).Scan(&imports))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id='shared-session'`).Scan(&sessions))
+	testutil.Require(t, imports == 1 && sessions == 2, "idempotency or project session isolation failed: imports=%d sessions=%d", imports, sessions)
+	testutil.Require(t, before == healthSnapshot(t, legacyPath), "legacy source was mutated")
+	testutil.NoError(t, store.Close())
+}
+
+func TestImportLegacy_RemapsSameNamedWorkspacesToResolvedProjects(t *testing.T) {
+	root := t.TempDir()
+	firstWorkspace := filepath.Join(root, "one", "same")
+	secondWorkspace := filepath.Join(root, "two", "same")
+	testutil.NoError(t, os.MkdirAll(firstWorkspace, 0o700))
+	testutil.NoError(t, os.MkdirAll(secondWorkspace, 0o700))
+	store := openPath(t, filepath.Join(t.TempDir(), "global.db"))
+	defer store.Close()
+	firstProject, err := store.ResolveProject(context.Background(), firstWorkspace)
+	testutil.NoError(t, err)
+	secondProject, err := store.ResolveProject(context.Background(), secondWorkspace)
+	testutil.Require(t, err == nil && firstProject != secondProject, "project collision: %q %q %v", firstProject, secondProject, err)
+
+	createLegacy := func(path, id, content string) {
+		db, openErr := sql.Open("sqlite", path)
+		testutil.NoError(t, openErr)
+		_, execErr := db.Exec(schemaV1+schemaV2+`
+			PRAGMA user_version=2;
+			INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,title)
+			VALUES(?, 'same', 'project', 'learning', ?, 'legacy', 'active', 1, 1, 'Legacy');
+			INSERT INTO observations_fts(id,content) VALUES(?, ?);`, id, content, id, content)
+		testutil.NoError(t, execErr)
+		testutil.NoError(t, db.Close())
+	}
+	firstLegacy := filepath.Join(t.TempDir(), "first.db")
+	secondLegacy := filepath.Join(t.TempDir(), "second.db")
+	createLegacy(firstLegacy, "first-observation", "first unique token")
+	createLegacy(secondLegacy, "second-observation", "second unique token")
+	testutil.NoError(t, store.ImportLegacy(context.Background(), firstLegacy, firstProject))
+	testutil.NoError(t, store.ImportLegacy(context.Background(), secondLegacy, secondProject))
+
+	first, err := store.Search(context.Background(), Search{Query: "first", Project: firstProject, Scope: ScopeProject})
+	testutil.Require(t, err == nil && len(first) == 1 && first[0].ID == "first-observation", "first import=%+v err=%v", first, err)
+	second, err := store.Search(context.Background(), Search{Query: "second", Project: secondProject, Scope: ScopeProject})
+	testutil.Require(t, err == nil && len(second) == 1 && second[0].ID == "second-observation", "second import=%+v err=%v", second, err)
 }
 
 func TestMigrate_RejectsNewerSchema(t *testing.T) {
@@ -172,16 +264,16 @@ func TestStore_RejectsInvalidDuplicateBoundaryAndCancelledWrites(t *testing.T) {
 	duplicate := observation("obs-1", "project-a", "duplicate")
 	_, err = store.Save(context.Background(), duplicate)
 	testutil.Require(t, errors.Is(err, ErrConflict), "expected duplicate conflict, got %v", err)
-	cross := observation("obs-2", "project-b", "cross")
-	cross.TopicKey = "shared"
-	_, err = store.Save(context.Background(), cross)
-	testutil.Require(t, errors.Is(err, ErrConflict), "expected boundary conflict, got %v", err)
-	cross.Project, cross.Scope = "project-a", ScopePersonal
-	_, err = store.Save(context.Background(), cross)
-	testutil.Require(t, errors.Is(err, ErrConflict), "expected scope conflict, got %v", err)
+	crossProject := observation("obs-2", "project-b", "cross project")
+	crossProject.TopicKey = "shared"
+	mustSave(t, store, crossProject)
+	crossScope := observation("obs-3", "project-a", "cross scope")
+	crossScope.Scope = ScopePersonal
+	crossScope.TopicKey = "shared"
+	mustSave(t, store, crossScope)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = store.Save(ctx, observation("obs-3", "project-a", "cancelled"))
+	_, err = store.Save(ctx, observation("obs-4", "project-a", "cancelled"))
 	testutil.Require(t, errors.Is(err, context.Canceled), "expected cancellation, got %v", err)
 }
 
@@ -265,7 +357,7 @@ func TestEnvironmentIsolation_NoAmbientHomeOrNetwork(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 2, "isolated health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 4, "isolated health=%d %v", version, err)
 }
 
 func healthSnapshot(t *testing.T, path string) string {
@@ -302,7 +394,7 @@ func healthWithoutMutation(t *testing.T, path string) (int, error) {
 func TestHealthFile_HealthyDatabaseWithoutMutation(t *testing.T) {
 	path := migratedPath(t)
 	version, err := healthWithoutMutation(t, path)
-	testutil.Require(t, err == nil && version == 2, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 4, "health=%d err=%v", version, err)
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	version, err = HealthFile(context.Background(), missing)
 	testutil.Require(t, err == nil && version == 0, "missing health=%d err=%v", version, err)
@@ -311,7 +403,7 @@ func TestHealthFile_HealthyDatabaseWithoutMutation(t *testing.T) {
 }
 
 func TestHealthFile_RejectsMissingRequiredTableWithoutMutation(t *testing.T) {
-	for _, table := range []string{"projects", "sessions", "observations", "observation_refs"} {
+	for _, table := range []string{"projects", "sessions", "observations", "observation_refs", "legacy_imports", "project_roots"} {
 		t.Run(table, func(t *testing.T) {
 			path := migratedPath(t)
 			db, err := sql.Open("sqlite", path)
@@ -382,7 +474,7 @@ func TestOpen_ConcurrentFreshProcesses(t *testing.T) {
 		testutil.NoError(t, command.Wait())
 	}
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, err == nil && version == 2, "concurrent health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 4, "concurrent health=%d err=%v", version, err)
 }
 
 func TestOpen_MigrationRetryBoundAndCancellation(t *testing.T) {
