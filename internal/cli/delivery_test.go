@@ -43,8 +43,10 @@ func TestDeliveryCLIReadsManifestAndForwardsExplicitGate(t *testing.T) {
 		t.Fatalf("issue code=%d stdout=%q stderr=%q request=%+v", code, stdout.String(), stderr.String(), fake.issueRequest)
 	}
 	stdout.Reset()
-	code = runDelivery(context.Background(), []string{"validate", "--manifest", path, "--gate", "pre-push"}, &stdout, &stderr, fake)
-	if code != 0 || fake.validateRequest.Gate != delivery.GatePrePush || !strings.Contains(stdout.String(), `"state":"valid"`) {
+	receipt := strings.Repeat("a", 64)
+	code = runDelivery(context.Background(), []string{"validate", "--manifest", path, "--gate", "pre-push", "--receipt", receipt}, &stdout, &stderr, fake)
+	if code != 0 || fake.validateRequest.Gate != delivery.GatePrePush || fake.validateRequest.ReceiptID != receipt ||
+		!strings.Contains(stdout.String(), `"state":"valid"`) {
 		t.Fatalf("validate code=%d stdout=%q stderr=%q request=%+v", code, stdout.String(), stderr.String(), fake.validateRequest)
 	}
 }

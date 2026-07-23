@@ -77,6 +77,33 @@ func TestValidationDriftDurablyInvalidatesReceipt(t *testing.T) {
 	}
 }
 
+func TestValidationReceiptMismatchDoesNotInvalidateCurrentReceipt(t *testing.T) {
+	repository := newRepository(t)
+	writeProjectFile(t, repository, "feature.txt", "reviewed\n")
+	service, _ := New(repository)
+	options := config.Options{StorageRoot: filepath.Join(t.TempDir(), "state")}
+	manifest := validManifest()
+	receipt, err := service.Issue(context.Background(), options, IssueRequest{Manifest: manifest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatched := receipt.ReceiptID
+	if mismatched[0] == '0' {
+		mismatched = "1" + mismatched[1:]
+	} else {
+		mismatched = "0" + mismatched[1:]
+	}
+	if _, err := service.Validate(context.Background(), options, ValidateRequest{
+		Gate: GatePostApply, ReceiptID: mismatched, Manifest: manifest,
+	}); !errors.Is(err, ErrInvalidated) {
+		t.Fatalf("mismatched receipt was accepted: %v", err)
+	}
+	status, err := service.Status(context.Background(), options)
+	if err != nil || status.Current.State != "active" || status.Receipt.ReceiptID != receipt.ReceiptID {
+		t.Fatalf("mismatch mutated current receipt: %+v err=%v", status, err)
+	}
+}
+
 func TestManifestDriftInvalidatesAndExplicitInvalidationIsIdempotent(t *testing.T) {
 	repository := newRepository(t)
 	writeProjectFile(t, repository, "feature.txt", "first\n")

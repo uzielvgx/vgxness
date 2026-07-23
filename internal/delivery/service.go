@@ -97,6 +97,9 @@ func (service *Service) Validate(ctx context.Context, options config.Options, re
 	if !validGate(request.Gate) {
 		return Validation{}, fmt.Errorf("%w: unknown gate", ErrInvalid)
 	}
+	if request.ReceiptID != "" && !validDigest(request.ReceiptID) {
+		return Validation{}, fmt.Errorf("%w: invalid receipt identity", ErrInvalid)
+	}
 	manifest, err := normalizeManifest(ctx, request.Manifest)
 	if err != nil {
 		return Validation{}, err
@@ -112,6 +115,9 @@ func (service *Service) Validate(ctx context.Context, options config.Options, re
 			return readErr
 		}
 		validation = Validation{Gate: request.Gate, ReceiptID: status.Receipt.ReceiptID, State: status.Current.State, Target: status.Receipt.Target}
+		if request.ReceiptID != "" && status.Receipt.ReceiptID != request.ReceiptID {
+			return fmt.Errorf("%w: requested receipt is not current", ErrInvalidated)
+		}
 		if status.Current.State != "active" {
 			return ErrInvalidated
 		}

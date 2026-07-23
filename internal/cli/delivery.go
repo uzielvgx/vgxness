@@ -30,7 +30,7 @@ func runDelivery(ctx context.Context, args []string, stdout, stderr io.Writer, r
 	flags := flag.NewFlagSet("delivery "+command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var options config.Options
-	var manifestPath, baseRef, gate, reason string
+	var manifestPath, baseRef, gate, receiptID, reason string
 	flags.StringVar(&options.StorageRoot, "storage-root", "", "storage root")
 	flags.BoolVar(&options.ProjectLocal, "project-local", false, "use project-local storage")
 	switch command {
@@ -42,6 +42,7 @@ func runDelivery(ctx context.Context, args []string, stdout, stderr io.Writer, r
 		flags.StringVar(&manifestPath, "manifest", "", "same review manifest JSON")
 		flags.StringVar(&baseRef, "base-ref", "", "optional expected base commit")
 		flags.StringVar(&gate, "gate", "", "post-apply, pre-commit, pre-push, or pre-pr")
+		flags.StringVar(&receiptID, "receipt", "", "optional exact current receipt ID")
 	case "invalidate":
 		flags.StringVar(&reason, "reason", "", "explicit invalidation reason")
 	default:
@@ -71,7 +72,7 @@ func runDelivery(ctx context.Context, args []string, stdout, stderr io.Writer, r
 			err = readErr
 			break
 		}
-		result, err = runtime.Validate(ctx, options, delivery.ValidateRequest{Gate: delivery.Gate(gate), BaseRef: baseRef, Manifest: manifest})
+		result, err = runtime.Validate(ctx, options, delivery.ValidateRequest{Gate: delivery.Gate(gate), BaseRef: baseRef, ReceiptID: receiptID, Manifest: manifest})
 	case "invalidate":
 		result, err = runtime.Invalidate(ctx, options, reason)
 	}

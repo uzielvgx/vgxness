@@ -1,16 +1,22 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/vgxness/vgxness/internal/bridge"
+	"github.com/vgxness/vgxness/internal/config"
+	"github.com/vgxness/vgxness/internal/delivery"
 	"github.com/vgxness/vgxness/internal/orchestrator"
 )
 
@@ -43,8 +49,52 @@ func (service *Service) InspectNativeEdit(ctx context.Context, workspace string,
 	return nativeEditLifecycleResult(document)
 }
 
-func (service *Service) ApproveNativeEdit(ctx context.Context, workspace string, request bridge.NativeEditActionRequest) (bridge.NativeEditLifecycleResult, error) {
-	if err := bridge.ValidateNativeEditAction(request); err != nil {
+func (service *Service) IssueNativeEditReview(ctx context.Context, workspace string, request bridge.NativeEditReviewRequest) (bridge.NativeEditReviewResult, error) {
+	if err := bridge.ValidateNativeEditReview(request); err != nil {
+		return bridge.NativeEditReviewResult{}, err
+	}
+	manifest, err := decodeNativeEditReviewManifest(request.Manifest)
+	if err != nil {
+		return bridge.NativeEditReviewResult{}, err
+	}
+	root, paths, document, release, err := service.openNativeTicket(ctx, workspace, request.TicketID)
+	if err != nil {
+		return bridge.NativeEditReviewResult{}, err
+	}
+	defer release()
+	integrationLock, err := acquireNativeEditIntegrationLock(ctx, paths.Root)
+	if err != nil {
+		return bridge.NativeEditReviewResult{}, err
+	}
+	defer integrationLock.Release()
+	artifact, err := validateLiveNativeEditArtifact(ctx, document, "")
+	if err != nil {
+		return bridge.NativeEditReviewResult{}, err
+	}
+	if document.EditLifecycle != nil && document.EditLifecycle.State != "approved" {
+		return bridge.NativeEditReviewResult{}, bridge.ErrDenied
+	}
+	reviewer, err := delivery.New(document.Edit.Root)
+	if err != nil {
+		return bridge.NativeEditReviewResult{}, bridge.ErrExecution
+	}
+	receipt, err := reviewer.Issue(ctx, nativeEditDeliveryOptions(service, root), delivery.IssueRequest{
+		BaseRef: artifact.BaseRevision, Manifest: manifest,
+	})
+	if err != nil {
+		return bridge.NativeEditReviewResult{}, normalizeNativeEditDeliveryError(ctx, err)
+	}
+	if err := validateNativeEditReviewTarget(artifact, receipt.Target); err != nil {
+		return bridge.NativeEditReviewResult{}, err
+	}
+	return bridge.NativeEditReviewResult{
+		TicketID: request.TicketID, Artifact: artifact, ReceiptID: receipt.ReceiptID, State: "active",
+		CandidateTree: receipt.Target.CandidateTree, ReviewSHA256: receipt.Bindings.ReviewSHA256,
+	}, nil
+}
+
+func (service *Service) ApproveNativeEdit(ctx context.Context, workspace string, request bridge.NativeEditApprovalRequest) (bridge.NativeEditLifecycleResult, error) {
+	if err := bridge.ValidateNativeEditApproval(request); err != nil {
 		return bridge.NativeEditLifecycleResult{}, err
 	}
 	root, paths, document, release, err := service.openNativeTicket(ctx, workspace, request.TicketID)
@@ -65,7 +115,8 @@ func (service *Service) ApproveNativeEdit(ctx context.Context, workspace string,
 		if document.EditLifecycle.State == "retiring" || document.EditLifecycle.State == "retired" {
 			if document.EditLifecycle.Approval != nil &&
 				document.EditLifecycle.Approval.ManifestSHA == request.ManifestSHA &&
-				document.EditLifecycle.Approval.BaseRevision == artifact.BaseRevision {
+				document.EditLifecycle.Approval.BaseRevision == artifact.BaseRevision &&
+				document.EditLifecycle.Approval.ReviewReceiptID == request.ReviewReceiptID {
 				return nativeEditLifecycleResult(document)
 			}
 			return bridge.NativeEditLifecycleResult{}, bridge.ErrDenied
@@ -75,26 +126,38 @@ func (service *Service) ApproveNativeEdit(ctx context.Context, workspace string,
 		}
 		switch document.EditLifecycle.State {
 		case "approved":
-			if document.EditLifecycle.Approval != nil && document.EditLifecycle.Approval.ManifestSHA == request.ManifestSHA {
-				return nativeEditLifecycleResult(document)
-			}
 		case "applying", "integrated":
-			if document.EditLifecycle.Approval != nil && document.EditLifecycle.Approval.ManifestSHA == request.ManifestSHA {
+			if document.EditLifecycle.Approval != nil &&
+				document.EditLifecycle.Approval.ManifestSHA == request.ManifestSHA &&
+				document.EditLifecycle.Approval.ReviewReceiptID == request.ReviewReceiptID {
 				return nativeEditLifecycleResult(document)
 			}
+			return bridge.NativeEditLifecycleResult{}, bridge.ErrDenied
+		default:
+			return bridge.NativeEditLifecycleResult{}, bridge.ErrDenied
 		}
-		return bridge.NativeEditLifecycleResult{}, bridge.ErrDenied
 	}
 	if err := validateNativeEditSourceClean(ctx, root, document, artifact); err != nil {
 		return bridge.NativeEditLifecycleResult{}, err
 	}
+	review, err := validateNativeEditReviewReceipt(ctx, service, root, document, artifact, request.ReviewReceiptID)
+	if err != nil {
+		return bridge.NativeEditLifecycleResult{}, err
+	}
+	if document.EditLifecycle != nil && document.EditLifecycle.Approval != nil &&
+		document.EditLifecycle.Approval.ManifestSHA == request.ManifestSHA &&
+		document.EditLifecycle.Approval.BaseRevision == artifact.BaseRevision &&
+		document.EditLifecycle.Approval.ReviewReceiptID == request.ReviewReceiptID {
+		return nativeEditLifecycleResult(document)
+	}
 	now := service.now().UTC().Format(time.RFC3339Nano)
-	document.EditLifecycle = &nativeEditLifecycleDocument{
-		State: "approved",
-		Approval: &bridge.NativeEditApproval{
-			ManifestSHA: artifact.ManifestSHA, BaseRevision: artifact.BaseRevision,
-			Actor: strings.TrimSpace(request.Actor), ApprovedAt: now,
-		},
+	if document.EditLifecycle == nil {
+		document.EditLifecycle = &nativeEditLifecycleDocument{State: "approved"}
+	}
+	document.EditLifecycle.Approval = &bridge.NativeEditApproval{
+		ManifestSHA: artifact.ManifestSHA, BaseRevision: artifact.BaseRevision,
+		ReviewReceiptID: review.ReceiptID, CandidateTree: review.Target.CandidateTree, ReviewSHA256: review.ReviewSHA256,
+		Actor: strings.TrimSpace(request.Actor), ApprovedAt: now,
 	}
 	if err := writeNativeTicket(paths.Root, document); err != nil {
 		return bridge.NativeEditLifecycleResult{}, fmt.Errorf("%w: persist native edit approval", bridge.ErrExecution)
@@ -141,6 +204,18 @@ func (service *Service) IntegrateNativeEdit(ctx context.Context, workspace strin
 		}
 		return nativeEditLifecycleResult(document)
 	case "approved":
+		if lifecycle.Approval.ReviewReceiptID == "" || lifecycle.Approval.CandidateTree == "" ||
+			lifecycle.Approval.ReviewSHA256 == "" {
+			return bridge.NativeEditLifecycleResult{}, bridge.ErrDenied
+		}
+		review, err := validateNativeEditReviewReceipt(ctx, service, root, document, artifact, lifecycle.Approval.ReviewReceiptID)
+		if err != nil {
+			return bridge.NativeEditLifecycleResult{}, err
+		}
+		if review.Target.CandidateTree != lifecycle.Approval.CandidateTree ||
+			review.ReviewSHA256 != lifecycle.Approval.ReviewSHA256 {
+			return bridge.NativeEditLifecycleResult{}, bridge.ErrDenied
+		}
 		if err := validateNativeEditSourceClean(ctx, root, document, artifact); err != nil {
 			return bridge.NativeEditLifecycleResult{}, err
 		}
@@ -268,6 +343,97 @@ func acquireNativeEditIntegrationLock(ctx context.Context, storageRoot string) (
 		return orchestrator.FileLock{}, bridge.ErrUnavailable
 	}
 	return orchestrator.FileLock{}, bridge.ErrDenied
+}
+
+type nativeEditReviewValidation struct {
+	ReceiptID    string
+	Target       delivery.TargetSnapshot
+	ReviewSHA256 string
+}
+
+func decodeNativeEditReviewManifest(raw json.RawMessage) (delivery.Manifest, error) {
+	if len(raw) == 0 || len(raw) > bridge.MaxNativeEditReviewManifestBytes {
+		return delivery.Manifest{}, bridge.ErrInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var manifest delivery.Manifest
+	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return delivery.Manifest{}, bridge.ErrInvalid
+	}
+	return manifest, nil
+}
+
+func validateNativeEditReviewReceipt(
+	ctx context.Context,
+	service *Service,
+	root string,
+	document nativeTicketDocument,
+	artifact bridge.NativeEditArtifact,
+	receiptID string,
+) (nativeEditReviewValidation, error) {
+	reviewer, err := delivery.New(document.Edit.Root)
+	if err != nil {
+		return nativeEditReviewValidation{}, bridge.ErrExecution
+	}
+	options := nativeEditDeliveryOptions(service, root)
+	status, err := reviewer.Status(ctx, options)
+	if err != nil {
+		return nativeEditReviewValidation{}, normalizeNativeEditDeliveryError(ctx, err)
+	}
+	if status.Current.State != "active" || status.Receipt.ReceiptID != receiptID {
+		return nativeEditReviewValidation{}, bridge.ErrDenied
+	}
+	validation, err := reviewer.Validate(ctx, options, delivery.ValidateRequest{
+		Gate: delivery.GatePostApply, BaseRef: artifact.BaseRevision,
+		ReceiptID: receiptID, Manifest: status.Receipt.Manifest,
+	})
+	if err != nil {
+		return nativeEditReviewValidation{}, normalizeNativeEditDeliveryError(ctx, err)
+	}
+	if validation.State != "valid" || validation.ReceiptID != receiptID ||
+		!reflect.DeepEqual(validation.Target, status.Receipt.Target) {
+		return nativeEditReviewValidation{}, bridge.ErrDenied
+	}
+	if err := validateNativeEditReviewTarget(artifact, validation.Target); err != nil {
+		return nativeEditReviewValidation{}, err
+	}
+	return nativeEditReviewValidation{
+		ReceiptID: receiptID, Target: validation.Target, ReviewSHA256: status.Receipt.Bindings.ReviewSHA256,
+	}, nil
+}
+
+func validateNativeEditReviewTarget(artifact bridge.NativeEditArtifact, target delivery.TargetSnapshot) error {
+	if target.BaseRevision != artifact.BaseRevision {
+		return bridge.ErrDenied
+	}
+	paths := make([]string, len(artifact.Changes))
+	for index, change := range artifact.Changes {
+		paths[index] = change.Path
+	}
+	sort.Strings(paths)
+	if !reflect.DeepEqual(paths, target.Paths) || target.CandidateTree == "" {
+		return bridge.ErrDenied
+	}
+	return nil
+}
+
+func nativeEditDeliveryOptions(service *Service, root string) config.Options {
+	return config.Options{StorageRoot: service.storageRoot, ProjectDir: root}
+}
+
+func normalizeNativeEditDeliveryError(ctx context.Context, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	switch {
+	case errors.Is(err, delivery.ErrInvalid), errors.Is(err, delivery.ErrNotFound),
+		errors.Is(err, delivery.ErrConflict), errors.Is(err, delivery.ErrInvalidated),
+		errors.Is(err, delivery.ErrSensitive), errors.Is(err, delivery.ErrUnbound):
+		return bridge.ErrDenied
+	default:
+		return bridge.ErrExecution
+	}
 }
 
 func nativeTicketEditArtifact(document nativeTicketDocument) (bridge.NativeEditArtifact, error) {

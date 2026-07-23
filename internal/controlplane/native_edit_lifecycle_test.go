@@ -2,13 +2,16 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vgxness/vgxness/internal/bridge"
+	"github.com/vgxness/vgxness/internal/delivery"
 	"github.com/vgxness/vgxness/internal/providers"
 )
 
@@ -20,22 +23,26 @@ func TestNativeEditLifecycleIntegratesAndRetiresExactArtifact(t *testing.T) {
 	request := bridge.NativeEditActionRequest{
 		TicketID: "ticket-lifecycle", ManifestSHA: artifact.ManifestSHA, Actor: "maintainer",
 	}
+	approvalRequest := reviewedNativeEditApproval(t, service, workspace, request.TicketID, artifact, request.Actor)
 
 	inspected, err := service.InspectNativeEdit(context.Background(), workspace, bridge.NativeEditInspectRequest{TicketID: request.TicketID})
 	if err != nil || inspected.State != "pending-approval" || inspected.Artifact.ManifestSHA != artifact.ManifestSHA {
 		t.Fatalf("unexpected pending lifecycle: %#v err=%v", inspected, err)
 	}
-	if _, err := service.ApproveNativeEdit(context.Background(), workspace, bridge.NativeEditActionRequest{
-		TicketID: request.TicketID, ManifestSHA: "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Actor: request.Actor,
+	if _, err := service.ApproveNativeEdit(context.Background(), workspace, bridge.NativeEditApprovalRequest{
+		TicketID: request.TicketID, ManifestSHA: "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ReviewReceiptID: approvalRequest.ReviewReceiptID, Actor: request.Actor,
 	}); !errors.Is(err, bridge.ErrDenied) {
 		t.Fatalf("mismatched manifest was approved: %v", err)
 	}
-	approved, err := service.ApproveNativeEdit(context.Background(), workspace, request)
+	approved, err := service.ApproveNativeEdit(context.Background(), workspace, approvalRequest)
 	if err != nil || approved.State != "approved" || approved.Approval == nil ||
-		approved.Approval.ManifestSHA != artifact.ManifestSHA || approved.Approval.BaseRevision != artifact.BaseRevision {
+		approved.Approval.ManifestSHA != artifact.ManifestSHA || approved.Approval.BaseRevision != artifact.BaseRevision ||
+		approved.Approval.ReviewReceiptID != approvalRequest.ReviewReceiptID || approved.Approval.CandidateTree == "" ||
+		approved.Approval.ReviewSHA256 == "" {
 		t.Fatalf("artifact was not approved exactly: %#v err=%v", approved, err)
 	}
-	replayed, err := service.ApproveNativeEdit(context.Background(), workspace, request)
+	replayed, err := service.ApproveNativeEdit(context.Background(), workspace, approvalRequest)
 	if err != nil || replayed.State != "approved" || replayed.Approval.ApprovedAt != approved.Approval.ApprovedAt {
 		t.Fatalf("approval was not idempotent: %#v err=%v", replayed, err)
 	}
@@ -62,7 +69,7 @@ func TestNativeEditLifecycleIntegratesAndRetiresExactArtifact(t *testing.T) {
 	if err != nil || replayedRetirement.State != "retired" {
 		t.Fatalf("retirement was not idempotent: %#v err=%v", replayedRetirement, err)
 	}
-	if replayedApproval, err := service.ApproveNativeEdit(context.Background(), workspace, request); err != nil || replayedApproval.State != "retired" {
+	if replayedApproval, err := service.ApproveNativeEdit(context.Background(), workspace, approvalRequest); err != nil || replayedApproval.State != "retired" {
 		t.Fatalf("retired approval could not be replayed: %#v err=%v", replayedApproval, err)
 	}
 	if replayedIntegration, err := service.IntegrateNativeEdit(context.Background(), workspace, request); err != nil || replayedIntegration.State != "retired" {
@@ -99,7 +106,8 @@ func TestNativeEditLifecycleRejectsDivergedSource(t *testing.T) {
 		{path: "internal/app.go", content: "package internal\n\nconst Value = \"approved\"\n"},
 	})
 	request := bridge.NativeEditActionRequest{TicketID: "ticket-diverged", ManifestSHA: artifact.ManifestSHA, Actor: "maintainer"}
-	if _, err := service.ApproveNativeEdit(context.Background(), workspace, request); err != nil {
+	approvalRequest := reviewedNativeEditApproval(t, service, workspace, request.TicketID, artifact, request.Actor)
+	if _, err := service.ApproveNativeEdit(context.Background(), workspace, approvalRequest); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("local divergence\n"), 0o644); err != nil {
@@ -114,13 +122,77 @@ func TestNativeEditLifecycleRejectsDivergedSource(t *testing.T) {
 	}
 }
 
+func TestNativeEditLifecycleRequiresCurrentReviewReceiptAtIntegration(t *testing.T) {
+	workspace, service, artifact := completedNativeEdit(t, "ticket-review-gate", []nativeLifecycleChange{
+		{path: "internal/app.go", content: "package internal\n\nconst Value = \"reviewed\"\n"},
+	})
+	action := bridge.NativeEditActionRequest{
+		TicketID: "ticket-review-gate", ManifestSHA: artifact.ManifestSHA, Actor: "maintainer",
+	}
+	if _, err := service.ApproveNativeEdit(context.Background(), workspace, bridge.NativeEditApprovalRequest{
+		TicketID: action.TicketID, ManifestSHA: action.ManifestSHA,
+		ReviewReceiptID: strings.Repeat("f", 64), Actor: action.Actor,
+	}); !errors.Is(err, bridge.ErrDenied) {
+		t.Fatalf("approval without a current review receipt was accepted: %v", err)
+	}
+	approval := reviewedNativeEditApproval(t, service, workspace, action.TicketID, artifact, action.Actor)
+	if _, err := service.ApproveNativeEdit(context.Background(), workspace, approval); err != nil {
+		t.Fatal(err)
+	}
+	reviewer, err := delivery.New(artifact.Worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reviewer.Invalidate(
+		context.Background(),
+		nativeEditDeliveryOptions(service, workspace),
+		"review evidence superseded",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.IntegrateNativeEdit(context.Background(), workspace, action); !errors.Is(err, bridge.ErrDenied) {
+		t.Fatalf("integration accepted an invalidated review receipt: %v", err)
+	}
+	assertNativeLifecycleFile(t, workspace, "internal/app.go", "package internal\n\nconst Value = \"base\"\n")
+	document, err := readNativeTicket(service.storageRoot, action.TicketID)
+	if err != nil || document.EditLifecycle == nil || document.EditLifecycle.State != "approved" {
+		t.Fatalf("rejected review gate mutated lifecycle: %#v err=%v", document.EditLifecycle, err)
+	}
+}
+
+func TestNativeEditLifecycleRejectsTamperedApprovalBinding(t *testing.T) {
+	workspace, service, artifact := completedNativeEdit(t, "ticket-review-binding", []nativeLifecycleChange{
+		{path: "internal/app.go", content: "package internal\n\nconst Value = \"reviewed\"\n"},
+	})
+	action := bridge.NativeEditActionRequest{
+		TicketID: "ticket-review-binding", ManifestSHA: artifact.ManifestSHA, Actor: "maintainer",
+	}
+	approval := reviewedNativeEditApproval(t, service, workspace, action.TicketID, artifact, action.Actor)
+	if _, err := service.ApproveNativeEdit(context.Background(), workspace, approval); err != nil {
+		t.Fatal(err)
+	}
+	document, err := readNativeTicket(service.storageRoot, action.TicketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.EditLifecycle.Approval.ReviewSHA256 = strings.Repeat("f", 64)
+	if err := writeNativeTicket(service.storageRoot, document); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.IntegrateNativeEdit(context.Background(), workspace, action); !errors.Is(err, bridge.ErrDenied) {
+		t.Fatalf("integration accepted a tampered approval binding: %v", err)
+	}
+	assertNativeLifecycleFile(t, workspace, "internal/app.go", "package internal\n\nconst Value = \"base\"\n")
+}
+
 func TestNativeEditLifecycleResumesPartialApplication(t *testing.T) {
 	workspace, service, artifact := completedNativeEdit(t, "ticket-resume", []nativeLifecycleChange{
 		{path: "internal/app.go", content: "package internal\n\nconst Value = \"resumed\"\n"},
 		{path: "internal/resumed.go", content: "package internal\n", create: true},
 	})
 	request := bridge.NativeEditActionRequest{TicketID: "ticket-resume", ManifestSHA: artifact.ManifestSHA, Actor: "maintainer"}
-	if _, err := service.ApproveNativeEdit(context.Background(), workspace, request); err != nil {
+	approvalRequest := reviewedNativeEditApproval(t, service, workspace, request.TicketID, artifact, request.Actor)
+	if _, err := service.ApproveNativeEdit(context.Background(), workspace, approvalRequest); err != nil {
 		t.Fatal(err)
 	}
 	document, err := readNativeTicket(service.storageRoot, request.TicketID)
@@ -162,7 +234,8 @@ func TestNativeEditLifecycleRevalidatesSourceWhileRetiring(t *testing.T) {
 		{path: "internal/app.go", content: "package internal\n\nconst Value = \"integrated\"\n"},
 	})
 	request := bridge.NativeEditActionRequest{TicketID: "ticket-retiring", ManifestSHA: artifact.ManifestSHA, Actor: "maintainer"}
-	if _, err := service.ApproveNativeEdit(context.Background(), workspace, request); err != nil {
+	approvalRequest := reviewedNativeEditApproval(t, service, workspace, request.TicketID, artifact, request.Actor)
+	if _, err := service.ApproveNativeEdit(context.Background(), workspace, approvalRequest); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.IntegrateNativeEdit(context.Background(), workspace, request); err != nil {
@@ -194,6 +267,52 @@ type nativeLifecycleChange struct {
 	path    string
 	content string
 	create  bool
+}
+
+func reviewedNativeEditApproval(
+	t *testing.T,
+	service *Service,
+	workspace, ticketID string,
+	artifact bridge.NativeEditArtifact,
+	actor string,
+) bridge.NativeEditApprovalRequest {
+	t.Helper()
+	encoded, err := json.Marshal(nativeLifecycleReviewManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := service.IssueNativeEditReview(context.Background(), workspace, bridge.NativeEditReviewRequest{
+		TicketID: ticketID, Manifest: encoded,
+	})
+	if err != nil || review.ReceiptID == "" || review.CandidateTree == "" || review.ReviewSHA256 == "" {
+		t.Fatalf("issue native edit review: %#v err=%v", review, err)
+	}
+	return bridge.NativeEditApprovalRequest{
+		TicketID: ticketID, ManifestSHA: artifact.ManifestSHA, ReviewReceiptID: review.ReceiptID, Actor: actor,
+	}
+}
+
+func nativeLifecycleReviewManifest() delivery.Manifest {
+	sha := strings.Repeat("0", 64)
+	identity := func(id string) delivery.Identity {
+		return delivery.Identity{ID: id, Version: "1", SHA256: sha}
+	}
+	return delivery.Manifest{
+		SchemaVersion: delivery.SchemaVersion,
+		Context: delivery.ContextManifest{
+			Policy: identity("policy"), Prompt: identity("prompt"), Registry: identity("registry"),
+			Provider: identity("provider"), Model: identity("model"),
+		},
+		Evidence: delivery.EvidenceManifest{Checks: []delivery.EvidenceCheck{{
+			ID: "go-test", Command: "go test ./...", ExitCode: 0, OutputSHA256: sha,
+			StartedAt: "2026-07-23T12:00:00Z", FinishedAt: "2026-07-23T12:01:00Z",
+			Toolchain: []delivery.Identity{identity("go")},
+		}}},
+		Review: delivery.ReviewManifest{
+			Risk: "low", Lenses: []string{}, Verdict: "approved",
+			Findings: []delivery.ReviewFinding{}, RollbackBoundary: "discard the isolated native edit",
+		},
+	}
 }
 
 func completedNativeEdit(t *testing.T, ticketID string, changes []nativeLifecycleChange) (string, *Service, bridge.NativeEditArtifact) {

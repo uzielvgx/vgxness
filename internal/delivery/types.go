@@ -116,9 +116,10 @@ type IssueRequest struct {
 }
 
 type ValidateRequest struct {
-	Gate     Gate
-	BaseRef  string
-	Manifest Manifest
+	Gate      Gate
+	BaseRef   string
+	ReceiptID string
+	Manifest  Manifest
 }
 
 type Validation struct {

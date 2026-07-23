@@ -151,12 +151,13 @@ VGXNESS does not silently copy, merge, commit, or delete the isolated result. Th
 
 ```sh
 vgxness edit inspect --workspace /absolute/project/path --ticket ticket-...
-vgxness edit approve --workspace /absolute/project/path --ticket ticket-... --manifest sha256-... --actor NAME
+vgxness edit review --workspace /absolute/project/path --ticket ticket-... --review-manifest review-manifest.json
+vgxness edit approve --workspace /absolute/project/path --ticket ticket-... --manifest sha256-... --receipt RECEIPT_ID --actor NAME
 vgxness edit integrate --workspace /absolute/project/path --ticket ticket-... --manifest sha256-... --actor NAME
 vgxness edit retire --workspace /absolute/project/path --ticket ticket-... --manifest sha256-... --actor NAME
 ```
 
-`approve` binds the exact manifest, base commit, actor, and time. `integrate` requires that approval and a clean canonical checkout still at the artifact base, then applies only the manifest paths through the hardened file broker; its persisted `applying` state makes an interrupted application safely resumable. It leaves the result unstaged and retains the worktree for verification. `retire` verifies that the approved content is still represented before removing the exact registered worktree. To reject an artifact before integration, use `edit discard` with the same manifest and an explicit actor. Every action is idempotent for its exact terminal state and rejects manifest, checkout, filesystem-identity, or worktree-registration drift.
+`review` validates the supplied Delivery Authority manifest, snapshots the exact isolated worktree against the artifact base, checks that its paths equal the native artifact, and emits the active content-bound receipt in the canonical project's delivery store. `approve` requires that exact current receipt and binds its candidate tree and review digest together with the artifact manifest, base commit, actor, and time. `integrate` revalidates the receipt before entering `applying`, requires a clean canonical checkout still at the artifact base, and applies only the manifest paths through the hardened file broker. Once `applying` is durable, an interrupted application resumes the already-authorized artifact without depending on later movement of the delivery pointer. It leaves the result unstaged and retains the worktree for verification. `retire` verifies that the approved content is still represented before removing the exact registered worktree. To reject an artifact before integration, use `edit discard` with the same manifest and an explicit actor. Every action is idempotent for its exact terminal state and rejects receipt, manifest, checkout, filesystem-identity, or worktree-registration drift.
 
 These operator actions are intentionally local CLI commands, not manager/plugin tools. Automatic review-to-merge remains separate rollout work.
 
