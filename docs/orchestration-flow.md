@@ -339,6 +339,7 @@ Failure detected
 | Validation failed | Record failed validation and route a fix agent with only the failing evidence. |
 | Snapshot/event mismatch | Stop and report inconsistency; do not guess the correct state. |
 | Interrupted run | Read `current-run.json`, latest JSONL event, run snapshot, artifacts, and memory summaries. |
+| OpenCode stops between dependency waves | Return the durable `pending` orchestration unchanged; resume or cancel it explicitly instead of inventing a terminal join. |
 | Permission denied | Stop and request explicit approval or narrower scope. |
 
 ## 12. Anti-patterns to avoid

@@ -36,6 +36,8 @@ vgxness orchestrate cancel --workspace /absolute/project/path --id orchestration
 
 `resume` advances the authority epoch and returns a new owner identity; the prior owner cannot prepare or publish more work. It repairs accepted projections and never silently redispatches an uncertain task. A confirmed native child must finish or be cancelled before takeover, so recovery cannot duplicate an in-flight execution.
 
+If OpenCode stops the tool between dependency waves, the managed plugin reads the durable schedule before cleanup. A `pending` schedule is returned unchanged and remains explicitly resumable instead of being converted into a cancellation or hidden behind a generic bridge error. If admitted work is still active, cleanup remains fail-closed and returns the durable cancellation envelope when it succeeds.
+
 Preview the proposed global artifact without writing anything:
 
 ```sh

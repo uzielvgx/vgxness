@@ -111,11 +111,12 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 		`client.session.create`, `client.session.prompt`, `["bridge", "prepare", "--stdin"]`, `["bridge", "read", "--stdin"]`,
 		`["bridge", "complete", "--stdin"]`, `value.protocolVersion !== "1"`, `"review-changes"`,
 		`tool.schema.enum(["start", "continue", "finish"]).optional()`, `runId: tool.schema.string().optional()`,
-		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `return JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 11",
+		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `return JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 12",
 		"shell: false", `child?.kill("SIGKILL")`, "invokeBounded", "invokeTerminal", "nativeTickets.delete(childSessionId)",
 		"MAX_NATIVE_DISPATCHES = 4", "acquireNativeCapacity", "VGXNESS native dispatch capacity exhausted", "releaseCapacity()",
 		"vgxness_orchestrate", "vgxness-navigator", `["bridge", "orchestrate-plan", "--stdin"]`, `["bridge", "orchestrate-wave", "--stdin"]`,
 		`["bridge", "orchestrate-terminal", "--stdin"]`, `["bridge", "orchestrate-join", "--stdin"]`, "Promise.allSettled(bindings.map",
+		`durable?.orchestration?.status === "pending"`, `context.abort.aborted && cancelled?.ok`,
 	} {
 		testutil.Require(t, strings.Contains(tool, required), "bridge plugin missing %q: %s", required, content)
 	}
@@ -367,6 +368,64 @@ const tool = Object.assign((definition) => definition, {
 			testutil.Require(t, string(output) == "created=3 peak=2", "%s orchestration output=%q", engine, output)
 		})
 	}
+}
+
+func TestIntegration_OrchestratePreservesPendingScheduleWhenHostStopsBetweenWaves(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("portable runtime smoke helper uses a POSIX executable")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("Node is not installed")
+	}
+
+	root := t.TempDir()
+	helper := filepath.Join(root, "vgxness-helper")
+	plan := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"pending","orchestration":{"orchestrationId":"orchestration-1","scheduleId":"schedule-1","ownerId":"owner-1","status":"pending","currentWave":0,"plan":{"kind":"delegation.plan","schemaVersion":"1","planId":"plan-1","requestDigest":"sha256-1","decision":"sequential","rationale":"dependent reads","policyVersion":"bridge-balanced-v1","maxParallel":1,"tasks":[{"taskId":"task-a","capability":"explore","operation":"read-files","goal":"inspect a","acceptanceCriteria":[],"dependsOn":[],"continuity":"isolated"},{"taskId":"task-b","capability":"explore","operation":"read-files","goal":"inspect b","acceptanceCriteria":[],"dependsOn":["task-a"],"continuity":"isolated"}],"waves":[{"waveId":"wave-1","index":0,"mode":"sequential","taskIds":["task-a"]},{"waveId":"wave-2","index":1,"mode":"sequential","taskIds":["task-b"]}]}}}`
+	wave := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"running","orchestration":{"orchestrationId":"orchestration-1","scheduleId":"schedule-1","ownerId":"owner-1","status":"running","currentWave":0,"plan":{"decision":"sequential","tasks":[],"waves":[]},"prepared":[{"taskId":"task-a","prepared":{"ticketId":"ticket-2","executionId":"execution-1","agent":"vgxness-explorer","model":"openai/gpt-5.6-sol","prompt":"inspect a","promptSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","deadline":"2099-01-01T00:00:00Z","promptRef":{"id":"prompt-a","version":"1","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}]}}`
+	pending := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"pending","orchestration":{"orchestrationId":"orchestration-1","scheduleId":"schedule-1","ownerId":"owner-1","status":"pending","currentWave":1,"plan":{"decision":"sequential","tasks":[],"waves":[]}}}`
+	helperSource := "#!/bin/sh\n" +
+		"cat >/dev/null\n" +
+		"case \"$2\" in\n" +
+		"  orchestrate-plan) printf '%s' '" + plan + "' ;;\n" +
+		"  orchestrate-wave) printf '%s' '" + wave + "' ;;\n" +
+		"  orchestrate-terminal|orchestrate-status) printf '%s' '" + pending + "' ;;\n" +
+		"  complete|fail) printf '%s' '{\"protocolVersion\":\"1\",\"ok\":true,\"bridge\":\"healthy\",\"provider\":\"opencode\",\"status\":\"completed\"}' ;;\n" +
+		"  orchestrate-cancel) exit 19 ;;\n" +
+		"  *) exit 9 ;;\n" +
+		"esac\n"
+	testutil.NoError(t, os.WriteFile(helper, []byte(helperSource), 0o700))
+	content, err := bridgeToolContent(helper, integrationTestModel)
+	testutil.NoError(t, err)
+	stub := `const optionalSchema = () => ({ optional() { return this } })
+const tool = Object.assign((definition) => definition, {
+  schema: { enum: optionalSchema, string: optionalSchema, array: optionalSchema },
+})`
+	source := strings.Replace(string(content), `import { tool } from "@opencode-ai/plugin"`, stub, 1)
+	source = strings.Replace(source, `import { randomUUID } from "node:crypto"`, `let uuidCounter = 0; const randomUUID = () => String(++uuidCounter)`, 1)
+	workspace, err := json.Marshal(root)
+	testutil.NoError(t, err)
+	source += "\nlet plugin, created = 0\n"
+	source += "const controller = new AbortController()\n"
+	source += "const client = { session: {\n"
+	source += "  create: async () => { created++; if (created === 3 && controller.signal.aborted) throw new Error('host stopped between waves'); return { data: { id: created === 1 ? 'ses_nav' : 'ses_task_' + (created - 1) } } },\n"
+	source += "  prompt: async (request) => { if (request.path.id === 'ses_nav') return { data: { info: { id: 'msg_nav' }, parts: [{ type: 'text', text: JSON.stringify({ tasks: [{ taskId: 'task-a', capability: 'explore', operation: 'read-files', goal: 'inspect a', acceptanceCriteria: [], dependsOn: [], continuity: 'isolated' }, { taskId: 'task-b', capability: 'explore', operation: 'read-files', goal: 'inspect b', acceptanceCriteria: [], dependsOn: ['task-a'], continuity: 'isolated' }] }) }] } }; controller.abort(); return { data: { info: { id: 'msg_task_a' }, parts: [{ type: 'text', text: JSON.stringify({ kind: 'agent.result', schemaVersion: '1', resultId: 'result-a', taskId: 'task-a', agentId: 'vgxness-bounded-worker-v1', status: 'success', summary: 'ok', findings: [], changes: [], validations: [], artifactRefs: [], memoryCandidates: [], nextRecommended: 'continue', confidence: 1 }) }] } } },\n"
+	source += "  abort: async () => ({ data: true }),\n"
+	source += "} }\n"
+	source += "plugin = await VGXNESSPlugin({ client })\n"
+	source += "const context = { directory: " + string(workspace) + ", worktree: '', sessionID: 'ses_parent', messageID: 'msg_parent', abort: controller.signal, metadata() {} }\n"
+	source += "const output = JSON.parse(await plugin.tool.vgxness_orchestrate.execute({ goal: 'inspect in sequence' }, context))\n"
+	source += "if (!output.ok || output.status !== 'pending' || output.orchestration?.currentWave !== 1 || created !== 3) throw new Error(JSON.stringify({ output, created }))\n"
+	source += "process.stdout.write('status=' + output.status + ' wave=' + output.orchestration.currentWave)\n"
+	script := filepath.Join(root, "orchestrate-recovery.mjs")
+	testutil.NoError(t, os.WriteFile(script, []byte(source), 0o600))
+
+	command := exec.Command(node, script)
+	output, runErr := command.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("generated orchestration recovery failed: %v\n%s", runErr, output)
+	}
+	testutil.Require(t, string(output) == "status=pending wave=1", "orchestration recovery output=%q", output)
 }
 
 func TestTrustedLauncherRequiresManagedLauncherForCurrentActiveBinary(t *testing.T) {

@@ -579,7 +579,7 @@ func bridgeToolContent(executable, model string) ([]byte, error) {
 	import { randomUUID } from "node:crypto"
 	import { tool } from "@opencode-ai/plugin"
 
-		// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 11
+		// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 12
 	const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 	const VGXNESS_MODEL = ` + string(quotedModel) + `
 	const MAX_OUTPUT_BYTES = __MAX_OUTPUT_BYTES__
@@ -976,11 +976,24 @@ async function readBounded(stream) {
 	          } catch (cause) {
 	            await Promise.all([...activeChildren].map((id) => client.session.abort({ path: { id }, query: { directory: workspace } }).catch(() => undefined)))
 	            if (orchestration?.orchestrationId && orchestration?.ownerId) {
-	              await invokeTerminal(
+	              const durable = context.abort.aborted
+	                ? await invokeTerminal(
+	                    ["bridge", "orchestrate-status", "--stdin"],
+	                    { protocolVersion: "1", orchestrationId: orchestration.orchestrationId },
+	                    workspace,
+	                  ).catch(() => undefined)
+	                : undefined
+	              if (durable?.ok && durable?.orchestration?.status === "pending") {
+	                return JSON.stringify(durable)
+	              }
+	              const cancelled = await invokeTerminal(
 	                ["bridge", "orchestrate-cancel", "--stdin"],
 	                { protocolVersion: "1", orchestrationId: orchestration.orchestrationId, ownerId: orchestration.ownerId },
 	                workspace,
 	              ).catch(() => undefined)
+	              if (context.abort.aborted && cancelled?.ok && cancelled?.orchestration) {
+	                return JSON.stringify(cancelled)
+	              }
 	            }
 	            throw cause instanceof Error ? cause : new Error("VGXNESS adaptive orchestration failed")
 	          }
