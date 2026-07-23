@@ -62,6 +62,9 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 	if len(args) > 0 && args[0] == "maintenance" {
 		return runMaintenance(ctx, args[1:], stdout, stderr, controlPlane)
 	}
+	if len(args) > 0 && args[0] == "edit" {
+		return runEditLifecycle(ctx, args[1:], stdout, stderr, controlPlane)
+	}
 	if len(args) > 0 && args[0] == "self" {
 		return runSelfInstall(ctx, args[1:], stdout, stderr, installer)
 	}
@@ -69,7 +72,7 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|orchestrate|maintenance|self|setup|delivery>")
+		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|orchestrate|edit|maintenance|self|setup|delivery>")
 		return 2
 	}
 	command := args[0]

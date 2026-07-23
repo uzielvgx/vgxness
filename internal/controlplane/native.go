@@ -60,6 +60,7 @@ type nativeTicketDocument struct {
 	CodeGraph     []bridge.NativeCodeGraphReceipt `json:"codegraph,omitempty"`
 	Edit          *nativeEditWorkspace            `json:"editWorkspace,omitempty"`
 	Edits         []bridge.NativeEditResult       `json:"edits,omitempty"`
+	EditLifecycle *nativeEditLifecycleDocument    `json:"editLifecycle,omitempty"`
 }
 
 type nativeEditWorkspace struct {
