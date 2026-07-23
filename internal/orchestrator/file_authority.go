@@ -718,6 +718,9 @@ func durableCheckpoint(state *durableAuthorityState, scheduleID, planID, parentS
 			outcome := state.TerminalOutcomes[use.TicketID]
 			item.Status, item.MessageID, item.ResultID = outcome.Status, outcome.MessageID, outcome.ResultID
 			item.Result = append(json.RawMessage(nil), outcome.Result...)
+			if outcome.Status != TaskCompleted && bytes.Equal(item.Result, []byte("null")) {
+				item.Result = nil
+			}
 			item.Failure = outcome.Failure
 		}
 		checkpoint.Tasks = append(checkpoint.Tasks, item)

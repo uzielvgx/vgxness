@@ -124,6 +124,86 @@ func TestAdaptiveOrchestrationPersistsParallelNativeWaveAndJoin(t *testing.T) {
 	}
 }
 
+func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsAcrossServices(t *testing.T) {
+	workspace := t.TempDir()
+	storage := filepath.Join(t.TempDir(), "storage")
+	now := time.Now().UTC()
+	adapter := nativeTestAdapter(now)
+	sequence := 0
+	service := New(Options{
+		StorageRoot: storage, Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return adapter, nil },
+		NewID: func(prefix string) (string, error) {
+			sequence++
+			return prefix + "-mixed-terminal-" + strconv.Itoa(sequence), nil
+		},
+	})
+	reopen := func() *Service {
+		return New(Options{
+			StorageRoot: storage, Now: func() time.Time { return now },
+			AdapterFactory: func(string) (providers.Adapter, error) { return adapter, nil },
+		})
+	}
+	planned, err := service.PlanOrchestration(context.Background(), workspace, bridge.OrchestratePlanRequest{
+		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol",
+		Input:           bridge.OrchestrateInput{Goal: "Inspect two boundaries independently"},
+		ParentSessionID: "ses_parent", ParentMessageID: "msg_parent",
+		CandidateTasks: []navigator.Task{
+			orchestrationReadTask("task-completed", nil), orchestrationReadTask("task-failed", nil),
+		},
+	})
+	if err != nil || planned.Orchestration == nil {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	view := planned.Orchestration
+	completedBinding := bridge.OrchestrationBinding{TaskID: "task-completed", ChildSessionID: "ses_child_completed", TicketID: "ticket-completed"}
+	failedBinding := bridge.OrchestrationBinding{TaskID: "task-failed", ChildSessionID: "ses_child_failed", TicketID: "ticket-failed"}
+	prepared, err := reopen().PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		Bindings: []bridge.OrchestrationBinding{completedBinding, failedBinding},
+	})
+	if err != nil || prepared.Orchestration == nil || len(prepared.Orchestration.Prepared) != 2 {
+		t.Fatalf("prepared=%#v err=%v", prepared, err)
+	}
+	failed, err := reopen().Fail(context.Background(), workspace, bridge.NativeFailureRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: failedBinding.TicketID,
+		ParentSessionID: "ses_parent", ChildSessionID: failedBinding.ChildSessionID, Category: "native-subagent-failed",
+	})
+	if err != nil || !failed.OK {
+		t.Fatalf("failed=%#v err=%v", failed, err)
+	}
+	failedTerminal, err := reopen().RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		TaskID: failedBinding.TaskID, TicketID: failedBinding.TicketID, ChildSessionID: failedBinding.ChildSessionID,
+		Status: "failed", Failure: "native subagent execution failed",
+	})
+	if err != nil || failedTerminal.Orchestration == nil {
+		t.Fatalf("failed terminal=%#v err=%v", failedTerminal, err)
+	}
+	native, err := readNativeTicket(storage, completedBinding.TicketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := nativeResult(t, native.TaskID)
+	completed, err := reopen().Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: completedBinding.TicketID,
+		ParentSessionID: "ses_parent", ChildSessionID: completedBinding.ChildSessionID,
+		MessageID: "msg_completed", Result: result,
+	})
+	if err != nil || !completed.OK {
+		t.Fatalf("completed=%#v err=%v", completed, err)
+	}
+	completedTerminal, err := reopen().RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		TaskID: completedBinding.TaskID, TicketID: completedBinding.TicketID, ChildSessionID: completedBinding.ChildSessionID,
+		Status: "completed", MessageID: "message-" + completedBinding.TicketID,
+		ResultID: "result-" + completedBinding.TicketID, Result: result,
+	})
+	if err != nil || completedTerminal.Orchestration == nil || completedTerminal.Status != "failed" {
+		t.Fatalf("completed terminal=%#v err=%v", completedTerminal, err)
+	}
+}
+
 func TestPlanOrchestrationUsesDefaultProjectStorage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
