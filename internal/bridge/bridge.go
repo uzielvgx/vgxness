@@ -3,6 +3,8 @@ package bridge
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +24,8 @@ const (
 	MaxOrchestrationResultBytes = 64 << 10
 	MaxNativeCompletionBytes    = MaxNativeResultBytes + MaxRequestBytes
 	MaxNativeReadBytes          = 256 << 10
+	MaxNativeEditBytes          = 256 << 10
+	MaxNativeEditRequestBytes   = 6*MaxNativeEditBytes + MaxRequestBytes
 	MaxNativeCodeGraphBytes     = 512 << 10
 	MaxBridgeOutputBytes        = 3*MaxNativeResultBytes + MaxRequestBytes
 	maxModelBytes               = 512
@@ -173,6 +177,31 @@ type NativeReadResult struct {
 	Truncated  bool   `json:"truncated"`
 }
 
+type NativeEditRequest struct {
+	ProtocolVersion string `json:"protocolVersion"`
+	TicketID        string `json:"ticketId"`
+	ChildSessionID  string `json:"childSessionId"`
+	Path            string `json:"path"`
+	Content         string `json:"content"`
+	ExpectedSHA256  string `json:"expectedSha256,omitempty"`
+	Create          bool   `json:"create,omitempty"`
+}
+
+type NativeEditResult struct {
+	Path           string `json:"path"`
+	SHA256         string `json:"sha256"`
+	PreviousSHA256 string `json:"previousSha256,omitempty"`
+	Bytes          int    `json:"bytes"`
+	Created        bool   `json:"created"`
+}
+
+type NativeEditArtifact struct {
+	Worktree     string             `json:"worktree"`
+	BaseRevision string             `json:"baseRevision"`
+	Changes      []NativeEditResult `json:"changes"`
+	ManifestSHA  string             `json:"manifestSha256"`
+}
+
 type NativeCodeGraphRequest struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	TicketID        string             `json:"ticketId"`
@@ -254,6 +283,8 @@ type Response struct {
 	Receipt         *Receipt               `json:"receipt,omitempty"`
 	Prepared        *PreparedDispatch      `json:"prepared,omitempty"`
 	Read            *NativeReadResult      `json:"read,omitempty"`
+	Edit            *NativeEditResult      `json:"edit,omitempty"`
+	EditArtifact    *NativeEditArtifact    `json:"editArtifact,omitempty"`
 	CodeGraph       *NativeCodeGraphResult `json:"codegraph,omitempty"`
 	Orchestration   *OrchestrationView     `json:"orchestration,omitempty"`
 	Error           *Error                 `json:"error,omitempty"`
@@ -266,16 +297,17 @@ type OrchestrationPreparedTask struct {
 }
 
 type OrchestrationView struct {
-	OrchestrationID string                      `json:"orchestrationId"`
-	ScheduleID      string                      `json:"scheduleId"`
-	OwnerID         string                      `json:"ownerId"`
-	ParentSessionID string                      `json:"parentSessionId"`
-	Status          string                      `json:"status"`
-	CurrentWave     int                         `json:"currentWave"`
-	NextWave        int                         `json:"nextWave"`
-	Plan            navigator.Plan              `json:"plan"`
-	Prepared        []OrchestrationPreparedTask `json:"prepared,omitempty"`
-	Join            json.RawMessage             `json:"join,omitempty"`
+	OrchestrationID string                        `json:"orchestrationId"`
+	ScheduleID      string                        `json:"scheduleId"`
+	OwnerID         string                        `json:"ownerId"`
+	ParentSessionID string                        `json:"parentSessionId"`
+	Status          string                        `json:"status"`
+	CurrentWave     int                           `json:"currentWave"`
+	NextWave        int                           `json:"nextWave"`
+	Plan            navigator.Plan                `json:"plan"`
+	Prepared        []OrchestrationPreparedTask   `json:"prepared,omitempty"`
+	EditArtifacts   map[string]NativeEditArtifact `json:"editArtifacts,omitempty"`
+	Join            json.RawMessage               `json:"join,omitempty"`
 }
 
 type Runtime interface {
@@ -289,6 +321,7 @@ type NativeRuntime interface {
 	Complete(context.Context, string, NativeCompletionRequest) (Response, error)
 	Fail(context.Context, string, NativeFailureRequest) (Response, error)
 	ReadNative(context.Context, string, NativeReadRequest) (Response, error)
+	EditNative(context.Context, string, NativeEditRequest) (Response, error)
 	QueryNativeCodeGraph(context.Context, string, NativeCodeGraphRequest) (Response, error)
 }
 
@@ -402,6 +435,14 @@ func DecodeNativeRead(reader io.Reader) (NativeReadRequest, error) {
 	return request, nil
 }
 
+func DecodeNativeEdit(reader io.Reader) (NativeEditRequest, error) {
+	var request NativeEditRequest
+	if err := decodeExact(reader, MaxNativeEditRequestBytes, &request); err != nil || ValidateNativeEdit(request) != nil {
+		return NativeEditRequest{}, ErrInvalid
+	}
+	return request, nil
+}
+
 func DecodeNativeCodeGraph(reader io.Reader) (NativeCodeGraphRequest, error) {
 	var request NativeCodeGraphRequest
 	if err := decodeExact(reader, MaxRequestBytes, &request); err != nil || ValidateNativeCodeGraph(request) != nil {
@@ -431,6 +472,26 @@ func ValidateNativeFailure(request NativeFailureRequest) error {
 
 func ValidateNativeRead(request NativeReadRequest) error {
 	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ChildSessionID) || request.Path == "" || len(request.Path) > 4096 || strings.ContainsRune(request.Path, '\x00') || filepath.IsAbs(request.Path) || !filepath.IsLocal(request.Path) || filepath.Clean(request.Path) != request.Path || request.Path == "." || strings.HasSuffix(request.Path, "/") || strings.HasSuffix(request.Path, `\`) || request.Offset < 0 || request.Limit < 0 || request.Limit > MaxNativeReadBytes {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func ValidateNativeEdit(request NativeEditRequest) error {
+	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ChildSessionID) ||
+		request.Path == "" || len(request.Path) > 4096 || strings.ContainsRune(request.Path, '\x00') || filepath.IsAbs(request.Path) ||
+		!filepath.IsLocal(request.Path) || filepath.Clean(request.Path) != request.Path || request.Path == "." ||
+		strings.HasSuffix(request.Path, "/") || strings.HasSuffix(request.Path, `\`) || !utf8.ValidString(request.Content) ||
+		strings.ContainsRune(request.Content, '\x00') || len(request.Content) > MaxNativeEditBytes {
+		return ErrInvalid
+	}
+	if request.Create {
+		if request.ExpectedSHA256 != "" {
+			return ErrInvalid
+		}
+		return nil
+	}
+	if !validSHA256(request.ExpectedSHA256) {
 		return ErrInvalid
 	}
 	return nil
@@ -659,4 +720,12 @@ func Encode(writer io.Writer, response Response) error {
 
 func validOperation(operation Operation) bool {
 	return operation == ReadFiles || operation == AnalyzeStructure || operation == WriteFiles || operation == ReviewChanges
+}
+
+func validSHA256(value string) bool {
+	if !strings.HasPrefix(value, "sha256-") || len(value) != len("sha256-")+sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256-"))
+	return err == nil
 }

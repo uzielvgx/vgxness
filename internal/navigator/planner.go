@@ -254,7 +254,9 @@ func validateTasks(tasks []Task) error {
 				return fmt.Errorf("%w: review task capability", ErrInvalidRequest)
 			}
 		case OperationWriteFiles:
-			return fmt.Errorf("%w: native edit broker is not available", ErrUnsupportedTask)
+			if task.Capability != CapabilityImplement {
+				return fmt.Errorf("%w: write task capability", ErrInvalidRequest)
+			}
 		default:
 			return ErrInvalidRequest
 		}

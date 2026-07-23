@@ -71,7 +71,7 @@ func TestNativeDispatchPreparesChildAndAcceptsIdempotentlyWithoutRunningAdapter(
 	if _, err := service.Prepare(context.Background(), workspace, bridge.DispatchRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-competing", Model: "openai/gpt-5.6-sol", Operation: bridge.WriteFiles,
 		Goal: "Competing write", ParentSessionID: "ses_parent", ParentMessageID: "msg_competing", ChildSessionID: "ses_competing",
-	}); !errors.Is(err, bridge.ErrUnavailable) {
+	}); !errors.Is(err, bridge.ErrDenied) {
 		t.Fatalf("competing foreground dispatch was not denied: %v", err)
 	}
 	result := nativeResult(t, prepared.TaskID)

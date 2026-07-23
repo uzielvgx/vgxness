@@ -109,10 +109,10 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 	for _, required := range []string{
 		`import { spawn } from "node:child_process"`, "spawn(VGXNESS_EXECUTABLE, [...args", `const VGXNESS_EXECUTABLE = "`,
 		`const VGXNESS_MODEL = "openai/gpt-5.6-sol"`, fmt.Sprintf("const MAX_OUTPUT_BYTES = %d", bridge.MaxBridgeOutputBytes),
-		`client.session.create`, `client.session.prompt`, `["bridge", "prepare", "--stdin"]`, `["bridge", "read", "--stdin"]`, `["bridge", "codegraph", "--stdin"]`,
+		`client.session.create`, `client.session.prompt`, `["bridge", "prepare", "--stdin"]`, `["bridge", "read", "--stdin"]`, `["bridge", "edit", "--stdin"]`, `["bridge", "codegraph", "--stdin"]`,
 		`["bridge", "complete", "--stdin"]`, `value.protocolVersion !== "1"`, `"review-changes"`,
 		`tool.schema.enum(["start", "continue", "finish"]).optional()`, `runId: tool.schema.string().optional()`,
-		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `output: JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 27",
+		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `output: JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 28",
 		"shell: false", `child?.kill("SIGKILL")`, "invokeBounded", "invokeTerminal", "nativeTickets.delete(childSessionId)",
 		"MAX_NATIVE_DISPATCHES = 4", "acquireNativeCapacity", "VGXNESS native dispatch capacity exhausted", "releaseCapacity()",
 		"vgxness_run", "startVisibleOrchestration", `tool.schema.enum(["fast", "auto", "deep"]).optional()`,
@@ -145,6 +145,7 @@ permission:
   task:
     "*": deny
     vgxness-explorer: allow
+    vgxness-implementer: allow
     vgxness-reviewer: allow
   vgxness_status: allow
   vgxness_run: allow
@@ -152,13 +153,13 @@ permission:
   vgxness_orchestrate: allow
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 16 -->`
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 17 -->`
 	if !strings.HasPrefix(managerPrompt, expectedFrontmatter) {
 		t.Fatalf("manager prompt has invalid OpenCode frontmatter:\n%s", managerPrompt)
 	}
 
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 16",
+		"artifact: opencode-agent/vgxness-manager; version: 17",
 		"exact native Task directives returned by vgxness_run, vgxness_dispatch, or vgxness_orchestrate",
 		"senior engineer with more than two decades of experience",
 		"calm, attentive, technically discerning, pragmatic, and collaborative",
@@ -188,7 +189,9 @@ permission:
 		"vgxness_dispatch action=start with read-files",
 		"vgxness_dispatch action=start with analyze-structure",
 		"then call vgxness_dispatch action=join",
-		"Native write-files is fail-closed",
+		"vgxness_dispatch action=start with write-files",
+		"ticket-authenticated edit broker in an isolated sibling worktree",
+		"never silently merges it into the source checkout",
 		"vgxness_dispatch action=start with review-changes",
 		"issue all returned native Task calls together",
 		"Join each dispatch only after its Task terminates",
@@ -224,18 +227,18 @@ func TestManagedNativeSubagentsHaveRoleSpecificFailClosedPermissions(t *testing.
 	if strings.Contains(explorerPrompt, "\n  read: allow\n") || strings.Contains(explorerPrompt, "edit: allow") || strings.Contains(explorerPrompt, "grep: allow") || strings.Contains(explorerPrompt, "lsp: allow") || strings.Contains(explorerPrompt, "codegraph_*: allow") || !strings.Contains(explorerPrompt, "vgxness_native_read: allow") || !strings.Contains(explorerPrompt, "vgxness_codegraph: allow") || !strings.Contains(explorerPrompt, "Never invoke CodeGraph CLI/MCP directly") {
 		t.Fatal("explorer exposes an alternate content-access path")
 	}
-	for _, prompt := range []string{explorerPrompt, reviewerPrompt} {
+	for _, prompt := range []string{explorerPrompt, implementerPrompt, reviewerPrompt} {
 		for _, required := range []string{"exactly two top-level input envelopes", "vgxness.visible-task.directive", "vgxness.direct-dispatch.directive", "without calling vgxness_task_claim or vgxness_task_complete", "Reject every other top-level input shape"} {
 			if !strings.Contains(prompt, required) {
 				t.Errorf("managed native profile is missing dual-protocol contract %q", required)
 			}
 		}
 	}
-	if strings.Contains(implementerPrompt, "\n  read: allow\n") || strings.Contains(implementerPrompt, "edit: allow") || strings.Contains(implementerPrompt, "write: allow") || strings.Contains(implementerPrompt, "grep: allow") || strings.Contains(implementerPrompt, "lsp: allow") || strings.Contains(implementerPrompt, "codegraph_*: allow") || !strings.Contains(implementerPrompt, "vgxness_native_read: allow") {
-		t.Fatal("reserved implementer profile can edit without a ticket-authenticated broker")
+	if strings.Contains(implementerPrompt, "\n  read: allow\n") || strings.Contains(implementerPrompt, "\n  edit: allow\n") || strings.Contains(implementerPrompt, "\n  write: allow\n") || strings.Contains(implementerPrompt, "grep: allow") || strings.Contains(implementerPrompt, "lsp: allow") || strings.Contains(implementerPrompt, "codegraph_*: allow") || !strings.Contains(implementerPrompt, "vgxness_native_read: allow") || !strings.Contains(implementerPrompt, "vgxness_native_edit: allow") {
+		t.Fatal("implementer exposes an alternate write path")
 	}
-	if strings.Contains(implementerPrompt, "vgxness_task_claim: allow") || strings.Contains(implementerPrompt, "vgxness_task_complete: allow") {
-		t.Fatal("reserved implementer exposes an unused visible-task protocol")
+	if !strings.Contains(implementerPrompt, "vgxness_task_claim: allow") || !strings.Contains(implementerPrompt, "vgxness_task_complete: allow") || !strings.Contains(implementerPrompt, "SHA-256 returned by its latest read or edit receipt") {
+		t.Fatal("implementer is missing the ticket-authenticated edit protocol")
 	}
 	if strings.Contains(reviewerPrompt, "read: allow") || strings.Contains(reviewerPrompt, "codegraph_*: allow") {
 		t.Fatal("reviewer can escape immutable Git evidence")
@@ -244,7 +247,9 @@ func TestManagedNativeSubagentsHaveRoleSpecificFailClosedPermissions(t *testing.
 
 func TestNavigatorRoutesReadOnlySynthesisWithoutGitReview(t *testing.T) {
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-navigator; version: 4",
+		"artifact: opencode-agent/vgxness-navigator; version: 5",
+		"implement with write-files",
+		"Every implementation task is exclusive",
 		"smallest sufficient set of bounded work units",
 		"Optimize for reliable elapsed time, not task count or visible activity",
 		"Use explore/analyze-structure for architecture, symbol, dependency, call-path, blast-radius, or affected-test questions",
@@ -316,6 +321,7 @@ func TestIntegration_BridgeToolRunsWithNodeAndBunWhenAvailable(t *testing.T) {
 	expected := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"healthy"}`
 	prepared := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"running","prepared":{"ticketId":"ticket-1","executionId":"execution-1","agent":"vgxness-explorer","model":"openai/gpt-5.6-sol","prompt":"return json","promptSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","deadline":"` + time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano) + `","promptRef":{"id":"prompt","version":"1","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}`
 	read := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"reading","read":{"path":"go.mod","content":"module example","truncated":false}}`
+	edit := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"editing","edit":{"path":"go.mod","sha256":"sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","previousSha256":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bytes":15,"created":false}}`
 	codegraph := `{"protocolVersion":"1","ok":true,"bridge":"healthy","provider":"opencode","status":"completed","codegraph":{"available":true,"operation":"explore"}}`
 	helperSource := "#!/bin/sh\n" +
 		"if [ \"$2\" = \"prepare\" ]; then\n" +
@@ -335,6 +341,13 @@ func TestIntegration_BridgeToolRunsWithNodeAndBunWhenAvailable(t *testing.T) {
 		"    *) exit 10 ;;\n" +
 		"  esac\n" +
 		"  printf '%s' '" + read + "'\n" +
+		"elif [ \"$2\" = \"edit\" ]; then\n" +
+		"  payload=$(cat)\n" +
+		"  case \"$payload\" in\n" +
+		"    *'\"ticketId\":\"ticket-1\"'*'\"childSessionId\":\"ses_child\"'*'\"path\":\"go.mod\"'*'\"expectedSha256\":\"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"'*) ;;\n" +
+		"    *) exit 12 ;;\n" +
+		"  esac\n" +
+		"  printf '%s' '" + edit + "'\n" +
 		"elif [ \"$2\" = \"codegraph\" ]; then\n" +
 		"  payload=$(cat)\n" +
 		"  case \"$payload\" in\n" +
@@ -354,7 +367,7 @@ func TestIntegration_BridgeToolRunsWithNodeAndBunWhenAvailable(t *testing.T) {
 	testutil.NoError(t, err)
 	stub := `const optionalSchema = () => ({ optional() { return this } })
 const tool = Object.assign((definition) => definition, {
-  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, array: optionalSchema },
+  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, boolean: optionalSchema, array: optionalSchema },
 })`
 	source := strings.Replace(string(content), `import { tool } from "@opencode-ai/plugin"`, stub, 1)
 	source = strings.Replace(source, `import { randomUUID } from "node:crypto"`, `const randomUUID = () => "1"`, 1)
@@ -364,7 +377,7 @@ const tool = Object.assign((definition) => definition, {
 	source += "const metadataEvents = []\n"
 	source += "\nconst client = { session: {\n"
 	source += "  create: async (request) => { createRequest = request; return { data: { id: \"ses_child\" } } },\n"
-	source += "  prompt: async () => { const childContext = { directory: " + string(workspace) + ", worktree: \"\", sessionID: \"ses_child\", abort: new AbortController().signal }; const value = JSON.parse(await plugin.tool.vgxness_native_read.execute({ path: \"go.mod\" }, childContext)); if (value.content !== \"module example\") throw new Error(\"native read broker failed\"); const graph = JSON.parse(await plugin.tool.vgxness_codegraph.execute({ operation: \"explore\", query: \"architecture\", depth: 8, maxFiles: 40 }, childContext)); if (!graph.available || graph.operation !== \"explore\") throw new Error(\"codegraph numeric bounds failed\"); return { data: { info: { id: \"msg_child\" }, parts: [{ type: \"text\", text: JSON.stringify({ kind: \"agent.result\", schemaVersion: \"1\", resultId: \"result-1\", taskId: \"task-1\", agentId: \"vgxness-bounded-worker-v1\", status: \"success\", summary: \"ok\", findings: [], changes: [], validations: [], artifactRefs: [], memoryCandidates: [], nextRecommended: \"done\", confidence: 1 }) }] } } },\n"
+	source += "  prompt: async () => { const childContext = { directory: " + string(workspace) + ", worktree: \"\", sessionID: \"ses_child\", abort: new AbortController().signal }; const value = JSON.parse(await plugin.tool.vgxness_native_read.execute({ path: \"go.mod\" }, childContext)); if (value.content !== \"module example\") throw new Error(\"native read broker failed\"); const changed = JSON.parse(await plugin.tool.vgxness_native_edit.execute({ path: \"go.mod\", content: \"module changed\\n\", expectedSha256: \"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }, childContext)); if (changed.bytes !== 15) throw new Error(\"native edit broker failed\"); const graph = JSON.parse(await plugin.tool.vgxness_codegraph.execute({ operation: \"explore\", query: \"architecture\", depth: 8, maxFiles: 40 }, childContext)); if (!graph.available || graph.operation !== \"explore\") throw new Error(\"codegraph numeric bounds failed\"); return { data: { info: { id: \"msg_child\" }, parts: [{ type: \"text\", text: JSON.stringify({ kind: \"agent.result\", schemaVersion: \"1\", resultId: \"result-1\", taskId: \"task-1\", agentId: \"vgxness-bounded-worker-v1\", status: \"success\", summary: \"ok\", findings: [], changes: [], validations: [], artifactRefs: [], memoryCandidates: [], nextRecommended: \"done\", confidence: 1 }) }] } } },\n"
 	source += "  abort: async () => ({ data: true }),\n"
 	source += "} }\n"
 	source += "plugin = await VGXNESSPlugin({ client })\n"
@@ -427,7 +440,7 @@ func TestIntegration_DispatchReturnsOneNativeTaskAndJoinsDurably(t *testing.T) {
 	testutil.NoError(t, err)
 	stub := `const optionalSchema = () => ({ optional() { return this } })
 const tool = Object.assign((definition) => definition, {
-  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, array: optionalSchema },
+  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, boolean: optionalSchema, array: optionalSchema },
 })`
 	source := strings.Replace(string(content), `import { tool } from "@opencode-ai/plugin"`, stub, 1)
 	source = strings.Replace(source, `import { randomUUID } from "node:crypto"`, `const randomUUID = () => "dispatchid"`, 1)
@@ -477,7 +490,7 @@ func TestIntegration_BridgeToolPreservesStructuredFailureEnvelope(t *testing.T) 
 	testutil.NoError(t, err)
 	stub := `const optionalSchema = () => ({ optional() { return this } })
 const tool = Object.assign((definition) => definition, {
-  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, array: optionalSchema },
+  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, boolean: optionalSchema, array: optionalSchema },
 })`
 	source := strings.Replace(string(content), `import { tool } from "@opencode-ai/plugin"`, stub, 1)
 	source = strings.Replace(source, `import { randomUUID } from "node:crypto"`, `const randomUUID = () => "1"`, 1)
@@ -518,7 +531,7 @@ func TestIntegration_BridgeToolNormalizesCommonAgentResultShapes(t *testing.T) {
 	testutil.NoError(t, err)
 	stub := `const optionalSchema = () => ({ optional() { return this } })
 const tool = Object.assign((definition) => definition, {
-  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, array: optionalSchema },
+  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, boolean: optionalSchema, array: optionalSchema },
 })`
 	source := strings.Replace(string(content), `import { tool } from "@opencode-ai/plugin"`, stub, 1)
 	source = strings.Replace(source, `import { randomUUID } from "node:crypto"`, `const randomUUID = () => "1"`, 1)
@@ -595,7 +608,7 @@ func TestIntegration_OrchestrateProducesParallelVisibleTaskDirectives(t *testing
 	testutil.NoError(t, err)
 	stub := `const optionalSchema = () => ({ optional() { return this } })
 const tool = Object.assign((definition) => definition, {
-  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, array: optionalSchema },
+  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, boolean: optionalSchema, array: optionalSchema },
 })`
 	source := strings.Replace(string(content), `import { tool } from "@opencode-ai/plugin"`, stub, 1)
 	source = strings.Replace(source, `import { randomUUID } from "node:crypto"`, `let uuidCounter = 0; const randomUUID = () => String(++uuidCounter)`, 1)
@@ -703,7 +716,7 @@ func TestIntegration_OrchestrateAdvanceRecoversNextVisibleWave(t *testing.T) {
 	testutil.NoError(t, err)
 	stub := `const optionalSchema = () => ({ optional() { return this } })
 const tool = Object.assign((definition) => definition, {
-  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, array: optionalSchema },
+  schema: { enum: optionalSchema, string: optionalSchema, number: optionalSchema, boolean: optionalSchema, array: optionalSchema },
 })`
 	source := strings.Replace(string(content), `import { tool } from "@opencode-ai/plugin"`, stub, 1)
 	source = strings.Replace(source, `import { randomUUID } from "node:crypto"`, `let uuidCounter = 0; const randomUUID = () => String(++uuidCounter)`, 1)

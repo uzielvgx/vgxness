@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,23 +33,24 @@ const (
 )
 
 type orchestrationDocument struct {
-	Version          int                        `json:"version"`
-	Workspace        string                     `json:"workspace"`
-	OrchestrationID  string                     `json:"orchestrationId"`
-	ScheduleID       string                     `json:"scheduleId"`
-	OwnerID          string                     `json:"ownerId"`
-	Model            string                     `json:"model"`
-	ParentSessionID  string                     `json:"parentSessionId"`
-	ParentMessageID  string                     `json:"parentMessageId"`
-	Plan             navigator.Plan             `json:"plan"`
-	Status           string                     `json:"status"`
-	CurrentWave      int                        `json:"currentWave"`
-	CreatedAt        string                     `json:"createdAt"`
-	UpdatedAt        string                     `json:"updatedAt"`
-	Join             json.RawMessage            `json:"join,omitempty"`
-	PreparedBindings map[string]string          `json:"preparedBindings"`
-	ClaimTokens      map[string]string          `json:"claimTokens,omitempty"`
-	Results          map[string]json.RawMessage `json:"results"`
+	Version          int                                  `json:"version"`
+	Workspace        string                               `json:"workspace"`
+	OrchestrationID  string                               `json:"orchestrationId"`
+	ScheduleID       string                               `json:"scheduleId"`
+	OwnerID          string                               `json:"ownerId"`
+	Model            string                               `json:"model"`
+	ParentSessionID  string                               `json:"parentSessionId"`
+	ParentMessageID  string                               `json:"parentMessageId"`
+	Plan             navigator.Plan                       `json:"plan"`
+	Status           string                               `json:"status"`
+	CurrentWave      int                                  `json:"currentWave"`
+	CreatedAt        string                               `json:"createdAt"`
+	UpdatedAt        string                               `json:"updatedAt"`
+	Join             json.RawMessage                      `json:"join,omitempty"`
+	PreparedBindings map[string]string                    `json:"preparedBindings"`
+	ClaimTokens      map[string]string                    `json:"claimTokens,omitempty"`
+	Results          map[string]json.RawMessage           `json:"results"`
+	EditArtifacts    map[string]bridge.NativeEditArtifact `json:"editArtifacts,omitempty"`
 }
 
 func (service *Service) PlanOrchestration(ctx context.Context, workspace string, request bridge.OrchestratePlanRequest) (bridge.Response, error) {
@@ -93,6 +95,7 @@ func (service *Service) PlanOrchestration(ctx context.Context, workspace string,
 		PreparedBindings: make(map[string]string),
 		ClaimTokens:      make(map[string]string),
 		Results:          make(map[string]json.RawMessage),
+		EditArtifacts:    make(map[string]bridge.NativeEditArtifact),
 	}
 	if data, marshalErr := json.Marshal(document); marshalErr != nil || len(data) > orchestrationDocumentLimit {
 		return bridge.Response{}, fmt.Errorf("%w: approved orchestration exceeds its durable bound", bridge.ErrDenied)
@@ -278,6 +281,7 @@ func (service *Service) RecordOrchestrationTerminal(ctx context.Context, workspa
 			return bridge.Response{}, bridge.ErrDenied
 		}
 		document.Status = string(scheduler.Status())
+		captureNativeEditArtifact(&document, request.TaskID, native.Response)
 		document.UpdatedAt = service.now().UTC().Format(time.RFC3339Nano)
 		if err := writeOrchestrationDocument(paths.Root, document); err != nil {
 			return bridge.Response{}, fmt.Errorf("%w: repair orchestration terminal projection", bridge.ErrExecution)
@@ -299,6 +303,7 @@ func (service *Service) RecordOrchestrationTerminal(ctx context.Context, workspa
 	document.Status = string(scheduler.Status())
 	if request.Status == "completed" {
 		document.Results[request.TaskID] = append(json.RawMessage(nil), request.Result...)
+		captureNativeEditArtifact(&document, request.TaskID, native.Response)
 	}
 	document.UpdatedAt = service.now().UTC().Format(time.RFC3339Nano)
 	if err := writeOrchestrationDocument(paths.Root, document); err != nil {
@@ -560,7 +565,7 @@ func orchestrationResponse(root string, document orchestrationDocument, prepared
 		Status: document.Status, Result: finalOrchestrationResult(document), Orchestration: &bridge.OrchestrationView{
 			OrchestrationID: document.OrchestrationID, ScheduleID: document.ScheduleID, OwnerID: document.OwnerID,
 			ParentSessionID: document.ParentSessionID, Status: document.Status, CurrentWave: document.CurrentWave, NextWave: nextWave, Plan: document.Plan,
-			Prepared: prepared, Join: append(json.RawMessage(nil), document.Join...),
+			Prepared: prepared, EditArtifacts: cloneNativeEditArtifacts(document.EditArtifacts), Join: append(json.RawMessage(nil), document.Join...),
 		},
 	}
 }
@@ -720,18 +725,16 @@ func readOrchestrationDocument(root, orchestrationID string) (orchestrationDocum
 	if err != nil {
 		return orchestrationDocument{}, err
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > orchestrationDocumentLimit {
-		return orchestrationDocument{}, bridge.ErrDenied
-	}
-	data, err := os.ReadFile(path)
+	data, err := readBoundedControlPlaneFile(path, orchestrationDocumentLimit)
 	if err != nil {
-		return orchestrationDocument{}, err
+		return orchestrationDocument{}, bridge.ErrDenied
 	}
 	var document orchestrationDocument
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&document) != nil || document.Version != orchestrationDocumentVersion || document.OrchestrationID != orchestrationID || navigator.ValidatePlan(context.Background(), document.Plan) != nil || document.PreparedBindings == nil || document.Results == nil {
+	if decoder.Decode(&document) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		document.Version != orchestrationDocumentVersion || document.OrchestrationID != orchestrationID ||
+		navigator.ValidatePlan(context.Background(), document.Plan) != nil || document.PreparedBindings == nil || document.Results == nil {
 		return orchestrationDocument{}, bridge.ErrDenied
 	}
 	if document.ClaimTokens == nil {
@@ -946,9 +949,36 @@ func (service *Service) reconcileNativeTerminals(ctx context.Context, storageRoo
 		}
 		if outcome.Status == orchestrator.TaskCompleted {
 			document.Results[item.TaskID] = append(json.RawMessage(nil), outcome.Result...)
+			captureNativeEditArtifact(document, item.TaskID, native.Response)
 		}
 	}
 	return nil
+}
+
+func captureNativeEditArtifact(document *orchestrationDocument, taskID string, response *bridge.Response) {
+	if document == nil || response == nil || response.EditArtifact == nil {
+		return
+	}
+	if document.EditArtifacts == nil {
+		document.EditArtifacts = make(map[string]bridge.NativeEditArtifact)
+	}
+	document.EditArtifacts[taskID] = cloneNativeEditArtifact(*response.EditArtifact)
+}
+
+func cloneNativeEditArtifacts(input map[string]bridge.NativeEditArtifact) map[string]bridge.NativeEditArtifact {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[string]bridge.NativeEditArtifact, len(input))
+	for taskID, artifact := range input {
+		output[taskID] = cloneNativeEditArtifact(artifact)
+	}
+	return output
+}
+
+func cloneNativeEditArtifact(input bridge.NativeEditArtifact) bridge.NativeEditArtifact {
+	input.Changes = append([]bridge.NativeEditResult(nil), input.Changes...)
+	return input
 }
 
 var _ bridge.OrchestrationRuntime = (*Service)(nil)

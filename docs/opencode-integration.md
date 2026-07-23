@@ -66,9 +66,9 @@ The default targets are:
 - `~/.config/opencode/agents/vgxness-manager.md` — the persistent primary agent.
 - `~/.config/opencode/agents/vgxness-navigator.md` — tool-denied candidate-task planning; it cannot inspect the workspace or choose execution policy.
 - `~/.config/opencode/agents/vgxness-explorer.md` — read-only native inspection whose exact file contents and optional CodeGraph structural queries pass through ticket-authenticated VGXNESS brokers.
-- `~/.config/opencode/agents/vgxness-implementer.md` — reserved read-only profile; native writes stay fail-closed until a ticket-authenticated edit broker exists.
+- `~/.config/opencode/agents/vgxness-implementer.md` — isolated implementation through ticket-authenticated read and edit brokers; direct filesystem editing, shell, Git, network, and delegation remain denied.
 - `~/.config/opencode/agents/vgxness-reviewer.md` — review of immutable Git evidence with no direct tool access.
-- `~/.config/opencode/plugins/vgxness.ts` — the managed plugin whose manager tools become `vgxness_run`, `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate`; visible Task children receive `vgxness_task_claim` and `vgxness_task_complete`, while the explorer also receives the ticket-bound `vgxness_native_read` and `vgxness_codegraph` brokers.
+- `~/.config/opencode/plugins/vgxness.ts` — the managed plugin whose manager tools become `vgxness_run`, `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate`; visible Task children receive `vgxness_task_claim` and `vgxness_task_complete`, the explorer receives ticket-bound read and CodeGraph brokers, and the implementer receives ticket-bound read and edit brokers.
 
 ## Manager personality and language boundary
 
@@ -114,7 +114,7 @@ vgxness bridge status --workspace /absolute/project/path
 - Existing foreign or modified content is never overwritten.
 - Symlinked artifacts or OpenCode config directories are treated as drift.
 - Uninstall accepts only exact managed artifacts and preserves each one in `.vgxness-backups/` instead of deleting it permanently.
-- The manager permits only user questions, managed VGXNESS tools, and the built-in Task tool restricted to `vgxness-explorer` and `vgxness-reviewer`. The child-only claim, completion, read, and structural-intelligence tools remain denied to it.
+- The manager permits only user questions, managed VGXNESS tools, and the built-in Task tool restricted to `vgxness-explorer`, `vgxness-implementer`, and `vgxness-reviewer`. Child-only claim, completion, read, edit, and structural-intelligence tools remain denied to it.
 - `vgxness_run action=start` accepts a goal plus optional constraints, desired outcome, acceptance criteria, and `fast|auto|deep` mode. It reuses the same Navigator, validated plan, native Task directives, tickets, waves, and durable join as the lower-level orchestration surface; it does not create a second execution authority.
 - `vgxness_dispatch action=start` validates one caller-supplied bounded task without launching Navigator, persists it as a one-task schedule, and returns one exact native Task `arguments` object. After that visible Task terminates, `action=join` returns the durable result. OpenCode therefore displays and links the child session instead of showing only a custom-tool row.
 - `vgxness_orchestrate action=start` returns VGXNESS task metadata separately from the exact native Task `arguments` object for one approved wave. The manager must pass only those arguments unchanged and emit every call together when the wave is parallel. OpenCode itself creates the native child sessions and renders their individual live Task rows in the parent conversation.
@@ -137,7 +137,17 @@ The broker invokes an already installed local CodeGraph CLI directly, never thro
 
 Every call is bound to the ticket workspace, limited to 30 seconds and 512 KiB of output, and recorded as input/output digests plus timestamps in the durable ticket. A ticket permits at most sixteen structural queries. Lifecycle and administrative commands—including install, upgrade, index, uninit, and uninstall—are not exposed. `impact` and `affected` depth is capped at five; `explore` is capped at twelve source files; oversized numeric hints are clamped to those safe limits instead of failing the whole inspection. Affected paths must stay local and pass the sensitive-path policy. The managed plugin serializes CodeGraph queries, native reads, and completion on one per-ticket lane; the control plane also waits briefly for cross-process document locks, so valid concurrent tool emission becomes deterministic sequencing instead of a misleading policy denial.
 
-Each Git worktree needs its own `.codegraph/` index because index roots and checked-out bytes are identity-bound. The broker does not create, copy, symlink, install, or repair an index. If the executable or the worktree-local index is unavailable, VGXNESS returns a structured unavailable result and the explorer falls back to bounded repository discovery plus `vgxness_native_read`. Exact file contents always use the read broker even when CodeGraph supplies the structural map.
+Each Git worktree needs its own `.codegraph/` index because index roots and checked-out bytes are identity-bound. The broker does not create, copy, symlink, install, or repair an index. If the executable or the worktree-local index is unavailable, VGXNESS returns a structured unavailable result and the explorer falls back to bounded repository discovery plus `vgxness_native_read`. Exact file contents always use the read broker even when CodeGraph supplies the structural map. Native implementers do not receive the CodeGraph broker.
+
+## Ticket-bound isolated edits
+
+`write-files` is available only for the canonical root of a clean Git repository with an existing `HEAD` commit. Clean means no tracked, staged, untracked, or submodule state is present. VGXNESS creates a detached sibling worktree at `<repository>-worktrees/vgxness-<ticket-id>`, binds its filesystem identity and base commit into the durable native ticket, and materializes the committed tree without running repository checkout hooks or filter processes. A denied sensitive path in the committed tree, an oversized archive, or an unsafe archive entry fails preparation closed.
+
+The implementer has no direct edit tool. It can discover paths while its ticket is active, read exact UTF-8 content through `vgxness_native_read`, and call `vgxness_native_edit` sequentially. The edit broker replaces one regular file of at most 256 KiB only when the caller supplies the SHA-256 of its latest content. A new file requires `create=true` and an already existing parent directory. Each ticket permits at most 32 edits. Sensitive paths, stale digests, traversal, symlink or hard-link aliases, submodule boundaries, missing parents, deletion, rename, permission change, and non-text content are denied.
+
+Every accepted edit is atomic and its path, old digest, new digest, byte count, and creation state are persisted before the broker responds. Completion rechecks the worktree identity and base commit, rejects staged or direct out-of-broker changes, verifies every final file against the last broker receipt, and publishes an authoritative manifest digest plus the isolated worktree path through the native response and orchestration join.
+
+VGXNESS does not silently copy, merge, commit, or delete the isolated result. The source checkout stays unchanged. The worktree is retained on success or failure so an operator can inspect it, run proportional validation, submit it to Delivery Authority, and integrate or remove it explicitly. Automatic review-to-merge and terminal worktree retention policy remain separate rollout work.
 
 ## Bounded dispatch
 
@@ -145,7 +155,7 @@ The first protocol version exposes only:
 
 - `read-files`
 - `analyze-structure`
-- `write-files` — currently denied in the native path until ticket-authenticated edits are available
+- `write-files` — isolated, ticket-authenticated, exclusive, and never silently merged
 - `review-changes`
 
 For an isolated operation, the manager calls `vgxness_dispatch action=start`. VGXNESS creates exactly one validated task and returns `delegation-required` with the exact built-in Task arguments. The manager emits that Task unchanged, waits for its terminal state, and calls `vgxness_dispatch action=join` with the returned `orchestrationId`. This deliberately skips adaptive Navigator decomposition while retaining the visible OpenCode child row, ticket claim, durable terminal, and content-bounded join.

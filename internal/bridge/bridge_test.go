@@ -228,6 +228,40 @@ func TestDecodeNativeReadRequiresOneCleanBoundedLocalFile(t *testing.T) {
 	}
 }
 
+func TestDecodeNativeEditRequiresVersionedBoundedReplacement(t *testing.T) {
+	request, err := DecodeNativeEdit(strings.NewReader(`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"internal/app/app.go","content":"package app\n","expectedSha256":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
+	if err != nil || request.Path != "internal/app/app.go" || request.Create {
+		t.Fatalf("request=%#v err=%v", request, err)
+	}
+	created, err := DecodeNativeEdit(strings.NewReader(`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"internal/app/new.go","content":"package app\n","create":true}`))
+	if err != nil || !created.Create || created.ExpectedSHA256 != "" {
+		t.Fatalf("create=%#v err=%v", created, err)
+	}
+	for _, input := range []string{
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"../secret","content":"x","create":true}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","content":"x"}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","content":"x","create":true,"expectedSha256":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","content":"x","expectedSha256":"sha256-not-a-digest"}`,
+		"{\"protocolVersion\":\"1\",\"ticketId\":\"ticket-1\",\"childSessionId\":\"ses_child\",\"path\":\"go.mod\",\"content\":\"x\\u0000y\",\"create\":true}",
+	} {
+		if _, err := DecodeNativeEdit(strings.NewReader(input)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("input %q: expected ErrInvalid, got %v", input, err)
+		}
+	}
+	oversized := NativeEditRequest{
+		ProtocolVersion: ProtocolVersion, TicketID: "ticket-1", ChildSessionID: "ses_child",
+		Path: "go.mod", Content: strings.Repeat("x", MaxNativeEditBytes+1),
+		ExpectedSHA256: "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	payload, err := json.Marshal(oversized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeNativeEdit(bytes.NewReader(payload)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversized edit accepted: %v", err)
+	}
+}
+
 func TestDecodeNativeCodeGraphRequiresOneBoundedStructuralQuery(t *testing.T) {
 	request, err := DecodeNativeCodeGraph(strings.NewReader(`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"explore","query":"How does dispatch reach native completion?","maxFiles":8}`))
 	if err != nil || request.Operation != CodeGraphExplore || request.MaxFiles != 8 {

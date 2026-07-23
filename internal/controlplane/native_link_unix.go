@@ -14,6 +14,9 @@ func nativeSingleLink(info os.FileInfo) bool {
 }
 
 func nativeFileIdentity(info os.FileInfo) (string, bool) {
+	if info == nil {
+		return "", false
+	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return "", false

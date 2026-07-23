@@ -128,6 +128,85 @@ func TestAdaptiveOrchestrationPersistsParallelNativeWaveAndJoin(t *testing.T) {
 	}
 }
 
+func TestWriteOrchestrationPublishesAuthoritativeEditArtifact(t *testing.T) {
+	workspace := nativeEditRepository(t)
+	storage := filepath.Join(t.TempDir(), "storage")
+	now := time.Now().UTC()
+	sequence := 0
+	service := New(Options{
+		StorageRoot: storage, Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return nativeTestAdapter(now), nil },
+		NewID: func(prefix string) (string, error) {
+			sequence++
+			return prefix + "-write-" + strconv.Itoa(sequence), nil
+		},
+	})
+	planned, err := service.PlanOrchestration(context.Background(), workspace, bridge.OrchestratePlanRequest{
+		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol",
+		Input:           bridge.OrchestrateInput{Goal: "Update one bounded file"},
+		ParentSessionID: "ses_parent", ParentMessageID: "msg_parent",
+		CandidateTasks: []navigator.Task{{
+			TaskID: "task-edit", Capability: navigator.CapabilityImplement, Operation: navigator.OperationWriteFiles,
+			Goal: "Update the value", AcceptanceCriteria: []string{"Change the value"}, DependsOn: []string{}, Continuity: navigator.ContinuityIsolated,
+		}},
+	})
+	if err != nil || planned.Orchestration == nil {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	view := planned.Orchestration
+	binding := bridge.OrchestrationBinding{TaskID: "task-edit", ChildSessionID: "ses_child", TicketID: "ticket-edit-visible", ClaimToken: "claim-edit"}
+	prepared, err := service.PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		Bindings: []bridge.OrchestrationBinding{binding},
+	})
+	if err != nil || prepared.Orchestration == nil || len(prepared.Orchestration.Prepared) != 1 || prepared.Orchestration.Prepared[0].Prepared.Agent != "vgxness-implementer" {
+		t.Fatalf("prepared=%#v err=%v", prepared, err)
+	}
+	native, err := readNativeTicket(storage, binding.TicketID)
+	if err != nil || native.Edit == nil {
+		t.Fatalf("native edit ticket=%#v err=%v", native.Edit, err)
+	}
+	t.Cleanup(func() { removeNativeEditWorkspace(workspace, native.Edit) })
+	read, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: binding.TicketID, ChildSessionID: binding.ChildSessionID, Path: "internal/app.go",
+	})
+	if err != nil || read.Read == nil {
+		t.Fatalf("read=%#v err=%v", read, err)
+	}
+	if _, err := service.EditNative(context.Background(), workspace, bridge.NativeEditRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: binding.TicketID, ChildSessionID: binding.ChildSessionID,
+		Path: "internal/app.go", Content: "package internal\n\nconst Value = \"visible\"\n", ExpectedSHA256: nativeSHA256([]byte(read.Read.Content)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := nativeResult(t, native.TaskID)
+	completed, err := service.Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: binding.TicketID, ParentSessionID: "ses_parent",
+		ChildSessionID: binding.ChildSessionID, MessageID: "msg_child", Result: result,
+	})
+	if err != nil || completed.EditArtifact == nil {
+		t.Fatalf("completed=%#v err=%v", completed, err)
+	}
+	terminal, err := service.RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		TaskID: binding.TaskID, TicketID: binding.TicketID, ChildSessionID: binding.ChildSessionID,
+		Status: "completed", MessageID: "msg_child", ResultID: "result-" + binding.TicketID, Result: result,
+	})
+	if err != nil || terminal.Orchestration == nil {
+		t.Fatalf("terminal=%#v err=%v", terminal, err)
+	}
+	artifact, present := terminal.Orchestration.EditArtifacts[binding.TaskID]
+	if !present || artifact.ManifestSHA != completed.EditArtifact.ManifestSHA {
+		t.Fatalf("terminal edit artifact=%#v response=%#v err=%v", artifact, terminal, err)
+	}
+	joined, err := service.JoinOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+	})
+	if err != nil || joined.Orchestration == nil || joined.Orchestration.EditArtifacts[binding.TaskID].Worktree != native.Edit.Root {
+		t.Fatalf("joined edit artifact=%#v err=%v", joined, err)
+	}
+}
+
 func TestStatusOrchestrationReopensMixedParallelReadWave(t *testing.T) {
 	workspace := t.TempDir()
 	storage := filepath.Join(t.TempDir(), "storage")

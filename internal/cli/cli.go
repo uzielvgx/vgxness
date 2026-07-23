@@ -59,6 +59,9 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 	if len(args) > 0 && args[0] == "orchestrate" {
 		return runOrchestration(ctx, args[1:], stdout, stderr, controlPlane)
 	}
+	if len(args) > 0 && args[0] == "maintenance" {
+		return runMaintenance(ctx, args[1:], stdout, stderr, controlPlane)
+	}
 	if len(args) > 0 && args[0] == "self" {
 		return runSelfInstall(ctx, args[1:], stdout, stderr, installer)
 	}
@@ -66,16 +69,19 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|orchestrate|self|setup|delivery>")
+		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|orchestrate|maintenance|self|setup|delivery>")
 		return 2
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var opts config.Options
+	var deep bool
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.StringVar(&opts.ProjectDir, "workspace", "", "absolute workspace")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "use project-local storage")
-	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+	flags.BoolVar(&deep, "deep", false, "inspect operational state")
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || command != "doctor" && deep {
 		fmt.Fprintln(stderr, "invalid command arguments")
 		return 2
 	}
@@ -94,6 +100,9 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 	chronicle := "absent"
 	if result.ChroniclePresent {
 		chronicle = "present run=" + terminalSafe(result.RunID)
+	}
+	if command == "doctor" && deep {
+		return printDeepDoctor(ctx, stdout, stderr, controlPlane, opts, result)
 	}
 	doctor := ""
 	if command == "doctor" {

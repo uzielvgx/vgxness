@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -57,6 +58,14 @@ type nativeTicketDocument struct {
 	CompletionSHA string                          `json:"completionSha256,omitempty"`
 	Response      *bridge.Response                `json:"response,omitempty"`
 	CodeGraph     []bridge.NativeCodeGraphReceipt `json:"codegraph,omitempty"`
+	Edit          *nativeEditWorkspace            `json:"editWorkspace,omitempty"`
+	Edits         []bridge.NativeEditResult       `json:"edits,omitempty"`
+}
+
+type nativeEditWorkspace struct {
+	Root         string `json:"root"`
+	RootIdentity string `json:"rootIdentity"`
+	BaseRevision string `json:"baseRevision"`
 }
 
 type nativeLease struct {
@@ -145,6 +154,21 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 		}
 		gitEvidence = &evidence
 	}
+	executionRoot := root
+	var editWorkspace *nativeEditWorkspace
+	if input.Operation == bridge.WriteFiles {
+		editWorkspace, err = prepareNativeEditWorkspace(ctx, root, input.TicketID)
+		if err != nil {
+			return bridge.Response{}, err
+		}
+		executionRoot = editWorkspace.Root
+	}
+	editWorkspaceOwned := editWorkspace != nil
+	defer func() {
+		if editWorkspaceOwned {
+			removeNativeEditWorkspace(root, editWorkspace)
+		}
+	}()
 	continuity, err := service.openContinuity(ctx, paths, root, input)
 	if err != nil {
 		if recovered != nil && recovered.CapsuleID != "" && input.Continuity == bridge.ContinuityStart && errors.Is(err, bridge.ErrDenied) {
@@ -161,11 +185,11 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 			return bridge.Response{}, err
 		}
 	}
-	adapter, err := service.newNativeAdapter(root)
+	adapter, err := service.newNativeAdapter(executionRoot)
 	if err != nil {
 		return bridge.Response{}, err
 	}
-	entries, err := runtimeRegistry(ctx, root, input.Model)
+	entries, err := runtimeRegistry(ctx, executionRoot, input.Model)
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: registry", bridge.ErrExecution)
 	}
@@ -205,7 +229,7 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}
-	request, err := service.executionRequest(root, runID, taskID, executionID, identities, input, gitEvidence, continuity, taskMemory)
+	request, err := service.executionRequest(executionRoot, runID, taskID, executionID, identities, input, gitEvidence, continuity, taskMemory)
 	if err != nil {
 		return bridge.Response{}, err
 	}
@@ -230,15 +254,18 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 		Coordinator: orchestrator.NativeTicket{RunID: runID, TaskID: taskID, Mode: request.Mode, Request: request},
 		Continuity:  freezeNativeContinuity(continuity),
 		Memory:      freezeNativeMemory(taskMemory),
+		Edit:        editWorkspace,
 	}
 	if err := createNativeTicket(paths.Root, document); err != nil {
 		if existing, readErr := readNativeTicket(paths.Root, ticketID); readErr == nil && sameNativeTicketIdentity(existing, document) {
 			// os.Link may have published the ticket before directory sync failed.
 			// Preserve its lease so Fail or expiry recovery can close that identity.
 			leaseOwned = false
+			editWorkspaceOwned = false
 		}
 		return bridge.Response{}, fmt.Errorf("%w: persist native recovery ticket", bridge.ErrExecution)
 	}
+	editWorkspaceOwned = false
 	// From this point the durable ticket owns the foreground lease. Errors leave
 	// both in place so the caller can invoke Fail or expiry recovery can finish
 	// the same identity; the setup defer must no longer make it undiscoverable.
@@ -296,6 +323,14 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 		return bridge.Response{}, err
 	}
 	defer leaseGuard.Release()
+	var editArtifact *bridge.NativeEditArtifact
+	if document.Input.Operation == bridge.WriteFiles {
+		artifact, artifactErr := finalizeNativeEditArtifact(ctx, document)
+		if artifactErr != nil {
+			return bridge.Response{}, artifactErr
+		}
+		editArtifact = &artifact
+	}
 	coordinator, continuity, err := service.nativeCoordinator(ctx, paths, root, document)
 	if err != nil {
 		return bridge.Response{}, err
@@ -317,6 +352,7 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 			ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
 			RunID: document.RunID, TaskID: document.TaskID, CapsuleID: continuityResult.capsuleID, StateVersion: continuityResult.stateVersion,
 			MemoryRefs: continuityResult.memoryRefs, Status: string(receipt.Status),
+			EditArtifact: editArtifact,
 		}
 		document.State, document.CompletionSHA, document.Response = "failed", digest, &response
 		if persistErr := writeNativeTicket(paths.Root, document); persistErr != nil {
@@ -346,6 +382,7 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
 		RunID: document.RunID, TaskID: document.TaskID, CapsuleID: continuityResult.capsuleID, StateVersion: continuityResult.stateVersion,
 		MemoryRefs: continuityResult.memoryRefs, Status: string(receipt.Status), Result: result,
+		EditArtifact: editArtifact,
 		Receipt: &bridge.Receipt{
 			ExecutionID: providerReceipt.ExecutionID, Decision: string(providerReceipt.Decision.Outcome), DecisionCondition: providerReceipt.Decision.Condition,
 			Provider: providerReceipt.Provider.Reference.Provider, ProviderID: providerReceipt.Provider.Reference.ID, ProviderVersion: providerReceipt.Provider.Reference.Version,
@@ -467,7 +504,7 @@ func (service *Service) ReadNative(ctx context.Context, workspace string, input 
 		return bridge.Response{}, err
 	}
 	defer release()
-	if document.State != "prepared" || document.Input.Operation != bridge.ReadFiles && document.Input.Operation != bridge.AnalyzeStructure || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) || sensitivepaths.IsSensitive(input.Path) {
+	if document.State != "prepared" || document.Input.Operation != bridge.ReadFiles && document.Input.Operation != bridge.AnalyzeStructure && document.Input.Operation != bridge.WriteFiles || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) || sensitivepaths.IsSensitive(input.Path) {
 		return bridge.Response{}, bridge.ErrDenied
 	}
 	leaseGuard, err := acquireOwnedNativeLeaseGuard(paths.Root, document.TicketID)
@@ -475,7 +512,14 @@ func (service *Service) ReadNative(ctx context.Context, workspace string, input 
 		return bridge.Response{}, err
 	}
 	defer leaseGuard.Release()
-	read, err := secureNativeRead(root, document.WorkspaceID, input)
+	readRoot, readIdentity := root, document.WorkspaceID
+	if document.Input.Operation == bridge.WriteFiles {
+		if document.Edit == nil {
+			return bridge.Response{}, bridge.ErrDenied
+		}
+		readRoot, readIdentity = document.Edit.Root, document.Edit.RootIdentity
+	}
+	read, err := secureNativeRead(readRoot, readIdentity, input)
 	if err != nil {
 		return bridge.Response{}, err
 	}
@@ -667,7 +711,14 @@ func thawNativeContinuity(ctx context.Context, paths config.Paths, workspace str
 func sameNativeTicketIdentity(left, right nativeTicketDocument) bool {
 	return left.SchemaVersion == right.SchemaVersion && left.TicketID == right.TicketID && left.Workspace == right.Workspace &&
 		left.RunID == right.RunID && left.TaskID == right.TaskID && left.Input.ParentSessionID == right.Input.ParentSessionID &&
-		left.Input.ChildSessionID == right.Input.ChildSessionID
+		left.Input.ChildSessionID == right.Input.ChildSessionID && sameNativeEditIdentity(left.Edit, right.Edit)
+}
+
+func sameNativeEditIdentity(left, right *nativeEditWorkspace) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Root == right.Root && left.RootIdentity == right.RootIdentity && left.BaseRevision == right.BaseRevision
 }
 
 func nativeAgentFor(operation bridge.Operation) string {
@@ -675,7 +726,7 @@ func nativeAgentFor(operation bridge.Operation) string {
 	case bridge.ReviewChanges:
 		return "vgxness-reviewer"
 	case bridge.WriteFiles:
-		return ""
+		return "vgxness-implementer"
 	default:
 		return "vgxness-explorer"
 	}
@@ -1338,22 +1389,41 @@ func readNativeTicket(root, ticketID string) (nativeTicketDocument, error) {
 	if err != nil {
 		return nativeTicketDocument{}, err
 	}
-	file, err := os.Open(path)
+	data, err := readBoundedControlPlaneFile(path, nativeTicketLimit)
 	if err != nil {
 		return nativeTicketDocument{}, bridge.ErrDenied
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > nativeTicketLimit {
-		return nativeTicketDocument{}, bridge.ErrDenied
-	}
-	decoder := json.NewDecoder(io.LimitReader(file, nativeTicketLimit+1))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var document nativeTicketDocument
-	if decoder.Decode(&document) != nil || document.SchemaVersion != nativeTicketVersion || document.TicketID != ticketID {
+	if decoder.Decode(&document) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		document.SchemaVersion != nativeTicketVersion || document.TicketID != ticketID {
 		return nativeTicketDocument{}, bridge.ErrDenied
 	}
 	return document, nil
+}
+
+func readBoundedControlPlaneFile(path string, limit int64) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > limit {
+		return nil, bridge.ErrDenied
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, bridge.ErrDenied
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) || !opened.Mode().IsRegular() {
+		return nil, bridge.ErrDenied
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	after, statErr := os.Lstat(path)
+	if err != nil || statErr != nil || int64(len(data)) == 0 || int64(len(data)) > limit ||
+		after.Mode()&os.ModeSymlink != 0 || !os.SameFile(before, after) {
+		return nil, bridge.ErrDenied
+	}
+	return data, nil
 }
 
 func writeNativeTicket(root string, document nativeTicketDocument) error {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -10,20 +11,51 @@ import (
 )
 
 func runOrchestration(ctx context.Context, args []string, stdout, stderr io.Writer, runtime bridge.Runtime) int {
-	if len(args) == 0 || args[0] != "status" && args[0] != "resume" && args[0] != "cancel" && args[0] != "explain" {
-		fmt.Fprintln(stderr, "usage: vgxness orchestrate <status|resume|cancel|explain> --workspace PATH --id ID [--owner OWNER]")
+	if len(args) == 0 || args[0] != "list" && args[0] != "status" && args[0] != "resume" && args[0] != "cancel" && args[0] != "explain" {
+		fmt.Fprintln(stderr, "usage: vgxness orchestrate <list|status|resume|cancel|explain> [--workspace PATH] [--id ID] [--owner OWNER]")
 		return 2
 	}
 	command := args[0]
 	flags := flag.NewFlagSet("orchestrate "+command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var workspace, orchestrationID, ownerID string
+	var workspace, orchestrationID, ownerID, storageRoot string
+	var projectLocal bool
 	flags.StringVar(&workspace, "workspace", "", "absolute workspace")
 	flags.StringVar(&orchestrationID, "id", "", "orchestration identity")
 	flags.StringVar(&ownerID, "owner", "", "current owner identity")
-	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || workspace == "" || orchestrationID == "" || (command == "resume" || command == "cancel") && ownerID == "" {
+	flags.StringVar(&storageRoot, "storage-root", "", "storage root")
+	flags.BoolVar(&projectLocal, "project-local", false, "use project-local storage")
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 ||
+		command != "list" && (workspace == "" || orchestrationID == "" || storageRoot != "" || projectLocal) ||
+		command == "list" && (orchestrationID != "" || ownerID != "") ||
+		(command == "resume" || command == "cancel") && ownerID == "" {
 		fmt.Fprintln(stderr, "invalid orchestration arguments")
 		return 2
+	}
+	if command == "list" {
+		operations, ok := runtime.(bridge.OperationsRuntime)
+		if !ok {
+			fmt.Fprintln(stderr, "unavailable: operational runtime is not configured")
+			return 1
+		}
+		workspace, err := operationalWorkspace(workspace)
+		if err != nil {
+			fmt.Fprintln(stderr, "invalid: workspace is unavailable")
+			return 2
+		}
+		inventory, err := operations.OperationalInventory(ctx, workspace, bridge.OperationalInventoryRequest{
+			StorageRoot: storageRoot, ProjectLocal: projectLocal,
+		})
+		if err != nil {
+			failure := bridge.ErrorResponse(err)
+			fmt.Fprintf(stderr, "%s: %s\n", failure.Error.Code, failure.Error.Message)
+			return 1
+		}
+		if err := json.NewEncoder(stdout).Encode(inventory.Orchestrations); err != nil {
+			fmt.Fprintln(stderr, "operational: orchestration output failed")
+			return 1
+		}
+		return 0
 	}
 	orchestration, ok := runtime.(bridge.OrchestrationRuntime)
 	if !ok {

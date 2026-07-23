@@ -101,7 +101,7 @@ func TestPlanRequestSchedulesReviewAfterEveryEvidenceTask(t *testing.T) {
 	}
 }
 
-func TestPlanRequestSplitsCapacityAndRejectsCyclesOrWrites(t *testing.T) {
+func TestPlanRequestSplitsCapacityRejectsCyclesAndSerializesWrites(t *testing.T) {
 	tasks := []Task{readTask("task-a"), readTask("task-b"), readTask("task-c"), readTask("task-d"), readTask("task-e")}
 	plan, err := PlanRequest(context.Background(), request(tasks...))
 	if err != nil {
@@ -115,8 +115,11 @@ func TestPlanRequestSplitsCapacityAndRejectsCyclesOrWrites(t *testing.T) {
 	}
 	write := readTask("task-write")
 	write.Capability, write.Operation = CapabilityImplement, OperationWriteFiles
-	if _, err := PlanRequest(context.Background(), request(write)); !errors.Is(err, ErrUnsupportedTask) {
-		t.Fatalf("write accepted before native edit broker: %v", err)
+	secondWrite := write
+	secondWrite.TaskID = "task-write-two"
+	writePlan, err := PlanRequest(context.Background(), request(write, secondWrite))
+	if err != nil || writePlan.Decision != "sequential" || len(writePlan.Waves) != 2 {
+		t.Fatalf("isolated writes were not serialized: %#v err=%v", writePlan, err)
 	}
 }
 

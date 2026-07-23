@@ -9,7 +9,7 @@ This plan turns the existing one-dispatch/one-child OpenCode bridge into an adap
 - VGXNESS, not the planning model, computes dependency waves and has final authority over agent eligibility, permissions, concurrency, and acceptance.
 - No nested `opencode run`, detached worker, alternate runtime, self-delegation, or subagent-to-subagent delegation is allowed.
 - V1 parallelism is limited to independent, isolated, read-only work and at most four active native children per workspace.
-- Continuity, review, and mutation remain exclusive. Parallel mutation is deferred until isolated worktrees and a ticket-authenticated edit broker exist.
+- Continuity, review, and mutation remain exclusive. Isolated worktrees and a ticket-authenticated edit broker are implemented, but parallel mutation remains deliberately disabled until merge coordination and conflict policy are explicit.
 - Existing `vgxness_dispatch` remains a compatible single-work-unit primitive while `vgxness_orchestrate` is introduced above it.
 
 ## Target lifecycle
@@ -36,7 +36,7 @@ user goal
 
 - Add `delegation.request`, `delegation.plan`, `delegationTask`, `executionWave`, and `delegation.join` contracts.
 - Accept only a high-level bridge orchestration goal; agent choice and parallelism are not tool arguments.
-- Validate advisory task decompositions and reject duplicate/missing dependencies, cycles, unsupported writes, incomplete review dependencies, and unsafe capability/operation combinations.
+- Validate advisory task decompositions and reject duplicate/missing dependencies, cycles, incomplete review dependencies, and unsafe capability/operation combinations. Only `implement/write-files` may request mutation.
 - Compute stable content-bound plan IDs and request digests.
 - Schedule at most four independent isolated reads per wave.
 - Construct a caller-owned factory from the exact authority dependency; never select an authority through a caller-supplied global identity. One factory singleflights concurrent opens for the same schedule/owner and locally fences its superseded handle, while the durable authority—not process memory—owns cross-process safety. The composition root bounds factory lifetime to one manager execution.
@@ -77,6 +77,19 @@ user goal
 
 **Exit evidence:** crash-point integration tests plus a real OpenCode smoke proving two independent reads overlap and a dependent task waits.
 
+### Slice 3b — Isolated native edit broker
+
+**Status: implemented for exclusive text replacement/creation and durable worktree evidence. Explicit review, merge, cleanup, and parallel mutation remain rollout work.**
+
+- Require a clean canonical Git repository root and bind every write ticket to the current immutable `HEAD`.
+- Create a detached sibling worktree without checkout hooks or filter execution; never place a CodeGraph-dependent worktree in a generic temporary directory or reuse another checkout's index.
+- Give the implementer only ticket-bound read/edit brokers. Existing files require an expected content digest; creation is explicit; sensitive paths, aliases, submodules, deletion, rename, and permission changes fail closed.
+- Persist every edit receipt and reject completion if Git or filesystem state contains any change not explained by those receipts.
+- Publish the worktree, base revision, final path/content receipts, and manifest digest through native completion and the durable orchestration projection.
+- Keep the source checkout unchanged and retain the isolated worktree for explicit validation, Delivery Authority review, integration, or removal.
+
+**Exit evidence:** focused bridge/control-plane/orchestration tests cover stale digests, source isolation, direct mutation rejection, alias rejection, and authoritative artifact propagation.
+
 ### Slice 4 — Delivery Authority v1
 
 **Status: implemented for the product-native receipt core and CLI gates. Automatic hook/branch-protection wiring remains rollout work.**
@@ -110,7 +123,7 @@ The delivered `vgxness delivery issue|status|validate|invalidate` boundary build
 | A task consumes another task's result | Place it in a later wave. |
 | A task uses continuity | Run exclusively. |
 | Review depends on implementation or evidence tasks | Run review in a later exclusive wave. |
-| Any task mutates state in V1 | Reject as unsupported until the edit broker exists. |
+| A task mutates files | Run one exclusive `implement/write-files` task in its ticket-bound worktree; never merge silently. |
 | Dependencies cycle, identity is reused, or policy/capacity is unclear | Fail closed with the smallest safe next action. |
 
 ## Definition of done
