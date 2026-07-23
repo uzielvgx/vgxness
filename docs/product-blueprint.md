@@ -26,7 +26,7 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 
 **Contracts-only:** Independently authored Draft 2020-12 schemas for future SDD, routing, artifact, and continuity paths define records that the current bounded runtime does not yet exercise. Schemas used by the current control plane are validated at runtime.
 
-**Implemented/Partial:** Contract-validated delegation plans, deterministic dependency waves, native Navigator/task sessions, a file-backed logical-slot and owner/epoch authority, prerequisite-gated prepared admission, fail-closed dispatch classification, checkpoint takeover, persisted bounded dependency results, and authority-accepted joins now power manager-facing `vgxness_orchestrate`. Full SDD phase/artifact workflows, Delivery Authority, richer autonomy UX, keyboard TUI, additional adapters, and advanced semantic-memory lifecycle remain planned.
+**Implemented/Partial:** Contract-validated delegation plans, deterministic dependency waves, native Navigator/task sessions, a file-backed logical-slot and owner/epoch authority, prerequisite-gated prepared admission, fail-closed dispatch classification, checkpoint takeover, persisted bounded dependency results, authority-accepted joins, and content-bound Delivery Authority receipts now power the bounded product path. Full SDD phase/artifact workflows, automatic delivery wiring, richer autonomy UX, keyboard TUI, additional adapters, and advanced semantic-memory lifecycle remain planned.
 
 ### Document and translation contract
 
@@ -41,7 +41,7 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 | Status | Scope |
 | --- | --- |
 | **Implemented** | Go binary/composition; launcher and self-install/update/rollback; storage and owned SQLite/FTS5 memory; runtime contract validation; Chronicle events, immutable crash-atomic snapshot publication, task-state and terminal recovery; Registry/Gatekeeper; prompt/provider runner; bounded coordinator/control plane; OpenCode adapter/bridge; guided setup; hermetic clean-checkout setup/dispatch E2E; tests and Go CI. |
-| **Partial** | Navigator's manager-facing native planner/wave/join runtime is bounded to supported operations and OpenCode; Chronicle's broader plan/checkpoint/artifact continuity, Delivery Authority, strict untracked-content review handling, and native Windows runtime/distribution smoke remain incomplete. |
+| **Partial** | Navigator's manager-facing native planner/wave/join runtime is bounded to supported operations and OpenCode; Delivery Authority has explicit receipt/gate CLI but no automatic delivery integration; Chronicle's broader plan/checkpoint/artifact continuity and native Windows runtime/distribution smoke remain incomplete. |
 | **Contracts-only** | Draft 2020-12 shapes and semantic rules for future SDD, routing, artifacts, and continuity paths not yet exercised by the bounded runtime. |
 | **Planned** | Navigator routing, complete SDD workflows and artifact backends, richer autonomy/approval UX, keyboard-first TUI, optional adapters, native Windows validation, and advanced semantic retrieval/lifecycle. |
 | **Deferred** | Additional runtime adapters, optional local MCP exposure, broader external MCP clients, richer semantic retrieval, and graphical product surfaces. |
@@ -321,7 +321,7 @@ Navigator may start concurrent work only when safe. Every background task is man
 
 ### Delivery horizons
 
-The original dependency sequence—**contract validation → Chronicle events → snapshots/recovery → task state machine → Gatekeeper/Registry → providers → bounded coordination**—is implemented for the narrow OpenCode control-plane path. The next product sequence is **adaptive native delegation → content-bound Delivery Authority → broader checkpoint/artifact continuity**. Native Windows runtime/distribution smoke is deferred and does not block this sequence.
+The dependency sequence through **adaptive native delegation → content-bound Delivery Authority receipts** is implemented for the bounded OpenCode control-plane path. The next product sequence is **automatic delivery integration → broader checkpoint/artifact continuity**. Native Windows runtime/distribution smoke is deferred and does not block this sequence.
 
 | Horizon | Status | Outcome |
 | --- | --- | --- |
@@ -366,7 +366,7 @@ This is a review map, not a substitute for the definitions above.
 | Skills, exact resolution, approvals, reviews, and delivery | Section 11 | Exact bounded resolution/approval/review evidence is **Partial**; full skill lifecycle and delivery automation remain **Planned**. |
 | Failure, cancellation, recovery, and background supervision | Sections 3, 9, and 11 | Bounded provider cancellation, recovery projection, and read-only background constraints are **Implemented/Partial**; full Navigator supervision remains **Planned**. |
 | Draft 2020-12 schemas and validation limitation | Sections 1-2 and [`schemas/README.md`](schemas/README.md) | Current runtime paths are validated; future-only shapes are **Contracts-only** and full release validation is not claimed. |
-| Delivered runtime foundation | Sections 1-2 and this map | Binary, storage, memory, Chronicle, Registry/Gatekeeper, provider runner, bounded coordinator, OpenCode bridge/setup, tests, and CI are **Implemented** within the stated limits; Navigator's scheduler and executable in-memory authority protocol are a **Partial** foundation pending the production durable backend and native child-session routing. |
+| Delivered runtime foundation | Sections 1-2 and this map | Binary, storage, memory, Chronicle, Registry/Gatekeeper, provider runner, bounded coordinator, native Navigator/task sessions, durable owner/epoch authority, OpenCode bridge/setup, content-bound Delivery Authority receipts, tests, and CI are **Implemented** within the stated limits; broader SDD/Chronicle continuity and automatic delivery integration remain **Partial/Planned**. |
 
 ## Supporting documents
 

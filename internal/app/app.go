@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"io"
+	"os"
 
 	"github.com/vgxness/vgxness/internal/cli"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/controlplane"
+	"github.com/vgxness/vgxness/internal/delivery"
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -23,7 +25,19 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	setupRuntime := setupflow.New(installer, integrationRuntime, func(executable string) (integration.Runtime, error) {
 		return opencode.NewManagedIntegration(executable)
 	}, controlPlane)
-	return cli.RunProductRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, controlPlane, installer, setupRuntime)
+	deliveryRuntime, err := delivery.New(mustWorkspace())
+	if err != nil {
+		return 1
+	}
+	return cli.RunProductRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, controlPlane, installer, setupRuntime, deliveryRuntime)
+}
+
+func mustWorkspace() string {
+	workspace, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return workspace
 }
 
 type memoryRuntime struct{ producer string }

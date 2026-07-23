@@ -10,6 +10,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/config"
+	"github.com/vgxness/vgxness/internal/delivery"
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -39,10 +40,13 @@ func RunControlPlaneRuntime(ctx context.Context, args []string, stdin io.Reader,
 }
 
 func RunAllRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime) int {
-	return RunProductRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, controlPlane, installer, nil)
+	return RunProductRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, controlPlane, installer, nil, nil)
 }
 
-func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime) int {
+func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, deliveries delivery.Runtime) int {
+	if len(args) > 0 && args[0] == "delivery" {
+		return runDelivery(ctx, args[1:], stdout, stderr, deliveries)
+	}
 	if len(args) > 0 && args[0] == "memory" {
 		return runMemory(ctx, args[1:], stdin, stdout, stderr, memories)
 	}
@@ -62,7 +66,7 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|orchestrate|self|setup>")
+		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|orchestrate|self|setup|delivery>")
 		return 2
 	}
 	command := args[0]
@@ -154,6 +158,20 @@ func failure(err error) (int, string) {
 		return 1, "unavailable: setup prerequisites are not ready"
 	case errors.Is(err, setupflow.ErrVerification):
 		return 1, "operational: setup verification failed"
+	case errors.Is(err, delivery.ErrInvalid):
+		return 2, "invalid: delivery request is invalid"
+	case errors.Is(err, delivery.ErrNotFound):
+		return 1, "not_found: no delivery receipt exists"
+	case errors.Is(err, delivery.ErrInvalidated):
+		return 1, "invalidated: delivery receipt no longer matches its target"
+	case errors.Is(err, delivery.ErrSensitive):
+		return 1, "denied: delivery target contains a sensitive path"
+	case errors.Is(err, delivery.ErrUnbound):
+		return 1, "denied: delivery target contains unbound submodule changes"
+	case errors.Is(err, delivery.ErrConflict):
+		return 1, "conflict: delivery state conflicts with immutable evidence"
+	case errors.Is(err, delivery.ErrCorrupt):
+		return 1, "corrupt: delivery state failed verification"
 	case errors.Is(err, config.ErrInvalid):
 		return 2, "invalid: storage configuration is invalid"
 	default:

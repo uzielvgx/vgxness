@@ -5,9 +5,9 @@ This document owns Go package, interface, dependency, and testing boundaries. Th
 | Status | Current-candidate evidence and boundary |
 | --- | --- |
 | **Implemented** | Binary/application wiring; versioned self-install/update/rollback; storage and SQLite/FTS5 memory; runtime contract validation; Chronicle JSONL events, crash-atomic snapshot publication, terminal recovery, and task-state derivation; Registry, Gatekeeper, prompt composition, provider runner, bounded coordinator, OpenCode adapter/bridge, guided setup, hermetic setup/dispatch E2E, tests, and Go CI. |
-| **Partial** | Chronicle recovery backs explicit cross-process `start`/`continue`/`finish` continuity with capsules and semantic-memory summaries. Navigator now has validated delegation request/plan/join contracts, a deterministic dependency-wave planner, a production file-backed owner/epoch authority, a native planning child, manager-facing `vgxness_orchestrate`, persisted plans/results, settled parallel native sessions, authoritative Join, and `status`/`resume`/`cancel`/`explain`. Chronicle plan events, complete SDD checkpoint/artifact lifecycle, and Delivery Authority remain planned. |
+| **Partial** | Chronicle recovery backs explicit cross-process `start`/`continue`/`finish` continuity with capsules and semantic-memory summaries. Navigator now has validated delegation request/plan/join contracts, deterministic waves, production file-backed owner/epoch authority, native planning/task children, authoritative Join, and lifecycle controls. Delivery Authority now provides content-bound receipts and four validating CLI gates. Chronicle plan events, complete SDD checkpoint/artifact lifecycle, and automatic delivery-gate rollout remain planned. |
 | **Contracts-only** | Schemas for broader SDD, routing, artifact, and continuity behaviors that are not exercised by the delivered bounded runtime path. |
-| **Planned** | Runtime-connected Navigator routing, full SDD phase workflows and artifact backends, Delivery Authority gates, richer autonomy/approval UX, the keyboard TUI, optional adapters, and advanced semantic-memory lifecycle operations. |
+| **Planned** | Full SDD phase workflows and artifact backends, automatic Git/branch-protection delivery wiring, richer autonomy/approval UX, the keyboard TUI, optional adapters, and advanced semantic-memory lifecycle operations. |
 
 VGXNESS is designed as a small, explicit Go control plane for adaptive agent orchestration. It will ship as a globally installed system on the user's machine. Go fits because the system needs a dependable local binary, readable storage, auditable workflow state, and testable package boundaries more than a framework-heavy stack.
 
@@ -15,7 +15,7 @@ OpenCode is the first preferred runtime adapter. At run start, a provider-neutra
 
 Capability names such as Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger belong to the canonical product taxonomy. Names such as explore, design, apply, and verify describe SDD phase-agent operating modes that use those capabilities; they are not additional product capabilities.
 
-The implemented control plane is deliberately narrower than the target product. It executes a bounded OpenCode path with exact Registry identities, Gatekeeper policy, contract-validated packets, crash-atomic Chronicle snapshot publication, finite coordination, and a manager-facing native Navigator/wave runtime. Full SDD workflows, Delivery Authority, richer TUI, and additional providers are not yet delivered.
+The implemented control plane is deliberately narrower than the target product. It executes a bounded OpenCode path with exact Registry identities, Gatekeeper policy, contract-validated packets, crash-atomic Chronicle snapshot publication, finite coordination, a manager-facing native Navigator/wave runtime, and product-native content-bound delivery receipts. Full SDD workflows, automatic delivery integration, richer TUI, and additional providers are not yet delivered.
 
 ## Quick path
 
@@ -24,7 +24,7 @@ The implemented control plane is deliberately narrower than the target product. 
 3. **Implemented:** Validate runtime contracts; append and verify Chronicle events; write/read snapshots; derive legal task state; reconstruct bounded recovery state.
 4. **Implemented:** Resolve exact Registry identities, evaluate Gatekeeper policy, compose frozen prompts, execute eligible providers, and coordinate finite foreground/background work.
 5. **Implemented:** Install and operate the persistent OpenCode manager, strict bridge, runtime adapter, and six-step confirmation-gated setup workflow.
-6. **Partial/Planned:** Harden the delivered native Navigator/adaptive wave runtime, add content-bound Delivery Authority, broaden Chronicle plan/artifact recovery, then add the keyboard TUI and optional adapters. Native Windows runtime/distribution smoke is deferred.
+6. **Partial/Planned:** Harden the delivered native Navigator/adaptive wave runtime and Delivery Authority, wire gates into supported delivery workflows, broaden Chronicle plan/artifact recovery, then add the keyboard TUI and optional adapters. Native Windows runtime/distribution smoke is deferred.
 
 ## Why Go fits VGXNESS
 
@@ -70,6 +70,7 @@ internal/providers/opencode
 internal/navigator
 internal/orchestrator
 internal/controlplane
+internal/delivery
 internal/integration
 internal/sensitivepaths
 internal/setup
@@ -91,7 +92,8 @@ internal/tui
 | `internal/prompts`, `internal/providers` | **Implemented** | Compose frozen prompt contracts, select an exact eligible provider, execute it, validate structured results, and emit bounded receipts. |
 | `internal/providers/opencode` | **Implemented** | Execute the supported OpenCode provider with ephemeral fail-closed permissions, cancellation, bounded output, and strict review evidence. |
 | `internal/orchestrator`, `internal/controlplane` | **Implemented/Partial** | Coordinate finite foreground/background work; persist adaptive plans, authority leases, prepared dispatches, terminals, dependency results, and joins; expose bounded lifecycle operations. Full SDD routing and artifact projection remain planned. |
-| `internal/navigator` | **Implemented/Partial** | Validate advisory task decomposition, reject unsafe graphs, compute content-bound single/sequential/parallel decisions, and produce deterministic waves. Native planning-session execution and runtime routing are planned. |
+| `internal/navigator` | **Implemented/Partial** | Validate advisory task decomposition, reject unsafe graphs, compute content-bound single/sequential/parallel decisions, and produce deterministic waves consumed by native planning/task sessions. Full SDD routing remains planned. |
+| `internal/delivery` | **Implemented/Partial** | Build representation-independent Git target snapshots; bind context, evidence, and review identities; persist immutable receipts; and validate or explicitly invalidate the same receipt across four gates. Automatic Git/hosting integration remains planned. |
 | `internal/setup` | **Implemented** | Compose self-installation, stable-path OpenCode projection, live verification, bounded rollback, and a complete explanatory plan without owning provider or installer policy. |
 | `internal/tui` | **Planned** | Render the implemented setup service as a richer keyboard-first interface without moving business logic into the UI. |
 
@@ -124,6 +126,7 @@ Chronicle's target operational truth remains readable local files:
 - `logs/<run-id>.jsonl` for append-only operational events.
 - `artifacts/<change-id>/...` for generated SDD or workflow artifacts when file storage is selected.
 - `registry/skills.json` and `registry/agents.json` for generated registries.
+- `delivery/receipts/<receipt-id>.json` for immutable content-bound review receipts and `delivery/current.json` for the atomic active/invalidated pointer.
 
 **Implemented:** Chronicle validates JSONL append/readback and task-state replay, writes active snapshots under immutable SHA-256 names, commits an active transition with one atomic pointer replacement, and stages a terminal snapshot before atomically removing the pointer. Recovery validates the pointer's digest and completes an interrupted terminal removal. **Partial:** broader checkpoint/artifact continuity remains outside the bounded runtime. **Implemented:** SQLite/FTS5 stores owned semantic records with two migrations, deterministic filters, and lexical retrieval. Semantic memory does not replace Chronicle operational truth.
 

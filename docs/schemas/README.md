@@ -16,6 +16,9 @@ These Draft 2020-12 schemas define runtime-neutral orchestration, execution, reg
 | Run event | `run-event.schema.json` | `https://vgxness.dev/schemas/run-event.schema.json` | One append-only JSONL event object. |
 | Skills registry | `skills.schema.json` | `https://vgxness.dev/schemas/skills.schema.json` | Exact, versioned, provenanced skill entries and scopes. |
 | Agents registry | `agents.schema.json` | `https://vgxness.dev/schemas/agents.schema.json` | Provider, capability, execution, permission, skill, and provenance contracts. |
+| Delivery manifest | `delivery-manifest.schema.json` | `https://vgxness.dev/schemas/delivery-manifest.schema.json` | Exact policy/prompt/registry/provider/model identities, focused check evidence, and bounded review verdict. |
+| Delivery receipt | `delivery-receipt.schema.json` | `https://vgxness.dev/schemas/delivery-receipt.schema.json` | Immutable content-bound target, manifest bindings, and issued review receipt. |
+| Current delivery receipt | `delivery-current.schema.json` | `https://vgxness.dev/schemas/delivery-current.schema.json` | Atomic active/invalidated receipt pointer and receipt-file digest. |
 
 Storage schemas apply equally under project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/` roots.
 
@@ -59,6 +62,8 @@ Validate at four boundaries:
 2. **Before delegation** — validate selection, routing, preflight, question/answer correlation, packet shape, exact skills, permissions, and loop budget.
 3. **Before append/write** — validate the event or snapshot before mutating durable state; read the write back and compare key IDs.
 4. **On recovery/readback** — validate each JSONL object independently, then compare snapshot, current projection, events, artifacts, results, and capsules.
+
+Delivery gates additionally recompute the candidate Git tree and every manifest binding. A mismatch atomically invalidates the current receipt; validation never issues a replacement receipt or starts another review.
 
 Schema failure returns `contract.invalid` with the schema URI, failing JSON Pointer, message, and recoverability. It performs no delegation or state advance and preserves the last valid state.
 
