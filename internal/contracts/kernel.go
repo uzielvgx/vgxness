@@ -14,16 +14,19 @@ import (
 )
 
 const (
-	schemaBaseURI       = "https://vgxness.dev/schemas/"
-	CommonSchemaURI     = schemaBaseURI + "common.schema.json"
-	OrchestrationURI    = schemaBaseURI + "orchestration.schema.json"
-	ExecutionSchemaURI  = schemaBaseURI + "execution.schema.json"
-	CurrentRunSchemaURI = schemaBaseURI + "current-run.schema.json"
-	RunSchemaURI        = schemaBaseURI + "run.schema.json"
-	RunEventSchemaURI   = schemaBaseURI + "run-event.schema.json"
-	SkillsSchemaURI     = schemaBaseURI + "skills.schema.json"
-	AgentsSchemaURI     = schemaBaseURI + "agents.schema.json"
-	PromptsSchemaURI    = schemaBaseURI + "prompts.schema.json"
+	schemaBaseURI             = "https://vgxness.dev/schemas/"
+	CommonSchemaURI           = schemaBaseURI + "common.schema.json"
+	OrchestrationURI          = schemaBaseURI + "orchestration.schema.json"
+	ExecutionSchemaURI        = schemaBaseURI + "execution.schema.json"
+	CurrentRunSchemaURI       = schemaBaseURI + "current-run.schema.json"
+	RunSchemaURI              = schemaBaseURI + "run.schema.json"
+	RunEventSchemaURI         = schemaBaseURI + "run-event.schema.json"
+	SkillsSchemaURI           = schemaBaseURI + "skills.schema.json"
+	AgentsSchemaURI           = schemaBaseURI + "agents.schema.json"
+	PromptsSchemaURI          = schemaBaseURI + "prompts.schema.json"
+	DeliveryManifestSchemaURI = schemaBaseURI + "delivery-manifest.schema.json"
+	DeliveryReceiptSchemaURI  = schemaBaseURI + "delivery-receipt.schema.json"
+	DeliveryCurrentSchemaURI  = schemaBaseURI + "delivery-current.schema.json"
 )
 
 var (
@@ -39,6 +42,9 @@ var (
 		"agents.schema.json",
 		"bridge.schema.json",
 		"prompts.schema.json",
+		"delivery-manifest.schema.json",
+		"delivery-receipt.schema.json",
+		"delivery-current.schema.json",
 	}
 	defaultKernel = sync.OnceValues(NewKernel)
 )

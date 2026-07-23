@@ -79,7 +79,7 @@ user goal
 
 ### Slice 4 — Delivery Authority v1
 
-**Status: planned.**
+**Status: implemented for the product-native receipt core and CLI gates. Automatic hook/branch-protection wiring remains rollout work.**
 
 - Add `TargetSnapshot` for base/candidate identity, changed paths, policy, prompt, Registry, provider, and model identities.
 - Add `EvidenceManifest` for focused commands/checks, exit status, output digest, runtime/toolchain versions, and timestamps.
@@ -89,9 +89,11 @@ user goal
 
 **Exit evidence:** mutation of every bound identity invalidates the receipt; unchanged evidence remains reusable across gates.
 
+The delivered `vgxness delivery issue|status|validate|invalidate` boundary builds the candidate from a temporary Git index/object store, so an unchanged tree keeps the same identity while moving from worktree to index to commit. Receipt files are immutable and SHA-256 addressed; the atomic current pointer records active or explicitly invalidated state. Sensitive-path changes, failed checks, rejected reviews, unresolved critical/blocker findings, and risk/lens mismatches fail closed. `validate` accepts only the four lifecycle gates above and never starts or renews a review.
+
 ### Slice 5 — Product hardening and rollout
 
-**Status: partial. The lifecycle CLI and generated-runtime smoke are implemented; incident bundles, broader crash matrices, and release rollout remain.**
+**Status: partial. The orchestration lifecycle CLI, generated-runtime smoke, and Delivery Authority inspection/gate CLI are implemented; incident bundles, automatic gate installation, broader crash matrices, and release rollout remain.**
 
 - Add `vgxness orchestrate status|resume|cancel|explain` and review/gate inspection commands.
 - Export a sanitized incident bundle with plan, timeline, identities, failures, and digests but no secret values or unrestricted prompts.
