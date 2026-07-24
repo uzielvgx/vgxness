@@ -93,13 +93,17 @@ func TestAdaptiveOrchestrationPersistsParallelNativeWaveAndJoin(t *testing.T) {
 		if completeErr != nil || !completed.OK {
 			t.Fatalf("complete task=%s response=%#v err=%v", binding.TaskID, completed, completeErr)
 		}
+		durable, readErr := readNativeTicket(storage, binding.TicketID)
+		if readErr != nil || durable.CompletionMessageID != messageID {
+			t.Fatalf("durable completion message=%q err=%v", durable.CompletionMessageID, readErr)
+		}
 		if recovered, recoverErr := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID}); recoverErr != nil || recovered.Status != "failed" {
 			t.Fatalf("native completion was not recovered: %#v err=%v", recovered, recoverErr)
 		}
 		terminal, terminalErr := service.RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
 			ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
 			TaskID: binding.TaskID, TicketID: binding.TicketID, ChildSessionID: binding.ChildSessionID,
-			Status: "completed", MessageID: "message-" + binding.TicketID, ResultID: "result-" + binding.TicketID, Result: result,
+			Status: "completed", MessageID: messageID, ResultID: "result-" + binding.TicketID, Result: result,
 		})
 		if terminalErr != nil || terminal.Orchestration == nil {
 			t.Fatalf("terminal=%#v err=%v", terminal, terminalErr)
@@ -331,7 +335,7 @@ func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsA
 	completedTerminal, err := reopen().RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
 		TaskID: completedBinding.TaskID, TicketID: completedBinding.TicketID, ChildSessionID: completedBinding.ChildSessionID,
-		Status: "completed", MessageID: "message-" + completedBinding.TicketID,
+		Status: "completed", MessageID: "msg_completed",
 		ResultID: "result-" + completedBinding.TicketID, Result: result,
 	})
 	if err != nil || completedTerminal.Orchestration == nil || completedTerminal.Status != "failed" {

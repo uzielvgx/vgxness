@@ -938,7 +938,11 @@ func (service *Service) reconcileNativeTerminals(ctx context.Context, storageRoo
 		}
 		switch native.State {
 		case "completed":
-			outcome.Status, outcome.MessageID, outcome.ResultID, outcome.Result = orchestrator.TaskCompleted, "message-"+item.TicketID, "result-"+item.TicketID, append(json.RawMessage(nil), native.Response.Result...)
+			messageID := native.CompletionMessageID
+			if messageID == "" {
+				messageID = "message-" + item.TicketID
+			}
+			outcome.Status, outcome.MessageID, outcome.ResultID, outcome.Result = orchestrator.TaskCompleted, messageID, "result-"+item.TicketID, append(json.RawMessage(nil), native.Response.Result...)
 		case "failed":
 			outcome.Status, outcome.Failure = orchestrator.TaskFailed, "native ticket completed with failure before orchestration acknowledgement"
 		default:

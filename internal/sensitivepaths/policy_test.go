@@ -52,7 +52,7 @@ func TestContainsSensitiveReferenceNormalizesToolOutput(t *testing.T) {
 			t.Fatalf("output did not expose sensitive path %q", output)
 		}
 	}
-	for _, output := range []string{"internal/app.go:12", "/workspace/docs/secrets-guide.md", "credentials parser"} {
+	for _, output := range []string{"internal/app.go:12", "/workspace/docs/secrets-guide.md", "credentials parser", "//"} {
 		if ContainsSensitiveReference(output, root) {
 			t.Fatalf("safe output was rejected %q", output)
 		}

@@ -43,24 +43,25 @@ const (
 )
 
 type nativeTicketDocument struct {
-	SchemaVersion string                          `json:"schemaVersion"`
-	TicketID      string                          `json:"ticketId"`
-	Workspace     string                          `json:"workspace"`
-	WorkspaceID   string                          `json:"workspaceIdentity"`
-	Input         bridge.DispatchRequest          `json:"input"`
-	RunID         string                          `json:"runId"`
-	TaskID        string                          `json:"taskId"`
-	Deadline      string                          `json:"deadline"`
-	State         string                          `json:"state"`
-	Coordinator   orchestrator.NativeTicket       `json:"coordinator"`
-	Continuity    *nativeContinuityState          `json:"continuity,omitempty"`
-	Memory        *nativeMemoryState              `json:"memory,omitempty"`
-	CompletionSHA string                          `json:"completionSha256,omitempty"`
-	Response      *bridge.Response                `json:"response,omitempty"`
-	CodeGraph     []bridge.NativeCodeGraphReceipt `json:"codegraph,omitempty"`
-	Edit          *nativeEditWorkspace            `json:"editWorkspace,omitempty"`
-	Edits         []bridge.NativeEditResult       `json:"edits,omitempty"`
-	EditLifecycle *nativeEditLifecycleDocument    `json:"editLifecycle,omitempty"`
+	SchemaVersion       string                          `json:"schemaVersion"`
+	TicketID            string                          `json:"ticketId"`
+	Workspace           string                          `json:"workspace"`
+	WorkspaceID         string                          `json:"workspaceIdentity"`
+	Input               bridge.DispatchRequest          `json:"input"`
+	RunID               string                          `json:"runId"`
+	TaskID              string                          `json:"taskId"`
+	Deadline            string                          `json:"deadline"`
+	State               string                          `json:"state"`
+	Coordinator         orchestrator.NativeTicket       `json:"coordinator"`
+	Continuity          *nativeContinuityState          `json:"continuity,omitempty"`
+	Memory              *nativeMemoryState              `json:"memory,omitempty"`
+	CompletionSHA       string                          `json:"completionSha256,omitempty"`
+	CompletionMessageID string                          `json:"completionMessageId,omitempty"`
+	Response            *bridge.Response                `json:"response,omitempty"`
+	CodeGraph           []bridge.NativeCodeGraphReceipt `json:"codegraph,omitempty"`
+	Edit                *nativeEditWorkspace            `json:"editWorkspace,omitempty"`
+	Edits               []bridge.NativeEditResult       `json:"edits,omitempty"`
+	EditLifecycle       *nativeEditLifecycleDocument    `json:"editLifecycle,omitempty"`
 }
 
 type nativeEditWorkspace struct {
@@ -355,7 +356,7 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 			MemoryRefs: continuityResult.memoryRefs, Status: string(receipt.Status),
 			EditArtifact: editArtifact,
 		}
-		document.State, document.CompletionSHA, document.Response = "failed", digest, &response
+		document.State, document.CompletionSHA, document.CompletionMessageID, document.Response = "failed", digest, input.MessageID, &response
 		if persistErr := writeNativeTicket(paths.Root, document); persistErr != nil {
 			return bridge.Response{}, fmt.Errorf("%w: persist rejected native completion", bridge.ErrExecution)
 		}
@@ -391,7 +392,7 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 			StartedAt: providerReceipt.StartedAt.UTC().Format(time.RFC3339Nano), FinishedAt: providerReceipt.FinishedAt.UTC().Format(time.RFC3339Nano), EventCount: len(receipt.Events) + 1,
 		},
 	}
-	document.State, document.CompletionSHA, document.Response = "completed", digest, &response
+	document.State, document.CompletionSHA, document.CompletionMessageID, document.Response = "completed", digest, input.MessageID, &response
 	if err := writeNativeTicket(paths.Root, document); err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: persist native completion", bridge.ErrExecution)
 	}

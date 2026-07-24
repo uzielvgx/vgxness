@@ -139,7 +139,7 @@ func (adapter *Adapter) Query(ctx context.Context, workspace string, request Req
 		return Result{}, ErrExecution
 	}
 	content := strings.TrimSpace(string(execution.stdout))
-	if content == "" || format == "json" && !json.Valid([]byte(content)) || sensitivepaths.ContainsSensitiveReference(content, root) {
+	if content == "" || format == "json" && !json.Valid([]byte(content)) || containsSensitiveEvidence(request, content, root) {
 		return Result{}, ErrExecution
 	}
 	digest := sha256.Sum256([]byte(content))
@@ -148,6 +148,38 @@ func (adapter *Adapter) Query(ctx context.Context, workspace string, request Req
 		OutputSHA256: "sha256-" + hex.EncodeToString(digest[:]),
 		StartedAt:    startedAt, FinishedAt: finishedAt,
 	}, nil
+}
+
+func containsSensitiveEvidence(request Request, content, root string) bool {
+	if request.Operation != Explore {
+		return sensitivepaths.ContainsSensitiveReference(content, root)
+	}
+	if sensitivepaths.ContainsSensitiveReference(request.Query, root) {
+		return true
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if codeGraphSourceLine(line) {
+			continue
+		}
+		if sensitivepaths.ContainsSensitiveReference(line, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func codeGraphSourceLine(line string) bool {
+	line = strings.TrimLeft(line, " ")
+	tab := strings.IndexByte(line, '\t')
+	if tab <= 0 {
+		return false
+	}
+	for _, character := range line[:tab] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func commandArguments(root string, request Request) ([]string, string, error) {

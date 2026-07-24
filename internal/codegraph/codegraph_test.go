@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,5 +105,46 @@ func TestAdapterRejectsUnavailableUnsafeAndInvalidEvidence(t *testing.T) {
 	}
 	if executor.args != nil {
 		t.Fatalf("cancelled query reached executor: %q", executor.args)
+	}
+}
+
+func TestAdapterAllowsSafePathsInsideExploreSourceLines(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".codegraph"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeExecutor{result: commandResult{stdout: []byte(
+		"**`internal/example.go`**\n\n" +
+			"```go\n" +
+			"12\t// The fixture uses safe absolute paths.\n" +
+			"13\tpaths := []string{\"/artifact\", \"/tmp/bin\", \"/workspace\"}\n" +
+			"14\tname := \".env\"\n" +
+			"```\n",
+	)}}
+	adapter, err := newAdapter("codegraph", executor, func(string) (string, error) { return "/usr/local/bin/codegraph", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.Query(context.Background(), workspace, Request{Operation: Explore, Query: "fixture paths"})
+	if err != nil || !strings.Contains(result.Content, "/tmp/bin") {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestAdapterRejectsSensitiveExplorePathOutsideSourceLines(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".codegraph"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeExecutor{result: commandResult{stdout: []byte("**`.env`**\n1\tSECRET=value\n")}}
+	adapter, err := newAdapter("codegraph", executor, func(string) (string, error) { return "/usr/local/bin/codegraph", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Query(context.Background(), workspace, Request{Operation: Explore, Query: "configuration"}); !errors.Is(err, ErrExecution) {
+		t.Fatalf("sensitive header err=%v", err)
+	}
+	if _, err := adapter.Query(context.Background(), workspace, Request{Operation: Explore, Query: ".env loading"}); !errors.Is(err, ErrExecution) {
+		t.Fatalf("sensitive query err=%v", err)
 	}
 }

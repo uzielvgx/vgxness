@@ -89,6 +89,10 @@ func ContainsSensitiveReference(value, root string) bool {
 			continue
 		}
 		if filepath.IsAbs(candidate) {
+			volume := filepath.VolumeName(candidate)
+			if strings.Trim(strings.TrimPrefix(candidate, volume), `/\`) == "" {
+				continue
+			}
 			relative, err := filepath.Rel(root, candidate)
 			if err != nil || !filepath.IsLocal(relative) {
 				return true
