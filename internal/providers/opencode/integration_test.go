@@ -241,6 +241,9 @@ func TestManagedNativeSubagentsHaveRoleSpecificFailClosedPermissions(t *testing.
 	if !strings.Contains(implementerPrompt, "vgxness_task_claim: allow") || !strings.Contains(implementerPrompt, "vgxness_task_complete: allow") || !strings.Contains(implementerPrompt, "SHA-256 returned by its latest read or edit receipt") {
 		t.Fatal("implementer is missing the ticket-authenticated edit protocol")
 	}
+	if strings.Contains(implementerPrompt, "  glob: allow") || strings.Contains(implementerPrompt, "  list: allow") || !strings.Contains(implementerPrompt, "Never call glob or list") {
+		t.Fatal("implementer permits unsupported isolated-worktree discovery")
+	}
 	if strings.Contains(reviewerPrompt, "read: allow") || strings.Contains(reviewerPrompt, "codegraph_*: allow") {
 		t.Fatal("reviewer can escape immutable Git evidence")
 	}
