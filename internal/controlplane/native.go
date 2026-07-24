@@ -386,7 +386,7 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 	response := bridge.Response{
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
 		RunID: document.RunID, TaskID: document.TaskID, CapsuleID: continuityResult.capsuleID, StateVersion: continuityResult.stateVersion,
-		MemoryRefs: continuityResult.memoryRefs, Status: string(receipt.Status), Result: result,
+		MemoryRefs: continuityResult.memoryRefs, Status: "completed", Result: result,
 		EditArtifact: editArtifact,
 		Receipt: &bridge.Receipt{
 			ExecutionID: providerReceipt.ExecutionID, Decision: string(providerReceipt.Decision.Outcome), DecisionCondition: providerReceipt.Decision.Condition,
@@ -395,10 +395,11 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 			StartedAt: providerReceipt.StartedAt.UTC().Format(time.RFC3339Nano), FinishedAt: providerReceipt.FinishedAt.UTC().Format(time.RFC3339Nano), EventCount: len(receipt.Events) + 1,
 		},
 	}
+	// A schema-valid agent.result is a successful native protocol terminal
+	// even when its bounded outcome is blocked, failed, needs_followup, or
+	// unsupported. Preserve that semantic status inside Result so the
+	// manager can act on it without losing the receipt or edit artifact.
 	document.State, document.TerminalStatus = "completed", "completed"
-	if receipt.Status != chronicle.TaskCompleted {
-		document.State, document.TerminalStatus, document.TerminalFailure = "failed", "failed", "native Task result failed its content-bound contract"
-	}
 	document.CompletionSHA, document.CompletionMessageID, document.Response = digest, input.MessageID, &response
 	if err := writeNativeTicket(paths.Root, document); err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: persist native completion", bridge.ErrExecution)

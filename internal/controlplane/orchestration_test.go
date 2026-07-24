@@ -247,7 +247,7 @@ func TestStatusOrchestrationReopensMixedParallelReadWave(t *testing.T) {
 	}
 }
 
-func TestOrchestrationReconcilesAcceptedFailureBeforeVisibleAcknowledgement(t *testing.T) {
+func TestOrchestrationReconcilesAcceptedNonSuccessBeforeVisibleAcknowledgement(t *testing.T) {
 	workspace := t.TempDir()
 	storage := filepath.Join(t.TempDir(), "storage")
 	now := time.Now().UTC()
@@ -286,17 +286,17 @@ func TestOrchestrationReconcilesAcceptedFailureBeforeVisibleAcknowledgement(t *t
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: binding.TicketID, ParentSessionID: "ses_parent",
 		ChildSessionID: binding.ChildSessionID, MessageID: "msg_blocked", Result: result,
 	})
-	if err != nil || completed.Status != "failed" {
+	if err != nil || completed.Status != "completed" || completed.Receipt == nil || len(completed.Result) == 0 {
 		t.Fatalf("completed=%#v err=%v", completed, err)
 	}
 	durable, err := readNativeTicket(storage, binding.TicketID)
-	if err != nil || durable.State != "failed" || durable.TerminalStatus != "failed" || durable.TerminalFailure == "" {
+	if err != nil || durable.State != "completed" || durable.TerminalStatus != "completed" || durable.TerminalFailure != "" {
 		t.Fatalf("durable=%#v err=%v", durable, err)
 	}
 	reconciled, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
 	})
-	if err != nil || reconciled.Status != "failed" {
+	if err != nil || reconciled.Status != "completed" || reconciled.Orchestration == nil {
 		t.Fatalf("reconciled=%#v err=%v", reconciled, err)
 	}
 	if _, err := service.RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
@@ -309,9 +309,9 @@ func TestOrchestrationReconcilesAcceptedFailureBeforeVisibleAcknowledgement(t *t
 	terminal, err := service.RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
 		TaskID: binding.TaskID, TicketID: binding.TicketID, ChildSessionID: binding.ChildSessionID,
-		Status: "failed", Failure: "native Task result failed its content-bound contract",
+		Status: "completed", MessageID: "msg_blocked", ResultID: "result-" + binding.TicketID, Result: result,
 	})
-	if err != nil || terminal.Status != "failed" {
+	if err != nil || terminal.Status != "completed" {
 		t.Fatalf("terminal=%#v err=%v", terminal, err)
 	}
 }
