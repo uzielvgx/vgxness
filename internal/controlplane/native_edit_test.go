@@ -60,6 +60,15 @@ func TestNativeEditBrokerIsolatesVersionedWritesAndPublishesManifest(t *testing.
 	if err != nil || read.Read == nil || read.Read.Content != "package internal\n\nconst Value = \"base\"\n" {
 		t.Fatalf("write ticket could not read its isolated base: %#v err=%v", read, err)
 	}
+	if !read.Read.Exists {
+		t.Fatalf("existing isolated file was reported absent: %#v", read.Read)
+	}
+	missing, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ChildSessionID: "ses_child", Path: "internal/new.go",
+	})
+	if err != nil || missing.Read == nil || missing.Read.Exists || missing.Read.Path != "internal/new.go" || missing.Read.Content != "" {
+		t.Fatalf("missing creation target did not return an absent receipt: %#v err=%v", missing, err)
+	}
 	first, err := service.EditNative(context.Background(), workspace, bridge.NativeEditRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ChildSessionID: "ses_child", Path: "internal/app.go",
 		Content: "package internal\n\nconst Value = \"changed\"\n", ExpectedSHA256: nativeSHA256([]byte(read.Read.Content)),
@@ -92,6 +101,35 @@ func TestNativeEditBrokerIsolatesVersionedWritesAndPublishesManifest(t *testing.
 		completed.EditArtifact.Worktree != document.Edit.Root || completed.EditArtifact.BaseRevision != document.Edit.BaseRevision ||
 		!strings.HasPrefix(completed.EditArtifact.ManifestSHA, "sha256-") {
 		t.Fatalf("completion did not publish bounded edit evidence: %#v err=%v", completed, err)
+	}
+}
+
+func TestNativeEditAcceptsNonSuccessResultWithoutChanges(t *testing.T) {
+	workspace := nativeEditRepository(t)
+	now := time.Now().UTC()
+	service := New(Options{
+		StorageRoot: filepath.Join(t.TempDir(), "storage"), Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return nativeTestAdapter(now), nil },
+	})
+	prepared, err := service.Prepare(context.Background(), workspace, bridge.DispatchRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit-blocked", Model: "openai/gpt-5.6-sol", Operation: bridge.WriteFiles,
+		Goal: "Report a bounded write blocker", ParentSessionID: "ses_parent", ParentMessageID: "msg_parent", ChildSessionID: "ses_child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := readNativeTicket(service.storageRoot, "ticket-edit-blocked")
+	if err != nil || document.Edit == nil {
+		t.Fatalf("edit workspace was not persisted: %#v err=%v", document.Edit, err)
+	}
+	t.Cleanup(func() { removeNativeEditWorkspace(workspace, document.Edit) })
+
+	completed, err := service.Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit-blocked", ParentSessionID: "ses_parent",
+		ChildSessionID: "ses_child", MessageID: "msg_child", Result: nativeResultWithStatus(t, prepared.TaskID, "needs_followup"),
+	})
+	if err != nil || completed.Status != "completed" || completed.EditArtifact != nil || completed.Receipt == nil {
+		t.Fatalf("accepted no-change result was not preserved: %#v err=%v", completed, err)
 	}
 }
 

@@ -329,11 +329,17 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 	defer leaseGuard.Release()
 	var editArtifact *bridge.NativeEditArtifact
 	if document.Input.Operation == bridge.WriteFiles {
-		artifact, artifactErr := finalizeNativeEditArtifact(ctx, document)
-		if artifactErr != nil {
-			return bridge.Response{}, artifactErr
+		var outcome struct {
+			Status string `json:"status"`
 		}
-		editArtifact = &artifact
+		_ = json.Unmarshal(input.Result, &outcome)
+		if len(document.Edits) > 0 || outcome.Status == "success" {
+			artifact, artifactErr := finalizeNativeEditArtifact(ctx, document)
+			if artifactErr != nil {
+				return bridge.Response{}, artifactErr
+			}
+			editArtifact = &artifact
+		}
 	}
 	coordinator, continuity, err := service.nativeCoordinator(ctx, paths, root, document)
 	if err != nil {
@@ -534,6 +540,10 @@ func (service *Service) ReadNative(ctx context.Context, workspace string, input 
 		readRoot, readIdentity = document.Edit.Root, document.Edit.RootIdentity
 	}
 	read, err := secureNativeRead(readRoot, readIdentity, input)
+	if document.Input.Operation == bridge.WriteFiles && errors.Is(err, os.ErrNotExist) {
+		read = bridge.NativeReadResult{Path: input.Path}
+		err = nil
+	}
 	if err != nil {
 		return bridge.Response{}, err
 	}
@@ -1304,6 +1314,9 @@ func secureNativeRead(workspace, expectedIdentity string, request bridge.NativeR
 	}
 	name := parts[len(parts)-1]
 	before, err := root.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return bridge.NativeReadResult{}, os.ErrNotExist
+	}
 	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || !nativeSingleLink(before) {
 		return bridge.NativeReadResult{}, bridge.ErrDenied
 	}
@@ -1346,7 +1359,7 @@ func secureNativeRead(workspace, expectedIdentity string, request bridge.NativeR
 		return bridge.NativeReadResult{}, bridge.ErrDenied
 	}
 	data = data[:end]
-	result := bridge.NativeReadResult{Path: request.Path, Content: string(data), Truncated: truncated}
+	result := bridge.NativeReadResult{Path: request.Path, Exists: true, Content: string(data), Truncated: truncated}
 	if truncated {
 		result.NextOffset = request.Offset + int64(len(data))
 	}

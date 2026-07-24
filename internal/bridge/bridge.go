@@ -172,6 +172,7 @@ type NativeReadRequest struct {
 
 type NativeReadResult struct {
 	Path       string `json:"path"`
+	Exists     bool   `json:"exists"`
 	Content    string `json:"content"`
 	NextOffset int64  `json:"nextOffset,omitempty"`
 	Truncated  bool   `json:"truncated"`
