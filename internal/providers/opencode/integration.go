@@ -149,14 +149,14 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-explorer; version: 9 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-explorer; version: 10 -->
 
 You are the native VGXNESS explorer. There are exactly two top-level input envelopes:
 
 - For kind vgxness.visible-task.directive, first call vgxness_task_claim exactly once with its identities. Execute only the exact content-bound prompt returned by that claim, then call vgxness_task_complete exactly once with the compact agent.result JSON string. After successful completion, return one short plain-language completion sentence.
 - For kind vgxness.direct-dispatch.directive, execute only its preparedPrompt and return exactly one agent.result JSON object without calling vgxness_task_claim or vgxness_task_complete.
 
-Reject every other top-level input shape. In either mode, use supplied memory and dependency evidence before gathering more context, but verify mutable or consequential claims against the current workspace. Stop when the acceptance criteria are satisfied; do not repeat a structural query or exact read that existing bounded evidence already answers. Propose memoryCandidates only for durable reusable project knowledge supported by the bounded evidence; never include routine steps, transient status, speculation, duplicates, credentials, tokens, secrets, or personal data. VGXNESS, not you, decides whether a proposal is saved, updated, held for review, or rejected. Use glob and list only while the plugin has an active VGXNESS ticket for this session. For analyze-structure, use vgxness_codegraph first: explore for architecture/call-flow context, impact for one symbol's blast radius, affected for tests related to explicit changed files, and status only to explain index availability. Use vgxness_native_read for exact file content or as a bounded fallback when the broker reports CodeGraph unavailable. Call ticket-bound VGXNESS broker tools sequentially; do not issue vgxness_codegraph, vgxness_native_read, or vgxness_task_complete in parallel. Never invoke CodeGraph CLI/MCP directly, edit files, run shell commands, use the network, delegate, install packages, commit, or push.
+Reject every other top-level input shape. In either mode, use supplied memory and dependency evidence before gathering more context, but verify mutable or consequential claims against the current workspace. Stop when the acceptance criteria are satisfied; do not repeat a structural query or exact read that existing bounded evidence already answers. Propose memoryCandidates only for durable reusable project knowledge supported by the bounded evidence; never include routine steps, transient status, speculation, duplicates, credentials, tokens, secrets, or personal data. VGXNESS, not you, decides whether a proposal is saved, updated, held for review, or rejected. Use glob and list only while the plugin has an active VGXNESS ticket for this session. For analyze-structure, use vgxness_codegraph first: explore for architecture/call-flow context, impact for one symbol's blast radius, affected for tests related to explicit changed files, and status only to explain index availability. For read-files, never call vgxness_codegraph; use supplied dependency evidence and vgxness_native_read only. Use vgxness_native_read for exact file content or as a bounded fallback when the analyze-structure broker reports CodeGraph unavailable. Call ticket-bound VGXNESS broker tools sequentially; do not issue vgxness_codegraph, vgxness_native_read, or vgxness_task_complete in parallel. Never invoke CodeGraph CLI/MCP directly, edit files, run shell commands, use the network, delegate, install packages, commit, or push.
 `
 	implementerPrompt = `---
 description: VGXNESS native implementer for ticket-authenticated isolated edits
@@ -633,7 +633,7 @@ func bridgeToolContent(executable, model string) ([]byte, error) {
 	import { randomUUID } from "node:crypto"
 	import { tool } from "@opencode-ai/plugin"
 
-	// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 28
+	// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 29
 	const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 	const VGXNESS_MODEL = ` + string(quotedModel) + `
 	const MAX_OUTPUT_BYTES = __MAX_OUTPUT_BYTES__
@@ -1099,8 +1099,10 @@ async function readBounded(stream) {
 	      if (ticket.ticketId !== claim.ticketId || ticket.agent !== claim.agent) {
 	        throw new Error("VGXNESS returned a mismatched visible Task ticket")
 	      }
+	      const task = orchestration.plan.tasks.find((candidate) => candidate.taskId === taskId)
 	      nativeTickets.set(claim.childSessionId, {
 	        ticketId: ticket.ticketId,
+	        operation: task?.operation,
 	        orchestrationId: wave.orchestrationId,
 	        ownerId: wave.ownerId,
 	        taskId,
@@ -1205,8 +1207,8 @@ async function readBounded(stream) {
 	  }), "OpenCode could not create a native VGXNESS subagent")
 	}
 
-	async function promptNativeChild(client, workspace, context, childSessionId, prepared) {
-	  nativeTickets.set(childSessionId, { ticketId: prepared.ticketId })
+	async function promptNativeChild(client, workspace, context, childSessionId, prepared, operation) {
+	  nativeTickets.set(childSessionId, { ticketId: prepared.ticketId, operation })
 	  const model = exactModelReference(prepared.model)
 	  const abortChild = () => client.session.abort({ path: { id: childSessionId }, query: { directory: workspace } }).catch(() => undefined)
 	  const abortChildOnContext = () => { void abortChild() }
@@ -1454,6 +1456,14 @@ async function readBounded(stream) {
 	          const workspace = context.worktree || context.directory
 	          const active = nativeTickets.get(context.sessionID)
 	          if (!active) throw new Error("No active VGXNESS structural-analysis ticket exists for this child session")
+	          if (active.operation && active.operation !== "analyze-structure") {
+	            return JSON.stringify({
+	              available: false,
+	              operation: args.operation,
+	              authorizedOperation: active.operation,
+	              nextSafeAction: "Use supplied dependency evidence and vgxness_native_read for this ticket.",
+	            })
+	          }
 	          const decimal = (value, fallback, maximum, label) => {
 	            if (value === undefined) return fallback
 	            const parsed = Number(value)
@@ -1538,6 +1548,7 @@ async function readBounded(stream) {
 	            const prepared = exactVisiblePrepared(recoveredOrchestration, args.taskId, context.sessionID, expectedAgent)
 	            nativeTickets.set(context.sessionID, {
 	              ticketId: prepared.ticketId,
+	              operation: task.operation,
 	              orchestrationId: orchestration.orchestrationId,
 	              ownerId: orchestration.ownerId,
 	              taskId: args.taskId,
@@ -1825,7 +1836,7 @@ async function readBounded(stream) {
 	            visible.agent = prepared.agent
 	            visible.status = "running"
 	            publish("running")
-	            const message = await promptNativeChild(client, workspace, context, childSessionId, prepared)
+	            const message = await promptNativeChild(client, workspace, context, childSessionId, prepared, args.operation)
 	            const result = exactAgentResult(message.parts || [])
 	            const completed = await invokeTerminal(
 	              ["bridge", "complete", "--stdin"],

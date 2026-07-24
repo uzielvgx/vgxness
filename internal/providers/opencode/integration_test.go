@@ -112,7 +112,7 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 		`client.session.create`, `client.session.prompt`, `["bridge", "prepare", "--stdin"]`, `["bridge", "read", "--stdin"]`, `["bridge", "edit", "--stdin"]`, `["bridge", "codegraph", "--stdin"]`,
 		`["bridge", "complete", "--stdin"]`, `value.protocolVersion !== "1"`, `"review-changes"`,
 		`tool.schema.enum(["start", "continue", "finish"]).optional()`, `runId: tool.schema.string().optional()`,
-		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `output: JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 28",
+		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `output: JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 29",
 		"shell: false", `child?.kill("SIGKILL")`, "invokeBounded", "invokeTerminal", "nativeTickets.delete(childSessionId)",
 		"MAX_NATIVE_DISPATCHES = 4", "acquireNativeCapacity", "VGXNESS native dispatch capacity exhausted", "releaseCapacity()",
 		"vgxness_run", "startVisibleOrchestration", `tool.schema.enum(["fast", "auto", "deep"]).optional()`,
@@ -125,6 +125,7 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 		`action: tool.schema.enum(["start", "advance"]).optional()`, "parentSessionId: context.sessionID",
 		`action: tool.schema.enum(["start", "join"]).optional()`, `"task-dispatch-"`, "advanceVisibleOrchestration",
 		`depth: tool.schema.number().optional()`, `maxFiles: tool.schema.number().optional()`, "withNativeTicketLane", "bridgeFailure",
+		`active.operation !== "analyze-structure"`, `authorizedOperation: active.operation`, `operation: task.operation`,
 	} {
 		testutil.Require(t, strings.Contains(tool, required), "bridge plugin missing %q: %s", required, content)
 	}
@@ -269,8 +270,9 @@ func TestNavigatorRoutesReadOnlySynthesisWithoutGitReview(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-explorer; version: 9",
+		"artifact: opencode-agent/vgxness-explorer; version: 10",
 		"use supplied memory and dependency evidence before gathering more context",
+		"For read-files, never call vgxness_codegraph",
 		"Stop when the acceptance criteria are satisfied",
 		"Propose memoryCandidates only for durable reusable project knowledge",
 		"VGXNESS, not you, decides whether a proposal is saved",
