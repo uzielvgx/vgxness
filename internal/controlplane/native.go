@@ -57,6 +57,8 @@ type nativeTicketDocument struct {
 	Memory              *nativeMemoryState              `json:"memory,omitempty"`
 	CompletionSHA       string                          `json:"completionSha256,omitempty"`
 	CompletionMessageID string                          `json:"completionMessageId,omitempty"`
+	TerminalStatus      string                          `json:"terminalStatus,omitempty"`
+	TerminalFailure     string                          `json:"terminalFailure,omitempty"`
 	Response            *bridge.Response                `json:"response,omitempty"`
 	CodeGraph           []bridge.NativeCodeGraphReceipt `json:"codegraph,omitempty"`
 	Edit                *nativeEditWorkspace            `json:"editWorkspace,omitempty"`
@@ -356,7 +358,8 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 			MemoryRefs: continuityResult.memoryRefs, Status: string(receipt.Status),
 			EditArtifact: editArtifact,
 		}
-		document.State, document.CompletionSHA, document.CompletionMessageID, document.Response = "failed", digest, input.MessageID, &response
+		document.State, document.CompletionSHA, document.CompletionMessageID = "failed", digest, input.MessageID
+		document.TerminalStatus, document.TerminalFailure, document.Response = "failed", "native Task result failed its content-bound contract", &response
 		if persistErr := writeNativeTicket(paths.Root, document); persistErr != nil {
 			return bridge.Response{}, fmt.Errorf("%w: persist rejected native completion", bridge.ErrExecution)
 		}
@@ -392,7 +395,11 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 			StartedAt: providerReceipt.StartedAt.UTC().Format(time.RFC3339Nano), FinishedAt: providerReceipt.FinishedAt.UTC().Format(time.RFC3339Nano), EventCount: len(receipt.Events) + 1,
 		},
 	}
-	document.State, document.CompletionSHA, document.CompletionMessageID, document.Response = "completed", digest, input.MessageID, &response
+	document.State, document.TerminalStatus = "completed", "completed"
+	if receipt.Status != chronicle.TaskCompleted {
+		document.State, document.TerminalStatus, document.TerminalFailure = "failed", "failed", "native Task result failed its content-bound contract"
+	}
+	document.CompletionSHA, document.CompletionMessageID, document.Response = digest, input.MessageID, &response
 	if err := writeNativeTicket(paths.Root, document); err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: persist native completion", bridge.ErrExecution)
 	}
@@ -485,6 +492,10 @@ func (service *Service) Fail(ctx context.Context, workspace string, input bridge
 		MemoryRefs: continuityResult.memoryRefs, Status: string(receipt.Status),
 	}
 	document.State, document.CompletionSHA, document.Response = "failed", digest, &response
+	document.TerminalStatus, document.TerminalFailure = "failed", "visible native Task ended without durable completion"
+	if input.Category == "native-subagent-cancelled" {
+		document.TerminalStatus, document.TerminalFailure = "cancelled", "visible native Task was cancelled"
+	}
 	if err := writeNativeTicket(paths.Root, document); err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: persist native failure", bridge.ErrExecution)
 	}

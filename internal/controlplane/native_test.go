@@ -1543,10 +1543,14 @@ func nativeTestAdapter(now time.Time) *fakeAdapter {
 }
 
 func nativeResult(t *testing.T, taskID string) json.RawMessage {
+	return nativeResultWithStatus(t, taskID, "success")
+}
+
+func nativeResultWithStatus(t *testing.T, taskID, status string) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(map[string]any{
 		"kind": "agent.result", "schemaVersion": "1", "resultId": "result-" + taskID, "taskId": taskID,
-		"agentId": agentID, "status": "success", "summary": "native bounded work completed", "artifacts": []any{},
+		"agentId": agentID, "status": status, "summary": "native bounded work completed", "artifacts": []any{},
 		"nextRecommended": "inspect the receipt", "risks": []any{}, "errors": []any{},
 	})
 	if err != nil {

@@ -263,6 +263,12 @@ func (service *Service) RecordOrchestrationTerminal(ctx context.Context, workspa
 	} else if native.State != "failed" {
 		return bridge.Response{}, bridge.ErrDenied
 	}
+	if native.TerminalStatus != "" && native.TerminalStatus != request.Status {
+		return bridge.Response{}, bridge.ErrDenied
+	}
+	if request.Status != "completed" && native.TerminalFailure != "" && native.TerminalFailure != request.Failure {
+		return bridge.Response{}, bridge.ErrDenied
+	}
 	authority, scheduler, err := openDurableScheduler(ctx, paths.Root, document)
 	if err != nil {
 		return bridge.Response{}, err
@@ -272,11 +278,16 @@ func (service *Service) RecordOrchestrationTerminal(ctx context.Context, workspa
 		return bridge.Response{}, normalizeOrchestrationError(err)
 	}
 	for _, item := range checkpoint.Tasks {
-		if item.TaskID != request.TaskID || item.TicketID != request.TicketID || item.ChildSessionID != request.ChildSessionID || string(item.Status) != request.Status {
+		if item.TaskID != request.TaskID || item.TicketID != request.TicketID || item.ChildSessionID != request.ChildSessionID {
+			continue
+		}
+		legacyFailureReplay := native.TerminalStatus == "" && native.State == "failed" && item.Status == orchestrator.TaskFailed &&
+			(request.Status == "failed" || request.Status == "cancelled")
+		if string(item.Status) != request.Status && !legacyFailureReplay {
 			continue
 		}
 		exact := request.Status == "completed" && item.MessageID == request.MessageID && item.ResultID == request.ResultID && bytes.Equal(item.Result, request.Result) ||
-			request.Status != "completed" && item.Failure == request.Failure
+			request.Status != "completed" && (item.Failure == request.Failure || legacyFailureReplay)
 		if !exact {
 			return bridge.Response{}, bridge.ErrDenied
 		}
@@ -944,7 +955,13 @@ func (service *Service) reconcileNativeTerminals(ctx context.Context, storageRoo
 			}
 			outcome.Status, outcome.MessageID, outcome.ResultID, outcome.Result = orchestrator.TaskCompleted, messageID, "result-"+item.TicketID, append(json.RawMessage(nil), native.Response.Result...)
 		case "failed":
-			outcome.Status, outcome.Failure = orchestrator.TaskFailed, "native ticket completed with failure before orchestration acknowledgement"
+			outcome.Status, outcome.Failure = orchestrator.TaskFailed, native.TerminalFailure
+			if outcome.Failure == "" {
+				outcome.Failure = "native ticket completed with failure before orchestration acknowledgement"
+			}
+			if native.TerminalStatus == "cancelled" {
+				outcome.Status = orchestrator.TaskCancelled
+			}
 		default:
 			continue
 		}

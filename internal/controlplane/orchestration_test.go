@@ -247,7 +247,76 @@ func TestStatusOrchestrationReopensMixedParallelReadWave(t *testing.T) {
 	}
 }
 
-func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsAcrossServices(t *testing.T) {
+func TestOrchestrationReconcilesAcceptedFailureBeforeVisibleAcknowledgement(t *testing.T) {
+	workspace := t.TempDir()
+	storage := filepath.Join(t.TempDir(), "storage")
+	now := time.Now().UTC()
+	adapter := nativeTestAdapter(now)
+	sequence := 0
+	service := New(Options{
+		StorageRoot: storage, Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return adapter, nil },
+		NewID: func(prefix string) (string, error) {
+			sequence++
+			return prefix + "-accepted-failure-" + strconv.Itoa(sequence), nil
+		},
+	})
+	task := orchestrationReadTask("task-blocked", nil)
+	planned, err := service.PlanOrchestration(context.Background(), workspace, bridge.OrchestratePlanRequest{
+		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol",
+		Input: bridge.OrchestrateInput{Goal: "Inspect a blocked boundary"}, ParentSessionID: "ses_parent", ParentMessageID: "msg_parent",
+		CandidateTasks: []navigator.Task{task},
+	})
+	if err != nil || planned.Orchestration == nil {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	view := planned.Orchestration
+	binding := bridge.OrchestrationBinding{TaskID: task.TaskID, ChildSessionID: "ses_child", TicketID: "ticket-blocked", ClaimToken: "claim-blocked"}
+	if _, err := service.PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID, Bindings: []bridge.OrchestrationBinding{binding},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	native, err := readNativeTicket(storage, binding.TicketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := nativeResultWithStatus(t, native.TaskID, "blocked")
+	completed, err := service.Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: binding.TicketID, ParentSessionID: "ses_parent",
+		ChildSessionID: binding.ChildSessionID, MessageID: "msg_blocked", Result: result,
+	})
+	if err != nil || completed.Status != "failed" {
+		t.Fatalf("completed=%#v err=%v", completed, err)
+	}
+	durable, err := readNativeTicket(storage, binding.TicketID)
+	if err != nil || durable.State != "failed" || durable.TerminalStatus != "failed" || durable.TerminalFailure == "" {
+		t.Fatalf("durable=%#v err=%v", durable, err)
+	}
+	reconciled, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
+	})
+	if err != nil || reconciled.Status != "failed" {
+		t.Fatalf("reconciled=%#v err=%v", reconciled, err)
+	}
+	if _, err := service.RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		TaskID: binding.TaskID, TicketID: binding.TicketID, ChildSessionID: binding.ChildSessionID,
+		Status: "failed", Failure: "different failure",
+	}); err == nil {
+		t.Fatal("mismatched durable terminal failure was accepted")
+	}
+	terminal, err := service.RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		TaskID: binding.TaskID, TicketID: binding.TicketID, ChildSessionID: binding.ChildSessionID,
+		Status: "failed", Failure: "native Task result failed its content-bound contract",
+	})
+	if err != nil || terminal.Status != "failed" {
+		t.Fatalf("terminal=%#v err=%v", terminal, err)
+	}
+}
+
+func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingIsCancelledAcrossServices(t *testing.T) {
 	workspace := t.TempDir()
 	storage := filepath.Join(t.TempDir(), "storage")
 	now := time.Now().UTC()
@@ -308,7 +377,7 @@ func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsA
 	}
 	failed, err := reopen().Fail(context.Background(), workspace, bridge.NativeFailureRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: failedBinding.TicketID,
-		ParentSessionID: "ses_parent", ChildSessionID: failedBinding.ChildSessionID, Category: "native-subagent-failed",
+		ParentSessionID: "ses_parent", ChildSessionID: failedBinding.ChildSessionID, Category: "native-subagent-cancelled",
 	})
 	if err != nil || !failed.OK {
 		t.Fatalf("failed=%#v err=%v", failed, err)
@@ -318,6 +387,14 @@ func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsA
 	})
 	if err != nil || failedTerminal.Orchestration == nil || failedTerminal.Status != "running" {
 		t.Fatalf("reconciled failed terminal=%#v err=%v", failedTerminal, err)
+	}
+	cancelledTerminal, err := reopen().RecordOrchestrationTerminal(context.Background(), workspace, bridge.OrchestrateTerminalRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		TaskID: failedBinding.TaskID, TicketID: failedBinding.TicketID, ChildSessionID: failedBinding.ChildSessionID,
+		Status: "cancelled", Failure: "visible native Task was cancelled",
+	})
+	if err != nil || cancelledTerminal.Orchestration == nil || cancelledTerminal.Status != "running" {
+		t.Fatalf("cancelled terminal=%#v err=%v", cancelledTerminal, err)
 	}
 	native, err := readNativeTicket(storage, completedBinding.TicketID)
 	if err != nil {
@@ -338,7 +415,7 @@ func TestAdaptiveOrchestrationAcceptsCompletedTerminalAfterParallelSiblingFailsA
 		Status: "completed", MessageID: "msg_completed",
 		ResultID: "result-" + completedBinding.TicketID, Result: result,
 	})
-	if err != nil || completedTerminal.Orchestration == nil || completedTerminal.Status != "failed" {
+	if err != nil || completedTerminal.Orchestration == nil || completedTerminal.Status != "cancelled" {
 		t.Fatalf("completed terminal=%#v err=%v", completedTerminal, err)
 	}
 }
