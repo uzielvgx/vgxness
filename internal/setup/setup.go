@@ -70,11 +70,11 @@ func New(installer selfinstall.Runtime, preview integration.Runtime, integration
 
 func OpenCodeSteps() []Step {
 	return []Step{
-		{Number: 1, Title: "Revisar requisitos, modelo y estado actual", Explanation: "Comprobaré el binario candidato, el modelo provider/model elegido para los subagentes nativos, los destinos, el workspace y que OpenCode esté disponible y sea compatible. Esta revisión no escribe archivos."},
+		{Number: 1, Title: "Revisar requisitos y estado actual", Explanation: "Comprobaré el binario candidato, los destinos, el workspace y que OpenCode esté disponible y sea compatible. Esta revisión no escribe archivos ni exige un modelo secundario."},
 		{Number: 2, Title: "Instalar el launcher estable", Explanation: "Guardaré la versión exacta por SHA-256 y activaré el launcher permanente. No editaré PATH ni descargaré software.", Mutates: true},
-		{Number: 3, Title: "Instalar managers y subagentes nativos", Explanation: "Crearé vgxness-manager para el flujo gobernado y vgxness-native-manager como modo de mantenimiento directo con los subagentes built-in explore/general de OpenCode, además de los perfiles ocultos vgxness-navigator, vgxness-explorer, vgxness-implementer, vgxness-maintainer y vgxness-reviewer. El manager nativo no usa tickets, waves ni herramientas vgxness_*; puede inspeccionar, editar y validar directamente, pero bloquea push, limpieza Git destructiva, acceso externo e instalaciones no autorizadas. El flujo gobernado conserva sus límites actuales.", Mutates: true},
-		{Number: 4, Title: "Instalar el plugin y bridge acotado", Explanation: "Crearé vgxness_run como entrada goal-first y vgxness_status, vgxness_dispatch y vgxness_orchestrate como controles explícitos, además de los brokers hijos de lectura y CodeGraph estructural para explorer. Un dispatch normal devuelve una Task nativa visible y un join durable; la orquestación puede devolver varias por wave. Cada ejecución usa tickets, y VGXNESS acepta el resultado antes de publicar evidencia; no inicia un segundo proceso OpenCode. CodeGraph es opcional y debe existir con un índice propio del worktree; el wizard no lo instala ni administra. El modelo queda fijado fuera de los argumentos controlados por el agente.", Mutates: true},
-		{Number: 5, Title: "Verificar archivos y conexión", Explanation: "Leeré nuevamente hashes y manifiestos, y comprobaré el handshake real con OpenCode desde el workspace seleccionado."},
+		{Number: 3, Title: "Instalar el manager y revisores nativos", Explanation: "Crearé un único vgxness-manager native-first y cinco revisores ocultos de solo lectura para Risk, Readability, Reliability, Resilience y refutación. Trabajan con herramientas, delegación y skills nativas de OpenCode; no se instala un plugin VGXNESS, herramientas vgxness_* ni subagentes gobernados.", Mutates: true},
+		{Number: 4, Title: "Validar skills y CodeGraph nativos", Explanation: "Confirmaré que el contrato usa skills por nombre y permite codegraph_explore de forma acotada en manager y revisores. El wizard no duplica el registry de OpenCode ni instala o administra índices de CodeGraph."},
+		{Number: 5, Title: "Verificar archivos y conexión", Explanation: "Leeré nuevamente hashes y manifiestos, y comprobaré el handshake real con OpenCode desde el workspace seleccionado. La salud depende de OpenCode y de los seis perfiles administrados, no de un bridge VGXNESS."},
 		{Number: 6, Title: "Explicar recuperación", Explanation: "Si una actualización falla antes de integrar OpenCode, intentaré volver a la versión anterior. Una primera instalación o una integración ya escrita se conserva para evitar borrados automáticos y se reporta cómo repararla."},
 	}
 }
@@ -108,7 +108,7 @@ func (service *Service) Plan(ctx context.Context, options Options) (Plan, error)
 		return plan, nil
 	}
 	if !health.OK {
-		plan.Blocker = "OpenCode respondió, pero el bridge no está saludable o la versión es incompatible. Corrige el requisito antes de continuar."
+		plan.Blocker = "OpenCode respondió, pero el adaptador no está saludable o la versión es incompatible. Corrige el requisito antes de continuar."
 		return plan, nil
 	}
 	if selfResult.State == selfinstall.StateDrifted || integrationResult.State == integration.StateDrifted {
@@ -147,7 +147,7 @@ func (service *Service) Status(ctx context.Context, options Options) (Plan, erro
 		plan.Blocker = "OpenCode no está disponible, es incompatible o el workspace no es válido."
 		return plan, nil
 	}
-	plan.Ready = selfResult.State == selfinstall.StateInstalled && integrationResult.State == integration.StateInstalled && integrationResult.Bridge == integration.BridgeConfigured
+	plan.Ready = selfResult.State == selfinstall.StateInstalled && integrationResult.State == integration.StateInstalled
 	if !plan.Ready {
 		plan.Blocker = "La configuración todavía no está completa o presenta drift. Ejecuta el wizard para revisar el plan de reparación."
 	}
@@ -185,7 +185,7 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 		return result, fmt.Errorf("%w: self-install", ErrVerification)
 	}
 	integrationStatus, err := managed.Status(ctx, options.Integration)
-	if err != nil || integrationStatus.State != integration.StateInstalled || integrationStatus.Bridge != integration.BridgeConfigured {
+	if err != nil || integrationStatus.State != integration.StateInstalled {
 		result.Recovery = "Los archivos instalados se conservan. Ejecuta `vgxness integrate opencode status` para inspeccionar y `uninstall` sólo si deseas retirarlos recuperablemente."
 		return result, fmt.Errorf("%w: integration", ErrVerification)
 	}

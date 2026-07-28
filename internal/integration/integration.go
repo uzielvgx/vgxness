@@ -22,6 +22,7 @@ const (
 
 	BridgeUnavailable BridgeState = "unavailable"
 	BridgeConfigured  BridgeState = "configured"
+	BridgeNotRequired BridgeState = "not-required"
 )
 
 type Options struct {

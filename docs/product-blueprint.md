@@ -20,13 +20,13 @@ Capability delivery labels have precise, evidence-backed meanings:
 
 VGXNESS is for developers who want AI-assisted work to remain understandable, bounded, and recoverable. The current candidate contains a working local control-plane foundation for exact identities, policy, Chronicle evidence, bounded OpenCode execution, semantic memory, installation, and recovery-aware operation. The broader Navigator/SDD product is still being built.
 
-**Implemented:** The repository builds a `vgxness` binary with application wiring, a permanent versioned launcher with atomic activation and rollback, storage-root resolution, `status`/`doctor`, owned SQLite/FTS5 memory, runtime contract validation, Chronicle event/snapshot/task-state services, Registry, Gatekeeper, prompt composition, bounded coordination, OpenCode provider execution, the persistent bridge, guided setup, focused tests, and Go CI.
+**Implemented:** The repository builds a `vgxness` binary with application wiring, a permanent versioned launcher with atomic activation and rollback, storage-root resolution, `status`/`doctor`, owned SQLite/FTS5 memory, runtime contract validation, Chronicle event/snapshot/task-state services, Registry, Gatekeeper, prompt composition, bounded coordination, OpenCode provider execution, a native-first OpenCode manager/reviewer projection, guided setup, focused tests, and Go CI. The legacy bridge CLI remains available for compatibility but is no longer installed as an OpenCode plugin.
 
 **Implemented:** Chronicle appends and verifies JSONL events, derives task state, publishes active snapshots through immutable SHA-256 files plus one atomic pointer replacement, and recovers an interrupted terminal-pointer removal. **Partial:** its recovery scope remains narrower than the future general checkpoint/artifact lifecycle.
 
 **Contracts-only:** Independently authored Draft 2020-12 schemas for future SDD, routing, artifact, and continuity paths define records that the current bounded runtime does not yet exercise. Schemas used by the current control plane are validated at runtime.
 
-**Implemented/Partial:** A goal-first `vgxness_run` facade with `fast`, `auto`, and `deep` profiles now reuses contract-validated delegation plans, deterministic dependency waves, native Navigator/task sessions, file-backed logical-slot and owner/epoch authority, prerequisite-gated prepared admission, fail-closed dispatch classification, checkpoint takeover, persisted bounded dependency results, authority-accepted joins, content-bound Delivery Authority receipts, an isolated edit broker, and a closed Go format/test/vet validation broker. Agent-proposed durable memory is validated and persisted by VGXNESS, with contradictions held for review. Arbitrary shell/network capability brokers, SDD phase/artifact workflows, automatic delivery wiring, richer autonomy UX, keyboard TUI, additional adapters, and advanced semantic retrieval remain planned.
+**Implemented/Partial:** The bounded control-plane, orchestration, isolated-edit, validation, and Delivery Authority services remain implemented as a legacy CLI compatibility surface. They are not projected into the native OpenCode manager. The interactive path now uses direct OpenCode tools, native Task delegation, native skills by name, optional SDD, and evidence-based review profiles. Final removal or redesign of the legacy services, complete SDD artifacts, automatic delivery wiring, richer autonomy UX, keyboard TUI, additional adapters, and advanced semantic retrieval remain planned.
 
 ### Document and translation contract
 
@@ -40,14 +40,14 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 
 | Status | Scope |
 | --- | --- |
-| **Implemented** | Go binary/composition; launcher and self-install/update/rollback; storage and owned SQLite/FTS5 memory; runtime contract validation; Chronicle events, immutable crash-atomic snapshot publication, task-state and terminal recovery; Registry/Gatekeeper; prompt/provider runner; bounded coordinator/control plane; OpenCode adapter/bridge; guided setup; hermetic clean-checkout setup/dispatch E2E; tests and Go CI. |
+| **Implemented** | Go binary/composition; launcher and self-install/update/rollback; storage and owned SQLite/FTS5 memory; runtime contract validation; Chronicle events, immutable crash-atomic snapshot publication, task-state and terminal recovery; Registry/Gatekeeper; prompt/provider runner; bounded coordinator/control plane; native OpenCode manager/review projection; guided setup; hermetic clean-checkout setup/dispatch E2E; tests and Go CI. |
 | **Partial** | Navigator's manager-facing native planner/wave/join runtime is bounded to supported operations and OpenCode; Delivery Authority has explicit receipt/gate CLI but no automatic delivery integration; Chronicle's broader plan/checkpoint/artifact continuity and native Windows runtime/distribution smoke remain incomplete. |
 | **Contracts-only** | Draft 2020-12 shapes and semantic rules for future SDD, routing, artifacts, and continuity paths not yet exercised by the bounded runtime. |
 | **Planned** | Navigator routing, complete SDD workflows and artifact backends, richer autonomy/approval UX, keyboard-first TUI, optional adapters, native Windows validation, and advanced semantic retrieval/lifecycle. |
 | **Deferred** | Additional runtime adapters, optional local MCP exposure, broader external MCP clients, richer semantic retrieval, and graphical product surfaces. |
 | **Non-goal** | Copied third-party artifacts, silent destructive autonomy, hidden operational truth, runtime or tool lock-in, unbounded agent loops, automatic prototype-to-production promotion, or a UI that owns business policy. |
 
-**Evidence boundary:** The implemented runtime includes the task state machine, Gatekeeper/Registry services, OpenCode provider execution, bounded coordination, a headless binary self-installer, and the persistent OpenCode bridge. No setup TUI, MCP server/client, Git automation, additional runtime adapter, or silent product configuration mutation is delivered.
+**Evidence boundary:** The implemented runtime includes the task state machine, Gatekeeper/Registry services, OpenCode provider execution, bounded coordination, a headless binary self-installer, and the native manager/reviewer projection. The bridge commands remain in the CLI only as legacy compatibility behavior; no VGXNESS OpenCode plugin is installed. No setup TUI, product-owned MCP server/client, Git automation, additional runtime adapter, or silent product configuration mutation is delivered.
 
 **Contracts-only limitation:** The schemas under [`schemas/`](schemas/README.md) mix delivered runtime contracts with future and partial behaviors. Runtime validation is evidence only for the schemas and paths actually invoked; `$schema` declarations alone do not prove complete product enforcement.
 
@@ -102,7 +102,7 @@ The delivery split is intentional: owned memory, Registry, Gatekeeper, contract-
 VGXNESS has an **Implemented, bounded** local Go control plane with explicit package and dependency boundaries. Navigator's contract and deterministic scheduling foundation is **Partial**; runtime routing and the complete SDD product remain **Planned**. The Go architecture is detailed in [`go-implementation.md`](go-implementation.md).
 
 ```text
-planned TUI / implemented CLI+bridge / planned local MCP
+planned TUI / implemented CLI + native OpenCode projection
                          |
  implemented composition, storage, contracts, Chronicle
                          |
@@ -122,8 +122,8 @@ planned TUI / implemented CLI+bridge / planned local MCP
 | Schemas and semantic rules | **Implemented/Contracts-only:** Current packets, events, snapshots, registry records, prompts, and results are validated at runtime; future SDD/continuity shapes remain contracts-only. |
 | Keyboard-first TUI | **Planned:** Provide setup and focused interaction without owning installation or orchestration policy. |
 | Bounded coordination | **Implemented, narrow:** Exact Registry/Gatekeeper policy, provider selection, finite foreground/background coordination, cancellation, receipts, and bounded status/read/write/review operations are delivered. Navigator/SDD routing remains planned. |
-| OpenCode adapter | **Implemented:** Hardened runtime adapter, persistent fail-closed `vgxness-manager`, strict `vgxness_*` bridge, fixed execution model, and confirmation-gated explanatory CLI setup are delivered. |
-| CodeGraph adapter | **Planned, optional:** Preferred structural-intelligence path when healthy and approved; filesystem analysis remains available. |
+| OpenCode adapter | **Implemented:** Hardened runtime adapter, one native-first `vgxness-manager`, five read-only review profiles, native skill-name routing, and confirmation-gated explanatory setup are delivered without a plugin or fixed child model. |
+| CodeGraph adapter | **Implemented, optional:** The manager and reviewers may use the read-only `codegraph_explore` MCP tool for bounded structural evidence when a healthy project index exists; exact source and diff inspection remain authoritative fallbacks. |
 | OpenPencil adapter | **Planned, optional:** Design and prototyping path; artifacts remain proposals until separately implemented and verified. |
 | Other runtime/MCP adapters | **Deferred:** Additional integrations may be added without changing core contracts. |
 
@@ -141,7 +141,7 @@ The wizard may detect OpenCode, CodeGraph, and OpenPencil. It may offer to insta
 
 ### Navigator interaction
 
-**Implemented/Partial:** The OpenCode manager matches the user's language, keeps the happy path concise, and uses `vgxness_run` to select the smallest sufficient bounded plan. `fast` forces one task, `auto` permits up to four proportional tasks, and `deep` permits up to sixteen bounded tasks. Broader adapter-independent autonomy and complete SDD routing remain planned.
+**Implemented/Partial:** The OpenCode manager matches the user's language and selects direct inline work, bounded native Task delegation, or optional user-approved SDD. It loads applicable skills through OpenCode's native registry, may consult bounded CodeGraph evidence, performs edits and validation itself, and uses the five read-only review profiles against a frozen candidate. Complete durable SDD artifact routing remains planned.
 
 ### Autonomy profiles
 

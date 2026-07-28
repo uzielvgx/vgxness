@@ -39,9 +39,9 @@ func (fake *fakeSetupRuntime) Status(context.Context, setupflow.Options) (setupf
 func TestSetupWizardPreviewExplainsAllStepsWithoutApplying(t *testing.T) {
 	fake := &fakeSetupRuntime{plan: setupPlanFixture(true)}
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"opencode", "--preview", "--model", "openai/gpt-5.6-sol", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
+	code := runSetup(context.Background(), []string{"opencode", "--preview", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
 	output := stdout.String()
-	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 6") || !strings.Contains(output, "Paso 6 de 6") || !strings.Contains(output, "no se editará PATH") || !strings.Contains(output, "no se modificó ningún archivo") {
+	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 6") || !strings.Contains(output, "Paso 6 de 6") || !strings.Contains(output, "sin plugin ni modelo secundario") || !strings.Contains(output, "no se modificó ningún archivo") {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, output, stderr.String())
 	}
 }
@@ -61,11 +61,11 @@ func TestSetupWizardRequiresExplicitConfirmation(t *testing.T) {
 			plan := setupPlanFixture(true)
 			fake := &fakeSetupRuntime{plan: plan, result: setupflow.Result{
 				SelfInstall: selfinstall.Result{LauncherPath: "/stable/vgxness"},
-				Integration: integration.Result{Path: "/config/agent", ToolPath: "/config/tool"},
+				Integration: integration.Result{Path: "/config/agent"},
 				Bridge:      bridge.Response{OK: true, Status: "healthy"}, Changed: true,
 			}}
 			var stdout, stderr bytes.Buffer
-			code := runSetup(context.Background(), []string{"opencode", "--model", "openai/gpt-5.6-sol", "--workspace", "/workspace"}, strings.NewReader(test.input), &stdout, &stderr, fake)
+			code := runSetup(context.Background(), []string{"opencode", "--workspace", "/workspace"}, strings.NewReader(test.input), &stdout, &stderr, fake)
 			if code != 0 || fake.applyCalls != test.wantApply || stderr.Len() != 0 || !strings.Contains(stdout.String(), test.wantOutput) {
 				t.Fatalf("code=%d apply=%d stdout=%q stderr=%q", code, fake.applyCalls, stdout.String(), stderr.String())
 			}
@@ -78,7 +78,7 @@ func TestSetupWizardBlocksBeforeConfirmationAndStatusIsNonMutating(t *testing.T)
 	blocked.Blocker = "OpenCode no disponible"
 	fake := &fakeSetupRuntime{plan: blocked}
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"opencode", "--model", "openai/gpt-5.6-sol", "--workspace", "/workspace"}, strings.NewReader("sí\n"), &stdout, &stderr, fake)
+	code := runSetup(context.Background(), []string{"opencode", "--workspace", "/workspace"}, strings.NewReader("sí\n"), &stdout, &stderr, fake)
 	if code != 1 || fake.applyCalls != 0 || !strings.Contains(stdout.String(), "bloqueado sin cambios") {
 		t.Fatalf("code=%d apply=%d stdout=%q", code, fake.applyCalls, stdout.String())
 	}
@@ -89,11 +89,11 @@ func TestSetupWizardBlocksBeforeConfirmationAndStatusIsNonMutating(t *testing.T)
 	}
 }
 
-func TestSetupWizardRequiresExplicitModelBeforePlanning(t *testing.T) {
+func TestSetupWizardDoesNotRequireASecondaryModel(t *testing.T) {
 	fake := &fakeSetupRuntime{plan: setupPlanFixture(true)}
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
-	if code != 2 || fake.planCalls != 0 || fake.applyCalls != 0 || !strings.Contains(stderr.String(), "--model provider/model is required") {
+	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 1 || stderr.Len() != 0 {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, stdout.String(), stderr.String())
 	}
 }
@@ -102,7 +102,7 @@ func setupPlanFixture(ready bool) setupflow.Plan {
 	return setupflow.Plan{
 		Provider: "opencode", Steps: setupflow.OpenCodeSteps(), Ready: ready,
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/stable/vgxness", DataDir: "/data"},
-		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ToolPath: "/config/tools/vgxness.ts", Model: "openai/gpt-5.6-sol"},
+		Integration: integration.Result{State: integration.StateAbsent, Bridge: integration.BridgeNotRequired, Path: "/config/agents/vgxness-manager.md"},
 		Bridge:      bridge.Response{OK: ready, Status: "healthy"},
 	}
 }

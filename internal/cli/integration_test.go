@@ -47,15 +47,11 @@ func runIntegrationTest(args []string, runtime integration.Runtime) (int, string
 func TestIntegrationCLI_RoutesEverySupportedAction(t *testing.T) {
 	for _, action := range []string{"preview", "install", "status", "uninstall"} {
 		t.Run(action, func(t *testing.T) {
-			runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeConfigured, Path: "/tmp/config/agent.md", ArtifactSHA256: strings.Repeat("a", 64), ToolPath: "/tmp/config/tools/vgxness.ts", ToolSHA256: strings.Repeat("b", 64), Changed: action == "install"}}
+			runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeNotRequired, Path: "/tmp/config/agent.md", ArtifactSHA256: strings.Repeat("a", 64), Changed: action == "install"}}
 			args := []string{"integrate", "opencode", action, "--config-dir", "/tmp/config"}
-			if action == "preview" || action == "install" {
-				args = append(args, "--model", "openai/gpt-5.6-sol")
-			}
 			code, stdout, stderr := runIntegrationTest(args, runtime)
-			modelOK := action != "preview" && action != "install" || runtime.options.Model == "openai/gpt-5.6-sol"
-			testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.action == action && runtime.options.ConfigDir == "/tmp/config" && modelOK && stderr == "", "exit=%d calls=%d action=%q options=%#v stderr=%q", code, runtime.calls, runtime.action, runtime.options, stderr)
-			testutil.Require(t, strings.Contains(stdout, "provider=opencode\n") && strings.Contains(stdout, "state=installed\n") && strings.Contains(stdout, "bridge=configured\n") && strings.Contains(stdout, "tool_path=/tmp/config/tools/vgxness.ts\n") && strings.Contains(stdout, "changed="), "output=%q", stdout)
+			testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.action == action && runtime.options.ConfigDir == "/tmp/config" && runtime.options.Model == "" && stderr == "", "exit=%d calls=%d action=%q options=%#v stderr=%q", code, runtime.calls, runtime.action, runtime.options, stderr)
+			testutil.Require(t, strings.Contains(stdout, "provider=opencode\n") && strings.Contains(stdout, "state=installed\n") && strings.Contains(stdout, "projection=native\n") && !strings.Contains(stdout, "tool_path=") && !strings.Contains(stdout, "model=") && strings.Contains(stdout, "changed="), "output=%q", stdout)
 		})
 	}
 }
@@ -74,11 +70,15 @@ func TestIntegrationCLI_RejectsUnsupportedInputWithoutCallingRuntime(t *testing.
 	}
 }
 
-func TestIntegrationCLI_RequiresModelForPreviewAndInstall(t *testing.T) {
+func TestIntegrationCLI_ModelIsOptionalAndAcceptedOnlyForCompatibility(t *testing.T) {
 	for _, action := range []string{"preview", "install"} {
-		runtime := &fakeIntegrationRuntime{}
-		code, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", action}, runtime)
-		testutil.Require(t, code == 2 && stdout == "" && runtime.calls == 0 && strings.Contains(stderr, "--model provider/model is required"), "action=%s exit=%d calls=%d stderr=%q", action, code, runtime.calls, stderr)
+		runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent}}
+		code, _, stderr := runIntegrationTest([]string{"integrate", "opencode", action}, runtime)
+		testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.options.Model == "" && stderr == "", "action=%s exit=%d calls=%d stderr=%q", action, code, runtime.calls, stderr)
+
+		runtime = &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent}}
+		code, _, stderr = runIntegrationTest([]string{"integrate", "opencode", action, "--model", "legacy/model"}, runtime)
+		testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.options.Model == "legacy/model" && stderr == "", "compat action=%s exit=%d calls=%d options=%#v stderr=%q", action, code, runtime.calls, runtime.options, stderr)
 	}
 }
 
@@ -95,13 +95,13 @@ func TestIntegrationCLI_ClassifiesErrorsAndKeepsOutputAtomic(t *testing.T) {
 		{errors.New("secret /private/path"), 1, "io:"},
 	} {
 		runtime := &fakeIntegrationRuntime{err: tc.err}
-		code, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", "install", "--model", "openai/gpt-5.6-sol"}, runtime)
+		code, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", "install"}, runtime)
 		testutil.Require(t, code == tc.code && stdout == "" && strings.Contains(stderr, tc.text) && !strings.Contains(stderr, "secret"), "error=%v exit=%d stdout=%q stderr=%q", tc.err, code, stdout, stderr)
 	}
 }
 
 func TestIntegrationCLI_EscapesPathsAndPrintsRecoverableBackup(t *testing.T) {
-	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, Path: "/tmp/line\nagent", ArtifactSHA256: strings.Repeat("b", 64), ToolPath: "/tmp/tool\nfile", ToolSHA256: strings.Repeat("c", 64), Changed: true, BackupPath: "/tmp/backup\x1b", ToolBackupPath: "/tmp/tool-backup\x1b"}}
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, Path: "/tmp/line\nagent", ArtifactSHA256: strings.Repeat("b", 64), Changed: true, BackupPath: "/tmp/backup\x1b"}}
 	code, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", "uninstall"}, runtime)
-	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(stdout, `path=/tmp/line\nagent`) && strings.Contains(stdout, `tool_path=/tmp/tool\nfile`) && strings.Contains(stdout, `backup=/tmp/backup\x1b`) && strings.Contains(stdout, `tool_backup=/tmp/tool-backup\x1b`), "exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(stdout, `path=/tmp/line\nagent`) && strings.Contains(stdout, `backup=/tmp/backup\x1b`) && !strings.Contains(stdout, "tool_"), "exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 }

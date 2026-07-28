@@ -53,7 +53,7 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 
 	environment := isolatedEnvironment(homeDirectory, temporaryDirectory, fakeBinDirectory)
 	setupOutput := run(t, environment, workspace, sourceExecutable,
-		"setup", "opencode", "--yes", "--model", "openai/gpt-5.6-sol", "--workspace", workspace,
+		"setup", "opencode", "--yes", "--workspace", workspace,
 		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
 	)
 	for _, expected := range []string{"Paso 1 de 6", "Paso 6 de 6", "configuración completa", "handshake OpenCode=healthy"} {
@@ -64,16 +64,21 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 
 	launcher := filepath.Join(launcherDirectory, executableName("vgxness"))
 	manager := filepath.Join(configDirectory, "agents", "vgxness-manager.md")
-	tool := filepath.Join(configDirectory, "plugins", "vgxness.ts")
-	for _, path := range []string{launcher, manager, tool} {
+	reviewers := []string{
+		"vgxness-review-risk.md",
+		"vgxness-review-readability.md",
+		"vgxness-review-reliability.md",
+		"vgxness-review-resilience.md",
+		"vgxness-review-refuter.md",
+	}
+	for _, path := range append([]string{launcher, manager}, reviewerPaths(configDirectory, reviewers)...) {
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.Mode().IsRegular() {
 			t.Fatalf("expected installed regular file %s: %v", path, statErr)
 		}
 	}
-	toolData, err := os.ReadFile(tool)
-	if err != nil || !bytes.Contains(toolData, []byte(launcher)) {
-		t.Fatalf("managed bridge does not target stable launcher %s: %v", launcher, err)
+	if _, err := os.Stat(filepath.Join(configDirectory, "plugins", "vgxness.ts")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("native setup installed a deprecated VGXNESS plugin: %v", err)
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {
 		t.Fatalf("retire source executable: %v", err)
@@ -183,6 +188,14 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 	if bytes.Count(continuityLog, []byte(`"type":"task.completed"`)) != 3 || bytes.Count(continuityLog, []byte(`"type":"memory.written"`)) != 3 || bytes.Count(continuityLog, []byte(`"type":"capsule.written"`)) != 3 || !bytes.Contains(continuityLog, []byte(`"type":"run.completed"`)) {
 		t.Fatalf("continuity evidence is incomplete:\n%s", continuityLog)
 	}
+}
+
+func reviewerPaths(configDirectory string, names []string) []string {
+	paths := make([]string, 0, len(names))
+	for _, name := range names {
+		paths = append(paths, filepath.Join(configDirectory, "agents", name))
+	}
+	return paths
 }
 
 func nativeDispatch(t *testing.T, environment []string, workspace, launcher, suffix string, request bridge.DispatchRequest) bridge.Response {

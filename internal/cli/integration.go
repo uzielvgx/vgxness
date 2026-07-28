@@ -12,7 +12,7 @@ import (
 
 func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer, runtime integration.Runtime) int {
 	if len(args) < 2 || args[0] != "opencode" || !integrationAction(args[1]) {
-		fmt.Fprintln(stderr, "usage: vgxness integrate opencode <preview|install|status|uninstall> [--model PROVIDER/MODEL] [--config-dir PATH]")
+		fmt.Fprintln(stderr, "usage: vgxness integrate opencode <preview|install|status|uninstall> [--config-dir PATH]")
 		return 2
 	}
 	action := args[1]
@@ -20,13 +20,9 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 	flags.SetOutput(io.Discard)
 	var options integration.Options
 	flags.StringVar(&options.ConfigDir, "config-dir", "", "OpenCode global config directory")
-	flags.StringVar(&options.Model, "model", "", "explicit OpenCode execution model as provider/model")
+	flags.StringVar(&options.Model, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
 	if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "invalid integration arguments")
-		return 2
-	}
-	if (action == "preview" || action == "install") && strings.TrimSpace(options.Model) == "" {
-		fmt.Fprintln(stderr, "invalid: --model provider/model is required for preview and install")
 		return 2
 	}
 	if runtime == nil {
@@ -51,14 +47,9 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 		return code
 	}
 	var output strings.Builder
-	fmt.Fprintf(&output, "provider=%s\nstate=%s\nbridge=%s\npath=%s\nartifact_sha256=%s\nchanged=%t\n", terminalSafe(result.Provider), result.State, result.Bridge, terminalSafe(result.Path), terminalSafe(result.ArtifactSHA256), result.Changed)
-	fmt.Fprintf(&output, "tool_path=%s\ntool_sha256=%s\n", terminalSafe(result.ToolPath), terminalSafe(result.ToolSHA256))
-	fmt.Fprintf(&output, "model=%s\n", terminalSafe(result.Model))
+	fmt.Fprintf(&output, "provider=%s\nstate=%s\nprojection=native\npath=%s\nartifact_sha256=%s\nchanged=%t\n", terminalSafe(result.Provider), result.State, terminalSafe(result.Path), terminalSafe(result.ArtifactSHA256), result.Changed)
 	if result.BackupPath != "" {
 		fmt.Fprintf(&output, "backup=%s\n", terminalSafe(result.BackupPath))
-	}
-	if result.ToolBackupPath != "" {
-		fmt.Fprintf(&output, "tool_backup=%s\n", terminalSafe(result.ToolBackupPath))
 	}
 	_, _ = io.WriteString(stdout, output.String())
 	return 0

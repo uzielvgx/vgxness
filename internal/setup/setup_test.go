@@ -85,7 +85,7 @@ func (*fakeBridge) Dispatch(context.Context, string, bridge.DispatchRequest) (br
 
 func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/bin/vgxness", DataDir: "/data"}}
-	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ToolPath: "/config/plugins/vgxness.ts"}}
+	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, Bridge: integration.BridgeNotRequired, Path: "/config/agents/vgxness-manager.md"}}
 	health := &fakeBridge{response: bridge.Response{OK: true, Provider: "opencode", Status: "healthy"}}
 	factoryCalls := 0
 	service := New(installer, preview, func(string) (integration.Runtime, error) {
@@ -131,8 +131,8 @@ func TestApplyInstallsThroughStableLauncherAndVerifiesEverything(t *testing.T) {
 	}
 	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}
 	managed := &fakeIntegration{
-		installResult: integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeConfigured, Changed: true},
-		statusResult:  integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeConfigured},
+		installResult: integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeNotRequired, Changed: true},
+		statusResult:  integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeNotRequired},
 	}
 	health := &fakeBridge{response: bridge.Response{OK: true, Provider: "opencode", Status: "healthy"}}
 	requestedLauncher := ""
@@ -149,6 +149,26 @@ func TestApplyInstallsThroughStableLauncherAndVerifiesEverything(t *testing.T) {
 	}
 	if strings.Join(managed.calls, ",") != "integration-install,integration-status" || health.calls != 2 {
 		t.Fatalf("managed=%v health=%d", managed.calls, health.calls)
+	}
+}
+
+func TestStatusReadinessDependsOnOpenCodeAndNativeProfilesNotBridgeProjection(t *testing.T) {
+	installer := &fakeInstaller{
+		statusResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness"},
+	}
+	managed := &fakeIntegration{
+		statusResult: integration.Result{
+			Provider: "opencode",
+			State:    integration.StateInstalled,
+			Bridge:   integration.BridgeUnavailable,
+		},
+	}
+	health := &fakeBridge{response: bridge.Response{OK: true, Provider: "opencode", Status: "healthy"}}
+	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, health)
+
+	plan, err := service.Status(context.Background(), Options{Workspace: "/workspace"})
+	if err != nil || !plan.Ready || plan.Blocker != "" {
+		t.Fatalf("native setup should be ready without bridge projection: plan=%#v err=%v", plan, err)
 	}
 }
 
