@@ -147,6 +147,13 @@ func TestNativeEditPrepareRequiresCleanRepositoryAndCompletionRejectsUnbrokeredC
 		if !errors.Is(err, bridge.ErrDenied) {
 			t.Fatalf("dirty source repository was accepted: %v", err)
 		}
+		if !errors.Is(err, errNativeSourceWorktreeDirty) {
+			t.Fatalf("dirty source denial lost its bounded discriminator: %v", err)
+		}
+		var preparation *nativePreparationError
+		if !errors.As(err, &preparation) || preparation.stage != nativePreparationStageEditWorkspace {
+			t.Fatalf("dirty source denial lost its preparation stage: %#v", preparation)
+		}
 	})
 
 	t.Run("unbrokered worktree mutation", func(t *testing.T) {

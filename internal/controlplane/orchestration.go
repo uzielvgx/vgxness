@@ -211,7 +211,10 @@ func (service *Service) PrepareOrchestrationWave(ctx context.Context, workspace 
 				ParentSessionID: document.ParentSessionID, ChildSessionID: binding.ChildSessionID,
 				Category: "native-subagent-failed",
 			})
-			return orchestrator.NativeDispatchResult{Status: orchestrator.NativeDispatchNotStarted, Failure: "native ticket preparation failed"}
+			return orchestrator.NativeDispatchResult{
+				Status:  orchestrator.NativeDispatchNotStarted,
+				Failure: nativeOrchestrationPreparationFailure(prepareErr, response),
+			}
 		}
 		prepared[binding.TaskID] = *response.Prepared
 		return orchestrator.NativeDispatchResult{Status: orchestrator.NativeDispatchConfirmed}
@@ -238,6 +241,40 @@ func (service *Service) PrepareOrchestrationWave(ctx context.Context, workspace 
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].TaskID < items[j].TaskID })
 	return orchestrationResponse(root, document, items), nil
+}
+
+func nativeOrchestrationPreparationFailure(err error, response bridge.Response) string {
+	if err == nil {
+		if !response.OK || response.Prepared == nil {
+			return "native ticket preparation returned an invalid response"
+		}
+		return "native ticket preparation failed"
+	}
+	var staged *nativePreparationError
+	if errors.As(err, &staged) && staged.stage == nativePreparationStageEditWorkspace {
+		if errors.Is(err, errNativeSourceWorktreeDirty) {
+			return "native ticket preparation denied: source worktree is not clean"
+		}
+		if errors.Is(err, bridge.ErrDenied) {
+			return "native ticket preparation denied during isolated edit workspace setup"
+		}
+		if errors.Is(err, bridge.ErrUnavailable) {
+			return "native ticket preparation unavailable during isolated edit workspace setup"
+		}
+		return "native ticket preparation failed during isolated edit workspace setup"
+	}
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "native ticket preparation was interrupted"
+	case errors.Is(err, bridge.ErrInvalid):
+		return "native ticket preparation rejected an invalid request"
+	case errors.Is(err, bridge.ErrDenied):
+		return "native ticket preparation was denied by policy"
+	case errors.Is(err, bridge.ErrUnavailable):
+		return "native ticket preparation is unavailable"
+	default:
+		return "native ticket preparation failed"
+	}
 }
 
 func (service *Service) RecordOrchestrationTerminal(ctx context.Context, workspace string, request bridge.OrchestrateTerminalRequest) (bridge.Response, error) {

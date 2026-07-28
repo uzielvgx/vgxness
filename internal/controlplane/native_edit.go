@@ -31,6 +31,8 @@ const (
 	nativeArchiveDiagnostic = 4096
 )
 
+var errNativeSourceWorktreeDirty = errors.New("native write source worktree is not clean")
+
 func prepareNativeEditWorkspace(ctx context.Context, workspace, ticketID string) (*nativeEditWorkspace, error) {
 	top, err := runGitCommand(ctx, workspace, nativeGitArgs("rev-parse", "--show-toplevel"), cleanGitEnvironment(nil))
 	if err != nil {
@@ -41,8 +43,11 @@ func prepareNativeEditWorkspace(ctx context.Context, workspace, ticketID string)
 		return nil, fmt.Errorf("%w: write-files requires the canonical Git repository root", bridge.ErrDenied)
 	}
 	status, err := runGitCommand(ctx, workspace, nativeGitArgs("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none", "--", "."), cleanGitEnvironment(nil))
-	if err != nil || len(status) != 0 {
-		return nil, fmt.Errorf("%w: write-files requires a clean source worktree", bridge.ErrDenied)
+	if err != nil {
+		return nil, fmt.Errorf("%w: inspect source worktree status", bridge.ErrExecution)
+	}
+	if len(status) != 0 {
+		return nil, fmt.Errorf("%w: %w", bridge.ErrDenied, errNativeSourceWorktreeDirty)
 	}
 	baseOutput, err := runGitCommand(ctx, workspace, nativeGitArgs("rev-parse", "--verify", "HEAD^{commit}"), cleanGitEnvironment(nil))
 	if err != nil {

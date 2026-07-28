@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -208,6 +209,63 @@ func TestWriteOrchestrationPublishesAuthoritativeEditArtifact(t *testing.T) {
 	})
 	if err != nil || joined.Orchestration == nil || joined.Orchestration.EditArtifacts[binding.TaskID].Worktree != native.Edit.Root {
 		t.Fatalf("joined edit artifact=%#v err=%v", joined, err)
+	}
+}
+
+func TestWriteOrchestrationReportsDirtySourceWithoutLeakingGitDetails(t *testing.T) {
+	workspace := nativeEditRepository(t)
+	if err := os.WriteFile(filepath.Join(workspace, "local-user-change.txt"), []byte("preserve me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	storage := filepath.Join(t.TempDir(), "storage")
+	now := time.Now().UTC()
+	service := New(Options{
+		StorageRoot: storage, Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return nativeTestAdapter(now), nil },
+	})
+	planned, err := service.PlanOrchestration(context.Background(), workspace, bridge.OrchestratePlanRequest{
+		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol",
+		Input:           bridge.OrchestrateInput{Goal: "Update one bounded file"},
+		ParentSessionID: "ses_parent", ParentMessageID: "msg_parent",
+		CandidateTasks: []navigator.Task{{
+			TaskID: "task-edit", Capability: navigator.CapabilityImplement, Operation: navigator.OperationWriteFiles,
+			Goal: "Update the value", DependsOn: []string{}, Continuity: navigator.ContinuityIsolated,
+		}},
+	})
+	if err != nil || planned.Orchestration == nil {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	view := planned.Orchestration
+	binding := bridge.OrchestrationBinding{
+		TaskID: "task-edit", ChildSessionID: "ses_child", TicketID: "ticket-dirty-visible", ClaimToken: "claim-edit",
+	}
+	prepared, err := service.PrepareOrchestrationWave(context.Background(), workspace, bridge.OrchestrateWaveRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+		Bindings: []bridge.OrchestrationBinding{binding},
+	})
+	if err != nil || prepared.Status != "failed" || prepared.Orchestration == nil || len(prepared.Orchestration.Prepared) != 0 {
+		t.Fatalf("prepared=%#v err=%v", prepared, err)
+	}
+	joined, err := service.JoinOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID, OwnerID: view.OwnerID,
+	})
+	if err != nil || joined.Orchestration == nil || len(joined.Orchestration.Join) == 0 {
+		t.Fatalf("joined=%#v err=%v", joined, err)
+	}
+	var join struct {
+		Tasks []struct {
+			Failure string `json:"failure"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(joined.Orchestration.Join, &join); err != nil || len(join.Tasks) != 1 {
+		t.Fatalf("join=%s err=%v", joined.Orchestration.Join, err)
+	}
+	const want = "native ticket preparation denied: source worktree is not clean"
+	if join.Tasks[0].Failure != want || strings.Contains(join.Tasks[0].Failure, "local-user-change.txt") {
+		t.Fatalf("unsafe or unhelpful preparation failure: %q", join.Tasks[0].Failure)
+	}
+	if _, err := os.Stat(filepath.Join(nativeTicketDirectory(storage), binding.TicketID+".json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dirty preparation published a native ticket: %v", err)
 	}
 }
 

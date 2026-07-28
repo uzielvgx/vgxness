@@ -107,6 +107,25 @@ type nativeHostAdapter struct {
 	checkedAt  time.Time
 }
 
+type nativePreparationStage string
+
+const nativePreparationStageEditWorkspace nativePreparationStage = "isolated-edit-workspace"
+
+type nativePreparationError struct {
+	stage nativePreparationStage
+	err   error
+}
+
+func (failure *nativePreparationError) Error() string { return failure.err.Error() }
+func (failure *nativePreparationError) Unwrap() error { return failure.err }
+
+func markNativePreparationStage(stage nativePreparationStage, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &nativePreparationError{stage: stage, err: err}
+}
+
 func (adapter nativeHostAdapter) Descriptor() providers.Descriptor { return adapter.descriptor }
 func (adapter nativeHostAdapter) Health(ctx context.Context) providers.Health {
 	if ctx.Err() != nil {
@@ -163,7 +182,7 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 	if input.Operation == bridge.WriteFiles {
 		editWorkspace, err = prepareNativeEditWorkspace(ctx, root, input.TicketID)
 		if err != nil {
-			return bridge.Response{}, err
+			return bridge.Response{}, markNativePreparationStage(nativePreparationStageEditWorkspace, err)
 		}
 		executionRoot = editWorkspace.Root
 	}
