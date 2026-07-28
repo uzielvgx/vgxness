@@ -20,6 +20,10 @@ type forgetStore interface {
 	Forget(context.Context, string, string, Scope) (Observation, error)
 }
 
+type recentStore interface {
+	Recent(context.Context, Recent) ([]Observation, error)
+}
+
 type SourceVerifier func(context.Context, string, string) error
 
 type MemoryService struct {
@@ -47,6 +51,13 @@ type Recall struct {
 	States                         []State
 	Limit                          int
 	MatchAny                       bool
+}
+
+type Recent struct {
+	Project string
+	Scope   Scope
+	States  []State
+	Limit   int
 }
 
 type Lookup struct {
@@ -131,20 +142,37 @@ func (s MemoryService) Recall(ctx context.Context, request Recall) ([]Entry, err
 	if err != nil {
 		return nil, err
 	}
-	results, remaining := make([]Entry, len(items)), previewBudget
-	for i, item := range items {
-		results[i] = shape(item, false)
-		preview := []rune(item.Content)
-		if len(preview) > previewLimit {
-			preview = preview[:previewLimit]
-		}
-		if len(preview) > remaining {
-			preview = preview[:remaining]
-		}
-		results[i].Preview = string(preview)
-		remaining -= len(preview)
+	return shapePreviews(items), nil
+}
+
+func (s MemoryService) Recent(ctx context.Context, request Recent) ([]Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return results, nil
+	if request.Project == "" || request.Scope != ScopeProject || request.Limit < 0 || request.Limit > 50 || !validMetadata(request.Project) {
+		return nil, fmt.Errorf("%w: invalid recent request", ErrInvalid)
+	}
+	if request.Limit == 0 {
+		request.Limit = 20
+	}
+	request.States = append([]State(nil), request.States...)
+	if len(request.States) == 0 {
+		request.States = []State{StateActive}
+	}
+	for _, state := range request.States {
+		if state != StateActive && state != StateNeedsReview && state != StateArchived {
+			return nil, fmt.Errorf("%w: invalid recent request", ErrInvalid)
+		}
+	}
+	store, ok := s.store.(recentStore)
+	if !ok {
+		return nil, fmt.Errorf("%w: recent recall is unavailable", ErrCorrupt)
+	}
+	items, err := store.Recent(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return shapePreviews(items), nil
 }
 
 func (s MemoryService) Get(ctx context.Context, request Lookup) (Entry, error) {
@@ -251,4 +279,21 @@ func shape(item Observation, content bool) Entry {
 		result.Content = item.Content
 	}
 	return result
+}
+
+func shapePreviews(items []Observation) []Entry {
+	results, remaining := make([]Entry, len(items)), previewBudget
+	for i, item := range items {
+		results[i] = shape(item, false)
+		preview := []rune(item.Content)
+		if len(preview) > previewLimit {
+			preview = preview[:previewLimit]
+		}
+		if len(preview) > remaining {
+			preview = preview[:remaining]
+		}
+		results[i].Preview = string(preview)
+		remaining -= len(preview)
+	}
+	return results
 }

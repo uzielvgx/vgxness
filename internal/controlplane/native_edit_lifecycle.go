@@ -74,7 +74,7 @@ func (service *Service) IssueNativeEditReview(ctx context.Context, workspace str
 	if document.EditLifecycle != nil && document.EditLifecycle.State != "approved" {
 		return bridge.NativeEditReviewResult{}, bridge.ErrDenied
 	}
-	reviewer, err := delivery.New(document.Edit.Root)
+	reviewer, err := delivery.New(document.Edit.Root, service.dispatcher)
 	if err != nil {
 		return bridge.NativeEditReviewResult{}, bridge.ErrExecution
 	}
@@ -372,7 +372,7 @@ func validateNativeEditReviewReceipt(
 	artifact bridge.NativeEditArtifact,
 	receiptID string,
 ) (nativeEditReviewValidation, error) {
-	reviewer, err := delivery.New(document.Edit.Root)
+	reviewer, err := delivery.New(document.Edit.Root, service.dispatcher)
 	if err != nil {
 		return nativeEditReviewValidation{}, bridge.ErrExecution
 	}

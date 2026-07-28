@@ -319,6 +319,35 @@ func TestStore_SearchFiltersAndStableTies(t *testing.T) {
 	testutil.Require(t, first[0].ID == second[0].ID && first[1].ID == second[1].ID, "search order is not stable")
 }
 
+func TestStore_RecentOrdersAndIsolatesProjectScopeAndState(t *testing.T) {
+	store := openTestStore(t)
+	for _, item := range []Observation{
+		observation("old", "project-a", "old active"),
+		observation("tie-b", "project-a", "tied active b"),
+		observation("tie-a", "project-a", "tied active a"),
+		observation("new", "project-a", "new active"),
+		observation("foreign", "project-b", "foreign active"),
+		{ID: "personal", Project: "project-a", Scope: ScopePersonal, Type: "learning", Content: "personal active", Provenance: Provenance{Producer: "test"}, State: StateActive},
+		{ID: "review", Project: "project-a", Scope: ScopeProject, Type: "learning", Content: "needs review", Provenance: Provenance{Producer: "test"}, State: StateNeedsReview},
+	} {
+		mustSave(t, store, item)
+	}
+	for id, updated := range map[string]int64{
+		"old": 10, "tie-a": 20, "tie-b": 20, "new": 30,
+		"foreign": 40, "personal": 40, "review": 40,
+	} {
+		_, err := store.db.Exec(`UPDATE observations SET updated_at=? WHERE id=?`, updated, id)
+		testutil.NoError(t, err)
+	}
+
+	got, err := store.Recent(context.Background(), Recent{Project: "project-a", Scope: ScopeProject, States: []State{StateActive}, Limit: 10})
+	testutil.Require(t, err == nil && len(got) == 4, "recent: %+v %v", got, err)
+	want := []string{"new", "tie-a", "tie-b", "old"}
+	for index := range want {
+		testutil.Require(t, got[index].ID == want[index], "recent order=%+v", got)
+	}
+}
+
 func TestSQLiteMemoryStore_SearchGetIsolationAndOrder(t *testing.T) {
 	store := openTestStore(t)
 	for _, item := range []Observation{

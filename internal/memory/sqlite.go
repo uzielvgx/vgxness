@@ -443,6 +443,52 @@ func (s *Store) Search(ctx context.Context, filter Search) ([]Observation, error
 	return found, nil
 }
 
+func (s *Store) Recent(ctx context.Context, request Recent) ([]Observation, error) {
+	if err := cancelled(ctx); err != nil {
+		return nil, err
+	}
+	if request.Project == "" || request.Scope != ScopeProject || request.Limit < 0 || request.Limit > 50 {
+		return nil, fmt.Errorf("%w: invalid recent input", ErrInvalid)
+	}
+	states := append([]State(nil), request.States...)
+	if len(states) == 0 {
+		states = []State{StateActive}
+	}
+	stateValues := make([]string, len(states))
+	for i, state := range states {
+		if state != StateActive && state != StateNeedsReview && state != StateArchived {
+			return nil, fmt.Errorf("%w: invalid recent lifecycle filter", ErrInvalid)
+		}
+		stateValues[i] = string(state)
+	}
+	query := observationColumns + ` FROM observations o WHERE o.project_id=? AND o.scope=?`
+	args := []any{request.Project, request.Scope}
+	query, args = addStrings(query, args, "o.state", stateValues)
+	query += ` ORDER BY o.updated_at DESC, o.id ASC LIMIT ?`
+	limit := request.Limit
+	if limit == 0 {
+		limit = 20
+	}
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	defer rows.Close()
+	var found []Observation
+	for rows.Next() {
+		item, scanErr := scanObservation(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("%w: read observation", ErrCorrupt)
+		}
+		found = append(found, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, writeError(ctx, err)
+	}
+	return found, nil
+}
+
 func (s *Store) Get(ctx context.Context, id, project string, scope Scope) (Observation, error) {
 	if err := cancelled(ctx); err != nil {
 		return Observation{}, err

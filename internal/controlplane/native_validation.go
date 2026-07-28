@@ -49,7 +49,14 @@ func (service *Service) ValidateNative(ctx context.Context, workspace string, in
 	if err != nil {
 		return bridge.Response{}, err
 	}
-	defer release()
+	ticketReleased := false
+	releaseTicket := func() {
+		if !ticketReleased {
+			release()
+			ticketReleased = true
+		}
+	}
+	defer releaseTicket()
 	if document.State != "prepared" || document.Input.Operation != bridge.WriteFiles && document.Input.Operation != bridge.RepairSystem ||
 		document.Input.ChildSessionID != input.ChildSessionID || document.Edit == nil ||
 		service.now().UTC().After(parseNativeDeadline(document.Deadline)) ||
@@ -60,7 +67,14 @@ func (service *Service) ValidateNative(ctx context.Context, workspace string, in
 	if err != nil {
 		return bridge.Response{}, err
 	}
-	defer leaseGuard.Release()
+	guardReleased := false
+	releaseGuard := func() {
+		if !guardReleased {
+			leaseGuard.Release()
+			guardReleased = true
+		}
+	}
+	defer releaseGuard()
 	if err := verifyNativeEditWorkspace(document); err != nil {
 		return bridge.Response{}, err
 	}
@@ -105,15 +119,19 @@ func (service *Service) ValidateNative(ctx context.Context, workspace string, in
 			document.Validations = nil
 		}
 	}
-	document.Validations = append(document.Validations, bridge.NativeValidationReceipt{
+	receipt := bridge.NativeValidationReceipt{
 		Operation: input.Operation, Packages: append([]string(nil), result.Packages...),
 		InputSHA256: nativeSHA256(requestData), OutputSHA256: result.OutputSHA256,
 		Success: result.Success, ExitCode: result.ExitCode,
 		StartedAt: result.StartedAt, FinishedAt: result.FinishedAt,
-	})
+	}
+	document.Validations = append(document.Validations, receipt)
 	if err := writeNativeTicket(paths.Root, document); err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: persist native validation receipt", bridge.ErrExecution)
 	}
+	releaseGuard()
+	releaseTicket()
+	service.dispatchValidationCompleted(ctx, document.TicketID, receipt, len(result.Changes))
 	return bridge.Response{
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode",
 		Workspace: root, RunID: document.RunID, TaskID: document.TaskID,

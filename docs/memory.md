@@ -1,16 +1,25 @@
 # Native memory
 
 VGXNESS memory is an in-process Go subsystem backed by the existing SQLite and
-FTS5 database. Its core API is `Remember`, `Recall`, `Get`, and `Forget`; it does
-not require a daemon, a second binary, embeddings, or a network service.
+FTS5 database. Its core API is `Remember`, `Recall`, `Recent`, `Get`, and
+`Forget`; it does not require a daemon, a second binary, embeddings, or a
+network service.
 
 ## Strict boundary, flexible core
 
 JSON is a trust-boundary format, not an internal service contract. The CLI keeps
 schema version 1, rejects unknown and duplicate fields, accepts at most 64 KiB,
 and rejects conflicting flag/payload sources. After decoding, adapters construct
-native Go values (`memory.Remember`, `memory.Recall`, `memory.Lookup`, and
-`memory.Forget`). Internal application calls use those values directly.
+native Go values (`memory.Remember`, `memory.Recall`, `memory.Recent`,
+`memory.Lookup`, and `memory.Forget`). Internal application calls use those
+values directly. The `memory search` boundary accepts `matchAny`; OpenCode sets
+it to `true`, while native recall keeps its existing all-term default for other
+callers.
+
+`memory recent` resolves the canonical project from `--workspace`. It returns
+active project-scope observations by default, ordered by most recently updated
+with an ID tiebreak. Results use the same bounded preview shape as search and do
+not expose full content.
 
 The SQLite schema and migrations remain unchanged. `Forget` is a lifecycle
 operation: it atomically marks the observation archived and removes its FTS row.

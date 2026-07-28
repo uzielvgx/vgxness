@@ -2,9 +2,10 @@
 
 VGXNESS installs one persistent primary profile, `vgxness-manager`, five hidden read-only review profiles, and one bounded memory-only plugin.
 
-The plugin exposes exactly:
+The plugin exposes exactly these tools:
 
 - `vgxness_memory_search`
+- `vgxness_memory_recent`
 - `vgxness_memory_get`
 - `vgxness_memory_save`
 - `vgxness_memory_forget`
@@ -30,7 +31,7 @@ vgxness integrate opencode uninstall
 
 `--config-dir` can select a non-default OpenCode configuration directory. The deprecated `--model` flag is accepted temporarily for command compatibility but has no effect.
 
-Preview and status are read-only. Installation creates only absent exact managed artifacts and refuses foreign or drifted content. Uninstall removes only exact managed artifacts, writes recoverable hard-link backups, and refuses drift.
+Preview and status are read-only. Installation creates absent managed artifacts and atomically upgrades only exact catalogued older VGXNESS versions with matching artifact identities. It refuses foreign, modified, malformed, equal-version drifted, or newer content. Uninstall removes only exact managed artifacts, writes recoverable hard-link backups, and refuses drift.
 
 ## Memory authority
 
@@ -38,9 +39,11 @@ VGXNESS's SQLite/FTS5 `MemoryStore` is the only persistent memory authority. The
 
 The default database is `~/.vgxness/memory.db`. Records remain isolated by canonical workspace binding, project, scope, topic, type, state, session, provenance, and references.
 
-The manager:
+The manager and plugin:
 
-- searches memory when prior project decisions, fixes, discoveries, or conventions may matter;
+- automatically recall recent active project memories once on the first top-level manager turn, append them as bounded untrusted reference data, and preserve that context across later model calls and compaction;
+- fall back to the explicit `vgxness_memory_recent` tool only when the automatic bounded context block is absent or unavailable;
+- searches memory with any-term matching when prior project decisions, fixes, discoveries, or conventions may matter;
 - reads full content only after a relevant search result;
 - saves durable evidence-backed knowledge immediately;
 - reuses stable topic keys for evolving subjects;
@@ -50,6 +53,12 @@ The manager:
 Reviewers may search and read memory as non-authoritative context. They cannot save or forget. Memory never proves a candidate diff and never overrides exact source, tests, Git evidence, or Chronicle operational truth.
 
 The plugin launches the exact managed VGXNESS executable with an argument vector and `shell=false`, passes bounded JSON through stdin, limits output and runtime, supports cancellation, and inherits only the minimal home/temp environment required to locate owned storage. It does not forward credentials.
+
+The generated plugin also uses OpenCode's `event`, `chat.message`, `experimental.chat.system.transform`, `experimental.session.compacting`, `tool.execute.before`, `tool.execute.after`, and `dispose` hooks. Session state is closure-owned and bounded. Tool observation retains only tool/session/call correlation, timing, and successful completion; it never captures arguments, output, titles, metadata, prompts, or errors and never mutates tool inputs or outputs. Hook and memory failures are fail-open for chat, compaction, and tool execution.
+
+These generated OpenCode callbacks are the shipped active hook surface. The typed internal Go dispatcher remains available only to in-process callers that explicitly register and inject handlers; the application registers no production handlers.
+
+These OpenCode callbacks are not arbitrary shell hooks or Git hooks. VGXNESS intentionally installs neither; see [Safe hooks](hooks.md) for event semantics, exclusions, and delivery guarantees.
 
 Engram is not part of this integration.
 

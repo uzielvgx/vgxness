@@ -12,15 +12,23 @@ import (
 
 	"github.com/vgxness/vgxness/internal/chronicle"
 	"github.com/vgxness/vgxness/internal/gatekeeper"
+	"github.com/vgxness/vgxness/internal/hooks"
 	"github.com/vgxness/vgxness/internal/providers"
 )
 
 type fakeRunner struct {
-	mu  sync.Mutex
-	run func(context.Context, providers.Request) (providers.Receipt, error)
+	mu      sync.Mutex
+	run     func(context.Context, providers.Request) (providers.Receipt, error)
+	prepare func(context.Context, providers.Request) (providers.Prepared, error)
 }
 
-func (f *fakeRunner) Prepare(context.Context, providers.Request) (providers.Prepared, error) {
+func (f *fakeRunner) Prepare(ctx context.Context, request providers.Request) (providers.Prepared, error) {
+	f.mu.Lock()
+	prepare := f.prepare
+	f.mu.Unlock()
+	if prepare != nil {
+		return prepare(ctx, request)
+	}
 	return providers.Prepared{}, nil
 }
 
@@ -59,6 +67,194 @@ func TestCoordinatorRecordsSuccessfulForegroundLifecycle(t *testing.T) {
 	}
 	if states["work-1"].Status != chronicle.TaskCompleted || states["work-1"].ResultID != "result-1" {
 		t.Fatalf("unexpected durable task state: %+v", states["work-1"])
+	}
+}
+
+func TestCoordinatorDispatchesOnlyCommittedLifecycleEvents(t *testing.T) {
+	log, err := chronicle.NewEventLog(t.TempDir(), "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{run: func(context.Context, providers.Request) (providers.Receipt, error) {
+		return providers.Receipt{ExecutionID: "execution-1", Result: resultDocumentFor(t, "success")}, nil
+	}}
+	var observed []hooks.Event
+	dispatcher, err := hooks.New(hooks.Options{},
+		func(ctx context.Context, event hooks.Event) error {
+			persisted, readErr := log.Read(ctx)
+			if readErr != nil {
+				t.Fatalf("read committed event: %v", readErr)
+			}
+			found := false
+			for _, item := range persisted {
+				if item.ID == hookEventID(event) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("hook observed event before Chronicle commit: %#v", event)
+			}
+			observed = append(observed, event)
+			return nil
+		},
+		func(context.Context, hooks.Event) error { panic("observer failure") },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := New(log, runner, Limits{MaxIterations: 3, MaxBackground: 1, MaxDuration: time.Second, CleanupTimeout: time.Second}, WithDispatcher(dispatcher))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureIDs(coordinator)
+	receipt, err := coordinator.Run(context.Background(), testRequest(t, chronicle.TaskForeground, nil))
+	if err != nil || receipt.Status != chronicle.TaskCompleted {
+		t.Fatalf("receipt=%+v err=%v", receipt, err)
+	}
+	if len(observed) != 2 || observed[0].Name() != hooks.TaskStartedName || observed[1].Name() != hooks.TaskSucceededName ||
+		hookEventID(observed[0]) != receipt.Events[0].ID || hookEventID(observed[1]) != receipt.Events[1].ID {
+		t.Fatalf("observed=%#v receipt=%#v", observed, receipt.Events)
+	}
+}
+
+func TestCoordinatorSlowSuccessHookCannotPreemptResultAccepted(t *testing.T) {
+	log, err := chronicle.NewEventLog(t.TempDir(), "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := hooks.New(hooks.Options{HandlerTimeout: 100 * time.Millisecond}, func(ctx context.Context, event hooks.Event) error {
+		if event.Name() == hooks.TaskSucceededName {
+			<-ctx.Done()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{run: func(context.Context, providers.Request) (providers.Receipt, error) {
+		return providers.Receipt{ExecutionID: "execution-1", Result: resultDocumentFor(t, "success")}, nil
+	}}
+	coordinator, err := New(log, runner, Limits{MaxIterations: 3, MaxBackground: 1, MaxDuration: time.Second, CleanupTimeout: 50 * time.Millisecond}, WithDispatcher(dispatcher))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureIDs(coordinator)
+	receipt, err := coordinator.Run(context.Background(), testRequest(t, chronicle.TaskForeground, nil))
+	if err != nil || receipt.Status != chronicle.TaskCompleted {
+		t.Fatalf("slow observer changed success: receipt=%+v err=%v", receipt, err)
+	}
+	events, err := log.Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEventTypes(t, events, "task.started", "task.completed", "result.accepted")
+}
+
+func TestCoordinatorSlowStartHookCannotExpireNativePrepare(t *testing.T) {
+	log, err := chronicle.NewEventLog(t.TempDir(), "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := hooks.New(hooks.Options{HandlerTimeout: 200 * time.Millisecond}, func(ctx context.Context, event hooks.Event) error {
+		if event.Name() == hooks.TaskStartedName {
+			<-ctx.Done()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{prepare: func(ctx context.Context, _ providers.Request) (providers.Prepared, error) {
+		if err := ctx.Err(); err != nil {
+			return providers.Prepared{}, err
+		}
+		return providers.Prepared{}, nil
+	}}
+	coordinator, err := New(log, runner, Limits{MaxIterations: 3, MaxBackground: 1, MaxDuration: time.Second, CleanupTimeout: time.Second}, WithDispatcher(dispatcher))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureIDs(coordinator)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, receipt, err := coordinator.StartNative(ctx, testRequest(t, chronicle.TaskForeground, nil))
+	if err != nil || receipt.Status != chronicle.TaskRunning {
+		t.Fatalf("slow start observer changed prepare: receipt=%+v err=%v", receipt, err)
+	}
+}
+
+func TestCoordinatorTaskFailureWithoutExitCodeUsesUnknownSentinel(t *testing.T) {
+	log, err := chronicle.NewEventLog(t.TempDir(), "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed hooks.TaskFailed
+	dispatcher, err := hooks.New(hooks.Options{}, func(_ context.Context, event hooks.Event) error {
+		if failed, ok := event.(hooks.TaskFailed); ok {
+			observed = failed
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{run: func(context.Context, providers.Request) (providers.Receipt, error) {
+		return providers.Receipt{}, &providers.Failure{Category: providers.FailureUnavailable, Recoverable: true}
+	}}
+	coordinator, err := New(log, runner, Limits{MaxIterations: 3, MaxBackground: 1, MaxDuration: time.Second, CleanupTimeout: time.Second}, WithDispatcher(dispatcher))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureIDs(coordinator)
+	_, _ = coordinator.Run(context.Background(), testRequest(t, chronicle.TaskForeground, nil))
+	if observed.Meta.ID == "" || observed.ExitCode != -1 {
+		t.Fatalf("task failure exit code=%d event=%#v", observed.ExitCode, observed)
+	}
+	coordinator.dispatchTaskEvents(context.Background(), []chronicle.Event{{
+		ID: "explicit-zero", RunID: "run-1", At: time.Now().UTC().Format(time.RFC3339Nano), Type: "task.failed",
+		Raw: json.RawMessage(`{"taskId":"work-1","failure":{"exitCode":0}}`),
+	}})
+	if observed.Meta.ID != "explicit-zero" || observed.ExitCode != 0 {
+		t.Fatalf("explicit zero exit code was not retained: %#v", observed)
+	}
+}
+
+func TestCoordinatorDoesNotDispatchUncommittedStart(t *testing.T) {
+	log, err := chronicle.NewEventLog(t.TempDir(), "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(log.Path(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	dispatcher, err := hooks.New(hooks.Options{}, func(context.Context, hooks.Event) error { calls++; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := New(log, &fakeRunner{}, Limits{MaxIterations: 1, MaxBackground: 0, MaxDuration: time.Second, CleanupTimeout: time.Second}, WithDispatcher(dispatcher))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := coordinator.StartNative(context.Background(), testRequest(t, chronicle.TaskForeground, nil)); err == nil {
+		t.Fatal("expected Chronicle append failure")
+	}
+	if calls != 0 {
+		t.Fatalf("uncommitted event dispatched %d times", calls)
+	}
+}
+
+func hookEventID(event hooks.Event) string {
+	switch event := event.(type) {
+	case hooks.TaskStarted:
+		return event.Meta.ID
+	case hooks.TaskSucceeded:
+		return event.Meta.ID
+	case hooks.TaskFailed:
+		return event.Meta.ID
+	default:
+		return ""
 	}
 }
 

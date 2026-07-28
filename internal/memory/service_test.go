@@ -12,6 +12,7 @@ import (
 type fakeMemoryStore struct {
 	saved  Observation
 	search Search
+	recent Recent
 	items  []Observation
 	item   Observation
 	err    error
@@ -31,6 +32,11 @@ func (f *fakeMemoryStore) Search(_ context.Context, query Search) ([]Observation
 func (f *fakeMemoryStore) Get(context.Context, string, string, Scope) (Observation, error) {
 	f.calls++
 	return f.item, f.err
+}
+func (f *fakeMemoryStore) Recent(_ context.Context, request Recent) ([]Observation, error) {
+	f.calls++
+	f.recent = request
+	return f.items, f.err
 }
 
 func TestMemoryService_DelegatesValidatedCommandsAndCancellation(t *testing.T) {
@@ -101,6 +107,19 @@ func TestMemoryService_SearchCanUseBoundedAnyTermMatching(t *testing.T) {
 		Query: "architecture reliability", Project: "p", Scope: ScopeProject, MatchAny: true,
 	})
 	testutil.Require(t, err == nil && store.search.Query == `"architecture" OR "reliability"`, "match-any query=%q err=%v", store.search.Query, err)
+}
+
+func TestMemoryService_RecentDefaultsAndBoundsPreviews(t *testing.T) {
+	store := &fakeMemoryStore{items: []Observation{
+		observation("a", "p", strings.Repeat("x", 400)),
+		observation("b", "p", strings.Repeat("y", 400)),
+	}}
+	results, err := NewMemoryService(store, "cli", nil).Recent(context.Background(), Recent{Project: "p", Scope: ScopeProject})
+	testutil.Require(t, err == nil && store.recent.Limit == 20 && len(store.recent.States) == 1 && store.recent.States[0] == StateActive, "recent defaults: %+v %v", store.recent, err)
+	testutil.Require(t, len(results) == 2 && len([]rune(results[0].Preview)) == previewLimit && results[0].Content == "", "recent shape: %+v", results)
+
+	_, err = NewMemoryService(store, "cli", nil).Recent(context.Background(), Recent{Project: "p", Scope: ScopeProject, Limit: 51})
+	testutil.Require(t, errors.Is(err, ErrInvalid), "recent accepted excessive limit: %v", err)
 }
 
 func TestMemoryService_SaveRejectsInvalidReferencesBeforeStore(t *testing.T) {

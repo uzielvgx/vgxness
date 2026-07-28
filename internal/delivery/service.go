@@ -14,15 +14,20 @@ import (
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/contracts"
+	"github.com/vgxness/vgxness/internal/hooks"
 	"github.com/vgxness/vgxness/internal/sensitivepaths"
 )
 
 type Service struct {
 	workspace string
 	now       func() time.Time
+	dispatch  *hooks.Dispatcher
 }
 
-func New(workspace string) (*Service, error) {
+func New(workspace string, dispatchers ...*hooks.Dispatcher) (*Service, error) {
+	if len(dispatchers) > 1 {
+		return nil, fmt.Errorf("%w: multiple hook dispatchers", ErrInvalid)
+	}
 	abs, err := filepath.Abs(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("%w: resolve workspace", ErrInvalid)
@@ -30,7 +35,11 @@ func New(workspace string) (*Service, error) {
 	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
 		abs = resolved
 	}
-	return &Service{workspace: filepath.Clean(abs), now: time.Now}, nil
+	var dispatcher *hooks.Dispatcher
+	if len(dispatchers) == 1 {
+		dispatcher = dispatchers[0]
+	}
+	return &Service{workspace: filepath.Clean(abs), now: time.Now, dispatch: dispatcher}, nil
 }
 
 func (service *Service) Issue(ctx context.Context, options config.Options, request IssueRequest) (Receipt, error) {
@@ -76,6 +85,13 @@ func (service *Service) Issue(ctx context.Context, options config.Options, reque
 	}); err != nil {
 		return Receipt{}, err
 	}
+	// delivery.installed means the receipt was durably persisted and selected
+	// as the active receipt. Dispatch occurs after the store lock is released.
+	issuedAt, _ := time.Parse(time.RFC3339Nano, receipt.IssuedAt)
+	service.dispatch.Dispatch(context.WithoutCancel(ctx), hooks.DeliveryInstalled{
+		Meta:      hooks.Metadata{ID: "delivery-installed-" + receipt.ReceiptID, At: issuedAt.UTC()},
+		ReceiptID: receipt.ReceiptID, ReceiptDigest: receipt.ReceiptID, ChangeCount: len(receipt.Target.Paths),
+	})
 	return receipt, nil
 }
 

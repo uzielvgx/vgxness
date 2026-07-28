@@ -50,6 +50,10 @@ func (runtime memoryRuntime) Recall(ctx context.Context, opts config.Options, re
 	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Recall(ctx, request)
 }
 
+func (runtime memoryRuntime) Recent(ctx context.Context, opts config.Options, request memory.Recent) ([]memory.Entry, error) {
+	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Recent(ctx, request)
+}
+
 func (runtime memoryRuntime) Get(ctx context.Context, opts config.Options, request memory.Lookup) (memory.Entry, error) {
 	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Get(ctx, request)
 }
@@ -107,6 +111,15 @@ func (runtime storeRuntime) Search(ctx context.Context, query memory.Search) ([]
 	}
 	defer store.Close()
 	return store.Search(ctx, query)
+}
+
+func (runtime storeRuntime) Recent(ctx context.Context, request memory.Recent) ([]memory.Observation, error) {
+	store, err := openStoreRead(ctx, runtime.opts)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return store.Recent(ctx, request)
 }
 
 func (runtime storeRuntime) Get(ctx context.Context, id, project string, scope memory.Scope) (memory.Observation, error) {

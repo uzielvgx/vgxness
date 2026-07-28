@@ -18,6 +18,7 @@ import (
 type MemoryRuntime interface {
 	Remember(context.Context, config.Options, memory.Remember) (memory.Entry, error)
 	Recall(context.Context, config.Options, memory.Recall) ([]memory.Entry, error)
+	Recent(context.Context, config.Options, memory.Recent) ([]memory.Entry, error)
 	Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error)
 	Forget(context.Context, config.Options, memory.Forget) (memory.Entry, error)
 	ResolveProject(context.Context, config.Options, string) (string, error)
@@ -35,10 +36,11 @@ type memoryInput struct {
 	TopicKey      string       `json:"topic"`
 	Session       string       `json:"session"`
 	Limit         int          `json:"limit"`
+	MatchAny      bool         `json:"matchAny"`
 }
 
 func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
-	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "get" && args[0] != "forget") || runtime == nil {
+	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget") || runtime == nil {
 		fmt.Fprintln(stderr, "invalid: unsupported memory operation")
 		return 2
 	}
@@ -102,7 +104,7 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	var result any
 	switch verb {
 	case "save":
-		if input.ID != "" || input.Query != "" || input.Limit != 0 {
+		if input.ID != "" || input.Query != "" || input.Limit != 0 || payloadFields["matchAny"] {
 			err = memory.ErrInvalid
 			break
 		}
@@ -112,9 +114,15 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 			err = memory.ErrInvalid
 			break
 		}
-		result, err = runtime.Recall(ctx, opts, memory.Recall{Query: input.Query, Project: input.Project, Scope: input.Scope, Type: input.Type, TopicKey: input.TopicKey, Limit: input.Limit})
+		result, err = runtime.Recall(ctx, opts, memory.Recall{Query: input.Query, Project: input.Project, Scope: input.Scope, Type: input.Type, TopicKey: input.TopicKey, Limit: input.Limit, MatchAny: input.MatchAny})
+	case "recent":
+		if input.ID != "" || input.Title != "" || input.Content != "" || input.Query != "" || input.Type != "" || input.TopicKey != "" || input.Session != "" || payloadFields["matchAny"] {
+			err = memory.ErrInvalid
+			break
+		}
+		result, err = runtime.Recent(ctx, opts, memory.Recent{Project: input.Project, Scope: input.Scope, Limit: input.Limit})
 	case "get", "forget":
-		if input.Title != "" || input.Content != "" || input.Query != "" || input.Type != "" || input.TopicKey != "" || input.Session != "" || input.Limit != 0 {
+		if input.Title != "" || input.Content != "" || input.Query != "" || input.Type != "" || input.TopicKey != "" || input.Session != "" || input.Limit != 0 || payloadFields["matchAny"] {
 			err = memory.ErrInvalid
 			break
 		}

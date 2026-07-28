@@ -17,6 +17,7 @@ import (
 	"github.com/vgxness/vgxness/internal/codegraph"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/gatekeeper"
+	"github.com/vgxness/vgxness/internal/hooks"
 	"github.com/vgxness/vgxness/internal/orchestrator"
 	"github.com/vgxness/vgxness/internal/prompts"
 	"github.com/vgxness/vgxness/internal/providers"
@@ -67,6 +68,7 @@ type Options struct {
 	NewID            func(string) (string, error)
 	StatusTimeout    time.Duration
 	ContinuityFault  ContinuityFault
+	Dispatcher       *hooks.Dispatcher
 }
 
 type Service struct {
@@ -80,6 +82,7 @@ type Service struct {
 	memory          MemoryRuntime
 	statusTimeout   time.Duration
 	continuityFault ContinuityFault
+	dispatcher      *hooks.Dispatcher
 }
 
 func New(options Options) *Service {
@@ -111,7 +114,7 @@ func New(options Options) *Service {
 	if statusTimeout <= 0 {
 		statusTimeout = defaultStatusTimeout
 	}
-	return &Service{storageRoot: options.StorageRoot, adapter: factory, codegraph: codegraphFactory, now: now, newID: newID, inspectGit: inspectGit, inspectBaseline: inspectBaseline, memory: options.Memory, statusTimeout: statusTimeout, continuityFault: options.ContinuityFault}
+	return &Service{storageRoot: options.StorageRoot, adapter: factory, codegraph: codegraphFactory, now: now, newID: newID, inspectGit: inspectGit, inspectBaseline: inspectBaseline, memory: options.Memory, statusTimeout: statusTimeout, continuityFault: options.ContinuityFault, dispatcher: options.Dispatcher}
 }
 
 func (service *Service) Status(ctx context.Context, workspace string) (bridge.Response, error) {
@@ -217,7 +220,7 @@ func (service *Service) Dispatch(ctx context.Context, workspace string, input br
 	}
 	coordinator, err := orchestrator.New(log, runner, orchestrator.Limits{
 		MaxIterations: 1, MaxBackground: 0, MaxDuration: 10 * time.Minute, CleanupTimeout: 5 * time.Second,
-	})
+	}, orchestrator.WithDispatcher(service.dispatcher))
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}

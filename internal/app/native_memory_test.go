@@ -57,3 +57,22 @@ func TestMemoryRuntimeResolvesCanonicalWorkspaceForPluginCalls(t *testing.T) {
 		t.Fatalf("workspace recall: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
 	}
 }
+
+func TestMemoryRuntimeRecentUsesCanonicalWorkspace(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"memory", "save", "--stdin", "--workspace", workspace, "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"title":"Recent","content":"recent canonical memory"}`), &out, &stderr)
+	if code != 0 {
+		t.Fatalf("save: code=%d stderr=%q", code, stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"memory", "recent", "--stdin", "--workspace", workspace, "--storage-root", root, "--json"}, strings.NewReader(`{"schemaVersion":1,"limit":5}`), &out, &stderr)
+	if code != 0 || !strings.Contains(out.String(), `"Title":"Recent"`) || strings.Contains(out.String(), `"Content":"recent canonical memory"`) {
+		t.Fatalf("recent: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	}
+}

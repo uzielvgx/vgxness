@@ -258,7 +258,7 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 	} else if log, err = chronicle.NewEventLog(paths.Root, runID); err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: chronicle", bridge.ErrExecution)
 	}
-	coordinator, err := orchestrator.New(log, runner, orchestrator.Limits{MaxIterations: 1, MaxBackground: 0, MaxDuration: 10 * time.Minute, CleanupTimeout: 5 * time.Second})
+	coordinator, err := orchestrator.New(log, runner, orchestrator.Limits{MaxIterations: 1, MaxBackground: 0, MaxDuration: 10 * time.Minute, CleanupTimeout: 5 * time.Second}, orchestrator.WithDispatcher(service.dispatcher))
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}
@@ -337,9 +337,21 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 	if err != nil {
 		return bridge.Response{}, err
 	}
-	defer release()
+	ticketReleased := false
+	releaseTicket := func() {
+		if !ticketReleased {
+			release()
+			ticketReleased = true
+		}
+	}
+	defer releaseTicket()
 	if document.Input.Operation == bridge.RepairSystem {
-		return service.completeNativeRepair(ctx, root, paths, document, input)
+		response, completeErr := service.completeNativeRepair(ctx, root, paths, document, input)
+		releaseTicket()
+		if completeErr == nil {
+			service.dispatchCandidateFrozen(ctx, document.TicketID, response)
+		}
+		return response, completeErr
 	}
 	digest := nativeCompletionDigest(input.ParentSessionID, input.ChildSessionID, input.MessageID, input.Result)
 	if document.State == "completed" || document.State == "failed" {
@@ -347,7 +359,10 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 			if err := releaseNativeLease(paths.Root, document.TicketID); err != nil {
 				return bridge.Response{}, err
 			}
-			return *document.Response, nil
+			response := *document.Response
+			releaseTicket()
+			service.dispatchCandidateFrozen(ctx, document.TicketID, response)
+			return response, nil
 		}
 		return bridge.Response{}, bridge.ErrDenied
 	}
@@ -358,7 +373,14 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 	if err != nil {
 		return bridge.Response{}, err
 	}
-	defer leaseGuard.Release()
+	guardReleased := false
+	releaseGuard := func() {
+		if !guardReleased {
+			leaseGuard.Release()
+			guardReleased = true
+		}
+	}
+	defer releaseGuard()
 	var editArtifact *bridge.NativeEditArtifact
 	if document.Input.Operation == bridge.WriteFiles {
 		var outcome struct {
@@ -445,6 +467,9 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 	if err := releaseNativeLeaseLocked(paths.Root, document.TicketID); err != nil {
 		return bridge.Response{}, err
 	}
+	releaseGuard()
+	releaseTicket()
+	service.dispatchCandidateFrozen(ctx, document.TicketID, response)
 	return response, nil
 }
 
@@ -701,7 +726,7 @@ func (service *Service) nativeCoordinator(ctx context.Context, paths config.Path
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: chronicle", bridge.ErrExecution)
 	}
-	coordinator, err := orchestrator.New(log, runner, orchestrator.Limits{MaxIterations: 1, MaxBackground: 0, MaxDuration: 10 * time.Minute, CleanupTimeout: 5 * time.Second})
+	coordinator, err := orchestrator.New(log, runner, orchestrator.Limits{MaxIterations: 1, MaxBackground: 0, MaxDuration: 10 * time.Minute, CleanupTimeout: 5 * time.Second}, orchestrator.WithDispatcher(service.dispatcher))
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}

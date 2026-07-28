@@ -17,6 +17,8 @@ import (
 type fakeMemoryRuntime struct {
 	result  memory.MemoryResult
 	items   []memory.MemoryResult
+	recall  memory.Recall
+	recent  memory.Recent
 	project string
 	err     error
 	calls   int
@@ -26,8 +28,9 @@ func (f *fakeMemoryRuntime) Save(context.Context, config.Options, memory.SaveReq
 	f.calls++
 	return f.result, f.err
 }
-func (f *fakeMemoryRuntime) Search(context.Context, config.Options, memory.SearchRequest) ([]memory.MemoryResult, error) {
+func (f *fakeMemoryRuntime) Search(_ context.Context, _ config.Options, request memory.SearchRequest) ([]memory.MemoryResult, error) {
 	f.calls++
+	f.recall = request
 	return f.items, f.err
 }
 func (f *fakeMemoryRuntime) Get(context.Context, config.Options, memory.GetRequest) (memory.MemoryResult, error) {
@@ -40,6 +43,12 @@ func (f *fakeMemoryRuntime) ResolveProject(context.Context, config.Options, stri
 		return "resolved-project", f.err
 	}
 	return f.project, f.err
+}
+
+func (f *fakeMemoryRuntime) Recent(_ context.Context, _ config.Options, request memory.Recent) ([]memory.Entry, error) {
+	f.calls++
+	f.recent = request
+	return f.items, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
@@ -92,6 +101,29 @@ func TestMemoryCLI_ResolvesWorkspaceWithoutCallerControlledProject(t *testing.T)
 	runtime = &fakeMemoryRuntime{}
 	code, out, _ := runMemoryTest([]string{"memory", "search", "--stdin", "--workspace", workspace, "--project", "forged"}, `{"schemaVersion":1,"query":"durable"}`, runtime)
 	testutil.Require(t, code == 2 && runtime.calls == 0 && out == "", "workspace accepted caller project: code=%d calls=%d out=%q", code, runtime.calls, out)
+}
+
+func TestMemoryCLI_RoutesRecentAndMatchAnyStrictly(t *testing.T) {
+	workspace := t.TempDir()
+	runtime := &fakeMemoryRuntime{project: "workspace-project"}
+	code, _, stderr := runMemoryTest([]string{"memory", "recent", "--stdin", "--workspace", workspace, "--json"}, `{"schemaVersion":1,"limit":7}`, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && runtime.recent.Project == "workspace-project" && runtime.recent.Scope == memory.ScopeProject && runtime.recent.Limit == 7, "recent route: code=%d calls=%d request=%+v stderr=%q", code, runtime.calls, runtime.recent, stderr)
+
+	runtime = &fakeMemoryRuntime{}
+	code, _, stderr = runMemoryTest([]string{"memory", "search", "--stdin"}, `{"schemaVersion":1,"query":"architecture reliability","project":"p","scope":"project","matchAny":true}`, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && runtime.recall.MatchAny, "matchAny route: code=%d calls=%d request=%+v stderr=%q", code, runtime.calls, runtime.recall, stderr)
+
+	wrongVerbPayloads := map[string]string{
+		"save":   `{"schemaVersion":1,"content":"x","matchAny":true}`,
+		"get":    `{"schemaVersion":1,"id":"entry","project":"p","scope":"project","matchAny":true}`,
+		"forget": `{"schemaVersion":1,"id":"entry","project":"p","scope":"project","matchAny":true}`,
+		"recent": `{"schemaVersion":1,"project":"p","scope":"project","matchAny":true}`,
+	}
+	for verb, payload := range wrongVerbPayloads {
+		runtime = &fakeMemoryRuntime{}
+		code, out, _ := runMemoryTest([]string{"memory", verb, "--stdin"}, payload, runtime)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == 0, "%s accepted matchAny: code=%d calls=%d", verb, code, runtime.calls)
+	}
 }
 
 func TestMemoryCLI_RenderStableSafeAndAtomicOutput(t *testing.T) {

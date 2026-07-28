@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/vgxness/vgxness/internal/chronicle"
 	"github.com/vgxness/vgxness/internal/contracts"
+	"github.com/vgxness/vgxness/internal/hooks"
 	"github.com/vgxness/vgxness/internal/providers"
 )
 
@@ -75,6 +77,17 @@ type Coordinator struct {
 	lockRoot string
 	now      func() time.Time
 	newID    func() (string, error)
+	dispatch *hooks.Dispatcher
+}
+
+type Option func(*Coordinator) error
+
+// WithDispatcher adds best-effort post-Chronicle lifecycle notifications.
+func WithDispatcher(dispatcher *hooks.Dispatcher) Option {
+	return func(coordinator *Coordinator) error {
+		coordinator.dispatch = dispatcher
+		return nil
+	}
 }
 
 type FileLock struct{ slot heldSlot }
@@ -86,7 +99,7 @@ func AcquireFileLock(path string) (FileLock, error) {
 func (lock FileLock) Release() { lock.slot.release() }
 
 // New creates a bounded coordinator for the run owned by log.
-func New(log *chronicle.EventLog, runner ProviderRunner, limits Limits) (*Coordinator, error) {
+func New(log *chronicle.EventLog, runner ProviderRunner, limits Limits, options ...Option) (*Coordinator, error) {
 	if log == nil || nilInterface(runner) || limits.MaxIterations < 1 || limits.MaxBackground < 0 || limits.MaxDuration <= 0 || limits.CleanupTimeout <= 0 {
 		return nil, ErrInvalidCoordinator
 	}
@@ -97,16 +110,22 @@ func New(log *chronicle.EventLog, runner ProviderRunner, limits Limits) (*Coordi
 		return nil, ErrInvalidCoordinator
 	}
 	root := filepath.Dir(filepath.Dir(log.Path()))
-	return &Coordinator{
+	coordinator := &Coordinator{
 		log: log, runner: runner, limits: limits, runID: runID,
 		lockRoot: filepath.Join(root, "coordination-locks"), now: time.Now, newID: randomID,
-	}, nil
+	}
+	for _, option := range options {
+		if option == nil || option(coordinator) != nil {
+			return nil, ErrInvalidCoordinator
+		}
+	}
+	return coordinator, nil
 }
 
 // StartNative validates, authorizes, composes, and records a task start without
 // running a provider process. The returned ticket is completed by a later
 // bridge call after OpenCode executes a native child session.
-func (c *Coordinator) StartNative(ctx context.Context, request providers.Request) (NativeTicket, Receipt, error) {
+func (c *Coordinator) StartNative(ctx context.Context, request providers.Request) (ticket NativeTicket, receipt Receipt, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return NativeTicket{}, Receipt{}, err
 	}
@@ -131,8 +150,11 @@ func (c *Coordinator) StartNative(ctx context.Context, request providers.Request
 	if err != nil {
 		return NativeTicket{}, Receipt{}, err
 	}
-	defer slot.release()
-	receipt := Receipt{Status: chronicle.TaskPending}
+	defer func() {
+		slot.release()
+		c.dispatchTaskEvents(context.WithoutCancel(ctx), receipt.Events)
+	}()
+	receipt = Receipt{Status: chronicle.TaskPending}
 	started, err := c.appendStarted(ctx, packet, request)
 	if err != nil {
 		return NativeTicket{}, receipt, err
@@ -156,7 +178,7 @@ func (c *Coordinator) StartNative(ctx context.Context, request providers.Request
 
 // CompleteNative accepts one native child result and records the same terminal
 // Chronicle evidence as the synchronous provider path.
-func (c *Coordinator) CompleteNative(ctx context.Context, ticket NativeTicket, resultData []byte) (Receipt, error) {
+func (c *Coordinator) CompleteNative(ctx context.Context, ticket NativeTicket, resultData []byte) (receipt Receipt, resultErr error) {
 	packet, err := decodePacket(ctx, ticket.Request.Packet)
 	if err != nil || ticket.RunID != c.runID || ticket.TaskID != packet.Context.TaskID || ticket.Mode != ticket.Request.Mode {
 		return Receipt{}, fmt.Errorf("%w: native ticket identity mismatch", ErrInvalidCoordinator)
@@ -165,7 +187,10 @@ func (c *Coordinator) CompleteNative(ctx context.Context, ticket NativeTicket, r
 	if !ok {
 		return Receipt{}, ErrInvalidCoordinator
 	}
-	receipt := Receipt{Status: chronicle.TaskRunning}
+	receipt = Receipt{Status: chronicle.TaskRunning}
+	defer func() {
+		c.dispatchTaskEvents(context.WithoutCancel(ctx), receipt.Events)
+	}()
 	providerReceipt, runErr := runner.Accept(ctx, ticket.Prepared, resultData)
 	resultDigest := nativeEvidenceDigest(resultData)
 	cleanup, cancelCleanup := c.cleanupContext(ctx)
@@ -337,7 +362,7 @@ func (c *Coordinator) replayNativeFailure(ctx context.Context, taskID, category,
 }
 
 // FailNative records a host-side child-session failure for a started ticket.
-func (c *Coordinator) FailNative(ctx context.Context, ticket NativeTicket, category string) (Receipt, error) {
+func (c *Coordinator) FailNative(ctx context.Context, ticket NativeTicket, category string) (receipt Receipt, resultErr error) {
 	packet, err := decodePacket(ctx, ticket.Request.Packet)
 	if err != nil || ticket.RunID != c.runID || ticket.TaskID != packet.Context.TaskID || ticket.Mode != ticket.Request.Mode {
 		return Receipt{}, fmt.Errorf("%w: native ticket identity mismatch", ErrInvalidCoordinator)
@@ -347,6 +372,9 @@ func (c *Coordinator) FailNative(ctx context.Context, ticket NativeTicket, categ
 	}
 	digest := nativeEvidenceDigest(ticket.RunID, ticket.TaskID, ticket.Mode, category)
 	cleanup, cancelCleanup := c.cleanupContext(ctx)
+	defer func() {
+		c.dispatchTaskEvents(context.WithoutCancel(ctx), receipt.Events)
+	}()
 	defer cancelCleanup()
 	failed, err := c.recordNativeFailure(cleanup, packet, ticket.Mode, map[string]any{
 		"category": category, "digest": digest, "nextSafeAction": "Retry the bounded task after checking the native OpenCode subagent.",
@@ -360,7 +388,7 @@ func (c *Coordinator) FailNative(ctx context.Context, ticket NativeTicket, categ
 // Run executes one foreground or read-only background task. Foreground capacity
 // is one slot; background capacity is Limits.MaxBackground slots. Slot files use
 // platform file locks so separate VGXNESS processes cannot exceed the same run's bounds.
-func (c *Coordinator) Run(ctx context.Context, request providers.Request) (Receipt, error) {
+func (c *Coordinator) Run(ctx context.Context, request providers.Request) (receipt Receipt, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return Receipt{}, err
 	}
@@ -390,9 +418,12 @@ func (c *Coordinator) Run(ctx context.Context, request providers.Request) (Recei
 	if err != nil {
 		return Receipt{}, err
 	}
-	defer slot.release()
+	defer func() {
+		slot.release()
+		c.dispatchTaskEvents(context.WithoutCancel(ctx), receipt.Events)
+	}()
 
-	receipt := Receipt{Status: chronicle.TaskRunning}
+	receipt = Receipt{Status: chronicle.TaskRunning}
 	started, err := c.appendStarted(ctx, packet, request)
 	if err != nil {
 		return receipt, err
@@ -578,6 +609,63 @@ func (c *Coordinator) appendFailed(ctx context.Context, packet packetDocument, m
 	}
 	fields["failure"] = cleanFailure
 	return c.appendEvent(ctx, fields)
+}
+
+func (c *Coordinator) dispatchTaskEvents(ctx context.Context, events []chronicle.Event) {
+	for _, event := range events {
+		var evidence struct {
+			TaskID       string `json:"taskId"`
+			ResultID     string `json:"resultId"`
+			ResultDigest string `json:"resultDigest"`
+			Failure      struct {
+				Digest   string `json:"digest"`
+				ExitCode *int   `json:"exitCode"`
+			} `json:"failure"`
+		}
+		if json.Unmarshal(event.Raw, &evidence) != nil {
+			continue
+		}
+		meta := hooks.Metadata{ID: event.ID, At: hookTime(event.At)}
+		mode := chronicle.TaskForeground
+		if strings.HasPrefix(event.Type, "background.") {
+			mode = chronicle.TaskBackground
+		}
+		switch event.Type {
+		case "task.started", "background.started":
+			c.dispatch.Dispatch(ctx, hooks.TaskStarted{Meta: meta, RunID: event.RunID, TaskID: evidence.TaskID, Mode: hookMode(mode)})
+		case "task.completed", "background.completed":
+			c.dispatch.Dispatch(ctx, hooks.TaskSucceeded{
+				Meta: meta, RunID: event.RunID, TaskID: evidence.TaskID, Mode: hookMode(mode),
+				ResultID: evidence.ResultID, ResultDigest: hookDigest(evidence.ResultDigest),
+			})
+		case "task.failed", "background.failed":
+			exitCode := -1
+			if evidence.Failure.ExitCode != nil {
+				exitCode = *evidence.Failure.ExitCode
+			}
+			c.dispatch.Dispatch(ctx, hooks.TaskFailed{
+				Meta: meta, RunID: event.RunID, TaskID: evidence.TaskID, Mode: hookMode(mode), ResultID: evidence.ResultID,
+				FailureDigest: hookDigest(evidence.Failure.Digest), ExitCode: exitCode,
+			})
+		}
+	}
+}
+
+func hookMode(mode chronicle.TaskMode) hooks.Mode {
+	if mode == chronicle.TaskBackground {
+		return hooks.ModeBackground
+	}
+	return hooks.ModeForeground
+}
+
+func hookTime(value string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339Nano, value)
+	return parsed.UTC()
+}
+
+func hookDigest(value string) string {
+	value = strings.TrimPrefix(value, "sha256:")
+	return strings.TrimPrefix(value, "sha256-")
 }
 
 func (c *Coordinator) appendLoopTerminated(ctx context.Context, packet packetDocument, reason string) (chronicle.Event, error) {

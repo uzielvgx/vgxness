@@ -9,11 +9,79 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/vgxness/vgxness/internal/config"
+	"github.com/vgxness/vgxness/internal/hooks"
 )
+
+func TestIssueDispatchesAfterReceiptIsPersistedAndActive(t *testing.T) {
+	repository := newRepository(t)
+	writeProjectFile(t, repository, "feature.txt", "delivery authority\n")
+	options := config.Options{StorageRoot: filepath.Join(t.TempDir(), "state")}
+	var service *Service
+	var calls atomic.Int32
+	var identity string
+	dispatcher, err := hooks.New(hooks.Options{HandlerTimeout: time.Second},
+		func(ctx context.Context, event hooks.Event) error {
+			installed, ok := event.(hooks.DeliveryInstalled)
+			if !ok {
+				return nil
+			}
+			status, statusErr := service.Status(ctx, options)
+			if statusErr != nil || status.Current.State != "active" || status.Receipt.ReceiptID != installed.ReceiptID {
+				t.Fatalf("hook observed inactive receipt: status=%+v err=%v", status, statusErr)
+			}
+			identity = installed.Meta.ID
+			calls.Add(1)
+			return nil
+		},
+		func(context.Context, hooks.Event) error { panic("observer failure") },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err = New(repository, dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := service.Issue(context.Background(), options, IssueRequest{Manifest: validManifest()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Issue(context.Background(), options, IssueRequest{Manifest: validManifest()}); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || identity != "delivery-installed-"+receipt.ReceiptID {
+		t.Fatalf("calls=%d identity=%q receipt=%q", calls.Load(), identity, receipt.ReceiptID)
+	}
+}
+
+func TestIssueDoesNotDispatchBeforeStoreCommit(t *testing.T) {
+	repository := newRepository(t)
+	writeProjectFile(t, repository, "feature.txt", "delivery authority\n")
+	var calls atomic.Int32
+	dispatcher, err := hooks.New(hooks.Options{}, func(context.Context, hooks.Event) error { calls.Add(1); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(repository, dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storageRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(storageRoot, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Issue(context.Background(), config.Options{StorageRoot: storageRoot}, IssueRequest{Manifest: validManifest()}); err == nil {
+		t.Fatal("expected store failure")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("uncommitted delivery dispatched %d times", calls.Load())
+	}
+}
 
 func TestReceiptSurvivesWorktreeStageAndCommitRepresentations(t *testing.T) {
 	repository := newRepository(t)

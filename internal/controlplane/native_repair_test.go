@@ -11,6 +11,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/config"
+	"github.com/vgxness/vgxness/internal/hooks"
 )
 
 func TestNativeRepairBypassesDirtyCheckoutAndNormalLeaseButRequiresFreshValidation(t *testing.T) {
@@ -26,7 +27,17 @@ func TestNativeRepairBypassesDirtyCheckoutAndNormalLeaseButRequiresFreshValidati
 
 	now := time.Now().UTC()
 	storage := filepath.Join(t.TempDir(), "storage")
-	service := New(Options{StorageRoot: storage, Now: func() time.Time { return now }})
+	var repairFrozen bool
+	dispatcher, err := hooks.New(hooks.Options{}, func(_ context.Context, event hooks.Event) error {
+		if frozen, ok := event.(hooks.CandidateFrozen); ok && frozen.TicketID == "ticket-repair" {
+			repairFrozen = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(Options{StorageRoot: storage, Now: func() time.Time { return now }, Dispatcher: dispatcher})
 	paths, err := config.Prepare(context.Background(), config.Options{StorageRoot: storage, ProjectDir: workspace})
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +112,9 @@ func TestNativeRepairBypassesDirtyCheckoutAndNormalLeaseButRequiresFreshValidati
 	if err != nil || completed.Status != "completed" || completed.EditArtifact == nil ||
 		len(completed.EditArtifact.Changes) != 1 || completed.EditArtifact.Changes[0].Path != "README.md" {
 		t.Fatalf("validated repair did not produce an artifact: %#v err=%v", completed, err)
+	}
+	if !repairFrozen {
+		t.Fatal("validated native repair did not dispatch candidate.frozen")
 	}
 	inspected, err := service.InspectNativeEdit(context.Background(), workspace, bridge.NativeEditInspectRequest{TicketID: "ticket-repair"})
 	if err != nil || inspected.Artifact.ManifestSHA != completed.EditArtifact.ManifestSHA {
