@@ -51,7 +51,8 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	toolInfo, err := os.Stat(installed.ToolPath)
 	testutil.NoError(t, err)
 	for name, expected := range map[string]string{
-		navigatorAgentName: navigatorPrompt, explorerAgentName: explorerPrompt, implementerAgentName: implementerPrompt, maintainerAgentName: maintainerPrompt, reviewerAgentName: reviewerPrompt,
+		nativeManagerName: nativeManagerPrompt, navigatorAgentName: navigatorPrompt, explorerAgentName: explorerPrompt,
+		implementerAgentName: implementerPrompt, maintainerAgentName: maintainerPrompt, reviewerAgentName: reviewerPrompt,
 	} {
 		content, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", name))
 		testutil.NoError(t, readErr)
@@ -215,6 +216,77 @@ permission:
 	for _, importedMechanic := range forbidden {
 		if strings.Contains(managerPrompt, importedMechanic) {
 			t.Errorf("manager prompt imports incompatible mechanic %q", importedMechanic)
+		}
+	}
+}
+
+func TestNativeManagerUsesOnlyOpenCodeNativeDelegation(t *testing.T) {
+	expectedFrontmatter := `---
+description: Native OpenCode manager for direct diagnosis, implementation, and verification without VGXNESS orchestration
+mode: primary
+color: primary
+permission:
+  "*": allow
+  task:
+    "*": deny
+    explore: allow
+    general: allow
+  external_directory: deny
+  webfetch: deny
+  websearch: deny
+  vgxness_status: deny
+  vgxness_run: deny
+  vgxness_dispatch: deny
+  vgxness_orchestrate: deny
+  vgxness_task_claim: deny
+  vgxness_task_complete: deny
+  vgxness_native_read: deny
+  vgxness_native_edit: deny
+  vgxness_native_validate: deny
+  vgxness_codegraph: deny
+  bash:
+    "*": allow
+    "git push": deny
+    "git push *": deny
+    "git commit": ask
+    "git commit *": ask
+    "git reset --hard": deny
+    "git reset --hard*": deny
+    "git clean": deny
+    "git clean *": deny
+    "git checkout -- *": deny
+    "git restore *": deny
+    "git branch -D *": deny
+    "rm -rf *": deny
+    "rm -fr *": deny
+    "rm -r *": deny
+    "sudo": deny
+    "sudo *": deny
+---
+
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-native-manager; version: 1 -->`
+	if !strings.HasPrefix(nativeManagerPrompt, expectedFrontmatter) {
+		t.Fatalf("native manager prompt has invalid OpenCode frontmatter:\n%s", nativeManagerPrompt)
+	}
+	for _, required := range []string{
+		"independent OpenCode-native engineering agent",
+		"do not use VGXNESS orchestration, tickets, waves",
+		"built-in explore subagent",
+		"built-in general subagent",
+		"Parallelize only independent read-only investigations",
+		"Never ask the user to run terminal, Git, filesystem, test, or diagnostic commands",
+		"A VGXNESS policy denial is evidence about the broken path",
+		"run gofmt on changed Go files",
+		"go test ./... plus go vet ./...",
+		"Do not commit or push unless the user explicitly asks",
+	} {
+		if !strings.Contains(nativeManagerPrompt, required) {
+			t.Errorf("native manager prompt is missing contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{"vgxness_run: allow", "vgxness_dispatch: allow", "vgxness_orchestrate: allow", "vgxness-explorer: allow", "vgxness-implementer: allow"} {
+		if strings.Contains(nativeManagerPrompt, forbidden) {
+			t.Errorf("native manager accidentally enables control-plane delegation %q", forbidden)
 		}
 	}
 }
@@ -887,7 +959,7 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 	_, targetErr := os.Stat(installed.Path)
 	_, toolTargetErr := os.Stat(installed.ToolPath)
 	subagentsRemoved := true
-	for _, name := range []string{navigatorAgentName, explorerAgentName, implementerAgentName, maintainerAgentName, reviewerAgentName} {
+	for _, name := range []string{nativeManagerName, navigatorAgentName, explorerAgentName, implementerAgentName, maintainerAgentName, reviewerAgentName} {
 		if _, statErr := os.Stat(filepath.Join(configDirectory, "agents", name)); !os.IsNotExist(statErr) {
 			subagentsRemoved = false
 		}

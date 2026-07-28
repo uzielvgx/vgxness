@@ -64,6 +64,7 @@ vgxness integrate opencode uninstall
 The default targets are:
 
 - `~/.config/opencode/agents/vgxness-manager.md` — the persistent primary agent.
+- `~/.config/opencode/agents/vgxness-native-manager.md` — a separately selectable primary maintenance agent that uses OpenCode-native tools and delegates only to built-in `explore` and `general`, without VGXNESS orchestration.
 - `~/.config/opencode/agents/vgxness-navigator.md` — tool-denied candidate-task planning; it cannot inspect the workspace or choose execution policy.
 - `~/.config/opencode/agents/vgxness-explorer.md` — read-only native inspection whose exact file contents and optional CodeGraph structural queries pass through ticket-authenticated VGXNESS brokers.
 - `~/.config/opencode/agents/vgxness-implementer.md` — isolated implementation through ticket-authenticated read, edit, and closed Go validation brokers; direct filesystem editing, shell, Git, network, and delegation remain denied.
