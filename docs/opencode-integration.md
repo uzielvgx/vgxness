@@ -1,6 +1,6 @@
 # OpenCode integration
 
-VGXNESS installs a persistent OpenCode primary agent named `vgxness-manager`, four hidden permission-scoped subagents, and a managed plugin that exposes the goal-first `vgxness_run` entrypoint plus the lower-level `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate` tools. Ticket-owning explorer children additionally receive `vgxness_native_read` and the optional `vgxness_codegraph` structural broker. OpenCode remains the user interface and native subagent runtime; VGXNESS remains the authority for prompt identity, permissions, routing, deterministic waves, bounded coordination, evidence, memory decisions, and durable state.
+VGXNESS installs a persistent OpenCode primary agent named `vgxness-manager`, four hidden permission-scoped subagents, and a managed plugin that exposes the goal-first `vgxness_run` entrypoint plus the lower-level `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate` tools. Ticket-owning explorer children additionally receive `vgxness_native_read` and the optional `vgxness_codegraph` structural broker; implementers receive ticket-bound read, edit, and Go validation brokers. OpenCode remains the user interface and native subagent runtime; VGXNESS remains the authority for prompt identity, permissions, routing, deterministic waves, bounded coordination, evidence, memory decisions, and durable state.
 
 ## CLI
 
@@ -66,9 +66,9 @@ The default targets are:
 - `~/.config/opencode/agents/vgxness-manager.md` — the persistent primary agent.
 - `~/.config/opencode/agents/vgxness-navigator.md` — tool-denied candidate-task planning; it cannot inspect the workspace or choose execution policy.
 - `~/.config/opencode/agents/vgxness-explorer.md` — read-only native inspection whose exact file contents and optional CodeGraph structural queries pass through ticket-authenticated VGXNESS brokers.
-- `~/.config/opencode/agents/vgxness-implementer.md` — isolated implementation through ticket-authenticated read and edit brokers; direct filesystem editing, shell, Git, network, and delegation remain denied.
+- `~/.config/opencode/agents/vgxness-implementer.md` — isolated implementation through ticket-authenticated read, edit, and closed Go validation brokers; direct filesystem editing, shell, Git, network, and delegation remain denied.
 - `~/.config/opencode/agents/vgxness-reviewer.md` — review of immutable Git evidence with no direct tool access.
-- `~/.config/opencode/plugins/vgxness.ts` — the managed plugin whose manager tools become `vgxness_run`, `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate`; visible Task children receive `vgxness_task_claim` and `vgxness_task_complete`, the explorer receives ticket-bound read and CodeGraph brokers, and the implementer receives ticket-bound read and edit brokers.
+- `~/.config/opencode/plugins/vgxness.ts` — the managed plugin whose manager tools become `vgxness_run`, `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate`; visible Task children receive `vgxness_task_claim` and `vgxness_task_complete`, the explorer receives ticket-bound read and CodeGraph brokers, and the implementer receives ticket-bound read, edit, and Go validation brokers.
 
 ## Manager personality and language boundary
 
@@ -148,6 +148,16 @@ Visible orchestration preserves a bounded preparation-stage diagnostic when disp
 The implementer has no direct edit tool. It can discover paths while its ticket is active, read exact UTF-8 content through `vgxness_native_read`, and call `vgxness_native_edit` sequentially. Every successful existing-file read returns the SHA-256 of the complete file, including partial paged reads; a missing creation target returns no digest. The edit broker replaces one regular file of at most 256 KiB only when the caller supplies that latest full-file SHA-256 (or the SHA-256 from the preceding edit receipt). A new file requires `create=true` and an already existing parent directory. Each ticket permits at most 32 edits. Sensitive paths, stale digests, traversal, symlink or hard-link aliases, submodule boundaries, missing parents, deletion, rename, permission change, and non-text content are denied.
 
 Every accepted edit is atomic and its path, old digest, new digest, byte count, and creation state are persisted before the broker responds. Completion rechecks the worktree identity and base commit, rejects staged or direct out-of-broker changes, verifies every final file against the last broker receipt, and publishes an authoritative manifest digest plus the isolated worktree path through the native response and orchestration join.
+
+## Ticket-bound Go validation
+
+The implementer can call `vgxness_native_validate` only while it owns a prepared `write-files` ticket. The broker exposes exactly three operations: `format`, `test`, and `vet`. It accepts no executable, shell text, flags, environment variables, or working directory. Package inputs are limited to at most sixteen canonical local selectors such as `.`, `./internal/app`, or `./...`; an omitted test or vet selector defaults to `./...`.
+
+`format` resolves the host's configured Go toolchain once, runs its `gofmt` binary over the current edited `.go` contents, and applies changed output through the same digest-guarded edit primitive. Formatting therefore cannot create an unreceipted worktree mutation. `test` and `vet` materialize the committed base into a broker-owned temporary directory, overlay only the latest receipted edits, and execute `go` from that same resolved toolchain directly without a shell. Their filesystem side effects are discarded with that validation copy and never become part of the integration artifact.
+
+Each operation has a fixed deadline and 256 KiB combined-output limit, terminates its broker process and Unix descendants on cancellation, uses a minimal credential-free environment, disables toolchain switching and module downloads, prevents module-file updates, and records input/output digests, outcome, exit code, package selectors, and timestamps in the durable ticket. A ticket permits at most sixteen validations. Failed tests are returned as bounded evidence rather than converted into bridge transport failures.
+
+This is an execution broker, not a portable OS sandbox: repository test code still executes with the local user account and may initiate its own system or network access. VGXNESS withholds inherited credentials, isolates the validation filesystem, and exposes no arbitrary command surface, but operators that require hostile-code isolation must run the OpenCode/VGXNESS host inside an OS sandbox or disposable machine.
 
 VGXNESS does not silently copy, merge, commit, or delete the isolated result. The source checkout stays unchanged until an operator uses the local lifecycle:
 

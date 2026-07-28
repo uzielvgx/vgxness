@@ -280,6 +280,24 @@ func TestDecodeNativeCodeGraphRequiresOneBoundedStructuralQuery(t *testing.T) {
 	}
 }
 
+func TestDecodeNativeValidationAllowsOnlyClosedGoOperations(t *testing.T) {
+	request, err := DecodeNativeValidation(strings.NewReader(`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"test","packages":[".","./internal/bridge","./internal/..."]}`))
+	if err != nil || request.Operation != NativeValidationTest || len(request.Packages) != 3 {
+		t.Fatalf("request=%#v err=%v", request, err)
+	}
+	for _, input := range []string{
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"shell","packages":["./..."]}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"format","packages":["./..."]}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"test","packages":["../..."]}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"vet","packages":["-json"]}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"test","packages":["./internal bridge"]}`,
+	} {
+		if _, err := DecodeNativeValidation(strings.NewReader(input)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("accepted unsafe validation request %s: %v", input, err)
+		}
+	}
+}
+
 func TestBridgeOutputBoundCoversWorstCaseNativeJSONEscaping(t *testing.T) {
 	count := (MaxNativeResultBytes - 2) / len("\u2028")
 	result := json.RawMessage(`"` + strings.Repeat("\u2028", count) + `"`)

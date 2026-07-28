@@ -40,30 +40,32 @@ const (
 	nativeAdmissionRetry      = 2 * time.Millisecond
 	nativeCodeGraphTimeout    = 30 * time.Second
 	nativeMaxCodeGraphQueries = 16
+	nativeMaxValidations      = 16
 )
 
 type nativeTicketDocument struct {
-	SchemaVersion       string                          `json:"schemaVersion"`
-	TicketID            string                          `json:"ticketId"`
-	Workspace           string                          `json:"workspace"`
-	WorkspaceID         string                          `json:"workspaceIdentity"`
-	Input               bridge.DispatchRequest          `json:"input"`
-	RunID               string                          `json:"runId"`
-	TaskID              string                          `json:"taskId"`
-	Deadline            string                          `json:"deadline"`
-	State               string                          `json:"state"`
-	Coordinator         orchestrator.NativeTicket       `json:"coordinator"`
-	Continuity          *nativeContinuityState          `json:"continuity,omitempty"`
-	Memory              *nativeMemoryState              `json:"memory,omitempty"`
-	CompletionSHA       string                          `json:"completionSha256,omitempty"`
-	CompletionMessageID string                          `json:"completionMessageId,omitempty"`
-	TerminalStatus      string                          `json:"terminalStatus,omitempty"`
-	TerminalFailure     string                          `json:"terminalFailure,omitempty"`
-	Response            *bridge.Response                `json:"response,omitempty"`
-	CodeGraph           []bridge.NativeCodeGraphReceipt `json:"codegraph,omitempty"`
-	Edit                *nativeEditWorkspace            `json:"editWorkspace,omitempty"`
-	Edits               []bridge.NativeEditResult       `json:"edits,omitempty"`
-	EditLifecycle       *nativeEditLifecycleDocument    `json:"editLifecycle,omitempty"`
+	SchemaVersion       string                           `json:"schemaVersion"`
+	TicketID            string                           `json:"ticketId"`
+	Workspace           string                           `json:"workspace"`
+	WorkspaceID         string                           `json:"workspaceIdentity"`
+	Input               bridge.DispatchRequest           `json:"input"`
+	RunID               string                           `json:"runId"`
+	TaskID              string                           `json:"taskId"`
+	Deadline            string                           `json:"deadline"`
+	State               string                           `json:"state"`
+	Coordinator         orchestrator.NativeTicket        `json:"coordinator"`
+	Continuity          *nativeContinuityState           `json:"continuity,omitempty"`
+	Memory              *nativeMemoryState               `json:"memory,omitempty"`
+	CompletionSHA       string                           `json:"completionSha256,omitempty"`
+	CompletionMessageID string                           `json:"completionMessageId,omitempty"`
+	TerminalStatus      string                           `json:"terminalStatus,omitempty"`
+	TerminalFailure     string                           `json:"terminalFailure,omitempty"`
+	Response            *bridge.Response                 `json:"response,omitempty"`
+	CodeGraph           []bridge.NativeCodeGraphReceipt  `json:"codegraph,omitempty"`
+	Validations         []bridge.NativeValidationReceipt `json:"validations,omitempty"`
+	Edit                *nativeEditWorkspace             `json:"editWorkspace,omitempty"`
+	Edits               []bridge.NativeEditResult        `json:"edits,omitempty"`
+	EditLifecycle       *nativeEditLifecycleDocument     `json:"editLifecycle,omitempty"`
 }
 
 type nativeEditWorkspace struct {

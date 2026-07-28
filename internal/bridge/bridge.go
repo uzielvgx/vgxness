@@ -42,6 +42,7 @@ var (
 type Operation string
 type ContinuityMode string
 type CodeGraphOperation string
+type NativeValidationOperation string
 
 const (
 	ReadFiles        Operation = "read-files"
@@ -53,6 +54,10 @@ const (
 	CodeGraphExplore  CodeGraphOperation = "explore"
 	CodeGraphImpact   CodeGraphOperation = "impact"
 	CodeGraphAffected CodeGraphOperation = "affected"
+
+	NativeValidationFormat NativeValidationOperation = "format"
+	NativeValidationTest   NativeValidationOperation = "test"
+	NativeValidationVet    NativeValidationOperation = "vet"
 
 	ContinuitySingle   ContinuityMode = ""
 	ContinuityStart    ContinuityMode = "start"
@@ -233,6 +238,37 @@ type NativeCodeGraphReceipt struct {
 	FinishedAt   string             `json:"finishedAt"`
 }
 
+type NativeValidationRequest struct {
+	ProtocolVersion string                    `json:"protocolVersion"`
+	TicketID        string                    `json:"ticketId"`
+	ChildSessionID  string                    `json:"childSessionId"`
+	Operation       NativeValidationOperation `json:"operation"`
+	Packages        []string                  `json:"packages,omitempty"`
+}
+
+type NativeValidationResult struct {
+	Operation    NativeValidationOperation `json:"operation"`
+	Packages     []string                  `json:"packages,omitempty"`
+	Success      bool                      `json:"success"`
+	ExitCode     int                       `json:"exitCode"`
+	Output       string                    `json:"output,omitempty"`
+	OutputSHA256 string                    `json:"outputSha256"`
+	Changes      []NativeEditResult        `json:"changes,omitempty"`
+	StartedAt    string                    `json:"startedAt"`
+	FinishedAt   string                    `json:"finishedAt"`
+}
+
+type NativeValidationReceipt struct {
+	Operation    NativeValidationOperation `json:"operation"`
+	Packages     []string                  `json:"packages,omitempty"`
+	InputSHA256  string                    `json:"inputSha256"`
+	OutputSHA256 string                    `json:"outputSha256"`
+	Success      bool                      `json:"success"`
+	ExitCode     int                       `json:"exitCode"`
+	StartedAt    string                    `json:"startedAt"`
+	FinishedAt   string                    `json:"finishedAt"`
+}
+
 type PreparedDispatch struct {
 	TicketID     string        `json:"ticketId"`
 	ExecutionID  string        `json:"executionId"`
@@ -270,26 +306,27 @@ type Receipt struct {
 }
 
 type Response struct {
-	ProtocolVersion string                 `json:"protocolVersion"`
-	OK              bool                   `json:"ok"`
-	Bridge          string                 `json:"bridge"`
-	Provider        string                 `json:"provider"`
-	Workspace       string                 `json:"workspace,omitempty"`
-	RunID           string                 `json:"runId,omitempty"`
-	TaskID          string                 `json:"taskId,omitempty"`
-	CapsuleID       string                 `json:"capsuleId,omitempty"`
-	StateVersion    int                    `json:"stateVersion,omitempty"`
-	MemoryRefs      []string               `json:"memoryRefs,omitempty"`
-	Status          string                 `json:"status"`
-	Result          json.RawMessage        `json:"result,omitempty"`
-	Receipt         *Receipt               `json:"receipt,omitempty"`
-	Prepared        *PreparedDispatch      `json:"prepared,omitempty"`
-	Read            *NativeReadResult      `json:"read,omitempty"`
-	Edit            *NativeEditResult      `json:"edit,omitempty"`
-	EditArtifact    *NativeEditArtifact    `json:"editArtifact,omitempty"`
-	CodeGraph       *NativeCodeGraphResult `json:"codegraph,omitempty"`
-	Orchestration   *OrchestrationView     `json:"orchestration,omitempty"`
-	Error           *Error                 `json:"error,omitempty"`
+	ProtocolVersion string                  `json:"protocolVersion"`
+	OK              bool                    `json:"ok"`
+	Bridge          string                  `json:"bridge"`
+	Provider        string                  `json:"provider"`
+	Workspace       string                  `json:"workspace,omitempty"`
+	RunID           string                  `json:"runId,omitempty"`
+	TaskID          string                  `json:"taskId,omitempty"`
+	CapsuleID       string                  `json:"capsuleId,omitempty"`
+	StateVersion    int                     `json:"stateVersion,omitempty"`
+	MemoryRefs      []string                `json:"memoryRefs,omitempty"`
+	Status          string                  `json:"status"`
+	Result          json.RawMessage         `json:"result,omitempty"`
+	Receipt         *Receipt                `json:"receipt,omitempty"`
+	Prepared        *PreparedDispatch       `json:"prepared,omitempty"`
+	Read            *NativeReadResult       `json:"read,omitempty"`
+	Edit            *NativeEditResult       `json:"edit,omitempty"`
+	EditArtifact    *NativeEditArtifact     `json:"editArtifact,omitempty"`
+	CodeGraph       *NativeCodeGraphResult  `json:"codegraph,omitempty"`
+	Validation      *NativeValidationResult `json:"validation,omitempty"`
+	Orchestration   *OrchestrationView      `json:"orchestration,omitempty"`
+	Error           *Error                  `json:"error,omitempty"`
 }
 
 type OrchestrationPreparedTask struct {
@@ -325,6 +362,7 @@ type NativeRuntime interface {
 	ReadNative(context.Context, string, NativeReadRequest) (Response, error)
 	EditNative(context.Context, string, NativeEditRequest) (Response, error)
 	QueryNativeCodeGraph(context.Context, string, NativeCodeGraphRequest) (Response, error)
+	ValidateNative(context.Context, string, NativeValidationRequest) (Response, error)
 }
 
 type OrchestrationRuntime interface {
@@ -453,6 +491,14 @@ func DecodeNativeCodeGraph(reader io.Reader) (NativeCodeGraphRequest, error) {
 	return request, nil
 }
 
+func DecodeNativeValidation(reader io.Reader) (NativeValidationRequest, error) {
+	var request NativeValidationRequest
+	if err := decodeExact(reader, MaxRequestBytes, &request); err != nil || ValidateNativeValidation(request) != nil {
+		return NativeValidationRequest{}, ErrInvalid
+	}
+	return request, nil
+}
+
 func ValidateNativeCompletion(request NativeCompletionRequest) error {
 	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ParentSessionID) || !validNativeIdentity(request.ChildSessionID) || !validNativeIdentity(request.MessageID) || len(request.Result) == 0 || len(request.Result) > MaxNativeResultBytes || !json.Valid(request.Result) {
 		return ErrInvalid
@@ -529,6 +575,55 @@ func ValidateNativeCodeGraph(request NativeCodeGraphRequest) error {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func ValidateNativeValidation(request NativeValidationRequest) error {
+	if request.ProtocolVersion != ProtocolVersion || !validNativeIdentity(request.TicketID) ||
+		!validNativeIdentity(request.ChildSessionID) || len(request.Packages) > 16 {
+		return ErrInvalid
+	}
+	switch request.Operation {
+	case NativeValidationFormat:
+		if len(request.Packages) != 0 {
+			return ErrInvalid
+		}
+	case NativeValidationTest, NativeValidationVet:
+		for _, selector := range request.Packages {
+			if !validGoPackageSelector(selector) {
+				return ErrInvalid
+			}
+		}
+	default:
+		return ErrInvalid
+	}
+	return nil
+}
+
+func validGoPackageSelector(value string) bool {
+	if value == "." || value == "./..." {
+		return true
+	}
+	if len(value) < 3 || len(value) > 256 || !strings.HasPrefix(value, "./") ||
+		strings.HasSuffix(value, "/") || strings.Contains(value, "//") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(value, "./"), "/")
+	for index, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+		if part == "..." {
+			return index == len(parts)-1
+		}
+		for _, character := range part {
+			if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+				character >= '0' && character <= '9' || character == '_' || character == '-' || character == '.' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func ValidateOrchestrateRequest(request OrchestrateRequest) error {

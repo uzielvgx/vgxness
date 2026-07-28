@@ -166,19 +166,20 @@ permission:
   "*": deny
   vgxness_native_read: allow
   vgxness_native_edit: allow
+  vgxness_native_validate: allow
   vgxness_task_claim: allow
   vgxness_task_complete: allow
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-implementer; version: 6 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-implementer; version: 7 -->
 
 You are the native VGXNESS implementer. There are exactly two top-level input envelopes:
 
 - For kind vgxness.visible-task.directive, first call vgxness_task_claim exactly once with its identities. Execute only the exact content-bound prompt returned by that claim, then call vgxness_task_complete exactly once with the compact agent.result JSON string. After successful completion, return one short plain-language completion sentence.
 - For kind vgxness.direct-dispatch.directive, execute only its preparedPrompt and return exactly one agent.result JSON object without calling vgxness_task_claim or vgxness_task_complete.
 
-Reject every other top-level input shape. Never call glob or list: the isolated worktree is outside the source checkout and built-in discovery is not authorized there. Read exact file content through vgxness_native_read. A read receipt with exists=false means the exact path is available for creation and is not a blocker. Replace an existing file through vgxness_native_edit only with the SHA-256 returned by its latest read or edit receipt; create a new file only with create=true. Parent directories must already exist. Keep edits within the supplied goal and acceptance criteria, and stop once they are satisfied. Call ticket-bound broker tools sequentially. Never use direct file editing, shell, Git, network, package installation, delegation, commits, pushes, deletes, renames, symlinks, hard links, or permission changes. The source checkout is not modified: report the isolated worktree artifact returned by VGXNESS as requiring explicit integration.
+Reject every other top-level input shape. Never call glob or list: the isolated worktree is outside the source checkout and built-in discovery is not authorized there. Read exact file content through vgxness_native_read. A read receipt with exists=false means the exact path is available for creation and is not a blocker. Replace an existing file through vgxness_native_edit only with the SHA-256 returned by its latest read or edit receipt; create a new file only with create=true. Parent directories must already exist. Keep edits within the supplied goal and acceptance criteria. For Go changes, call vgxness_native_validate with format first, then test and vet using only the smallest relevant canonical package selectors; use ./... only when repository-wide validation is justified. Formatting is applied through the same content-bound edit broker, while test and vet run in a disposable validation copy. Treat a returned success=false as validation evidence, fix the cause through read/edit, and rerun only the affected validation. Call ticket-bound broker tools sequentially and stop once the acceptance criteria are satisfied. Never use direct file editing, shell, Git, network, package installation, delegation, commits, pushes, deletes, renames, symlinks, hard links, or permission changes. The source checkout is not modified: report the isolated worktree artifact returned by VGXNESS as requiring explicit integration.
 `
 	reviewerPrompt = `---
 description: VGXNESS native reviewer for bounded pre-collected change evidence
@@ -631,12 +632,13 @@ func bridgeToolContent(executable, model string) ([]byte, error) {
 	import { randomUUID } from "node:crypto"
 	import { tool } from "@opencode-ai/plugin"
 
-	// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 29
+	// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 30
 	const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 	const VGXNESS_MODEL = ` + string(quotedModel) + `
 	const MAX_OUTPUT_BYTES = __MAX_OUTPUT_BYTES__
 	const MAX_ORCHESTRATION_RESULT_BYTES = __MAX_ORCHESTRATION_RESULT_BYTES__
 	const TERMINAL_TIMEOUT_MS = 30_000
+	const VALIDATION_TIMEOUT_MS = 130_000
 	const VISIBLE_CLAIM_TIMEOUT_MS = 300_000
 	const MAX_NATIVE_DISPATCHES = 4
 	const nativeTickets = new Map()
@@ -1441,6 +1443,32 @@ async function readBounded(stream) {
 	          ))
 	          if (!envelope.ok || !envelope.edit) throw new Error(bridgeFailure(envelope, "VGXNESS native edit was denied"))
 	          return JSON.stringify(envelope.edit)
+	        },
+	      }),
+	      vgxness_native_validate: tool({
+	        description: "Run one closed Go validation operation for the active write ticket. format rewrites edited Go files through the content-bound broker; test and vet accept only canonical package selectors and run in a disposable validation copy.",
+	        args: {
+	          operation: tool.schema.enum(["format", "test", "vet"]),
+	          packages: tool.schema.array(tool.schema.string()).optional(),
+	        },
+	        async execute(args, context) {
+	          const workspace = context.worktree || context.directory
+	          const active = nativeTickets.get(context.sessionID)
+	          if (!active || active.operation !== "write-files") {
+	            throw new Error("No active VGXNESS native write ticket for validation")
+	          }
+	          const envelope = await withNativeTicketLane(active, () => invokeBounded(
+	            ["bridge", "validate", "--stdin"],
+	            {
+	              protocolVersion: "1", ticketId: active.ticketId, childSessionId: context.sessionID,
+	              operation: args.operation, packages: args.packages,
+	            },
+	            workspace,
+	            VALIDATION_TIMEOUT_MS,
+	            context.abort,
+	          ))
+	          if (!envelope.ok || !envelope.validation) throw new Error(bridgeFailure(envelope, "VGXNESS native validation was denied"))
+	          return JSON.stringify(envelope.validation)
 	        },
 	      }),
 	      vgxness_codegraph: tool({

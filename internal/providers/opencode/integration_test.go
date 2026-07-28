@@ -109,10 +109,10 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 	for _, required := range []string{
 		`import { spawn } from "node:child_process"`, "spawn(VGXNESS_EXECUTABLE, [...args", `const VGXNESS_EXECUTABLE = "`,
 		`const VGXNESS_MODEL = "openai/gpt-5.6-sol"`, fmt.Sprintf("const MAX_OUTPUT_BYTES = %d", bridge.MaxBridgeOutputBytes),
-		`client.session.create`, `client.session.prompt`, `["bridge", "prepare", "--stdin"]`, `["bridge", "read", "--stdin"]`, `["bridge", "edit", "--stdin"]`, `["bridge", "codegraph", "--stdin"]`,
+		`client.session.create`, `client.session.prompt`, `["bridge", "prepare", "--stdin"]`, `["bridge", "read", "--stdin"]`, `["bridge", "edit", "--stdin"]`, `["bridge", "validate", "--stdin"]`, `["bridge", "codegraph", "--stdin"]`,
 		`["bridge", "complete", "--stdin"]`, `value.protocolVersion !== "1"`, `"review-changes"`,
 		`tool.schema.enum(["start", "continue", "finish"]).optional()`, `runId: tool.schema.string().optional()`,
-		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `output: JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 29",
+		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `output: JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 30",
 		"shell: false", `child?.kill("SIGKILL")`, "invokeBounded", "invokeTerminal", "nativeTickets.delete(childSessionId)",
 		"MAX_NATIVE_DISPATCHES = 4", "acquireNativeCapacity", "VGXNESS native dispatch capacity exhausted", "releaseCapacity()",
 		"vgxness_run", "startVisibleOrchestration", `tool.schema.enum(["fast", "auto", "deep"]).optional()`,
@@ -235,10 +235,10 @@ func TestManagedNativeSubagentsHaveRoleSpecificFailClosedPermissions(t *testing.
 			}
 		}
 	}
-	if strings.Contains(implementerPrompt, "\n  read: allow\n") || strings.Contains(implementerPrompt, "\n  edit: allow\n") || strings.Contains(implementerPrompt, "\n  write: allow\n") || strings.Contains(implementerPrompt, "grep: allow") || strings.Contains(implementerPrompt, "lsp: allow") || strings.Contains(implementerPrompt, "codegraph_*: allow") || !strings.Contains(implementerPrompt, "vgxness_native_read: allow") || !strings.Contains(implementerPrompt, "vgxness_native_edit: allow") {
+	if strings.Contains(implementerPrompt, "\n  read: allow\n") || strings.Contains(implementerPrompt, "\n  edit: allow\n") || strings.Contains(implementerPrompt, "\n  write: allow\n") || strings.Contains(implementerPrompt, "grep: allow") || strings.Contains(implementerPrompt, "lsp: allow") || strings.Contains(implementerPrompt, "codegraph_*: allow") || !strings.Contains(implementerPrompt, "vgxness_native_read: allow") || !strings.Contains(implementerPrompt, "vgxness_native_edit: allow") || !strings.Contains(implementerPrompt, "vgxness_native_validate: allow") {
 		t.Fatal("implementer exposes an alternate write path")
 	}
-	if !strings.Contains(implementerPrompt, "vgxness_task_claim: allow") || !strings.Contains(implementerPrompt, "vgxness_task_complete: allow") || !strings.Contains(implementerPrompt, "SHA-256 returned by its latest read or edit receipt") {
+	if !strings.Contains(implementerPrompt, "vgxness_task_claim: allow") || !strings.Contains(implementerPrompt, "vgxness_task_complete: allow") || !strings.Contains(implementerPrompt, "SHA-256 returned by its latest read or edit receipt") || !strings.Contains(implementerPrompt, "disposable validation copy") {
 		t.Fatal("implementer is missing the ticket-authenticated edit protocol")
 	}
 	if strings.Contains(implementerPrompt, "  glob: allow") || strings.Contains(implementerPrompt, "  list: allow") || !strings.Contains(implementerPrompt, "Never call glob or list") || !strings.Contains(implementerPrompt, "exists=false") {

@@ -11,13 +11,13 @@ import (
 
 func runBridge(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime bridge.Runtime) int {
 	validCommands := map[string]bool{
-		"status": true, "prepare": true, "complete": true, "fail": true, "read": true, "edit": true, "codegraph": true,
+		"status": true, "prepare": true, "complete": true, "fail": true, "read": true, "edit": true, "validate": true, "codegraph": true,
 		"orchestrate-plan": true, "orchestrate-wave": true, "orchestrate-terminal": true,
 		"orchestrate-join": true, "orchestrate-status": true, "orchestrate-resume": true, "orchestrate-cancel": true,
 	}
 	if len(args) == 0 || !validCommands[args[0]] {
-		fmt.Fprintln(stderr, "usage: vgxness bridge <status|prepare|complete|fail|read|edit|codegraph|orchestrate-plan|orchestrate-wave|orchestrate-terminal|orchestrate-join|orchestrate-status|orchestrate-resume|orchestrate-cancel> --workspace PATH [--stdin]")
-		fmt.Fprintln(stderr, "note: native sessions create a child, then use prepare, ticket-bound read/edit or CodeGraph evidence, complete, and fail")
+		fmt.Fprintln(stderr, "usage: vgxness bridge <status|prepare|complete|fail|read|edit|validate|codegraph|orchestrate-plan|orchestrate-wave|orchestrate-terminal|orchestrate-join|orchestrate-status|orchestrate-resume|orchestrate-cancel> --workspace PATH [--stdin]")
+		fmt.Fprintln(stderr, "note: native sessions create a child, then use prepare, ticket-bound read/edit/validation or CodeGraph evidence, complete, and fail")
 		return 2
 	}
 	command := args[0]
@@ -93,6 +93,14 @@ func runBridge(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 				return 2
 			}
 			response, err = native.EditNative(ctx, workspace, request)
+		case "validate":
+			request, decodeErr := bridge.DecodeNativeValidation(stdin)
+			if decodeErr != nil {
+				response = bridge.ErrorResponse(decodeErr)
+				_ = bridge.Encode(stdout, response)
+				return 2
+			}
+			response, err = native.ValidateNative(ctx, workspace, request)
 		case "codegraph":
 			request, decodeErr := bridge.DecodeNativeCodeGraph(stdin)
 			if decodeErr != nil {

@@ -19,6 +19,7 @@ type fakeBridgeRuntime struct {
 	failure    bridge.NativeFailureRequest
 	read       bridge.NativeReadRequest
 	edit       bridge.NativeEditRequest
+	validation bridge.NativeValidationRequest
 	codegraph  bridge.NativeCodeGraphRequest
 	plan       bridge.OrchestratePlanRequest
 	wave       bridge.OrchestrateWaveRequest
@@ -49,6 +50,11 @@ func (runtime *fakeBridgeRuntime) ReadNative(_ context.Context, _ string, reques
 
 func (runtime *fakeBridgeRuntime) EditNative(_ context.Context, _ string, request bridge.NativeEditRequest) (bridge.Response, error) {
 	runtime.edit = request
+	return runtime.response, runtime.err
+}
+
+func (runtime *fakeBridgeRuntime) ValidateNative(_ context.Context, _ string, request bridge.NativeValidationRequest) (bridge.Response, error) {
+	runtime.validation = request
 	return runtime.response, runtime.err
 }
 
@@ -132,6 +138,7 @@ func TestBridgeNativeLifecycleRoutesExactRequests(t *testing.T) {
 		{"fail", `{"protocolVersion":"1","ticketId":"ticket-1","parentSessionId":"ses_parent","childSessionId":"ses_child","category":"native-subagent-failed"}`},
 		{"read", `{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","limit":4096}`},
 		{"edit", `{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","content":"module changed\n","expectedSha256":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`},
+		{"validate", `{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"test","packages":["./internal/bridge"]}`},
 		{"codegraph", `{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","operation":"impact","symbol":"Service.Dispatch","depth":3}`},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -139,8 +146,8 @@ func TestBridgeNativeLifecycleRoutesExactRequests(t *testing.T) {
 			t.Fatalf("%s code=%d stdout=%s stderr=%s", test.command, code, stdout.String(), stderr.String())
 		}
 	}
-	if runtime.request.ParentSessionID != "ses_parent" || runtime.completion.ChildSessionID != "ses_child" || runtime.failure.Category != "native-subagent-failed" || runtime.read.Path != "go.mod" || runtime.edit.Path != "go.mod" || runtime.codegraph.Symbol != "Service.Dispatch" {
-		t.Fatalf("native lifecycle was not routed: request=%#v completion=%#v failure=%#v read=%#v edit=%#v codegraph=%#v", runtime.request, runtime.completion, runtime.failure, runtime.read, runtime.edit, runtime.codegraph)
+	if runtime.request.ParentSessionID != "ses_parent" || runtime.completion.ChildSessionID != "ses_child" || runtime.failure.Category != "native-subagent-failed" || runtime.read.Path != "go.mod" || runtime.edit.Path != "go.mod" || runtime.validation.Packages[0] != "./internal/bridge" || runtime.codegraph.Symbol != "Service.Dispatch" {
+		t.Fatalf("native lifecycle was not routed: request=%#v completion=%#v failure=%#v read=%#v edit=%#v validation=%#v codegraph=%#v", runtime.request, runtime.completion, runtime.failure, runtime.read, runtime.edit, runtime.validation, runtime.codegraph)
 	}
 }
 
