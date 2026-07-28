@@ -68,6 +68,26 @@ The manager uses ordinary OpenCode workspace tools, built-in `explore` and `gene
 
 When a project has a healthy `.codegraph` index, the manager and reviewers may use one bounded `codegraph_explore` query for structural evidence. Exact source, Git diff, and test output remain authoritative.
 
+### Adaptive workflow and interaction
+
+The manager chooses the smallest capable native route: direct inline work, read-only exploration, plan-only work, bounded delegated implementation, or optional SDD. File count influences inline versus delegated topology; it does not force ceremony or SDD. TDD, spikes, vertical slices, review, and validation are composable practices within those routes.
+
+Interaction mode is resolved in this order:
+
+1. an explicit override for the current task;
+2. a durable project default recalled from VGXNESS memory;
+3. automatic mode as the fallback.
+
+Automatic mode resolves reversible choices from repository evidence and asks only for required authorization, irreversible or high-consequence ambiguity, unavailable prerequisites, or acceptance before SDD. Interactive mode asks about consequential route, architecture, behavior, scope, or testing tradeoffs while still deriving routine facts from the repository. A task override is never persisted; an explicitly requested project default may be retained as a durable decision.
+
+The primary manager has explicit access to OpenCode's native `question` tool. It asks one blocking decision at a time, presents the recommended option first, and resumes without repeating the same question. Questions do not grant permission, override a denial, or move terminal and diagnostic work to the user. Review profiles cannot ask questions.
+
+### Adaptive TDD
+
+For safely testable regressions and behavior changes, the manager prefers an observable RED -> GREEN -> REFACTOR cycle. It may claim TDD only when the test was run and observed failing for the expected reason before the production change. Tests added after implementation are reported as regression coverage instead.
+
+TDD is not a universal gate. Documentation, passive assets, generated code, disposable spikes, and changes for which a safe failing test cannot be expressed use proportional validation with an explicit rationale. SDD defines requirements and design; TDD may guide implementation and does not replace SDD.
+
 ## Health contract
 
 The integration is installed only when the manager, all five reviewers, and the memory-only plugin match their managed identities exactly. Setup health combines:

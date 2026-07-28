@@ -196,7 +196,7 @@ func TestIntegration_UpgradesExactV22ManagerAndV1Plugin(t *testing.T) {
 	testutil.NoError(t, err)
 	managerPredecessors := previousManagerPrompts()
 	pluginV1 := previousMemoryPluginV1(previousMemoryPluginV2(currentPlugin))
-	testutil.NoError(t, os.WriteFile(installed.Path, managerPredecessors[1], 0o600))
+	testutil.NoError(t, os.WriteFile(installed.Path, managerPredecessors[2], 0o600))
 	testutil.NoError(t, os.WriteFile(installed.ToolPath, pluginV1, 0o600))
 
 	upgraded, err := service.Install(context.Background(), options)
@@ -321,7 +321,7 @@ func TestIntegration_RefusesForeignMemoryPluginAndDoesNotInspectLegacyAgents(t *
 
 func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 24",
+		"artifact: opencode-agent/vgxness-manager; version: 25",
 		"user's OpenCode-native engineering partner",
 		"OpenCode's native tools, skills, memory, Task subagents",
 		"Direct inline",
@@ -360,6 +360,37 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	} {
 		if strings.Contains(managerPrompt, forbidden) {
 			t.Errorf("manager prompt retains deprecated mechanic %q", forbidden)
+		}
+	}
+}
+
+func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
+	required := []string{
+		"question: allow",
+		"Explore",
+		"Plan only",
+		"Automatic mode",
+		"Interactive mode",
+		"task override",
+		"project default",
+		"native question tool",
+		"one blocking decision at a time",
+		"recommended option first",
+		"RED -> GREEN -> REFACTOR",
+		"regression coverage",
+		"Do not claim TDD",
+		"VGXNESS memory is context only",
+	}
+	for _, contract := range required {
+		if !strings.Contains(managerPrompt, contract) {
+			t.Errorf("manager prompt is missing adaptive contract %q", contract)
+		}
+	}
+	for _, forbidden := range []string{
+		"VGXNESS memory backend", "vgxness_route", "route tool", "Ask the user to run",
+	} {
+		if strings.Contains(managerPrompt, forbidden) {
+			t.Errorf("manager prompt retains forbidden adaptive mechanic %q", forbidden)
 		}
 	}
 }
@@ -445,16 +476,17 @@ func TestMemoryPluginDefinesSafeOpenCodeHookContracts(t *testing.T) {
 	}
 }
 
-func TestManagedArtifactsRecognizeExactTwoPredecessorVersions(t *testing.T) {
+func TestManagedArtifactsRecognizeExactThreePredecessorVersions(t *testing.T) {
 	service := NewIntegration()
 	currentPlugin, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
 	managerPredecessors := previousManagerPrompts()
 	pluginV2 := previousMemoryPluginV2(currentPlugin)
 	pluginV1 := previousMemoryPluginV1(pluginV2)
-	if len(managerPredecessors) != 2 || !isManagedPredecessor(managerPredecessors[0], []byte(managerPrompt), managerPredecessors, nil) ||
-		!isManagedPredecessor(managerPredecessors[1], []byte(managerPrompt), managerPredecessors, nil) {
-		t.Fatalf("manager v23/v22 predecessors were not recognized")
+	if len(managerPredecessors) != 3 || !isManagedPredecessor(managerPredecessors[0], []byte(managerPrompt), managerPredecessors, nil) ||
+		!isManagedPredecessor(managerPredecessors[1], []byte(managerPrompt), managerPredecessors, nil) ||
+		!isManagedPredecessor(managerPredecessors[2], []byte(managerPrompt), managerPredecessors, nil) {
+		t.Fatalf("manager v24/v23/v22 predecessors were not recognized")
 	}
 	if !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
 		t.Fatalf("plugin v2/v1 predecessors were not recognized")
@@ -469,7 +501,7 @@ func priorManagedArtifactsForTest(t *testing.T, currentPlugin []byte) ([]byte, [
 	t.Helper()
 	managerPredecessors := previousManagerPrompts()
 	plugin := previousMemoryPluginV2(currentPlugin)
-	if len(managerPredecessors) != 2 || len(managerPredecessors[0]) == 0 || len(plugin) == 0 {
+	if len(managerPredecessors) != 3 || len(managerPredecessors[0]) == 0 || len(plugin) == 0 {
 		t.Fatal("could not derive managed predecessors")
 	}
 	return managerPredecessors[0], plugin
@@ -678,8 +710,9 @@ func TestIntegration_UninstallsExactRecognizedPredecessors(t *testing.T) {
 		pluginVersion       int
 		differentExecutable bool
 	}{
-		{name: "manager v23 and plugin v2", managerIndex: 0, pluginVersion: 2},
-		{name: "manager v22 and plugin v1 from prior executable", managerIndex: 1, pluginVersion: 1, differentExecutable: true},
+		{name: "manager v24 and plugin v2", managerIndex: 0, pluginVersion: 2},
+		{name: "manager v23 and plugin v2", managerIndex: 1, pluginVersion: 2},
+		{name: "manager v22 and plugin v1 from prior executable", managerIndex: 2, pluginVersion: 1, differentExecutable: true},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -731,7 +764,7 @@ func TestIntegration_UninstallRefusesModifiedPredecessors(t *testing.T) {
 		manager []byte
 		plugin  []byte
 	}{
-		{name: "modified manager v23", manager: append(append([]byte(nil), previousManagerPrompts()[0]...), []byte("\nmodified\n")...), plugin: previousMemoryPluginV2(currentPlugin)},
+		{name: "modified manager v23", manager: append(append([]byte(nil), previousManagerPrompts()[1]...), []byte("\nmodified\n")...), plugin: previousMemoryPluginV2(currentPlugin)},
 		{name: "modified plugin v2", manager: previousManagerPrompts()[0], plugin: append(append([]byte(nil), previousMemoryPluginV2(currentPlugin)...), []byte("\nmodified\n")...)},
 	}
 	for _, test := range cases {
