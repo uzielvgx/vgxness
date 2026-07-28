@@ -57,7 +57,8 @@ func TestNativeEditBrokerIsolatesVersionedWritesAndPublishesManifest(t *testing.
 	read, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ChildSessionID: "ses_child", Path: "internal/app.go",
 	})
-	if err != nil || read.Read == nil || read.Read.Content != "package internal\n\nconst Value = \"base\"\n" {
+	if err != nil || read.Read == nil || read.Read.Content != "package internal\n\nconst Value = \"base\"\n" ||
+		read.Read.SHA256 != nativeSHA256([]byte(read.Read.Content)) {
 		t.Fatalf("write ticket could not read its isolated base: %#v err=%v", read, err)
 	}
 	if !read.Read.Exists {
@@ -69,16 +70,19 @@ func TestNativeEditBrokerIsolatesVersionedWritesAndPublishesManifest(t *testing.
 	if err != nil || missing.Read == nil || missing.Read.Exists || missing.Read.Path != "internal/new.go" || missing.Read.Content != "" {
 		t.Fatalf("missing creation target did not return an absent receipt: %#v err=%v", missing, err)
 	}
+	if missing.Read.SHA256 != "" {
+		t.Fatalf("missing creation target returned a content digest: %#v", missing.Read)
+	}
 	first, err := service.EditNative(context.Background(), workspace, bridge.NativeEditRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ChildSessionID: "ses_child", Path: "internal/app.go",
-		Content: "package internal\n\nconst Value = \"changed\"\n", ExpectedSHA256: nativeSHA256([]byte(read.Read.Content)),
+		Content: "package internal\n\nconst Value = \"changed\"\n", ExpectedSHA256: read.Read.SHA256,
 	})
 	if err != nil || first.Edit == nil || first.Edit.Created || first.Edit.PreviousSHA256 == "" {
 		t.Fatalf("versioned replacement failed: %#v err=%v", first, err)
 	}
 	if _, err := service.EditNative(context.Background(), workspace, bridge.NativeEditRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ChildSessionID: "ses_child", Path: "internal/app.go",
-		Content: "package internal\n\nconst Value = \"stale\"\n", ExpectedSHA256: nativeSHA256([]byte(read.Read.Content)),
+		Content: "package internal\n\nconst Value = \"stale\"\n", ExpectedSHA256: read.Read.SHA256,
 	}); !errors.Is(err, bridge.ErrDenied) {
 		t.Fatalf("stale expected digest was accepted: %v", err)
 	}

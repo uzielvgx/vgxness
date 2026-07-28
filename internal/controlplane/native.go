@@ -1348,6 +1348,10 @@ func secureNativeRead(workspace, expectedIdentity string, request bridge.NativeR
 	if err != nil || !os.SameFile(before, opened) || !opened.Mode().IsRegular() || !nativeSingleLink(opened) {
 		return bridge.NativeReadResult{}, bridge.ErrDenied
 	}
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return bridge.NativeReadResult{}, bridge.ErrDenied
+	}
 	if _, err := file.Seek(request.Offset, io.SeekStart); err != nil {
 		return bridge.NativeReadResult{}, bridge.ErrDenied
 	}
@@ -1378,7 +1382,10 @@ func secureNativeRead(workspace, expectedIdentity string, request bridge.NativeR
 		return bridge.NativeReadResult{}, bridge.ErrDenied
 	}
 	data = data[:end]
-	result := bridge.NativeReadResult{Path: request.Path, Exists: true, Content: string(data), Truncated: truncated}
+	result := bridge.NativeReadResult{
+		Path: request.Path, Exists: true, Content: string(data),
+		SHA256: "sha256-" + hex.EncodeToString(digest.Sum(nil)), Truncated: truncated,
+	}
 	if truncated {
 		result.NextOffset = request.Offset + int64(len(data))
 	}

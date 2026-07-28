@@ -180,7 +180,7 @@ func TestWriteOrchestrationPublishesAuthoritativeEditArtifact(t *testing.T) {
 	}
 	if _, err := service.EditNative(context.Background(), workspace, bridge.NativeEditRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: binding.TicketID, ChildSessionID: binding.ChildSessionID,
-		Path: "internal/app.go", Content: "package internal\n\nconst Value = \"visible\"\n", ExpectedSHA256: nativeSHA256([]byte(read.Read.Content)),
+		Path: "internal/app.go", Content: "package internal\n\nconst Value = \"visible\"\n", ExpectedSHA256: read.Read.SHA256,
 	}); err != nil {
 		t.Fatal(err)
 	}

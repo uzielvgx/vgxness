@@ -1391,7 +1391,7 @@ async function readBounded(stream) {
 	    },
 	    tool: {
 	      vgxness_native_read: tool({
-	        description: "Read one bounded workspace-relative text file through the ticket-authenticated VGXNESS broker. Pass nextOffset as a decimal cursor to continue a truncated file.",
+	        description: "Read one bounded workspace-relative text file through the ticket-authenticated VGXNESS broker. The receipt includes the full-file SHA-256 even for a partial page. Pass nextOffset as a decimal cursor to continue a truncated file.",
 	        args: {
 	          path: tool.schema.string(),
 	          cursor: tool.schema.string().optional(),
@@ -1410,6 +1410,9 @@ async function readBounded(stream) {
 	            context.abort,
 	          ))
 	          if (!envelope.ok || !envelope.read) throw new Error(bridgeFailure(envelope, "VGXNESS native read was denied"))
+	          if (envelope.read.exists && !/^sha256-[0-9a-f]{64}$/.test(envelope.read.sha256)) {
+	            throw new Error("VGXNESS native read omitted its full-file content digest")
+	          }
 	          return JSON.stringify(envelope.read)
 	        },
 	      }),

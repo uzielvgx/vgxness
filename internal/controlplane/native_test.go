@@ -393,7 +393,8 @@ func TestNativeReadBrokerBindsTicketAndRejectsSensitiveAliases(t *testing.T) {
 	read, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child", Path: "internal/app.go", Limit: 8,
 	})
-	if err != nil || read.Read == nil || read.Read.Content != "package " || !read.Read.Truncated || read.Read.NextOffset != 8 {
+	if err != nil || read.Read == nil || read.Read.Content != "package " || !read.Read.Truncated || read.Read.NextOffset != 8 ||
+		read.Read.SHA256 != nativeSHA256([]byte("package app\n")) {
 		t.Fatalf("read=%#v err=%v", read, err)
 	}
 	for _, path := range []string{".env", ".git/config", "linked.go", "linked-dir/app.go", "hardlinked.go"} {
@@ -572,13 +573,15 @@ func TestNativeReadBrokerPagesUTF8WithoutRejectingSplitRune(t *testing.T) {
 	first, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child", Path: "utf8.txt", Limit: 8,
 	})
-	if err != nil || first.Read == nil || first.Read.Content != "1234567" || first.Read.NextOffset != 7 || !first.Read.Truncated {
+	fullDigest := nativeSHA256([]byte(content))
+	if err != nil || first.Read == nil || first.Read.Content != "1234567" || first.Read.NextOffset != 7 || !first.Read.Truncated ||
+		first.Read.SHA256 != fullDigest {
 		t.Fatalf("first page=%#v err=%v", first, err)
 	}
 	second, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child", Path: "utf8.txt", Offset: first.Read.NextOffset, Limit: 8,
 	})
-	if err != nil || second.Read == nil || second.Read.Content != "€tail" || second.Read.Truncated {
+	if err != nil || second.Read == nil || second.Read.Content != "€tail" || second.Read.Truncated || second.Read.SHA256 != fullDigest {
 		t.Fatalf("second page=%#v err=%v", second, err)
 	}
 	if _, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
