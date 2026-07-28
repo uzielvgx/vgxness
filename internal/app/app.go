@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 
@@ -43,16 +42,35 @@ func mustWorkspace() string {
 
 type memoryRuntime struct{ producer string }
 
+func (runtime memoryRuntime) Remember(ctx context.Context, opts config.Options, request memory.Remember) (memory.Entry, error) {
+	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Remember(ctx, request)
+}
+
+func (runtime memoryRuntime) Recall(ctx context.Context, opts config.Options, request memory.Recall) ([]memory.Entry, error) {
+	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Recall(ctx, request)
+}
+
+func (runtime memoryRuntime) Get(ctx context.Context, opts config.Options, request memory.Lookup) (memory.Entry, error) {
+	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Get(ctx, request)
+}
+
+func (runtime memoryRuntime) Forget(ctx context.Context, opts config.Options, request memory.Forget) (memory.Entry, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return memory.Entry{}, err
+	}
+	defer store.Close()
+	return memory.NewMemoryService(store, runtime.producerName(), nil).Forget(ctx, request)
+}
+
+// Save and Search are temporary control-plane adapter spellings. Both route
+// immediately into the native core; application and CLI code use the native API.
 func (runtime memoryRuntime) Save(ctx context.Context, opts config.Options, request memory.SaveRequest) (memory.MemoryResult, error) {
-	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Save(ctx, request)
+	return runtime.Remember(ctx, opts, request)
 }
 
-func (memoryRuntime) Search(ctx context.Context, opts config.Options, request memory.SearchRequest) ([]memory.MemoryResult, error) {
-	return memory.NewMemoryService(storeRuntime{opts}, "cli", nil).Search(ctx, request)
-}
-
-func (memoryRuntime) Get(ctx context.Context, opts config.Options, request memory.GetRequest) (memory.MemoryResult, error) {
-	return memory.NewMemoryService(storeRuntime{opts}, "cli", nil).Get(ctx, request)
+func (runtime memoryRuntime) Search(ctx context.Context, opts config.Options, request memory.SearchRequest) ([]memory.MemoryResult, error) {
+	return runtime.Recall(ctx, opts, request)
 }
 
 func (memoryRuntime) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
@@ -105,19 +123,7 @@ func openStore(ctx context.Context, opts config.Options) (*memory.Store, error) 
 	if err != nil {
 		return nil, err
 	}
-	store, err := memory.Open(ctx, paths.Database, nil)
-	if err != nil {
-		return nil, err
-	}
-	project, err := store.ResolveProject(ctx, opts.ProjectDir)
-	if err == nil {
-		err = store.ImportLegacy(ctx, paths.LegacyDatabase, project)
-	}
-	if err != nil {
-		_ = store.Close()
-		return nil, err
-	}
-	return store, nil
+	return memory.Open(ctx, paths.Database, nil)
 }
 
 func openStoreRead(ctx context.Context, opts config.Options) (*memory.Store, error) {
@@ -125,17 +131,5 @@ func openStoreRead(ctx context.Context, opts config.Options) (*memory.Store, err
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(paths.Database); errors.Is(err, os.ErrNotExist) {
-		if paths.LegacyDatabase == "" {
-			return memory.OpenRead(ctx, paths.Database)
-		}
-		if _, legacyErr := os.Stat(paths.LegacyDatabase); errors.Is(legacyErr, os.ErrNotExist) {
-			return memory.OpenRead(ctx, paths.Database)
-		} else if legacyErr != nil {
-			return nil, legacyErr
-		}
-	} else if err != nil {
-		return nil, err
-	}
-	return openStore(ctx, opts)
+	return memory.OpenRead(ctx, paths.Database)
 }

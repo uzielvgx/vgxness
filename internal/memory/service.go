@@ -16,6 +16,10 @@ type MemoryStore interface {
 	Get(context.Context, string, string, Scope) (Observation, error)
 }
 
+type forgetStore interface {
+	Forget(context.Context, string, string, Scope) (Observation, error)
+}
+
 type SourceVerifier func(context.Context, string, string) error
 
 type MemoryService struct {
@@ -28,24 +32,34 @@ func NewMemoryService(store MemoryStore, producer string, verifySource SourceVer
 	return MemoryService{store: store, producer: producer, verifySource: verifySource}
 }
 
-type SaveRequest struct {
+// Remember describes one native in-process memory write. JSON contracts belong
+// at trust boundaries (for example the CLI), not between Go callers.
+type Remember struct {
 	Title, Content, Project, Type, TopicKey, Session, SourceProvider, SourceID string
 	Scope                                                                      Scope
 	State                                                                      State
 	References                                                                 []string
 }
-type SearchRequest struct {
+
+type Recall struct {
 	Query, Project, Type, TopicKey string
 	Scope                          Scope
 	States                         []State
 	Limit                          int
 	MatchAny                       bool
 }
-type GetRequest struct {
+
+type Lookup struct {
 	ID, Project string
 	Scope       Scope
 }
-type MemoryResult struct {
+
+type Forget struct {
+	ID, Project string
+	Scope       Scope
+}
+
+type Entry struct {
 	ID, Title, Project, Type, TopicKey, Session, Producer, SourceProvider, SourceID string
 	Scope                                                                           Scope
 	State                                                                           State
@@ -54,9 +68,17 @@ type MemoryResult struct {
 	References                                                                      []string
 }
 
-func (s MemoryService) Save(ctx context.Context, request SaveRequest) (MemoryResult, error) {
+// Compatibility aliases preserve source compatibility for bounded external
+// adapters while native in-process callers use Remember, Recall, Lookup, and Entry.
+type SaveRequest = Remember
+type SearchRequest = Recall
+type GetRequest = Lookup
+type ForgetRequest = Forget
+type MemoryResult = Entry
+
+func (s MemoryService) Remember(ctx context.Context, request Remember) (Entry, error) {
 	if err := ctx.Err(); err != nil {
-		return MemoryResult{}, err
+		return Entry{}, err
 	}
 	if request.Project == "" {
 		request.Project = "default"
@@ -72,22 +94,22 @@ func (s MemoryService) Save(ctx context.Context, request SaveRequest) (MemoryRes
 	}
 	pairedSource := request.SourceProvider != "" && request.SourceID != ""
 	if !validText(request.Content, 4096, false) || !validText(request.Title, 256, true) || !validMetadata(request.Project, request.Type, request.TopicKey, request.Session, s.producer, request.SourceProvider, request.SourceID) || !validReferences(request.References) || request.Scope != ScopeProject && request.Scope != ScopePersonal || request.State != StateActive && request.State != StateNeedsReview || (request.SourceProvider == "") != (request.SourceID == "") || pairedSource && (s.verifySource == nil || s.verifySource(ctx, request.SourceProvider, request.SourceID) != nil) {
-		return MemoryResult{}, fmt.Errorf("%w: invalid save request", ErrInvalid)
+		return Entry{}, fmt.Errorf("%w: invalid remember request", ErrInvalid)
 	}
 	item, err := s.store.Save(ctx, Observation{Title: request.Title, Content: request.Content, Project: request.Project, Scope: request.Scope, Type: request.Type, TopicKey: request.TopicKey, Session: request.Session, Provenance: Provenance{Producer: s.producer, SourceProvider: request.SourceProvider, SourceID: request.SourceID}, State: request.State, References: append([]string(nil), request.References...)})
 	if err != nil {
-		return MemoryResult{}, err
+		return Entry{}, err
 	}
 	return shape(item, true), nil
 }
 
-func (s MemoryService) Search(ctx context.Context, request SearchRequest) ([]MemoryResult, error) {
+func (s MemoryService) Recall(ctx context.Context, request Recall) ([]Entry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	query, ok := safeQuery(request.Query, request.MatchAny)
 	if !ok || request.Project == "" || request.Scope != ScopeProject && request.Scope != ScopePersonal || request.Limit < 0 || request.Limit > 50 || !validMetadata(request.Project, request.Type, request.TopicKey) {
-		return nil, fmt.Errorf("%w: invalid search request", ErrInvalid)
+		return nil, fmt.Errorf("%w: invalid recall request", ErrInvalid)
 	}
 	if request.Limit == 0 {
 		request.Limit = 20
@@ -98,7 +120,7 @@ func (s MemoryService) Search(ctx context.Context, request SearchRequest) ([]Mem
 	}
 	for _, state := range states {
 		if state != StateActive && state != StateNeedsReview && state != StateArchived {
-			return nil, fmt.Errorf("%w: invalid search request", ErrInvalid)
+			return nil, fmt.Errorf("%w: invalid recall request", ErrInvalid)
 		}
 	}
 	filter := Search{Query: query, Project: request.Project, Scope: request.Scope, TopicKey: request.TopicKey, Limit: request.Limit, States: states}
@@ -109,7 +131,7 @@ func (s MemoryService) Search(ctx context.Context, request SearchRequest) ([]Mem
 	if err != nil {
 		return nil, err
 	}
-	results, remaining := make([]MemoryResult, len(items)), previewBudget
+	results, remaining := make([]Entry, len(items)), previewBudget
 	for i, item := range items {
 		results[i] = shape(item, false)
 		preview := []rune(item.Content)
@@ -125,18 +147,42 @@ func (s MemoryService) Search(ctx context.Context, request SearchRequest) ([]Mem
 	return results, nil
 }
 
-func (s MemoryService) Get(ctx context.Context, request GetRequest) (MemoryResult, error) {
-	if err := ctx.Err(); err != nil {
-		return MemoryResult{}, err
-	}
-	if request.ID == "" || request.Project == "" || request.Scope != ScopeProject && request.Scope != ScopePersonal || !validMetadata(request.ID, request.Project) {
-		return MemoryResult{}, fmt.Errorf("%w: invalid get request", ErrInvalid)
+func (s MemoryService) Get(ctx context.Context, request Lookup) (Entry, error) {
+	if err := validateLookup(ctx, request); err != nil {
+		return Entry{}, err
 	}
 	item, err := s.store.Get(ctx, request.ID, request.Project, request.Scope)
 	if err != nil {
-		return MemoryResult{}, err
+		return Entry{}, err
 	}
 	return shape(item, true), nil
+}
+
+// Forget archives an entry atomically and removes it from FTS recall while
+// retaining its row and relationships for lifecycle and stored-data compatibility.
+func (s MemoryService) Forget(ctx context.Context, request Forget) (Entry, error) {
+	if err := validateLookup(ctx, Lookup(request)); err != nil {
+		return Entry{}, err
+	}
+	store, ok := s.store.(forgetStore)
+	if !ok {
+		return Entry{}, fmt.Errorf("%w: forget is unavailable", ErrCorrupt)
+	}
+	item, err := store.Forget(ctx, request.ID, request.Project, request.Scope)
+	if err != nil {
+		return Entry{}, err
+	}
+	return shape(item, true), nil
+}
+
+func validateLookup(ctx context.Context, request Lookup) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if request.ID == "" || request.Project == "" || request.Scope != ScopeProject && request.Scope != ScopePersonal || !validMetadata(request.ID, request.Project) {
+		return fmt.Errorf("%w: invalid lookup request", ErrInvalid)
+	}
+	return nil
 }
 
 func safeQuery(value string, matchAny bool) (string, bool) {
@@ -199,8 +245,8 @@ func validText(value string, limit int, optional bool) bool {
 	}
 	return true
 }
-func shape(item Observation, content bool) MemoryResult {
-	result := MemoryResult{ID: item.ID, Title: item.Title, Project: item.Project, Scope: item.Scope, Type: item.Type, TopicKey: item.TopicKey, Session: item.Session, Producer: item.Provenance.Producer, SourceProvider: item.Provenance.SourceProvider, SourceID: item.Provenance.SourceID, State: item.State, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt, References: append([]string(nil), item.References...)}
+func shape(item Observation, content bool) Entry {
+	result := Entry{ID: item.ID, Title: item.Title, Project: item.Project, Scope: item.Scope, Type: item.Type, TopicKey: item.TopicKey, Session: item.Session, Producer: item.Provenance.Producer, SourceProvider: item.Provenance.SourceProvider, SourceID: item.Provenance.SourceID, State: item.State, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt, References: append([]string(nil), item.References...)}
 	if content {
 		result.Content = item.Content
 	}

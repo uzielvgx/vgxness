@@ -16,9 +16,10 @@ import (
 )
 
 type MemoryRuntime interface {
-	Save(context.Context, config.Options, memory.SaveRequest) (memory.MemoryResult, error)
-	Search(context.Context, config.Options, memory.SearchRequest) ([]memory.MemoryResult, error)
-	Get(context.Context, config.Options, memory.GetRequest) (memory.MemoryResult, error)
+	Remember(context.Context, config.Options, memory.Remember) (memory.Entry, error)
+	Recall(context.Context, config.Options, memory.Recall) ([]memory.Entry, error)
+	Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error)
+	Forget(context.Context, config.Options, memory.Forget) (memory.Entry, error)
 }
 
 type memoryInput struct {
@@ -36,7 +37,7 @@ type memoryInput struct {
 }
 
 func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
-	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "get") || runtime == nil {
+	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "get" && args[0] != "forget") || runtime == nil {
 		fmt.Fprintln(stderr, "invalid: unsupported memory operation")
 		return 2
 	}
@@ -88,19 +89,24 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 			err = memory.ErrInvalid
 			break
 		}
-		result, err = runtime.Save(ctx, opts, memory.SaveRequest{Title: input.Title, Content: input.Content, Project: input.Project, Scope: input.Scope, Type: input.Type, TopicKey: input.TopicKey, Session: input.Session})
+		result, err = runtime.Remember(ctx, opts, memory.Remember{Title: input.Title, Content: input.Content, Project: input.Project, Scope: input.Scope, Type: input.Type, TopicKey: input.TopicKey, Session: input.Session})
 	case "search":
 		if input.ID != "" || input.Title != "" || input.Content != "" || input.Session != "" {
 			err = memory.ErrInvalid
 			break
 		}
-		result, err = runtime.Search(ctx, opts, memory.SearchRequest{Query: input.Query, Project: input.Project, Scope: input.Scope, Type: input.Type, TopicKey: input.TopicKey, Limit: input.Limit})
-	case "get":
+		result, err = runtime.Recall(ctx, opts, memory.Recall{Query: input.Query, Project: input.Project, Scope: input.Scope, Type: input.Type, TopicKey: input.TopicKey, Limit: input.Limit})
+	case "get", "forget":
 		if input.Title != "" || input.Content != "" || input.Query != "" || input.Type != "" || input.TopicKey != "" || input.Session != "" || input.Limit != 0 {
 			err = memory.ErrInvalid
 			break
 		}
-		result, err = runtime.Get(ctx, opts, memory.GetRequest{ID: input.ID, Project: input.Project, Scope: input.Scope})
+		lookup := memory.Lookup{ID: input.ID, Project: input.Project, Scope: input.Scope}
+		if verb == "get" {
+			result, err = runtime.Get(ctx, opts, lookup)
+		} else {
+			result, err = runtime.Forget(ctx, opts, memory.Forget(lookup))
+		}
 	}
 	if err != nil {
 		return memoryFailure(stderr, err)
@@ -113,9 +119,9 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		}{1, result})
 	} else {
 		switch value := result.(type) {
-		case memory.MemoryResult:
+		case memory.Entry:
 			fmt.Fprintf(&output, "id=%s\ntitle=%s\ncontent=%s\n", terminalSafe(value.ID), terminalSafe(value.Title), terminalSafe(value.Content))
-		case []memory.MemoryResult:
+		case []memory.Entry:
 			for _, item := range value {
 				fmt.Fprintf(&output, "id=%s title=%s preview=%s\n", terminalSafe(item.ID), terminalSafe(item.Title), terminalSafe(item.Preview))
 			}
