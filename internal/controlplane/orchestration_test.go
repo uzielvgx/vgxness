@@ -517,6 +517,13 @@ func TestStatusOrchestrationExpiresPreparedVisibleTask(t *testing.T) {
 		t.Fatalf("prepared=%#v err=%v", prepared, err)
 	}
 	now = now.Add(11 * time.Minute)
+	grace, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
+		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
+	})
+	if err != nil || grace.Orchestration == nil || grace.Status != "running" {
+		t.Fatalf("terminal grace=%#v err=%v", grace, err)
+	}
+	now = now.Add(2 * time.Minute)
 	expired, err := service.StatusOrchestration(context.Background(), workspace, bridge.OrchestrateReferenceRequest{
 		ProtocolVersion: bridge.ProtocolVersion, OrchestrationID: view.OrchestrationID,
 	})

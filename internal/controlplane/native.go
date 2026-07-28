@@ -41,6 +41,10 @@ const (
 	nativeCodeGraphTimeout    = 30 * time.Second
 	nativeMaxCodeGraphQueries = 32
 	nativeMaxValidations      = 16
+	// Evidence and mutations stop at the packet deadline. Completion gets a
+	// small terminal-only grace period so provider retries or final synthesis
+	// cannot strand an otherwise valid result after all work has stopped.
+	nativeCompletionGrace = 2 * time.Minute
 )
 
 type nativeTicketDocument struct {
@@ -267,7 +271,7 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 	if agent == "" {
 		return bridge.Response{}, bridge.ErrUnavailable
 	}
-	if err := acquireNativeLeaseModeContext(ctx, paths.Root, ticketID, deadline, nativeDispatchMayShareLease(input)); err != nil {
+	if err := acquireNativeLeaseModeContext(ctx, paths.Root, ticketID, nativeLeaseDeadline(deadline), nativeDispatchMayShareLease(input)); err != nil {
 		return bridge.Response{}, err
 	}
 	leaseOwned := true
@@ -346,7 +350,7 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 		}
 		return bridge.Response{}, bridge.ErrDenied
 	}
-	if document.State != "prepared" || document.Input.ParentSessionID != input.ParentSessionID || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) {
+	if document.State != "prepared" || document.Input.ParentSessionID != input.ParentSessionID || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(nativeCompletionDeadline(document.Deadline)) {
 		return bridge.Response{}, bridge.ErrDenied
 	}
 	leaseGuard, err := acquireOwnedNativeLeaseGuard(paths.Root, document.TicketID)
@@ -825,6 +829,22 @@ func parseNativeDeadline(value string) time.Time {
 		return time.Time{}
 	}
 	return deadline
+}
+
+func nativeCompletionDeadline(value string) time.Time {
+	deadline := parseNativeDeadline(value)
+	if deadline.IsZero() {
+		return deadline
+	}
+	return deadline.Add(nativeCompletionGrace)
+}
+
+func nativeLeaseDeadline(value string) string {
+	deadline := nativeCompletionDeadline(value)
+	if deadline.IsZero() {
+		return value
+	}
+	return deadline.Format(time.RFC3339Nano)
 }
 
 func nativeCompletionDigest(parts ...any) string {

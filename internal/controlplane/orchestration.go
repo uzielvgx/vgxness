@@ -970,7 +970,7 @@ func (service *Service) reconcileNativeTerminals(ctx context.Context, storageRoo
 		if readErr != nil || native.Input.ChildSessionID != item.ChildSessionID {
 			continue
 		}
-		if native.Response == nil && native.State == "prepared" && service.now().UTC().After(parseNativeDeadline(native.Deadline)) {
+		if native.Response == nil && native.State == "prepared" && service.now().UTC().After(nativeCompletionDeadline(native.Deadline)) {
 			_, _ = service.Fail(context.WithoutCancel(ctx), document.Workspace, bridge.NativeFailureRequest{
 				ProtocolVersion: bridge.ProtocolVersion, TicketID: item.TicketID,
 				ParentSessionID: document.ParentSessionID, ChildSessionID: item.ChildSessionID,

@@ -129,6 +129,53 @@ func TestNativeDispatchPreparesChildAndAcceptsIdempotentlyWithoutRunningAdapter(
 	}
 }
 
+func TestNativeCompletionHasTerminalOnlyDeadlineGrace(t *testing.T) {
+	workspace := t.TempDir()
+	now := time.Now().UTC()
+	service := New(Options{
+		StorageRoot: filepath.Join(t.TempDir(), "storage"), Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return nativeTestAdapter(now), nil },
+	})
+	prepared, err := service.Prepare(context.Background(), workspace, bridge.DispatchRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-terminal-grace", Model: "openai/gpt-5.6-sol", Operation: bridge.AnalyzeStructure,
+		Goal: "Inspect the architecture", ParentSessionID: "ses_parent", ParentMessageID: "msg_parent", ChildSessionID: "ses_child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := parseNativeDeadline(prepared.Prepared.Deadline)
+	now = deadline.Add(time.Second)
+	if _, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child",
+		Path: "go.mod", Offset: 0, Limit: 64,
+	}); !errors.Is(err, bridge.ErrDenied) {
+		t.Fatalf("evidence read remained available after the work deadline: %v", err)
+	}
+	completed, err := service.Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ParentSessionID: "ses_parent",
+		ChildSessionID: "ses_child", MessageID: "msg_child", Result: nativeResult(t, prepared.TaskID),
+	})
+	if err != nil || completed.Status != "completed" {
+		t.Fatalf("completion was not accepted during terminal grace: %#v err=%v", completed, err)
+	}
+
+	now = time.Now().UTC()
+	prepared, err = service.Prepare(context.Background(), workspace, bridge.DispatchRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-terminal-expired", Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
+		Goal: "Inspect safely", ParentSessionID: "ses_parent", ParentMessageID: "msg_parent_2", ChildSessionID: "ses_child_2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = nativeCompletionDeadline(prepared.Prepared.Deadline).Add(time.Nanosecond)
+	if _, err := service.Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ParentSessionID: "ses_parent",
+		ChildSessionID: "ses_child_2", MessageID: "msg_child_2", Result: nativeResult(t, prepared.TaskID),
+	}); !errors.Is(err, bridge.ErrDenied) {
+		t.Fatalf("completion remained available after terminal grace: %v", err)
+	}
+}
+
 func TestNativeDispatchHydratesAndPersistsTaskMemory(t *testing.T) {
 	workspace := t.TempDir()
 	storage := filepath.Join(t.TempDir(), "storage")
