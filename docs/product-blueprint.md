@@ -20,7 +20,7 @@ Capability delivery labels have precise, evidence-backed meanings:
 
 VGXNESS is for developers who want AI-assisted work to remain understandable, bounded, and recoverable. The current candidate contains a working local control-plane foundation for exact identities, policy, Chronicle evidence, bounded OpenCode execution, semantic memory, installation, and recovery-aware operation. The broader Navigator/SDD product is still being built.
 
-**Implemented:** The repository builds a `vgxness` binary with application wiring, a permanent versioned launcher with atomic activation and rollback, storage-root resolution, `status`/`doctor`, owned SQLite/FTS5 memory, runtime contract validation, Chronicle event/snapshot/task-state services, Registry, Gatekeeper, prompt composition, bounded coordination, OpenCode provider execution, a native-first OpenCode manager/reviewer projection, guided setup, focused tests, and Go CI. The legacy bridge CLI remains available for compatibility but is no longer installed as an OpenCode plugin.
+**Implemented:** The repository builds a `vgxness` binary with application wiring, a permanent versioned launcher with atomic activation and rollback, storage-root resolution, `status`/`doctor`, owned SQLite/FTS5 memory, runtime contract validation, Chronicle event/snapshot/task-state services, Registry, Gatekeeper, prompt composition, bounded coordination, OpenCode provider execution, a native-first OpenCode manager/reviewer projection, a bounded memory-only OpenCode plugin, guided setup, focused tests, and Go CI. The legacy execution bridge CLI remains available for compatibility but is not projected through the plugin.
 
 **Implemented:** Chronicle appends and verifies JSONL events, derives task state, publishes active snapshots through immutable SHA-256 files plus one atomic pointer replacement, and recovers an interrupted terminal-pointer removal. **Partial:** its recovery scope remains narrower than the future general checkpoint/artifact lifecycle.
 
@@ -40,14 +40,14 @@ VGXNESS is for developers who want AI-assisted work to remain understandable, bo
 
 | Status | Scope |
 | --- | --- |
-| **Implemented** | Go binary/composition; launcher and self-install/update/rollback; storage and owned SQLite/FTS5 memory; runtime contract validation; Chronicle events, immutable crash-atomic snapshot publication, task-state and terminal recovery; Registry/Gatekeeper; prompt/provider runner; bounded coordinator/control plane; native OpenCode manager/review projection; guided setup; hermetic clean-checkout setup/dispatch E2E; tests and Go CI. |
+| **Implemented** | Go binary/composition; launcher and self-install/update/rollback; storage and owned SQLite/FTS5 memory; runtime contract validation; Chronicle events, immutable crash-atomic snapshot publication, task-state and terminal recovery; Registry/Gatekeeper; prompt/provider runner; bounded coordinator/control plane; native OpenCode manager/review projection with a memory-only plugin; guided setup; hermetic clean-checkout setup/dispatch E2E; tests and Go CI. |
 | **Partial** | Navigator's manager-facing native planner/wave/join runtime is bounded to supported operations and OpenCode; Delivery Authority has explicit receipt/gate CLI but no automatic delivery integration; Chronicle's broader plan/checkpoint/artifact continuity and native Windows runtime/distribution smoke remain incomplete. |
 | **Contracts-only** | Draft 2020-12 shapes and semantic rules for future SDD, routing, artifacts, and continuity paths not yet exercised by the bounded runtime. |
 | **Planned** | Navigator routing, complete SDD workflows and artifact backends, richer autonomy/approval UX, keyboard-first TUI, optional adapters, native Windows validation, and advanced semantic retrieval/lifecycle. |
 | **Deferred** | Additional runtime adapters, optional local MCP exposure, broader external MCP clients, richer semantic retrieval, and graphical product surfaces. |
-| **Non-goal** | Copied third-party artifacts, silent destructive autonomy, hidden operational truth, runtime or tool lock-in, unbounded agent loops, automatic prototype-to-production promotion, or a UI that owns business policy. |
+| **Non-goal** | Copied third-party artifacts, silent destructive autonomy, hidden operational truth, runtime or tool lock-in, Engram integration, unbounded agent loops, automatic prototype-to-production promotion, or a UI that owns business policy. |
 
-**Evidence boundary:** The implemented runtime includes the task state machine, Gatekeeper/Registry services, OpenCode provider execution, bounded coordination, a headless binary self-installer, and the native manager/reviewer projection. The bridge commands remain in the CLI only as legacy compatibility behavior; no VGXNESS OpenCode plugin is installed. No setup TUI, product-owned MCP server/client, Git automation, additional runtime adapter, or silent product configuration mutation is delivered.
+**Evidence boundary:** The implemented runtime includes the task state machine, Gatekeeper/Registry services, OpenCode provider execution, bounded coordination, a headless binary self-installer, and the native manager/reviewer projection. The installed VGXNESS OpenCode plugin exposes only owned-memory search, get, save, and explicit forget; bridge commands remain in the CLI only as legacy compatibility behavior. No setup TUI, product-owned MCP server/client, Engram integration, Git automation, additional runtime adapter, or silent product configuration mutation is delivered.
 
 **Contracts-only limitation:** The schemas under [`schemas/`](schemas/README.md) mix delivered runtime contracts with future and partial behaviors. Runtime validation is evidence only for the schemas and paths actually invoked; `$schema` declarations alone do not prove complete product enforcement.
 
@@ -89,7 +89,7 @@ VGXNESS uses four distinct concept groups. They must not be collapsed into a sin
 | Product capabilities | LLM-backed roles that provide a bounded kind of reasoning or work. | Navigator, Scout, Blueprint, Forge, Sentinel, optional Challenger. |
 | Deterministic services | Code-owned policy and persistence boundaries; they do not improvise decisions. | Registry, Chronicle, Gatekeeper. |
 | Operating modes | Named responsibilities used while a capability performs SDD or recovery work. | explore, propose, spec, design, tasks, apply, verify, archive, fix, recovery. |
-| Adapters | Replaceable translations between the control plane and external runtimes, tools, protocols, or stores. | OpenCode, CodeGraph, OpenPencil, Engram, MCP, and future adapters. |
+| Adapters | Replaceable translations between the control plane and external runtimes, tools, protocols, or stores. | OpenCode, CodeGraph, OpenPencil, MCP, and future adapters. |
 
 **Planned:** Capability names describe stable product responsibilities, not one process per name and not provider-specific prompt files. `sdd-design` is a Blueprint operating mode, `sdd-apply` is a Forge operating mode, and `sdd-verify` is a Sentinel operating mode.
 
@@ -110,7 +110,7 @@ planned TUI / implemented CLI + native OpenCode projection
                          |
        implemented OpenCode provider execution
                          |
- implemented MemoryStore + planned external adapters
+ implemented MemoryStore + bounded OpenCode memory projection
 ```
 
 | Boundary | Status and responsibility |
@@ -122,7 +122,7 @@ planned TUI / implemented CLI + native OpenCode projection
 | Schemas and semantic rules | **Implemented/Contracts-only:** Current packets, events, snapshots, registry records, prompts, and results are validated at runtime; future SDD/continuity shapes remain contracts-only. |
 | Keyboard-first TUI | **Planned:** Provide setup and focused interaction without owning installation or orchestration policy. |
 | Bounded coordination | **Implemented, narrow:** Exact Registry/Gatekeeper policy, provider selection, finite foreground/background coordination, cancellation, receipts, and bounded status/read/write/review operations are delivered. Navigator/SDD routing remains planned. |
-| OpenCode adapter | **Implemented:** Hardened runtime adapter, one native-first `vgxness-manager`, five read-only review profiles, native skill-name routing, and confirmation-gated explanatory setup are delivered without a plugin or fixed child model. |
+| OpenCode adapter | **Implemented:** Hardened runtime adapter, one native-first `vgxness-manager`, five read-only review profiles, native skill-name routing, one bounded owned-memory plugin, and confirmation-gated explanatory setup are delivered without a fixed child model or execution bridge. |
 | CodeGraph adapter | **Implemented, optional:** The manager and reviewers may use the read-only `codegraph_explore` MCP tool for bounded structural evidence when a healthy project index exists; exact source and diff inspection remain authoritative fallbacks. |
 | OpenPencil adapter | **Planned, optional:** Design and prototyping path; artifacts remain proposals until separately implemented and verified. |
 | Other runtime/MCP adapters | **Deferred:** Additional integrations may be added without changing core contracts. |
@@ -190,7 +190,7 @@ The `tasks` operating mode belongs inside SDD and converts approved requirements
 
 **Planned:** Automatic preflight uses policy and repository evidence and asks only on consequential ambiguity. Interactive preflight explains the meaningful choice before phase work.
 
-**Contracts-only:** The owned-backend contract already uses `memory`; `engram` identifies only an external-provider reference. No memory-backend schema migration remains as an implementation prerequisite. Runtime preflight resolution and SDD artifact persistence are still planned.
+**Contracts-only:** The owned-backend contract uses `memory`. Engram is not a runtime backend or planned adapter. No memory-backend schema migration remains as an implementation prerequisite. Runtime preflight resolution and SDD artifact persistence are still planned.
 
 | User-facing store | Contract mapping | Delivery and behavior |
 | --- | --- | --- |
@@ -214,12 +214,12 @@ Phase order is evidence-driven rather than ceremonial. A phase may be skipped on
 | Chronicle | **Implemented/Partial:** Reads the active pointer; validates, appends, rolls back, and rereads JSONL events; derives task/cancellation state; publishes active snapshots atomically through immutable content-addressed files; and repairs interrupted terminal publication. General checkpoints and richer artifact recovery remain planned. |
 | VGXNESS MemoryStore | **Implemented:** Semantic authority for typed durable observations with identity, scope, topic, provenance, lifecycle state, references, save/search/get, session metadata, automatic task retrieval/capture, and governed `memoryCandidates`. Conflicting candidate updates transition to `needs_review`; broader human review UX remains planned. |
 | SQLite/FTS5 | **Implemented:** One default user database, canonical workspace bindings, project-isolated records, four migrations, safe legacy imports, deterministic filtering, and lexical retrieval behind `MemoryStore`; richer semantic indexing remains planned. |
-| Engram adapter | **Planned, optional:** Compatibility, import, and reference bridge. It may preserve external IDs and provenance but does not own VGXNESS semantics. |
+| Engram integration | **Non-goal:** VGXNESS does not install, invoke, import from, or depend on Engram. |
 | Project/user roots | **Implemented:** Resolve project-local `.vgxness/` or user-global `~/.vgxness/projects/<project-id>/` operational storage; default semantic memory is shared at `~/.vgxness/memory.db`. |
 
 Memory entries carry stable IDs, type, topic, content, provenance, timestamps, scope, lifecycle state, and references. Search starts with deterministic filters and FTS5; summaries and embeddings may supplement retrieval later without replacing source records.
 
-Chronicle and semantic memory may cross-reference each other but never substitute for each other. If semantic context conflicts with an event, receipt, or execution state, Chronicle controls the operational decision and the inconsistency is surfaced. If Engram is absent, declined, or unavailable, owned memory remains fully usable and authoritative.
+Chronicle and semantic memory may cross-reference each other but never substitute for each other. If semantic context conflicts with an event, receipt, or execution state, Chronicle controls the operational decision and the inconsistency is surfaced. The owned `MemoryStore` is the sole semantic-memory authority.
 
 ### Semantic-memory lifecycle
 
@@ -231,7 +231,7 @@ Chronicle and semantic memory may cross-reference each other but never substitut
 | Compare | **Planned:** Preserve compatible, related, scoped, conflicting, or superseding relationships without deleting history silently. |
 | Review | **Planned:** Surface stale or review-due knowledge before it is trusted as current fact. |
 | Summarize | **Planned:** Create derived summaries that reference source entries rather than replacing them. |
-| Import | **Planned:** Translate optional Engram records with source IDs and import provenance; never overwrite authority silently. |
+| Import | **Non-goal for Engram:** The active runtime does not probe, import, or synchronize Engram data. |
 
 Retention, redaction, export, backup, and migration remain explicit application services. Memory writes respect project/user scope and secret policy. Deleting or rewriting durable knowledge is consequential and cannot be smuggled through an ordinary edit lease.
 
@@ -338,7 +338,7 @@ The dependency sequence through **adaptive native delegation → content-bound D
 - Copying another system's code, prompts, schemas, skills, names, layouts, or exact workflows.
 - Silent destructive actions, installs, commits, pushes, releases, external side effects, or configuration mutation.
 - Treating a capability profile or lease as unbounded standing permission.
-- Requiring CodeGraph, OpenPencil, Engram, or one runtime for core VGXNESS operation.
+- Requiring CodeGraph, OpenPencil, or one runtime for core VGXNESS operation.
 - Treating prototypes as production or semantic memory as operational truth.
 - Multi-user synchronization or distributed scheduling without a future scope decision.
 - Making a dashboard, wizard, or TUI the owner of orchestration, installation, memory, or permissions.
@@ -360,7 +360,7 @@ This is a review map, not a substitute for the definitions above.
 | Thin packets and continuity capsules | Section 9 | Bounded execution packets are **Implemented**; general continuity capsules remain **Planned**. |
 | Chronicle operational truth and readable JSON/JSONL | Sections 6 and 9 | Events, digest-bound snapshots, task replay, atomic pointers, terminal repair, and recovery projection are delivered; broader checkpoint/artifact continuity keeps Chronicle **Partial**. |
 | Owned SQLite/FTS5 semantic authority and durable knowledge scope | Section 9 | Core save/search/get foundation **Implemented**; advanced lifecycle **Planned**. |
-| Optional Engram compatibility/import/reference adapter | Sections 6 and 9 | **Planned, optional**. |
+| No Engram runtime integration | Sections 2, 6, and 9 | **Non-goal**. |
 | Optional CodeGraph structural intelligence and wizard install | Sections 7 and 10 | **Planned, optional**, with fallback. |
 | Optional OpenPencil design/prototyping and wizard install | Sections 7, 10, and 11 | **Planned, optional**; no automatic promotion. |
 | Skills, exact resolution, approvals, reviews, and delivery | Section 11 | Exact bounded resolution/approval/review evidence is **Partial**; full skill lifecycle and delivery automation remain **Planned**. |

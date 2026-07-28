@@ -47,9 +47,12 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 		return code
 	}
 	var output strings.Builder
-	fmt.Fprintf(&output, "provider=%s\nstate=%s\nprojection=native\npath=%s\nartifact_sha256=%s\nchanged=%t\n", terminalSafe(result.Provider), result.State, terminalSafe(result.Path), terminalSafe(result.ArtifactSHA256), result.Changed)
+	fmt.Fprintf(&output, "provider=%s\nstate=%s\nprojection=native+memory\npath=%s\nartifact_sha256=%s\nmemory_plugin=%s\nmemory_plugin_sha256=%s\nchanged=%t\n", terminalSafe(result.Provider), result.State, terminalSafe(result.Path), terminalSafe(result.ArtifactSHA256), terminalSafe(result.ToolPath), terminalSafe(result.ToolSHA256), result.Changed)
 	if result.BackupPath != "" {
 		fmt.Fprintf(&output, "backup=%s\n", terminalSafe(result.BackupPath))
+	}
+	if result.ToolBackupPath != "" {
+		fmt.Fprintf(&output, "memory_plugin_backup=%s\n", terminalSafe(result.ToolBackupPath))
 	}
 	_, _ = io.WriteString(stdout, output.String())
 	return 0

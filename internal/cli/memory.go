@@ -20,6 +20,7 @@ type MemoryRuntime interface {
 	Recall(context.Context, config.Options, memory.Recall) ([]memory.Entry, error)
 	Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error)
 	Forget(context.Context, config.Options, memory.Forget) (memory.Entry, error)
+	ResolveProject(context.Context, config.Options, string) (string, error)
 }
 
 type memoryInput struct {
@@ -44,7 +45,7 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	verb := args[0]
 	flags := flag.NewFlagSet(verb, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var inputPath, project, scope string
+	var inputPath, project, scope, workspace string
 	var stdinSource, jsonOutput bool
 	var limit int
 	flags.StringVar(&inputPath, "input", "", "JSON input file")
@@ -52,6 +53,7 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
 	flags.StringVar(&project, "project", "", "project")
 	flags.StringVar(&scope, "scope", "", "scope")
+	flags.StringVar(&workspace, "workspace", "", "canonical workspace used to resolve the project")
 	flags.IntVar(&limit, "limit", 0, "search limit")
 	var opts config.Options
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
@@ -69,7 +71,7 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	}
 	set := map[string]bool{}
 	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	if set["project"] && payloadFields["project"] || set["scope"] && payloadFields["scope"] || set["limit"] && payloadFields["limit"] {
+	if set["project"] && payloadFields["project"] || set["scope"] && payloadFields["scope"] || set["limit"] && payloadFields["limit"] || workspace != "" && (set["project"] || payloadFields["project"]) {
 		return memoryFailure(stderr, memory.ErrInvalid)
 	}
 	if set["project"] {
@@ -80,6 +82,21 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	}
 	if set["limit"] {
 		input.Limit = limit
+	}
+	if workspace != "" {
+		absolute, absErr := filepath.Abs(workspace)
+		if absErr != nil {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+		optionsWorkspace := filepath.Clean(absolute)
+		opts.ProjectDir = optionsWorkspace
+		input.Project, err = runtime.ResolveProject(ctx, opts, optionsWorkspace)
+		if err != nil {
+			return memoryFailure(stderr, err)
+		}
+		if input.Scope == "" {
+			input.Scope = memory.ScopeProject
+		}
 	}
 
 	var result any

@@ -18,9 +18,9 @@ The observation row and relationships remain available to `Get` for durable
 history and persisted-data compatibility, while normal `Recall` cannot return
 forgotten content.
 
-## Legacy compatibility
+## Runtime boundary
 
-Engram data can still be imported explicitly through the legacy import API for
-operators who need migration compatibility. Opening, reading, remembering,
-recalling, getting, forgetting, resolving a project, and continuity processing
-do not probe, require, or automatically import an Engram database.
+Engram is not part of the active architecture. Startup, `vgxness status`,
+OpenCode setup, and normal memory operations do not install, probe, invoke,
+import, require, or synchronize it. The owned `MemoryStore` is the sole
+persistent semantic-memory authority.

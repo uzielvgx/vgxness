@@ -110,7 +110,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return code
 	}
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
-	fmt.Fprintf(stdout, "Pasos 3–4: manager, revisores, skills y CodeGraph nativos verificados desde %s\n", terminalSafe(result.Integration.Path))
+	fmt.Fprintf(stdout, "Pasos 3–4: manager, revisores y memoria VGXNESS verificados en %s y %s\n", terminalSafe(result.Integration.Path), terminalSafe(result.Integration.ToolPath))
 	fmt.Fprintf(stdout, "Paso 5: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Bridge.Status), terminalSafe(options.Workspace))
 	fmt.Fprintln(stdout, "Paso 6: no fue necesaria recuperación.")
 	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Abre OpenCode y selecciona vgxness-manager.\n", result.Changed)
@@ -131,7 +131,7 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintf(writer, "  Launcher: %s (estado=%s)\n", terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.State)
 	fmt.Fprintf(writer, "  Versiones: %s\n", terminalSafe(plan.SelfInstall.DataDir))
 	fmt.Fprintf(writer, "  Manager: %s (estado=%s)\n", terminalSafe(plan.Integration.Path), plan.Integration.State)
-	fmt.Fprintln(writer, "  Proyección: manager + cinco revisores nativos (sin plugin ni modelo secundario)")
+	fmt.Fprintf(writer, "  Proyección: manager + cinco revisores nativos + memoria VGXNESS (%s)\n", terminalSafe(plan.Integration.ToolPath))
 	fmt.Fprintf(writer, "  Workspace de verificación: %s\n", terminalSafe(workspace))
 	fmt.Fprintln(writer, "\nLímites: no se editará PATH, no se descargará software, no se sobrescribirá contenido ajeno y no se habilitará shell arbitrario.")
 	fmt.Fprintln(writer, "Recuperación: una actualización binaria puede volver a la versión anterior; una primera instalación o integración escrita se conserva y se reporta para evitar borrados silenciosos.")
@@ -140,7 +140,7 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 func renderSetupStatus(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintln(writer, "VGXNESS · Estado completo del setup OpenCode")
 	fmt.Fprintf(writer, "Launcher: state=%s path=%s active_sha256=%s\n", plan.SelfInstall.State, terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.ActiveSHA256)
-	fmt.Fprintf(writer, "Integración: state=%s projection=native manager=%s\n", plan.Integration.State, terminalSafe(plan.Integration.Path))
+	fmt.Fprintf(writer, "Integración: state=%s projection=native+memory manager=%s memory_plugin=%s\n", plan.Integration.State, terminalSafe(plan.Integration.Path), terminalSafe(plan.Integration.ToolPath))
 	fmt.Fprintf(writer, "Handshake: ok=%t status=%s workspace=%s\n", plan.Bridge.OK, terminalSafe(plan.Bridge.Status), terminalSafe(workspace))
 	if plan.Ready {
 		fmt.Fprintln(writer, "Resultado: configuración completa y saludable.")

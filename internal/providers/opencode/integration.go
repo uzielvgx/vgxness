@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +25,9 @@ const (
 	reviewReliabilityName = "vgxness-review-reliability.md"
 	reviewResilienceName  = "vgxness-review-resilience.md"
 	reviewRefuterName     = "vgxness-review-refuter.md"
+	memoryPluginName      = "vgxness.ts"
 	maxArtifactBytes      = 512 * 1024
+	maxMemoryOutputBytes  = 128 * 1024
 	managerPrompt         = `---
 description: VGXNESS manager — OpenCode-native engineering partner
 mode: primary
@@ -43,6 +46,10 @@ permission:
   external_directory: deny
   webfetch: deny
   websearch: deny
+  vgxness_memory_search: allow
+  vgxness_memory_get: allow
+  vgxness_memory_save: allow
+  vgxness_memory_forget: ask
   bash:
     "*": allow
     "git push": deny
@@ -63,7 +70,7 @@ permission:
     "sudo *": deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 21 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 22 -->
 
 # Identity
 
@@ -103,11 +110,13 @@ OpenCode is the execution authority for normal work. Use ordinary workspace tool
 - Keep an in-session launch log keyed by normalized goal and scope. Never launch the same task twice.
 - Treat subagent output as evidence. Inspect the final diff and own final validation yourself.
 
-# Skills, CodeGraph, memory, and repository ownership
+# Skills, CodeGraph, owned memory, and repository ownership
 
 - Inspect the native skill registry before task work and load every clearly applicable skill through the skill tool. Pass exact skill names, never filesystem paths, to delegated workers.
 - When .codegraph exists and the question concerns architecture, symbols, call paths, dependencies, blast radius, or affected tests, use one bounded codegraph_explore query before broad grep or file reads. Treat it as indexed structural evidence, not authority for the candidate diff. Exact source, Git diff, and test output remain authoritative. If CodeGraph is unavailable, missing, or stale, continue with native reads and search without blocking the task.
-- Search persistent memory when prior decisions may matter, verify mutable claims against the repository, and save material decisions, discoveries, conventions, and fixes.
+- VGXNESS-owned memory is the only persistent memory authority. At the start of work, use vgxness_memory_search when prior project decisions or fixes may matter, then use vgxness_memory_get only for relevant full entries. Verify mutable claims against the repository.
+- Save material decisions, bug fixes, non-obvious discoveries, conventions, and configuration changes through vgxness_memory_save as soon as they become durable. Reuse one stable topic key for an evolving subject. Never save routine progress, transient status, speculation, credentials, secrets, personal data, raw command output, or full transcripts.
+- Use vgxness_memory_forget only when the user explicitly asks to forget a specific memory. Do not use any external memory system or duplicate the same fact across stores.
 - Inspect branch, HEAD, and working-tree state yourself. Preserve unrelated user changes. Never ask the user to run terminal, Git, filesystem, test, or diagnostic commands.
 - Diagnose before editing. For behavior changes, use a regression test or RED -> GREEN -> REFACTOR when the project can express it safely.
 - Run source-mutating formatters and generators before freezing the candidate. After freeze, only read-only review and validation may run; a source change creates a new candidate.
@@ -149,7 +158,7 @@ Accept only one parent mission containing:
 - verificationEvidence: tests and read-only checks already run
 - frozenLedger and correctionDelta only in scoped-validation mode
 
-Reject a mission that omits or contradicts candidate identity, scope, or acceptance criteria. Load every supplied skill name through the native skill tool before reviewing. When .codegraph exists and the question concerns code structure, flow, dependencies, or blast radius, use at most one bounded codegraph_explore query before fallback reads. CodeGraph cannot prove the candidate diff by itself; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Inspect only files needed to assess the supplied diff scope. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push. Treat the candidate as immutable.
+Reject a mission that omits or contradicts candidate identity, scope, or acceptance criteria. Load every supplied skill name through the native skill tool before reviewing. Use vgxness_memory_search and vgxness_memory_get only when prior project decisions are material to the supplied acceptance criteria; memory is context, never proof of the frozen candidate. When .codegraph exists and the question concerns code structure, flow, dependencies, or blast radius, use at most one bounded codegraph_explore query before fallback reads. CodeGraph cannot prove the candidate diff by itself; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Inspect only files needed to assess the supplied diff scope. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push. Treat the candidate as immutable.
 
 In initial mode, perform one complete sweep through your assigned lens. In scoped-validation mode, inspect only the frozen severe-finding ledger and correction delta. Scoped validation may approve or escalate an unresolved severe finding, but it must not add unrelated findings or propose another correction cycle.
 
@@ -171,6 +180,8 @@ permission:
   list: allow
   skill: allow
   codegraph_explore: allow
+  vgxness_memory_search: allow
+  vgxness_memory_get: allow
   task: deny
 ---
 
@@ -190,6 +201,8 @@ permission:
   list: allow
   skill: allow
   codegraph_explore: allow
+  vgxness_memory_search: allow
+  vgxness_memory_get: allow
   task: deny
 ---
 
@@ -209,6 +222,8 @@ permission:
   list: allow
   skill: allow
   codegraph_explore: allow
+  vgxness_memory_search: allow
+  vgxness_memory_get: allow
   task: deny
 ---
 
@@ -228,6 +243,8 @@ permission:
   list: allow
   skill: allow
   codegraph_explore: allow
+  vgxness_memory_search: allow
+  vgxness_memory_get: allow
   task: deny
 ---
 
@@ -247,6 +264,8 @@ permission:
   list: allow
   skill: allow
   codegraph_explore: allow
+  vgxness_memory_search: allow
+  vgxness_memory_get: allow
   task: deny
 ---
 
@@ -256,7 +275,7 @@ You are the severe-finding refuter for VGXNESS Native Manager. Accept only one p
 
 Independently attempt to disprove each supplied claim against the frozen candidate. Inspect only evidence needed for those IDs. Never add a new finding, broaden scope, suggest a fix, or turn uncertainty into approval. A deterministic severe finding must not be sent to you.
 
-Load every supplied native skill name through the skill tool. When .codegraph exists and structural evidence is material to a supplied finding, use at most one bounded codegraph_explore query; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push.
+Load every supplied native skill name through the skill tool. Use vgxness_memory_search and vgxness_memory_get only when prior project decisions are material to refuting a supplied finding; memory is context, never candidate proof. When .codegraph exists and structural evidence is material to a supplied finding, use at most one bounded codegraph_explore query; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push.
 
 Return exactly one compact JSON object and no Markdown:
 
@@ -521,9 +540,14 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	reviewReliabilityPath := filepath.Join(configDirectory, "agents", reviewReliabilityName)
 	reviewResiliencePath := filepath.Join(configDirectory, "agents", reviewResilienceName)
 	reviewRefuterPath := filepath.Join(configDirectory, "agents", reviewRefuterName)
+	toolPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+	toolContent, err := memoryPluginContent(service.executable)
+	if err != nil {
+		return inspection{}, err
+	}
 	result := integration.Result{
 		Provider: "opencode", State: integration.StateAbsent, Path: managerPath, ArtifactSHA256: artifactSHA256([]byte(managerPrompt)),
-		Bridge: integration.BridgeNotRequired,
+		ToolPath: toolPath, ToolSHA256: artifactSHA256(toolContent), Bridge: integration.BridgeNotRequired,
 	}
 	exists, drifted, containerErr := inspectDirectory(configDirectory)
 	if containerErr != nil {
@@ -536,6 +560,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: reviewReliabilityPath, content: []byte(reviewReliabilityPrompt), backup: "vgxness-review-reliability"},
 		{path: reviewResiliencePath, content: []byte(reviewResiliencePrompt), backup: "vgxness-review-resilience"},
 		{path: reviewRefuterPath, content: []byte(reviewRefuterPrompt), backup: "vgxness-review-refuter"},
+		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin"},
 	}}
 	if drifted {
 		state.result.State = integration.StateDrifted
@@ -638,6 +663,172 @@ func installArtifact(ctx context.Context, item artifact) (installedArtifact, err
 		return installedArtifact{}, fmt.Errorf("read back OpenCode integration artifact: %w", integration.ErrDrift)
 	}
 	return installed, nil
+}
+
+func memoryPluginContent(executable string) ([]byte, error) {
+	if strings.TrimSpace(executable) == "" || !filepath.IsAbs(executable) {
+		return nil, fmt.Errorf("%w: VGXNESS executable path", integration.ErrInvalid)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(executable))
+	if err != nil {
+		return nil, fmt.Errorf("%w: VGXNESS executable unavailable", integration.ErrInvalid)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: VGXNESS executable is not a regular file", integration.ErrInvalid)
+	}
+	quoted, err := json.Marshal(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("%w: VGXNESS executable path", integration.ErrInvalid)
+	}
+	content := `import { spawn } from "node:child_process"
+import { isAbsolute } from "node:path"
+import { tool } from "@opencode-ai/plugin"
+
+// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 1
+const VGXNESS_EXECUTABLE = ` + string(quoted) + `
+const MAX_INPUT_BYTES = 64 * 1024
+const MAX_OUTPUT_BYTES = ` + fmt.Sprintf("%d", maxMemoryOutputBytes) + `
+const TIMEOUT_MS = 10_000
+
+function safeQuery(value) {
+  const terms = String(value ?? "").match(/[\p{L}\p{N}_]+/gu) ?? []
+  return Array.from(new Set(terms.map((term) => term.toLowerCase()))).slice(0, 8).join(" ")
+}
+
+async function invokeMemory(operation, payload, context) {
+  const workspace = String(context?.directory ?? "")
+  if (!workspace || !isAbsolute(workspace)) throw new Error("VGXNESS memory workspace is unavailable")
+  const input = JSON.stringify({ schemaVersion: 1, ...payload })
+  if (Buffer.byteLength(input) > MAX_INPUT_BYTES) throw new Error("VGXNESS memory request exceeded its bound")
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(
+      VGXNESS_EXECUTABLE,
+      ["memory", operation, "--stdin", "--json", "--workspace", workspace],
+      {
+        cwd: workspace,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          HOME: process.env.HOME,
+          USERPROFILE: process.env.USERPROFILE,
+          TMPDIR: process.env.TMPDIR,
+          SystemRoot: process.env.SystemRoot,
+        },
+      },
+    )
+    let stdout = ""
+    let stderrBytes = 0
+    let settled = false
+    const finish = (error, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      context?.abort?.removeEventListener?.("abort", abort)
+      if (error) reject(error)
+      else resolve(value)
+    }
+    const abort = () => {
+      child.kill("SIGKILL")
+      finish(new Error("VGXNESS memory request was cancelled"))
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL")
+      finish(new Error("VGXNESS memory request timed out"))
+    }, TIMEOUT_MS)
+    context?.abort?.addEventListener?.("abort", abort, { once: true })
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk
+      if (Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) {
+        child.kill("SIGKILL")
+        finish(new Error("VGXNESS memory response exceeded its bound"))
+      }
+    })
+    child.stderr.on("data", (chunk) => {
+      stderrBytes += Buffer.byteLength(chunk)
+      if (stderrBytes > MAX_OUTPUT_BYTES) {
+        child.kill("SIGKILL")
+        finish(new Error("VGXNESS memory failure exceeded its bound"))
+      }
+    })
+    child.on("error", () => finish(new Error("VGXNESS memory process is unavailable")))
+    child.on("close", (code) => {
+      if (settled) return
+      if (code !== 0) return finish(new Error("VGXNESS memory request failed"))
+      try {
+        const envelope = JSON.parse(stdout)
+        if (envelope?.schemaVersion !== 1 || !("result" in envelope)) {
+          return finish(new Error("VGXNESS memory response is invalid"))
+        }
+        finish(undefined, JSON.stringify(envelope.result))
+      } catch {
+        finish(new Error("VGXNESS memory response is invalid"))
+      }
+    })
+    child.stdin.end(input)
+  })
+}
+
+export const VGXNESSMemoryPlugin = async () => ({
+  tool: {
+    vgxness_memory_search: tool({
+      description: "Search VGXNESS-owned durable project memory. Use for prior decisions, fixes, conventions, and discoveries; verify mutable claims against the workspace.",
+      args: {
+        query: tool.schema.string().describe("Plain-language search terms"),
+        type: tool.schema.string().optional().describe("Optional memory type filter"),
+        topic: tool.schema.string().optional().describe("Optional stable topic key filter"),
+        limit: tool.schema.number().optional().describe("Maximum results from 1 to 10"),
+      },
+      async execute(args, context) {
+        const query = safeQuery(args.query)
+        if (!query) throw new Error("VGXNESS memory query has no searchable terms")
+        const limit = Math.max(1, Math.min(10, Math.trunc(args.limit ?? 5)))
+        return await invokeMemory("search", { query, type: args.type ?? "", topic: args.topic ?? "", limit }, context)
+      },
+    }),
+    vgxness_memory_get: tool({
+      description: "Read one full VGXNESS-owned project memory by exact ID after a relevant search result.",
+      args: {
+        id: tool.schema.string().describe("Exact memory observation ID"),
+      },
+      async execute(args, context) {
+        return await invokeMemory("get", { id: args.id }, context)
+      },
+    }),
+    vgxness_memory_save: tool({
+      description: "Save a durable project decision, bug fix, discovery, convention, or configuration fact to VGXNESS-owned memory. Never store secrets, personal data, transient progress, or raw transcripts.",
+      args: {
+        title: tool.schema.string().describe("Short searchable title"),
+        content: tool.schema.string().describe("Durable evidence-backed content"),
+        type: tool.schema.string().optional().describe("Memory type such as decision, bugfix, discovery, pattern, architecture, or config"),
+        topic: tool.schema.string().optional().describe("Stable topic key reused for an evolving subject"),
+      },
+      async execute(args, context) {
+        return await invokeMemory("save", {
+          title: args.title,
+          content: args.content,
+          type: args.type ?? "learning",
+          topic: args.topic ?? "",
+          session: context?.sessionID ?? "",
+        }, context)
+      },
+    }),
+    vgxness_memory_forget: tool({
+      description: "Archive one exact VGXNESS-owned project memory so normal search no longer returns it. Use only after an explicit user request.",
+      args: {
+        id: tool.schema.string().describe("Exact memory observation ID"),
+      },
+      async execute(args, context) {
+        return await invokeMemory("forget", { id: args.id }, context)
+      },
+    }),
+  },
+})
+`
+	return []byte(content), nil
 }
 
 func inspectDirectory(path string) (exists, drifted bool, err error) {

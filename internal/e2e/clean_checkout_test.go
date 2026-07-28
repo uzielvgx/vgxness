@@ -64,6 +64,7 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 
 	launcher := filepath.Join(launcherDirectory, executableName("vgxness"))
 	manager := filepath.Join(configDirectory, "agents", "vgxness-manager.md")
+	memoryPlugin := filepath.Join(configDirectory, "plugins", "vgxness.ts")
 	reviewers := []string{
 		"vgxness-review-risk.md",
 		"vgxness-review-readability.md",
@@ -71,14 +72,19 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 		"vgxness-review-resilience.md",
 		"vgxness-review-refuter.md",
 	}
-	for _, path := range append([]string{launcher, manager}, reviewerPaths(configDirectory, reviewers)...) {
+	for _, path := range append([]string{launcher, manager, memoryPlugin}, reviewerPaths(configDirectory, reviewers)...) {
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.Mode().IsRegular() {
 			t.Fatalf("expected installed regular file %s: %v", path, statErr)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(configDirectory, "plugins", "vgxness.ts")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("native setup installed a deprecated VGXNESS plugin: %v", err)
+	pluginData, err := os.ReadFile(memoryPlugin)
+	if err != nil ||
+		!bytes.Contains(pluginData, []byte("opencode-plugin/vgxness-memory")) ||
+		!bytes.Contains(pluginData, []byte("vgxness_memory_search")) ||
+		bytes.Contains(pluginData, []byte("vgxness_orchestrate")) ||
+		bytes.Contains(pluginData, []byte("vgxness_native_edit")) {
+		t.Fatalf("setup did not install the bounded memory-only plugin: %v", err)
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {
 		t.Fatalf("retire source executable: %v", err)

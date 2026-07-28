@@ -20,7 +20,7 @@ The implemented control plane is deliberately narrower than the target product. 
 ## Quick path
 
 1. **Implemented:** Build a single `vgxness` binary from `cmd/vgxness`; install it behind a permanent validated launcher with immutable versions and rollback; resolve storage roots; expose status/doctor and memory save/search/get.
-2. **Implemented:** Keep owned semantic memory on SQLite/FTS5; `memory` is the owned-backend contract and `engram` is only an external-provider reference.
+2. **Implemented:** Keep owned semantic memory on SQLite/FTS5; `memory` is the sole runtime backend and Engram integration is a non-goal.
 3. **Implemented:** Validate runtime contracts; append and verify Chronicle events; write/read snapshots; derive legal task state; reconstruct bounded recovery state.
 4. **Implemented:** Resolve exact Registry identities, evaluate Gatekeeper policy, compose frozen prompts, execute eligible providers, and coordinate finite foreground/background work.
 5. **Implemented:** Install and operate the persistent OpenCode manager, strict bridge, runtime adapter, and six-step confirmation-gated setup workflow.
@@ -45,7 +45,7 @@ The implemented control plane is deliberately narrower than the target product. 
 - No database replacement for operational truth. Chronicle starts with readable JSON/JSONL files; SQLite/FTS5 is intentionally limited to the initial semantic `MemoryStore`.
 - No CLI lock-in. Users and recovery flows should still understand the state by reading files.
 - No TUI-owned business logic. Setup screens render state and collect decisions; installation, memory, and orchestration remain independent services.
-- No Engram coupling in orchestration contracts. VGXNESS-owned memory is authoritative; Engram is an optional compatibility/import/reference adapter.
+- No Engram integration or coupling in runtime contracts. VGXNESS-owned memory is authoritative.
 - No claim that schemas, the Chronicle reader, or implemented memory constitute provider execution, task-state, recovery, or orchestration behavior.
 
 ## Package delivery map
@@ -169,7 +169,7 @@ If a caller only needs `AppendEvent`, define an even smaller interface in that c
 
 The implemented coordinator and provider runner follow these small-boundary rules. Provider selection records a neutral provider reference and capability evidence, never mutable provider configuration. Runtime validation occurs before provider execution and Chronicle mutations on the delivered path.
 
-The **Implemented** `MemoryStore` is VGXNESS-owned and SQLite/FTS5-first. It stores typed observations with provenance, scope, topic, lifecycle state, references, and save/search/get behavior. Every bounded control-plane task resolves a durable project identity, retrieves and hydrates at most three relevant observations into a fixed 4,096-rune packet budget, and saves one idempotent terminal summary whose references identify the retrieved evidence. Richer approval, comparison, review, derived-summary, and optional Engram import workflows remain **Planned**; the owned-backend contract already uses `memory`, so no backend migration is pending.
+The **Implemented** `MemoryStore` is VGXNESS-owned and SQLite/FTS5-first. It stores typed observations with provenance, scope, topic, lifecycle state, references, and save/search/get behavior. Every bounded control-plane task resolves a durable project identity, retrieves and hydrates at most three relevant observations into a fixed 4,096-rune packet budget, and saves one idempotent terminal summary whose references identify the retrieved evidence. Richer approval, comparison, review, and derived-summary workflows remain **Planned**; the owned-backend contract uses `memory`, so no backend migration is pending.
 
 ## Adaptive execution boundaries
 
@@ -232,7 +232,7 @@ Use Go's standard `testing` package first.
 | Platform portability | **Implemented/Partial:** CI cross-builds Windows amd64/arm64 and compiles all Windows amd64 test packages; native Windows execution and distribution smoke remain open. |
 | Vertical E2E | **Implemented:** an opt-in `e2e` test builds from the checkout with network-disabled nested builds, isolates home/config/data/workspace, completes the six-step setup, proves launcher independence from the source binary, dispatches through the real control plane, and verifies Chronicle evidence using a deterministic OpenCode protocol fake. |
 
-Prefer behavior tests over implementation trivia. Each package should be testable without real providers, real Engram, external network calls, package installation, or git operations.
+Prefer behavior tests over implementation trivia. Each package should be testable without real providers, external network calls, package installation, or git operations.
 
 ## First version scope in Go
 
@@ -247,4 +247,4 @@ Continue from the delivered foundation in dependency order:
 7. **Implemented:** Install and operate the persistent OpenCode manager, strict bridge, runtime adapter, and guided CLI setup.
 8. **Partial/Planned:** Connect native Navigator/wave execution, Delivery Authority, and broader Chronicle plan/artifact continuity; then add the keyboard TUI and optional adapters. Native Windows runtime/distribution validation remains deferred.
 
-The first version does not include a graphical installer, multi-user sync, distributed scheduling, autonomous destructive actions, advanced embedding infrastructure, or runtime adapters beyond OpenCode. Its orchestration, installation, Chronicle, memory, adapter, and permission contracts must permit later runtimes and optional Engram interoperability without changing core authority.
+The first version does not include a graphical installer, multi-user sync, distributed scheduling, autonomous destructive actions, advanced embedding infrastructure, Engram integration, or runtime adapters beyond OpenCode. Its orchestration, installation, Chronicle, memory, adapter, and permission contracts must permit later runtimes without changing core authority.

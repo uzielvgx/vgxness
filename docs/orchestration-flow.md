@@ -11,7 +11,7 @@ This document owns the request lifecycle, gates, phase operating modes, and reco
 
 **Implemented, bounded:** VGXNESS coordinates contract-validated executions through a provider-neutral runner, exact Registry identity, Gatekeeper policy, finite coordinator, and native OpenCode child sessions. `vgxness_orchestrate` creates a tool-denied Navigator child, validates its proposal, persists the approved plan, creates one native child per legal task, overlaps independent reads, carries bounded dependency results forward, and publishes one durable join. The file-backed authority verifies prerequisites, reserves logical slots, persists prepared replay and uncertain markers, accepts terminals, and fences stale owners through monotonic epochs. No automatic redelivery occurs. `vgxness orchestrate status|resume|cancel|explain` provides recovery controls without making them happy-path ceremony. Delivery Authority issues immutable content-bound receipts and validates the same receipt at four lifecycle gates. **Planned:** automatic delivery integration, complete SDD artifacts/checkpoints, richer UI, and additional adapters. OpenCode is the first implemented runtime adapter, not a core domain dependency.
 
-**Implemented:** The VGXNESS-owned SQLite/FTS5 `MemoryStore` provides local semantic persistence; Registry, Gatekeeper, provider execution, bounded coordination, and crash-atomic Chronicle snapshot publication operate on validated contracts. **Partial:** Chronicle recovery remains bounded rather than implementing the future general checkpoint/artifact lifecycle. Optional Engram compatibility and full Navigator/SDD orchestration remain planned.
+**Implemented:** The VGXNESS-owned SQLite/FTS5 `MemoryStore` provides local semantic persistence; Registry, Gatekeeper, provider execution, bounded coordination, and crash-atomic Chronicle snapshot publication operate on validated contracts. **Partial:** Chronicle recovery remains bounded rather than implementing the future general checkpoint/artifact lifecycle. Engram integration is a non-goal; full Navigator/SDD orchestration remains planned.
 
 Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger are product capabilities; Registry, Chronicle, and Gatekeeper are deterministic services. The explore, propose, spec, design, tasks, apply, verify, archive, fix, and recovery agents described here are operating modes that use those capabilities, not a competing capability taxonomy.
 
@@ -46,7 +46,7 @@ User request
 | Subagent role | **Implemented, bounded:** A hidden, tool-denied `navigator` proposes the task graph; hidden native `explorer`, `implementer`, and `reviewer` profiles execute one authorized operation and return a validated structured result. Capability-specific SDD agents remain planned. |
 | Subagent nesting | **Implemented, bounded:** Each native child has `task: deny`; missing authority is reported instead of recursively delegating. |
 | Operational truth | **Implemented/Partial:** Chronicle records validated events, digest-bound snapshots, atomic pointer commits, terminal repair, task/cancellation state, results, and recovery projection. General artifacts/checkpoints remain planned. |
-| Semantic authority | **Implemented:** The owned `MemoryStore` persists typed observations with provenance and lifecycle state. Higher-level approval, summary, capsule, and optional Engram workflows are planned. |
+| Semantic authority | **Implemented:** The owned `MemoryStore` persists typed observations with provenance and lifecycle state. Higher-level approval, summary, and capsule workflows are planned. |
 | Recovery source | **Implemented/Partial:** Readable digest-bound snapshots and events drive bounded recovery reconstruction, including terminal commit repair; general artifacts/checkpoints and a dedicated UX remain planned. |
 | User experience | Happy path is quiet. Detailed inspection is available on demand. |
 | Provider selection | **Implemented, bounded:** Compare exact capability/version/health evidence with policy and fail closed before execution. |
@@ -73,7 +73,7 @@ Routing classifies difficulty and risk, records candidate agents, chooses the sm
 
 The classifier route `plan` produces a bounded approach when implementation is not authorized or full SDD is unnecessary. It is distinct from the SDD `tasks` operating mode, which converts approved requirements and design into implementation work units. A planning route must not be reported as an approved tasks artifact.
 
-SDD preflight modes are deterministic contracts. The owned-backend contract already uses `memory`; `engram` is only an external-provider reference. No memory-backend migration remains pending. Runtime preflight and SDD artifact-store resolution are still **Planned**.
+SDD preflight modes are deterministic contracts. The owned-backend contract uses `memory`; Engram is not a runtime backend. No memory-backend migration remains pending. Runtime preflight and SDD artifact-store resolution are still **Planned**.
 
 | Mode | Backend behavior | Failure behavior |
 | --- | --- | --- |

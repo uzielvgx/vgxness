@@ -41,7 +41,7 @@ func TestSetupWizardPreviewExplainsAllStepsWithoutApplying(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--preview", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
 	output := stdout.String()
-	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 6") || !strings.Contains(output, "Paso 6 de 6") || !strings.Contains(output, "sin plugin ni modelo secundario") || !strings.Contains(output, "no se modificó ningún archivo") {
+	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 6") || !strings.Contains(output, "Paso 6 de 6") || !strings.Contains(output, "memoria VGXNESS") || !strings.Contains(output, "no se modificó ningún archivo") {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, output, stderr.String())
 	}
 }
@@ -61,7 +61,7 @@ func TestSetupWizardRequiresExplicitConfirmation(t *testing.T) {
 			plan := setupPlanFixture(true)
 			fake := &fakeSetupRuntime{plan: plan, result: setupflow.Result{
 				SelfInstall: selfinstall.Result{LauncherPath: "/stable/vgxness"},
-				Integration: integration.Result{Path: "/config/agent"},
+				Integration: integration.Result{Path: "/config/agent", ToolPath: "/config/plugins/vgxness.ts"},
 				Bridge:      bridge.Response{OK: true, Status: "healthy"}, Changed: true,
 			}}
 			var stdout, stderr bytes.Buffer
@@ -102,7 +102,7 @@ func setupPlanFixture(ready bool) setupflow.Plan {
 	return setupflow.Plan{
 		Provider: "opencode", Steps: setupflow.OpenCodeSteps(), Ready: ready,
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/stable/vgxness", DataDir: "/data"},
-		Integration: integration.Result{State: integration.StateAbsent, Bridge: integration.BridgeNotRequired, Path: "/config/agents/vgxness-manager.md"},
+		Integration: integration.Result{State: integration.StateAbsent, Bridge: integration.BridgeNotRequired, Path: "/config/agents/vgxness-manager.md", ToolPath: "/config/plugins/vgxness.ts"},
 		Bridge:      bridge.Response{OK: ready, Status: "healthy"},
 	}
 }

@@ -15,10 +15,11 @@ import (
 )
 
 type fakeMemoryRuntime struct {
-	result memory.MemoryResult
-	items  []memory.MemoryResult
-	err    error
-	calls  int
+	result  memory.MemoryResult
+	items   []memory.MemoryResult
+	project string
+	err     error
+	calls   int
 }
 
 func (f *fakeMemoryRuntime) Save(context.Context, config.Options, memory.SaveRequest) (memory.MemoryResult, error) {
@@ -32,6 +33,13 @@ func (f *fakeMemoryRuntime) Search(context.Context, config.Options, memory.Searc
 func (f *fakeMemoryRuntime) Get(context.Context, config.Options, memory.GetRequest) (memory.MemoryResult, error) {
 	f.calls++
 	return f.result, f.err
+}
+func (f *fakeMemoryRuntime) ResolveProject(context.Context, config.Options, string) (string, error) {
+	f.calls++
+	if f.project == "" {
+		return "resolved-project", f.err
+	}
+	return f.project, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
@@ -73,6 +81,17 @@ func TestMemoryCLI_StrictSingleSourceInput(t *testing.T) {
 			testutil.Require(t, code == map[bool]int{true: 0, false: 2}[validCase] && out == "" == !validCase && runtime.calls == map[bool]int{true: 1}[validCase], "exit=%d calls=%d out=%q", code, runtime.calls, out)
 		})
 	}
+}
+
+func TestMemoryCLI_ResolvesWorkspaceWithoutCallerControlledProject(t *testing.T) {
+	workspace := t.TempDir()
+	runtime := &fakeMemoryRuntime{project: "workspace-project", result: memory.MemoryResult{Project: "workspace-project"}}
+	code, _, stderr := runMemoryTest([]string{"memory", "save", "--stdin", "--workspace", workspace, "--json"}, `{"schemaVersion":1,"content":"durable fact"}`, runtime)
+	testutil.Require(t, code == 0 && runtime.calls == 2 && stderr == "", "workspace save: code=%d calls=%d stderr=%q", code, runtime.calls, stderr)
+
+	runtime = &fakeMemoryRuntime{}
+	code, out, _ := runMemoryTest([]string{"memory", "search", "--stdin", "--workspace", workspace, "--project", "forged"}, `{"schemaVersion":1,"query":"durable"}`, runtime)
+	testutil.Require(t, code == 2 && runtime.calls == 0 && out == "", "workspace accepted caller project: code=%d calls=%d out=%q", code, runtime.calls, out)
 }
 
 func TestMemoryCLI_RenderStableSafeAndAtomicOutput(t *testing.T) {

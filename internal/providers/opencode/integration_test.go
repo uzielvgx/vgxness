@@ -26,14 +26,15 @@ func TestIntegration_PreviewIsNonMutatingAndModelIndependent(t *testing.T) {
 	testutil.NoError(t, err)
 
 	expected := filepath.Join(home, ".config", "opencode", "agents", managerAgentName)
+	expectedTool := filepath.Join(home, ".config", "opencode", "plugins", memoryPluginName)
 	_, statErr := os.Stat(filepath.Join(home, ".config"))
 	testutil.Require(t,
 		result.Provider == "opencode" &&
 			result.State == integration.StateAbsent &&
 			result.Bridge == integration.BridgeNotRequired &&
 			result.Path == expected &&
-			result.ToolPath == "" &&
-			result.ToolSHA256 == "" &&
+			result.ToolPath == expectedTool &&
+			len(result.ToolSHA256) == 64 &&
 			result.Model == "" &&
 			result.Changed &&
 			len(result.ArtifactSHA256) == 64,
@@ -52,6 +53,12 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	data, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
 	info, err := os.Stat(installed.Path)
+	testutil.NoError(t, err)
+	toolData, err := os.ReadFile(installed.ToolPath)
+	testutil.NoError(t, err)
+	toolInfo, err := os.Stat(installed.ToolPath)
+	testutil.NoError(t, err)
+	expectedTool, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
 
 	expectedAgents := map[string]string{
@@ -74,13 +81,15 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 		installed.State == integration.StateInstalled &&
 			installed.Bridge == integration.BridgeNotRequired &&
 			installed.Changed &&
-			installed.ToolPath == "" &&
+			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
+			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
 			installed.Model == "" &&
-			string(data) == managerPrompt,
+			string(data) == managerPrompt &&
+			string(toolData) == string(expectedTool),
 		"unexpected install: %#v", installed,
 	)
 	if runtime.GOOS != "windows" {
-		testutil.Require(t, info.Mode().Perm() == 0o600, "artifact mode=%o", info.Mode().Perm())
+		testutil.Require(t, info.Mode().Perm() == 0o600 && toolInfo.Mode().Perm() == 0o600, "artifact modes=%o/%o", info.Mode().Perm(), toolInfo.Mode().Perm())
 	}
 
 	status, err := service.Status(context.Background(), options)
@@ -89,7 +98,8 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 		status.State == integration.StateInstalled &&
 			status.Bridge == integration.BridgeNotRequired &&
 			!status.Changed &&
-			status.ArtifactSHA256 == managerPromptSHA256(),
+			status.ArtifactSHA256 == managerPromptSHA256() &&
+			status.ToolSHA256 == artifactSHA256(expectedTool),
 		"unexpected status: %#v", status,
 	)
 	second, err := service.Install(context.Background(), options)
@@ -116,7 +126,7 @@ func TestIntegration_RepairsOnlyMissingManagedArtifact(t *testing.T) {
 	testutil.Require(t, installed.State == integration.StateInstalled && installed.Changed && os.SameFile(before, after), "partial repair replaced existing artifact: %#v", installed)
 }
 
-func TestIntegration_DoesNotProjectOrInspectLegacyPluginAndAgents(t *testing.T) {
+func TestIntegration_RefusesForeignMemoryPluginAndDoesNotInspectLegacyAgents(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	pluginPath := filepath.Join(configDirectory, "plugins", "vgxness.ts")
 	legacyAgentPath := filepath.Join(configDirectory, "agents", "vgxness-explorer.md")
@@ -126,24 +136,22 @@ func TestIntegration_DoesNotProjectOrInspectLegacyPluginAndAgents(t *testing.T) 
 	testutil.NoError(t, os.WriteFile(legacyAgentPath, []byte("user-owned agent\n"), 0o600))
 
 	service := NewIntegration()
-	result, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
-	testutil.NoError(t, err)
+	_, installErr := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	plugin, err := os.ReadFile(pluginPath)
 	testutil.NoError(t, err)
 	legacyAgent, err := os.ReadFile(legacyAgentPath)
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		result.State == integration.StateInstalled &&
-			result.ToolPath == "" &&
+		errors.Is(installErr, integration.ErrConflict) &&
 			string(plugin) == "user-owned plugin\n" &&
 			string(legacyAgent) == "user-owned agent\n",
-		"legacy or user-owned projection was touched: %#v", result,
+		"legacy or user-owned projection was touched: %v", installErr,
 	)
 }
 
 func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 21",
+		"artifact: opencode-agent/vgxness-manager; version: 22",
 		"user's OpenCode-native engineering partner",
 		"OpenCode's native tools, skills, memory, Task subagents",
 		"Direct inline",
@@ -156,6 +164,12 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"Pass exact skill names, never filesystem paths",
 		"use one bounded codegraph_explore query",
 		"Exact source, Git diff, and test output remain authoritative",
+		"VGXNESS-owned memory is the only persistent memory authority",
+		"vgxness_memory_search",
+		"vgxness_memory_get",
+		"vgxness_memory_save",
+		"vgxness_memory_forget",
+		"Do not use any external memory system",
 		"Never ask the user to run terminal, Git, filesystem, test, or diagnostic commands",
 		"one correction transaction and one scoped validation",
 		"Do not commit or push unless the user explicitly asks",
@@ -166,12 +180,40 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"vgxness_", "vgxness-explorer", "vgxness-implementer", "vgxness-maintainer",
+		"vgxness_run", "vgxness_dispatch", "vgxness_orchestrate", "vgxness_native_", "vgxness_codegraph",
+		"vgxness-explorer", "vgxness-implementer", "vgxness-maintainer",
 		"vgxness-navigator", "skill paths", "managed plugin", "ticket system: allow",
 		"guide to the VGXNESS control plane", "gentle-orchestrator",
 	} {
 		if strings.Contains(managerPrompt, forbidden) {
 			t.Errorf("manager prompt retains deprecated mechanic %q", forbidden)
+		}
+	}
+}
+
+func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
+	service := NewIntegration()
+	content, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	for _, required := range []string{
+		"artifact: opencode-plugin/vgxness-memory; version: 1",
+		"vgxness_memory_search", "vgxness_memory_get", "vgxness_memory_save", "vgxness_memory_forget",
+		`["memory", operation, "--stdin", "--json", "--workspace", workspace]`,
+		"shell: false", "MAX_INPUT_BYTES", "MAX_OUTPUT_BYTES", "TIMEOUT_MS",
+		`env: {`, `HOME: process.env.HOME`, `context?.abort?.addEventListener`,
+		"VGXNESS-owned durable project memory",
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("memory plugin missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"vgxness_run", "vgxness_status", "vgxness_dispatch", "vgxness_orchestrate",
+		"vgxness_native_", "vgxness_codegraph", "client.session", "--model", "ENGRAM",
+	} {
+		if strings.Contains(plugin, forbidden) {
+			t.Errorf("memory plugin retains non-memory capability %q", forbidden)
 		}
 	}
 }
@@ -191,6 +233,7 @@ func TestReviewAgentsAreReadOnlyWithNativeSkillAndCodeGraphAccess(t *testing.T) 
 		for _, required := range []string{
 			"mode: subagent", "hidden: true", `"*": deny`, "read: allow", "grep: allow",
 			"glob: allow", "list: allow", "skill: allow", "codegraph_explore: allow",
+			"vgxness_memory_search: allow", "vgxness_memory_get: allow",
 			"task: deny", "relevant native skill names", "Load every supplied skill name",
 			"use at most one bounded codegraph_explore query", "exact source and supplied diff evidence remain authoritative",
 			"candidateIdentity", "changedPaths", "acceptanceCriteria", profile.role, profile.prefix,
@@ -199,14 +242,14 @@ func TestReviewAgentsAreReadOnlyWithNativeSkillAndCodeGraphAccess(t *testing.T) 
 				t.Errorf("%s reviewer missing %q", name, required)
 			}
 		}
-		for _, forbidden := range []string{"bash: allow", "edit: allow", "write: allow", "task: allow", "codegraph_*: allow"} {
+		for _, forbidden := range []string{"bash: allow", "edit: allow", "write: allow", "task: allow", "codegraph_*: allow", "vgxness_memory_save: allow", "vgxness_memory_forget: allow"} {
 			if strings.Contains(profile.prompt, forbidden) {
 				t.Errorf("%s reviewer enables %q", name, forbidden)
 			}
 		}
 	}
 	for _, required := range []string{
-		"severe-finding refuter", "skill: allow", "codegraph_explore: allow",
+		"severe-finding refuter", "skill: allow", "codegraph_explore: allow", "vgxness_memory_search: allow", "vgxness_memory_get: allow",
 		"Load every supplied native skill name", "Never add a new finding",
 		`"outcome":"corroborated|refuted|inconclusive"`,
 	} {
@@ -320,7 +363,12 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 	testutil.NoError(t, err)
 	backup, err := os.ReadFile(removed.BackupPath)
 	testutil.NoError(t, err)
+	toolBackup, err := os.ReadFile(removed.ToolBackupPath)
+	testutil.NoError(t, err)
+	expectedTool, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
 	_, targetErr := os.Stat(installed.Path)
+	_, toolErr := os.Stat(installed.ToolPath)
 	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
 		if _, statErr := os.Stat(filepath.Join(configDirectory, "agents", name)); !os.IsNotExist(statErr) {
 			t.Errorf("managed reviewer %s was not removed: %v", name, statErr)
@@ -332,8 +380,10 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 			removed.Changed &&
 			strings.Contains(removed.BackupPath, "20260721T123456") &&
 			string(backup) == managerPrompt &&
-			os.IsNotExist(targetErr),
-		"unexpected uninstall: %#v target=%v", removed, targetErr,
+			string(toolBackup) == string(expectedTool) &&
+			os.IsNotExist(targetErr) &&
+			os.IsNotExist(toolErr),
+		"unexpected uninstall: %#v target=%v tool=%v", removed, targetErr, toolErr,
 	)
 	second, err := service.Uninstall(context.Background(), options)
 	testutil.NoError(t, err)

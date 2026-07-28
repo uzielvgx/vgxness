@@ -1,18 +1,17 @@
 # OpenCode integration
 
-VGXNESS installs one persistent primary profile, `vgxness-manager`, and five hidden read-only review profiles:
+VGXNESS installs one persistent primary profile, `vgxness-manager`, five hidden read-only review profiles, and one bounded memory-only plugin.
 
-- `vgxness-review-risk`
-- `vgxness-review-readability`
-- `vgxness-review-reliability`
-- `vgxness-review-resilience`
-- `vgxness-review-refuter`
+The plugin exposes exactly:
 
-This is a native OpenCode projection. It does not install `vgxness.ts`, expose any `vgxness_*` tool, create ticket-bound governed agents, or require a secondary `provider/model`.
+- `vgxness_memory_search`
+- `vgxness_memory_get`
+- `vgxness_memory_save`
+- `vgxness_memory_forget`
+
+It does not expose orchestration, status, dispatch, tickets, filesystem access, editing, validation, CodeGraph, shell execution, model selection, or subagent creation. OpenCode remains the execution authority for all engineering work.
 
 ## Install and inspect
-
-The guided path is:
 
 ```sh
 vgxness setup opencode --preview
@@ -29,39 +28,45 @@ vgxness integrate opencode status
 vgxness integrate opencode uninstall
 ```
 
-`--config-dir` can select a non-default OpenCode configuration directory. The deprecated `--model` flag is accepted temporarily for command compatibility but has no effect on the native projection.
+`--config-dir` can select a non-default OpenCode configuration directory. The deprecated `--model` flag is accepted temporarily for command compatibility but has no effect.
 
 Preview and status are read-only. Installation creates only absent exact managed artifacts and refuses foreign or drifted content. Uninstall removes only exact managed artifacts, writes recoverable hard-link backups, and refuses drift.
 
-## Native capability routing
+## Memory authority
 
-The manager uses OpenCode directly:
+VGXNESS's SQLite/FTS5 `MemoryStore` is the only persistent memory authority. The plugin resolves project identity from OpenCode's trusted workspace directory, so agents cannot select another project by supplying an arbitrary project ID.
 
-- ordinary workspace tools for inspection and implementation;
-- built-in `explore` and `general` Task workers for bounded delegation;
-- the native `skill` tool, addressed by skill name;
-- persistent memory when available;
-- optional SDD only when the user requests or accepts it;
-- the five review profiles against one frozen candidate.
+The default database is `~/.vgxness/memory.db`. Records remain isolated by canonical workspace binding, project, scope, topic, type, state, session, provenance, and references.
 
-When a project has a healthy `.codegraph` index, the manager and reviewers may use one bounded `codegraph_explore` query for architecture, symbols, call paths, dependencies, blast radius, or affected tests. Exact source, Git diff, and test output remain authoritative. Missing or stale CodeGraph never blocks fallback reads and search.
+The manager:
 
-Review profiles deny all tools by default and allow only `read`, `grep`, `glob`, `list`, `skill`, and the exact `codegraph_explore` tool. They cannot edit, run shell commands, delegate, access the network, commit, or push.
+- searches memory when prior project decisions, fixes, discoveries, or conventions may matter;
+- reads full content only after a relevant search result;
+- saves durable evidence-backed knowledge immediately;
+- reuses stable topic keys for evolving subjects;
+- never stores secrets, personal data, transient progress, raw command output, or full transcripts;
+- forgets a memory only after an explicit user request.
+
+Reviewers may search and read memory as non-authoritative context. They cannot save or forget. Memory never proves a candidate diff and never overrides exact source, tests, Git evidence, or Chronicle operational truth.
+
+The plugin launches the exact managed VGXNESS executable with an argument vector and `shell=false`, passes bounded JSON through stdin, limits output and runtime, supports cancellation, and inherits only the minimal home/temp environment required to locate owned storage. It does not forward credentials.
+
+Engram is not part of this integration.
+
+## Other native capabilities
+
+The manager uses ordinary OpenCode workspace tools, built-in `explore` and `general` Task workers, skills by native registry name, optional user-approved SDD, and the five review profiles.
+
+When a project has a healthy `.codegraph` index, the manager and reviewers may use one bounded `codegraph_explore` query for structural evidence. Exact source, Git diff, and test output remain authoritative.
 
 ## Health contract
 
-The integration is installed only when the manager and all five reviewer files match their managed identities exactly. Setup health combines:
+The integration is installed only when the manager, all five reviewers, and the memory-only plugin match their managed identities exactly. Setup health combines:
 
 1. the permanent VGXNESS launcher is installed and verified;
-2. all six native profiles are installed without drift;
+2. all seven managed artifacts are installed without drift;
 3. the OpenCode adapter handshake succeeds for the selected workspace.
 
-Plugin state, a child execution model, and `BridgeConfigured` are not readiness requirements.
+A child execution model and the old execution bridge are not readiness requirements.
 
-## Migration from the governed projection
-
-Before activating this native-only projection over an older installation, use the old managed launcher to uninstall its exact projection. That recoverably removes the old `vgxness.ts` plugin and the governed Navigator, explorer, implementer, maintainer, and reviewer profiles. Then install the new projection.
-
-The Go control-plane and legacy bridge CLI remain in the binary for compatibility and a later deprecation phase. They are no longer projected into OpenCode and are not part of the manager's normal workflow.
-
-After installation or migration, restart OpenCode Desktop so it reloads the agent and plugin inventory.
+Restart OpenCode Desktop after installation so it reloads the profiles and memory plugin.

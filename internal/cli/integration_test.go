@@ -47,11 +47,11 @@ func runIntegrationTest(args []string, runtime integration.Runtime) (int, string
 func TestIntegrationCLI_RoutesEverySupportedAction(t *testing.T) {
 	for _, action := range []string{"preview", "install", "status", "uninstall"} {
 		t.Run(action, func(t *testing.T) {
-			runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeNotRequired, Path: "/tmp/config/agent.md", ArtifactSHA256: strings.Repeat("a", 64), Changed: action == "install"}}
+			runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeNotRequired, Path: "/tmp/config/agent.md", ArtifactSHA256: strings.Repeat("a", 64), ToolPath: "/tmp/config/plugins/vgxness.ts", ToolSHA256: strings.Repeat("b", 64), Changed: action == "install"}}
 			args := []string{"integrate", "opencode", action, "--config-dir", "/tmp/config"}
 			code, stdout, stderr := runIntegrationTest(args, runtime)
 			testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.action == action && runtime.options.ConfigDir == "/tmp/config" && runtime.options.Model == "" && stderr == "", "exit=%d calls=%d action=%q options=%#v stderr=%q", code, runtime.calls, runtime.action, runtime.options, stderr)
-			testutil.Require(t, strings.Contains(stdout, "provider=opencode\n") && strings.Contains(stdout, "state=installed\n") && strings.Contains(stdout, "projection=native\n") && !strings.Contains(stdout, "tool_path=") && !strings.Contains(stdout, "model=") && strings.Contains(stdout, "changed="), "output=%q", stdout)
+			testutil.Require(t, strings.Contains(stdout, "provider=opencode\n") && strings.Contains(stdout, "state=installed\n") && strings.Contains(stdout, "projection=native+memory\n") && strings.Contains(stdout, "memory_plugin=/tmp/config/plugins/vgxness.ts\n") && !strings.Contains(stdout, "model=") && strings.Contains(stdout, "changed="), "output=%q", stdout)
 		})
 	}
 }
@@ -101,7 +101,7 @@ func TestIntegrationCLI_ClassifiesErrorsAndKeepsOutputAtomic(t *testing.T) {
 }
 
 func TestIntegrationCLI_EscapesPathsAndPrintsRecoverableBackup(t *testing.T) {
-	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, Path: "/tmp/line\nagent", ArtifactSHA256: strings.Repeat("b", 64), Changed: true, BackupPath: "/tmp/backup\x1b"}}
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, Path: "/tmp/line\nagent", ArtifactSHA256: strings.Repeat("b", 64), Changed: true, BackupPath: "/tmp/backup\x1b", ToolBackupPath: "/tmp/memory-backup\x1b"}}
 	code, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", "uninstall"}, runtime)
-	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(stdout, `path=/tmp/line\nagent`) && strings.Contains(stdout, `backup=/tmp/backup\x1b`) && !strings.Contains(stdout, "tool_"), "exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(stdout, `path=/tmp/line\nagent`) && strings.Contains(stdout, `backup=/tmp/backup\x1b`) && strings.Contains(stdout, `memory_plugin_backup=/tmp/memory-backup\x1b`), "exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 }
