@@ -43,6 +43,15 @@ type GitEvidence struct {
 
 type GitInspector func(context.Context, string) (GitEvidence, error)
 
+type GitBaselineEvidence struct {
+	Head     string `json:"head"`
+	Branch   string `json:"branch,omitempty"`
+	Clean    bool   `json:"clean"`
+	Detached bool   `json:"detached"`
+}
+
+type GitBaselineInspector func(context.Context, string) (GitBaselineEvidence, error)
+
 // ContinuityFault is a test seam for failures between durable completion steps.
 // Production callers should leave it nil.
 type ContinuityFault func(string) error
@@ -52,6 +61,7 @@ type Options struct {
 	AdapterFactory   AdapterFactory
 	CodeGraphFactory CodeGraphFactory
 	GitInspector     GitInspector
+	GitBaseline      GitBaselineInspector
 	Memory           MemoryRuntime
 	Now              func() time.Time
 	NewID            func(string) (string, error)
@@ -66,6 +76,7 @@ type Service struct {
 	now             func() time.Time
 	newID           func(string) (string, error)
 	inspectGit      GitInspector
+	inspectBaseline GitBaselineInspector
 	memory          MemoryRuntime
 	statusTimeout   time.Duration
 	continuityFault ContinuityFault
@@ -92,11 +103,15 @@ func New(options Options) *Service {
 	if inspectGit == nil {
 		inspectGit = collectGitEvidence
 	}
+	inspectBaseline := options.GitBaseline
+	if inspectBaseline == nil {
+		inspectBaseline = collectGitBaselineEvidence
+	}
 	statusTimeout := options.StatusTimeout
 	if statusTimeout <= 0 {
 		statusTimeout = defaultStatusTimeout
 	}
-	return &Service{storageRoot: options.StorageRoot, adapter: factory, codegraph: codegraphFactory, now: now, newID: newID, inspectGit: inspectGit, memory: options.Memory, statusTimeout: statusTimeout, continuityFault: options.ContinuityFault}
+	return &Service{storageRoot: options.StorageRoot, adapter: factory, codegraph: codegraphFactory, now: now, newID: newID, inspectGit: inspectGit, inspectBaseline: inspectBaseline, memory: options.Memory, statusTimeout: statusTimeout, continuityFault: options.ContinuityFault}
 }
 
 func (service *Service) Status(ctx context.Context, workspace string) (bridge.Response, error) {
@@ -144,6 +159,7 @@ func (service *Service) Dispatch(ctx context.Context, workspace string, input br
 		}
 		gitEvidence = &evidence
 	}
+	repositoryEvidence := service.repositoryBaseline(ctx, root)
 	paths, err := config.Prepare(ctx, config.Options{StorageRoot: service.storageRoot, ProjectDir: root})
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: storage", bridge.ErrExecution)
@@ -205,7 +221,7 @@ func (service *Service) Dispatch(ctx context.Context, workspace string, input br
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}
-	request, err := service.executionRequest(root, runID, taskID, executionID, identities, input, gitEvidence, continuity, taskMemory)
+	request, err := service.executionRequest(root, runID, taskID, executionID, identities, input, gitEvidence, repositoryEvidence, continuity, taskMemory)
 	if err != nil {
 		return bridge.Response{}, err
 	}
@@ -275,7 +291,20 @@ func (service *Service) newCodeGraph() (codegraph.Runtime, error) {
 	return runtime, nil
 }
 
-func (service *Service) executionRequest(workspace, runID, taskID, executionID string, identities executionIDs, input bridge.DispatchRequest, gitEvidence *GitEvidence, continuity *continuityState, taskMemory *taskMemoryState) (providers.Request, error) {
+func (service *Service) repositoryBaseline(ctx context.Context, workspace string) *GitBaselineEvidence {
+	if service == nil || service.inspectBaseline == nil {
+		return nil
+	}
+	evidence, err := service.inspectBaseline(ctx, workspace)
+	if err != nil {
+		// A workspace need not be a Git repository for bounded read operations.
+		// Write preparation independently requires and validates a clean HEAD.
+		return nil
+	}
+	return &evidence
+}
+
+func (service *Service) executionRequest(workspace, runID, taskID, executionID string, identities executionIDs, input bridge.DispatchRequest, gitEvidence *GitEvidence, repositoryEvidence *GitBaselineEvidence, continuity *continuityState, taskMemory *taskMemoryState) (providers.Request, error) {
 	operation := effectiveOperation(input.Operation)
 	operations := []gatekeeper.OperationClass{gatekeeper.ReadFiles}
 	if operation != gatekeeper.ReadFiles {
@@ -290,6 +319,9 @@ func (service *Service) executionRequest(workspace, runID, taskID, executionID s
 	inputs := map[string]any{"operation": input.Operation}
 	if gitEvidence != nil {
 		inputs["git"] = gitEvidence
+	}
+	if repositoryEvidence != nil {
+		inputs["repository"] = repositoryEvidence
 	}
 	if continuity != nil {
 		continuityInput := map[string]any{

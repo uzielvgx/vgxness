@@ -54,6 +54,38 @@ func TestCollectGitEvidenceUsesOnlyFixedReadOnlyCommands(t *testing.T) {
 	}
 }
 
+func TestCollectGitBaselineEvidenceReturnsHeadBranchAndCleanliness(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("Git is unavailable")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "sample.txt"), []byte("original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "init", "-q")
+	runGitTest(t, root, "add", "sample.txt")
+	runGitTest(t, root, "-c", "user.name=Probe", "-c", "user.email=probe@example.invalid", "commit", "-qm", "initial")
+	head := strings.TrimSpace(string(runGitTestOutput(t, root, "rev-parse", "HEAD")))
+	branch := strings.TrimSpace(string(runGitTestOutput(t, root, "branch", "--show-current")))
+	evidence, err := collectGitBaselineEvidence(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Head != head || evidence.Branch != branch || !evidence.Clean || evidence.Detached {
+		t.Fatalf("unexpected clean baseline: %#v", evidence)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sample.txt"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evidence, err = collectGitBaselineEvidence(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Clean {
+		t.Fatalf("dirty repository reported clean: %#v", evidence)
+	}
+}
+
 func TestCollectGitEvidenceStopsOnFailureAndBoundsCombinedOutput(t *testing.T) {
 	calls := 0
 	_, err := collectGitEvidenceWith(context.Background(), "/workspace", func(context.Context, string, []string) ([]byte, error) {
@@ -222,6 +254,17 @@ func runGitTest(t *testing.T, directory string, args ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
+}
+
+func runGitTestOutput(t *testing.T, directory string, args ...string) []byte {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+	return output
 }
 
 func containsArg(values []string, target string) bool {

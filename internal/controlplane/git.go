@@ -22,6 +22,28 @@ const (
 
 type gitCommandRunner func(context.Context, string, []string) ([]byte, error)
 
+func collectGitBaselineEvidence(ctx context.Context, workspace string) (GitBaselineEvidence, error) {
+	snapshot, err := prepareGitSnapshot(ctx, workspace)
+	if err != nil {
+		return GitBaselineEvidence{}, err
+	}
+	defer os.RemoveAll(snapshot.directory)
+	if !validGitObjectID(snapshot.head) {
+		return GitBaselineEvidence{}, fmt.Errorf("Git HEAD commit is unavailable")
+	}
+	status, err := snapshot.run(ctx, workspace, []string{
+		"-c", "color.ui=false", "-c", "core.attributesFile=" + os.DevNull,
+		"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none", "--", ".",
+	})
+	if err != nil {
+		return GitBaselineEvidence{}, fmt.Errorf("collect Git cleanliness: %w", err)
+	}
+	return GitBaselineEvidence{
+		Head: snapshot.head, Branch: snapshot.branch,
+		Clean: len(status) == 0, Detached: snapshot.branch == "",
+	}, nil
+}
+
 func collectGitEvidence(ctx context.Context, workspace string) (GitEvidence, error) {
 	snapshot, err := prepareGitSnapshot(ctx, workspace)
 	if err != nil {
@@ -117,6 +139,8 @@ func rejectSensitiveRelations(output []byte) error {
 type gitSnapshot struct {
 	directory   string
 	environment []string
+	head        string
+	branch      string
 }
 
 func prepareGitSnapshot(ctx context.Context, workspace string) (gitSnapshot, error) {
@@ -149,8 +173,21 @@ func prepareGitSnapshot(ctx context.Context, workspace string) (gitSnapshot, err
 	}
 	head, headErr := runGitCommand(ctx, workspace, []string{"rev-parse", "--verify", "HEAD"}, cleanGitEnvironment(nil))
 	headData := []byte("ref: refs/heads/vgxness-unborn\n")
+	headValue := ""
+	branchValue := ""
 	if headErr == nil {
-		headData = []byte(strings.TrimSpace(string(head)) + "\n")
+		headValue = strings.TrimSpace(string(head))
+		if !validGitObjectID(headValue) {
+			return fail(fmt.Errorf("resolve Git HEAD"))
+		}
+		headData = []byte(headValue + "\n")
+		branch, branchErr := runGitCommand(ctx, workspace, []string{"symbolic-ref", "--short", "-q", "HEAD"}, cleanGitEnvironment(nil))
+		if branchErr == nil {
+			branchValue = strings.TrimSpace(string(branch))
+			if branchValue == "" || len(branchValue) > 1024 || strings.ContainsAny(branchValue, "\x00\r\n") {
+				return fail(fmt.Errorf("resolve Git branch"))
+			}
+		}
 	} else if _, symbolicErr := runGitCommand(ctx, workspace, []string{"symbolic-ref", "-q", "HEAD"}, cleanGitEnvironment(nil)); symbolicErr != nil {
 		return fail(fmt.Errorf("resolve Git HEAD"))
 	}
@@ -177,7 +214,7 @@ func prepareGitSnapshot(ctx context.Context, workspace string) (gitSnapshot, err
 	}
 	overrides["GIT_ATTR_SOURCE"] = strings.TrimSpace(string(emptyTree))
 	environment = cleanGitEnvironment(overrides)
-	return gitSnapshot{directory: directory, environment: environment}, nil
+	return gitSnapshot{directory: directory, environment: environment, head: headValue, branch: branchValue}, nil
 }
 
 func (snapshot gitSnapshot) run(ctx context.Context, workspace string, args []string) ([]byte, error) {

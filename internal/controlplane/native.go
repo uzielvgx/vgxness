@@ -186,6 +186,7 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 		}
 		gitEvidence = &evidence
 	}
+	repositoryEvidence := service.repositoryBaseline(ctx, root)
 	executionRoot := root
 	var editWorkspace *nativeEditWorkspace
 	if input.Operation == bridge.WriteFiles {
@@ -261,7 +262,7 @@ func (service *Service) Prepare(ctx context.Context, workspace string, input bri
 	if err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: coordinator", bridge.ErrExecution)
 	}
-	request, err := service.executionRequest(executionRoot, runID, taskID, executionID, identities, input, gitEvidence, continuity, taskMemory)
+	request, err := service.executionRequest(executionRoot, runID, taskID, executionID, identities, input, gitEvidence, repositoryEvidence, continuity, taskMemory)
 	if err != nil {
 		return bridge.Response{}, err
 	}

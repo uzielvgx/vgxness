@@ -156,13 +156,13 @@ permission:
   vgxness_orchestrate: allow
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 18 -->`
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 19 -->`
 	if !strings.HasPrefix(managerPrompt, expectedFrontmatter) {
 		t.Fatalf("manager prompt has invalid OpenCode frontmatter:\n%s", managerPrompt)
 	}
 
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 18",
+		"artifact: opencode-agent/vgxness-manager; version: 19",
 		"exact native Task directives returned by vgxness_run, vgxness_dispatch, or vgxness_orchestrate",
 		"senior engineer with more than two decades of experience",
 		"calm, attentive, technically discerning, pragmatic, and collaborative",
@@ -170,6 +170,8 @@ permission:
 		"challenge unnecessary complexity respectfully",
 		"Match the language and register of the user's direct conversation",
 		"technical artifacts neutral and in English by default",
+		"Never ask the user to run terminal, Git, filesystem, or inspection commands",
+		"write-files validates the source repository and snapshots its clean HEAD",
 		"Optimize for the user's outcome and time, not for visible orchestration activity",
 		"Answer directly when the user is chatting, asking a conceptual question",
 		"prefer the goal-first vgxness_run entrypoint",
@@ -282,8 +284,10 @@ func TestNavigatorRoutesReadOnlySynthesisWithoutGitReview(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-explorer; version: 11",
+		"artifact: opencode-agent/vgxness-explorer; version: 12",
 		"use supplied memory and dependency evidence before gathering more context",
+		"context.inputs.repository as immutable bounded VGXNESS evidence",
+		"instead of asking the user to run Git or terminal commands",
 		"For read-files, never call vgxness_codegraph",
 		"Stop when the acceptance criteria are satisfied",
 		"Propose memoryCandidates only for durable reusable project knowledge",

@@ -129,6 +129,52 @@ func TestNativeDispatchPreparesChildAndAcceptsIdempotentlyWithoutRunningAdapter(
 	}
 }
 
+func TestNativePromptIncludesBoundedRepositoryBaseline(t *testing.T) {
+	workspace := t.TempDir()
+	canonical, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	head := strings.Repeat("a", 40)
+	service := New(Options{
+		StorageRoot: filepath.Join(t.TempDir(), "storage"), Now: func() time.Time { return now },
+		AdapterFactory: func(string) (providers.Adapter, error) { return nativeTestAdapter(now), nil },
+		GitBaseline: func(_ context.Context, root string) (GitBaselineEvidence, error) {
+			if root != canonical {
+				t.Fatalf("baseline workspace=%q want %q", root, canonical)
+			}
+			return GitBaselineEvidence{Head: head, Branch: "main", Clean: true}, nil
+		},
+	})
+	prepared, err := service.Prepare(context.Background(), workspace, bridge.DispatchRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-repository-baseline", Model: "openai/gpt-5.6-sol", Operation: bridge.AnalyzeStructure,
+		Goal: "Inspect repository structure", ParentSessionID: "ses_parent", ParentMessageID: "msg_parent", ChildSessionID: "ses_child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt struct {
+		Work struct {
+			Inputs struct {
+				Repository GitBaselineEvidence `json:"repository"`
+			} `json:"inputs"`
+		} `json:"work"`
+	}
+	if err := json.Unmarshal([]byte(prepared.Prepared.Prompt), &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if prompt.Work.Inputs.Repository.Head != head || prompt.Work.Inputs.Repository.Branch != "main" || !prompt.Work.Inputs.Repository.Clean || prompt.Work.Inputs.Repository.Detached {
+		t.Fatalf("missing repository baseline: %#v", prompt.Work.Inputs.Repository)
+	}
+	if _, err := service.Fail(context.Background(), workspace, bridge.NativeFailureRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID,
+		ParentSessionID: "ses_parent", ChildSessionID: "ses_child", Category: "native-subagent-cancelled",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNativeCompletionHasTerminalOnlyDeadlineGrace(t *testing.T) {
 	workspace := t.TempDir()
 	now := time.Now().UTC()
