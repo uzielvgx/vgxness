@@ -505,7 +505,11 @@ func TestNativeCodeGraphBrokerBindsStructuralTicketAndPersistsReceipt(t *testing
 	if resolveErr != nil {
 		t.Fatal(resolveErr)
 	}
-	if err != nil || response.CodeGraph == nil || response.CodeGraph.Content != "Dispatch calls Prepare" || response.CodeGraph.OutputSHA256 != codegraphRuntime.result.OutputSHA256 || codegraphRuntime.workspace != resolvedWorkspace || codegraphRuntime.request.Operation != codegraph.Explore {
+	if err != nil || response.CodeGraph == nil || !response.CodeGraph.Available ||
+		response.CodeGraph.Content != "Dispatch calls Prepare" || response.CodeGraph.OutputSHA256 != codegraphRuntime.result.OutputSHA256 ||
+		response.CodeGraph.QueriesUsed != 1 || response.CodeGraph.QueriesRemaining != nativeMaxCodeGraphQueries-1 ||
+		response.CodeGraph.QueryLimit != nativeMaxCodeGraphQueries ||
+		codegraphRuntime.workspace != resolvedWorkspace || codegraphRuntime.request.Operation != codegraph.Explore {
 		t.Fatalf("response=%#v runtime=%#v err=%v", response, codegraphRuntime, err)
 	}
 	if _, err := service.QueryNativeCodeGraph(context.Background(), workspace, bridge.NativeCodeGraphRequest{
@@ -536,11 +540,14 @@ func TestNativeCodeGraphBrokerBindsStructuralTicketAndPersistsReceipt(t *testing
 			t.Fatalf("bounded structural query %d failed: %v", query+1, err)
 		}
 	}
-	if _, err := service.QueryNativeCodeGraph(context.Background(), workspace, bridge.NativeCodeGraphRequest{
+	exhausted, err := service.QueryNativeCodeGraph(context.Background(), workspace, bridge.NativeCodeGraphRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ChildSessionID: "ses_child",
 		Operation: bridge.CodeGraphExplore, Query: "Dispatch Prepare completion", MaxFiles: 8,
-	}); !errors.Is(err, bridge.ErrDenied) {
-		t.Fatalf("structural query budget was not enforced: %v", err)
+	})
+	if err != nil || exhausted.CodeGraph == nil || exhausted.CodeGraph.Available ||
+		exhausted.CodeGraph.Reason != "query-budget-exhausted" ||
+		exhausted.CodeGraph.QueriesUsed != nativeMaxCodeGraphQueries || exhausted.CodeGraph.QueriesRemaining != 0 {
+		t.Fatalf("structural query budget was not reported explicitly: %#v err=%v", exhausted, err)
 	}
 	if _, err := service.Fail(context.Background(), workspace, bridge.NativeFailureRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ParentSessionID: "ses_parent", ChildSessionID: "ses_child", Category: "native-subagent-failed",

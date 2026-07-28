@@ -25,6 +25,7 @@ const (
 	navigatorAgentName   = "vgxness-navigator.md"
 	explorerAgentName    = "vgxness-explorer.md"
 	implementerAgentName = "vgxness-implementer.md"
+	maintainerAgentName  = "vgxness-maintainer.md"
 	reviewerAgentName    = "vgxness-reviewer.md"
 	bridgePluginName     = "vgxness.ts"
 	maxArtifactBytes     = 512 * 1024
@@ -46,7 +47,7 @@ permission:
   vgxness_orchestrate: allow
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 17 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 18 -->
 
 # Identity
 
@@ -96,6 +97,7 @@ The available control-plane surface is exact:
 - Use vgxness_dispatch action=start with read-files for one bounded workspace inspection. It returns exactly one native Task directive without invoking Navigator. Issue that exact Task call so OpenCode renders the child session, then call vgxness_dispatch action=join with the returned orchestrationId after the Task terminates.
 - Use vgxness_dispatch action=start with analyze-structure when one bounded request is about architecture, symbols, call paths, dependencies, blast radius, or affected tests. The explorer receives only the ticket-bound vgxness_codegraph broker and may fall back to bounded native reads when the local index is unavailable. Issue its exact Task call and finish with action=join.
 - Use vgxness_dispatch action=start with write-files for one bounded implementation against a clean Git repository. The implementer writes only through the ticket-authenticated edit broker in an isolated sibling worktree; the durable result identifies that worktree and its content manifest, and VGXNESS never silently merges it into the source checkout.
+- Use vgxness_dispatch action=start with repair-system only after a concrete VGXNESS failure and when the user wants it diagnosed and corrected. Put the failure evidence in goal. This activates the isolated vgxness-maintainer channel, which remains available when normal continuity, dispatch leases, or a dirty checkout would block write-files. It is restricted to the VGXNESS repository, requires successful test and vet evidence after the final edit, and returns an explicit artifact for review without integrating it.
 - Use vgxness_dispatch action=start with review-changes for one bounded review of current, staged, or uncommitted repository changes. Do not substitute read-files; only review-changes includes bounded Git status and diff evidence.
 For two or more independent read-only inspections, issue the vgxness_dispatch action=start calls together, then issue all returned native Task calls together so OpenCode displays and runs the child sessions in parallel. Join each dispatch only after its Task terminates. Never parallelize writes or review phases. If capacity is exhausted, report the bounded blocker instead of retrying in a loop.
 For explicit low-level work that clearly needs more than one bounded phase, use vgxness_orchestrate so every phase remains visible. The continuity and runId fields remain available only for backward compatibility with older callers; do not select them in normal manager routing because their direct child session is not represented by a native Task row.
@@ -149,14 +151,14 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-explorer; version: 10 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-explorer; version: 11 -->
 
 You are the native VGXNESS explorer. There are exactly two top-level input envelopes:
 
 - For kind vgxness.visible-task.directive, first call vgxness_task_claim exactly once with its identities. Execute only the exact content-bound prompt returned by that claim, then call vgxness_task_complete exactly once with the compact agent.result JSON string. After successful completion, return one short plain-language completion sentence.
 - For kind vgxness.direct-dispatch.directive, execute only its preparedPrompt and return exactly one agent.result JSON object without calling vgxness_task_claim or vgxness_task_complete.
 
-Reject every other top-level input shape. In either mode, use supplied memory and dependency evidence before gathering more context, but verify mutable or consequential claims against the current workspace. Stop when the acceptance criteria are satisfied; do not repeat a structural query or exact read that existing bounded evidence already answers. Propose memoryCandidates only for durable reusable project knowledge supported by the bounded evidence; never include routine steps, transient status, speculation, duplicates, credentials, tokens, secrets, or personal data. VGXNESS, not you, decides whether a proposal is saved, updated, held for review, or rejected. Use glob and list only while the plugin has an active VGXNESS ticket for this session. For analyze-structure, use vgxness_codegraph first: explore for architecture/call-flow context, impact for one symbol's blast radius, affected for tests related to explicit changed files, and status only to explain index availability. For read-files, never call vgxness_codegraph; use supplied dependency evidence and vgxness_native_read only. Use vgxness_native_read for exact file content or as a bounded fallback when the analyze-structure broker reports CodeGraph unavailable. Call ticket-bound VGXNESS broker tools sequentially; do not issue vgxness_codegraph, vgxness_native_read, or vgxness_task_complete in parallel. Never invoke CodeGraph CLI/MCP directly, edit files, run shell commands, use the network, delegate, install packages, commit, or push.
+Reject every other top-level input shape. In either mode, use supplied memory and dependency evidence before gathering more context, but verify mutable or consequential claims against the current workspace. Stop when the acceptance criteria are satisfied; do not repeat a structural query or exact read that existing bounded evidence already answers. Propose memoryCandidates only for durable reusable project knowledge supported by the bounded evidence; never include routine steps, transient status, speculation, duplicates, credentials, tokens, secrets, or personal data. VGXNESS, not you, decides whether a proposal is saved, updated, held for review, or rejected. Use glob and list only while the plugin has an active VGXNESS ticket for this session. For analyze-structure, use vgxness_codegraph first: explore for architecture/call-flow context, impact for one symbol's blast radius, affected for tests related to explicit changed files, and status only to explain index availability. For read-files, never call vgxness_codegraph; use supplied dependency evidence and vgxness_native_read only. Use vgxness_native_read for exact file content or as a bounded fallback when the analyze-structure broker reports CodeGraph unavailable. A CodeGraph result with available=false is evidence, not a tool failure: inspect reason and never retry when reason is query-budget-exhausted. Never read .git paths; branch or HEAD metadata not supplied by the ticket is unavailable. Call ticket-bound VGXNESS broker tools sequentially; do not issue vgxness_codegraph, vgxness_native_read, or vgxness_task_complete in parallel. Use no more than fourteen evidence broker calls, then synthesize and complete the visible task so at least two tool steps remain for durable closure. Never invoke CodeGraph CLI/MCP directly, edit files, run shell commands, use the network, delegate, install packages, commit, or push.
 `
 	implementerPrompt = `---
 description: VGXNESS native implementer for ticket-authenticated isolated edits
@@ -172,14 +174,34 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-implementer; version: 7 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-implementer; version: 8 -->
 
 You are the native VGXNESS implementer. There are exactly two top-level input envelopes:
 
 - For kind vgxness.visible-task.directive, first call vgxness_task_claim exactly once with its identities. Execute only the exact content-bound prompt returned by that claim, then call vgxness_task_complete exactly once with the compact agent.result JSON string. After successful completion, return one short plain-language completion sentence.
 - For kind vgxness.direct-dispatch.directive, execute only its preparedPrompt and return exactly one agent.result JSON object without calling vgxness_task_claim or vgxness_task_complete.
 
-Reject every other top-level input shape. Never call glob or list: the isolated worktree is outside the source checkout and built-in discovery is not authorized there. Read exact file content through vgxness_native_read. A read receipt with exists=false means the exact path is available for creation and is not a blocker. Replace an existing file through vgxness_native_edit only with the SHA-256 returned by its latest read or edit receipt; create a new file only with create=true. Parent directories must already exist. Keep edits within the supplied goal and acceptance criteria. For Go changes, call vgxness_native_validate with format first, then test and vet using only the smallest relevant canonical package selectors; use ./... only when repository-wide validation is justified. Formatting is applied through the same content-bound edit broker, while test and vet run in a disposable validation copy. Treat a returned success=false as validation evidence, fix the cause through read/edit, and rerun only the affected validation. Call ticket-bound broker tools sequentially and stop once the acceptance criteria are satisfied. Never use direct file editing, shell, Git, network, package installation, delegation, commits, pushes, deletes, renames, symlinks, hard links, or permission changes. The source checkout is not modified: report the isolated worktree artifact returned by VGXNESS as requiring explicit integration.
+Reject every other top-level input shape. Never call glob or list: the isolated worktree is outside the source checkout and built-in discovery is not authorized there. Read exact file content through vgxness_native_read. A read receipt with exists=false means the exact path is available for creation and is not a blocker. Replace an existing file through vgxness_native_edit only with the SHA-256 returned by its latest read or edit receipt; create a new file only with create=true. Delete an existing file only with delete=true, no content, and the SHA-256 from its latest read or edit receipt. Parent directories must already exist. Keep edits within the supplied goal and acceptance criteria. For Go changes, call vgxness_native_validate with format first, then test and vet using only the smallest relevant canonical package selectors; use ./... only when repository-wide validation is justified. Formatting is applied through the same content-bound edit broker, while test and vet run in a disposable validation copy. Treat a returned success=false as validation evidence, fix the cause through read/edit, and rerun only the affected validation. Call ticket-bound broker tools sequentially and stop once the acceptance criteria are satisfied. Use no more than fourteen read, edit, or validation broker calls, then produce the compact result and complete the visible task so at least two tool steps remain for durable closure. Never use direct file editing, shell, Git, network, package installation, delegation, commits, pushes, renames, symlinks, hard links, or permission changes. The source checkout is not modified: report the isolated worktree artifact returned by VGXNESS as requiring explicit integration.
+`
+	maintainerPrompt = `---
+description: VGXNESS native maintainer for isolated self-diagnosis and validated repair
+mode: subagent
+hidden: true
+permission:
+  "*": deny
+  vgxness_native_read: allow
+  vgxness_native_edit: allow
+  vgxness_native_validate: allow
+  task: deny
+---
+
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-maintainer; version: 2 -->
+
+You are the native VGXNESS maintainer. Accept only a vgxness.direct-dispatch.directive envelope and execute only the exact content-bound prompt in its preparedPrompt field. Return exactly one compact agent.result JSON object.
+
+You operate through VGXNESS's emergency maintenance ticket, independently of the normal orchestration path. Diagnose the supplied VGXNESS failure from exact bounded reads, make the smallest root-cause correction through content-bound edits, format changed Go files, and run focused tests plus vet. Replace or delete an existing file only with the SHA-256 from its latest read or edit receipt; deletion requires delete=true and no content. A new edit invalidates earlier validation evidence, so rerun the affected tests and vet after the final change. Use no more than fourteen read, edit, or validation broker calls, then return the compact result so the host can complete the ticket. Preserve authentication, isolation, path safety, durable receipts, and fail-closed behavior. Never weaken a policy merely to make a test pass.
+
+Never use direct filesystem tools, shell, Git, network, package installation, delegation, commits, pushes, renames, symlinks, hard links, permission changes, or automatic integration. If the evidence is insufficient or a safe repair cannot be validated, return blocked with the exact next action.
 `
 	reviewerPrompt = `---
 description: VGXNESS native reviewer for bounded pre-collected change evidence
@@ -458,6 +480,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	navigatorPath := filepath.Join(configDirectory, "agents", navigatorAgentName)
 	explorerPath := filepath.Join(configDirectory, "agents", explorerAgentName)
 	implementerPath := filepath.Join(configDirectory, "agents", implementerAgentName)
+	maintainerPath := filepath.Join(configDirectory, "agents", maintainerAgentName)
 	reviewerPath := filepath.Join(configDirectory, "agents", reviewerAgentName)
 	toolPath := filepath.Join(configDirectory, "plugins", bridgePluginName)
 	model := strings.TrimSpace(options.Model)
@@ -495,6 +518,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: navigatorPath, content: []byte(navigatorPrompt), backup: "vgxness-navigator"},
 		{path: explorerPath, content: []byte(explorerPrompt), backup: "vgxness-explorer"},
 		{path: implementerPath, content: []byte(implementerPrompt), backup: "vgxness-implementer"},
+		{path: maintainerPath, content: []byte(maintainerPrompt), backup: "vgxness-maintainer"},
 		{path: reviewerPath, content: []byte(reviewerPrompt), backup: "vgxness-reviewer"},
 		{path: toolPath, content: toolContent, backup: "vgxness-plugin"},
 	}}
@@ -632,7 +656,7 @@ func bridgeToolContent(executable, model string) ([]byte, error) {
 	import { randomUUID } from "node:crypto"
 	import { tool } from "@opencode-ai/plugin"
 
-	// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 30
+	// managed-by: vgxness; artifact: opencode-plugin/vgxness; version: 31
 	const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 	const VGXNESS_MODEL = ` + string(quotedModel) + `
 	const MAX_OUTPUT_BYTES = __MAX_OUTPUT_BYTES__
@@ -764,6 +788,15 @@ async function readBounded(stream) {
 	  }
 	}
 
+	function consumeNativeBrokerBudget(active) {
+	  const used = (active.brokerCalls || 0) + 1
+	  if (used > 16) {
+	    throw new Error("VGXNESS native broker-call budget exhausted; stop work and return the best bounded result, completing a visible task next")
+	  }
+	  active.brokerCalls = used
+	  return { used, remaining: 16 - used, limit: 16 }
+	}
+
 	function bridgeFailure(envelope, fallback) {
 	  const code = typeof envelope?.error?.code === "string" ? envelope.error.code : ""
 	  const message = typeof envelope?.error?.message === "string" ? envelope.error.message : ""
@@ -846,6 +879,7 @@ async function readBounded(stream) {
 	function nativeAgentForTask(task) {
 	  if (task?.operation === "review-changes") return "vgxness-reviewer"
 	  if (task?.operation === "write-files") return "vgxness-implementer"
+	  if (task?.operation === "repair-system") return "vgxness-maintainer"
 	  return "vgxness-explorer"
 	}
 
@@ -1103,6 +1137,7 @@ async function readBounded(stream) {
 	      nativeTickets.set(claim.childSessionId, {
 	        ticketId: ticket.ticketId,
 	        operation: task?.operation,
+	        brokerCalls: 0,
 	        orchestrationId: wave.orchestrationId,
 	        ownerId: wave.ownerId,
 	        taskId,
@@ -1208,7 +1243,7 @@ async function readBounded(stream) {
 	}
 
 	async function promptNativeChild(client, workspace, context, childSessionId, prepared, operation) {
-	  nativeTickets.set(childSessionId, { ticketId: prepared.ticketId, operation })
+	  nativeTickets.set(childSessionId, { ticketId: prepared.ticketId, operation, brokerCalls: 0 })
 	  const model = exactModelReference(prepared.model)
 	  const abortChild = () => client.session.abort({ path: { id: childSessionId }, query: { directory: workspace } }).catch(() => undefined)
 	  const abortChildOnContext = () => { void abortChild() }
@@ -1380,7 +1415,7 @@ async function readBounded(stream) {
 	        query: { directory },
 	      }), "OpenCode could not verify the native tool session")
 	      const unverifiedChild = !session.agent && typeof session.parentID === "string" && session.parentID
-	      if ((session.agent === "vgxness-explorer" || session.agent === "vgxness-implementer" || unverifiedChild) && !nativeTickets.has(input.sessionID)) {
+	      if ((session.agent === "vgxness-explorer" || session.agent === "vgxness-implementer" || session.agent === "vgxness-maintainer" || unverifiedChild) && !nativeTickets.has(input.sessionID)) {
 	        throw new Error("VGXNESS native discovery requires an active ticket")
 	      }
 	    },
@@ -1402,6 +1437,7 @@ async function readBounded(stream) {
 	          const workspace = context.worktree || context.directory
 	          const active = nativeTickets.get(context.sessionID)
 	          if (!active) throw new Error("No active VGXNESS native read ticket for this child session")
+	          const brokerBudget = consumeNativeBrokerBudget(active)
 	          const offset = args.cursor === undefined ? 0 : Number(args.cursor)
 	          if (!Number.isSafeInteger(offset) || offset < 0 || String(offset) !== (args.cursor ?? "0")) throw new Error("VGXNESS native read cursor is invalid")
 	          const envelope = await withNativeTicketLane(active, () => invokeBounded(
@@ -1415,34 +1451,38 @@ async function readBounded(stream) {
 	          if (envelope.read.exists && !/^sha256-[0-9a-f]{64}$/.test(envelope.read.sha256)) {
 	            throw new Error("VGXNESS native read omitted its full-file content digest")
 	          }
-	          return JSON.stringify(envelope.read)
+	          return JSON.stringify({ ...envelope.read, brokerBudget })
 	        },
 	      }),
 	      vgxness_native_edit: tool({
-	        description: "Replace or create one bounded text file in the active ticket's isolated worktree. Existing files require the SHA-256 from the latest native read or edit receipt.",
+	        description: "Replace, create, or delete one bounded text file in the active ticket's isolated worktree. Existing files require the SHA-256 from the latest native read or edit receipt.",
 	        args: {
 	          path: tool.schema.string(),
-	          content: tool.schema.string(),
+	          content: tool.schema.string().optional(),
 	          expectedSha256: tool.schema.string().optional(),
 	          create: tool.schema.boolean().optional(),
+	          delete: tool.schema.boolean().optional(),
 	        },
 	        async execute(args, context) {
 	          const workspace = context.worktree || context.directory
 	          const active = nativeTickets.get(context.sessionID)
 	          if (!active) throw new Error("No active VGXNESS native edit ticket for this child session")
+	          if (args.create === true && args.delete === true) throw new Error("VGXNESS native edit cannot create and delete the same path")
+	          if (args.delete === true && args.content !== undefined && args.content !== "") throw new Error("VGXNESS native delete does not accept content")
+	          const brokerBudget = consumeNativeBrokerBudget(active)
 	          const envelope = await withNativeTicketLane(active, () => invokeBounded(
 	            ["bridge", "edit", "--stdin"],
 	            {
 	              protocolVersion: "1", ticketId: active.ticketId, childSessionId: context.sessionID,
-	              path: args.path, content: args.content, expectedSha256: args.expectedSha256,
-	              create: args.create === true,
+	              path: args.path, content: args.content ?? "", expectedSha256: args.expectedSha256,
+	              create: args.create === true, delete: args.delete === true,
 	            },
 	            workspace,
 	            TERMINAL_TIMEOUT_MS,
 	            context.abort,
 	          ))
 	          if (!envelope.ok || !envelope.edit) throw new Error(bridgeFailure(envelope, "VGXNESS native edit was denied"))
-	          return JSON.stringify(envelope.edit)
+	          return JSON.stringify({ ...envelope.edit, brokerBudget })
 	        },
 	      }),
 	      vgxness_native_validate: tool({
@@ -1454,9 +1494,10 @@ async function readBounded(stream) {
 	        async execute(args, context) {
 	          const workspace = context.worktree || context.directory
 	          const active = nativeTickets.get(context.sessionID)
-	          if (!active || active.operation !== "write-files") {
+	          if (!active || active.operation !== "write-files" && active.operation !== "repair-system") {
 	            throw new Error("No active VGXNESS native write ticket for validation")
 	          }
+	          const brokerBudget = consumeNativeBrokerBudget(active)
 	          const envelope = await withNativeTicketLane(active, () => invokeBounded(
 	            ["bridge", "validate", "--stdin"],
 	            {
@@ -1468,7 +1509,7 @@ async function readBounded(stream) {
 	            context.abort,
 	          ))
 	          if (!envelope.ok || !envelope.validation) throw new Error(bridgeFailure(envelope, "VGXNESS native validation was denied"))
-	          return JSON.stringify(envelope.validation)
+	          return JSON.stringify({ ...envelope.validation, brokerBudget })
 	        },
 	      }),
 	      vgxness_codegraph: tool({
@@ -1493,6 +1534,7 @@ async function readBounded(stream) {
 	              nextSafeAction: "Use supplied dependency evidence and vgxness_native_read for this ticket.",
 	            })
 	          }
+	          const brokerBudget = consumeNativeBrokerBudget(active)
 	          const decimal = (value, fallback, maximum, label) => {
 	            if (value === undefined) return fallback
 	            const parsed = Number(value)
@@ -1516,7 +1558,7 @@ async function readBounded(stream) {
 	            context.abort,
 	          ))
 	          if (!envelope.ok || !envelope.codegraph) throw new Error(bridgeFailure(envelope, "VGXNESS CodeGraph query was unavailable or denied"))
-	          return JSON.stringify(envelope.codegraph)
+	          return JSON.stringify({ ...envelope.codegraph, brokerBudget })
 	        },
 	      }),
 	      vgxness_task_claim: tool({
@@ -1578,6 +1620,7 @@ async function readBounded(stream) {
 	            nativeTickets.set(context.sessionID, {
 	              ticketId: prepared.ticketId,
 	              operation: task.operation,
+	              brokerCalls: 0,
 	              orchestrationId: orchestration.orchestrationId,
 	              ownerId: orchestration.ownerId,
 	              taskId: args.taskId,
@@ -1768,10 +1811,10 @@ async function readBounded(stream) {
 	        },
 	      }),
 	      vgxness_dispatch: tool({
-	        description: "Start or join the preferred single bounded VGXNESS operation when one inspection or review is sufficient. A normal start returns exact built-in Task arguments so OpenCode renders its child session; call join with the returned orchestrationId after that Task terminates. Explicit continuity remains a legacy direct-session compatibility path.",
+	        description: "Start or join one bounded VGXNESS operation. Normal operations return exact built-in Task arguments so OpenCode renders the child session; repair-system invokes the independently ticketed VGXNESS maintainer directly. Explicit continuity remains a legacy compatibility path.",
 	        args: {
 	          action: tool.schema.enum(["start", "join"]).optional(),
-	          operation: tool.schema.enum(["read-files", "analyze-structure", "write-files", "review-changes"]).optional(),
+	          operation: tool.schema.enum(["read-files", "analyze-structure", "write-files", "review-changes", "repair-system"]).optional(),
 	          goal: tool.schema.string().optional(),
 	          acceptanceCriteria: tool.schema.array(tool.schema.string()).optional(),
 	          orchestrationId: tool.schema.string().optional(),
@@ -1796,7 +1839,7 @@ async function readBounded(stream) {
 	          ) {
 	            throw new Error("Starting a VGXNESS dispatch requires an operation and a non-empty goal")
 	          }
-	          if (args.continuity === undefined && args.runId === undefined) {
+	          if (args.operation !== "repair-system" && args.continuity === undefined && args.runId === undefined) {
 	            const taskId = "task-dispatch-" + randomUUID().replaceAll("-", "").slice(0, 24).toLowerCase()
 	            const candidateTask = {
 	              taskId,
@@ -1830,12 +1873,14 @@ async function readBounded(stream) {
 	            }
 	            return visibleDelegationResult(context, envelope, 0)
 	          }
-	          const releaseCapacity = acquireNativeCapacity(workspace, (args.operation === "read-files" || args.operation === "analyze-structure") && args.continuity === undefined && args.runId === undefined)
+	          const releaseCapacity = args.operation === "repair-system"
+	            ? () => {}
+	            : acquireNativeCapacity(workspace, (args.operation === "read-files" || args.operation === "analyze-structure") && args.continuity === undefined && args.runId === undefined)
 	          let prepared
 	          let ticketId = ""
 	          let childSessionId = ""
 	          let deadlineExceeded = false
-	          const agent = args.operation === "review-changes" ? "vgxness-reviewer" : args.operation === "write-files" ? "vgxness-implementer" : "vgxness-explorer"
+	          const agent = args.operation === "review-changes" ? "vgxness-reviewer" : args.operation === "write-files" ? "vgxness-implementer" : args.operation === "repair-system" ? "vgxness-maintainer" : "vgxness-explorer"
 	          const visible = { taskId: args.operation, sessionId: "", agent, status: "preparing" }
 	          const publish = (phase) => publishNativeVisibility(context, visible.sessionId ? [visible] : [], phase, { operation: args.operation })
 	          try {
@@ -1849,7 +1894,12 @@ async function readBounded(stream) {
 	            ticketId = "ticket-" + randomUUID()
 	            const envelope = await invoke(
 	              ["bridge", "prepare", "--stdin"],
-	              { ...args, protocolVersion: "1", ticketId, model: VGXNESS_MODEL, parentSessionId: context.sessionID, parentMessageId: context.messageID, childSessionId },
+	              {
+	                protocolVersion: "1", ticketId, model: VGXNESS_MODEL,
+	                operation: args.operation, goal: args.goal, acceptanceCriteria: args.acceptanceCriteria,
+	                continuity: args.continuity, runId: args.runId,
+	                parentSessionId: context.sessionID, parentMessageId: context.messageID, childSessionId,
+	              },
 	              workspace,
 	              context.abort,
 	            )

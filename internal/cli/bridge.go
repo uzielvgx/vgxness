@@ -54,8 +54,8 @@ func runBridge(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		}
 		switch command {
 		case "prepare":
-			request, decodeErr := bridge.DecodeDispatch(stdin)
-			if decodeErr != nil || bridge.ValidateNativePrepare(request) != nil {
+			request, decodeErr := bridge.DecodeNativePrepare(stdin)
+			if decodeErr != nil {
 				response = bridge.ErrorResponse(decodeErr)
 				_ = bridge.Encode(stdout, response)
 				return 2

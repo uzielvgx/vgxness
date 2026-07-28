@@ -101,6 +101,31 @@ func TestNativeEditLifecycleDiscardsWithoutTouchingSource(t *testing.T) {
 	}
 }
 
+func TestNativeEditLifecycleIntegratesContentBoundDeletion(t *testing.T) {
+	workspace, service, artifact := completedNativeEdit(t, "ticket-delete", []nativeLifecycleChange{
+		{path: "README.md", delete: true},
+	})
+	if len(artifact.Changes) != 1 || !artifact.Changes[0].Deleted ||
+		artifact.Changes[0].PreviousSHA256 == "" || artifact.Changes[0].SHA256 != "" {
+		t.Fatalf("unexpected deletion artifact: %#v", artifact)
+	}
+	request := bridge.NativeEditActionRequest{TicketID: "ticket-delete", ManifestSHA: artifact.ManifestSHA, Actor: "maintainer"}
+	approval := reviewedNativeEditApproval(t, service, workspace, request.TicketID, artifact, request.Actor)
+	if _, err := service.ApproveNativeEdit(context.Background(), workspace, approval); err != nil {
+		t.Fatal(err)
+	}
+	integrated, err := service.IntegrateNativeEdit(context.Background(), workspace, request)
+	if err != nil || integrated.State != "integrated" {
+		t.Fatalf("deletion artifact was not integrated: %#v err=%v", integrated, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "README.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("integrated deletion left the source file present: %v", err)
+	}
+	if _, err := service.RetireNativeEdit(context.Background(), workspace, request); err != nil {
+		t.Fatalf("integrated deletion worktree was not retired: %v", err)
+	}
+}
+
 func TestNativeEditLifecycleRejectsDivergedSource(t *testing.T) {
 	workspace, service, artifact := completedNativeEdit(t, "ticket-diverged", []nativeLifecycleChange{
 		{path: "internal/app.go", content: "package internal\n\nconst Value = \"approved\"\n"},
@@ -267,6 +292,7 @@ type nativeLifecycleChange struct {
 	path    string
 	content string
 	create  bool
+	delete  bool
 }
 
 func reviewedNativeEditApproval(
@@ -342,7 +368,7 @@ func completedNativeEdit(t *testing.T, ticketID string, changes []nativeLifecycl
 	for _, change := range changes {
 		request := bridge.NativeEditRequest{
 			ProtocolVersion: bridge.ProtocolVersion, TicketID: ticketID, ChildSessionID: "ses_child",
-			Path: change.path, Content: change.content, Create: change.create,
+			Path: change.path, Content: change.content, Create: change.create, Delete: change.delete,
 		}
 		if !change.create {
 			read, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{

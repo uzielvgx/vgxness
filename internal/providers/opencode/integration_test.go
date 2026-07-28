@@ -51,7 +51,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	toolInfo, err := os.Stat(installed.ToolPath)
 	testutil.NoError(t, err)
 	for name, expected := range map[string]string{
-		navigatorAgentName: navigatorPrompt, explorerAgentName: explorerPrompt, implementerAgentName: implementerPrompt, reviewerAgentName: reviewerPrompt,
+		navigatorAgentName: navigatorPrompt, explorerAgentName: explorerPrompt, implementerAgentName: implementerPrompt, maintainerAgentName: maintainerPrompt, reviewerAgentName: reviewerPrompt,
 	} {
 		content, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", name))
 		testutil.NoError(t, readErr)
@@ -110,9 +110,9 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 		`import { spawn } from "node:child_process"`, "spawn(VGXNESS_EXECUTABLE, [...args", `const VGXNESS_EXECUTABLE = "`,
 		`const VGXNESS_MODEL = "openai/gpt-5.6-sol"`, fmt.Sprintf("const MAX_OUTPUT_BYTES = %d", bridge.MaxBridgeOutputBytes),
 		`client.session.create`, `client.session.prompt`, `["bridge", "prepare", "--stdin"]`, `["bridge", "read", "--stdin"]`, `["bridge", "edit", "--stdin"]`, `["bridge", "validate", "--stdin"]`, `["bridge", "codegraph", "--stdin"]`,
-		`["bridge", "complete", "--stdin"]`, `value.protocolVersion !== "1"`, `"review-changes"`,
+		`["bridge", "complete", "--stdin"]`, `value.protocolVersion !== "1"`, `"review-changes"`, `"repair-system"`,
 		`tool.schema.enum(["start", "continue", "finish"]).optional()`, `runId: tool.schema.string().optional()`,
-		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `output: JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 30",
+		`"native-subagent-deadline"`, `envelope.status === "recovered"`, `output: JSON.stringify(envelope)`, "artifact: opencode-plugin/vgxness; version: 31",
 		"shell: false", `child?.kill("SIGKILL")`, "invokeBounded", "invokeTerminal", "nativeTickets.delete(childSessionId)",
 		"MAX_NATIVE_DISPATCHES = 4", "acquireNativeCapacity", "VGXNESS native dispatch capacity exhausted", "releaseCapacity()",
 		"vgxness_run", "startVisibleOrchestration", `tool.schema.enum(["fast", "auto", "deep"]).optional()`,
@@ -126,10 +126,12 @@ func TestIntegration_BridgeToolUsesPortableArgumentVectorAndTrustedExecutable(t 
 		`action: tool.schema.enum(["start", "join"]).optional()`, `"task-dispatch-"`, "advanceVisibleOrchestration",
 		`depth: tool.schema.number().optional()`, `maxFiles: tool.schema.number().optional()`, "withNativeTicketLane", "bridgeFailure",
 		`active.operation !== "analyze-structure"`, `authorizedOperation: active.operation`, `operation: task.operation`,
+		`args.operation !== "repair-system"`, `args.operation === "repair-system" ? "vgxness-maintainer"`,
+		`operation: args.operation, goal: args.goal`, `? () => {}`,
 	} {
 		testutil.Require(t, strings.Contains(tool, required), "bridge plugin missing %q: %s", required, content)
 	}
-	for _, forbidden := range []string{`"bridge", "dispatch"`, "Bun.spawn", "run-command", "shell: true"} {
+	for _, forbidden := range []string{`"bridge", "dispatch"`, "Bun.spawn", "run-command", "shell: true", `{ ...args, protocolVersion: "1"`} {
 		testutil.Require(t, !strings.Contains(tool, forbidden), "bridge plugin contains unsafe %q: %s", forbidden, content)
 	}
 	testutil.Require(t, strings.Contains(managerPrompt, "vgxness_dispatch action=start with analyze-structure") && strings.Contains(managerPrompt, "vgxness_dispatch action=start with review-changes") && strings.Contains(managerPrompt, "Do not substitute read-files"), "manager does not route structural and Git review explicitly: %s", managerPrompt)
@@ -154,13 +156,13 @@ permission:
   vgxness_orchestrate: allow
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 17 -->`
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 18 -->`
 	if !strings.HasPrefix(managerPrompt, expectedFrontmatter) {
 		t.Fatalf("manager prompt has invalid OpenCode frontmatter:\n%s", managerPrompt)
 	}
 
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 17",
+		"artifact: opencode-agent/vgxness-manager; version: 18",
 		"exact native Task directives returned by vgxness_run, vgxness_dispatch, or vgxness_orchestrate",
 		"senior engineer with more than two decades of experience",
 		"calm, attentive, technically discerning, pragmatic, and collaborative",
@@ -217,7 +219,7 @@ permission:
 
 func TestManagedNativeSubagentsHaveRoleSpecificFailClosedPermissions(t *testing.T) {
 	for name, prompt := range map[string]string{
-		"navigator": navigatorPrompt, "explorer": explorerPrompt, "implementer": implementerPrompt, "reviewer": reviewerPrompt,
+		"navigator": navigatorPrompt, "explorer": explorerPrompt, "implementer": implementerPrompt, "maintainer": maintainerPrompt, "reviewer": reviewerPrompt,
 	} {
 		for _, required := range []string{"mode: subagent", "hidden: true", `"*": deny`, "task: deny", "exact content-bound prompt"} {
 			if !strings.Contains(prompt, required) {
@@ -243,6 +245,13 @@ func TestManagedNativeSubagentsHaveRoleSpecificFailClosedPermissions(t *testing.
 	}
 	if strings.Contains(implementerPrompt, "  glob: allow") || strings.Contains(implementerPrompt, "  list: allow") || !strings.Contains(implementerPrompt, "Never call glob or list") || !strings.Contains(implementerPrompt, "exists=false") {
 		t.Fatal("implementer permits unsupported isolated-worktree discovery")
+	}
+	if strings.Contains(maintainerPrompt, "vgxness_task_claim: allow") || strings.Contains(maintainerPrompt, "vgxness_task_complete: allow") ||
+		!strings.Contains(maintainerPrompt, "vgxness_native_read: allow") || !strings.Contains(maintainerPrompt, "vgxness_native_edit: allow") ||
+		!strings.Contains(maintainerPrompt, "vgxness_native_validate: allow") || !strings.Contains(maintainerPrompt, "A new edit invalidates earlier validation evidence") ||
+		!strings.Contains(maintainerPrompt, "delete=true") || !strings.Contains(maintainerPrompt, "fourteen") ||
+		!strings.Contains(maintainerPrompt, "Never weaken a policy") {
+		t.Fatal("maintainer is missing its independent fail-closed repair contract")
 	}
 	if strings.Contains(reviewerPrompt, "read: allow") || strings.Contains(reviewerPrompt, "codegraph_*: allow") {
 		t.Fatal("reviewer can escape immutable Git evidence")
@@ -273,7 +282,7 @@ func TestNavigatorRoutesReadOnlySynthesisWithoutGitReview(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-explorer; version: 10",
+		"artifact: opencode-agent/vgxness-explorer; version: 11",
 		"use supplied memory and dependency evidence before gathering more context",
 		"For read-files, never call vgxness_codegraph",
 		"Stop when the acceptance criteria are satisfied",
@@ -874,7 +883,7 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 	_, targetErr := os.Stat(installed.Path)
 	_, toolTargetErr := os.Stat(installed.ToolPath)
 	subagentsRemoved := true
-	for _, name := range []string{navigatorAgentName, explorerAgentName, implementerAgentName, reviewerAgentName} {
+	for _, name := range []string{navigatorAgentName, explorerAgentName, implementerAgentName, maintainerAgentName, reviewerAgentName} {
 		if _, statErr := os.Stat(filepath.Join(configDirectory, "agents", name)); !os.IsNotExist(statErr) {
 			subagentsRemoved = false
 		}

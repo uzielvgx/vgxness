@@ -1,6 +1,6 @@
 # Guided OpenCode setup
 
-The OpenCode setup wizard explains the complete plan before it changes anything. It combines the versioned VGXNESS self-installer, the persistent OpenCode manager, four native subagent profiles, the managed plugin bridge, and a live provider handshake without moving policy into the CLI.
+The OpenCode setup wizard explains the complete plan before it changes anything. It combines the versioned VGXNESS self-installer, the persistent OpenCode manager, five native subagent profiles, the managed plugin bridge, and a live provider handshake without moving policy into the CLI.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ Preview performs read-only inspection and explains all six steps:
 
 1. Check the candidate, explicit execution model, destinations, workspace, and OpenCode compatibility.
 2. Install or update the immutable VGXNESS version behind the stable launcher.
-3. Install `vgxness-manager` plus the hidden `vgxness-navigator`, `vgxness-explorer`, `vgxness-implementer`, and `vgxness-reviewer` native subagents with separate fail-closed permissions. Navigator has no workspace tools and only proposes candidate tasks; the VGXNESS runtime validates and schedules them. The manager may invoke OpenCode Task only for exact explorer or reviewer directives returned by VGXNESS, so the conversation shows one native execution row per running subagent and several rows for a parallel wave.
+3. Install `vgxness-manager` plus the hidden `vgxness-navigator`, `vgxness-explorer`, `vgxness-implementer`, `vgxness-maintainer`, and `vgxness-reviewer` native subagents with separate fail-closed permissions. Navigator has no workspace tools and only proposes candidate tasks; the VGXNESS runtime validates and schedules them. Maintainer is restricted to isolated self-repair after a concrete VGXNESS failure, is opened only by the managed plugin after ticket preparation, and must validate the final bytes with tests and vet. The manager may invoke OpenCode Task only for exact explorer, implementer, or reviewer directives returned by VGXNESS.
 4. Install the goal-first `vgxness_run` entrypoint plus the bounded `vgxness_status`, `vgxness_dispatch`, and `vgxness_orchestrate` controls with that model fixed outside agent-controlled arguments. A normal dispatch returns exactly one built-in Task directive and a later durable join; adaptive orchestration returns one or more approved Task directives per legal wave. OpenCode renders every one as a native, navigable child row. Visible children must claim their approved ticket through `vgxness_task_claim` and publish their terminal through `vgxness_task_complete`; path discovery is blocked until claim, exact file contents remain available only through `vgxness_native_read`, and structural analysis is exposed to the explorer only through the optional ticket-bound `vgxness_codegraph` broker. No nested OpenCode worker is launched.
 5. Read everything back and run the live OpenCode handshake.
 6. Explain recovery for the detected installation state.

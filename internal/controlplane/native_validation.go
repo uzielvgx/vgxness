@@ -29,6 +29,7 @@ type nativeValidationSnapshot struct {
 	Path    string `json:"path"`
 	SHA256  string `json:"sha256"`
 	Created bool   `json:"created"`
+	Deleted bool   `json:"deleted,omitempty"`
 }
 
 type nativeFormattedFile struct {
@@ -49,7 +50,7 @@ func (service *Service) ValidateNative(ctx context.Context, workspace string, in
 		return bridge.Response{}, err
 	}
 	defer release()
-	if document.State != "prepared" || document.Input.Operation != bridge.WriteFiles ||
+	if document.State != "prepared" || document.Input.Operation != bridge.WriteFiles && document.Input.Operation != bridge.RepairSystem ||
 		document.Input.ChildSessionID != input.ChildSessionID || document.Edit == nil ||
 		service.now().UTC().After(parseNativeDeadline(document.Deadline)) ||
 		len(document.Validations) >= nativeMaxValidations {
@@ -98,6 +99,11 @@ func (service *Service) ValidateNative(ctx context.Context, workspace string, in
 		for _, change := range result.Changes {
 			replaceNativeEditReceipt(document.Edits, change)
 		}
+		if document.Input.Operation == bridge.RepairSystem && len(result.Changes) > 0 {
+			// Formatting changes the candidate bytes. Earlier test and vet
+			// receipts must not authorize the newly formatted result.
+			document.Validations = nil
+		}
 	}
 	document.Validations = append(document.Validations, bridge.NativeValidationReceipt{
 		Operation: input.Operation, Packages: append([]string(nil), result.Packages...),
@@ -129,12 +135,20 @@ func nativeValidationSnapshots(edits []bridge.NativeEditResult) []nativeValidati
 	latest := make(map[string]nativeValidationSnapshot, len(edits))
 	for _, edit := range edits {
 		item := latest[edit.Path]
-		item.Path, item.SHA256 = edit.Path, edit.SHA256
-		item.Created = item.Created || edit.Created
+		if item.Path == "" {
+			item.Path, item.Created = edit.Path, edit.Created
+		}
+		item.SHA256 = edit.SHA256
+		item.Deleted = edit.Deleted
 		latest[edit.Path] = item
 	}
 	result := make([]nativeValidationSnapshot, 0, len(latest))
 	for _, item := range latest {
+		if item.Created && item.Deleted {
+			// A file created and deleted within one ticket has no effect on
+			// the committed validation base.
+			continue
+		}
 		result = append(result, item)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
@@ -153,7 +167,7 @@ func runNativeFormat(ctx context.Context, document nativeTicketDocument) (bridge
 	}
 	paths := make([]string, 0, len(latest))
 	for path := range latest {
-		if filepath.Ext(path) == ".go" {
+		if filepath.Ext(path) == ".go" && !latest[path].Deleted {
 			paths = append(paths, path)
 		}
 	}
@@ -296,11 +310,16 @@ func materializeNativeValidationWorkspace(ctx context.Context, document nativeTi
 		read, err := secureNativeRead(document.Edit.Root, document.Edit.RootIdentity, bridge.NativeReadRequest{
 			Path: edit.Path, Limit: bridge.MaxNativeEditBytes,
 		})
-		if err != nil || read.Truncated || read.SHA256 != edit.SHA256 {
+		if edit.Deleted {
+			if !errors.Is(err, os.ErrNotExist) {
+				cleanup()
+				return "", nil, bridge.ErrDenied
+			}
+		} else if err != nil || read.Truncated || read.SHA256 != edit.SHA256 {
 			cleanup()
 			return "", nil, bridge.ErrDenied
 		}
-		request := bridge.NativeEditRequest{Path: edit.Path, Content: read.Content, Create: edit.Created}
+		request := bridge.NativeEditRequest{Path: edit.Path, Content: read.Content, Create: edit.Created, Delete: edit.Deleted}
 		if !edit.Created {
 			base, readErr := secureNativeRead(root, identity, bridge.NativeReadRequest{
 				Path: edit.Path, Limit: bridge.MaxNativeEditBytes,

@@ -21,6 +21,17 @@ func TestDecodeDispatchAcceptsOneBoundedExactRequest(t *testing.T) {
 	}
 }
 
+func TestRepairSystemIsRestrictedToNativePrepare(t *testing.T) {
+	payload := `{"protocolVersion":"1","ticketId":"ticket-repair","model":"openai/gpt-5.6-sol","operation":"repair-system","goal":"repair VGXNESS","parentSessionId":"ses_parent","parentMessageId":"msg_parent","childSessionId":"ses_child"}`
+	if _, err := DecodeDispatch(strings.NewReader(payload)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("general dispatch accepted self-repair: %v", err)
+	}
+	request, err := DecodeNativePrepare(strings.NewReader(payload))
+	if err != nil || request.Operation != RepairSystem {
+		t.Fatalf("native prepare rejected self-repair: %#v err=%v", request, err)
+	}
+}
+
 func TestDecodeOrchestrateAcceptsOnlyPublicIntentAndEnrichesTrustedContext(t *testing.T) {
 	input, err := DecodeOrchestrateInput(strings.NewReader(`{"goal":"Inspect memory and delegation independently","acceptanceCriteria":["Explain both boundaries"]}`))
 	if err != nil || input.Goal != "Inspect memory and delegation independently" || len(input.AcceptanceCriteria) != 1 {
@@ -237,11 +248,18 @@ func TestDecodeNativeEditRequiresVersionedBoundedReplacement(t *testing.T) {
 	if err != nil || !created.Create || created.ExpectedSHA256 != "" {
 		t.Fatalf("create=%#v err=%v", created, err)
 	}
+	deleted, err := DecodeNativeEdit(strings.NewReader(`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"internal/old.go","expectedSha256":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","delete":true}`))
+	if err != nil || !deleted.Delete || deleted.Content != "" {
+		t.Fatalf("delete=%#v err=%v", deleted, err)
+	}
 	for _, input := range []string{
 		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"../secret","content":"x","create":true}`,
 		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","content":"x"}`,
 		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","content":"x","create":true,"expectedSha256":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","content":"x","expectedSha256":"sha256-not-a-digest"}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","delete":true}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","content":"x","expectedSha256":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","delete":true}`,
+		`{"protocolVersion":"1","ticketId":"ticket-1","childSessionId":"ses_child","path":"go.mod","create":true,"delete":true}`,
 		"{\"protocolVersion\":\"1\",\"ticketId\":\"ticket-1\",\"childSessionId\":\"ses_child\",\"path\":\"go.mod\",\"content\":\"x\\u0000y\",\"create\":true}",
 	} {
 		if _, err := DecodeNativeEdit(strings.NewReader(input)); !errors.Is(err, ErrInvalid) {

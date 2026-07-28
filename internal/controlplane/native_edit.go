@@ -34,6 +34,10 @@ const (
 var errNativeSourceWorktreeDirty = errors.New("native write source worktree is not clean")
 
 func prepareNativeEditWorkspace(ctx context.Context, workspace, ticketID string) (*nativeEditWorkspace, error) {
+	return prepareNativeEditWorkspaceMode(ctx, workspace, ticketID, true)
+}
+
+func prepareNativeEditWorkspaceMode(ctx context.Context, workspace, ticketID string, requireClean bool) (*nativeEditWorkspace, error) {
 	top, err := runGitCommand(ctx, workspace, nativeGitArgs("rev-parse", "--show-toplevel"), cleanGitEnvironment(nil))
 	if err != nil {
 		return nil, fmt.Errorf("%w: write-files requires a Git repository root", bridge.ErrDenied)
@@ -42,12 +46,14 @@ func prepareNativeEditWorkspace(ctx context.Context, workspace, ticketID string)
 	if err != nil || filepath.Clean(resolvedTop) != workspace {
 		return nil, fmt.Errorf("%w: write-files requires the canonical Git repository root", bridge.ErrDenied)
 	}
-	status, err := runGitCommand(ctx, workspace, nativeGitArgs("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none", "--", "."), cleanGitEnvironment(nil))
-	if err != nil {
-		return nil, fmt.Errorf("%w: inspect source worktree status", bridge.ErrExecution)
-	}
-	if len(status) != 0 {
-		return nil, fmt.Errorf("%w: %w", bridge.ErrDenied, errNativeSourceWorktreeDirty)
+	if requireClean {
+		status, err := runGitCommand(ctx, workspace, nativeGitArgs("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none", "--", "."), cleanGitEnvironment(nil))
+		if err != nil {
+			return nil, fmt.Errorf("%w: inspect source worktree status", bridge.ErrExecution)
+		}
+		if len(status) != 0 {
+			return nil, fmt.Errorf("%w: %w", bridge.ErrDenied, errNativeSourceWorktreeDirty)
+		}
 	}
 	baseOutput, err := runGitCommand(ctx, workspace, nativeGitArgs("rev-parse", "--verify", "HEAD^{commit}"), cleanGitEnvironment(nil))
 	if err != nil {
@@ -260,7 +266,7 @@ func (service *Service) EditNative(ctx context.Context, workspace string, input 
 		return bridge.Response{}, err
 	}
 	defer release()
-	if document.State != "prepared" || document.Input.Operation != bridge.WriteFiles || document.Input.ChildSessionID != input.ChildSessionID ||
+	if document.State != "prepared" || document.Input.Operation != bridge.WriteFiles && document.Input.Operation != bridge.RepairSystem || document.Input.ChildSessionID != input.ChildSessionID ||
 		document.Edit == nil || service.now().UTC().After(parseNativeDeadline(document.Deadline)) || sensitivepaths.IsSensitive(input.Path) ||
 		len(document.Edits) >= nativeMaxEdits {
 		return bridge.Response{}, bridge.ErrDenied
@@ -280,6 +286,11 @@ func (service *Service) EditNative(ctx context.Context, workspace string, input 
 		return bridge.Response{}, err
 	}
 	document.Edits = append(document.Edits, edit)
+	if document.Input.Operation == bridge.RepairSystem {
+		// A repair may only complete with test and vet evidence collected after
+		// its latest content change.
+		document.Validations = nil
+	}
 	if err := writeNativeTicket(paths.Root, document); err != nil {
 		return bridge.Response{}, fmt.Errorf("%w: persist native edit receipt", bridge.ErrExecution)
 	}
@@ -354,6 +365,30 @@ func secureNativeEdit(workspace, expectedIdentity string, request bridge.NativeE
 			return bridge.NativeEditResult{}, bridge.ErrDenied
 		}
 		mode = before.Mode().Perm()
+	}
+	if request.Delete {
+		current, currentErr := root.Lstat(name)
+		if currentErr != nil || !sameNativeFileSnapshot(before, current) || current.Mode()&os.ModeSymlink != 0 || !nativeSingleLink(current) {
+			return bridge.NativeEditResult{}, bridge.ErrDenied
+		}
+		if err := root.Remove(name); err != nil {
+			return bridge.NativeEditResult{}, bridge.ErrExecution
+		}
+		directory, err := root.Open(".")
+		if err != nil {
+			return bridge.NativeEditResult{}, bridge.ErrExecution
+		}
+		syncErr := directory.Sync()
+		closeErr := directory.Close()
+		if syncErr != nil || closeErr != nil {
+			return bridge.NativeEditResult{}, bridge.ErrExecution
+		}
+		if _, err := root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return bridge.NativeEditResult{}, bridge.ErrDenied
+		}
+		return bridge.NativeEditResult{
+			Path: request.Path, PreviousSHA256: previous, Deleted: true,
+		}, nil
 	}
 	temporary, err := nativeEditTemporaryName()
 	if err != nil {
@@ -457,9 +492,13 @@ func finalizeNativeEditArtifact(ctx context.Context, document nativeTicketDocume
 	}
 	latest := make(map[string]bridge.NativeEditResult, len(document.Edits))
 	created := make(map[string]bool, len(document.Edits))
+	original := make(map[string]string, len(document.Edits))
 	for _, edit := range document.Edits {
+		if _, seen := latest[edit.Path]; !seen {
+			original[edit.Path] = edit.PreviousSHA256
+			created[edit.Path] = edit.Created
+		}
 		latest[edit.Path] = edit
-		created[edit.Path] = created[edit.Path] || edit.Created
 	}
 	if len(paths) != len(latest) {
 		return bridge.NativeEditArtifact{}, bridge.ErrDenied
@@ -470,12 +509,21 @@ func finalizeNativeEditArtifact(ctx context.Context, document nativeTicketDocume
 		if !present || sensitivepaths.IsSensitive(path) {
 			return bridge.NativeEditArtifact{}, bridge.ErrDenied
 		}
-		read, readErr := secureNativeRead(document.Edit.Root, document.Edit.RootIdentity, bridge.NativeReadRequest{Path: path, Limit: bridge.MaxNativeEditBytes})
-		if readErr != nil || read.Truncated || nativeSHA256([]byte(read.Content)) != expected.SHA256 {
-			return bridge.NativeEditArtifact{}, bridge.ErrDenied
+		if expected.Deleted {
+			if _, readErr := secureNativeRead(document.Edit.Root, document.Edit.RootIdentity, bridge.NativeReadRequest{Path: path, Limit: bridge.MaxNativeEditBytes}); !errors.Is(readErr, os.ErrNotExist) {
+				return bridge.NativeEditArtifact{}, bridge.ErrDenied
+			}
+			expected.SHA256 = ""
+			expected.Bytes = 0
+		} else {
+			read, readErr := secureNativeRead(document.Edit.Root, document.Edit.RootIdentity, bridge.NativeReadRequest{Path: path, Limit: bridge.MaxNativeEditBytes})
+			if readErr != nil || read.Truncated || nativeSHA256([]byte(read.Content)) != expected.SHA256 {
+				return bridge.NativeEditArtifact{}, bridge.ErrDenied
+			}
+			expected.Bytes = len(read.Content)
 		}
 		expected.Created = created[path]
-		expected.Bytes = len(read.Content)
+		expected.PreviousSHA256 = original[path]
 		changes = append(changes, expected)
 	}
 	manifest, err := json.Marshal(struct {
@@ -505,7 +553,7 @@ func nativeChangedPaths(status []byte) ([]string, error) {
 			return nil, bridge.ErrDenied
 		}
 		state := string(record[:2])
-		if state != " M" && state != "??" {
+		if state != " M" && state != " D" && state != "??" {
 			return nil, bridge.ErrDenied
 		}
 		path := filepath.Clean(string(record[3:]))

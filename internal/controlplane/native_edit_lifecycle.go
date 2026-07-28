@@ -437,7 +437,7 @@ func normalizeNativeEditDeliveryError(ctx context.Context, err error) error {
 }
 
 func nativeTicketEditArtifact(document nativeTicketDocument) (bridge.NativeEditArtifact, error) {
-	if document.State != "completed" || document.Input.Operation != bridge.WriteFiles || document.Edit == nil ||
+	if document.State != "completed" || document.Input.Operation != bridge.WriteFiles && document.Input.Operation != bridge.RepairSystem || document.Edit == nil ||
 		document.Response == nil || document.Response.EditArtifact == nil {
 		return bridge.NativeEditArtifact{}, bridge.ErrDenied
 	}
@@ -537,23 +537,32 @@ func applyNativeEditArtifact(ctx context.Context, root string, document nativeTi
 		}
 	}
 	for _, change := range artifact.Changes {
+		var desired bridge.NativeReadResult
 		desired, readErr := secureNativeRead(document.Edit.Root, document.Edit.RootIdentity, bridge.NativeReadRequest{
 			Path: change.Path, Limit: bridge.MaxNativeEditBytes,
 		})
-		if readErr != nil || desired.Truncated || nativeSHA256([]byte(desired.Content)) != change.SHA256 {
+		if change.Deleted {
+			if !errors.Is(readErr, os.ErrNotExist) {
+				return bridge.ErrDenied
+			}
+		} else if readErr != nil || desired.Truncated || nativeSHA256([]byte(desired.Content)) != change.SHA256 {
 			return bridge.ErrDenied
 		}
 		if containsString(changed, change.Path) {
 			current, currentErr := secureNativeRead(root, document.WorkspaceID, bridge.NativeReadRequest{
 				Path: change.Path, Limit: bridge.MaxNativeEditBytes,
 			})
-			if currentErr != nil || current.Truncated || nativeSHA256([]byte(current.Content)) != change.SHA256 {
+			if change.Deleted {
+				if !errors.Is(currentErr, os.ErrNotExist) {
+					return bridge.ErrDenied
+				}
+			} else if currentErr != nil || current.Truncated || nativeSHA256([]byte(current.Content)) != change.SHA256 {
 				return bridge.ErrDenied
 			}
 			continue
 		}
 		_, editErr := secureNativeEdit(root, document.WorkspaceID, bridge.NativeEditRequest{
-			Path: change.Path, Content: desired.Content, ExpectedSHA256: change.PreviousSHA256, Create: change.Created,
+			Path: change.Path, Content: desired.Content, ExpectedSHA256: change.PreviousSHA256, Create: change.Created, Delete: change.Deleted,
 		})
 		if editErr != nil {
 			return editErr
@@ -606,7 +615,11 @@ func validateNativeEditSourceContents(root string, document nativeTicketDocument
 		current, err := secureNativeRead(root, document.WorkspaceID, bridge.NativeReadRequest{
 			Path: change.Path, Limit: bridge.MaxNativeEditBytes,
 		})
-		if err != nil || current.Truncated || nativeSHA256([]byte(current.Content)) != change.SHA256 {
+		if change.Deleted {
+			if !errors.Is(err, os.ErrNotExist) {
+				return bridge.ErrDenied
+			}
+		} else if err != nil || current.Truncated || nativeSHA256([]byte(current.Content)) != change.SHA256 {
 			return bridge.ErrDenied
 		}
 	}

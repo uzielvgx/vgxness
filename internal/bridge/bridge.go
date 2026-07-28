@@ -49,6 +49,7 @@ const (
 	AnalyzeStructure Operation = "analyze-structure"
 	WriteFiles       Operation = "write-files"
 	ReviewChanges    Operation = "review-changes"
+	RepairSystem     Operation = "repair-system"
 
 	CodeGraphStatus   CodeGraphOperation = "status"
 	CodeGraphExplore  CodeGraphOperation = "explore"
@@ -192,14 +193,16 @@ type NativeEditRequest struct {
 	Content         string `json:"content"`
 	ExpectedSHA256  string `json:"expectedSha256,omitempty"`
 	Create          bool   `json:"create,omitempty"`
+	Delete          bool   `json:"delete,omitempty"`
 }
 
 type NativeEditResult struct {
 	Path           string `json:"path"`
-	SHA256         string `json:"sha256"`
+	SHA256         string `json:"sha256,omitempty"`
 	PreviousSHA256 string `json:"previousSha256,omitempty"`
 	Bytes          int    `json:"bytes"`
 	Created        bool   `json:"created"`
+	Deleted        bool   `json:"deleted,omitempty"`
 }
 
 type NativeEditArtifact struct {
@@ -222,12 +225,17 @@ type NativeCodeGraphRequest struct {
 }
 
 type NativeCodeGraphResult struct {
-	Operation    CodeGraphOperation `json:"operation"`
-	Format       string             `json:"format"`
-	Content      string             `json:"content"`
-	OutputSHA256 string             `json:"outputSha256"`
-	StartedAt    string             `json:"startedAt"`
-	FinishedAt   string             `json:"finishedAt"`
+	Available        bool               `json:"available"`
+	Reason           string             `json:"reason,omitempty"`
+	Operation        CodeGraphOperation `json:"operation"`
+	Format           string             `json:"format,omitempty"`
+	Content          string             `json:"content,omitempty"`
+	OutputSHA256     string             `json:"outputSha256,omitempty"`
+	StartedAt        string             `json:"startedAt,omitempty"`
+	FinishedAt       string             `json:"finishedAt,omitempty"`
+	QueriesUsed      int                `json:"queriesUsed"`
+	QueriesRemaining int                `json:"queriesRemaining"`
+	QueryLimit       int                `json:"queryLimit"`
 }
 
 type NativeCodeGraphReceipt struct {
@@ -377,25 +385,17 @@ type OrchestrationRuntime interface {
 }
 
 func DecodeDispatch(reader io.Reader) (DispatchRequest, error) {
-	if reader == nil {
-		return DispatchRequest{}, ErrInvalid
-	}
-	data, err := io.ReadAll(io.LimitReader(reader, MaxRequestBytes+1))
-	if err != nil || len(data) == 0 || len(data) > MaxRequestBytes {
-		return DispatchRequest{}, ErrInvalid
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	var request DispatchRequest
-	if err := decoder.Decode(&request); err != nil {
+	if err := decodeExact(reader, MaxRequestBytes, &request); err != nil || ValidateDispatch(request) != nil {
 		return DispatchRequest{}, ErrInvalid
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
+	return request, nil
+}
+
+func DecodeNativePrepare(reader io.Reader) (DispatchRequest, error) {
+	var request DispatchRequest
+	if err := decodeExact(reader, MaxRequestBytes, &request); err != nil || ValidateNativePrepare(request) != nil {
 		return DispatchRequest{}, ErrInvalid
-	}
-	if err := ValidateDispatch(request); err != nil {
-		return DispatchRequest{}, err
 	}
 	return request, nil
 }
@@ -532,6 +532,15 @@ func ValidateNativeEdit(request NativeEditRequest) error {
 		strings.HasSuffix(request.Path, "/") || strings.HasSuffix(request.Path, `\`) || !utf8.ValidString(request.Content) ||
 		strings.ContainsRune(request.Content, '\x00') || len(request.Content) > MaxNativeEditBytes {
 		return ErrInvalid
+	}
+	if request.Create && request.Delete {
+		return ErrInvalid
+	}
+	if request.Delete {
+		if request.Content != "" || !validSHA256(request.ExpectedSHA256) {
+			return ErrInvalid
+		}
+		return nil
 	}
 	if request.Create {
 		if request.ExpectedSHA256 != "" {
@@ -749,7 +758,11 @@ func validateBoundedIntent(goal string, criteria []string) error {
 }
 
 func ValidateNativePrepare(request DispatchRequest) error {
-	if ValidateDispatch(request) != nil || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ParentSessionID) || !validNativeIdentity(request.ParentMessageID) || !validNativeIdentity(request.ChildSessionID) {
+	candidate := request
+	if candidate.Operation == RepairSystem {
+		candidate.Operation = WriteFiles
+	}
+	if ValidateDispatch(candidate) != nil || !validNativeIdentity(request.TicketID) || !validNativeIdentity(request.ParentSessionID) || !validNativeIdentity(request.ParentMessageID) || !validNativeIdentity(request.ChildSessionID) {
 		return ErrInvalid
 	}
 	return nil

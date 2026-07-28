@@ -39,7 +39,7 @@ const (
 	nativeAdmissionWait       = 2 * time.Second
 	nativeAdmissionRetry      = 2 * time.Millisecond
 	nativeCodeGraphTimeout    = 30 * time.Second
-	nativeMaxCodeGraphQueries = 16
+	nativeMaxCodeGraphQueries = 32
 	nativeMaxValidations      = 16
 )
 
@@ -144,6 +144,9 @@ func (nativeHostAdapter) Run(context.Context, providers.Invocation) ([]byte, err
 func (service *Service) Prepare(ctx context.Context, workspace string, input bridge.DispatchRequest) (bridge.Response, error) {
 	if err := bridge.ValidateNativePrepare(input); err != nil {
 		return bridge.Response{}, bridge.ErrInvalid
+	}
+	if input.Operation == bridge.RepairSystem {
+		return service.prepareNativeRepair(ctx, workspace, input)
 	}
 	root, err := canonicalWorkspace(ctx, workspace)
 	if err != nil {
@@ -330,6 +333,9 @@ func (service *Service) Complete(ctx context.Context, workspace string, input br
 		return bridge.Response{}, err
 	}
 	defer release()
+	if document.Input.Operation == bridge.RepairSystem {
+		return service.completeNativeRepair(ctx, root, paths, document, input)
+	}
 	digest := nativeCompletionDigest(input.ParentSessionID, input.ChildSessionID, input.MessageID, input.Result)
 	if document.State == "completed" || document.State == "failed" {
 		if document.CompletionSHA == digest && document.Response != nil {
@@ -446,6 +452,9 @@ func (service *Service) Fail(ctx context.Context, workspace string, input bridge
 		return bridge.Response{}, err
 	}
 	defer release()
+	if document.Input.Operation == bridge.RepairSystem {
+		return service.failNativeRepair(ctx, paths, root, document, input)
+	}
 	digest := nativeCompletionDigest(input.ParentSessionID, input.ChildSessionID, input.Category, nil)
 	if document.State == "failed" {
 		if document.CompletionSHA == digest && document.Response != nil {
@@ -545,7 +554,7 @@ func (service *Service) ReadNative(ctx context.Context, workspace string, input 
 		return bridge.Response{}, err
 	}
 	defer release()
-	if document.State != "prepared" || document.Input.Operation != bridge.ReadFiles && document.Input.Operation != bridge.AnalyzeStructure && document.Input.Operation != bridge.WriteFiles || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) || sensitivepaths.IsSensitive(input.Path) {
+	if document.State != "prepared" || document.Input.Operation != bridge.ReadFiles && document.Input.Operation != bridge.AnalyzeStructure && document.Input.Operation != bridge.WriteFiles && document.Input.Operation != bridge.RepairSystem || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) || sensitivepaths.IsSensitive(input.Path) {
 		return bridge.Response{}, bridge.ErrDenied
 	}
 	leaseGuard, err := acquireOwnedNativeLeaseGuard(paths.Root, document.TicketID)
@@ -554,14 +563,14 @@ func (service *Service) ReadNative(ctx context.Context, workspace string, input 
 	}
 	defer leaseGuard.Release()
 	readRoot, readIdentity := root, document.WorkspaceID
-	if document.Input.Operation == bridge.WriteFiles {
+	if document.Input.Operation == bridge.WriteFiles || document.Input.Operation == bridge.RepairSystem {
 		if document.Edit == nil {
 			return bridge.Response{}, bridge.ErrDenied
 		}
 		readRoot, readIdentity = document.Edit.Root, document.Edit.RootIdentity
 	}
 	read, err := secureNativeRead(readRoot, readIdentity, input)
-	if document.Input.Operation == bridge.WriteFiles && errors.Is(err, os.ErrNotExist) {
+	if (document.Input.Operation == bridge.WriteFiles || document.Input.Operation == bridge.RepairSystem) && errors.Is(err, os.ErrNotExist) {
 		read = bridge.NativeReadResult{Path: input.Path}
 		err = nil
 	}
@@ -589,8 +598,19 @@ func (service *Service) QueryNativeCodeGraph(ctx context.Context, workspace stri
 	if document.State != "prepared" || document.Input.Operation != bridge.AnalyzeStructure || document.Input.ChildSessionID != input.ChildSessionID || service.now().UTC().After(parseNativeDeadline(document.Deadline)) {
 		return bridge.Response{}, bridge.ErrDenied
 	}
+	unavailable := func(reason string) (bridge.Response, error) {
+		used := len(document.CodeGraph)
+		return bridge.Response{
+			ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
+			RunID: document.RunID, TaskID: document.TaskID, Status: "analyzing",
+			CodeGraph: &bridge.NativeCodeGraphResult{
+				Available: false, Reason: reason, Operation: input.Operation,
+				QueriesUsed: used, QueriesRemaining: max(0, nativeMaxCodeGraphQueries-used), QueryLimit: nativeMaxCodeGraphQueries,
+			},
+		}, nil
+	}
 	if len(document.CodeGraph) >= nativeMaxCodeGraphQueries {
-		return bridge.Response{}, bridge.ErrDenied
+		return unavailable("query-budget-exhausted")
 	}
 	workspaceInfo, err := os.Lstat(root)
 	if err != nil || !workspaceInfo.IsDir() || workspaceInfo.Mode()&os.ModeSymlink != 0 {
@@ -607,6 +627,9 @@ func (service *Service) QueryNativeCodeGraph(ctx context.Context, workspace stri
 	defer leaseGuard.Release()
 	runtime, err := service.newCodeGraph()
 	if err != nil {
+		if errors.Is(err, bridge.ErrUnavailable) || errors.Is(err, codegraph.ErrUnavailable) {
+			return unavailable("index-unavailable")
+		}
 		return bridge.Response{}, err
 	}
 	queryContext, cancel := context.WithTimeout(ctx, nativeCodeGraphTimeout)
@@ -620,7 +643,7 @@ func (service *Service) QueryNativeCodeGraph(ctx context.Context, workspace stri
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return bridge.Response{}, err
 		case errors.Is(err, codegraph.ErrUnavailable):
-			return bridge.Response{}, bridge.ErrUnavailable
+			return unavailable("index-unavailable")
 		case errors.Is(err, codegraph.ErrInvalid):
 			return bridge.Response{}, bridge.ErrInvalid
 		default:
@@ -645,8 +668,9 @@ func (service *Service) QueryNativeCodeGraph(ctx context.Context, workspace stri
 		ProtocolVersion: bridge.ProtocolVersion, OK: true, Bridge: "healthy", Provider: "opencode", Workspace: root,
 		RunID: document.RunID, TaskID: document.TaskID, Status: "analyzing",
 		CodeGraph: &bridge.NativeCodeGraphResult{
-			Operation: input.Operation, Format: result.Format, Content: result.Content, OutputSHA256: result.OutputSHA256,
+			Available: true, Operation: input.Operation, Format: result.Format, Content: result.Content, OutputSHA256: result.OutputSHA256,
 			StartedAt: result.StartedAt.UTC().Format(time.RFC3339Nano), FinishedAt: result.FinishedAt.UTC().Format(time.RFC3339Nano),
+			QueriesUsed: len(document.CodeGraph), QueriesRemaining: nativeMaxCodeGraphQueries - len(document.CodeGraph), QueryLimit: nativeMaxCodeGraphQueries,
 		},
 	}, nil
 }
@@ -772,6 +796,8 @@ func nativeAgentFor(operation bridge.Operation) string {
 		return "vgxness-reviewer"
 	case bridge.WriteFiles:
 		return "vgxness-implementer"
+	case bridge.RepairSystem:
+		return "vgxness-maintainer"
 	default:
 		return "vgxness-explorer"
 	}
@@ -1015,7 +1041,8 @@ func readNativeLeasePath(path string) (nativeLease, error) {
 }
 
 func findNativeLease(root, ticketID string) (string, bool, error) {
-	for _, path := range nativeLeasePaths(root) {
+	paths := append(nativeLeasePaths(root), nativeRepairLeasePath(root))
+	for _, path := range paths {
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {

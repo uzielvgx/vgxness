@@ -93,18 +93,44 @@ func TestNativeEditBrokerIsolatesVersionedWritesAndPublishesManifest(t *testing.
 	if err != nil || second.Edit == nil || !second.Edit.Created {
 		t.Fatalf("bounded creation failed: %#v err=%v", second, err)
 	}
+	readDelete, err := service.ReadNative(context.Background(), workspace, bridge.NativeReadRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ChildSessionID: "ses_child", Path: "README.md",
+	})
+	if err != nil || readDelete.Read == nil {
+		t.Fatalf("deletion target could not be read: %#v err=%v", readDelete, err)
+	}
+	deleted, err := service.EditNative(context.Background(), workspace, bridge.NativeEditRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ChildSessionID: "ses_child", Path: "README.md",
+		ExpectedSHA256: readDelete.Read.SHA256, Delete: true,
+	})
+	if err != nil || deleted.Edit == nil || !deleted.Edit.Deleted || deleted.Edit.SHA256 != "" ||
+		deleted.Edit.PreviousSHA256 != readDelete.Read.SHA256 {
+		t.Fatalf("content-bound deletion failed: %#v err=%v", deleted, err)
+	}
+	if _, err := service.EditNative(context.Background(), workspace, bridge.NativeEditRequest{
+		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ChildSessionID: "ses_child", Path: "internal/app.go",
+		ExpectedSHA256: read.Read.SHA256, Delete: true,
+	}); !errors.Is(err, bridge.ErrDenied) {
+		t.Fatalf("stale content-bound deletion was accepted: %v", err)
+	}
 	if data, err := os.ReadFile(filepath.Join(workspace, "internal", "app.go")); err != nil || string(data) != "package internal\n\nconst Value = \"base\"\n" {
 		t.Fatalf("source checkout was mutated: %q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(workspace, "README.md")); err != nil || string(data) != "base\n" {
+		t.Fatalf("source deletion escaped the isolated worktree: %q err=%v", data, err)
 	}
 
 	completed, err := service.Complete(context.Background(), workspace, bridge.NativeCompletionRequest{
 		ProtocolVersion: bridge.ProtocolVersion, TicketID: "ticket-edit", ParentSessionID: "ses_parent",
 		ChildSessionID: "ses_child", MessageID: "msg_child", Result: nativeResult(t, prepared.TaskID),
 	})
-	if err != nil || completed.Status != "completed" || completed.EditArtifact == nil || len(completed.EditArtifact.Changes) != 2 ||
+	if err != nil || completed.Status != "completed" || completed.EditArtifact == nil || len(completed.EditArtifact.Changes) != 3 ||
 		completed.EditArtifact.Worktree != document.Edit.Root || completed.EditArtifact.BaseRevision != document.Edit.BaseRevision ||
 		!strings.HasPrefix(completed.EditArtifact.ManifestSHA, "sha256-") {
 		t.Fatalf("completion did not publish bounded edit evidence: %#v err=%v", completed, err)
+	}
+	if change := completed.EditArtifact.Changes[0]; change.Path != "README.md" || !change.Deleted || change.SHA256 != "" || change.Bytes != 0 {
+		t.Fatalf("deletion manifest entry is invalid: %#v", change)
 	}
 }
 
