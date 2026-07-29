@@ -19,6 +19,7 @@ VGXNESS is planned as a local-first agent orchestration system that keeps human 
 | [Compatibility Delivery Authority](docs/delivery-authority.md) | Maintainer-only receipt lifecycle, four validating gates, storage, and trust boundary. |
 | [Compatibility Operations](docs/operations.md) / [Español](docs/operations.es.md) | Legacy CLI diagnosis, retention, and isolated-edit lifecycle. |
 | [Versioned Self-installation](docs/self-install.md) | Permanent launcher, immutable SHA-256 versions, atomic activation, rollback, and safety behavior. |
+| [Alpha releases](docs/release.md) | Release artifacts, support matrix, checksum verification, installation, and release rollback boundaries. |
 | [Guided OpenCode Setup](docs/opencode-setup-wizard.md) | Complete explanatory wizard, confirmation boundary, verification, status, and recovery behavior. |
 | [OpenCode Integration](docs/opencode-integration.md) | Current persistent manager installation, safety behavior, CLI, and remaining bridge boundary. |
 | [Safe Hooks](docs/hooks.md) | Typed post-commit events, OpenCode context hooks, failure policy, delivery limits, and explicit shell/Git-hook exclusions. |
@@ -35,3 +36,7 @@ By default, semantic memory for every workspace lives in one user database at `~
 **Non-goal:** VGXNESS will not copy third-party code, prompts, schemas, names, skills, or exact workflows, and it will not permit silent destructive autonomy or hide operational truth behind a CLI.
 
 For complete definitions and status classifications, read the [Product Blueprint](docs/product-blueprint.md). Supporting documents intentionally do not duplicate its roadmap.
+
+## Installation and releases
+
+Alpha releases provide unsigned archives for Linux, macOS, and Windows plus `SHA256SUMS`. Verify the downloaded archive before running it, then use the extracted `vgxness` or `vgxness.exe` binary to preview and perform self-installation. See [Alpha releases](docs/release.md) for acquisition, exact artifact names, checksums, and platform support, and [Versioned self-installation](docs/self-install.md) for launcher, status, and rollback behavior. Self-installation does not download releases or edit `PATH`.

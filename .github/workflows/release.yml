@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
+      - name: Validate tagged source
+        run: |
+          go test ./...
+          go vet ./...
+          go mod verify
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse "$GITHUB_REF_NAME^{commit}")"
+          date="$(git show -s --format=%cI "$commit")"
+          go run ./cmd/vgxness-release \
+            --version "$GITHUB_REF_NAME" \
+            --commit "$commit" \
+            --date "$date" \
+            --output dist
+          printf 'RELEASE_COMMIT=%s\nRELEASE_DATE=%s\n' "$commit" "$date" >> "$GITHUB_ENV"
+      - name: Verify Linux artifact and self-install
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          version="${GITHUB_REF_NAME#v}"
+          archive="vgxness_${version}_linux_amd64.tar.gz"
+          extract="$(mktemp -d)"
+          install="$(mktemp -d)"
+          tar -xzf "dist/$archive" -C "$extract"
+          binary="$extract/${archive%.tar.gz}/vgxness"
+          version_output="$("$binary" version)"
+          grep -Fx "version=$GITHUB_REF_NAME" <<<"$version_output"
+          grep -Fx "commit=$RELEASE_COMMIT" <<<"$version_output"
+          grep -Fx "date=$RELEASE_DATE" <<<"$version_output"
+          grep -Fx "os=linux" <<<"$version_output"
+          grep -Fx "arch=amd64" <<<"$version_output"
+          "$binary" self install --bin-dir "$install/bin" --data-dir "$install/data"
+          status="$("$install/bin/vgxness" self status --bin-dir "$install/bin" --data-dir "$install/data")"
+          grep -Fx "state=installed" <<<"$status"
+      - name: Upload shared release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dist-${{ github.ref_name }}
+          path: dist/*
+          if-no-files-found: error
+
+  windows-smoke:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Download shared release assets
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-dist-${{ github.ref_name }}
+          path: dist
+      - name: Verify Windows artifact and self-install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $archive = "vgxness_${version}_windows_amd64.zip"
+          $checksumLine = Get-Content "dist/SHA256SUMS" | Where-Object { $_ -match "  $([regex]::Escape($archive))$" }
+          if (@($checksumLine).Count -ne 1) { throw "Expected one checksum for $archive" }
+          $expected = ($checksumLine -split "\s+")[0]
+          $actual = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "SHA-256 mismatch for $archive" }
+          $root = Join-Path $env:RUNNER_TEMP ("vgxness-release-" + [guid]::NewGuid())
+          $extract = Join-Path $root "extract"
+          $binDir = Join-Path $root "installed-bin"
+          $dataDir = Join-Path $root "installed-data"
+          New-Item -ItemType Directory -Path $extract | Out-Null
+          Expand-Archive -LiteralPath "dist/$archive" -DestinationPath $extract
+          $binary = Join-Path $extract "vgxness_${version}_windows_amd64/vgxness.exe"
+          $versionOutput = & $binary version
+          if ($LASTEXITCODE -ne 0 -or $versionOutput -notcontains "version=$env:GITHUB_REF_NAME" -or $versionOutput -notcontains "os=windows" -or $versionOutput -notcontains "arch=amd64") { throw "Unexpected Windows version output" }
+          $preview = & $binary self preview --bin-dir $binDir --data-dir $dataDir
+          if ($LASTEXITCODE -ne 0 -or $preview -notcontains "state=absent") { throw "Windows preview failed" }
+          $install = & $binary self install --bin-dir $binDir --data-dir $dataDir
+          if ($LASTEXITCODE -ne 0 -or $install -notcontains "state=installed") { throw "Windows install failed" }
+          $launcher = Join-Path $binDir "vgxness.exe"
+          $status = & $launcher self status --bin-dir $binDir --data-dir $dataDir
+          if ($LASTEXITCODE -ne 0 -or $status -notcontains "state=installed") { throw "Windows launcher status failed" }
+
+  publish:
+    needs: [build, windows-smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release assets
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-dist-${{ github.ref_name }}
+          path: dist
+      - name: Verify and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          version="${GITHUB_REF_NAME#v}"
+          assets=(
+            "dist/vgxness_${version}_linux_amd64.tar.gz"
+            "dist/vgxness_${version}_linux_arm64.tar.gz"
+            "dist/vgxness_${version}_darwin_amd64.tar.gz"
+            "dist/vgxness_${version}_darwin_arm64.tar.gz"
+            "dist/vgxness_${version}_windows_amd64.zip"
+            "dist/vgxness_${version}_windows_arm64.zip"
+            "dist/SHA256SUMS"
+          )
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

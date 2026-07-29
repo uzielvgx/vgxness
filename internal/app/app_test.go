@@ -41,3 +41,24 @@ func TestOpenCodeIntegrationRuntime_InstallStatusAndRecoverableUninstall(t *test
 	code = Run(context.Background(), []string{"integrate", "opencode", "uninstall", "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
 	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=absent") && strings.Contains(out.String(), "backup="), "uninstall exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
 }
+
+func TestVersionUsesLightweightPathWithoutWorkingDirectory(t *testing.T) {
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	if err := os.Remove(directory); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"version"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 || !strings.HasPrefix(stdout.String(), "version=dev\ncommit=unknown\ndate=unknown\n") || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
