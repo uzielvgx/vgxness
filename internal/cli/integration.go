@@ -19,8 +19,9 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 	flags := flag.NewFlagSet("integrate opencode "+action, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var options integration.Options
+	var deprecatedModel string
 	flags.StringVar(&options.ConfigDir, "config-dir", "", "OpenCode global config directory")
-	flags.StringVar(&options.Model, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
+	flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
 	flags.Var((*planFlag)(&options.ModelPlan), "model-plan", "active model plan: low, medium, or high")
 	flags.StringVar(&options.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
 	flags.StringVar(&options.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")

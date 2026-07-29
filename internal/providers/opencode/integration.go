@@ -425,7 +425,6 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	}
 	rollback = false
 	state.result.State = integration.StateAbsent
-	state.result.Bridge = integration.BridgeNotRequired
 	state.result.Changed = len(backups) != 0
 	for _, item := range backups {
 		if item.target == state.result.Path {
@@ -464,7 +463,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	}
 	result := integration.Result{
 		Provider: "opencode", State: integration.StateAbsent, Path: managerPath, ArtifactSHA256: artifactSHA256(plan.agents[managerAgentName]),
-		ToolPath: toolPath, ToolSHA256: artifactSHA256(toolContent), Bridge: integration.BridgeNotRequired,
+		ToolPath: toolPath, ToolSHA256: artifactSHA256(toolContent),
 		ModelPlan: plan.config.ActivePlan, ModelProvider: plan.resolved.Provider,
 		ModelEfficient: plan.config.Efficient, ModelBalanced: plan.config.Balanced, ModelFrontier: plan.config.Frontier,
 		ManifestPath: manifestPath, ManifestSHA256: artifactSHA256(plan.manifest),

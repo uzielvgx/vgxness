@@ -22,7 +22,6 @@ type Paths struct {
 	Root           string
 	Database       string
 	LegacyDatabase string
-	CurrentRun     string
 }
 
 func Prepare(ctx context.Context, opts Options) (Paths, error) {
@@ -82,7 +81,6 @@ func pathsForRoot(opts Options, root string) (Paths, error) {
 		Root:           root,
 		Database:       database,
 		LegacyDatabase: legacy,
-		CurrentRun:     filepath.Join(root, "current-run.json"),
 	}, nil
 }
 

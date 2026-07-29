@@ -17,11 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
-func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
+func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("native Windows runtime smoke is tracked separately")
 	}
@@ -99,7 +98,7 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 		t.Fatalf("setup did not install the bounded storage-only plugin: %v", err)
 	}
 	managerData, err := os.ReadFile(manager)
-	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 29")) || !bytes.Contains(managerData, []byte("At the start of every accepted SDD change")) {
+	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 30")) || !bytes.Contains(managerData, []byte("At the start of every accepted SDD change")) {
 		t.Fatalf("setup did not install the executable SDD manager contract: %v", err)
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {
@@ -146,113 +145,8 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 		t.Fatalf("SDD lifecycle did not advance: %+v", transitionEnvelope.Result)
 	}
 
-	var health bridge.Response
-	decodeJSON(t, run(t, environment, workspace, launcher, "bridge", "status", "--workspace", workspace), &health)
-	if !health.OK || health.Status != "healthy" || health.Workspace != canonicalPath(t, workspace) {
-		t.Fatalf("unexpected bridge health: %#v", health)
-	}
-
-	response := nativeDispatch(t, environment, workspace, launcher, "isolated", bridge.DispatchRequest{
-		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
-		Goal: "Inspect the hermetic workspace", AcceptanceCriteria: []string{"Return a valid bounded result"},
-	})
-	if !response.OK || response.Status != "completed" || response.RunID == "" || response.TaskID == "" || response.Receipt == nil {
-		t.Fatalf("unexpected dispatch response: %#v", response)
-	}
-	if response.Receipt.Decision != "allow" || response.Receipt.EventCount != 3 || response.Receipt.Provider != "opencode" {
-		t.Fatalf("unexpected bounded receipt: %#v", response.Receipt)
-	}
-	var result struct {
-		TaskID  string `json:"taskId"`
-		AgentID string `json:"agentId"`
-		Status  string `json:"status"`
-	}
-	if err := json.Unmarshal(response.Result, &result); err != nil || result.TaskID != response.TaskID || result.AgentID != "vgxness-worker" || result.Status != "success" {
-		t.Fatalf("unexpected provider result %s: %#v err=%v", response.Result, result, err)
-	}
-
-	logs, err := filepath.Glob(filepath.Join(homeDirectory, ".vgxness", "projects", "*", "logs", "*.jsonl"))
-	if err != nil || len(logs) != 1 {
-		t.Fatalf("expected one Chronicle log, got %v: %v", logs, err)
-	}
-	logData, err := os.ReadFile(logs[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := bytes.Split(bytes.TrimSpace(logData), []byte{'\n'})
-	if len(lines) != 3 || !bytes.Contains(logData, []byte(`"type":"task.started"`)) || !bytes.Contains(logData, []byte(`"type":"task.completed"`)) || !bytes.Contains(logData, []byte(`"type":"result.accepted"`)) {
-		t.Fatalf("unexpected Chronicle evidence:\n%s", logData)
-	}
-
-	started := nativeDispatch(t, environment, workspace, launcher, "start", bridge.DispatchRequest{
-		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
-		Goal: "Inspect continuity before implementation", Continuity: bridge.ContinuityStart,
-	})
-	if !started.OK || started.RunID == "" || started.CapsuleID == "" || started.StateVersion != 1 || len(started.MemoryRefs) != 2 {
-		t.Fatalf("unexpected continuity start: %#v", started)
-	}
-	continued := nativeDispatch(t, environment, workspace, launcher, "continue", bridge.DispatchRequest{
-		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
-		Goal: "Inspect continuity before implementation", Continuity: bridge.ContinuityContinue, RunID: started.RunID,
-	})
-	if !continued.OK || continued.RunID != started.RunID || continued.CapsuleID == started.CapsuleID || continued.StateVersion != 2 || len(continued.MemoryRefs) != 3 {
-		t.Fatalf("unexpected continuity continuation: %#v", continued)
-	}
-	projectRoots, err := filepath.Glob(filepath.Join(homeDirectory, ".vgxness", "projects", "*"))
-	if err != nil || len(projectRoots) == 0 {
-		t.Fatalf("expected project storage roots, got %v: %v", projectRoots, err)
-	}
-	continuityRoot := ""
-	for _, root := range projectRoots {
-		if info, statErr := os.Stat(filepath.Join(root, "current-run.json")); statErr == nil && info.Mode().IsRegular() {
-			if continuityRoot != "" {
-				t.Fatalf("multiple active continuity roots: %s and %s", continuityRoot, root)
-			}
-			continuityRoot = root
-		}
-	}
-	if continuityRoot == "" {
-		t.Fatalf("active continuity root is missing from %v", projectRoots)
-	}
-	currentData, err := os.ReadFile(filepath.Join(continuityRoot, "current-run.json"))
-	if err != nil || !bytes.Contains(currentData, []byte(started.RunID)) || !bytes.Contains(currentData, []byte(continued.CapsuleID)) || !bytes.Contains(currentData, []byte(`"status": "paused"`)) {
-		t.Fatalf("continuity pointer was not persisted: err=%v\n%s", err, currentData)
-	}
 	if info, err := os.Stat(filepath.Join(homeDirectory, ".vgxness", "memory.db")); err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("global project-isolated memory store is missing: info=%v err=%v", info, err)
-	}
-	if _, err := os.Stat(filepath.Join(continuityRoot, "memory.db")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy per-project memory store was recreated: %v", err)
-	}
-	finished := nativeDispatch(t, environment, workspace, launcher, "finish", bridge.DispatchRequest{
-		ProtocolVersion: bridge.ProtocolVersion, Model: "openai/gpt-5.6-sol", Operation: bridge.ReadFiles,
-		Goal: "Inspect continuity before implementation", Continuity: bridge.ContinuityFinish, RunID: started.RunID,
-	})
-	if !finished.OK || finished.RunID != started.RunID || finished.CapsuleID == continued.CapsuleID || finished.StateVersion != 3 || len(finished.MemoryRefs) != 4 {
-		t.Fatalf("unexpected continuity finish: %#v", finished)
-	}
-	if _, err := os.Stat(filepath.Join(continuityRoot, "current-run.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("terminal continuity pointer still exists: %v", err)
-	}
-	if info, err := os.Stat(filepath.Join(continuityRoot, "runs", started.RunID+".json")); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("terminal continuity snapshot is missing: info=%v err=%v", info, err)
-	}
-	logs, err = filepath.Glob(filepath.Join(continuityRoot, "logs", "*.jsonl"))
-	if err != nil || len(logs) != 2 {
-		t.Fatalf("expected isolated and continuity logs, got %v: %v", logs, err)
-	}
-	var continuityLog []byte
-	for _, path := range logs {
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		if bytes.Contains(data, []byte(started.RunID)) {
-			continuityLog = data
-		}
-	}
-	if bytes.Count(continuityLog, []byte(`"type":"task.completed"`)) != 3 || bytes.Count(continuityLog, []byte(`"type":"memory.written"`)) != 3 || bytes.Count(continuityLog, []byte(`"type":"capsule.written"`)) != 3 || !bytes.Contains(continuityLog, []byte(`"type":"run.completed"`)) {
-		t.Fatalf("continuity evidence is incomplete:\n%s", continuityLog)
 	}
 }
 
@@ -262,41 +156,6 @@ func reviewerPaths(configDirectory string, names []string) []string {
 		paths = append(paths, filepath.Join(configDirectory, "agents", name))
 	}
 	return paths
-}
-
-func nativeDispatch(t *testing.T, environment []string, workspace, launcher, suffix string, request bridge.DispatchRequest) bridge.Response {
-	t.Helper()
-	request.ParentSessionID = "ses_parent_" + suffix
-	request.ParentMessageID = "msg_parent_" + suffix
-	request.ChildSessionID = "ses_child_" + suffix
-	request.TicketID = "ticket_" + suffix
-	requestData, err := json.Marshal(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var prepared bridge.Response
-	decodeJSON(t, runWithInput(t, environment, workspace, string(requestData), launcher, "bridge", "prepare", "--workspace", workspace, "--stdin"), &prepared)
-	if !prepared.OK || prepared.Prepared == nil || prepared.Prepared.TicketID == "" {
-		t.Fatalf("unexpected native preparation: %#v", prepared)
-	}
-	result, err := json.Marshal(map[string]any{
-		"kind": "agent.result", "schemaVersion": "1", "resultId": "result-" + suffix, "taskId": prepared.TaskID,
-		"agentId": "vgxness-worker", "status": "success", "summary": "hermetic native dispatch completed", "artifacts": []any{},
-		"nextRecommended": "inspect Chronicle evidence", "risks": []any{}, "errors": []any{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	completionData, err := json.Marshal(bridge.NativeCompletionRequest{
-		ProtocolVersion: bridge.ProtocolVersion, TicketID: prepared.Prepared.TicketID, ParentSessionID: request.ParentSessionID,
-		ChildSessionID: request.ChildSessionID, MessageID: "msg_child_" + suffix, Result: result,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var completed bridge.Response
-	decodeJSON(t, runWithInput(t, environment, workspace, string(completionData), launcher, "bridge", "complete", "--workspace", workspace, "--stdin"), &completed)
-	return completed
 }
 
 func repositoryRoot(t *testing.T) string {

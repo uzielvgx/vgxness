@@ -8,10 +8,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/buildinfo"
 	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/delivery"
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -24,36 +22,9 @@ type Inspector interface {
 	Doctor(context.Context, config.Options) (inspection.Result, error)
 }
 
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer, inspector Inspector) int {
-	return RunIO(ctx, args, strings.NewReader(""), stdout, stderr, inspector, nil)
-}
-
-func RunIO(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime) int {
-	return RunRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, nil)
-}
-
-func RunRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime) int {
-	return RunControlPlaneRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, nil)
-}
-
-func RunControlPlaneRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime) int {
-	return RunAllRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, controlPlane, nil)
-}
-
-func RunAllRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime) int {
-	return RunProductRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, controlPlane, installer, nil, nil)
-}
-
-func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, deliveries delivery.Runtime) int {
-	return RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, controlPlane, installer, setup, deliveries, nil)
-}
-
-func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, deliveries delivery.Runtime, sdds SDDRuntime) int {
+func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, sdds SDDRuntime) int {
 	if len(args) > 0 && args[0] == "version" {
 		return RunVersion(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "delivery" {
-		return runDelivery(ctx, args[1:], stdout, stderr, deliveries)
 	}
 	if len(args) > 0 && args[0] == "memory" {
 		return runMemory(ctx, args[1:], stdin, stdout, stderr, memories)
@@ -64,18 +35,6 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 	if len(args) > 0 && args[0] == "integrate" {
 		return runIntegration(ctx, args[1:], stdout, stderr, integrations)
 	}
-	if len(args) > 0 && args[0] == "bridge" {
-		return runBridge(ctx, args[1:], stdin, stdout, stderr, controlPlane)
-	}
-	if len(args) > 0 && args[0] == "orchestrate" {
-		return runOrchestration(ctx, args[1:], stdout, stderr, controlPlane)
-	}
-	if len(args) > 0 && args[0] == "maintenance" {
-		return runMaintenance(ctx, args[1:], stdout, stderr, controlPlane)
-	}
-	if len(args) > 0 && args[0] == "edit" {
-		return runEditLifecycle(ctx, args[1:], stdout, stderr, controlPlane)
-	}
 	if len(args) > 0 && args[0] == "self" {
 		return runSelfInstall(ctx, args[1:], stdout, stderr, installer)
 	}
@@ -83,19 +42,17 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|memory|sdd|integrate|bridge|orchestrate|edit|maintenance|self|setup|delivery>")
+		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|sdd|integrate|self|setup>")
 		return 2
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var opts config.Options
-	var deep bool
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
 	flags.StringVar(&opts.ProjectDir, "workspace", "", "absolute workspace")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "use project-local storage")
-	flags.BoolVar(&deep, "deep", false, "inspect operational state")
-	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || command != "doctor" && deep {
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "invalid command arguments")
 		return 2
 	}
@@ -111,18 +68,11 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		fmt.Fprintln(stderr, message)
 		return code
 	}
-	chronicle := "absent"
-	if result.ChroniclePresent {
-		chronicle = "present run=" + terminalSafe(result.RunID)
-	}
-	if command == "doctor" && deep {
-		return printDeepDoctor(ctx, stdout, stderr, controlPlane, opts, result)
-	}
 	doctor := ""
 	if command == "doctor" {
 		doctor = "doctor=healthy\n"
 	}
-	fmt.Fprintf(stdout, "storage_root=%s\ndatabase=%s\nmigration=%d\nchronicle=%s\n%s", terminalSafe(result.Root), terminalSafe(result.Database), result.Migration, chronicle, doctor)
+	fmt.Fprintf(stdout, "storage_root=%s\ndatabase=%s\nmigration=%d\n%s", terminalSafe(result.Root), terminalSafe(result.Database), result.Migration, doctor)
 	return 0
 }
 
@@ -196,20 +146,6 @@ func failure(err error) (int, string) {
 		return 1, "unavailable: setup prerequisites are not ready"
 	case errors.Is(err, setupflow.ErrVerification):
 		return 1, "operational: setup verification failed"
-	case errors.Is(err, delivery.ErrInvalid):
-		return 2, "invalid: delivery request is invalid"
-	case errors.Is(err, delivery.ErrNotFound):
-		return 1, "not_found: no delivery receipt exists"
-	case errors.Is(err, delivery.ErrInvalidated):
-		return 1, "invalidated: delivery receipt no longer matches its target"
-	case errors.Is(err, delivery.ErrSensitive):
-		return 1, "denied: delivery target contains a sensitive path"
-	case errors.Is(err, delivery.ErrUnbound):
-		return 1, "denied: delivery target contains unbound submodule changes"
-	case errors.Is(err, delivery.ErrConflict):
-		return 1, "conflict: delivery state conflicts with immutable evidence"
-	case errors.Is(err, delivery.ErrCorrupt):
-		return 1, "corrupt: delivery state failed verification"
 	case errors.Is(err, config.ErrInvalid):
 		return 2, "invalid: storage configuration is invalid"
 	default:

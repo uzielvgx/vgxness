@@ -152,11 +152,6 @@ func parseModelPlanManifest(data []byte) (modelPlanManifest, error) {
 	return manifest, nil
 }
 
-func parsePreviousModelPlanManifest(data []byte) (modelPlanManifest, error) {
-	manifest, _, err := parseHistoricalModelPlanManifest(data, buildPreviousModelPlanBundle)
-	return manifest, err
-}
-
 func parseHistoricalModelPlanManifest(data []byte, build func(sdd.ModelPlanConfig) (modelPlanBundle, error)) (modelPlanManifest, modelPlanBundle, error) {
 	var manifest modelPlanManifest
 	decoder := json.NewDecoder(bytes.NewReader(data))

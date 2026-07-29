@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 )
@@ -35,7 +34,7 @@ type Plan struct {
 	Steps       []Step
 	SelfInstall selfinstall.Result
 	Integration integration.Result
-	Bridge      bridge.Response
+	Handshake   integration.Handshake
 	Ready       bool
 	Blocker     string
 }
@@ -44,7 +43,7 @@ type Result struct {
 	Plan        Plan
 	SelfInstall selfinstall.Result
 	Integration integration.Result
-	Bridge      bridge.Response
+	Handshake   integration.Handshake
 	Recovery    string
 	Changed     bool
 }
@@ -57,15 +56,19 @@ type Runtime interface {
 
 type IntegrationFactory func(string) (integration.Runtime, error)
 
+type Prober interface {
+	Probe(context.Context, string) (integration.Handshake, error)
+}
+
 type Service struct {
 	installer    selfinstall.Runtime
 	preview      integration.Runtime
 	integrations IntegrationFactory
-	controlPlane bridge.Runtime
+	prober       Prober
 }
 
-func New(installer selfinstall.Runtime, preview integration.Runtime, integrations IntegrationFactory, controlPlane bridge.Runtime) *Service {
-	return &Service{installer: installer, preview: preview, integrations: integrations, controlPlane: controlPlane}
+func New(installer selfinstall.Runtime, preview integration.Runtime, integrations IntegrationFactory, prober Prober) *Service {
+	return &Service{installer: installer, preview: preview, integrations: integrations, prober: prober}
 }
 
 func OpenCodeSteps() []Step {
@@ -81,7 +84,7 @@ func OpenCodeSteps() []Step {
 
 func (service *Service) Plan(ctx context.Context, options Options) (Plan, error) {
 	plan := Plan{Provider: "opencode", Steps: OpenCodeSteps()}
-	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.controlPlane == nil || options.Workspace == "" {
+	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.prober == nil || options.Workspace == "" {
 		return plan, ErrInvalid
 	}
 	selfResult, err := service.installer.Preview(ctx, options.SelfInstall)
@@ -101,13 +104,16 @@ func (service *Service) Plan(ctx context.Context, options Options) (Plan, error)
 	}
 	plan.SelfInstall = selfResult
 	plan.Integration = integrationResult
-	health, healthErr := service.controlPlane.Status(ctx, options.Workspace)
-	plan.Bridge = health
-	if healthErr != nil {
+	handshake, handshakeErr := service.prober.Probe(ctx, options.Workspace)
+	plan.Handshake = handshake
+	if handshakeErr != nil {
+		return plan, handshakeErr
+	}
+	if handshake.Status == integration.HandshakeUnavailable {
 		plan.Blocker = "OpenCode no está disponible o el workspace no es válido. Instala una versión compatible y vuelve a ejecutar el wizard."
 		return plan, nil
 	}
-	if !health.OK {
+	if !handshake.OK {
 		plan.Blocker = "OpenCode respondió, pero el adaptador no está saludable o la versión es incompatible. Corrige el requisito antes de continuar."
 		return plan, nil
 	}
@@ -121,7 +127,7 @@ func (service *Service) Plan(ctx context.Context, options Options) (Plan, error)
 
 func (service *Service) Status(ctx context.Context, options Options) (Plan, error) {
 	plan := Plan{Provider: "opencode", Steps: OpenCodeSteps()}
-	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.controlPlane == nil || options.Workspace == "" {
+	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.prober == nil || options.Workspace == "" {
 		return plan, ErrInvalid
 	}
 	selfResult, err := service.installer.Status(ctx, options.SelfInstall)
@@ -141,9 +147,12 @@ func (service *Service) Status(ctx context.Context, options Options) (Plan, erro
 	}
 	plan.SelfInstall = selfResult
 	plan.Integration = integrationResult
-	health, healthErr := service.controlPlane.Status(ctx, options.Workspace)
-	plan.Bridge = health
-	if healthErr != nil || !health.OK {
+	handshake, handshakeErr := service.prober.Probe(ctx, options.Workspace)
+	plan.Handshake = handshake
+	if handshakeErr != nil {
+		return plan, handshakeErr
+	}
+	if !handshake.OK {
 		plan.Blocker = "OpenCode no está disponible, es incompatible o el workspace no es válido."
 		return plan, nil
 	}
@@ -176,7 +185,15 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 	integrated, err := managed.Install(ctx, options.Integration)
 	result.Integration = integrated
 	if err != nil {
+		integrationRecoveryIncomplete := errors.Is(err, integration.ErrRecovery)
 		service.recoverBinary(ctx, options, plan, installed, &result)
+		if integrationRecoveryIncomplete {
+			message := "La integración no pudo revertir todos los artefactos; inspecciona los backups administrados antes de reintentar."
+			if result.Recovery != "" {
+				message += " " + result.Recovery
+			}
+			result.Recovery = message
+		}
 		return result, err
 	}
 	selfStatus, err := service.installer.Status(ctx, options.SelfInstall)
@@ -189,11 +206,11 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 		result.Recovery = "Los archivos instalados se conservan. Ejecuta `vgxness integrate opencode status` para inspeccionar y `uninstall` sólo si deseas retirarlos recuperablemente."
 		return result, fmt.Errorf("%w: integration", ErrVerification)
 	}
-	health, err := service.controlPlane.Status(ctx, options.Workspace)
-	result.Bridge = health
-	if err != nil || !health.OK {
+	handshake, err := service.prober.Probe(ctx, options.Workspace)
+	result.Handshake = handshake
+	if err != nil || !handshake.OK {
 		result.Recovery = "El launcher y la integración quedaron instalados, pero OpenCode no respondió saludablemente. Corrige OpenCode y ejecuta `vgxness setup opencode --status`."
-		return result, fmt.Errorf("%w: bridge", ErrVerification)
+		return result, fmt.Errorf("%w: handshake", ErrVerification)
 	}
 	result.SelfInstall = selfStatus
 	result.Integration = integrationStatus

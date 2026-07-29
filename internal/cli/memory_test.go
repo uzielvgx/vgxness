@@ -15,8 +15,8 @@ import (
 )
 
 type fakeMemoryRuntime struct {
-	result  memory.MemoryResult
-	items   []memory.MemoryResult
+	result  memory.Entry
+	items   []memory.Entry
 	recall  memory.Recall
 	recent  memory.Recent
 	project string
@@ -24,16 +24,20 @@ type fakeMemoryRuntime struct {
 	calls   int
 }
 
-func (f *fakeMemoryRuntime) Save(context.Context, config.Options, memory.SaveRequest) (memory.MemoryResult, error) {
+func (f *fakeMemoryRuntime) Remember(context.Context, config.Options, memory.Remember) (memory.Entry, error) {
 	f.calls++
 	return f.result, f.err
 }
-func (f *fakeMemoryRuntime) Search(_ context.Context, _ config.Options, request memory.SearchRequest) ([]memory.MemoryResult, error) {
+func (f *fakeMemoryRuntime) Recall(_ context.Context, _ config.Options, request memory.Recall) ([]memory.Entry, error) {
 	f.calls++
 	f.recall = request
 	return f.items, f.err
 }
-func (f *fakeMemoryRuntime) Get(context.Context, config.Options, memory.GetRequest) (memory.MemoryResult, error) {
+func (f *fakeMemoryRuntime) Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error) {
+	f.calls++
+	return f.result, f.err
+}
+func (f *fakeMemoryRuntime) Forget(context.Context, config.Options, memory.Forget) (memory.Entry, error) {
 	f.calls++
 	return f.result, f.err
 }
@@ -53,7 +57,7 @@ func (f *fakeMemoryRuntime) Recent(_ context.Context, _ config.Options, request 
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
 	var out, stderr bytes.Buffer
-	code := RunIO(context.Background(), args, strings.NewReader(input), &out, &stderr, &fakeInspector{}, runtime)
+	code := RunProductSDDRuntime(context.Background(), args, strings.NewReader(input), &out, &stderr, &fakeInspector{}, runtime, nil, nil, nil, nil)
 	return code, out.String(), stderr.String()
 }
 
@@ -94,7 +98,7 @@ func TestMemoryCLI_StrictSingleSourceInput(t *testing.T) {
 
 func TestMemoryCLI_ResolvesWorkspaceWithoutCallerControlledProject(t *testing.T) {
 	workspace := t.TempDir()
-	runtime := &fakeMemoryRuntime{project: "workspace-project", result: memory.MemoryResult{Project: "workspace-project"}}
+	runtime := &fakeMemoryRuntime{project: "workspace-project", result: memory.Entry{Project: "workspace-project"}}
 	code, _, stderr := runMemoryTest([]string{"memory", "save", "--stdin", "--workspace", workspace, "--json"}, `{"schemaVersion":1,"content":"durable fact"}`, runtime)
 	testutil.Require(t, code == 0 && runtime.calls == 2 && stderr == "", "workspace save: code=%d calls=%d stderr=%q", code, runtime.calls, stderr)
 
@@ -127,7 +131,7 @@ func TestMemoryCLI_RoutesRecentAndMatchAnyStrictly(t *testing.T) {
 }
 
 func TestMemoryCLI_RenderStableSafeAndAtomicOutput(t *testing.T) {
-	runtime := &fakeMemoryRuntime{result: memory.MemoryResult{ID: "id", Title: "line\n\x1b", Content: "body"}}
+	runtime := &fakeMemoryRuntime{result: memory.Entry{ID: "id", Title: "line\n\x1b", Content: "body"}}
 	code, out, stderr := runMemoryTest([]string{"memory", "get", "--stdin", "--json"}, `{"schemaVersion":1,"id":"id","project":"p","scope":"project"}`, runtime)
 	testutil.Require(t, code == 0 && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"ID":"id"`) && stderr == "", "json=%q stderr=%q", out, stderr)
 	code, out, _ = runMemoryTest([]string{"memory", "get", "--stdin"}, `{"schemaVersion":1,"id":"id","project":"p","scope":"project"}`, runtime)

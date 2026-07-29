@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vgxness/vgxness/internal/chronicle"
 	"github.com/vgxness/vgxness/internal/config"
 )
 
@@ -15,14 +14,11 @@ type Service struct {
 
 var (
 	ErrCorrupt = errors.New("corrupt")
-	ErrIO      = errors.New("io")
 )
 
 type Result struct {
-	Root, Database   string
-	Migration        int
-	ChroniclePresent bool
-	RunID            string
+	Root, Database string
+	Migration      int
 }
 
 func (s Service) Status(ctx context.Context, opts config.Options) (Result, error) {
@@ -50,12 +46,5 @@ func (s Service) inspect(ctx context.Context, opts config.Options) (Result, erro
 			return Result{}, fmt.Errorf("%w: memory health check failed", ErrCorrupt)
 		}
 	}
-	run, present, err := chronicle.ReadCurrent(ctx, paths.CurrentRun)
-	if err != nil {
-		if errors.Is(err, chronicle.ErrCorrupt) {
-			return Result{}, fmt.Errorf("%w: Chronicle current run is malformed", ErrCorrupt)
-		}
-		return Result{}, fmt.Errorf("%w: Chronicle inspection failed", ErrIO)
-	}
-	return Result{Root: paths.Root, Database: paths.Database, Migration: version, ChroniclePresent: present, RunID: run.ID}, nil
+	return Result{Root: paths.Root, Database: paths.Database, Migration: version}, nil
 }

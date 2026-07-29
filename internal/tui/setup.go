@@ -38,8 +38,8 @@ type SetupPlan struct {
 	ModelEfficient   string
 	ModelBalanced    string
 	ModelFrontier    string
-	BridgeOK         bool
-	BridgeStatus     string
+	HandshakeOK      bool
+	HandshakeStatus  string
 	Ready            bool
 	Blocker          string
 }
@@ -51,8 +51,8 @@ type SetupResult struct {
 	IntegrationState string
 	IntegrationPath  string
 	ArtifactCount    int
-	BridgeOK         bool
-	BridgeStatus     string
+	HandshakeOK      bool
+	HandshakeStatus  string
 	Recovery         string
 	Changed          bool
 	RestartRequired  bool
@@ -172,7 +172,7 @@ func (m *Model) handleSetupApplied(msg setupAppliedMsg) {
 			SelfInstallState: msg.value.SelfInstallState, SelfInstallPath: msg.value.SelfInstallPath,
 			IntegrationState: msg.value.IntegrationState, IntegrationPath: msg.value.IntegrationPath,
 			ArtifactCount: msg.value.ArtifactCount,
-			BridgeOK:      msg.value.BridgeOK, BridgeStatus: msg.value.BridgeStatus,
+			HandshakeOK:   msg.value.HandshakeOK, HandshakeStatus: msg.value.HandshakeStatus,
 			ModelPlan: msg.value.Plan.ModelPlan,
 		}
 		m.setupErr = nil
@@ -274,7 +274,7 @@ func (m Model) setupRouteLines() []string {
 			"launcher  "+setupValue(result.SelfInstallState)+"  "+setupValue(result.SelfInstallPath),
 			"integration  "+setupValue(result.IntegrationState)+"  "+setupValue(result.IntegrationPath),
 			fmt.Sprintf("artifacts  %d", result.ArtifactCount),
-			setupHandshake(result.BridgeOK, result.BridgeStatus),
+			setupHandshake(result.HandshakeOK, result.HandshakeStatus),
 		)
 		if result.RestartRequired {
 			lines = append(lines, "! Restart OpenCode to load the selected model plan.")
@@ -307,7 +307,7 @@ func (m Model) setupRouteLines() []string {
 		"model efficient  "+setupValue(plan.ModelEfficient),
 		"model balanced   "+setupValue(plan.ModelBalanced),
 		"model frontier   "+setupValue(plan.ModelFrontier),
-		setupHandshake(plan.BridgeOK, plan.BridgeStatus),
+		setupHandshake(plan.HandshakeOK, plan.HandshakeStatus),
 	)
 	if plan.Blocker != "" {
 		lines = append(lines, "Blocker: "+sanitizeTerminal(plan.Blocker))

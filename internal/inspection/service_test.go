@@ -13,17 +13,11 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
-func TestInspection_DiagnosesCorruptDBMalformedOrUnknownChronicleAndCancellation(t *testing.T) {
+func TestInspectionDiagnosesCorruptDBAndCancellation(t *testing.T) {
 	t.Run("storage", func(t *testing.T) {
 		svc := Service{Health: func(context.Context, string) (int, error) { return 0, errors.New("corrupt database") }}
 		_, err := svc.Doctor(context.Background(), config.Options{StorageRoot: t.TempDir()})
 		testutil.Require(t, err != nil && errors.Is(err, ErrCorrupt), "expected categorized corruption, got %v", err)
-	})
-	t.Run("chronicle", func(t *testing.T) {
-		root := t.TempDir()
-		testutil.NoError(t, os.WriteFile(filepath.Join(root, "current-run.json"), []byte(`{"schemaVersion":"2"}`), 0o600))
-		_, err := (Service{Health: healthy}).Status(context.Background(), config.Options{StorageRoot: root})
-		testutil.Require(t, err != nil && errors.Is(err, ErrCorrupt), "expected Chronicle corruption, got %v", err)
 	})
 	t.Run("cancelled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())

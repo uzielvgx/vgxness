@@ -23,13 +23,14 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	var (
 		preview, status, yes bool
 		workspace            string
+		deprecatedModel      string
 		options              setupflow.Options
 	)
 	flags.BoolVar(&preview, "preview", false, "explain the complete plan without writing")
 	flags.BoolVar(&status, "status", false, "inspect the complete setup without writing")
 	flags.BoolVar(&yes, "yes", false, "approve the explained plan non-interactively")
 	flags.StringVar(&workspace, "workspace", "", "workspace used for the live OpenCode handshake")
-	flags.StringVar(&options.Integration.Model, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
+	flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
 	flags.Var((*planFlag)(&options.Integration.ModelPlan), "model-plan", "active model plan: low, medium, or high")
 	flags.StringVar(&options.Integration.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
 	flags.StringVar(&options.Integration.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
@@ -115,7 +116,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	}
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
 	fmt.Fprintf(stdout, "Pasos 3–4: %d artefactos de manager, revisores, agentes SDD, almacenamiento y plan verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
-	fmt.Fprintf(stdout, "Paso 5: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Bridge.Status), terminalSafe(options.Workspace))
+	fmt.Fprintf(stdout, "Paso 5: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
 	fmt.Fprintln(stdout, "Paso 6: no fue necesaria recuperación.")
 	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode y selecciona vgxness-manager para cargar el plan instalado.\n", result.Changed)
 	return 0
@@ -151,7 +152,7 @@ func renderSetupStatus(writer io.Writer, plan setupflow.Plan, workspace string) 
 	fmt.Fprintf(writer, "Launcher: state=%s path=%s active_sha256=%s\n", plan.SelfInstall.State, terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.ActiveSHA256)
 	fmt.Fprintf(writer, "Integración: state=%s projection=native+sdd-storage artifacts=%d manager=%s storage_plugin=%s\n", plan.Integration.State, plan.Integration.ArtifactCount, terminalSafe(plan.Integration.Path), terminalSafe(plan.Integration.ToolPath))
 	fmt.Fprintf(writer, "Plan de modelos: %s provider=%s efficient=%s balanced=%s frontier=%s manifest=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider), terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier), terminalSafe(plan.Integration.ManifestPath))
-	fmt.Fprintf(writer, "Handshake: ok=%t status=%s workspace=%s\n", plan.Bridge.OK, terminalSafe(plan.Bridge.Status), terminalSafe(workspace))
+	fmt.Fprintf(writer, "Handshake: ok=%t status=%s workspace=%s\n", plan.Handshake.OK, terminalSafe(plan.Handshake.Status.String()), terminalSafe(workspace))
 	if plan.Ready {
 		fmt.Fprintln(writer, "Resultado: configuración completa y saludable.")
 	} else {

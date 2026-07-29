@@ -79,14 +79,6 @@ type Entry struct {
 	References                                                                      []string
 }
 
-// Compatibility aliases preserve source compatibility for bounded external
-// adapters while native in-process callers use Remember, Recall, Lookup, and Entry.
-type SaveRequest = Remember
-type SearchRequest = Recall
-type GetRequest = Lookup
-type ForgetRequest = Forget
-type MemoryResult = Entry
-
 func (s MemoryService) Remember(ctx context.Context, request Remember) (Entry, error) {
 	if err := ctx.Err(); err != nil {
 		return Entry{}, err

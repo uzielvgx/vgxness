@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
@@ -91,7 +90,7 @@ func TestSetupWizardRequiresExplicitConfirmation(t *testing.T) {
 			fake := &fakeSetupRuntime{plan: plan, result: setupflow.Result{
 				SelfInstall: selfinstall.Result{LauncherPath: "/stable/vgxness"},
 				Integration: integration.Result{Path: "/config/agent", ToolPath: "/config/plugins/vgxness.ts"},
-				Bridge:      bridge.Response{OK: true, Status: "healthy"}, Changed: true,
+				Handshake:   integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, Changed: true,
 			}}
 			var stdout, stderr bytes.Buffer
 			code := runSetup(context.Background(), []string{"opencode", "--workspace", "/workspace"}, strings.NewReader(test.input), &stdout, &stderr, fake)
@@ -121,7 +120,7 @@ func TestSetupWizardBlocksBeforeConfirmationAndStatusIsNonMutating(t *testing.T)
 func TestSetupWizardDoesNotRequireASecondaryModel(t *testing.T) {
 	fake := &fakeSetupRuntime{plan: setupPlanFixture(true)}
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
+	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace", "--model", "legacy/ignored"}, strings.NewReader(""), &stdout, &stderr, fake)
 	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 1 || stderr.Len() != 0 {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, stdout.String(), stderr.String())
 	}
@@ -131,7 +130,7 @@ func setupPlanFixture(ready bool) setupflow.Plan {
 	return setupflow.Plan{
 		Provider: "opencode", Steps: setupflow.OpenCodeSteps(), Ready: ready,
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/stable/vgxness", DataDir: "/data"},
-		Integration: integration.Result{State: integration.StateAbsent, Bridge: integration.BridgeNotRequired, Path: "/config/agents/vgxness-manager.md", ToolPath: "/config/plugins/vgxness.ts", ArtifactCount: 14, ModelPlan: sdd.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna-fast", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json"},
-		Bridge:      bridge.Response{OK: ready, Status: "healthy"},
+		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ToolPath: "/config/plugins/vgxness.ts", ArtifactCount: 14, ModelPlan: sdd.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna-fast", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json"},
+		Handshake:   integration.Handshake{OK: ready, Status: integration.HandshakeHealthy},
 	}
 }

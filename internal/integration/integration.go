@@ -15,7 +15,7 @@ var (
 )
 
 type State string
-type BridgeState string
+type HandshakeStatus string
 
 const (
 	StateAbsent    State = "absent"
@@ -23,15 +23,21 @@ const (
 	StateInstalled State = "installed"
 	StateDrifted   State = "drifted"
 
-	BridgeUnavailable BridgeState = "unavailable"
-	BridgeConfigured  BridgeState = "configured"
-	BridgeNotRequired BridgeState = "not-required"
+	HandshakeHealthy      HandshakeStatus = "healthy"
+	HandshakeUnavailable  HandshakeStatus = "unavailable"
+	HandshakeIncompatible HandshakeStatus = "incompatible"
 )
+
+type Handshake struct {
+	OK     bool
+	Status HandshakeStatus
+}
+
+func (status HandshakeStatus) String() string { return string(status) }
 
 type Options struct {
 	ConfigDir      string
 	HomeDir        string
-	Model          string
 	ModelPlan      sdd.Plan
 	ModelEfficient string
 	ModelBalanced  string
@@ -45,8 +51,6 @@ type Result struct {
 	ArtifactSHA256  string
 	ToolPath        string
 	ToolSHA256      string
-	Model           string
-	Bridge          BridgeState
 	Changed         bool
 	BackupPath      string
 	ToolBackupPath  string

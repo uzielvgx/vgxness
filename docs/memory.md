@@ -44,11 +44,17 @@ execution authority.
 ## Upgrade migration caveat
 
 **Implemented:** A read-only database open cannot migrate schema v4 to v5.
-Immediately after upgrading the binary, `status`, `doctor`, `setup --status`, or
+Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
 another read operation may therefore report a migration/storage failure. Run one
 write-capable memory or SDD operation to open the database and atomically apply
 v5, then rerun the read-only command. Do not delete or recreate the database;
 the existing data is the migration source and remains authoritative.
+
+Older project-level `memory.db` files are a separate compatibility case. The
+transactional, idempotent importer remains in the Go memory package, but normal
+startup and memory operations do not invoke it automatically. Preserve those
+files until a supported migration route is selected; do not treat their current
+inactivity as permission to delete them.
 
 ## Runtime boundary
 

@@ -197,7 +197,7 @@ func readySetupPlan(plan string) SetupPlan {
 		Provider: "opencode", Steps: steps, Ready: true,
 		SelfInstallState: "absent", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "absent", IntegrationPath: "/config/agents/vgxness-manager.md",
-		ArtifactCount: 14, BridgeOK: true, BridgeStatus: "healthy", ModelPlan: plan,
+		ArtifactCount: 14, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: plan,
 		ModelProvider: "openai", ModelEfficient: "openai/fast", ModelBalanced: "openai/balanced", ModelFrontier: "openai/frontier",
 	}
 }
@@ -207,7 +207,7 @@ func successfulSetupResult() SetupResult {
 		Plan: readySetupPlan("high"), Changed: true,
 		SelfInstallState: "installed", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "installed", IntegrationPath: "/config/agents/vgxness-manager.md",
-		ArtifactCount: 14, BridgeOK: true, BridgeStatus: "healthy", RestartRequired: true,
+		ArtifactCount: 14, HandshakeOK: true, HandshakeStatus: "healthy", RestartRequired: true,
 	}
 }
 

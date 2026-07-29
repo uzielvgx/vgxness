@@ -1,27 +1,11 @@
 package cli
 
 import (
-	"context"
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
 )
-
-// Keep the pre-native fake focused on assertions while exercising the native
-// runtime interface used by the CLI.
-func (f *fakeMemoryRuntime) Remember(ctx context.Context, opts config.Options, request memory.Remember) (memory.Entry, error) {
-	return f.Save(ctx, opts, request)
-}
-
-func (f *fakeMemoryRuntime) Recall(ctx context.Context, opts config.Options, request memory.Recall) ([]memory.Entry, error) {
-	return f.Search(ctx, opts, request)
-}
-
-func (f *fakeMemoryRuntime) Forget(ctx context.Context, opts config.Options, request memory.Forget) (memory.Entry, error) {
-	return f.Get(ctx, opts, memory.Lookup(request))
-}
 
 func TestMemoryCLIForgetUsesStrictVersionedBoundary(t *testing.T) {
 	runtime := &fakeMemoryRuntime{result: memory.Entry{ID: "entry", State: memory.StateArchived}}

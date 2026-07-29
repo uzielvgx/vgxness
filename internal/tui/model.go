@@ -27,11 +27,9 @@ type Request struct {
 }
 
 type Inspection struct {
-	Root             string
-	Database         string
-	Migration        int
-	ChroniclePresent bool
-	RunID            string
+	Root      string
+	Database  string
+	Migration int
 }
 
 type SetupStatus struct {
@@ -43,8 +41,8 @@ type SetupStatus struct {
 	IntegrationState string
 	IntegrationPath  string
 	ArtifactCount    int
-	BridgeOK         bool
-	BridgeStatus     string
+	HandshakeOK      bool
+	HandshakeStatus  string
 	ModelPlan        string
 }
 
@@ -536,11 +534,6 @@ func (m Model) renderInspection() []string {
 		"  root      " + sanitizeTerminal(value.Root),
 		"  database  " + sanitizeTerminal(value.Database),
 	}
-	if value.ChroniclePresent {
-		lines = append(lines, "✓ Chronicle current run · "+sanitizeTerminal(value.RunID))
-	} else {
-		lines = append(lines, "! Chronicle has no current run")
-	}
 	return lines
 }
 
@@ -569,12 +562,12 @@ func (m Model) renderSetup() []string {
 	if value.ArtifactCount > 0 {
 		lines = append(lines, fmt.Sprintf("  artifacts    %d", value.ArtifactCount))
 	}
-	if value.BridgeStatus != "" {
+	if value.HandshakeStatus != "" {
 		glyph := "✕"
-		if value.BridgeOK {
+		if value.HandshakeOK {
 			glyph = "✓"
 		}
-		lines = append(lines, "  "+glyph+" OpenCode handshake · "+sanitizeTerminal(value.BridgeStatus))
+		lines = append(lines, "  "+glyph+" OpenCode handshake · "+sanitizeTerminal(value.HandshakeStatus))
 	}
 	if value.ModelPlan != "" {
 		lines = append(lines, "  model plan   "+sanitizeTerminal(value.ModelPlan))

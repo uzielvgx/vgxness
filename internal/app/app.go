@@ -9,8 +9,6 @@ import (
 
 	"github.com/vgxness/vgxness/internal/cli"
 	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/controlplane"
-	"github.com/vgxness/vgxness/internal/delivery"
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -38,10 +36,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	installer := selfinstall.New(selfinstall.Config{})
 	integrationRuntime := opencode.NewIntegration()
 	cliMemory := memoryRuntime{producer: "cli"}
-	controlPlane := controlplane.New(controlplane.Options{Memory: memoryRuntime{producer: "vgxness-controlplane"}})
 	setupRuntime := setupflow.New(installer, integrationRuntime, func(executable string) (integration.Runtime, error) {
 		return opencode.NewManagedIntegration(executable)
-	}, controlPlane)
+	}, opencode.NewProber(""))
 	workspace := mustWorkspace()
 	if len(args) == 1 && args[0] == "tui" {
 		if launchTUI == nil {
@@ -55,11 +52,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		return launchTUI(ctx, stdin, stdout, stderr, backend, tui.Options{Workspace: workspace})
 	}
-	deliveryRuntime, err := delivery.New(workspace)
-	if err != nil {
-		return 1
-	}
-	return cli.RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, controlPlane, installer, setupRuntime, deliveryRuntime, sddRuntime{})
+	return cli.RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, installer, setupRuntime, sddRuntime{})
 }
 
 func mustWorkspace() string {
@@ -98,16 +91,6 @@ func (runtime memoryRuntime) Forget(ctx context.Context, opts config.Options, re
 	}
 	defer store.Close()
 	return memory.NewMemoryService(store, runtime.producerName(), nil).Forget(ctx, request)
-}
-
-// Save and Search are temporary control-plane adapter spellings. Both route
-// immediately into the native core; application and CLI code use the native API.
-func (runtime memoryRuntime) Save(ctx context.Context, opts config.Options, request memory.SaveRequest) (memory.MemoryResult, error) {
-	return runtime.Remember(ctx, opts, request)
-}
-
-func (runtime memoryRuntime) Search(ctx context.Context, opts config.Options, request memory.SearchRequest) ([]memory.MemoryResult, error) {
-	return runtime.Recall(ctx, opts, request)
 }
 
 func (runtime memoryRuntime) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
@@ -153,10 +136,7 @@ func (backend tuiBackend) Inspect(ctx context.Context, request tui.Request) (tui
 	if err != nil {
 		return tui.Inspection{}, err
 	}
-	return tui.Inspection{
-		Root: result.Root, Database: result.Database, Migration: result.Migration,
-		ChroniclePresent: result.ChroniclePresent, RunID: result.RunID,
-	}, nil
+	return tui.Inspection{Root: result.Root, Database: result.Database, Migration: result.Migration}, nil
 }
 
 func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) (tui.SetupStatus, error) {
@@ -174,7 +154,7 @@ func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) 
 		SelfInstallState: preview.SelfInstallState, SelfInstallPath: preview.SelfInstallPath,
 		IntegrationState: preview.IntegrationState, IntegrationPath: preview.IntegrationPath,
 		ArtifactCount: preview.ArtifactCount,
-		BridgeOK:      preview.BridgeOK, BridgeStatus: preview.BridgeStatus, ModelPlan: preview.ModelPlan,
+		HandshakeOK:   preview.HandshakeOK, HandshakeStatus: preview.HandshakeStatus, ModelPlan: preview.ModelPlan,
 	}, nil
 }
 
@@ -198,7 +178,7 @@ func (backend tuiBackend) ApplySetup(ctx context.Context, request tui.SetupReque
 		SelfInstallState: fmt.Sprint(result.SelfInstall.State), SelfInstallPath: result.SelfInstall.LauncherPath,
 		IntegrationState: fmt.Sprint(result.Integration.State), IntegrationPath: result.Integration.Path,
 		ArtifactCount: result.Integration.ArtifactCount,
-		BridgeOK:      result.Bridge.OK, BridgeStatus: result.Bridge.Status,
+		HandshakeOK:   result.Handshake.OK, HandshakeStatus: result.Handshake.Status.String(),
 		Recovery: result.Recovery, Changed: result.Changed, RestartRequired: result.Integration.RestartRequired,
 	}, err
 }
@@ -238,7 +218,7 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 		ModelPlan:     fmt.Sprint(plan.Integration.ModelPlan), ModelProvider: plan.Integration.ModelProvider,
 		ModelEfficient: plan.Integration.ModelEfficient, ModelBalanced: plan.Integration.ModelBalanced,
 		ModelFrontier: plan.Integration.ModelFrontier,
-		BridgeOK:      plan.Bridge.OK, BridgeStatus: plan.Bridge.Status,
+		HandshakeOK:   plan.Handshake.OK, HandshakeStatus: plan.Handshake.Status.String(),
 		Ready: plan.Ready, Blocker: plan.Blocker,
 	}
 }

@@ -18,13 +18,10 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
-func TestIntegration_PreviewIsNonMutatingAndModelIndependent(t *testing.T) {
+func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 	home := t.TempDir()
 	service := NewIntegration()
-	result, err := service.Preview(context.Background(), integration.Options{
-		HomeDir: home,
-		Model:   "legacy/value-is-ignored",
-	})
+	result, err := service.Preview(context.Background(), integration.Options{HomeDir: home})
 	testutil.NoError(t, err)
 
 	expected := filepath.Join(home, ".config", "opencode", "agents", managerAgentName)
@@ -33,11 +30,9 @@ func TestIntegration_PreviewIsNonMutatingAndModelIndependent(t *testing.T) {
 	testutil.Require(t,
 		result.Provider == "opencode" &&
 			result.State == integration.StateAbsent &&
-			result.Bridge == integration.BridgeNotRequired &&
 			result.Path == expected &&
 			result.ToolPath == expectedTool &&
 			len(result.ToolSHA256) == 64 &&
-			result.Model == "" &&
 			result.Changed &&
 			len(result.ArtifactSHA256) == 64,
 		"unexpected preview: %#v", result,
@@ -88,11 +83,9 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	_, configErr := os.Stat(filepath.Join(configDirectory, "opencode.json"))
 	testutil.Require(t,
 		installed.State == integration.StateInstalled &&
-			installed.Bridge == integration.BridgeNotRequired &&
 			installed.Changed &&
 			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
 			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
-			installed.Model == "" &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
 			installed.ArtifactCount == 14 &&
 			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
@@ -109,7 +102,6 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Require(t,
 		status.State == integration.StateInstalled &&
-			status.Bridge == integration.BridgeNotRequired &&
 			!status.Changed &&
 			status.ArtifactSHA256 == artifactSHA256(bundle.agents[managerAgentName]) &&
 			status.ToolSHA256 == artifactSHA256(expectedTool),
@@ -162,10 +154,10 @@ func TestIntegrationSwitchesManagedModelPlanAndRefusesManualDrift(t *testing.T) 
 	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "manual drift changed: err=%v", err)
 }
 
-func TestIntegrationCustomModelSlotsAndDeprecatedModelIsIgnored(t *testing.T) {
+func TestIntegrationCustomModelSlots(t *testing.T) {
 	service := NewIntegration()
 	result, err := service.Preview(context.Background(), integration.Options{
-		ConfigDir: t.TempDir(), Model: "legacy/ignored", ModelPlan: sdd.PlanLow,
+		ConfigDir: t.TempDir(), ModelPlan: sdd.PlanLow,
 		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
 	})
 	testutil.Require(t, err == nil && result.ModelPlan == sdd.PlanLow && result.ModelProvider == "acme" && result.ModelEfficient == "acme/fast" && result.ModelFrontier == "acme/frontier", "result=%+v err=%v", result, err)
@@ -295,7 +287,7 @@ func TestIntegration_RepairsOnlyMissingManagedArtifact(t *testing.T) {
 	service := NewIntegration()
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
-	testutil.Require(t, status.State == integration.StatePartial && status.Bridge == integration.BridgeNotRequired, "unexpected partial status: %#v", status)
+	testutil.Require(t, status.State == integration.StatePartial, "unexpected partial status: %#v", status)
 	installed, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	after, err := os.Stat(managerPath)
@@ -1112,7 +1104,6 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 	testutil.NoError(t, bundleErr)
 	testutil.Require(t,
 		removed.State == integration.StateAbsent &&
-			removed.Bridge == integration.BridgeNotRequired &&
 			removed.Changed &&
 			strings.Contains(removed.BackupPath, "20260721T123456") &&
 			bytes.Equal(backup, bundle.agents[managerAgentName]) &&

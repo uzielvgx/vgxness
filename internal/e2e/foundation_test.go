@@ -1,4 +1,4 @@
-package contracts
+package e2e
 
 import (
 	"os"
@@ -8,13 +8,13 @@ import (
 	"testing"
 )
 
-func TestGoCI_WorkflowContract(t *testing.T) {
+func TestGoCIWorkflowContract(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/go-ci.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	workflow := string(data)
-	t.Run("workflow_is_auditable", func(t *testing.T) {
+	t.Run("workflow is auditable", func(t *testing.T) {
 		for _, want := range []string{
 			"permissions:\n  contents: read", "pull_request:", "push:", "branches: [main]",
 			"go-version: 1.26.3", "persist-credentials: false", "cancel-in-progress: true",
@@ -37,7 +37,7 @@ func TestGoCI_WorkflowContract(t *testing.T) {
 			}
 		}
 	})
-	t.Run("all_gates_are_declared", func(t *testing.T) {
+	t.Run("all gates are declared", func(t *testing.T) {
 		for _, command := range []string{
 			"go test ./...", "go test -race ./...", "go test -covermode=atomic -coverprofile=coverage.out ./...",
 			"go vet ./...", "gofmt -l .", "go mod tidy", "git diff --exit-code -- go.mod go.sum",
@@ -48,7 +48,7 @@ func TestGoCI_WorkflowContract(t *testing.T) {
 			}
 		}
 	})
-	t.Run("coverage_upload_survives_failure", func(t *testing.T) {
+	t.Run("coverage upload survives failure", func(t *testing.T) {
 		upload := strings.Index(workflow, "- name: Upload coverage")
 		if upload < 0 || !strings.Contains(workflow[upload:], "if: always()") || !strings.Contains(workflow[upload:], "path: coverage.out") {
 			t.Error("coverage upload must always run and publish coverage.out")
@@ -56,7 +56,7 @@ func TestGoCI_WorkflowContract(t *testing.T) {
 	})
 }
 
-func TestFoundationDeliveryContract(t *testing.T) {
+func TestFoundationProductContract(t *testing.T) {
 	readme, err := os.ReadFile("../../README.md")
 	if err != nil {
 		t.Fatal(err)
@@ -76,10 +76,15 @@ func TestFoundationDeliveryContract(t *testing.T) {
 	if err != nil || len(migrations) != 5 {
 		t.Fatalf("foundation must retain exactly five migrations: %v %v", migrations, err)
 	}
-	_ = filepath.WalkDir("../../.github", func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr == nil && (strings.Contains(strings.ToLower(path), "ruleset") || strings.Contains(strings.ToLower(path), "branch-protection")) {
+	if err := filepath.WalkDir("../../.github", func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if strings.Contains(strings.ToLower(path), "ruleset") || strings.Contains(strings.ToLower(path), "branch-protection") {
 			t.Errorf("branch protection remains deferred: %s", path)
 		}
 		return walkErr
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

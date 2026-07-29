@@ -31,7 +31,7 @@ func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
 		"--model-efficient", "acme/fast", "--model-balanced", "acme/balanced", "--model-frontier", "acme/frontier",
 		"--model", "legacy/ignored",
 	}, runtime)
-	if code != 0 || stderr != "" || runtime.options.ModelPlan != sdd.PlanHigh || runtime.options.ModelEfficient != "acme/fast" || runtime.options.Model != "legacy/ignored" {
+	if code != 0 || stderr != "" || runtime.options.ModelPlan != sdd.PlanHigh || runtime.options.ModelEfficient != "acme/fast" {
 		t.Fatalf("code=%d options=%+v stderr=%q", code, runtime.options, stderr)
 	}
 	for _, expected := range []string{"model_plan=high", "model_provider=acme", "model_efficient=acme/fast", "model_balanced=acme/balanced", "model_frontier=acme/frontier", "model_manifest=/tmp/config/vgxness/model-plan.json", "restart_required=true"} {
@@ -62,17 +62,17 @@ func (runtime *fakeIntegrationRuntime) call(action string, options integration.O
 
 func runIntegrationTest(args []string, runtime integration.Runtime) (int, string, string) {
 	var stdout, stderr bytes.Buffer
-	code := RunRuntime(context.Background(), args, strings.NewReader(""), &stdout, &stderr, &fakeInspector{}, nil, runtime)
+	code := RunProductSDDRuntime(context.Background(), args, strings.NewReader(""), &stdout, &stderr, &fakeInspector{}, nil, runtime, nil, nil, nil)
 	return code, stdout.String(), stderr.String()
 }
 
 func TestIntegrationCLI_RoutesEverySupportedAction(t *testing.T) {
 	for _, action := range []string{"preview", "install", "status", "uninstall"} {
 		t.Run(action, func(t *testing.T) {
-			runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeNotRequired, Path: "/tmp/config/agent.md", ArtifactSHA256: strings.Repeat("a", 64), ToolPath: "/tmp/config/plugins/vgxness.ts", ToolSHA256: strings.Repeat("b", 64), Changed: action == "install"}}
+			runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, Path: "/tmp/config/agent.md", ArtifactSHA256: strings.Repeat("a", 64), ToolPath: "/tmp/config/plugins/vgxness.ts", ToolSHA256: strings.Repeat("b", 64), Changed: action == "install"}}
 			args := []string{"integrate", "opencode", action, "--config-dir", "/tmp/config"}
 			code, stdout, stderr := runIntegrationTest(args, runtime)
-			testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.action == action && runtime.options.ConfigDir == "/tmp/config" && runtime.options.Model == "" && stderr == "", "exit=%d calls=%d action=%q options=%#v stderr=%q", code, runtime.calls, runtime.action, runtime.options, stderr)
+			testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.action == action && runtime.options.ConfigDir == "/tmp/config" && stderr == "", "exit=%d calls=%d action=%q options=%#v stderr=%q", code, runtime.calls, runtime.action, runtime.options, stderr)
 			testutil.Require(t, strings.Contains(stdout, "provider=opencode\n") && strings.Contains(stdout, "state=installed\n") && strings.Contains(stdout, "projection=native+sdd-storage\n") && strings.Contains(stdout, "storage_plugin=/tmp/config/plugins/vgxness.ts\n") && !strings.Contains(stdout, "model=") && strings.Contains(stdout, "changed="), "output=%q", stdout)
 		})
 	}
@@ -93,15 +93,16 @@ func TestIntegrationCLI_RejectsUnsupportedInputWithoutCallingRuntime(t *testing.
 	}
 }
 
-func TestIntegrationCLI_ModelIsOptionalAndAcceptedOnlyForCompatibility(t *testing.T) {
+func TestIntegrationCLI_DeprecatedModelFlagIsAcceptedAndIgnored(t *testing.T) {
 	for _, action := range []string{"preview", "install"} {
 		runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent}}
 		code, _, stderr := runIntegrationTest([]string{"integrate", "opencode", action}, runtime)
-		testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.options.Model == "" && stderr == "", "action=%s exit=%d calls=%d stderr=%q", action, code, runtime.calls, stderr)
+		withoutModel := runtime.options
+		testutil.Require(t, code == 0 && runtime.calls == 1 && stderr == "", "action=%s exit=%d calls=%d stderr=%q", action, code, runtime.calls, stderr)
 
 		runtime = &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent}}
 		code, _, stderr = runIntegrationTest([]string{"integrate", "opencode", action, "--model", "legacy/model"}, runtime)
-		testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.options.Model == "legacy/model" && stderr == "", "compat action=%s exit=%d calls=%d options=%#v stderr=%q", action, code, runtime.calls, runtime.options, stderr)
+		testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.options == withoutModel && stderr == "", "compat action=%s exit=%d calls=%d options=%#v stderr=%q", action, code, runtime.calls, runtime.options, stderr)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/bridge"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 )
@@ -69,24 +68,21 @@ func (fake *fakeIntegration) Uninstall(context.Context, integration.Options) (in
 	return integration.Result{}, nil
 }
 
-type fakeBridge struct {
-	response bridge.Response
-	err      error
-	calls    int
+type fakeProber struct {
+	result integration.Handshake
+	err    error
+	calls  int
 }
 
-func (fake *fakeBridge) Status(context.Context, string) (bridge.Response, error) {
+func (fake *fakeProber) Probe(context.Context, string) (integration.Handshake, error) {
 	fake.calls++
-	return fake.response, fake.err
-}
-func (*fakeBridge) Dispatch(context.Context, string, bridge.DispatchRequest) (bridge.Response, error) {
-	return bridge.Response{}, errors.New("unexpected dispatch")
+	return fake.result, fake.err
 }
 
 func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/bin/vgxness", DataDir: "/data"}}
-	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, Bridge: integration.BridgeNotRequired, Path: "/config/agents/vgxness-manager.md"}}
-	health := &fakeBridge{response: bridge.Response{OK: true, Provider: "opencode", Status: "healthy"}}
+	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md"}}
+	health := &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}}
 	factoryCalls := 0
 	service := New(installer, preview, func(string) (integration.Runtime, error) {
 		factoryCalls++
@@ -109,7 +105,7 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 func TestPlanReportsUnavailablePrerequisiteWithoutApplying(t *testing.T) {
 	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}}
 	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}
-	service := New(installer, preview, func(string) (integration.Runtime, error) { return preview, nil }, &fakeBridge{err: bridge.ErrUnavailable})
+	service := New(installer, preview, func(string) (integration.Runtime, error) { return preview, nil }, &fakeProber{result: integration.Handshake{Status: integration.HandshakeUnavailable}})
 	plan, err := service.Plan(context.Background(), Options{Workspace: "/workspace"})
 	if err != nil || plan.Ready || plan.Blocker == "" || len(plan.Steps) != 6 {
 		t.Fatalf("unexpected blocked plan=%#v err=%v", plan, err)
@@ -131,10 +127,10 @@ func TestApplyInstallsThroughStableLauncherAndVerifiesEverything(t *testing.T) {
 	}
 	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}
 	managed := &fakeIntegration{
-		installResult: integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeNotRequired, Changed: true},
-		statusResult:  integration.Result{Provider: "opencode", State: integration.StateInstalled, Bridge: integration.BridgeNotRequired},
+		installResult: integration.Result{Provider: "opencode", State: integration.StateInstalled, Changed: true},
+		statusResult:  integration.Result{Provider: "opencode", State: integration.StateInstalled},
 	}
-	health := &fakeBridge{response: bridge.Response{OK: true, Provider: "opencode", Status: "healthy"}}
+	health := &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}}
 	requestedLauncher := ""
 	service := New(installer, preview, func(path string) (integration.Runtime, error) {
 		requestedLauncher = path
@@ -144,7 +140,7 @@ func TestApplyInstallsThroughStableLauncherAndVerifiesEverything(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requestedLauncher != launcherPath || !result.Changed || result.Bridge.Status != "healthy" || result.Recovery != "" {
+	if requestedLauncher != launcherPath || !result.Changed || result.Handshake.Status != integration.HandshakeHealthy || result.Recovery != "" {
 		t.Fatalf("unexpected result=%#v launcher=%q", result, requestedLauncher)
 	}
 	if strings.Join(managed.calls, ",") != "integration-install,integration-status" || health.calls != 2 {
@@ -152,18 +148,14 @@ func TestApplyInstallsThroughStableLauncherAndVerifiesEverything(t *testing.T) {
 	}
 }
 
-func TestStatusReadinessDependsOnOpenCodeAndNativeProfilesNotBridgeProjection(t *testing.T) {
+func TestStatusReadinessDependsOnOpenCodeAndNativeProfiles(t *testing.T) {
 	installer := &fakeInstaller{
 		statusResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness"},
 	}
 	managed := &fakeIntegration{
-		statusResult: integration.Result{
-			Provider: "opencode",
-			State:    integration.StateInstalled,
-			Bridge:   integration.BridgeUnavailable,
-		},
+		statusResult: integration.Result{Provider: "opencode", State: integration.StateInstalled},
 	}
-	health := &fakeBridge{response: bridge.Response{OK: true, Provider: "opencode", Status: "healthy"}}
+	health := &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}}
 	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, health)
 
 	plan, err := service.Status(context.Background(), Options{Workspace: "/workspace"})
@@ -181,10 +173,25 @@ func TestApplyRollsBackManagedUpdateWhenIntegrationFails(t *testing.T) {
 		rollbackResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: oldDigest, Changed: true},
 	}
 	managed := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, installErr: integration.ErrConflict}
-	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeBridge{response: bridge.Response{OK: true, Status: "healthy"}})
+	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
 	if !errors.Is(err, integration.ErrConflict) || result.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "revirtió") || !strings.Contains(strings.Join(installer.calls, ","), "self-rollback") {
 		t.Fatalf("result=%#v err=%v calls=%v", result, err, installer.calls)
+	}
+}
+
+func TestApplyReportsIntegrationAndLauncherRecovery(t *testing.T) {
+	oldDigest, newDigest := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	installer := &fakeInstaller{
+		previewResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: oldDigest, UpdateAvailable: true},
+		installResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: newDigest, PreviousSHA256: oldDigest, RollbackAvailable: true, Changed: true},
+		rollbackResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: oldDigest, Changed: true},
+	}
+	managed := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, installErr: errors.Join(integration.ErrConflict, integration.ErrRecovery)}
+	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	if !errors.Is(err, integration.ErrRecovery) || !strings.Contains(result.Recovery, "integración no pudo revertir") || !strings.Contains(result.Recovery, "revirtió") {
+		t.Fatalf("result=%#v err=%v", result, err)
 	}
 }
 
@@ -196,7 +203,7 @@ func TestApplyRollbackSurvivesCallerCancellation(t *testing.T) {
 		rollbackResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: oldDigest, Changed: true},
 	}
 	managed := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, installErr: context.Canceled}
-	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeBridge{response: bridge.Response{OK: true, Status: "healthy"}})
+	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	result, err := service.Apply(ctx, Options{Workspace: "/workspace"})

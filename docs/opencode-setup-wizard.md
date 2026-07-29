@@ -9,7 +9,7 @@ The wizard explains and verifies the complete OpenCode setup before changing any
 5. Read back all managed identities and perform the live OpenCode handshake.
 6. Report recovery guidance if any step fails.
 
-The resulting 14 managed artifacts are 12 agents, storage plugin v5, and the model-plan manifest. The agents are manager v29, five read-only reviewers, and six read-only SDD profiles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The installed manager is the sole workspace and lifecycle writer; the wizard does not install compatibility orchestration tools, ticket brokers, a child execution model, skills, CodeGraph indexes, or Engram.
+The resulting 14 managed artifacts are 12 agents, storage plugin v5, and the model-plan manifest. The agents are manager v30, five read-only reviewers, and six read-only SDD profiles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The installed manager is the sole workspace and lifecycle writer; the wizard does not install a child execution model, skills, CodeGraph indexes, or Engram.
 
 ## Commands
 
@@ -30,7 +30,7 @@ Preview is ready to apply when OpenCode responds healthily and no managed destin
 - the manager, all five reviewer identities, and all six SDD identities are installed with the resolved model and variant;
 - the exact storage-only plugin is installed;
 - the canonical non-secret model-plan manifest binds all model-aware agent digests;
-- the OpenCode adapter handshake succeeds in the workspace.
+- the bounded OpenCode handshake succeeds in the workspace.
 
 The wizard never edits `PATH` or `opencode.json`, downloads packages, silently initializes skills or CodeGraph, overwrites foreign content, commits, pushes, or performs destructive Git cleanup.
 

@@ -45,7 +45,6 @@ func TestOverviewRendersIndependentResultsAtEightyColumns(t *testing.T) {
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = updateModel(t, model, inspectionLoadedMsg{generation: 1, value: Inspection{
 		Root: "/storage", Database: "/storage/memory.db", Migration: 5,
-		ChroniclePresent: true, RunID: "run-1",
 	}})
 	model = updateModel(t, model, setupLoadedMsg{generation: 1, err: errors.New("opencode unavailable")})
 	model = updateModel(t, model, memoriesLoadedMsg{generation: 1, value: []MemorySummary{{
@@ -61,7 +60,7 @@ func TestOverviewRendersIndependentResultsAtEightyColumns(t *testing.T) {
 			t.Fatalf("line %d width=%d: %q", index+1, width, line)
 		}
 	}
-	for _, expected := range []string{"schema v5", "run-1", "Durable TUI decision", "Setup unavailable"} {
+	for _, expected := range []string{"schema v5", "Durable TUI decision", "Setup unavailable"} {
 		if !strings.Contains(view.Content, expected) {
 			t.Fatalf("view missing %q:\n%s", expected, view.Content)
 		}
@@ -109,12 +108,11 @@ func TestSectionNavigatorOpensSystemAndEscReturnsOverview(t *testing.T) {
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = updateModel(t, model, inspectionLoadedMsg{generation: 1, value: Inspection{
 		Root: "/storage", Database: "/storage/memory.db", Migration: 5,
-		ChroniclePresent: true, RunID: "run-system",
 	}})
 	model = updateModel(t, model, setupLoadedMsg{generation: 1, value: SetupStatus{
 		Ready: true, SelfInstallState: "installed", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "installed", IntegrationPath: "/config/vgxness-manager.md",
-		ArtifactCount: 14, BridgeOK: true, BridgeStatus: "healthy", ModelPlan: "medium",
+		ArtifactCount: 14, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: "medium",
 	}})
 
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'g', Text: "g"}))
@@ -124,7 +122,7 @@ func TestSectionNavigatorOpensSystemAndEscReturnsOverview(t *testing.T) {
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	view := model.View().Content
-	if !strings.Contains(view, "SYSTEM HEALTH") || !strings.Contains(view, "schema v5") || !strings.Contains(view, "run-system") || !strings.Contains(view, "CLI-only") {
+	if !strings.Contains(view, "SYSTEM HEALTH") || !strings.Contains(view, "schema v5") || !strings.Contains(view, "CLI-only") {
 		t.Fatalf("system route missing evidence:\n%s", view)
 	}
 	assertMaximumWidth(t, view, 80)
