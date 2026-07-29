@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/vgxness/vgxness/internal/bridge"
+	"github.com/vgxness/vgxness/internal/buildinfo"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/delivery"
 	"github.com/vgxness/vgxness/internal/inspection"
@@ -48,6 +49,9 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 }
 
 func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, deliveries delivery.Runtime, sdds SDDRuntime) int {
+	if len(args) > 0 && args[0] == "version" {
+		return RunVersion(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "delivery" {
 		return runDelivery(ctx, args[1:], stdout, stderr, deliveries)
 	}
@@ -79,7 +83,7 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|sdd|integrate|bridge|orchestrate|edit|maintenance|self|setup|delivery>")
+		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|memory|sdd|integrate|bridge|orchestrate|edit|maintenance|self|setup|delivery>")
 		return 2
 	}
 	command := args[0]
@@ -119,6 +123,19 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		doctor = "doctor=healthy\n"
 	}
 	fmt.Fprintf(stdout, "storage_root=%s\ndatabase=%s\nmigration=%d\nchronicle=%s\n%s", terminalSafe(result.Root), terminalSafe(result.Database), result.Migration, chronicle, doctor)
+	return 0
+}
+
+// RunVersion renders build metadata without requiring any application services.
+func RunVersion(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintln(stderr, "usage: vgxness version")
+		return 2
+	}
+	if _, err := io.WriteString(stdout, buildinfo.Render(buildinfo.Current())); err != nil {
+		fmt.Fprintln(stderr, "io: write version")
+		return 1
+	}
 	return 0
 }
 

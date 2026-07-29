@@ -2,6 +2,8 @@
 
 VGXNESS can install a permanent launcher while keeping every application version immutable and addressable by its SHA-256 digest. Installation is explicit and does not download software or mutate shell configuration.
 
+Release acquisition, artifact names, and checksum verification are documented in [Alpha releases](release.md). Self-installation only manages the already extracted executable: it does not download releases or edit `PATH`.
+
 ## Layout
 
 The default managed paths are:
@@ -9,6 +11,12 @@ The default managed paths are:
 - `~/.local/bin/vgxness` — permanent launcher path.
 - `~/.local/bin/vgxness.launcher.json` — atomic active-version pointer and one rollback reference.
 - `~/.local/share/vgxness/versions/<sha256>/vgxness` — immutable application version.
+
+On Windows, the corresponding explicit layout uses `.exe`:
+
+- `<bin-dir>\vgxness.exe` — permanent launcher path.
+- `<bin-dir>\vgxness.exe.launcher.json` — atomic active-version pointer and one rollback reference.
+- `<data-dir>\versions\<sha256>\vgxness.exe` — immutable application version.
 
 Use `--bin-dir` and `--data-dir` with absolute paths for controlled or test installations.
 
@@ -39,6 +47,15 @@ Return to the previous immutable version:
 ```
 
 Rollback is intentionally one level. A successful rollback clears the previous-version reference; version files remain content-addressed on disk.
+
+Windows examples should use absolute paths and the extracted `.exe` candidate:
+
+```powershell
+.\vgxness.exe self preview --bin-dir "$HOME\bin" --data-dir "$HOME\vgxness-data"
+.\vgxness.exe self install --bin-dir "$HOME\bin" --data-dir "$HOME\vgxness-data"
+& "$HOME\bin\vgxness.exe" self status --bin-dir "$HOME\bin" --data-dir "$HOME\vgxness-data"
+& "$HOME\bin\vgxness.exe" self rollback --bin-dir "$HOME\bin" --data-dir "$HOME\vgxness-data"
+```
 
 ## Safety properties
 

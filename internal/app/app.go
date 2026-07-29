@@ -19,6 +19,9 @@ import (
 )
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "version" {
+		return cli.RunVersion(args[1:], stdout, stderr)
+	}
 	installer := selfinstall.New(selfinstall.Config{})
 	integrationRuntime := opencode.NewIntegration()
 	cliMemory := memoryRuntime{producer: "cli"}
