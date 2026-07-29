@@ -130,6 +130,8 @@ type tuiInspectionRuntime interface {
 }
 
 type tuiSetupRuntime interface {
+	Plan(context.Context, setupflow.Options) (setupflow.Plan, error)
+	Apply(context.Context, setupflow.Options) (setupflow.Result, error)
 	Status(context.Context, setupflow.Options) (setupflow.Plan, error)
 }
 
@@ -158,21 +160,87 @@ func (backend tuiBackend) Inspect(ctx context.Context, request tui.Request) (tui
 }
 
 func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) (tui.SetupStatus, error) {
-	workspace, err := filepath.Abs(request.Workspace)
+	workspace, err := cleanWorkspace(request.Workspace)
 	if err != nil {
 		return tui.SetupStatus{}, err
 	}
-	plan, err := backend.setup.Status(ctx, setupflow.Options{Workspace: filepath.Clean(workspace)})
+	plan, err := backend.setup.Status(ctx, setupflow.Options{Workspace: workspace})
 	if err != nil {
 		return tui.SetupStatus{}, err
 	}
+	preview := tuiSetupPlan(plan)
 	return tui.SetupStatus{
-		Provider: plan.Provider, Ready: plan.Ready, Blocker: plan.Blocker,
+		Provider: preview.Provider, Ready: preview.Ready, Blocker: preview.Blocker,
+		SelfInstallState: preview.SelfInstallState, SelfInstallPath: preview.SelfInstallPath,
+		IntegrationState: preview.IntegrationState, IntegrationPath: preview.IntegrationPath,
+		ArtifactCount: preview.ArtifactCount,
+		BridgeOK:      preview.BridgeOK, BridgeStatus: preview.BridgeStatus, ModelPlan: preview.ModelPlan,
+	}, nil
+}
+
+func (backend tuiBackend) PlanSetup(ctx context.Context, request tui.SetupRequest) (tui.SetupPlan, error) {
+	options, err := tuiSetupOptions(request)
+	if err != nil {
+		return tui.SetupPlan{}, err
+	}
+	plan, err := backend.setup.Plan(ctx, options)
+	return tuiSetupPlan(plan), err
+}
+
+func (backend tuiBackend) ApplySetup(ctx context.Context, request tui.SetupRequest) (tui.SetupResult, error) {
+	options, err := tuiSetupOptions(request)
+	if err != nil {
+		return tui.SetupResult{}, err
+	}
+	result, err := backend.setup.Apply(ctx, options)
+	return tui.SetupResult{
+		Plan:             tuiSetupPlan(result.Plan),
+		SelfInstallState: fmt.Sprint(result.SelfInstall.State), SelfInstallPath: result.SelfInstall.LauncherPath,
+		IntegrationState: fmt.Sprint(result.Integration.State), IntegrationPath: result.Integration.Path,
+		ArtifactCount: result.Integration.ArtifactCount,
+		BridgeOK:      result.Bridge.OK, BridgeStatus: result.Bridge.Status,
+		Recovery: result.Recovery, Changed: result.Changed, RestartRequired: result.Integration.RestartRequired,
+	}, err
+}
+
+func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
+	workspace, err := cleanWorkspace(request.Workspace)
+	if err != nil {
+		return setupflow.Options{}, err
+	}
+	plan := sdd.Plan(request.Plan)
+	if !plan.Valid() {
+		return setupflow.Options{}, fmt.Errorf("invalid TUI setup plan")
+	}
+	return setupflow.Options{Workspace: workspace, Integration: integration.Options{ModelPlan: plan}}, nil
+}
+
+func cleanWorkspace(workspace string) (string, error) {
+	absolute, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(absolute), nil
+}
+
+func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
+	steps := make([]tui.SetupStep, len(plan.Steps))
+	for index, step := range plan.Steps {
+		steps[index] = tui.SetupStep{
+			Number: step.Number, Title: step.Title, Explanation: step.Explanation, Mutates: step.Mutates,
+		}
+	}
+	return tui.SetupPlan{
+		Provider: plan.Provider, Steps: steps,
 		SelfInstallState: fmt.Sprint(plan.SelfInstall.State), SelfInstallPath: plan.SelfInstall.LauncherPath,
 		IntegrationState: fmt.Sprint(plan.Integration.State), IntegrationPath: plan.Integration.Path,
 		ArtifactCount: plan.Integration.ArtifactCount,
-		BridgeOK:      plan.Bridge.OK, BridgeStatus: plan.Bridge.Status, ModelPlan: fmt.Sprint(plan.Integration.ModelPlan),
-	}, nil
+		ModelPlan:     fmt.Sprint(plan.Integration.ModelPlan), ModelProvider: plan.Integration.ModelProvider,
+		ModelEfficient: plan.Integration.ModelEfficient, ModelBalanced: plan.Integration.ModelBalanced,
+		ModelFrontier: plan.Integration.ModelFrontier,
+		BridgeOK:      plan.Bridge.OK, BridgeStatus: plan.Bridge.Status,
+		Ready: plan.Ready, Blocker: plan.Blocker,
+	}
 }
 
 func (backend tuiBackend) Recent(ctx context.Context, request tui.Request) ([]tui.MemorySummary, error) {

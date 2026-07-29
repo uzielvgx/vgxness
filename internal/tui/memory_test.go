@@ -22,6 +22,14 @@ func (*recordingMemoryBackend) SetupStatus(context.Context, Request) (SetupStatu
 	return SetupStatus{}, nil
 }
 
+func (*recordingMemoryBackend) PlanSetup(context.Context, SetupRequest) (SetupPlan, error) {
+	return SetupPlan{}, nil
+}
+
+func (*recordingMemoryBackend) ApplySetup(context.Context, SetupRequest) (SetupResult, error) {
+	return SetupResult{}, nil
+}
+
 func (*recordingMemoryBackend) Recent(context.Context, Request) ([]MemorySummary, error) {
 	return []MemorySummary{{ID: "obs-recent", Title: "Recent decision", Type: "architecture", Preview: "recent preview"}}, nil
 }

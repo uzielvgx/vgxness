@@ -32,6 +32,14 @@ func (fakeBackend) GetMemory(context.Context, MemoryLookup) (MemoryDetail, error
 	return MemoryDetail{}, nil
 }
 
+func (fakeBackend) PlanSetup(context.Context, SetupRequest) (SetupPlan, error) {
+	return SetupPlan{}, nil
+}
+
+func (fakeBackend) ApplySetup(context.Context, SetupRequest) (SetupResult, error) {
+	return SetupResult{}, nil
+}
+
 func TestOverviewRendersIndependentResultsAtEightyColumns(t *testing.T) {
 	model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})

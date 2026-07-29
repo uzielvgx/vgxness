@@ -51,6 +51,8 @@ type SetupStatus struct {
 type Backend interface {
 	Inspect(context.Context, Request) (Inspection, error)
 	SetupStatus(context.Context, Request) (SetupStatus, error)
+	PlanSetup(context.Context, SetupRequest) (SetupPlan, error)
+	ApplySetup(context.Context, SetupRequest) (SetupResult, error)
 	Recent(context.Context, Request) ([]MemorySummary, error)
 	Search(context.Context, MemorySearch) ([]MemorySummary, error)
 	GetMemory(context.Context, MemoryLookup) (MemoryDetail, error)
@@ -112,6 +114,7 @@ const (
 	routeOverview route = iota
 	routeSystem
 	routeMemory
+	routeSetup
 )
 
 func (current route) title() string {
@@ -120,6 +123,8 @@ func (current route) title() string {
 		return "SYSTEM"
 	case routeMemory:
 		return "MEMORY"
+	case routeSetup:
+		return "SETUP"
 	default:
 		return "OVERVIEW"
 	}
@@ -179,6 +184,19 @@ type Model struct {
 	memoryDetailLoad  bool
 	memoryGeneration  int
 	cancelMemory      context.CancelFunc
+	setupPlan         SetupPlan
+	setupResult       SetupResult
+	setupViewport     viewport.Model
+	setupSelected     string
+	setupPlanErr      error
+	setupApplyErr     error
+	setupPlanLoading  bool
+	setupConfirm      bool
+	setupApplying     bool
+	setupCancelAsked  bool
+	setupSucceeded    bool
+	setupGeneration   int
+	cancelSetup       context.CancelFunc
 
 	spinner spinner.Model
 	help    help.Model
@@ -199,6 +217,7 @@ func NewModel(ctx context.Context, backend Backend, options Options) Model {
 		sectionItem{route: routeOverview, title: "Overview", description: "workspace summary"},
 		sectionItem{route: routeSystem, title: "System", description: "read-only health"},
 		sectionItem{route: routeMemory, title: "Memory", description: "search and inspect"},
+		sectionItem{route: routeSetup, title: "Setup", description: "controlled OpenCode write"},
 	}, delegate, 24, 4)
 	sections.SetShowTitle(false)
 	sections.SetShowFilter(false)
@@ -215,6 +234,7 @@ func NewModel(ctx context.Context, backend Backend, options Options) Model {
 		spinner: spin, help: help.New(), keys: newKeyMap(),
 	}
 	model.initMemory()
+	model.initSetup()
 	return model
 }
 
@@ -256,21 +276,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help.SetWidth(max(1, msg.Width))
 		m.resizeSections()
 		m.resizeMemory()
+		m.resizeSetup()
 		return m, nil
 	case tea.KeyPressMsg:
+		if m.route == routeSetup && m.setupApplying {
+			if msg.String() == "ctrl+c" && m.cancelSetup != nil {
+				m.cancelSetup()
+				m.setupCancelAsked = true
+			}
+			return m, nil
+		}
 		if msg.String() == "ctrl+c" {
 			m.cancelCurrentLoad()
 			m.cancelMemoryOperation()
+			m.cancelSetupOperation()
 			return m, tea.Quit
+		}
+		if m.route == routeSetup && m.tooSmall() {
+			if key.Matches(msg, m.keys.Quit) {
+				m.cancelCurrentLoad()
+				m.cancelMemoryOperation()
+				m.cancelSetupOperation()
+				return m, tea.Quit
+			}
+			return m, nil
 		}
 		if m.route == routeMemory && m.focus == focusMemorySearch {
 			if handled, cmd := m.updateMemoryKey(msg); handled {
 				return m, cmd
 			}
 		}
+		if m.route == routeSetup && m.focus != focusNavigation {
+			if handled, cmd := m.updateSetupKey(msg); handled {
+				return m, cmd
+			}
+		}
 		if key.Matches(msg, m.keys.Quit) {
 			m.cancelCurrentLoad()
 			m.cancelMemoryOperation()
+			m.cancelSetupOperation()
 			return m, tea.Quit
 		}
 		if key.Matches(msg, m.keys.Help) {
@@ -285,6 +329,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, m.keys.Select):
 				if item, ok := m.sections.SelectedItem().(sectionItem); ok {
 					m.setRoute(item.route)
+					if item.route == routeSetup {
+						return m, m.loadSetupPlan()
+					}
 				}
 				return m, nil
 			}
@@ -300,6 +347,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Refresh) && !m.tooSmall():
 			m.cancelCurrentLoad()
 			m.cancelMemoryOperation()
+			m.cancelSetupOperation()
 			m.memorySearched = false
 			m.memoryDetail = MemoryDetail{}
 			m.memoryDetailReady = false
@@ -350,6 +398,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case memoryDetailLoadedMsg:
 		m.handleMemoryDetailLoaded(msg)
 		return m, nil
+	case setupPlanLoadedMsg:
+		m.handleSetupPlanLoaded(msg)
+		return m, nil
+	case setupAppliedMsg:
+		m.handleSetupApplied(msg)
+		return m, nil
 	case spinner.TickMsg:
 		if !m.loading() {
 			return m, nil
@@ -381,8 +435,12 @@ func (m Model) render() string {
 		return fit(lines, width, m.height)
 	}
 
+	mode := "READ ONLY"
+	if m.route == routeSetup {
+		mode = "CONTROLLED WRITE"
+	}
 	lines := []string{
-		"VGXNESS / " + m.route.title() + " / READ ONLY",
+		"VGXNESS / " + m.route.title() + " / " + mode,
 		"workspace  " + sanitizeTerminal(m.options.Workspace),
 		strings.Repeat("─", width),
 	}
@@ -396,6 +454,8 @@ func (m Model) render() string {
 	footer := m.help.View(m.keys)
 	if m.route == routeMemory && m.focus != focusNavigation {
 		footer = m.memoryHelp()
+	} else if m.route == routeSetup && m.focus != focusNavigation {
+		footer = m.setupHelp()
 	}
 	lines = append(lines, strings.Repeat("─", width), footer)
 	return fit(lines, width, m.height)
@@ -407,6 +467,8 @@ func (m Model) renderRoute() []string {
 		return m.renderSystem()
 	case routeMemory:
 		return m.renderMemory()
+	case routeSetup:
+		return m.renderSetupRoute()
 	}
 	lines := []string{"STORAGE & CHRONICLE"}
 	lines = append(lines, m.renderInspection()...)
@@ -548,7 +610,7 @@ func (m Model) renderMemories() []string {
 }
 
 func (m Model) loading() bool {
-	return m.inspectionLoading || m.setupLoading || m.memoriesLoading
+	return m.inspectionLoading || m.setupLoading || m.memoriesLoading || m.setupPlanLoading || m.setupApplying
 }
 
 func (m *Model) cancelCurrentLoad() {
@@ -584,11 +646,28 @@ func (m *Model) setRoute(next route) {
 	if m.route == routeMemory && next != routeMemory {
 		m.cancelMemoryOperation()
 	}
+	if m.route == routeSetup && next != routeSetup {
+		m.cancelSetupOperation()
+	}
+	previous := m.route
 	m.route = next
 	m.sections.Select(int(next))
 	if next == routeMemory {
 		m.focusMemory(focusMemoryList)
 		return
+	}
+	if next == routeSetup && previous != routeSetup {
+		m.setupSelected = defaultSetupPlan
+		if validSetupPlan(m.setup.ModelPlan) {
+			m.setupSelected = m.setup.ModelPlan
+		}
+		m.setupPlan = SetupPlan{}
+		m.setupResult = SetupResult{}
+		m.setupPlanErr = nil
+		m.setupApplyErr = nil
+		m.setupSucceeded = false
+		m.setupConfirm = false
+		m.setupViewport.GotoTop()
 	}
 	m.focus = focusContent
 }
