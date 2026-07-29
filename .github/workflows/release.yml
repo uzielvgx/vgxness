@@ -133,7 +133,12 @@ jobs:
             "dist/vgxness_${version}_windows_arm64.zip"
             "dist/SHA256SUMS"
           )
+          release_flags=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
+            "${release_flags[@]}" \
             --generate-notes
