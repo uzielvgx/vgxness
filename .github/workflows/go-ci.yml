@@ -130,8 +130,8 @@ jobs:
       - name: Native Windows self-install lifecycle
         run: go test -tags=e2e -count=1 -run '^TestWindowsSelfInstallLifecycle$' ./internal/e2e
 
-  standard:
-    name: Standard validation
+  quality:
+    name: quality
     if: ${{ always() }}
     needs: [coverage, race, static, linux-e2e, windows-compile, windows-install]
     runs-on: ubuntu-24.04

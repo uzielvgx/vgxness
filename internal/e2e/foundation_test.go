@@ -44,8 +44,8 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, race, static, linux-e2e, windows-compile, windows-install]") {
 			t.Error("only the standard aggregate gate may depend on validation lanes")
 		}
-		if !strings.Contains(workflow, "  standard:\n    name: Standard validation\n    if: ${{ always() }}") {
-			t.Error("workflow must expose an always-running stable standard gate")
+		if !strings.Contains(workflow, "  quality:\n    name: quality\n    if: ${{ always() }}") {
+			t.Error("workflow must preserve the always-running quality check required by branch protection")
 		}
 		for _, result := range []string{"needs.coverage.result", "needs.race.result", "needs.static.result", "needs.linux-e2e.result", "needs.windows-compile.result", "needs.windows-install.result"} {
 			if !strings.Contains(workflow, result) {
