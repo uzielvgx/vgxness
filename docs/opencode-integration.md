@@ -1,6 +1,6 @@
 # OpenCode integration
 
-VGXNESS installs 14 managed artifacts: 12 agents (`vgxness-manager` v28, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, and one non-secret model-plan manifest.
+VGXNESS installs 14 managed artifacts: 12 agents (`vgxness-manager` v29, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, and one non-secret model-plan manifest.
 
 The plugin exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
 
@@ -46,7 +46,7 @@ vgxness integrate opencode uninstall
 
 Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna-fast`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS does not create or modify `opencode.json` and the storage plugin does not route models.
 
-Preview and status are read-only. Installation creates absent managed artifacts and atomically upgrades only exact catalogued older VGXNESS versions with matching artifact identities. The current catalogue installs manager v28 and storage plugin v5 and recognizes the exact prior manager v27/plugin v4 set for upgrade. It refuses foreign, modified, malformed, equal-version drifted, or newer content. Uninstall removes only exact managed artifacts, writes recoverable hard-link backups, and refuses drift. A failed rollback or restore is returned as an explicit `recovery` failure instead of being hidden.
+Preview and status are read-only. Installation creates absent managed artifacts and atomically upgrades only exact catalogued older VGXNESS versions with matching artifact identities. The current catalogue installs manager v29 and storage plugin v5 and recognizes the exact prior manager v28 and v27 model-plan sets for upgrade. It refuses foreign, modified, malformed, equal-version drifted, or newer content. Uninstall removes only exact managed artifacts, writes recoverable hard-link backups, and refuses drift. A failed rollback or restore is returned as an explicit `recovery` failure instead of being hidden.
 
 Changing the plan or a slot regenerates the same managed agent set only when every current byte still matches the installed current or exact prior manifest. An interrupted switch containing an exact mixture of those old and new bytes resumes safely; any unrelated byte drift blocks regeneration. The change becomes active only after OpenCode restarts. Manual modification of an agent, plugin, or manifest blocks regeneration.
 
@@ -125,7 +125,7 @@ TDD is not a universal gate. Documentation, passive assets, generated code, disp
 
 ## Health contract
 
-The integration is installed only when manager v28, all five reviewers, all six SDD profiles, storage plugin v5, and the model-plan manifest match their managed identities exactly. Setup health combines:
+The integration is installed only when manager v29, all five reviewers, all six SDD profiles, storage plugin v5, and the model-plan manifest match their managed identities exactly. Setup health combines:
 
 1. the permanent VGXNESS launcher is installed and verified;
 2. all 14 managed artifacts are installed without drift;

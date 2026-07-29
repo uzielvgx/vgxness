@@ -366,34 +366,41 @@ func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
 	}
 }
 
-func TestIntegrationUpgradesExactInstalledV27SDDV1Plan(t *testing.T) {
-	configDirectory := filepath.Join(t.TempDir(), "opencode")
-	agentsDirectory := filepath.Join(configDirectory, "agents")
-	pluginsDirectory := filepath.Join(configDirectory, "plugins")
-	manifestDirectory := filepath.Join(configDirectory, "vgxness")
-	for _, directory := range []string{agentsDirectory, pluginsDirectory, manifestDirectory} {
-		testutil.NoError(t, os.MkdirAll(directory, 0o700))
-	}
-	previous, err := buildPreviousModelPlanBundle(sdd.DefaultModelPlanConfig())
-	testutil.NoError(t, err)
-	for name, content := range previous.agents {
-		testutil.NoError(t, os.WriteFile(filepath.Join(agentsDirectory, name), content, 0o600))
-	}
-	testutil.NoError(t, os.WriteFile(filepath.Join(manifestDirectory, modelPlanManifestName), previous.manifest, 0o600))
-	service := NewIntegration()
-	plugin, err := memoryPluginContent(service.executable)
-	testutil.NoError(t, err)
-	testutil.NoError(t, os.WriteFile(filepath.Join(pluginsDirectory, memoryPluginName), previousMemoryPluginV4(plugin), 0o600))
+func TestIntegrationUpgradesExactInstalledHistoricalModelPlans(t *testing.T) {
+	for name, build := range map[string]func(sdd.ModelPlanConfig) (modelPlanBundle, error){
+		"v28": buildPreviousModelPlanBundle,
+		"v27": buildLegacyModelPlanBundle,
+	} {
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			agentsDirectory := filepath.Join(configDirectory, "agents")
+			pluginsDirectory := filepath.Join(configDirectory, "plugins")
+			manifestDirectory := filepath.Join(configDirectory, "vgxness")
+			for _, directory := range []string{agentsDirectory, pluginsDirectory, manifestDirectory} {
+				testutil.NoError(t, os.MkdirAll(directory, 0o700))
+			}
+			previous, err := build(sdd.DefaultModelPlanConfig())
+			testutil.NoError(t, err)
+			for artifactName, content := range previous.agents {
+				testutil.NoError(t, os.WriteFile(filepath.Join(agentsDirectory, artifactName), content, 0o600))
+			}
+			testutil.NoError(t, os.WriteFile(filepath.Join(manifestDirectory, modelPlanManifestName), previous.manifest, 0o600))
+			service := NewIntegration()
+			plugin, err := memoryPluginContent(service.executable)
+			testutil.NoError(t, err)
+			testutil.NoError(t, os.WriteFile(filepath.Join(pluginsDirectory, memoryPluginName), previousMemoryPluginV4(plugin), 0o600))
 
-	options := integration.Options{ConfigDir: configDirectory}
-	status, err := service.Status(context.Background(), options)
-	testutil.Require(t, err == nil && status.State == integration.StatePartial, "previous plan status=%+v err=%v", status, err)
-	installed, err := service.Install(context.Background(), options)
-	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed, "previous plan upgrade=%+v err=%v", installed, err)
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	testutil.NoError(t, err)
-	manager, err := os.ReadFile(filepath.Join(agentsDirectory, managerAgentName))
-	testutil.Require(t, err == nil && bytes.Equal(manager, current.agents[managerAgentName]), "manager was not upgraded exactly: %v", err)
+			options := integration.Options{ConfigDir: configDirectory}
+			status, err := service.Status(context.Background(), options)
+			testutil.Require(t, err == nil && status.State == integration.StatePartial, "%s plan status=%+v err=%v", name, status, err)
+			installed, err := service.Install(context.Background(), options)
+			testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed, "%s plan upgrade=%+v err=%v", name, installed, err)
+			current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+			testutil.NoError(t, err)
+			manager, err := os.ReadFile(filepath.Join(agentsDirectory, managerAgentName))
+			testutil.Require(t, err == nil && bytes.Equal(manager, current.agents[managerAgentName]), "%s manager was not upgraded exactly: %v", name, err)
+		})
+	}
 }
 
 func TestIntegration_UpgradesExactPriorPluginFromDifferentExecutable(t *testing.T) {
@@ -441,7 +448,7 @@ func TestIntegration_UpgradesExactV22ManagerAndV1Plugin(t *testing.T) {
 	testutil.NoError(t, err)
 	managerPredecessors := previousManagerPrompts()
 	pluginV1 := previousMemoryPluginV1(previousMemoryPluginV2(previousMemoryPluginV3(currentPlugin)))
-	testutil.NoError(t, os.WriteFile(installed.Path, managerPredecessors[3], 0o600))
+	testutil.NoError(t, os.WriteFile(installed.Path, managerPredecessors[4], 0o600))
 	testutil.NoError(t, os.WriteFile(installed.ToolPath, pluginV1, 0o600))
 
 	upgraded, err := service.Install(context.Background(), options)
@@ -569,7 +576,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 28",
+		"artifact: opencode-agent/vgxness-manager; version: 29",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"OpenCode's native tools, skills, memory, Task subagents",
@@ -651,6 +658,25 @@ func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Errorf("manager prompt retains forbidden adaptive mechanic %q", forbidden)
+		}
+	}
+}
+
+func TestManagerPromptRequiresApprovalForGitPush(t *testing.T) {
+	for _, required := range []string{
+		`    "git push": ask`,
+		`    "git push *": ask`,
+	} {
+		if !strings.Contains(managerPrompt, required) {
+			t.Errorf("manager prompt is missing push approval rule %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		`    "git push": deny`,
+		`    "git push *": deny`,
+	} {
+		if strings.Contains(managerPrompt, forbidden) {
+			t.Errorf("manager prompt retains push denial rule %q", forbidden)
 		}
 	}
 }
@@ -885,11 +911,12 @@ func TestManagedArtifactsRecognizeExactPredecessorVersions(t *testing.T) {
 	pluginV3 := previousMemoryPluginV3(currentPlugin)
 	pluginV2 := previousMemoryPluginV2(pluginV3)
 	pluginV1 := previousMemoryPluginV1(pluginV2)
-	if len(managerPredecessors) != 4 || !isManagedPredecessor(managerPredecessors[0], []byte(managerPrompt), managerPredecessors, nil) ||
+	if len(managerPredecessors) != 5 || !isManagedPredecessor(managerPredecessors[0], []byte(managerPrompt), managerPredecessors, nil) ||
 		!isManagedPredecessor(managerPredecessors[1], []byte(managerPrompt), managerPredecessors, nil) ||
 		!isManagedPredecessor(managerPredecessors[2], []byte(managerPrompt), managerPredecessors, nil) ||
-		!isManagedPredecessor(managerPredecessors[3], []byte(managerPrompt), managerPredecessors, nil) {
-		t.Fatalf("manager v25/v24/v23/v22 predecessors were not recognized")
+		!isManagedPredecessor(managerPredecessors[3], []byte(managerPrompt), managerPredecessors, nil) ||
+		!isManagedPredecessor(managerPredecessors[4], []byte(managerPrompt), managerPredecessors, nil) {
+		t.Fatalf("manager v26/v25/v24/v23/v22 predecessors were not recognized")
 	}
 	if !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
 		t.Fatalf("plugin v3/v2/v1 predecessors were not recognized")
@@ -1112,10 +1139,11 @@ func TestIntegration_UninstallsExactRecognizedPredecessors(t *testing.T) {
 		pluginVersion       int
 		differentExecutable bool
 	}{
-		{name: "manager v25 and plugin v3", managerIndex: 0, pluginVersion: 3},
-		{name: "manager v24 and plugin v2", managerIndex: 1, pluginVersion: 2},
-		{name: "manager v23 and plugin v2", managerIndex: 2, pluginVersion: 2},
-		{name: "manager v22 and plugin v1 from prior executable", managerIndex: 3, pluginVersion: 1, differentExecutable: true},
+		{name: "manager v26 and plugin v3", managerIndex: 0, pluginVersion: 3},
+		{name: "manager v25 and plugin v3", managerIndex: 1, pluginVersion: 3},
+		{name: "manager v24 and plugin v2", managerIndex: 2, pluginVersion: 2},
+		{name: "manager v23 and plugin v2", managerIndex: 3, pluginVersion: 2},
+		{name: "manager v22 and plugin v1 from prior executable", managerIndex: 4, pluginVersion: 1, differentExecutable: true},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -1170,7 +1198,7 @@ func TestIntegration_UninstallRefusesModifiedPredecessors(t *testing.T) {
 		manager []byte
 		plugin  []byte
 	}{
-		{name: "modified manager v23", manager: append(append([]byte(nil), previousManagerPrompts()[2]...), []byte("\nmodified\n")...), plugin: previousMemoryPluginV2(currentPlugin)},
+		{name: "modified manager v23", manager: append(append([]byte(nil), previousManagerPrompts()[3]...), []byte("\nmodified\n")...), plugin: previousMemoryPluginV2(currentPlugin)},
 		{name: "modified plugin v2", manager: previousManagerPrompts()[0], plugin: append(append([]byte(nil), previousMemoryPluginV2(currentPlugin)...), []byte("\nmodified\n")...)},
 	}
 	for _, test := range cases {

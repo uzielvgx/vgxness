@@ -75,6 +75,18 @@ func buildPreviousModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, 
 	return encodeModelPlanBundle(config, resolved, agents)
 }
 
+func buildLegacyModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+	resolved, err := sdd.ResolveOpenCodePlan(config)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents, err := legacyModelBoundAgents(resolved)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	return encodeModelPlanBundle(config, resolved, agents)
+}
+
 func requestedModelPlan(options integration.Options, configDirectory string) (modelPlanBundle, error) {
 	explicit := options.ModelPlan != "" || options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != ""
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
@@ -117,12 +129,13 @@ func parseInstalledModelPlanManifest(data []byte) (modelPlanManifest, modelPlanB
 		bundle, buildErr := buildModelPlanBundle(manifest.Config)
 		return manifest, bundle, buildErr
 	}
-	manifest, err := parsePreviousModelPlanManifest(data)
-	if err != nil {
-		return modelPlanManifest{}, modelPlanBundle{}, integration.ErrDrift
+	for _, build := range []func(sdd.ModelPlanConfig) (modelPlanBundle, error){buildPreviousModelPlanBundle, buildLegacyModelPlanBundle} {
+		manifest, bundle, err := parseHistoricalModelPlanManifest(data, build)
+		if err == nil {
+			return manifest, bundle, nil
+		}
 	}
-	bundle, err := buildPreviousModelPlanBundle(manifest.Config)
-	return manifest, bundle, err
+	return modelPlanManifest{}, modelPlanBundle{}, integration.ErrDrift
 }
 
 func parseModelPlanManifest(data []byte) (modelPlanManifest, error) {
@@ -140,17 +153,22 @@ func parseModelPlanManifest(data []byte) (modelPlanManifest, error) {
 }
 
 func parsePreviousModelPlanManifest(data []byte) (modelPlanManifest, error) {
+	manifest, _, err := parseHistoricalModelPlanManifest(data, buildPreviousModelPlanBundle)
+	return manifest, err
+}
+
+func parseHistoricalModelPlanManifest(data []byte, build func(sdd.ModelPlanConfig) (modelPlanBundle, error)) (modelPlanManifest, modelPlanBundle, error) {
 	var manifest modelPlanManifest
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) == nil || manifest.SchemaVersion != 1 || manifest.ManagedBy != "vgxness" {
-		return modelPlanManifest{}, integration.ErrDrift
+		return modelPlanManifest{}, modelPlanBundle{}, integration.ErrDrift
 	}
-	bundle, err := buildPreviousModelPlanBundle(manifest.Config)
+	bundle, err := build(manifest.Config)
 	if err != nil || !bytes.Equal(bundle.manifest, data) {
-		return modelPlanManifest{}, integration.ErrDrift
+		return modelPlanManifest{}, modelPlanBundle{}, integration.ErrDrift
 	}
-	return manifest, nil
+	return manifest, bundle, nil
 }
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
@@ -198,6 +216,42 @@ func previousModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) 
 		reviewRefuterName: sdd.RoleRefuter,
 	}
 	agents := make(map[string][]byte, 12)
+	manager, err := bindPreviousManager(plan.Roles[sdd.RoleManager])
+	if err != nil {
+		return nil, err
+	}
+	agents[managerAgentName] = manager
+	for name, base := range map[string]string{
+		reviewRiskName: reviewRiskPrompt, reviewReadabilityName: reviewReadabilityPrompt,
+		reviewReliabilityName: reviewReliabilityPrompt, reviewResilienceName: reviewResiliencePrompt,
+		reviewRefuterName: reviewRefuterPrompt,
+	} {
+		content, bindErr := bindAgent(base, assignments[name], plan.Roles[assignments[name]], 1, 2)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		agents[name] = content
+	}
+	for _, profile := range []struct {
+		name string
+		role sdd.Role
+	}{
+		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec},
+		{sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
+	} {
+		agents[profile.name] = []byte(sddAgentPrompt(profile.role, plan.Roles[profile.role]))
+	}
+	return agents, nil
+}
+
+func legacyModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
+	assignments := map[string]sdd.Role{
+		managerAgentName: sdd.RoleManager,
+		reviewRiskName:   sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
+		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
+		reviewRefuterName: sdd.RoleRefuter,
+	}
+	agents := make(map[string][]byte, 12)
 	manager, err := bindManagerV27(plan.Roles[sdd.RoleManager])
 	if err != nil {
 		return nil, err
@@ -227,13 +281,25 @@ func previousModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) 
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	bound, err := bindManagerV28(assignment)
+	if err != nil {
+		return nil, err
+	}
+	return finalizeManager(bound, 28, 29)
+}
+
+func bindPreviousManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	bound, err := bindManagerV27(assignment)
 	if err != nil {
 		return nil, err
 	}
+	return finalizeManager(bound, 27, 28)
+}
+
+func finalizeManager(bound []byte, fromVersion, toVersion int) ([]byte, error) {
 	value := string(bound)
 	for _, replacement := range []textReplacement{
-		{old: "artifact: opencode-agent/vgxness-manager; version: 27", new: "artifact: opencode-agent/vgxness-manager; version: 28"},
+		{old: fmt.Sprintf("artifact: opencode-agent/vgxness-manager; version: %d", fromVersion), new: fmt.Sprintf("artifact: opencode-agent/vgxness-manager; version: %d", toVersion)},
 		{old: "  vgxness_sdd_get: allow\n", new: "  vgxness_sdd_get: allow\n  vgxness_sdd_set_interaction_mode: allow\n"},
 	} {
 		if strings.Count(value, replacement.old) != 1 {
@@ -244,11 +310,23 @@ func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	return []byte(value + managerSDDLifecycleContract), nil
 }
 
+func bindManagerV28(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	return bindManagerVersion(managerPrompt, assignment, 27, 28)
+}
+
 func bindManagerV27(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
-	value := managerPrompt
+	predecessors := previousManagerPrompts()
+	if len(predecessors) == 0 {
+		return nil, integration.ErrInvalid
+	}
+	return bindManagerVersion(string(predecessors[0]), assignment, 26, 27)
+}
+
+func bindManagerVersion(base string, assignment sdd.OpenCodeRoleAssignment, fromVersion, toVersion int) ([]byte, error) {
+	value := base
 	for _, replacement := range []textReplacement{
 		{old: "color: primary\n", new: fmt.Sprintf("color: primary\nmodel: %s\nvariant: %s\n", assignment.Model, assignment.Variant)},
-		{old: "artifact: opencode-agent/vgxness-manager; version: 26", new: "artifact: opencode-agent/vgxness-manager; version: 27"},
+		{old: fmt.Sprintf("artifact: opencode-agent/vgxness-manager; version: %d", fromVersion), new: fmt.Sprintf("artifact: opencode-agent/vgxness-manager; version: %d", toVersion)},
 		{old: "    general: allow\n", new: "    general: allow\n    vgxness-sdd-research: allow\n    vgxness-sdd-proposal: allow\n    vgxness-sdd-spec: allow\n    vgxness-sdd-design: allow\n    vgxness-sdd-tasks: allow\n    vgxness-sdd-apply: allow\n"},
 		{old: "- VGXNESS SDD tools persist structured records and render or compare supplied OpenSpec bytes only.", new: "- The manager alone owns SDD phase transitions, revision acceptance, projection records, and persistence decisions. SDD subagents return bounded evidence or candidate content and never mutate lifecycle state.\n- VGXNESS SDD tools persist structured records and render or compare supplied OpenSpec bytes only."},
 	} {

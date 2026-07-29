@@ -99,7 +99,7 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 		t.Fatalf("setup did not install the bounded storage-only plugin: %v", err)
 	}
 	managerData, err := os.ReadFile(manager)
-	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 28")) || !bytes.Contains(managerData, []byte("At the start of every accepted SDD change")) {
+	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 29")) || !bytes.Contains(managerData, []byte("At the start of every accepted SDD change")) {
 		t.Fatalf("setup did not install the executable SDD manager contract: %v", err)
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {

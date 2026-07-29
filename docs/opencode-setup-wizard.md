@@ -9,7 +9,7 @@ The wizard explains and verifies the complete OpenCode setup before changing any
 5. Read back all managed identities and perform the live OpenCode handshake.
 6. Report recovery guidance if any step fails.
 
-The resulting 14 managed artifacts are 12 agents, storage plugin v5, and the model-plan manifest. The agents are manager v28, five read-only reviewers, and six read-only SDD profiles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The installed manager is the sole workspace and lifecycle writer; the wizard does not install compatibility orchestration tools, ticket brokers, a child execution model, skills, CodeGraph indexes, or Engram.
+The resulting 14 managed artifacts are 12 agents, storage plugin v5, and the model-plan manifest. The agents are manager v29, five read-only reviewers, and six read-only SDD profiles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The installed manager is the sole workspace and lifecycle writer; the wizard does not install compatibility orchestration tools, ticket brokers, a child execution model, skills, CodeGraph indexes, or Engram.
 
 ## Commands
 
