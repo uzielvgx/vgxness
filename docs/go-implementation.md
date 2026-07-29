@@ -23,7 +23,7 @@ The implemented control plane is deliberately narrower than the target product. 
 2. **Implemented:** Keep owned semantic memory on SQLite/FTS5; it remains the sole semantic-memory backend and Engram integration is a non-goal. Structured SDD artifacts separately support `memory`, `openspec`, and `hybrid` ownership.
 3. **Implemented:** Validate runtime contracts; append and verify Chronicle events; write/read snapshots; derive legal task state; reconstruct bounded recovery state.
 4. **Implemented:** Resolve exact Registry identities, evaluate Gatekeeper policy, compose frozen prompts, execute eligible providers, and coordinate finite foreground/background work.
-5. **Implemented:** Install and operate manager v28, five read-only reviewers, six read-only SDD profiles, storage plugin v5, the model-plan manifest, and the six-step confirmation-gated setup workflow.
+5. **Implemented:** Install and operate manager v29, five read-only reviewers, six read-only SDD profiles, storage plugin v5, the model-plan manifest, and the six-step confirmation-gated setup workflow.
 6. **Planned:** Add richer Chronicle-backed interrupted-SDD recovery, provider-neutral routing/catalog probes, automatic delivery integration, the keyboard TUI, and optional adapters. Native Windows runtime/distribution smoke is deferred.
 
 ## Why Go fits VGXNESS
@@ -93,7 +93,7 @@ internal/tui
 | `internal/contracts` | **Implemented** | Embed Draft 2020-12 schemas and validate current runtime packets, events, snapshots, registry records, prompts, and results; broader future schemas remain contracts-only until used. |
 | `internal/registry`, `internal/gatekeeper` | **Implemented** | Resolve exact agent/skill/prompt identities and fail closed on capabilities, adapter health, operations, roots/tools, risk, leases, approvals, and task transitions. |
 | `internal/prompts`, `internal/providers` | **Implemented** | Compose frozen prompt contracts, select an exact eligible provider, execute it, validate structured results, and emit bounded receipts. |
-| `internal/providers/opencode` | **Implemented** | Execute the compatibility provider path and generate the active manager v28, five reviewers, six SDD profiles, storage plugin v5, and low/medium/high model plans. |
+| `internal/providers/opencode` | **Implemented** | Execute the compatibility provider path and generate the active manager v29, five reviewers, six SDD profiles, storage plugin v5, and low/medium/high model plans. |
 | `internal/orchestrator`, `internal/controlplane` | **Implemented/Partial** | Preserve the bounded compatibility coordination surface with plans, leases, prepared dispatches, terminals, dependency results, joins, and recovery controls. It is not the active OpenCode SDD scheduler. |
 | `internal/navigator` | **Implemented for compatibility** | Validate advisory task decomposition, reject unsafe graphs, and compute content-bound single/sequential/parallel decisions for the compatibility orchestrator. It is not the active native SDD router. |
 | `internal/delivery` | **Implemented/Partial** | Build representation-independent Git target snapshots; bind context, evidence, and review identities; persist immutable receipts; and validate or explicitly invalidate the same receipt across four gates. Automatic Git/hosting integration remains planned. |

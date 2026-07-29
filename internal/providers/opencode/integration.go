@@ -67,8 +67,8 @@ permission:
   vgxness_sdd_compare_projection: allow
   bash:
     "*": allow
-    "git push": deny
-    "git push *": deny
+    "git push": ask
+    "git push *": ask
     "git commit": ask
     "git commit *": ask
     "git reset --hard": deny
@@ -85,7 +85,7 @@ permission:
     "sudo *": deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 26 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 27 -->
 
 # Identity
 
@@ -1688,7 +1688,11 @@ func readRegularFile(path string) ([]byte, error) {
 }
 
 func previousManagerPrompts() [][]byte {
-	v25 := derivePredecessor([]byte(managerPrompt), []textReplacement{
+	v26 := derivePredecessor([]byte(managerPrompt), []textReplacement{
+		{old: "artifact: opencode-agent/vgxness-manager; version: 27", new: "artifact: opencode-agent/vgxness-manager; version: 26"},
+		{old: "    \"git push\": ask\n    \"git push *\": ask\n", new: "    \"git push\": deny\n    \"git push *\": deny\n"},
+	})
+	v25 := derivePredecessor(v26, []textReplacement{
 		{old: "artifact: opencode-agent/vgxness-manager; version: 26", new: "artifact: opencode-agent/vgxness-manager; version: 25"},
 		{old: "  vgxness_sdd_create: allow\n  vgxness_sdd_list: allow\n  vgxness_sdd_get: allow\n  vgxness_sdd_save_revision: allow\n  vgxness_sdd_get_revision: allow\n  vgxness_sdd_list_revisions: allow\n  vgxness_sdd_accept_revision: allow\n  vgxness_sdd_transition: allow\n  vgxness_sdd_projection_status: allow\n  vgxness_sdd_record_projection: allow\n  vgxness_sdd_render_projection: allow\n  vgxness_sdd_compare_projection: allow\n", new: ""},
 		{old: "- VGXNESS SDD tools persist structured records and render or compare supplied OpenSpec bytes only. They do not execute agents, access the filesystem, route work, or advance phases autonomously. In hybrid mode memory is canonical; divergent projection content requires an explicit save-revision call before it can become a candidate.\n", new: ""},
@@ -1739,7 +1743,7 @@ Do not claim TDD unless the failing RED evidence was observed before the product
 			new: "- VGXNESS-owned memory is the only persistent memory authority. At the start of work, use vgxness_memory_search when prior project decisions or fixes may matter, then use vgxness_memory_get only for relevant full entries. Verify mutable claims against the repository.",
 		},
 	})
-	return [][]byte{v25, v24, v23, v22}
+	return [][]byte{v26, v25, v24, v23, v22}
 }
 
 func previousMemoryPluginV4(current []byte) []byte {
