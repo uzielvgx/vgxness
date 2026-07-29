@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Adds an official SHA-256-pinned Homebrew tap for macOS and Linux with explicit Homebrew and managed OpenCode ownership boundaries.
+
 ## v0.1.0-alpha.1 - 2026-07-29
 
 - Delivers the first bounded alpha of the local VGXNESS control plane, native OpenCode manager projection, semantic memory, structured SDD storage, and compatibility maintenance surfaces.
