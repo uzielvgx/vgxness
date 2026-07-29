@@ -100,6 +100,27 @@ Homebrew owns its executable and does not modify OpenCode. Preview and explicitl
 
 The setup wizard creates a separate immutable installation and launcher under `~/.local`. After `brew upgrade vgxness`, rerun the preview and approved setup commands to activate the upgraded managed version. Removing the formula does not remove that separate managed installation. The formula source and complete ownership guidance live in the [official Homebrew tap](https://github.com/uzielvgx/homebrew-tap).
 
+### Scoop on Windows
+
+With [Scoop](https://scoop.sh) installed, register the official bucket and install VGXNESS:
+
+```powershell
+scoop bucket add vgxness https://github.com/uzielvgx/scoop-bucket
+scoop install vgxness/vgxness
+& "$(scoop prefix vgxness)\vgxness.exe" version
+```
+
+Scoop selects the matching Windows amd64 or ARM64 ZIP and verifies the downloaded archive against the SHA-256 pinned in the manifest. Windows amd64 is alpha-supported; Windows ARM64 remains preview and compile-only.
+
+Scoop owns its app directory and `vgxness` shim and does not modify OpenCode. Preview and explicitly install the optional managed OpenCode integration with the Scoop-owned version:
+
+```powershell
+& "$(scoop prefix vgxness)\vgxness.exe" setup opencode --preview
+& "$(scoop prefix vgxness)\vgxness.exe" setup opencode --yes
+```
+
+The setup wizard creates a separate managed installation and launcher. After `scoop update vgxness`, rerun the preview and approved setup commands to activate the upgraded managed version. Removing the Scoop app does not remove that separate managed installation. The manifest source and complete ownership guidance live in the [official Scoop bucket](https://github.com/uzielvgx/scoop-bucket).
+
 ### Direct archive
 
 Extract the selected archive, enter its top-level directory, and inspect its metadata:

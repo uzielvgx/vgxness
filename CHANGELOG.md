@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 - Adds an official SHA-256-pinned Homebrew tap for macOS and Linux with explicit Homebrew and managed OpenCode ownership boundaries.
+- Adds an official script-free Scoop bucket for Windows amd64 and ARM64 with native Windows installation validation.
 
 ## v0.1.0-alpha.1 - 2026-07-29
 
