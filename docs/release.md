@@ -80,6 +80,28 @@ Release binaries are not code-signed or notarized yet. `SHA256SUMS` and acquisit
 
 ## Install and operate
 
+### Homebrew on macOS or Linux
+
+Install the release pinned by the official tap:
+
+```sh
+brew install uzielvgx/tap/vgxness
+"$(brew --prefix vgxness)/bin/vgxness" version
+```
+
+Homebrew selects the matching macOS or Linux ARM64 or amd64 archive and verifies its formula SHA-256 before installation. The formula follows the support levels above; availability through Homebrew does not promote a preview target to alpha-supported.
+
+Homebrew owns its executable and does not modify OpenCode. Preview and explicitly install the optional managed OpenCode integration with the brewed version:
+
+```sh
+"$(brew --prefix vgxness)/bin/vgxness" setup opencode --preview
+"$(brew --prefix vgxness)/bin/vgxness" setup opencode --yes
+```
+
+The setup wizard creates a separate immutable installation and launcher under `~/.local`. After `brew upgrade vgxness`, rerun the preview and approved setup commands to activate the upgraded managed version. Removing the formula does not remove that separate managed installation. The formula source and complete ownership guidance live in the [official Homebrew tap](https://github.com/uzielvgx/homebrew-tap).
+
+### Direct archive
+
 Extract the selected archive, enter its top-level directory, and inspect its metadata:
 
 ```sh
