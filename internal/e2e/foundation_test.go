@@ -72,6 +72,9 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		if strings.Contains(workflow, "go mod tidy\n") || strings.Contains(workflow, "go test -c -o") || strings.Contains(workflow, "while IFS=") {
 			t.Error("workflow contains a mutating tidy or serial Windows test compilation")
 		}
+		if strings.Count(workflow, "run: go mod download") != 4 {
+			t.Error("test lanes with nested offline builds must prefetch modules on cold runners")
+		}
 	})
 	t.Run("coverage upload survives failure", func(t *testing.T) {
 		upload := strings.Index(workflow, "- name: Upload coverage")

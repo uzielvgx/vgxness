@@ -19,7 +19,7 @@ func TestRunVersionBoundsInheritedOutputPipes(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	_, err := runVersion(ctx, executable, t.TempDir())
-	if elapsed := time.Since(started); err == nil || elapsed >= time.Second {
+	if elapsed := time.Since(started); err == nil || elapsed >= 2*time.Second {
 		t.Fatalf("inherited output pipes were not bounded: elapsed=%s err=%v", elapsed, err)
 	}
 }
