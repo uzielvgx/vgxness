@@ -1,6 +1,13 @@
 name: Go CI
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact Git revision to validate
+        required: false
+        type: string
+        default: ""
   pull_request:
     branches: [main]
   push:
@@ -14,21 +21,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
+  coverage:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.3
           cache: true
-      - name: Test
-        run: go test ./...
-      - name: Coverage
-        if: always()
-        run: go test -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Test with coverage
+        run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -36,33 +41,78 @@ jobs:
           name: go-coverage
           path: coverage.out
           if-no-files-found: warn
+
+  race:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
       - name: Race
-        run: go test -race ./...
+        run: go test -count=1 -race ./...
+
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
       - name: Vet
         run: go vet ./...
       - name: Format
         run: test -z "$(gofmt -l .)"
       - name: Tidy
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
+        run: go mod tidy -diff
+      - name: Whitespace
+        run: git diff --check
       - name: Verify modules
         run: go mod verify
       - name: Build
         run: go build -trimpath ./...
+
+  linux-e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
       - name: Hermetic clean-checkout E2E
-        run: go test -tags=e2e -count=1 ./internal/e2e
+        run: go test -tags=e2e -count=1 -run '^TestCleanCheckoutSetupAndNativeSDD$' ./internal/e2e
+
+  windows-compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
       - name: Cross-build Windows
         run: |
           GOOS=windows GOARCH=amd64 go build -trimpath ./...
           GOOS=windows GOARCH=arm64 go build -trimpath ./...
-      - name: Compile Windows tests
+      - name: Compile and link Windows tests
         run: |
-          set -euo pipefail
-          while IFS= read -r package; do
-            GOOS=windows GOARCH=amd64 go test -c -o /dev/null "$package"
-          done < <(go list ./...)
-          GOOS=windows GOARCH=amd64 go test -tags=e2e -c -o /dev/null ./internal/e2e
+          GOOS=windows GOARCH=amd64 go test -count=1 -run '^$' -exec=/usr/bin/true ./...
+          GOOS=windows GOARCH=amd64 go test -tags=e2e -count=1 -run '^$' -exec=/usr/bin/true ./internal/e2e
 
   windows-install:
     runs-on: windows-latest
@@ -70,6 +120,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.3
@@ -78,3 +129,22 @@ jobs:
         run: go test -count=1 ./internal/launcher ./internal/selfinstall ./internal/setup ./internal/cli
       - name: Native Windows self-install lifecycle
         run: go test -tags=e2e -count=1 -run '^TestWindowsSelfInstallLifecycle$' ./internal/e2e
+
+  standard:
+    name: Standard validation
+    if: ${{ always() }}
+    needs: [coverage, race, static, linux-e2e, windows-compile, windows-install]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every standard lane
+        env:
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          STATIC_RESULT: ${{ needs.static.result }}
+          LINUX_E2E_RESULT: ${{ needs.linux-e2e.result }}
+          WINDOWS_COMPILE_RESULT: ${{ needs.windows-compile.result }}
+          WINDOWS_INSTALL_RESULT: ${{ needs.windows-install.result }}
+        run: |
+          for result in "$COVERAGE_RESULT" "$RACE_RESULT" "$STATIC_RESULT" "$LINUX_E2E_RESULT" "$WINDOWS_COMPILE_RESULT" "$WINDOWS_INSTALL_RESULT"; do
+            test "$result" = success || exit 1
+          done

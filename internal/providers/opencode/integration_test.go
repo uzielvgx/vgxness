@@ -41,6 +41,7 @@ func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 }
 
 func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory}
@@ -181,6 +182,7 @@ func TestRequestedModelPlanOverlaysInstalledCustomSlots(t *testing.T) {
 }
 
 func TestIntegrationResumesExactMixedModelPlanSwitch(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	oldOptions := integration.Options{
@@ -275,6 +277,7 @@ func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
 }
 
 func TestIntegration_RepairsOnlyMissingManagedArtifact(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
@@ -293,6 +296,13 @@ func TestIntegration_RepairsOnlyMissingManagedArtifact(t *testing.T) {
 	after, err := os.Stat(managerPath)
 	testutil.NoError(t, err)
 	testutil.Require(t, installed.State == integration.StateInstalled && installed.Changed && os.SameFile(before, after), "partial repair replaced existing artifact: %#v", installed)
+}
+
+func skipShortIntegration(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping filesystem integration lifecycle in short mode")
+	}
 }
 
 func TestIntegration_UpgradesExactPriorManagerAndPlugin(t *testing.T) {

@@ -13,6 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  standard-validation:
+    uses: ./.github/workflows/go-ci.yml
+    with:
+      ref: ${{ github.sha }}
+    permissions:
+      contents: read
+
   build:
     runs-on: ubuntu-24.04
     steps:
@@ -23,11 +30,6 @@ jobs:
         with:
           go-version: 1.26.3
           cache: true
-      - name: Validate tagged source
-        run: |
-          go test ./...
-          go vet ./...
-          go mod verify
       - name: Build release assets
         shell: bash
         run: |
@@ -105,7 +107,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $status -notcontains "state=installed") { throw "Windows launcher status failed" }
 
   publish:
-    needs: [build, windows-smoke]
+    needs: [standard-validation, build, windows-smoke]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

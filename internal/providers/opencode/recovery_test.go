@@ -86,6 +86,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 }
 
 func TestReinstallChangesOnlyManagedArtifacts(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory}
@@ -127,6 +128,7 @@ func TestReinstallChangesOnlyManagedArtifacts(t *testing.T) {
 }
 
 func TestReinstallRollbackRestoresOldManagedSet(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory}
@@ -171,6 +173,7 @@ func TestReinstallRollbackRestoresOldManagedSet(t *testing.T) {
 }
 
 func TestReinstallRollbackNeverOverwritesConcurrentReplacement(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory}
@@ -270,6 +273,7 @@ func TestUpgradeNeverOverwritesConcurrentReplacement(t *testing.T) {
 }
 
 func TestReinstallCancellationRestoresManagedSet(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory}
@@ -293,6 +297,7 @@ func TestReinstallCancellationRestoresManagedSet(t *testing.T) {
 }
 
 func TestReinstallMovesRecognizedTargetToAnchorBeforePublishing(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory}
@@ -346,6 +351,7 @@ func TestReinstallMovesRecognizedTargetToAnchorBeforePublishing(t *testing.T) {
 }
 
 func TestReinstallMovedRollbackNeverOverwritesConcurrentTarget(t *testing.T) {
+	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory}

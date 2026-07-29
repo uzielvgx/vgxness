@@ -32,10 +32,10 @@ The complete repository test suite runs on Linux in CI. Windows CI intentionally
 ## Release process
 
 1. Update `CHANGELOG.md` and confirm the intended tag is strict `v`-prefixed SemVer.
-2. Run the repository quality gates and tagged E2E suite.
+2. Run `make verify`; native Windows installation evidence remains CI-only.
 3. Create and push the tag. Branch pushes do not create releases.
-4. The tag workflow derives the exact 40-character commit and its committer RFC3339 date, then runs `go run ./cmd/vgxness-release` with those values.
-5. The workflow verifies checksums and native Linux amd64 and Windows amd64 install paths before publishing the six archives and `SHA256SUMS` with `gh release create --verify-tag`.
+4. The tag workflow calls the complete standard validation workflow at the exact tagged SHA while independently deriving the exact 40-character commit and its committer RFC3339 date and running `go run ./cmd/vgxness-release` with those values.
+5. Publication remains blocked on standard validation, complete asset construction, checksum verification, and native Linux amd64 and Windows amd64 install paths before publishing the six archives and `SHA256SUMS` with `gh release create --verify-tag`.
 
 For a local rehearsal from the repository root:
 
