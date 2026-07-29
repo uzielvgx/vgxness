@@ -197,9 +197,9 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	return version, nil
 }
 
-// ResolveProject binds one canonical workspace to one durable project identity.
-// A legacy basename identity is adopted once when it already owns observations;
-// new workspaces use a basename plus a path digest to avoid name collisions.
+// ResolveProject maps one canonical workspace to one durable project identity.
+// Writable stores persist the binding; read-only stores resolve the same identity
+// without creating a project or root binding.
 func (s *Store) ResolveProject(ctx context.Context, workspace string) (string, error) {
 	if err := cancelled(ctx); err != nil {
 		return "", err
@@ -223,6 +223,29 @@ func (s *Store) ResolveProject(ctx context.Context, workspace string) (string, e
 		name = name[:243]
 	}
 	stableID := fmt.Sprintf("%s-%x", string(name), digest[:6])
+	if s.readOnly {
+		var projectID string
+		err = s.db.QueryRowContext(ctx, `SELECT project_id FROM project_roots WHERE workspace_hash=?`, workspaceHash).Scan(&projectID)
+		if err == nil {
+			return projectID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", writeError(ctx, err)
+		}
+		var legacyAvailable int
+		if err = s.db.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM projects p
+				WHERE p.id=?
+				  AND NOT EXISTS(SELECT 1 FROM project_roots r WHERE r.project_id=p.id)
+			)`, legacyID).Scan(&legacyAvailable); err != nil {
+			return "", writeError(ctx, err)
+		}
+		if legacyAvailable == 1 {
+			return legacyID, nil
+		}
+		return stableID, nil
+	}
 
 	conn, err := s.db.Conn(ctx)
 	if err != nil {

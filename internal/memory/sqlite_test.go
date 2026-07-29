@@ -100,6 +100,42 @@ func TestResolveProject_AdoptsLegacyOnceAndSeparatesSameNamedWorkspaces(t *testi
 	testutil.Require(t, err == nil && secondProject != "" && secondProject != firstProject && strings.HasPrefix(secondProject, "same-"), "collision project=%q err=%v", secondProject, err)
 }
 
+func TestResolveProject_ReadOnlyResolvesWithoutCreatingBindings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store := openPath(t, path)
+	root := t.TempDir()
+	boundWorkspace := filepath.Join(root, "bound")
+	legacyWorkspace := filepath.Join(root, "legacy")
+	newWorkspace := filepath.Join(root, "new")
+	for _, workspace := range []string{boundWorkspace, legacyWorkspace, newWorkspace} {
+		testutil.NoError(t, os.MkdirAll(workspace, 0o700))
+	}
+	boundProject, err := store.ResolveProject(context.Background(), boundWorkspace)
+	testutil.NoError(t, err)
+	mustSave(t, store, observation("legacy-observation", "legacy", "legacy project token"))
+	var projectsBefore, rootsBefore int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projectsBefore))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM project_roots`).Scan(&rootsBefore))
+	testutil.NoError(t, store.Close())
+
+	readOnly, err := OpenRead(context.Background(), path)
+	testutil.NoError(t, err)
+	resolvedBound, err := readOnly.ResolveProject(context.Background(), boundWorkspace)
+	testutil.Require(t, err == nil && resolvedBound == boundProject, "bound=%q want=%q err=%v", resolvedBound, boundProject, err)
+	resolvedLegacy, err := readOnly.ResolveProject(context.Background(), legacyWorkspace)
+	testutil.Require(t, err == nil && resolvedLegacy == "legacy", "legacy=%q err=%v", resolvedLegacy, err)
+	resolvedNew, err := readOnly.ResolveProject(context.Background(), newWorkspace)
+	testutil.Require(t, err == nil && strings.HasPrefix(resolvedNew, "new-"), "new=%q err=%v", resolvedNew, err)
+	testutil.NoError(t, readOnly.Close())
+
+	store = openPath(t, path)
+	defer store.Close()
+	var projectsAfter, rootsAfter int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projectsAfter))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM project_roots`).Scan(&rootsAfter))
+	testutil.Require(t, projectsAfter == projectsBefore && rootsAfter == rootsBefore, "read-only resolution mutated storage: projects=%d/%d roots=%d/%d", projectsBefore, projectsAfter, rootsBefore, rootsAfter)
+}
+
 func TestImportLegacy_MergesProjectsIdempotentlyWithoutMutatingSource(t *testing.T) {
 	legacyPath := filepath.Join(t.TempDir(), "legacy.db")
 	legacy, err := sql.Open("sqlite", legacyPath)

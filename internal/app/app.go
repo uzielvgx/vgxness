@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/vgxness/vgxness/internal/cli"
 	"github.com/vgxness/vgxness/internal/config"
@@ -16,11 +18,22 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/vgxness/vgxness/internal/tui"
 )
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return run(ctx, args, stdin, stdout, stderr, tui.Run)
+}
+
+type tuiLauncher func(context.Context, io.Reader, io.Writer, io.Writer, tui.Backend, tui.Options) int
+
+func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher) int {
 	if len(args) > 0 && args[0] == "version" {
 		return cli.RunVersion(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "tui" && len(args) != 1 {
+		fmt.Fprintln(stderr, "usage: vgxness tui")
+		return 2
 	}
 	installer := selfinstall.New(selfinstall.Config{})
 	integrationRuntime := opencode.NewIntegration()
@@ -29,7 +42,20 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	setupRuntime := setupflow.New(installer, integrationRuntime, func(executable string) (integration.Runtime, error) {
 		return opencode.NewManagedIntegration(executable)
 	}, controlPlane)
-	deliveryRuntime, err := delivery.New(mustWorkspace())
+	workspace := mustWorkspace()
+	if len(args) == 1 && args[0] == "tui" {
+		if launchTUI == nil {
+			fmt.Fprintln(stderr, "operational: TUI launcher is unavailable")
+			return 1
+		}
+		backend := tuiBackend{
+			inspection: inspection.Service{Health: memory.HealthFile},
+			setup:      setupRuntime,
+			memory:     memoryRuntime{producer: "cli", readOnly: true},
+		}
+		return launchTUI(ctx, stdin, stdout, stderr, backend, tui.Options{Workspace: workspace})
+	}
+	deliveryRuntime, err := delivery.New(workspace)
 	if err != nil {
 		return 1
 	}
@@ -44,7 +70,10 @@ func mustWorkspace() string {
 	return workspace
 }
 
-type memoryRuntime struct{ producer string }
+type memoryRuntime struct {
+	producer string
+	readOnly bool
+}
 
 func (runtime memoryRuntime) Remember(ctx context.Context, opts config.Options, request memory.Remember) (memory.Entry, error) {
 	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Remember(ctx, request)
@@ -81,13 +110,129 @@ func (runtime memoryRuntime) Search(ctx context.Context, opts config.Options, re
 	return runtime.Recall(ctx, opts, request)
 }
 
-func (memoryRuntime) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
-	store, err := openStore(ctx, opts)
+func (runtime memoryRuntime) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
+	var store *memory.Store
+	var err error
+	if runtime.readOnly {
+		store, err = openStoreRead(ctx, opts)
+	} else {
+		store, err = openStore(ctx, opts)
+	}
 	if err != nil {
 		return "", err
 	}
 	defer store.Close()
 	return store.ResolveProject(ctx, workspace)
+}
+
+type tuiInspectionRuntime interface {
+	Status(context.Context, config.Options) (inspection.Result, error)
+}
+
+type tuiSetupRuntime interface {
+	Status(context.Context, setupflow.Options) (setupflow.Plan, error)
+}
+
+type tuiMemoryRuntime interface {
+	ResolveProject(context.Context, config.Options, string) (string, error)
+	Recall(context.Context, config.Options, memory.Recall) ([]memory.Entry, error)
+	Recent(context.Context, config.Options, memory.Recent) ([]memory.Entry, error)
+	Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error)
+}
+
+type tuiBackend struct {
+	inspection tuiInspectionRuntime
+	setup      tuiSetupRuntime
+	memory     tuiMemoryRuntime
+}
+
+func (backend tuiBackend) Inspect(ctx context.Context, request tui.Request) (tui.Inspection, error) {
+	result, err := backend.inspection.Status(ctx, config.Options{ProjectDir: request.Workspace})
+	if err != nil {
+		return tui.Inspection{}, err
+	}
+	return tui.Inspection{
+		Root: result.Root, Database: result.Database, Migration: result.Migration,
+		ChroniclePresent: result.ChroniclePresent, RunID: result.RunID,
+	}, nil
+}
+
+func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) (tui.SetupStatus, error) {
+	workspace, err := filepath.Abs(request.Workspace)
+	if err != nil {
+		return tui.SetupStatus{}, err
+	}
+	plan, err := backend.setup.Status(ctx, setupflow.Options{Workspace: filepath.Clean(workspace)})
+	if err != nil {
+		return tui.SetupStatus{}, err
+	}
+	return tui.SetupStatus{
+		Provider: plan.Provider, Ready: plan.Ready, Blocker: plan.Blocker,
+		SelfInstallState: fmt.Sprint(plan.SelfInstall.State), SelfInstallPath: plan.SelfInstall.LauncherPath,
+		IntegrationState: fmt.Sprint(plan.Integration.State), IntegrationPath: plan.Integration.Path,
+		ArtifactCount: plan.Integration.ArtifactCount,
+		BridgeOK:      plan.Bridge.OK, BridgeStatus: plan.Bridge.Status, ModelPlan: fmt.Sprint(plan.Integration.ModelPlan),
+	}, nil
+}
+
+func (backend tuiBackend) Recent(ctx context.Context, request tui.Request) ([]tui.MemorySummary, error) {
+	opts := config.Options{ProjectDir: request.Workspace}
+	project, err := backend.memory.ResolveProject(ctx, opts, request.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := backend.memory.Recent(ctx, opts, memory.Recent{Project: project, Scope: memory.ScopeProject, Limit: 5})
+	if err != nil {
+		return nil, err
+	}
+	return tuiMemorySummaries(entries), nil
+}
+
+func (backend tuiBackend) Search(ctx context.Context, request tui.MemorySearch) ([]tui.MemorySummary, error) {
+	opts := config.Options{ProjectDir: request.Workspace}
+	project, err := backend.memory.ResolveProject(ctx, opts, request.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := backend.memory.Recall(ctx, opts, memory.Recall{
+		Query: request.Query, Project: project, Scope: memory.ScopeProject,
+		Limit: request.Limit, MatchAny: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tuiMemorySummaries(entries), nil
+}
+
+func (backend tuiBackend) GetMemory(ctx context.Context, request tui.MemoryLookup) (tui.MemoryDetail, error) {
+	opts := config.Options{ProjectDir: request.Workspace}
+	project, err := backend.memory.ResolveProject(ctx, opts, request.Workspace)
+	if err != nil {
+		return tui.MemoryDetail{}, err
+	}
+	entry, err := backend.memory.Get(ctx, opts, memory.Lookup{ID: request.ID, Project: project, Scope: memory.ScopeProject})
+	if err != nil {
+		return tui.MemoryDetail{}, err
+	}
+	return tui.MemoryDetail{
+		ID: entry.ID, Title: entry.Title, Content: entry.Content,
+		Project: entry.Project, Scope: string(entry.Scope), Type: entry.Type,
+		TopicKey: entry.TopicKey, Session: entry.Session, Producer: entry.Producer,
+		SourceProvider: entry.SourceProvider, SourceID: entry.SourceID,
+		State: string(entry.State), CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt,
+		References: append([]string(nil), entry.References...),
+	}, nil
+}
+
+func tuiMemorySummaries(entries []memory.Entry) []tui.MemorySummary {
+	result := make([]tui.MemorySummary, len(entries))
+	for index, entry := range entries {
+		result[index] = tui.MemorySummary{
+			ID: entry.ID, Title: entry.Title, Preview: entry.Preview, Type: entry.Type,
+			State: string(entry.State), UpdatedAt: entry.UpdatedAt,
+		}
+	}
+	return result
 }
 
 func (runtime memoryRuntime) producerName() string {
