@@ -31,7 +31,7 @@ func (runtime *recordingRecoveryRuntime) PlanProtectedReinstall(_ context.Contex
 	runtime.calls = append(runtime.calls, "plan")
 	runtime.planRequest = request
 	return setupflow.ProtectedReinstallPlan{
-		Mode: request.Mode, SourceRoot: "/config/opencode", BackupRoot: "/backups", ManagedArtifactCount: 14,
+		Mode: request.Mode, SourceRoot: "/config/opencode", BackupRoot: "/backups", ManagedArtifactCount: 15,
 		Ready: true, Integration: integration.Result{State: integration.StateInstalled},
 		Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy},
 	}, nil
@@ -42,14 +42,14 @@ func (runtime *recordingRecoveryRuntime) ListBackups(_ context.Context, request 
 	runtime.listRequest = request
 	return setupflow.BackupListResult{Backups: []opencodebackup.Summary{{
 		SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", CreatedAt: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
-		Mode: opencodebackup.ModeManaged, EntryCount: 14, TotalBytes: 2048,
+		Mode: opencodebackup.ModeManaged, EntryCount: 15, TotalBytes: 2048,
 	}}}, nil
 }
 
 func (runtime *recordingRecoveryRuntime) CreateBackup(_ context.Context, request setupflow.BackupRequest) (setupflow.BackupResult, error) {
 	runtime.calls = append(runtime.calls, "create")
 	runtime.createRequest = request
-	summary := opencodebackup.Summary{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", Mode: request.Mode, EntryCount: 14}
+	summary := opencodebackup.Summary{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", Mode: request.Mode, EntryCount: 15}
 	return setupflow.BackupResult{Mode: request.Mode, Summary: summary, Snapshot: opencodebackup.Snapshot{Manifest: opencodebackup.Manifest{SnapshotID: summary.SnapshotID, Mode: request.Mode}, Summary: summary}}, nil
 }
 
@@ -75,7 +75,7 @@ func (runtime *recordingRecoveryRuntime) ProtectedReinstall(_ context.Context, r
 	runtime.missing = []string{"agents/missing.md"}
 	return setupflow.ProtectedReinstallResult{
 		Mode: request.Mode, SnapshotVerified: true,
-		Snapshot:    opencodebackup.Snapshot{Summary: opencodebackup.Summary{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", Mode: request.Mode, EntryCount: 14}},
+		Snapshot:    opencodebackup.Snapshot{Summary: opencodebackup.Summary{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", Mode: request.Mode, EntryCount: 15}},
 		Integration: integration.Result{State: integration.StateInstalled},
 		Handshake:   integration.Handshake{OK: true, Status: integration.HandshakeHealthy},
 		Recovery:    setupflow.RecoveryAttempt{Attempted: true, Missing: runtime.missing, Guidance: "Inspect retained snapshot."},
@@ -88,7 +88,7 @@ func TestTUIRecoveryBackendMapsModesPathsAndClonesSlices(t *testing.T) {
 	workspace := "workspace/../project"
 
 	plan, err := backend.PlanRecovery(context.Background(), tui.RecoveryPlanRequest{Workspace: workspace, BackupRoot: "/backups", Mode: "full"})
-	if err != nil || !plan.Ready || plan.Mode != "full" || plan.ArtifactCount != 14 || !plan.HandshakeOK || plan.HandshakeStatus != integration.HandshakeHealthy.String() {
+	if err != nil || !plan.Ready || plan.Mode != "full" || plan.ArtifactCount != 15 || !plan.HandshakeOK || plan.HandshakeStatus != integration.HandshakeHealthy.String() {
 		t.Fatalf("PlanRecovery()=%+v, %v", plan, err)
 	}
 	if runtime.planRequest.Mode != opencodebackup.ModeFull || runtime.planRequest.BackupRoot != "/backups" || !strings.HasSuffix(runtime.planRequest.Options.Workspace, "/project") {

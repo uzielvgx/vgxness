@@ -41,7 +41,7 @@ func TestProtectedReinstallCreatesAndVerifiesBackupBeforeMutation(t *testing.T) 
 	if create < 0 || verify <= create || reinstall <= verify {
 		t.Fatalf("backup was not verified before reinstall: %v", calls)
 	}
-	if backups.options.SourceRoot != layout.Root || len(backups.options.ManagedPaths) != 14 || backups.options.Launcher == nil || backups.options.Launcher.ActiveSHA256 != launcherStatus.ActiveSHA256 {
+	if backups.options.SourceRoot != layout.Root || len(backups.options.ManagedPaths) != 15 || backups.options.Launcher == nil || backups.options.Launcher.ActiveSHA256 != launcherStatus.ActiveSHA256 {
 		t.Fatalf("backup options do not bind managed layout and launcher: %+v", backups.options)
 	}
 }
@@ -184,13 +184,13 @@ func TestProtectedReinstallRecoveryRestoresOnlyMissingManagedPaths(t *testing.T)
 func TestProtectedReinstallPlanBlocksInvalidModeRootAndInventory(t *testing.T) {
 	launcherStatus := managedLauncherForRecoveryTest(t)
 	layout := recoveryLayout(t.TempDir())
-	managed := &recoveryManaged{status: integration.Result{State: integration.StateInstalled, ArtifactCount: 14}, layout: layout}
+	managed := &recoveryManaged{status: integration.Result{State: integration.StateInstalled, ArtifactCount: 15}, layout: layout}
 	service := recoveryService(launcherStatus, managed, &recoveryBackups{}, healthyRecoveryProber(), nil)
 	if _, err := service.PlanProtectedReinstall(context.Background(), ProtectedReinstallRequest{Options: Options{Workspace: t.TempDir()}, Mode: opencodebackup.Mode("invalid"), BackupRoot: t.TempDir()}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("invalid mode error = %v", err)
 	}
 
-	managed.layout.Artifacts = managed.layout.Artifacts[:13]
+	managed.layout.Artifacts = managed.layout.Artifacts[:14]
 	plan, err := service.PlanProtectedReinstall(context.Background(), ProtectedReinstallRequest{Options: Options{Workspace: t.TempDir()}, Mode: opencodebackup.ModeManaged, BackupRoot: t.TempDir()})
 	if err != nil || plan.Ready || plan.Blocker == "" {
 		t.Fatalf("invalid inventory plan=%+v err=%v", plan, err)
@@ -377,9 +377,9 @@ func recoveryService(status selfinstall.Result, managed *recoveryManaged, backup
 }
 
 func recoveryLayout(root string) integration.ManagedLayout {
-	artifacts := make([]integration.ManagedArtifact, 14)
+	artifacts := make([]integration.ManagedArtifact, 15)
 	for index := range artifacts {
-		artifacts[index] = integration.ManagedArtifact{RelativePath: "agents/artifact-" + string(rune('a'+index)), SHA256: strings.Repeat(string("0123456789abcd"[index]), 64)}
+		artifacts[index] = integration.ManagedArtifact{RelativePath: "agents/artifact-" + string(rune('a'+index)), SHA256: strings.Repeat(string("0123456789abcde"[index]), 64)}
 	}
 	return integration.ManagedLayout{Root: root, Artifacts: artifacts, AggregateSHA256: recoveryLayoutDigest(artifacts)}
 }

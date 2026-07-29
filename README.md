@@ -2,7 +2,7 @@
 
 VGXNESS is a local OpenCode-native manager product. The Go 1.26 repository delivers the `vgxness` executable, versioned self-installation, a keyboard-first TUI, SQLite/FTS5 schema v5, native memory and SDD storage, OpenSpec backends, guided setup, and release tooling.
 
-The installed projection has 14 managed artifacts: `vgxness-manager` v30, five read-only reviewers, six read-only SDD profiles, storage plugin v5, and the model-plan manifest. The plugin exposes five semantic-memory tools and 13 SDD tools. OpenCode owns execution; the manager is the sole workspace and lifecycle writer. The storage plugin never executes, routes, edits, or delegates, and SDD mutations fail closed outside the tracked top-level manager session.
+The installed projection has 15 managed artifacts: `vgxness-manager` v31, a CodeGraph-first read-only `explore` override, five read-only reviewers, six read-only SDD profiles, storage plugin v5, and the model-plan manifest. The plugin exposes five semantic-memory tools and 13 SDD tools. OpenCode owns execution; the manager is the sole workspace and lifecycle writer. The storage plugin never executes, routes, edits, or delegates, and SDD mutations fail closed outside the tracked top-level manager session.
 
 The read-only `status` and `doctor` commands report storage root, database, and schema health. Compatibility execution commands and subsystems are not part of the product.
 

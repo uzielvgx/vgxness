@@ -100,6 +100,9 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 			t.Fatalf("incomplete step %d: %#v", index, step)
 		}
 	}
+	if !strings.Contains(plan.Steps[2].Explanation, "sustitución administrada y de solo lectura para Explore") || strings.Contains(plan.Steps[2].Explanation, "Explore y general integrados no se sobrescriben") {
+		t.Fatalf("step 3 does not describe the managed Explore override: %q", plan.Steps[2].Explanation)
+	}
 }
 
 func TestPlanReportsUnavailablePrerequisiteWithoutApplying(t *testing.T) {

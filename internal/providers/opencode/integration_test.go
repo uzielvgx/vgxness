@@ -87,7 +87,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
 			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
-			installed.ArtifactCount == 14 &&
+			installed.ArtifactCount == 15 &&
 			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired && os.IsNotExist(configErr) &&
 			bytes.Equal(data, bundle.agents[managerAgentName]) &&
@@ -263,7 +263,7 @@ func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
 		config.ActivePlan = plan
 		bundle, err := buildModelPlanBundle(config)
 		testutil.NoError(t, err)
-		if len(bundle.agents) != 12 {
+		if len(bundle.agents) != 13 {
 			t.Fatalf("plan %s agents=%d", plan, len(bundle.agents))
 		}
 		for name, content := range bundle.agents {
@@ -349,7 +349,7 @@ func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
 	status, err := service.Status(context.Background(), options)
 	testutil.Require(t, err == nil && status.State == integration.StatePartial, "status=%+v err=%v", status, err)
 	installed, err := service.Install(context.Background(), options)
-	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.ArtifactCount == 14, "installed=%+v err=%v", installed, err)
+	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.ArtifactCount == 15, "installed=%+v err=%v", installed, err)
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for name, expected := range bundle.agents {
@@ -360,8 +360,9 @@ func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
 
 func TestIntegrationUpgradesExactInstalledHistoricalModelPlans(t *testing.T) {
 	for name, build := range map[string]func(sdd.ModelPlanConfig) (modelPlanBundle, error){
-		"v29": buildPreviousModelPlanBundle,
-		"v28": buildLegacyModelPlanBundle,
+		"v30": buildV30ModelPlanBundle,
+		"v29": buildV29ModelPlanBundle,
+		"v28": buildV28ModelPlanBundle,
 	} {
 		t.Run(name, func(t *testing.T) {
 			configDirectory := filepath.Join(t.TempDir(), "opencode")
@@ -568,7 +569,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 30",
+		"artifact: opencode-agent/vgxness-manager; version: 31",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"OpenCode's native tools, skills, memory, Task subagents",
@@ -576,7 +577,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"Delegated direct",
 		"Optional SDD",
 		"OpenCode is the execution authority for normal work",
-		"built-in explore and general subagents",
+		"VGXNESS-managed explore override and built-in general subagent",
 		"relevant native skill names",
 		"load every clearly applicable skill through the skill tool",
 		"Pass exact skill names, never filesystem paths",

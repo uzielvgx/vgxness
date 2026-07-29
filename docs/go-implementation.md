@@ -12,7 +12,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
 | `internal/memory` | SQLite/FTS5 schema v5, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
-| `internal/providers/opencode` | Manager v30, five reviewers, six SDD profiles, plugin v5, model-plan manifest, exact prior-artifact recognizers, sync plumbing, and the setup handshake. |
+| `internal/providers/opencode` | Manager v31, read-only `explore` override, five reviewers, six SDD profiles, plugin v5, model-plan manifest, exact prior-artifact recognizers, sync plumbing, and the setup handshake. |
 | `internal/integration`, `internal/setup` | Managed artifact lifecycle and six-step CLI/TUI setup workflow. |
 | `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
 | `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |
@@ -41,9 +41,10 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 ## Managed projection
 
-The OpenCode projection contains 14 exact managed artifacts:
+The OpenCode projection contains 15 exact managed artifacts:
 
-- manager v30;
+- manager v31;
+- one CodeGraph-first, deny-by-default read-only `explore` override;
 - five hidden read-only reviewers;
 - six hidden read-only SDD profiles;
 - storage plugin v5;

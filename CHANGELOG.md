@@ -4,6 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Adds a model-bound, CodeGraph-first `explore` override with deny-by-default read-only permissions, updates the manager to v31, preserves exact v30/v29/v28 upgrade recognition, and hardens upgrades against concurrent replacement while retaining recovery anchors on conflict.
 - Removes the compatibility execution bridge, control plane, Chronicle, provider runner, compatibility commands, schemas, and related documentation, leaving the OpenCode-native manager, storage, setup, inspection, memory, SDD, launcher, and release product.
 - Adds an official SHA-256-pinned Homebrew tap for macOS and Linux with explicit Homebrew and managed OpenCode ownership boundaries.
 - Adds an official script-free Scoop bucket for Windows amd64 and ARM64 with native Windows installation validation.

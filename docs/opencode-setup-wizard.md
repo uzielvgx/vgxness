@@ -4,12 +4,12 @@ The wizard explains and verifies the complete OpenCode setup before changing any
 
 1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
 2. Install or update the permanent versioned launcher.
-3. Install `vgxness-manager`, five hidden read-only review profiles, and six hidden SDD profiles.
+3. Install `vgxness-manager`, the read-only `explore` override, five hidden read-only review profiles, and six hidden SDD profiles.
 4. Install the bounded VGXNESS-owned storage plugin and `<config-dir>/vgxness/model-plan.json`.
 5. Read back all managed identities and perform the live OpenCode handshake.
 6. Report recovery guidance if any step fails.
 
-The resulting 14 managed artifacts are 12 agents, storage plugin v5, and the model-plan manifest. The agents are manager v30, five read-only reviewers, and six read-only SDD profiles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The installed manager is the sole workspace and lifecycle writer; the wizard does not install a child execution model, skills, CodeGraph indexes, or Engram.
+The resulting 15 managed artifacts are 13 agents, storage plugin v5, and the model-plan manifest. The agents are manager v31, one CodeGraph-first read-only `explore` override, five read-only reviewers, and six read-only SDD profiles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The installed manager is the sole workspace and lifecycle writer; the wizard does not install a child execution model, skills, CodeGraph indexes, or Engram.
 
 ## Commands
 
@@ -27,7 +27,7 @@ Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explic
 Preview is ready to apply when OpenCode responds healthily and no managed destination is drifted. Status is healthy when:
 
 - the permanent launcher identity is installed;
-- the manager, all five reviewer identities, and all six SDD identities are installed with the resolved model and variant;
+- the manager, `explore` override, all five reviewer identities, and all six SDD identities are installed with the resolved model and variant;
 - the exact storage-only plugin is installed;
 - the canonical non-secret model-plan manifest binds all model-aware agent digests;
 - the bounded OpenCode handshake succeeds in the workspace.

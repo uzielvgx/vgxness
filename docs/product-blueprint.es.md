@@ -15,7 +15,7 @@ VGXNESS es un manager nativo de OpenCode con almacenamiento local y herramientas
 - SQLite/FTS5 esquema v5 con dominios semántico y SDD aislados;
 - backends SDD `memory`, `openspec` e `hybrid`;
 - modos SDD `automatic` e `interactive` por cambio;
-- manager v30, cinco revisores, seis perfiles SDD, plugin v5 y manifiesto de modelos;
+- manager v31, una sustitución `explore` de solo lectura, cinco revisores, seis perfiles SDD, plugin v5 y manifiesto de modelos;
 - setup CLI/TUI de seis pasos con handshake delimitado de OpenCode 1.18.4+;
 - reconocimiento exacto de artefactos anteriores y upgrades conservadores;
 - archivos de release, checksums y workflows deterministas.
@@ -30,11 +30,12 @@ El plugin expone 18 herramientas: cinco de memoria semántica y 13 de SDD. Cada 
 
 ## Artefactos gestionados
 
-La proyección contiene exactamente 14 artefactos:
+La proyección contiene exactamente 15 artefactos:
 
 | Grupo | Cantidad | Contrato |
 | --- | ---: | --- |
-| Manager v30 | 1 | Único escritor de workspace y ciclo. |
+| Manager v31 | 1 | Único escritor de workspace y ciclo. |
+| Sustitución Explore | 1 | Descubrimiento CodeGraph-first, de solo lectura y denegado por defecto. |
 | Revisores | 5 | Ocultos y de solo lectura. |
 | Perfiles SDD | 6 | Ocultos, de solo lectura y ligados a modelos. |
 | Plugin v5 | 1 | Solo almacenamiento de memoria y SDD. |

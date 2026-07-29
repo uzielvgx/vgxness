@@ -14,16 +14,16 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
-func TestManagerV30DefinesEvidenceBoundedContract(t *testing.T) {
+func TestManagerV31DefinesEvidenceBoundedContract(t *testing.T) {
 	config := sdd.DefaultModelPlanConfig()
 	current, err := buildModelPlanBundle(config)
 	testutil.NoError(t, err)
-	previous, err := buildPreviousModelPlanBundle(config)
+	previous, err := buildV30ModelPlanBundle(config)
 	testutil.NoError(t, err)
 
 	prompt := string(current.agents[managerAgentName])
 	for _, contract := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 30",
+		"artifact: opencode-agent/vgxness-manager; version: 31",
 		"# Evidence-bounded delegation",
 		"goal, scope, nonGoals, acceptanceCriteria, evidenceScope, validation, and stopCondition",
 		"fact, inference, or unknown",
@@ -41,14 +41,14 @@ func TestManagerV30DefinesEvidenceBoundedContract(t *testing.T) {
 		t.Errorf("manager model selection is not bound exactly once")
 	}
 	if managerFrontmatter(t, prompt) != managerFrontmatter(t, string(previous.agents[managerAgentName])) {
-		t.Error("v30 changed manager permissions or the subagent allowlist")
+		t.Error("v31 changed manager permissions or the subagent allowlist")
 	}
 	if got := artifactSHA256([]byte(managerPrompt)); got != "27ff0b19e70b796e386c39b57db3e83d2be029b583b10a0622e11cf121e8e13d" {
 		t.Errorf("embedded historical manager v27 bytes changed: sha256=%s", got)
 	}
 }
 
-func TestManagerV30RejectsMissingOrDuplicateInsertionAnchor(t *testing.T) {
+func TestManagerV31RejectsMissingOrDuplicateInsertionAnchor(t *testing.T) {
 	config := sdd.DefaultModelPlanConfig()
 	bundle, err := buildModelPlanBundle(config)
 	testutil.NoError(t, err)
@@ -73,14 +73,15 @@ func TestManagerV30RejectsMissingOrDuplicateInsertionAnchor(t *testing.T) {
 	}
 }
 
-func TestHistoricalModelPlansRecognizeV29AndV28(t *testing.T) {
+func TestHistoricalModelPlansRecognizeV30V29AndV28(t *testing.T) {
 	config := sdd.DefaultModelPlanConfig()
 	for name, build := range map[string]struct {
 		version string
 		build   func(sdd.ModelPlanConfig) (modelPlanBundle, error)
 	}{
-		"immediate v29": {version: "version: 29", build: buildPreviousModelPlanBundle},
-		"legacy v28":    {version: "version: 28", build: buildLegacyModelPlanBundle},
+		"immediate v30": {version: "version: 30", build: buildV30ModelPlanBundle},
+		"legacy v29":    {version: "version: 29", build: buildV29ModelPlanBundle},
+		"legacy v28":    {version: "version: 28", build: buildV28ModelPlanBundle},
 	} {
 		t.Run(name, func(t *testing.T) {
 			bundle, err := build.build(config)
@@ -97,7 +98,7 @@ func TestHistoricalModelPlansRecognizeV29AndV28(t *testing.T) {
 	}
 }
 
-func TestIntegrationUpgradesOnlyExactManagedV29(t *testing.T) {
+func TestIntegrationUpgradesOnlyExactManagedV30(t *testing.T) {
 	for _, modified := range []bool{false, true} {
 		name := "exact"
 		if modified {
@@ -112,10 +113,10 @@ func TestIntegrationUpgradesOnlyExactManagedV29(t *testing.T) {
 
 			current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 			testutil.NoError(t, err)
-			previous, err := buildPreviousModelPlanBundle(sdd.DefaultModelPlanConfig())
+			previous, err := buildV30ModelPlanBundle(sdd.DefaultModelPlanConfig())
 			testutil.NoError(t, err)
-			if !bytes.Contains(previous.agents[managerAgentName], []byte("version: 29")) {
-				t.Fatal("upgrade fixture is not an exact managed v29 artifact")
+			if !bytes.Contains(previous.agents[managerAgentName], []byte("version: 30")) {
+				t.Fatal("upgrade fixture is not an exact managed v30 artifact")
 			}
 			for artifactName, content := range previous.agents {
 				testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", artifactName), content, 0o600))
@@ -132,19 +133,19 @@ func TestIntegrationUpgradesOnlyExactManagedV29(t *testing.T) {
 			if modified {
 				_, installErr := service.Install(context.Background(), options)
 				after, readErr := os.ReadFile(installed.Path)
-				testutil.Require(t, status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, priorManager), "modified v29 changed: status=%+v err=%v", status, installErr)
+				testutil.Require(t, status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, priorManager), "modified v30 changed: status=%+v err=%v", status, installErr)
 				return
 			}
 
-			testutil.Require(t, status.State == integration.StatePartial, "exact v29 status=%+v", status)
+			testutil.Require(t, status.State == integration.StatePartial, "exact v30 status=%+v", status)
 			upgraded, err := service.Install(context.Background(), options)
-			testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed, "v29 upgrade=%+v err=%v", upgraded, err)
+			testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed, "v30 upgrade=%+v err=%v", upgraded, err)
 			manager, managerErr := os.ReadFile(installed.Path)
 			manifest, manifestErr := os.ReadFile(installed.ManifestPath)
-			testutil.Require(t, managerErr == nil && manifestErr == nil && bytes.Equal(manager, current.agents[managerAgentName]) && bytes.Equal(manifest, current.manifest), "v30 readback mismatch: manager=%v manifest=%v", managerErr, manifestErr)
-			testutil.Require(t, upgraded.ArtifactSHA256 == artifactSHA256(manager) && upgraded.ManifestSHA256 == artifactSHA256(manifest), "v30 hashes do not bind readback")
+			testutil.Require(t, managerErr == nil && manifestErr == nil && bytes.Equal(manager, current.agents[managerAgentName]) && bytes.Equal(manifest, current.manifest), "v31 readback mismatch: manager=%v manifest=%v", managerErr, manifestErr)
+			testutil.Require(t, upgraded.ArtifactSHA256 == artifactSHA256(manager) && upgraded.ManifestSHA256 == artifactSHA256(manifest), "v31 hashes do not bind readback")
 			second, err := service.Install(context.Background(), options)
-			testutil.Require(t, err == nil && second.State == integration.StateInstalled && !second.Changed, "v30 install is not idempotent: result=%+v err=%v", second, err)
+			testutil.Require(t, err == nil && second.State == integration.StateInstalled && !second.Changed, "v31 install is not idempotent: result=%+v err=%v", second, err)
 		})
 	}
 }

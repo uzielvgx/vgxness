@@ -27,8 +27,12 @@ var managerPrompt string
 //go:embed templates/evidence-bounded-contract.md
 var managerEvidenceBoundedContract string
 
+//go:embed templates/explore.md
+var explorePrompt string
+
 const (
 	managerAgentName           = "vgxness-manager.md"
+	exploreAgentName           = "explore.md"
 	reviewRiskName             = "vgxness-review-risk.md"
 	reviewReadabilityName      = "vgxness-review-readability.md"
 	reviewReliabilityName      = "vgxness-review-reliability.md"
@@ -387,11 +391,14 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 				anchorBytes, anchorErr := readRegularFile(anchor.path)
 				if anchorErr != nil {
 					recoveryErr = errors.Join(recoveryErr, recoveryFailure("read reinstall rollback anchor", anchorErr))
+					continue
 				} else if err := restoreWithoutOverwrite(anchor.path, anchor.target); err != nil {
 					recoveryErr = errors.Join(recoveryErr, err)
+					continue
 				} else if restored, err := readRegularFile(anchor.target); err != nil || !bytes.Equal(restored, anchorBytes) {
 					recoveryErr = errors.Join(recoveryErr, recoveryFailure("verify restored reinstall predecessor", errors.Join(err, integration.ErrDrift)))
 				}
+				continue
 			}
 			if err := os.Remove(anchor.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove reinstall rollback anchor", err))
@@ -661,6 +668,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		return inspection{}, err
 	}
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
+	explorePath := filepath.Join(configDirectory, "agents", exploreAgentName)
 	reviewRiskPath := filepath.Join(configDirectory, "agents", reviewRiskName)
 	reviewReadabilityPath := filepath.Join(configDirectory, "agents", reviewReadabilityName)
 	reviewReliabilityPath := filepath.Join(configDirectory, "agents", reviewReliabilityName)
@@ -697,6 +705,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	managerPredecessors := append([][]byte{[]byte(managerPrompt)}, previousManagerPrompts()...)
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: managerPredecessors, regenerations: regeneration(managerPath)},
+		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", regenerations: regeneration(explorePath)},
 		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: [][]byte{[]byte(reviewRiskPrompt)}, regenerations: regeneration(reviewRiskPath)},
 		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: [][]byte{[]byte(reviewReadabilityPrompt)}, regenerations: regeneration(reviewReadabilityPath)},
 		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", predecessors: [][]byte{[]byte(reviewReliabilityPrompt)}, regenerations: regeneration(reviewReliabilityPath)},
@@ -804,11 +813,20 @@ func installArtifact(ctx context.Context, item artifact) (installedArtifact, err
 }
 
 func upgradeArtifact(ctx context.Context, item artifact) (installedArtifact, error) {
+	return upgradeArtifactAtCheckpoint(ctx, item, nil)
+}
+
+func upgradeArtifactAtCheckpoint(ctx context.Context, item artifact, checkpoint func() error) (installedArtifact, error) {
 	temporary, err := writeArtifactTemporary(ctx, item)
 	if err != nil {
 		return installedArtifact{}, err
 	}
-	defer os.Remove(temporary)
+	keepTemporary := false
+	defer func() {
+		if !keepTemporary {
+			_ = os.Remove(temporary)
+		}
+	}()
 	directory := filepath.Dir(item.path)
 	backup, err := vacantTemporaryPath(directory, ".vgxness-previous-*.tmp")
 	if err != nil {
@@ -827,21 +845,8 @@ func upgradeArtifact(ctx context.Context, item artifact) (installedArtifact, err
 	if readErr != nil || !bytes.Equal(prior, item.prior) || !sameFile(item.path, backup) {
 		return installedArtifact{}, fmt.Errorf("%w: OpenCode integration artifact changed before upgrade", integration.ErrConflict)
 	}
-	anchor, err := vacantTemporaryPath(directory, ".vgxness-current-*.tmp")
-	if err != nil {
-		return installedArtifact{}, fmt.Errorf("prepare OpenCode integration replacement: %w", err)
-	}
-	if err := os.Link(temporary, anchor); err != nil {
-		return installedArtifact{}, fmt.Errorf("protect OpenCode integration replacement: %w", err)
-	}
-	keepAnchor := false
-	defer func() {
-		if !keepAnchor {
-			_ = os.Remove(anchor)
-		}
-	}()
 	if err := syncDirectory(directory); err != nil {
-		return installedArtifact{}, fmt.Errorf("sync OpenCode integration replacement: %w", err)
+		return installedArtifact{}, fmt.Errorf("sync OpenCode integration predecessor: %w", err)
 	}
 	current, readErr := readRegularFile(item.path)
 	if readErr != nil || !bytes.Equal(current, item.prior) || !sameFile(item.path, backup) {
@@ -850,16 +855,33 @@ func upgradeArtifact(ctx context.Context, item artifact) (installedArtifact, err
 	if err := ctx.Err(); err != nil {
 		return installedArtifact{}, err
 	}
-	if err := os.Rename(temporary, item.path); err != nil {
-		return installedArtifact{}, fmt.Errorf("replace OpenCode integration artifact: %w", err)
+	if checkpoint != nil {
+		if err := checkpoint(); err != nil {
+			return installedArtifact{}, err
+		}
 	}
-	installed := installedArtifact{path: item.path, temporary: anchor, backup: backup, content: item.content}
-	keepAnchor, keepBackup = true, true
+	if err := removeSameFileDurably(item.path, backup); err != nil {
+		keepBackup = true
+		return installedArtifact{}, fmt.Errorf("remove OpenCode integration predecessor; retained at %q: %w", backup, err)
+	}
+	if err := os.Link(temporary, item.path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			keepBackup = true
+			return installedArtifact{}, fmt.Errorf("%w: OpenCode integration artifact changed during upgrade; predecessor retained at %q", integration.ErrConflict, backup)
+		}
+		restoreErr := restoreWithoutOverwrite(backup, item.path)
+		if restoreErr != nil {
+			keepBackup = true
+		}
+		return installedArtifact{}, errors.Join(fmt.Errorf("replace OpenCode integration artifact: %w", err), recoveryFailure("restore integration predecessor", restoreErr))
+	}
+	installed := installedArtifact{path: item.path, temporary: temporary, backup: backup, content: item.content}
+	keepTemporary, keepBackup = true, true
 	if err := syncDirectory(directory); err != nil {
 		return installedArtifact{}, errors.Join(fmt.Errorf("sync OpenCode integration replacement: %w", err), rollbackInstalledArtifact(installed))
 	}
 	readback, readErr := readRegularFile(item.path)
-	if readErr != nil || !bytes.Equal(readback, item.content) || !sameFile(item.path, anchor) {
+	if readErr != nil || !bytes.Equal(readback, item.content) || !sameFile(item.path, temporary) {
 		return installedArtifact{}, errors.Join(fmt.Errorf("read back OpenCode integration replacement: %w", integration.ErrDrift), rollbackInstalledArtifact(installed))
 	}
 	return installed, nil
@@ -1701,7 +1723,7 @@ func sameFile(first, second string) bool {
 
 func restoreWithoutOverwrite(backup, target string) error {
 	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: integration target changed before uninstall rollback", integration.ErrRecovery)
+		return fmt.Errorf("%w: integration target changed; predecessor retained at %q", integration.ErrRecovery, backup)
 	}
 	if err := os.Link(backup, target); err != nil {
 		return fmt.Errorf("%w: restore uninstalled artifact: %v", integration.ErrRecovery, err)

@@ -1,6 +1,6 @@
 # OpenCode integration
 
-VGXNESS installs 14 managed artifacts: 12 agents (`vgxness-manager` v30, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, and one non-secret model-plan manifest.
+VGXNESS installs 15 managed artifacts: 13 agents (`vgxness-manager` v31, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, and one non-secret model-plan manifest.
 
 The plugin exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
 
@@ -46,7 +46,7 @@ vgxness integrate opencode uninstall
 
 Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna-fast`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS does not create or modify `opencode.json` and the storage plugin does not route models.
 
-Preview and status are read-only. Installation creates absent managed artifacts and atomically upgrades only exact catalogued older VGXNESS versions with matching artifact identities. The current catalogue installs manager v30 and storage plugin v5 and recognizes exact catalogued prior manager, plugin, and model-plan artifacts for upgrade. It refuses foreign, modified, malformed, equal-version drifted, or newer content. Uninstall removes only exact managed artifacts, writes recoverable hard-link backups, and refuses drift. A failed rollback or restore is returned as an explicit `recovery` failure instead of being hidden.
+Preview and status are read-only. Installation creates absent managed artifacts and atomically upgrades only exact catalogued older VGXNESS versions with matching artifact identities. The current catalogue installs manager v31 and storage plugin v5 and recognizes exact v30, v29, and v28 manager/model-plan artifacts plus catalogued prior plugin artifacts for upgrade. It refuses foreign, modified, malformed, equal-version drifted, or newer content. A foreign `agents/explore.md` is preserved byte-for-byte and reported as a conflict. Uninstall removes only exact managed artifacts, writes recoverable hard-link backups, and refuses drift. A failed rollback or restore is returned as an explicit `recovery` failure instead of being hidden.
 
 Changing the plan or a slot regenerates the same managed agent set only when every current byte still matches the installed current or exact prior manifest. An interrupted switch containing an exact mixture of those old and new bytes resumes safely; any unrelated byte drift blocks regeneration. The change becomes active only after OpenCode restarts. Manual modification of an agent, plugin, or manifest blocks regeneration.
 
@@ -91,13 +91,13 @@ Comparison reports `synced`, `drifted`, or `missing`. In hybrid mode memory is c
 
 ## Other native capabilities
 
-The manager uses ordinary OpenCode workspace tools, built-in `explore` and `general` Task workers, skills by native registry name, optional user-approved SDD, the five review profiles, and the six model-bound SDD profiles. VGXNESS does not override the built-in `explore` or `general` definitions.
+The manager uses ordinary OpenCode workspace tools, the VGXNESS-managed `explore` override, the built-in `general` Task worker, skills by native registry name, optional user-approved SDD, the five review profiles, and the six model-bound SDD profiles. The `explore` override is bound to the research role model and variant. Its deny-by-default permissions allow only `read`, `grep`, `glob`, `list`, `skill`, and `codegraph_explore`; it has no shell, write, network, question, or delegation access. VGXNESS does not override `general`.
 
 All six SDD profiles are read-only. Research, proposal, spec, design, and tasks return evidence or candidate artifact content; apply accepts an exact hash-bound mission and returns a bounded patch and validation plan without editing files or running commands. No SDD profile can ask questions, delegate, persist memory, save or accept revisions, record projections, or transition lifecycle state. The manager is the sole workspace writer, test runner, lifecycle authority, and authorized caller for SDD persistence mutations.
 
 Each accepted SDD change follows `explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete`. A transition requires an accepted artifact for the current phase; `openspec` and `hybrid` also require a current projection record bound to that revision and digest. The manager sends phase agents exact change, artifact, accepted-input, evidence-scope, and return contracts. It may overlap at most four independent read-only missions bound to the same inputs; final artifacts, manager-applied patches, validation, and all lifecycle writes remain sequential and single-authority.
 
-When a project has a healthy `.codegraph` index, the manager and reviewers may use one bounded `codegraph_explore` query for structural evidence. Exact source, Git diff, and test output remain authoritative.
+The managed `explore` override uses `codegraph_explore` first for structural evidence and falls back narrowly to native reads and search when the index is unavailable, stale, or insufficient. When a project has a healthy `.codegraph` index, the manager and reviewers may also use one bounded query. Exact source, Git diff, and test output remain authoritative.
 
 ### Adaptive workflow and interaction
 
@@ -123,10 +123,10 @@ TDD is not a universal gate. Documentation, passive assets, generated code, disp
 
 ## Health contract
 
-The integration is installed only when manager v30, all five reviewers, all six SDD profiles, storage plugin v5, and the model-plan manifest match their managed identities exactly. Setup health combines:
+The integration is installed only when manager v31, the read-only `explore` override, all five reviewers, all six SDD profiles, storage plugin v5, and the model-plan manifest match their managed identities exactly. Setup health combines:
 
 1. the permanent VGXNESS launcher is installed and verified;
-2. all 14 managed artifacts are installed without drift;
+2. all 15 managed artifacts are installed without drift;
 3. the bounded OpenCode handshake succeeds for the selected workspace.
 
 Restart OpenCode Desktop after installation or a plan switch so it reloads the profiles, model bindings, variants, and storage plugin.

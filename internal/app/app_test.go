@@ -172,7 +172,7 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 		Provider: "opencode", Steps: steps, Ready: true,
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/bin/vgxness"},
 		Integration: integration.Result{
-			State: integration.StatePartial, Path: "/config/manager.md", ArtifactCount: 14,
+			State: integration.StatePartial, Path: "/config/manager.md", ArtifactCount: 15,
 			ModelPlan: sdd.PlanHigh, ModelProvider: "acme", ModelEfficient: "acme/fast",
 			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", RestartRequired: true,
 		},
@@ -180,7 +180,7 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 	}
 	runtime := &recordingTUISetupRuntime{plan: plan, result: setupflow.Result{
 		Plan: plan, SelfInstall: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/bin/vgxness"},
-		Integration: integration.Result{State: integration.StateInstalled, Path: "/config/manager.md", ArtifactCount: 14, RestartRequired: true},
+		Integration: integration.Result{State: integration.StateInstalled, Path: "/config/manager.md", ArtifactCount: 15, RestartRequired: true},
 		Handshake:   integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, Changed: true, Recovery: "safe recovery",
 	}}
 	backend := tuiBackend{setup: runtime}
@@ -196,7 +196,7 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 	testutil.Require(t, runtime.plan.Steps[0].Title == "Check", "preview steps alias setupflow plan: %+v", runtime.plan.Steps)
 
 	result, err := backend.ApplySetup(context.Background(), tui.SetupRequest{Workspace: "/workspace", Plan: "low"})
-	testutil.Require(t, err == nil && result.Changed && result.SelfInstallState == "installed" && result.IntegrationState == "installed" && result.ArtifactCount == 14 && result.HandshakeOK && result.RestartRequired && result.Recovery == "safe recovery", "result=%+v err=%v", result, err)
+	testutil.Require(t, err == nil && result.Changed && result.SelfInstallState == "installed" && result.IntegrationState == "installed" && result.ArtifactCount == 15 && result.HandshakeOK && result.RestartRequired && result.Recovery == "safe recovery", "result=%+v err=%v", result, err)
 	testutil.Require(t, runtime.applyOptions.Workspace == "/workspace" && runtime.applyOptions.Integration.ModelPlan == sdd.PlanLow, "apply options=%+v", runtime.applyOptions)
 	result.Plan.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.result.Plan.Steps[0].Title == "Check", "result steps alias setupflow result: %+v", runtime.result.Plan.Steps)

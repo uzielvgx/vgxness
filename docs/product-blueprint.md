@@ -16,7 +16,7 @@ VGXNESS makes AI-assisted engineering understandable, bounded, and recoverable w
 - SQLite/FTS5 schema v5 with isolated semantic and SDD domains;
 - `memory`, `openspec`, and `hybrid` SDD backends;
 - `automatic` and `interactive` per-change SDD modes;
-- manager v30, five reviewers, six SDD profiles, plugin v5, and model-plan manifest;
+- manager v31, a read-only `explore` override, five reviewers, six SDD profiles, plugin v5, and model-plan manifest;
 - six-step CLI/TUI setup with a bounded OpenCode 1.18.4+ handshake;
 - exact prior-artifact recognition and conservative upgrade/uninstall behavior;
 - deterministic release archives, checksums, and workflows.
@@ -31,11 +31,12 @@ The plugin exposes 18 tools: five semantic-memory operations and 13 SDD operatio
 
 ## Managed artifacts
 
-The projection contains exactly 14 artifacts:
+The projection contains exactly 15 artifacts:
 
 | Artifact group | Count | Contract |
 | --- | ---: | --- |
-| Manager v30 | 1 | Sole workspace and lifecycle writer. |
+| Manager v31 | 1 | Sole workspace and lifecycle writer. |
+| Explore override | 1 | CodeGraph-first and deny-by-default read-only discovery. |
 | Reviewers | 5 | Hidden and read-only. |
 | SDD profiles | 6 | Hidden, read-only, model-bound phase roles. |
 | Storage plugin v5 | 1 | Memory and SDD storage only. |

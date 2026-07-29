@@ -30,6 +30,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 		t.Fatalf("ManagedLayout mutated config root: %v", err)
 	}
 	wantPaths := []string{
+		"agents/explore.md",
 		"agents/vgxness-manager.md",
 		"agents/vgxness-review-readability.md",
 		"agents/vgxness-review-refuter.md",
@@ -45,7 +46,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 		"plugins/vgxness.ts",
 		"vgxness/model-plan.json",
 	}
-	if before.Root != configDirectory || len(before.Artifacts) != 14 || len(before.AggregateSHA256) != 64 {
+	if before.Root != configDirectory || len(before.Artifacts) != 15 || len(before.AggregateSHA256) != 64 {
 		t.Fatalf("unexpected layout: %+v", before)
 	}
 	paths := managedPaths(before)
@@ -54,7 +55,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 	}
 
 	installed, err := service.Install(context.Background(), options)
-	if err != nil || installed.ArtifactCount != 14 {
+	if err != nil || installed.ArtifactCount != 15 {
 		t.Fatalf("Install() = %+v, %v", installed, err)
 	}
 	for _, artifact := range before.Artifacts {
@@ -231,6 +232,43 @@ func TestDurableRemovalNeverUnlinksConcurrentReplacement(t *testing.T) {
 	}
 }
 
+func TestUpgradeNeverOverwritesConcurrentReplacement(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	replacement := filepath.Join(directory, "replacement")
+	prior := []byte("managed predecessor")
+	current := []byte("managed replacement")
+	concurrent := []byte("concurrent user replacement")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(replacement, concurrent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := upgradeArtifactAtCheckpoint(context.Background(), artifact{path: target, content: current, prior: prior}, func() error {
+		if err := os.Remove(target); err != nil {
+			return err
+		}
+		return os.Rename(replacement, target)
+	})
+	if !errors.Is(err, integration.ErrConflict) {
+		t.Fatalf("upgradeArtifactAtCheckpoint() error = %v, want ErrConflict", err)
+	}
+	data, readErr := os.ReadFile(target)
+	if readErr != nil || !bytes.Equal(data, concurrent) {
+		t.Fatalf("concurrent replacement changed: %q, %v", data, readErr)
+	}
+	anchors, globErr := filepath.Glob(filepath.Join(directory, ".vgxness-previous-*.tmp"))
+	if globErr != nil || len(anchors) != 1 {
+		t.Fatalf("predecessor recovery anchor = %v, %v", anchors, globErr)
+	}
+	backup, backupErr := os.ReadFile(anchors[0])
+	if backupErr != nil || !bytes.Equal(backup, prior) {
+		t.Fatalf("predecessor recovery anchor changed: %q, %v", backup, backupErr)
+	}
+}
+
 func TestReinstallCancellationRestoresManagedSet(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
@@ -315,6 +353,10 @@ func TestReinstallMovedRollbackNeverOverwritesConcurrentTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	prior, err := os.ReadFile(installed.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	concurrent := []byte("concurrent target after move")
 	injected := errors.New("stop after concurrent move replacement")
 	service.reinstallCheckpoint = func(stage, target string) error {
@@ -333,6 +375,14 @@ func TestReinstallMovedRollbackNeverOverwritesConcurrentTarget(t *testing.T) {
 	data, readErr := os.ReadFile(installed.Path)
 	if readErr != nil || !bytes.Equal(data, concurrent) {
 		t.Fatalf("concurrent target was overwritten: %q %v", data, readErr)
+	}
+	anchors, globErr := filepath.Glob(filepath.Join(filepath.Dir(installed.Path), ".vgxness-reinstall-old-*.tmp"))
+	if globErr != nil || len(anchors) != 1 {
+		t.Fatalf("reinstall predecessor recovery anchor = %v, %v", anchors, globErr)
+	}
+	backup, backupErr := os.ReadFile(anchors[0])
+	if backupErr != nil || !bytes.Equal(backup, prior) {
+		t.Fatalf("reinstall predecessor recovery anchor changed: %q, %v", backup, backupErr)
 	}
 }
 
