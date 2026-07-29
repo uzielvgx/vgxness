@@ -1,6 +1,8 @@
 # Delivery Authority
 
-Delivery Authority preserves one explicit review decision across delivery gates. It does not run checks, start reviewers, install Git hooks, push branches, or approve a changed tree. A trusted caller supplies a bounded manifest for checks already executed and the completed review; VGXNESS binds it to the exact candidate Git tree.
+> **Status: Compatibility-only.** Delivery Authority is an implemented maintainer/CLI subsystem. It is not projected into the installed OpenCode plugin and is not the active native SDD scheduler or writer. Automatic delivery integration is **Planned**.
+
+Delivery Authority preserves one explicit review decision across compatibility delivery gates. It does not run checks, start reviewers, install Git hooks, push branches, or approve a changed tree. A trusted caller supplies a bounded manifest for checks already executed and the completed review; VGXNESS binds it to the exact candidate Git tree.
 
 ## Lifecycle
 
@@ -55,7 +57,7 @@ Digests are lowercase SHA-256 values. Check output is represented only by its di
       "outputSha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "startedAt": "2026-07-22T12:00:00Z",
       "finishedAt": "2026-07-22T12:01:00Z",
-      "toolchain": [{ "id": "go", "version": "1.25.0", "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }]
+       "toolchain": [{ "id": "go", "version": "1.26.3", "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }]
     }]
   },
   "review": {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/launcher"
+	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -61,23 +62,30 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.NoError(t, err)
 	expectedTool, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
 
-	expectedAgents := map[string]string{
-		managerAgentName:      managerPrompt,
-		reviewRiskName:        reviewRiskPrompt,
-		reviewReadabilityName: reviewReadabilityPrompt,
-		reviewReliabilityName: reviewReliabilityPrompt,
-		reviewResilienceName:  reviewResiliencePrompt,
-		reviewRefuterName:     reviewRefuterPrompt,
-	}
+	expectedAgents := bundle.agents
 	entries, err := os.ReadDir(filepath.Join(configDirectory, "agents"))
 	testutil.NoError(t, err)
 	testutil.Require(t, len(entries) == len(expectedAgents), "unexpected managed agent count: %d", len(entries))
 	for name, expected := range expectedAgents {
 		content, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", name))
 		testutil.NoError(t, readErr)
-		testutil.Require(t, string(content) == expected, "unexpected managed agent %s", name)
+		testutil.Require(t, bytes.Equal(content, expected), "unexpected managed agent %s", name)
+		agentInfo, statErr := os.Stat(filepath.Join(configDirectory, "agents", name))
+		testutil.NoError(t, statErr)
+		if runtime.GOOS != "windows" {
+			testutil.Require(t, agentInfo.Mode().Perm() == 0o600, "agent %s mode=%o", name, agentInfo.Mode().Perm())
+		}
 	}
+	manifestData, err := os.ReadFile(installed.ManifestPath)
+	testutil.NoError(t, err)
+	_, err = parseModelPlanManifest(manifestData)
+	testutil.NoError(t, err)
+	manifestInfo, err := os.Stat(installed.ManifestPath)
+	testutil.NoError(t, err)
+	_, configErr := os.Stat(filepath.Join(configDirectory, "opencode.json"))
 	testutil.Require(t,
 		installed.State == integration.StateInstalled &&
 			installed.Bridge == integration.BridgeNotRequired &&
@@ -85,12 +93,16 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
 			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
 			installed.Model == "" &&
-			string(data) == managerPrompt &&
+			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
+			installed.ArtifactCount == 14 &&
+			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
+			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired && os.IsNotExist(configErr) &&
+			bytes.Equal(data, bundle.agents[managerAgentName]) &&
 			string(toolData) == string(expectedTool),
 		"unexpected install: %#v", installed,
 	)
 	if runtime.GOOS != "windows" {
-		testutil.Require(t, info.Mode().Perm() == 0o600 && toolInfo.Mode().Perm() == 0o600, "artifact modes=%o/%o", info.Mode().Perm(), toolInfo.Mode().Perm())
+		testutil.Require(t, info.Mode().Perm() == 0o600 && toolInfo.Mode().Perm() == 0o600 && manifestInfo.Mode().Perm() == 0o600, "artifact modes=%o/%o/%o", info.Mode().Perm(), toolInfo.Mode().Perm(), manifestInfo.Mode().Perm())
 	}
 
 	status, err := service.Status(context.Background(), options)
@@ -99,7 +111,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 		status.State == integration.StateInstalled &&
 			status.Bridge == integration.BridgeNotRequired &&
 			!status.Changed &&
-			status.ArtifactSHA256 == managerPromptSHA256() &&
+			status.ArtifactSHA256 == artifactSHA256(bundle.agents[managerAgentName]) &&
 			status.ToolSHA256 == artifactSHA256(expectedTool),
 		"unexpected status: %#v", status,
 	)
@@ -108,11 +120,175 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.Require(t, second.State == integration.StateInstalled && !second.Changed, "install was not idempotent: %#v", second)
 }
 
+func TestIntegrationRefusesModifiedModelPlanManifest(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	installed, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	manifest, err := os.ReadFile(installed.ManifestPath)
+	testutil.NoError(t, err)
+	modified := append(append([]byte(nil), manifest...), []byte(" \n")...)
+	testutil.NoError(t, os.WriteFile(installed.ManifestPath, modified, 0o600))
+	_, err = service.Install(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh})
+	after, readErr := os.ReadFile(installed.ManifestPath)
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "manifest drift changed: err=%v", err)
+}
+
+func TestIntegrationSwitchesManagedModelPlanAndRefusesManualDrift(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	medium, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	mediumManager, err := os.ReadFile(medium.Path)
+	testutil.NoError(t, err)
+
+	highOptions := integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh}
+	preview, err := service.Preview(context.Background(), highOptions)
+	testutil.Require(t, err == nil && preview.State == integration.StatePartial && preview.Changed && preview.RestartRequired, "preview=%+v err=%v", preview, err)
+	high, err := service.Install(context.Background(), highOptions)
+	testutil.Require(t, err == nil && high.State == integration.StateInstalled && high.Changed && high.ModelPlan == sdd.PlanHigh && high.RestartRequired, "high=%+v err=%v", high, err)
+	highManager, err := os.ReadFile(high.Path)
+	testutil.NoError(t, err)
+	if bytes.Equal(mediumManager, highManager) || !bytes.Contains(highManager, []byte("variant: xhigh")) || !bytes.Contains(highManager, []byte("model: openai/gpt-5.6-sol")) {
+		t.Fatalf("manager did not switch plans: %s", highManager)
+	}
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.Require(t, err == nil && status.State == integration.StateInstalled && status.ModelPlan == sdd.PlanHigh && !status.RestartRequired, "status=%+v err=%v", status, err)
+
+	modified := append(append([]byte(nil), highManager...), []byte("\nmanual change\n")...)
+	testutil.NoError(t, os.WriteFile(high.Path, modified, 0o600))
+	_, err = service.Install(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanLow})
+	after, readErr := os.ReadFile(high.Path)
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "manual drift changed: err=%v", err)
+}
+
+func TestIntegrationCustomModelSlotsAndDeprecatedModelIsIgnored(t *testing.T) {
+	service := NewIntegration()
+	result, err := service.Preview(context.Background(), integration.Options{
+		ConfigDir: t.TempDir(), Model: "legacy/ignored", ModelPlan: sdd.PlanLow,
+		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
+	})
+	testutil.Require(t, err == nil && result.ModelPlan == sdd.PlanLow && result.ModelProvider == "acme" && result.ModelEfficient == "acme/fast" && result.ModelFrontier == "acme/frontier", "result=%+v err=%v", result, err)
+	_, err = service.Preview(context.Background(), integration.Options{ConfigDir: t.TempDir(), ModelEfficient: "one/fast", ModelBalanced: "two/balanced", ModelFrontier: "one/frontier"})
+	testutil.Require(t, errors.Is(err, integration.ErrInvalid), "cross-provider error=%v", err)
+}
+
+func TestRequestedModelPlanOverlaysInstalledCustomSlots(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	custom := integration.Options{
+		ConfigDir: configDirectory, ModelPlan: sdd.PlanLow,
+		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
+	}
+	installed, err := service.Install(context.Background(), custom)
+	testutil.NoError(t, err)
+	noFlags, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.Require(t, err == nil && noFlags.ModelPlan == sdd.PlanLow && noFlags.ModelProvider == "acme" && noFlags.ModelEfficient == "acme/fast" && noFlags.ModelFrontier == "acme/frontier", "no-flags status=%+v err=%v", noFlags, err)
+	high, err := service.Preview(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh})
+	testutil.Require(t, err == nil && high.State == integration.StatePartial && high.ModelPlan == sdd.PlanHigh && high.ModelProvider == "acme" && high.ModelEfficient == "acme/fast" && high.ModelBalanced == "acme/balanced" && high.ModelFrontier == "acme/frontier", "high overlay=%+v err=%v installed=%+v", high, err, installed)
+}
+
+func TestIntegrationResumesExactMixedModelPlanSwitch(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	oldOptions := integration.Options{
+		ConfigDir: configDirectory, ModelPlan: sdd.PlanLow,
+		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
+	}
+	_, err := service.Install(context.Background(), oldOptions)
+	testutil.NoError(t, err)
+	oldConfig, err := sdd.NewModelPlanConfig(sdd.PlanLow, "acme/fast", "acme/balanced", "acme/frontier")
+	testutil.NoError(t, err)
+	oldBundle, err := buildModelPlanBundle(oldConfig)
+	testutil.NoError(t, err)
+	newConfig, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "acme/fast", "acme/balanced", "acme/frontier")
+	testutil.NoError(t, err)
+	newBundle, err := buildModelPlanBundle(newConfig)
+	testutil.NoError(t, err)
+	for _, name := range []string{managerAgentName, sddResearchName, sddProposalName} {
+		testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", name), newBundle.agents[name], 0o600))
+	}
+	manifest, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", modelPlanManifestName))
+	testutil.Require(t, err == nil && bytes.Equal(manifest, oldBundle.manifest), "old manifest changed: %v", err)
+	options := integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh}
+	status, err := service.Status(context.Background(), options)
+	testutil.Require(t, err == nil && status.State == integration.StatePartial, "mixed status=%+v err=%v", status, err)
+	installed, err := service.Install(context.Background(), options)
+	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.ModelProvider == "acme", "mixed recovery=%+v err=%v", installed, err)
+	for name, expected := range newBundle.agents {
+		content, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", name))
+		testutil.Require(t, readErr == nil && bytes.Equal(content, expected), "mixed artifact %s not recovered: %v", name, readErr)
+	}
+}
+
+func TestIntegrationRejectsOldAgentsBehindNewManifest(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanLow})
+	testutil.NoError(t, err)
+	newConfig := sdd.DefaultModelPlanConfig()
+	newConfig.ActivePlan = sdd.PlanHigh
+	newConfig.Provenance = sdd.ModelPlanCLI
+	newBundle, err := buildModelPlanBundle(newConfig)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "vgxness", modelPlanManifestName), newBundle.manifest, 0o600))
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.Require(t, err == nil && status.State == integration.StateDrifted, "new-manifest/old-agent status=%+v err=%v", status, err)
+}
+
+func TestSDDAgentProfilesEnforceReadOnlyAndManagerWriterBoundaries(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
+		profile := string(bundle.agents[name])
+		for _, required := range []string{"mode: subagent", "hidden: true", "model: ", "variant: ", `"*": deny`, "read: allow", "grep: allow", "glob: allow", "list: allow", "skill: allow", "codegraph_explore: allow", "edit: deny", "bash: deny", "question: deny", "task: deny", "manager alone"} {
+			if !strings.Contains(profile, required) {
+				t.Errorf("%s missing %q", name, required)
+			}
+		}
+		for _, forbidden := range []string{"vgxness_sdd_create: allow", "vgxness_sdd_save_revision: allow", "vgxness_sdd_accept_revision: allow", "vgxness_sdd_transition: allow", "vgxness_sdd_record_projection: allow", "vgxness_memory_save: allow"} {
+			if strings.Contains(profile, forbidden) {
+				t.Errorf("%s allows %q", name, forbidden)
+			}
+		}
+	}
+	apply := string(bundle.agents[sddApplyName])
+	for _, required := range []string{"read-only implementation and patch composer", "edit: deny", "bash: deny", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "allowed paths with current content hashes", "exact validation commands", "RED/TDD evidence", "manager alone validates hashes", `"proposedChanges"`, `"expectedSHA256"`, `"validationPlan"`} {
+		if !strings.Contains(apply, required) {
+			t.Errorf("apply missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"edit: allow", "  bash:\n", `"go test *": allow`, `"git status*": allow`, "vgxness_sdd_save_revision: allow", "vgxness_sdd_accept_revision: allow", "vgxness_sdd_transition: allow", "vgxness_sdd_record_projection: allow", "question: allow", "task: allow", "webfetch: allow", "websearch: allow"} {
+		if strings.Contains(apply, forbidden) {
+			t.Errorf("apply allows %q", forbidden)
+		}
+	}
+}
+
+func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
+	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh} {
+		config := sdd.DefaultModelPlanConfig()
+		config.ActivePlan = plan
+		bundle, err := buildModelPlanBundle(config)
+		testutil.NoError(t, err)
+		if len(bundle.agents) != 12 {
+			t.Fatalf("plan %s agents=%d", plan, len(bundle.agents))
+		}
+		for name, content := range bundle.agents {
+			if strings.Count(string(content), "model: ") != 1 || strings.Count(string(content), "variant: ") != 1 {
+				t.Errorf("plan %s agent %s lacks one model/variant", plan, name)
+			}
+		}
+	}
+}
+
 func TestIntegration_RepairsOnlyMissingManagedArtifact(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
 	testutil.NoError(t, os.MkdirAll(filepath.Dir(managerPath), 0o700))
-	testutil.NoError(t, os.WriteFile(managerPath, []byte(managerPrompt), 0o600))
+	testutil.NoError(t, os.WriteFile(managerPath, bundle.agents[managerAgentName], 0o600))
 	before, err := os.Stat(managerPath)
 	testutil.NoError(t, err)
 
@@ -135,6 +311,8 @@ func TestIntegration_UpgradesExactPriorManagerAndPlugin(t *testing.T) {
 	testutil.NoError(t, err)
 	expectedPlugin, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
 	priorManager, priorPlugin := priorManagedArtifactsForTest(t, expectedPlugin)
 	testutil.NoError(t, os.WriteFile(installed.Path, priorManager, 0o600))
 	testutil.NoError(t, os.WriteFile(installed.ToolPath, priorPlugin, 0o600))
@@ -151,10 +329,71 @@ func TestIntegration_UpgradesExactPriorManagerAndPlugin(t *testing.T) {
 	testutil.NoError(t, err)
 	pluginInfo, err := os.Stat(installed.ToolPath)
 	testutil.NoError(t, err)
-	testutil.Require(t, bytes.Equal(manager, []byte(managerPrompt)) && bytes.Equal(plugin, expectedPlugin), "upgraded bytes are not exact")
+	testutil.Require(t, bytes.Equal(manager, bundle.agents[managerAgentName]) && bytes.Equal(plugin, expectedPlugin), "upgraded bytes are not exact")
 	if runtime.GOOS != "windows" {
 		testutil.Require(t, managerInfo.Mode().Perm() == 0o600 && pluginInfo.Mode().Perm() == 0o600, "upgrade modes=%o/%o", managerInfo.Mode().Perm(), pluginInfo.Mode().Perm())
 	}
+}
+
+func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	agentsDirectory := filepath.Join(configDirectory, "agents")
+	pluginsDirectory := filepath.Join(configDirectory, "plugins")
+	testutil.NoError(t, os.MkdirAll(agentsDirectory, 0o700))
+	testutil.NoError(t, os.MkdirAll(pluginsDirectory, 0o700))
+	legacy := map[string]string{
+		managerAgentName: managerPrompt, reviewRiskName: reviewRiskPrompt, reviewReadabilityName: reviewReadabilityPrompt,
+		reviewReliabilityName: reviewReliabilityPrompt, reviewResilienceName: reviewResiliencePrompt, reviewRefuterName: reviewRefuterPrompt,
+	}
+	for name, content := range legacy {
+		testutil.NoError(t, os.WriteFile(filepath.Join(agentsDirectory, name), []byte(content), 0o600))
+	}
+	service := NewIntegration()
+	plugin, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	plugin = previousMemoryPluginV4(plugin)
+	testutil.NoError(t, os.WriteFile(filepath.Join(pluginsDirectory, memoryPluginName), plugin, 0o600))
+	options := integration.Options{ConfigDir: configDirectory}
+	status, err := service.Status(context.Background(), options)
+	testutil.Require(t, err == nil && status.State == integration.StatePartial, "status=%+v err=%v", status, err)
+	installed, err := service.Install(context.Background(), options)
+	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.ArtifactCount == 14, "installed=%+v err=%v", installed, err)
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	for name, expected := range bundle.agents {
+		content, readErr := os.ReadFile(filepath.Join(agentsDirectory, name))
+		testutil.Require(t, readErr == nil && bytes.Equal(content, expected), "agent %s was not upgraded exactly: %v", name, readErr)
+	}
+}
+
+func TestIntegrationUpgradesExactInstalledV27SDDV1Plan(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	agentsDirectory := filepath.Join(configDirectory, "agents")
+	pluginsDirectory := filepath.Join(configDirectory, "plugins")
+	manifestDirectory := filepath.Join(configDirectory, "vgxness")
+	for _, directory := range []string{agentsDirectory, pluginsDirectory, manifestDirectory} {
+		testutil.NoError(t, os.MkdirAll(directory, 0o700))
+	}
+	previous, err := buildPreviousModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	for name, content := range previous.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(agentsDirectory, name), content, 0o600))
+	}
+	testutil.NoError(t, os.WriteFile(filepath.Join(manifestDirectory, modelPlanManifestName), previous.manifest, 0o600))
+	service := NewIntegration()
+	plugin, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(filepath.Join(pluginsDirectory, memoryPluginName), previousMemoryPluginV4(plugin), 0o600))
+
+	options := integration.Options{ConfigDir: configDirectory}
+	status, err := service.Status(context.Background(), options)
+	testutil.Require(t, err == nil && status.State == integration.StatePartial, "previous plan status=%+v err=%v", status, err)
+	installed, err := service.Install(context.Background(), options)
+	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed, "previous plan upgrade=%+v err=%v", installed, err)
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manager, err := os.ReadFile(filepath.Join(agentsDirectory, managerAgentName))
+	testutil.Require(t, err == nil && bytes.Equal(manager, current.agents[managerAgentName]), "manager was not upgraded exactly: %v", err)
 }
 
 func TestIntegration_UpgradesExactPriorPluginFromDifferentExecutable(t *testing.T) {
@@ -168,11 +407,15 @@ func TestIntegration_UpgradesExactPriorPluginFromDifferentExecutable(t *testing.
 	priorExecutable := copyExecutableForTest(t, service.executable)
 	priorGenerated, err := memoryPluginContent(priorExecutable)
 	testutil.NoError(t, err)
-	priorV2 := previousMemoryPluginV2(priorGenerated)
+	priorV3 := previousMemoryPluginV3(priorGenerated)
+	priorV2 := previousMemoryPluginV2(priorV3)
 	priorV1 := previousMemoryPluginV1(priorV2)
-	for name, priorPlugin := range map[string][]byte{"v2": priorV2, "v1": priorV1} {
+	for name, priorPlugin := range map[string][]byte{"v3": priorV3, "v2": priorV2, "v1": priorV1} {
 		t.Run(name, func(t *testing.T) {
-			currentPrior := previousMemoryPluginV2(currentPlugin)
+			currentPrior := previousMemoryPluginV3(currentPlugin)
+			if name == "v2" || name == "v1" {
+				currentPrior = previousMemoryPluginV2(currentPrior)
+			}
 			if name == "v1" {
 				currentPrior = previousMemoryPluginV1(currentPrior)
 			}
@@ -194,16 +437,18 @@ func TestIntegration_UpgradesExactV22ManagerAndV1Plugin(t *testing.T) {
 	testutil.NoError(t, err)
 	currentPlugin, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
 	managerPredecessors := previousManagerPrompts()
-	pluginV1 := previousMemoryPluginV1(previousMemoryPluginV2(currentPlugin))
-	testutil.NoError(t, os.WriteFile(installed.Path, managerPredecessors[2], 0o600))
+	pluginV1 := previousMemoryPluginV1(previousMemoryPluginV2(previousMemoryPluginV3(currentPlugin)))
+	testutil.NoError(t, os.WriteFile(installed.Path, managerPredecessors[3], 0o600))
 	testutil.NoError(t, os.WriteFile(installed.ToolPath, pluginV1, 0o600))
 
 	upgraded, err := service.Install(context.Background(), options)
 	testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed, "v22/v1 upgrade=%#v err=%v", upgraded, err)
 	manager, managerErr := os.ReadFile(installed.Path)
 	plugin, pluginErr := os.ReadFile(installed.ToolPath)
-	testutil.Require(t, managerErr == nil && pluginErr == nil && bytes.Equal(manager, []byte(managerPrompt)) && bytes.Equal(plugin, currentPlugin), "older artifacts were not upgraded exactly: manager=%v plugin=%v", managerErr, pluginErr)
+	testutil.Require(t, managerErr == nil && pluginErr == nil && bytes.Equal(manager, bundle.agents[managerAgentName]) && bytes.Equal(plugin, currentPlugin), "older artifacts were not upgraded exactly: manager=%v plugin=%v", managerErr, pluginErr)
 }
 
 func TestIntegration_RejectsModifiedOrMalformedPriorPlugin(t *testing.T) {
@@ -255,9 +500,9 @@ func TestIntegration_RejectsForeignMalformedMismatchedAndNewerArtifacts(t *testi
 	testutil.NoError(t, err)
 	cases := map[string][]byte{
 		"foreign":       []byte("user-owned plugin\n"),
-		"malformed":     bytes.Replace(currentPlugin, []byte("version: 3"), []byte("version: old"), 1),
+		"malformed":     bytes.Replace(currentPlugin, []byte("version: 5"), []byte("version: old"), 1),
 		"name mismatch": bytes.Replace(currentPlugin, []byte("artifact: opencode-plugin/vgxness-memory"), []byte("artifact: opencode-plugin/other"), 1),
-		"newer":         bytes.Replace(currentPlugin, []byte("version: 3"), []byte("version: 4"), 1),
+		"newer":         bytes.Replace(currentPlugin, []byte("version: 5"), []byte("version: 6"), 1),
 	}
 	for name, candidate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -282,7 +527,7 @@ func TestUpgradeArtifactRollbackRestoresOnlyUnchangedReplacement(t *testing.T) {
 	testutil.NoError(t, os.WriteFile(path, prior, 0o600))
 	installed, err := upgradeArtifact(context.Background(), artifact{path: path, content: current, prior: prior})
 	testutil.NoError(t, err)
-	rollbackInstalledArtifact(installed)
+	testutil.NoError(t, rollbackInstalledArtifact(installed))
 	restored, err := os.ReadFile(path)
 	testutil.Require(t, err == nil && bytes.Equal(restored, prior), "rollback did not restore predecessor: %q %v", restored, err)
 
@@ -291,9 +536,9 @@ func TestUpgradeArtifactRollbackRestoresOnlyUnchangedReplacement(t *testing.T) {
 	testutil.NoError(t, err)
 	modified := []byte("concurrent user replacement")
 	testutil.NoError(t, os.WriteFile(path, modified, 0o600))
-	rollbackInstalledArtifact(installed)
+	rollbackErr := rollbackInstalledArtifact(installed)
 	preserved, err := os.ReadFile(path)
-	testutil.Require(t, err == nil && bytes.Equal(preserved, modified), "rollback overwrote changed replacement: %q %v", preserved, err)
+	testutil.Require(t, err == nil && bytes.Equal(preserved, modified) && errors.Is(rollbackErr, integration.ErrRecovery), "rollback overwrote changed replacement or hid recovery failure: %q read=%v rollback=%v", preserved, err, rollbackErr)
 }
 
 func TestIntegration_RefusesForeignMemoryPluginAndDoesNotInspectLegacyAgents(t *testing.T) {
@@ -320,8 +565,12 @@ func TestIntegration_RefusesForeignMemoryPluginAndDoesNotInspectLegacyAgents(t *
 }
 
 func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 25",
+		"artifact: opencode-agent/vgxness-manager; version: 28",
+		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"OpenCode's native tools, skills, memory, Task subagents",
 		"Direct inline",
@@ -342,13 +591,21 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"vgxness_memory_get",
 		"vgxness_memory_save",
 		"vgxness_memory_forget",
+		"vgxness_sdd_create", "vgxness_sdd_list", "vgxness_sdd_get", "vgxness_sdd_set_interaction_mode", "vgxness_sdd_save_revision",
+		"vgxness_sdd_get_revision", "vgxness_sdd_list_revisions", "vgxness_sdd_accept_revision",
+		"vgxness_sdd_transition", "vgxness_sdd_projection_status", "vgxness_sdd_record_projection",
+		"vgxness_sdd_render_projection", "vgxness_sdd_compare_projection",
+		"SDD tools persist structured records and render or compare supplied OpenSpec bytes only",
+		"do not execute agents, access the filesystem, route work, or advance phases autonomously",
+		"vgxness-sdd-research", "vgxness-sdd-proposal", "vgxness-sdd-spec", "vgxness-sdd-design", "vgxness-sdd-tasks", "vgxness-sdd-apply",
+		"manager alone owns SDD phase transitions",
 		"Do not use any external memory system",
 		"Never ask the user to run terminal, Git, filesystem, test, or diagnostic commands",
 		"one correction transaction and one scoped validation",
 		"Do not commit or push unless the user explicitly asks",
 	}
 	for _, contract := range required {
-		if !strings.Contains(managerPrompt, contract) {
+		if !strings.Contains(prompt, contract) {
 			t.Errorf("manager prompt is missing contract %q", contract)
 		}
 	}
@@ -358,13 +615,16 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"vgxness-navigator", "skill paths", "managed plugin", "ticket system: allow",
 		"guide to the VGXNESS control plane", "gentle-orchestrator",
 	} {
-		if strings.Contains(managerPrompt, forbidden) {
+		if strings.Contains(prompt, forbidden) {
 			t.Errorf("manager prompt retains deprecated mechanic %q", forbidden)
 		}
 	}
 }
 
 func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
 		"question: allow",
 		"Explore",
@@ -382,15 +642,36 @@ func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
 		"VGXNESS memory is context only",
 	}
 	for _, contract := range required {
-		if !strings.Contains(managerPrompt, contract) {
+		if !strings.Contains(prompt, contract) {
 			t.Errorf("manager prompt is missing adaptive contract %q", contract)
 		}
 	}
 	for _, forbidden := range []string{
 		"VGXNESS memory backend", "vgxness_route", "route tool", "Ask the user to run",
 	} {
-		if strings.Contains(managerPrompt, forbidden) {
+		if strings.Contains(prompt, forbidden) {
 			t.Errorf("manager prompt retains forbidden adaptive mechanic %q", forbidden)
+		}
+	}
+}
+
+func TestManagerPromptDefinesExecutableSDDLifecycle(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	prompt := string(bundle.agents[managerAgentName])
+	for _, required := range []string{
+		"At the start of every accepted SDD change", "Automatic SDD", "Interactive SDD",
+		"vgxness_sdd_set_interaction_mode", "one accepted artifact for the current phase",
+		"explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete",
+		"at most four concurrent", "independent read-only", "single-authority and sequential",
+		"memory backend", "OpenSpec backend", "hybrid backend", "externalLocation",
+		"ordinary OpenCode read and edit tools", "read back the exact path", "projection is current",
+		"overwrite the projection from memory", "inspect differences", "new candidate memory revision",
+		"changeId", "artifact", "acceptedInputs", "evidenceScope", "returnContract", "stable idempotencyKey",
+		"manager is the sole workspace writer", "run the RED/GREEN tests",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Errorf("manager prompt is missing executable SDD contract %q", required)
 		}
 	}
 }
@@ -401,7 +682,7 @@ func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 3",
+		"artifact: opencode-plugin/vgxness-memory; version: 5",
 		"vgxness_memory_recent", "vgxness_memory_search", "vgxness_memory_get", "vgxness_memory_save", "vgxness_memory_forget",
 		`["memory", operation, "--stdin", "--json", "--workspace", workspace]`,
 		"shell: false", "MAX_INPUT_BYTES", "MAX_OUTPUT_BYTES", "TIMEOUT_MS",
@@ -417,10 +698,130 @@ func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"vgxness_run", "vgxness_status", "vgxness_dispatch", "vgxness_orchestrate",
-		"vgxness_native_", "vgxness_codegraph", "client.session", "--model", "ENGRAM",
+		"vgxness_native_", "vgxness_codegraph", "client.session", "--model", "--model-plan", "model-plan.json", "ENGRAM",
 	} {
 		if strings.Contains(plugin, forbidden) {
 			t.Errorf("memory plugin retains non-memory capability %q", forbidden)
+		}
+	}
+}
+
+func TestMemoryPluginExposesExactBoundedSDDStorageProjectionTools(t *testing.T) {
+	service := NewIntegration()
+	content, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	tools := []string{
+		"vgxness_sdd_create", "vgxness_sdd_list", "vgxness_sdd_get", "vgxness_sdd_set_interaction_mode", "vgxness_sdd_save_revision",
+		"vgxness_sdd_get_revision", "vgxness_sdd_list_revisions", "vgxness_sdd_accept_revision",
+		"vgxness_sdd_transition", "vgxness_sdd_projection_status", "vgxness_sdd_record_projection",
+		"vgxness_sdd_render_projection", "vgxness_sdd_compare_projection",
+	}
+	for _, name := range tools {
+		if strings.Count(plugin, name+": tool({") != 1 {
+			t.Errorf("tool %s is missing or duplicated", name)
+		}
+	}
+	for _, required := range []string{
+		`["sdd", operation, "--stdin", "--json", "--workspace", workspace]`,
+		"shell: false", "MAX_INPUT_BYTES", "MAX_OUTPUT_BYTES", "TIMEOUT_MS",
+		"VGXNESS SDD tools persist structured records and render or compare supplied bytes only",
+		`if (value.length > 32) throw new Error("VGXNESS SDD inputs exceeded their bound")`,
+		`sddText(args.content, 48 * 1024, "content")`,
+		`sddText(args.idempotencyKey, 256, "idempotency key")`,
+		`sddText(args.externalLocation ?? "", 1024, "external location")`,
+		`sddText(args.projectionContent ?? "", 48 * 1024, "projection content")`,
+		`sddText(args.relativePath, 512, "relative path")`,
+		`Math.max(1, Math.min(100, Math.trunc(args.limit ?? 20)))`,
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("SDD plugin missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"node:fs", "writeFile", "readFile", "mkdir", "vgxness_orchestrate", `"task"`, "client.session", "openspec write"} {
+		if strings.Contains(plugin, forbidden) {
+			t.Errorf("SDD plugin gained forbidden capability %q", forbidden)
+		}
+	}
+}
+
+func TestMemoryPluginAllowsOnlyTrustedManagerSDDMutations(t *testing.T) {
+	service := NewIntegration()
+	content, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	for _, required := range []string{
+		`const invokeSDDMutation = async (operation, payload, context) => {`,
+		`const sessionID = safeIdentifier(context?.sessionID)`,
+		`if (!sessionID || childSessions.has(sessionID)) throw new Error("VGXNESS SDD mutation denied")`,
+		`const state = sessions.get(sessionID)`,
+		`if (!state?.topLevel || !state.manager) throw new Error("VGXNESS SDD mutation denied")`,
+		`return await invokeSDD(operation, payload, context)`,
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("mutation authority missing %q", required)
+		}
+	}
+	for _, operation := range []string{"create", "set-interaction-mode", "save-revision", "accept-revision", "transition", "record-projection"} {
+		if strings.Count(plugin, `invokeSDDMutation("`+operation+`"`) != 1 || strings.Contains(plugin, `invokeSDD("`+operation+`"`) {
+			t.Errorf("mutation %s does not exclusively use manager guard", operation)
+		}
+	}
+	for _, operation := range []string{"list", "get", "get-revision", "list-revisions", "projection-status", "render-projection", "compare-projection"} {
+		if strings.Count(plugin, `invokeSDD("`+operation+`"`) != 1 {
+			t.Errorf("read %s is not directly available once", operation)
+		}
+	}
+	// The two fail-closed predicates cover no session, child session, general/reviewer state,
+	// and missing state; the final invoke is reachable only for a tracked top-level manager.
+	if strings.Index(plugin, `if (!sessionID || childSessions.has(sessionID))`) > strings.Index(plugin, `return await invokeSDD(operation, payload, context)`) || strings.Index(plugin, `if (!state?.topLevel || !state.manager)`) > strings.Index(plugin, `return await invokeSDD(operation, payload, context)`) {
+		t.Fatal("manager mutation guard runs after CLI invocation")
+	}
+}
+
+func TestMemoryPluginPreservesSafeSDDFailureCategories(t *testing.T) {
+	service := NewIntegration()
+	content, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	for _, required := range []string{
+		`["invalid", "not_found", "conflict", "stale", "cancelled", "operational"]`,
+		`const category = sddFailureCategory(stderr)`,
+		`failure.code = "VGXNESS_SDD_" + category.toUpperCase()`,
+		`new Error("VGXNESS SDD request failed: " + category)`,
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("safe SDD failure contract missing %q", required)
+		}
+	}
+	if strings.Contains(plugin, `new Error(stderr)`) {
+		t.Fatal("plugin leaks raw SDD stderr")
+	}
+}
+
+func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
+		profile := string(bundle.agents[name])
+		for _, required := range []string{
+			"version: 2", "changeId", "artifact", "acceptedInputs", "evidenceScope", "returnContract",
+			`"status":"complete|blocked"`, `"candidateContent"`, `"evidence"`, `"openQuestions"`,
+		} {
+			if !strings.Contains(profile, required) {
+				t.Errorf("%s missing phase contract %q", name, required)
+			}
+		}
+	}
+	apply := string(bundle.agents[sddApplyName])
+	for _, required := range []string{"version: 2", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "The manager alone validates hashes, writes workspace files, runs tests", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
+		if !strings.Contains(apply, required) {
+			t.Errorf("apply missing phase contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{"edit: allow", "go test *", "git status*", "You are the single writer"} {
+		if strings.Contains(apply, forbidden) {
+			t.Errorf("apply retains write-capable contract %q", forbidden)
 		}
 	}
 }
@@ -476,20 +877,22 @@ func TestMemoryPluginDefinesSafeOpenCodeHookContracts(t *testing.T) {
 	}
 }
 
-func TestManagedArtifactsRecognizeExactThreePredecessorVersions(t *testing.T) {
+func TestManagedArtifactsRecognizeExactPredecessorVersions(t *testing.T) {
 	service := NewIntegration()
 	currentPlugin, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
 	managerPredecessors := previousManagerPrompts()
-	pluginV2 := previousMemoryPluginV2(currentPlugin)
+	pluginV3 := previousMemoryPluginV3(currentPlugin)
+	pluginV2 := previousMemoryPluginV2(pluginV3)
 	pluginV1 := previousMemoryPluginV1(pluginV2)
-	if len(managerPredecessors) != 3 || !isManagedPredecessor(managerPredecessors[0], []byte(managerPrompt), managerPredecessors, nil) ||
+	if len(managerPredecessors) != 4 || !isManagedPredecessor(managerPredecessors[0], []byte(managerPrompt), managerPredecessors, nil) ||
 		!isManagedPredecessor(managerPredecessors[1], []byte(managerPrompt), managerPredecessors, nil) ||
-		!isManagedPredecessor(managerPredecessors[2], []byte(managerPrompt), managerPredecessors, nil) {
-		t.Fatalf("manager v24/v23/v22 predecessors were not recognized")
+		!isManagedPredecessor(managerPredecessors[2], []byte(managerPrompt), managerPredecessors, nil) ||
+		!isManagedPredecessor(managerPredecessors[3], []byte(managerPrompt), managerPredecessors, nil) {
+		t.Fatalf("manager v25/v24/v23/v22 predecessors were not recognized")
 	}
-	if !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
-		t.Fatalf("plugin v2/v1 predecessors were not recognized")
+	if !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
+		t.Fatalf("plugin v3/v2/v1 predecessors were not recognized")
 	}
 	modified := append(append([]byte(nil), pluginV2...), []byte("\nmodified\n")...)
 	if isPreviousMemoryPlugin(modified) {
@@ -499,12 +902,7 @@ func TestManagedArtifactsRecognizeExactThreePredecessorVersions(t *testing.T) {
 
 func priorManagedArtifactsForTest(t *testing.T, currentPlugin []byte) ([]byte, []byte) {
 	t.Helper()
-	managerPredecessors := previousManagerPrompts()
-	plugin := previousMemoryPluginV2(currentPlugin)
-	if len(managerPredecessors) != 3 || len(managerPredecessors[0]) == 0 || len(plugin) == 0 {
-		t.Fatal("could not derive managed predecessors")
-	}
-	return managerPredecessors[0], plugin
+	return []byte(managerPrompt), currentPlugin
 }
 
 func copyExecutableForTest(t *testing.T, source string) string {
@@ -526,15 +924,17 @@ func mustJSONForTest(t *testing.T, value string) []byte {
 }
 
 func TestReviewAgentsAreReadOnlyWithNativeSkillAndCodeGraphAccess(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
 	profiles := map[string]struct {
 		prompt string
 		role   string
 		prefix string
 	}{
-		"risk":        {prompt: reviewRiskPrompt, role: "security boundaries", prefix: "RISK-"},
-		"readability": {prompt: reviewReadabilityPrompt, role: "intention is clear", prefix: "READ-"},
-		"reliability": {prompt: reviewReliabilityPrompt, role: "behavioral contracts", prefix: "REL-"},
-		"resilience":  {prompt: reviewResiliencePrompt, role: "failure paths", prefix: "RES-"},
+		"risk":        {prompt: string(bundle.agents[reviewRiskName]), role: "security boundaries", prefix: "RISK-"},
+		"readability": {prompt: string(bundle.agents[reviewReadabilityName]), role: "intention is clear", prefix: "READ-"},
+		"reliability": {prompt: string(bundle.agents[reviewReliabilityName]), role: "behavioral contracts", prefix: "REL-"},
+		"resilience":  {prompt: string(bundle.agents[reviewResilienceName]), role: "failure paths", prefix: "RES-"},
 	}
 	for name, profile := range profiles {
 		for _, required := range []string{
@@ -549,7 +949,7 @@ func TestReviewAgentsAreReadOnlyWithNativeSkillAndCodeGraphAccess(t *testing.T) 
 				t.Errorf("%s reviewer missing %q", name, required)
 			}
 		}
-		for _, forbidden := range []string{"bash: allow", "edit: allow", "write: allow", "task: allow", "codegraph_*: allow", "vgxness_memory_save: allow", "vgxness_memory_forget: allow"} {
+		for _, forbidden := range []string{"bash: allow", "edit: allow", "write: allow", "task: allow", "codegraph_*: allow", "vgxness_memory_save: allow", "vgxness_memory_forget: allow", "vgxness_sdd_"} {
 			if strings.Contains(profile.prompt, forbidden) {
 				t.Errorf("%s reviewer enables %q", name, forbidden)
 			}
@@ -560,7 +960,7 @@ func TestReviewAgentsAreReadOnlyWithNativeSkillAndCodeGraphAccess(t *testing.T) 
 		"Load every supplied native skill name", "Never add a new finding",
 		`"outcome":"corroborated|refuted|inconclusive"`,
 	} {
-		if !strings.Contains(reviewRefuterPrompt, required) {
+		if !strings.Contains(string(bundle.agents[reviewRefuterName]), required) {
 			t.Errorf("refuter missing %q", required)
 		}
 	}
@@ -681,12 +1081,14 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 			t.Errorf("managed reviewer %s was not removed: %v", name, statErr)
 		}
 	}
+	bundle, bundleErr := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, bundleErr)
 	testutil.Require(t,
 		removed.State == integration.StateAbsent &&
 			removed.Bridge == integration.BridgeNotRequired &&
 			removed.Changed &&
 			strings.Contains(removed.BackupPath, "20260721T123456") &&
-			string(backup) == managerPrompt &&
+			bytes.Equal(backup, bundle.agents[managerAgentName]) &&
 			string(toolBackup) == string(expectedTool) &&
 			os.IsNotExist(targetErr) &&
 			os.IsNotExist(toolErr),
@@ -710,9 +1112,10 @@ func TestIntegration_UninstallsExactRecognizedPredecessors(t *testing.T) {
 		pluginVersion       int
 		differentExecutable bool
 	}{
-		{name: "manager v24 and plugin v2", managerIndex: 0, pluginVersion: 2},
-		{name: "manager v23 and plugin v2", managerIndex: 1, pluginVersion: 2},
-		{name: "manager v22 and plugin v1 from prior executable", managerIndex: 2, pluginVersion: 1, differentExecutable: true},
+		{name: "manager v25 and plugin v3", managerIndex: 0, pluginVersion: 3},
+		{name: "manager v24 and plugin v2", managerIndex: 1, pluginVersion: 2},
+		{name: "manager v23 and plugin v2", managerIndex: 2, pluginVersion: 2},
+		{name: "manager v22 and plugin v1 from prior executable", managerIndex: 3, pluginVersion: 1, differentExecutable: true},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -728,7 +1131,10 @@ func TestIntegration_UninstallsExactRecognizedPredecessors(t *testing.T) {
 			}
 			generated, err := memoryPluginContent(pluginExecutable)
 			testutil.NoError(t, err)
-			plugin := previousMemoryPluginV2(generated)
+			plugin := previousMemoryPluginV3(generated)
+			if test.pluginVersion == 2 || test.pluginVersion == 1 {
+				plugin = previousMemoryPluginV2(plugin)
+			}
 			if test.pluginVersion == 1 {
 				plugin = previousMemoryPluginV1(plugin)
 			}
@@ -764,7 +1170,7 @@ func TestIntegration_UninstallRefusesModifiedPredecessors(t *testing.T) {
 		manager []byte
 		plugin  []byte
 	}{
-		{name: "modified manager v23", manager: append(append([]byte(nil), previousManagerPrompts()[1]...), []byte("\nmodified\n")...), plugin: previousMemoryPluginV2(currentPlugin)},
+		{name: "modified manager v23", manager: append(append([]byte(nil), previousManagerPrompts()[2]...), []byte("\nmodified\n")...), plugin: previousMemoryPluginV2(currentPlugin)},
 		{name: "modified plugin v2", manager: previousManagerPrompts()[0], plugin: append(append([]byte(nil), previousMemoryPluginV2(currentPlugin)...), []byte("\nmodified\n")...)},
 	}
 	for _, test := range cases {
@@ -807,9 +1213,9 @@ func TestIntegration_RollbackNeverRemovesOrOverwritesConcurrentReplacement(t *te
 	testutil.NoError(t, err)
 	testutil.Require(t, string(data) == "foreign", "install rollback removed replacement: %q", data)
 	testutil.NoError(t, os.WriteFile(backup, []byte("managed"), 0o600))
-	restoreWithoutOverwrite(backup, target)
+	restoreErr := restoreWithoutOverwrite(backup, target)
 	data, err = os.ReadFile(target)
 	testutil.NoError(t, err)
 	_, backupErr := os.Stat(backup)
-	testutil.Require(t, string(data) == "foreign" && backupErr == nil, "uninstall rollback overwrote replacement: target=%q backup=%v", data, backupErr)
+	testutil.Require(t, string(data) == "foreign" && backupErr == nil && errors.Is(restoreErr, integration.ErrRecovery), "uninstall rollback overwrote replacement or hid recovery failure: target=%q backup=%v restore=%v", data, backupErr, restoreErr)
 }

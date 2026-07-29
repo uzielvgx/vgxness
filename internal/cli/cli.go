@@ -44,11 +44,18 @@ func RunAllRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, 
 }
 
 func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, deliveries delivery.Runtime) int {
+	return RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspector, memories, integrations, controlPlane, installer, setup, deliveries, nil)
+}
+
+func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, controlPlane bridge.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, deliveries delivery.Runtime, sdds SDDRuntime) int {
 	if len(args) > 0 && args[0] == "delivery" {
 		return runDelivery(ctx, args[1:], stdout, stderr, deliveries)
 	}
 	if len(args) > 0 && args[0] == "memory" {
 		return runMemory(ctx, args[1:], stdin, stdout, stderr, memories)
+	}
+	if len(args) > 0 && args[0] == "sdd" {
+		return runSDD(ctx, args[1:], stdin, stdout, stderr, sdds)
 	}
 	if len(args) > 0 && args[0] == "integrate" {
 		return runIntegration(ctx, args[1:], stdout, stderr, integrations)
@@ -72,7 +79,7 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|integrate|bridge|orchestrate|edit|maintenance|self|setup|delivery>")
+		fmt.Fprintln(stderr, "usage: vgxness <status|doctor|memory|sdd|integrate|bridge|orchestrate|edit|maintenance|self|setup|delivery>")
 		return 2
 	}
 	command := args[0]
@@ -138,6 +145,8 @@ func terminalSafe(value string) string {
 
 func failure(err error) (int, string) {
 	switch {
+	case errors.Is(err, integration.ErrRecovery):
+		return 1, "recovery: integration rollback failed; inspect managed artifacts and backups"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return 130, "cancelled: operation cancelled"
 	case errors.Is(err, memory.ErrInvalid):

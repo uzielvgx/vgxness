@@ -1,6 +1,8 @@
 # VGXNESS Contract Schemas
 
-These Draft 2020-12 schemas define runtime-neutral orchestration, execution, registries, run snapshots, and append-only events. Canonical writers emit `schemaVersion: "1"`; readers may accept only the legacy artifact forms documented below.
+> **Status: Compatibility contracts plus shared runtime contracts.** These Draft 2020-12 schemas primarily define the bridge/control-plane orchestration, execution, registry, Chronicle, and Delivery Authority records retained by the CLI compatibility surface. Canonical writers emit `schemaVersion: "1"`; readers may accept only the legacy artifact forms documented below.
+
+Native structured SDD storage is not encoded by a new JSON Schema in this directory. Its change, artifact, revision, binding, optimistic-state, backend, interaction-mode, and projection invariants are enforced by the Go SDD domain and SQLite schema v5, then exposed through the storage-only plugin. The installed manager is the sole lifecycle writer.
 
 ## Schema index
 
@@ -20,7 +22,7 @@ These Draft 2020-12 schemas define runtime-neutral orchestration, execution, reg
 | Delivery receipt | `delivery-receipt.schema.json` | `https://vgxness.dev/schemas/delivery-receipt.schema.json` | Immutable content-bound target, manifest bindings, and issued review receipt. |
 | Current delivery receipt | `delivery-current.schema.json` | `https://vgxness.dev/schemas/delivery-current.schema.json` | Atomic active/invalidated receipt pointer and receipt-file digest. |
 
-Operational storage schemas apply equally under project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/` roots. The default semantic-memory SQLite database is shared at `~/.vgxness/memory.db` and isolates records by project; explicit project-local and storage-root modes remain isolated.
+Operational compatibility schemas apply equally under project-local `.vgxness/` and user-global `~/.vgxness/projects/<project-id>/` roots. The default `~/.vgxness/memory.db` uses SQLite schema v5 and shares canonical workspace/project identity across two isolated domains: semantic observations/FTS and native structured SDD tables. Explicit project-local and storage-root modes remain isolated. A read-only open cannot migrate v4; follow the [native memory migration procedure](../memory.md#upgrade-migration-caveat) rather than deleting the database.
 
 ## Use a stable fragment
 

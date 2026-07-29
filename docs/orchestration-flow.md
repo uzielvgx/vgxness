@@ -4,60 +4,59 @@ This document owns the request lifecycle, gates, phase operating modes, and reco
 
 | Status | Current-candidate evidence and boundary |
 | --- | --- |
-| **Implemented** | Local binary/storage/memory; runtime contract validation; Chronicle events, task-state derivation, immutable crash-atomic snapshot publication and terminal repair; exact Registry/Gatekeeper decisions; prompt/provider runner; finite coordinator; OpenCode execution; strict bridge/setup; tests and receipts. |
-| **Partial** | The delivered coordinator exposes status/read/write/review plus adaptive native orchestration rather than the full Navigator/SDD lifecycle. Explicit `start`/`continue`/`finish` preserves one foreground run. Native Navigator planning, validated plans, deterministic dependency waves, file-backed owner/epoch authority, prerequisite-gated task admission, prepared replay, checkpoint takeover, fail-closed dispatch classification, partial-failure stops, persisted results, authoritative joins, and lifecycle controls are implemented. Chronicle plan/artifact projection and full live SDD supervision remain planned. |
-| **Contracts-only** | Schemas and rules for broader routing, SDD phases, artifact stores, continuity capsules, and event types not exercised by the delivered path. |
-| **Planned** | Navigator intent/routing, complete SDD workflows, richer approval/autonomy UX, artifact/checkpoint lifecycle, and additional providers/adapters. |
+| **Implemented** | Installed native manager routing; structured SDD lifecycle; `memory`, `openspec`, and `hybrid` backends; per-change `automatic`/`interactive` modes; six read-only SDD agents; five read-only reviewers; manager-only workspace/lifecycle writes; storage plugin authorization; bounded read-only parallelism. |
+| **Partial** | Chronicle-backed recovery covers existing run state but not rich interrupted-SDD reconstruction. Compatibility bridge/control-plane orchestration, tickets, waves, edit broker, maintenance, and Delivery Authority remain implemented CLI/maintainer subsystems, not the installed scheduler. |
+| **Contracts-only** | Schemas and rules for broader provider-neutral routing, continuity capsules, and event types not exercised by delivered paths. |
+| **Planned** | Richer Chronicle-backed interrupted-SDD recovery, provider-neutral routing/catalog probes, automatic delivery integration, and additional adapters. |
 
-**Implemented, bounded:** VGXNESS coordinates contract-validated executions through a provider-neutral runner, exact Registry identity, Gatekeeper policy, finite coordinator, and native OpenCode child sessions. `vgxness_orchestrate` creates a tool-denied Navigator child, validates its proposal, persists the approved plan, creates one native child per legal task, overlaps independent reads, carries bounded dependency results forward, and publishes one durable join. The file-backed authority verifies prerequisites, reserves logical slots, persists prepared replay and uncertain markers, accepts terminals, and fences stale owners through monotonic epochs. No automatic redelivery occurs. `vgxness orchestrate status|resume|cancel|explain` provides recovery controls without making them happy-path ceremony. Delivery Authority issues immutable content-bound receipts and validates the same receipt at four lifecycle gates. **Planned:** automatic delivery integration, complete SDD artifacts/checkpoints, richer UI, and additional adapters. OpenCode is the first implemented runtime adapter, not a core domain dependency.
+**Active installed path:** The top-level `vgxness-manager` chooses direct work, bounded native read-only delegation, or structured SDD. It alone creates and transitions changes, accepts immutable revisions, writes OpenSpec files, applies patches, runs validation, records projection evidence, and edits the workspace. The storage-only plugin persists or transforms bounded data and fails every SDD mutation closed unless trusted OpenCode context identifies the tracked top-level manager session.
 
-**Implemented:** The VGXNESS-owned SQLite/FTS5 `MemoryStore` provides local semantic persistence; Registry, Gatekeeper, provider execution, bounded coordination, and crash-atomic Chronicle snapshot publication operate on validated contracts. **Partial:** Chronicle recovery remains bounded rather than implementing the future general checkpoint/artifact lifecycle. Engram integration is a non-goal; full Navigator/SDD orchestration remains planned.
+**Compatibility path:** `bridge`, `controlplane`, `orchestrate`, `maintenance`, `edit`, ticket/wave, and Delivery Authority commands retain their deterministic plans, leases, worktrees, receipts, and recovery controls for CLI and maintainer use. Setup does not install their OpenCode tools, and they do not schedule active native SDD work. See the [compatibility implementation plan](delegation-authority-implementation-plan.md).
 
-Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger are product capabilities; Registry, Chronicle, and Gatekeeper are deterministic services. The explore, propose, spec, design, tasks, apply, verify, archive, fix, and recovery agents described here are operating modes that use those capabilities, not a competing capability taxonomy.
+Navigator, Scout, Blueprint, Forge, Sentinel, and optional Challenger are product capabilities; Registry, Chronicle, and Gatekeeper are deterministic services. Explore, proposal, spec, design, tasks, apply, and verify are installed SDD operating roles, not a competing capability taxonomy.
 
 In this workflow, “manager” or “orchestrator” denotes Navigator's coordinating context; it is not an additional product capability.
 
 ## Quick path
 
-The flow below is the **target full-product lifecycle**. The current binary implements its bounded execution core plus the pure Navigator plan/wave/join foundation—**contract validation → Chronicle events/snapshots/task state → Gatekeeper/Registry → provider → finite coordination → deterministic delegation waves**—but not the manager-facing adaptive runtime, selective SDD, or general artifact stores.
+The active native lifecycle is:
 
 ```text
 User request
-  -> manager negotiates required capabilities and records provider selection
-  -> manager opens or resumes a run
-  -> manager records routing rationale and selective SDD preflight
-  -> manager asks a structured blocking question when required
-  -> agent receives a thin context packet and exact versioned skill refs
-  -> foreground agent executes bounded work sequentially
-  -> optional background agents perform read-only advisory work
-  -> agent returns structured result and immutable artifact refs
-  -> manager validates result, records events, and handles gates
-  -> manager writes a continuity capsule or terminal loop reason
-  -> manager returns a short summary in the user's language
+  -> manager selects direct, bounded read-only, or SDD route
+  -> manager creates/resumes one change with memory|openspec|hybrid backend
+  -> change stores automatic|interactive mode
+  -> read-only phase agents return evidence or candidate content
+  -> apply returns a hash-bound patch and validation plan, without writing
+  -> manager synthesizes, accepts, projects, applies, and validates sequentially
+  -> optional independent read-only subworks overlap, maximum four
+  -> manager transitions explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete
 ```
 
-`vgxness status`, `vgxness doctor`, bridge status/dispatch, guided OpenCode setup, bounded orchestration, and recovery projection are **Implemented**. A general `run inspect` UX and full Navigator/SDD recovery workflow are **Planned**; inspection remains debugging/auditing rather than mandatory ceremony.
+The manager and storage plugin implement this lifecycle. `vgxness status`, `vgxness doctor`, guided setup, and native SDD CLI/storage operations are **Implemented**. Bridge dispatch and control-plane orchestration are **Implemented for compatibility**. Richer interrupted-SDD recovery is **Planned**.
 
 ## Core decisions
 
 | Area | Decision |
 | --- | --- |
-| Manager role | **Implemented/Partial:** The manager routes one-shot work or a validated adaptive plan, enforces native-child boundaries, and summarizes the authoritative join. Full SDD supervision remains planned. |
-| Subagent role | **Implemented, bounded:** A hidden, tool-denied `navigator` proposes the task graph; hidden native `explorer`, `implementer`, and `reviewer` profiles execute one authorized operation and return a validated structured result. Capability-specific SDD agents remain planned. |
+| Manager role | **Implemented/Partial:** The native manager routes direct work or optional SDD, owns revision acceptance and phase transitions, enforces child boundaries, and validates every candidate. Richer interrupted-run recovery remains planned. |
+| Subagent role | **Implemented, bounded:** All six SDD profiles are read-only. Five artifact profiles return schema-bound candidates, apply returns a hash-bound patch and validation plan, and frozen-candidate reviewers provide verification evidence. They cannot write, run commands, mutate lifecycle state, or delegate; the manager is the sole workspace writer and test runner. |
 | Subagent nesting | **Implemented, bounded:** Each native child has `task: deny`; missing authority is reported instead of recursively delegating. |
 | Operational truth | **Implemented/Partial:** Chronicle records validated events, digest-bound snapshots, atomic pointer commits, terminal repair, task/cancellation state, results, and recovery projection. General artifacts/checkpoints remain planned. |
 | Semantic authority | **Implemented:** The owned `MemoryStore` persists typed observations with provenance and lifecycle state. Higher-level approval, summary, and capsule workflows are planned. |
 | Recovery source | **Implemented/Partial:** Readable digest-bound snapshots and events drive bounded recovery reconstruction, including terminal commit repair; general artifacts/checkpoints and a dedicated UX remain planned. |
 | User experience | Happy path is quiet. Detailed inspection is available on demand. |
-| Provider selection | **Implemented, bounded:** Compare exact capability/version/health evidence with policy and fail closed before execution. |
-| Routing | Persist normalized inputs, candidates, selected route, rationale, policy version, SDD decision, and attributable overrides. |
-| Concurrency | **Implemented, bounded:** Independent reads can use four native child sessions per workspace, including deterministic waves in an adaptive foreground plan. A workspace admission guard serializes only pool membership changes; child execution remains parallel, while continuity advancement, reviews, and mutation remain exclusive. Unknown active lease state fails closed. Supervised background task graphs are still planned. |
+| Provider selection | **Implemented for compatibility:** The provider runner compares declared capability/version/health evidence with policy. Provider-neutral native-path catalog probes remain planned; model availability is not claimed. |
+| Routing | **Implemented/Partial:** The native manager selects direct, bounded read-only, or SDD work. Provider-neutral routing persistence and catalog probes remain planned. |
+| Concurrency | **Implemented, bounded:** At most four independent read-only subworks may overlap. Final synthesis, review incorporation, patch application, validation, projection, acceptance, and every write remain sequential and manager-owned. |
 
 ## Adaptive contract gates
 
-These gates combine delivered and future behavior. Registry resolution, Gatekeeper eligibility/permission checks, prompt composition, provider execution, structured results, finite coordinator limits, native Navigator execution, delegation-plan validation, dependency-wave computation, file-backed owner/epoch coordination, and explicit Delivery Authority CLI gates are **Implemented** on the bounded path. Automatic gate installation, SDD preflight, general artifact stores, and the full approval UX remain **Planned/Partial**.
+Native manager SDD preflight, backend/mode selection, phase gates, immutable revision acceptance, projection checks, and mutation authorization are **Implemented**. Registry/Gatekeeper/provider/coordinator and Delivery Authority gates remain implemented on the compatibility path. Automatic delivery integration, provider-neutral routing/catalog probes, and richer Chronicle SDD recovery are **Planned**.
 
 ### 1. Capability negotiation and provider selection
+
+The following deterministic selection record belongs to the compatibility provider path and the provider-neutral target. The active native SDD installation uses its configured model plan; it does not probe runtime model availability.
 
 1. Normalize the run's required capabilities and constraints.
 2. Evaluate every configured provider against those needs and the active policy version.
@@ -69,17 +68,22 @@ The selection record is immutable evidence. Provider-native configuration and mu
 
 ### 2. Explainable routing and selective SDD
 
-Routing classifies difficulty and risk, records candidate agents, chooses the smallest capable agent, and explains why. SDD is `required`, `skipped`, or `overridden` by policy—not automatically invoked for every request. Overrides include the approving identity and reason.
+The native manager classifies difficulty and risk and chooses the smallest direct, read-only, or SDD route. Provider-neutral candidate records, policy-level `required`/`skipped`/`overridden` decisions, and attributable overrides remain planned.
 
 The classifier route `plan` produces a bounded approach when implementation is not authorized or full SDD is unnecessary. It is distinct from the SDD `tasks` operating mode, which converts approved requirements and design into implementation work units. A planning route must not be reported as an approved tasks artifact.
 
-SDD preflight modes are deterministic contracts. The owned-backend contract uses `memory`; Engram is not a runtime backend. No memory-backend migration remains pending. Runtime preflight and SDD artifact-store resolution are still **Planned**.
+SDD preflight is deterministic. Each change stores `automatic` or `interactive` execution and may change it only through optimistic versioning. Creation uses a project-scoped idempotency key; saves, acceptance, and transitions are limited to the current phase. Change statuses are `active`, `completed`, and `cancelled`; artifacts are `draft`, `accepted`, or `stale`; revisions are `candidate` or `accepted`; projection evidence is `absent`, `current`, `stale`, `drift`, or `failed`.
 
-| Mode | Backend behavior | Failure behavior |
-| --- | --- | --- |
-| `required` | **Contracts-only:** resolve owned `memory`, repository `openspec`, or synchronized `hybrid`; never label owned memory as `engram`. | **Planned:** block with a recoverable structured error when the configured store is unavailable or invalid. |
-| `auto` | Check the configured backend only when routing selects SDD. | Record an explicit fallback decision. |
-| `off` | Use backend `none` and perform no artifact access. | Continue without SDD artifacts. |
+| Backend | Implemented canonical behavior |
+| --- | --- |
+| `memory` | Structured SQLite SDD revisions contain canonical bodies, isolated from semantic observations. |
+| `openspec` | Repository files under `openspec/changes/<safe-change-id>/` are canonical; SQLite records bounded identity, digest, bindings, and projection evidence. |
+| `hybrid` | Memory is canonical and OpenSpec is a deterministic projection. Divergent content is never auto-imported. |
+
+| Interaction mode | Implemented behavior |
+| --- | --- |
+| `automatic` | Advance validated reversible phase gates without routine pauses; stop for authorization, drift, missing evidence, or consequential ambiguity. |
+| `interactive` | Pause at each candidate boundary for approve, revise, or cancel. |
 
 ### 3. Structured questions
 
@@ -95,7 +99,7 @@ A question carries `questionId`, prompt, expected answer shape, blocking status,
 
 ## 1. System flow: request to final summary
 
-The following table is the **target manager lifecycle**. The bounded bridge path currently implements scoped skill/risk resolution, compact context, native selection among explorer/implementer/reviewer, up to four independent one-shot read children, structured result validation, receipts, Chronicle task/run evidence, and opt-in cross-process `start`/`continue` continuity. It does not yet advance every Navigator/SDD phase, schedule supervised background work, or approve dependency-aware parallel task graphs.
+The following table describes the native manager lifecycle. Compatibility Chronicle event names remain illustrative where the richer SDD recovery projection is still planned.
 
 | Step | Owner | What happens | Run-store event |
 | --- | --- | --- | --- |
@@ -105,8 +109,8 @@ The following table is the **target manager lifecycle**. The bounded bridge path
 | 4. Assess risk | Manager | Identify destructive, external, credential, install, commit, push, or network actions. | `checkpoint.created` |
 | 5. Select subagent | Manager | Pick one subagent for the next bounded phase. | `phase.started` |
 | 6. Pass compact context | Manager | Provide goal, scope, allowed paths/tools, relevant artifacts, and exact skill refs. | `phase.started` |
-| 7. Execute work | Subagent | Read required context, perform the scoped work, and write allowed artifacts. | `artifact.written` as needed |
-| 8. Return result | Subagent | Return status, files/artifacts changed, validations, risks, and next recommended action. | `phase.completed` or `phase.failed` |
+| 7. Execute work | Subagent and manager | Read-only agents return evidence/candidates; apply returns a hash-bound patch. Only the manager writes artifacts or workspace files. | `artifact.written` as needed |
+| 8. Return result | Subagent | Return status, candidate artifacts or patch scope, validations, risks, and next recommended action. | `phase.completed` or `phase.failed` |
 | 9. Validate gate | Manager or reviewer | Check the result against requirements, safety rules, and validation expectations. | `validation.completed` |
 | 10. Save memory | Manager | Save semantic memory only for durable learnings or decisions. | `memory.written` when saved |
 | 11. Summarize | Manager | Return a concise final summary with status, files, decisions, risks, and next steps. | `run.completed` or `run.failed` |
@@ -115,7 +119,7 @@ The manager should repeat steps 5-10 for multi-phase work. Each phase should be 
 
 ## 2. Manager/orchestrator responsibilities and hard boundaries
 
-The manager keeps the whole workflow coherent without becoming the worker.
+The manager keeps the workflow coherent while retaining exclusive responsibility for synthesis and every write.
 
 ### Responsibilities
 
@@ -133,7 +137,7 @@ The manager keeps the whole workflow coherent without becoming the worker.
 
 | Boundary | Rule |
 | --- | --- |
-| Execution | The manager should not perform substantial implementation, review, or analysis when a scoped subagent exists for that capability. |
+| Execution | The manager delegates bounded read-only analysis when useful but remains the sole patch applier, workspace writer, validation runner, persistence caller, and lifecycle authority. |
 | Delegation | Only the manager delegates in v1. Subagents return `needs_followup` instead of creating more subagents. |
 | Safety | Risky/destructive actions require explicit human approval before execution. |
 | Context | The manager must not dump the full conversation or full repository into a subagent when a focused payload is enough. |
@@ -148,14 +152,14 @@ Subagents are hidden by default and purpose-built. They should advertise capabil
 | --- | --- | --- |
 | Capability agents | Execute a workflow phase such as explore, propose, spec, design, `tasks`, apply, verify, or archive. | Structured phase result plus artifacts. The classifier's `plan` route is not a phase alias for `tasks`. |
 | Review agents | Inspect work through one review lens such as risk, reliability, resilience, or readability. | Findings, severity, evidence, and verdict. |
-| Fix agents | Apply narrowly scoped fixes after validation or review findings. | Patch summary, changed files, and retest notes. |
+| Apply/fix operating role | Compose a narrowly scoped hash-bound patch after accepted inputs or findings. | Patch and validation plan; no file or lifecycle mutation. |
 | Future specialized agents | Handle domains such as iOS, Android, TypeScript, database migrations, release, or security. | Domain-specific result following the same structured envelope. |
 
 ### Required subagent behavior
 
 - Accept only the assigned scope.
 - Load only injected or directly relevant skills.
-- Write only to allowed paths.
+- Remain read-only; return bounded candidate content or a hash-bound patch for the manager to apply.
 - Return structured status: `success`, `blocked`, `failed`, or `needs_followup`.
 - Report deviations instead of silently changing the plan.
 - Ask the manager for more context when blocked; do not guess.
@@ -179,7 +183,7 @@ The manager should select the smallest capable subagent for the next decision or
 | Requirements or acceptance criteria are missing | Use a requirements/spec agent. |
 | Architecture or tradeoffs are needed | Use a design agent. |
 | Work needs task breakdown | Use a planning agent. |
-| Files need to change | Use an apply/fix agent with write permissions limited to the required paths. |
+| Files need to change | Use the read-only apply composer when SDD is active; the manager applies the accepted hash-bound patch to the required paths. |
 | Work needs proof | Use a verify or review agent. |
 | Risk is high | Use a review-risk agent before execution and require human approval when needed. |
 
@@ -187,7 +191,7 @@ Selection should consider:
 
 1. Intent: what phase is actually needed next.
 2. Capability match: which subagent has the narrowest relevant capability.
-3. Permissions: whether the subagent may read, write, run commands, use network, or use MCP.
+3. Permissions: installed SDD and review agents remain read-only; any future capability expansion must be explicit and policy-checked.
 4. Skill match: which exact skills are required.
 5. Context size: whether the work can be completed with a compact payload.
 6. Review budget: whether the work should be split before execution.
@@ -204,7 +208,7 @@ Context should be a curated work packet, not a transcript dump.
 | `phase` | Names the current phase. |
 | `goal` | States the user outcome in one or two sentences. |
 | `scope` | Defines what is in scope and out of scope. |
-| `allowedPaths` | Limits file reads/writes. |
+| `allowedPaths` | Limits child reads and manager-owned writes. |
 | `allowedTools` | Limits command/tool usage. |
 | `artifacts` | Points to existing proposal/spec/design/tasks/results. |
 | `skillRefs` | Exact versioned skill identities with source, provenance, and allowed scope. |
@@ -298,7 +302,7 @@ The manager must stop before risky actions unless the current request explicitly
 | Package changes | Installing packages, changing lockfiles, upgrading runtimes, or modifying global config. |
 | External side effects | Network calls, production APIs, cloud resources, billing systems, deployments, or release actions. |
 | Secrets and credentials | Reading, printing, modifying, or transmitting secrets. |
-| Permission expansion | Granting a subagent broader paths, tools, network, or write access than originally scoped. |
+| Permission expansion | Granting a subagent broader paths, tools, or network access, or making a read-only role write-capable. |
 
 Approval should be recorded as a checkpoint with the approved action, scope, and any user-provided wording.
 
@@ -339,12 +343,13 @@ Failure detected
 | Validation failed | Record failed validation and route a fix agent with only the failing evidence. |
 | Snapshot/event mismatch | Stop and report inconsistency; do not guess the correct state. |
 | Interrupted run | Read `current-run.json`, latest JSONL event, run snapshot, artifacts, and memory summaries. |
-| OpenCode stops between dependency waves | Return the durable `pending` orchestration unchanged; resume or cancel it explicitly instead of inventing a terminal join. |
+| Compatibility orchestration stops between dependency waves | Return the durable `pending` orchestration unchanged; resume or cancel it explicitly instead of inventing a terminal join. |
+| Native SDD is interrupted | Preserve the accepted revisions and current phase; do not infer missing work. Richer Chronicle-backed reconstruction remains planned. |
 | Permission denied | Stop and request explicit approval or narrower scope. |
 
 ## 12. Anti-patterns to avoid
 
-- Letting the manager implement substantial work while pretending it is coordinating.
+- Letting the manager bypass accepted SDD inputs or silently rewrite a phase agent's hash-bound patch.
 - Passing the entire conversation or repository map to every subagent.
 - Delegating to a generic “do everything” agent instead of a narrow capability agent.
 - Allowing subagents to spawn more subagents silently.
@@ -374,9 +379,10 @@ Failure detected
 - [x] **Implemented, bounded:** Coordinate compact context packets, approvals, foreground/background constraints, cancellation, and finite loops for status/read/write/review operations.
 - [x] **Implemented/Partial:** Add delegation request/plan/join contracts, deterministic dependency waves, execution-scoped factory singleflight, durable logical-slot and owner/epoch authority, atomic confirmed-prerequisite admission, prepared replay, fail-closed dispatch classification, checkpoint takeover, authority-accepted Join, native Navigator/task sessions, plan persistence, and lifecycle controls.
 - [x] **Implemented/Partial:** Add content-bound Delivery Authority receipts and explicit lifecycle validation; automatic Git/branch-protection wiring remains rollout work.
-- [ ] **Planned:** Add Chronicle plan-event projection, full SDD phases/artifact stores, richer approval UX, and additional adapters.
+- [x] **Implemented:** Add native SDD phases, structured artifact stores, backends, interaction modes, projection checks, and manager-only lifecycle authority.
+- [ ] **Planned:** Add richer Chronicle-backed interrupted-SDD recovery, provider-neutral routing/catalog probes, automatic delivery integration, and additional adapters.
 - [ ] **Planned:** Keep future `run inspect` and recovery commands focused on debugging/auditing, not happy-path ceremony.
 
 ## Next step
 
-Use this document with the contract schemas in [`docs/schemas/README.md`](schemas/README.md) and the [native delegation/Delivery Authority implementation plan](delegation-authority-implementation-plan.md). The next major slice is Delivery Authority rollout plus broader SDD artifacts and Chronicle plan events. Native Windows runtime/distribution smoke is deferred.
+Use this document with [OpenCode Integration](opencode-integration.md), [Native Memory](memory.md), and the [contract schema boundary](schemas/README.md). The delegation/Delivery Authority plan is compatibility-only. Remaining native work is richer Chronicle-backed interrupted-SDD recovery, provider-neutral routing/catalog probes, and automatic delivery integration. Native Windows runtime/distribution smoke remains deferred.

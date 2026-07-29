@@ -3,12 +3,15 @@ package integration
 import (
 	"context"
 	"errors"
+
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 var (
 	ErrInvalid  = errors.New("invalid integration request")
 	ErrConflict = errors.New("integration artifact conflicts with existing content")
 	ErrDrift    = errors.New("integration artifact has drifted")
+	ErrRecovery = errors.New("integration rollback or recovery failed")
 )
 
 type State string
@@ -26,23 +29,36 @@ const (
 )
 
 type Options struct {
-	ConfigDir string
-	HomeDir   string
-	Model     string
+	ConfigDir      string
+	HomeDir        string
+	Model          string
+	ModelPlan      sdd.Plan
+	ModelEfficient string
+	ModelBalanced  string
+	ModelFrontier  string
 }
 
 type Result struct {
-	Provider       string
-	State          State
-	Path           string
-	ArtifactSHA256 string
-	ToolPath       string
-	ToolSHA256     string
-	Model          string
-	Bridge         BridgeState
-	Changed        bool
-	BackupPath     string
-	ToolBackupPath string
+	Provider        string
+	State           State
+	Path            string
+	ArtifactSHA256  string
+	ToolPath        string
+	ToolSHA256      string
+	Model           string
+	Bridge          BridgeState
+	Changed         bool
+	BackupPath      string
+	ToolBackupPath  string
+	ModelPlan       sdd.Plan
+	ModelProvider   string
+	ModelEfficient  string
+	ModelBalanced   string
+	ModelFrontier   string
+	ManifestPath    string
+	ManifestSHA256  string
+	RestartRequired bool
+	ArtifactCount   int
 }
 
 type Runtime interface {

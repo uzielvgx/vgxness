@@ -1,8 +1,8 @@
 # Safe hooks
 
-VGXNESS exposes two closed hook surfaces: typed in-process notifications for committed control-plane transitions, and a generated OpenCode plugin that maintains bounded manager context. Arbitrary shell hooks and Git hooks are intentionally not supported.
+VGXNESS contains two closed hook surfaces with different delivery status: generated OpenCode plugin hooks are **Implemented and active**, while typed in-process control-plane notifications are **Implemented but inactive by default** and retained for compatibility callers. Arbitrary shell hooks and Git hooks are intentionally not supported.
 
-## Internal events
+## Internal compatibility events
 
 `internal/hooks` recognizes exactly these event names:
 
@@ -19,7 +19,7 @@ Events contain only bounded stable IDs, canonical digests, foreground/background
 
 Handlers run in registration order with a bounded timeout, panic recovery, classified diagnostics, a recursion-depth limit, and bounded process-local duplicate suppression. Each handler receives an isolated payload clone. Empty and nil dispatchers are safe. There is no global dispatcher and no second event log.
 
-The internal dispatcher is an injection point for in-process callers, not active production telemetry. Internal handlers run only when a caller explicitly constructs a dispatcher with handlers and injects it into the relevant service. The shipped application registers none, so it invents no persistence side effect, shell sink, or duplicate Chronicle. The active shipped hooks are the generated OpenCode plugin hooks described below.
+The internal dispatcher is an injection point for compatibility in-process callers, not active production telemetry or part of native SDD scheduling. Internal handlers run only when a caller explicitly constructs a dispatcher with handlers and injects it into the relevant service. The shipped application registers none, so it invents no persistence side effect, shell sink, or duplicate Chronicle. The active shipped hooks are the generated OpenCode plugin hooks described below.
 
 ## Delivery guarantee
 
@@ -29,7 +29,7 @@ Duplicate suppression is bounded and process-local. It reduces replay noise but 
 
 ## OpenCode hooks
 
-The managed `vgxness.ts` plugin uses OpenCode's typed plugin hooks without changing user messages, tool arguments, or tool results:
+The managed storage plugin v5 uses OpenCode's typed plugin hooks without changing user messages, tool arguments, or tool results:
 
 - `event` synchronously tracks top-level session creation, known child sessions, and session deletion.
 - `chat.message` marks the first `vgxness-manager` user turn as needing context.
@@ -39,6 +39,8 @@ The managed `vgxness.ts` plugin uses OpenCode's typed plugin hooks without chang
 - `dispose` aborts plugin-owned memory lookups and clears all closure state.
 
 Memory is untrusted reference data, never an instruction source. Closing tags are escaped, context and observation collections are capped, stale unmatched tool starts are purged, child sessions are excluded, and every hook catches its own failures. A memory timeout or lookup failure therefore cannot abort chat, compaction, or tool execution.
+
+The plugin also exposes five semantic-memory and 13 structured-SDD storage tools. Hook correlation never grants mutation authority: every SDD mutation independently verifies the tracked trusted top-level `vgxness-manager` session and fails closed for child, reviewer, phase-agent, missing, or mismatched session context. The plugin stores and transforms bounded data only; it never executes, routes, edits, delegates, or advances a change by itself.
 
 ## Excluded hooks
 

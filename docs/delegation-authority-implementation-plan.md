@@ -1,22 +1,24 @@
 # Native Delegation and Delivery Authority Implementation Plan
 
-This plan turns the existing one-dispatch/one-child OpenCode bridge into an adaptive, auditable orchestration path without introducing nested workers or a second agent runtime.
+> **Status: Compatibility-only.** This document records the implemented bridge/control-plane, ticket, wave, isolated-edit, and Delivery Authority subsystem. It is retained for CLI and maintainer compatibility and is not the active installed OpenCode scheduler. The active native SDD path is documented in [OpenCode Integration](opencode-integration.md) and [Orchestration Flow](orchestration-flow.md).
 
-## Non-negotiable invariants
+This plan turned the former one-dispatch/one-child bridge into an adaptive, auditable compatibility path without nested workers or a second agent runtime. Setup does not project `vgxness_dispatch`, `vgxness_orchestrate`, ticket, edit-broker, or Delivery Authority tools into OpenCode.
 
-- Every delegated work unit executes in an OpenCode-native child session whose parent is the active `vgxness-manager` session.
+## Compatibility invariants
+
+- Every compatibility delegated work unit executes in an OpenCode-native child session whose parent is the invoking trusted manager session.
 - A subagent is a bounded role; its child session is an ephemeral execution container, not durable semantic memory.
-- VGXNESS, not the planning model, computes dependency waves and has final authority over agent eligibility, permissions, concurrency, and acceptance.
+- The compatibility control plane, not the planning model, computes dependency waves and has final authority over agent eligibility, permissions, concurrency, and acceptance.
 - No nested `opencode run`, detached worker, alternate runtime, self-delegation, or subagent-to-subagent delegation is allowed.
 - V1 parallelism is limited to independent, isolated, read-only work and at most four active native children per workspace.
 - Continuity, review, and mutation remain exclusive. Isolated worktrees and a ticket-authenticated edit broker are implemented, but parallel mutation remains deliberately disabled until merge coordination and conflict policy are explicit.
-- Existing `vgxness_dispatch` remains a compatible single-work-unit primitive while `vgxness_orchestrate` is introduced above it.
+- `vgxness_dispatch` and `vgxness_orchestrate` remain compatibility CLI primitives; neither is an installed plugin tool.
 
-## Target lifecycle
+## Compatibility lifecycle
 
 ```text
-user goal
-  -> VGXNESS Manager calls vgxness_orchestrate once
+compatibility CLI goal
+  -> trusted caller invokes the control-plane orchestration service
   -> native Navigator child proposes bounded candidate tasks
   -> VGXNESS validates contracts, Registry identities, Gatekeeper policy, and dependencies
   -> deterministic scheduler computes sequential/parallel waves
@@ -32,7 +34,7 @@ user goal
 
 ### Slice 1 — Delegation contracts and deterministic scheduler
 
-**Status: implemented, including the production file-backed authority used by Slice 3.**
+**Status: Implemented for compatibility, including the file-backed authority used by Slice 3.**
 
 - Add `delegation.request`, `delegation.plan`, `delegationTask`, `executionWave`, and `delegation.join` contracts.
 - Accept only a high-level bridge orchestration goal; agent choice and parallelism are not tool arguments.
@@ -53,20 +55,20 @@ user goal
 
 ### Slice 2 — Native Navigator and `vgxness_orchestrate`
 
-**Status: implemented.**
+**Status: Implemented for compatibility.**
 
 - Add a hidden, tool-denied `vgxness-navigator` OpenCode subagent profile.
 - Add a frozen prompt/return contract for a bounded candidate-task proposal.
 - Add plan prepare/accept commands to the bridge. The native Navigator session is created with `parentID` equal to the manager session.
 - Validate the proposal through Slice 1 and persist the approved plan before executing any task.
-- Project one `vgxness_orchestrate(goal, acceptanceCriteria)` tool. It must not expose task, agent, wave, or concurrency arguments.
+- The historical projection defined `vgxness_orchestrate(goal, acceptanceCriteria)` without task, agent, wave, or concurrency arguments. The current storage plugin does not install this tool.
 - Keep `vgxness_dispatch` for explicit single operations and compatibility fallback.
 
 **Exit evidence:** an OpenCode integration test proves one orchestration call creates one native Navigator child and returns an approved content-bound plan.
 
 ### Slice 3 — Native wave execution, visibility, and recovery
 
-**Status: implemented for deterministic native waves, durable plan state, owner/epoch recovery, status/resume/cancel, and settled parallel execution. Chronicle plan-event projection and richer UI remain hardening work.**
+**Status: Implemented for compatibility** for deterministic native waves, durable plan state, owner/epoch recovery, status/resume/cancel, and settled parallel execution. Chronicle plan-event projection and richer UI remain hardening work.
 
 - Extend the bridge with plan status/advance/cancel operations and idempotency keys.
 - Prepare tickets only for the current approved wave.
@@ -79,7 +81,7 @@ user goal
 
 ### Slice 3b — Isolated native edit broker
 
-**Status: implemented for exclusive text replacement/creation and durable worktree evidence. Explicit review, merge, cleanup, and parallel mutation remain rollout work.**
+**Status: Implemented for compatibility** for exclusive text replacement/creation and durable worktree evidence. Explicit review, merge, cleanup, and parallel mutation remain rollout work.
 
 - Require a clean canonical Git repository root and bind every write ticket to the current immutable `HEAD`.
 - Create a detached sibling worktree without checkout hooks or filter execution; never place a CodeGraph-dependent worktree in a generic temporary directory or reuse another checkout's index.
@@ -92,7 +94,7 @@ user goal
 
 ### Slice 4 — Delivery Authority v1
 
-**Status: implemented for the product-native receipt core and CLI gates. Automatic hook/branch-protection wiring remains rollout work.**
+**Status: Implemented for compatibility** for the receipt core and CLI gates. Automatic hook/branch-protection wiring remains rollout work.
 
 - Add `TargetSnapshot` for base/candidate identity, changed paths, policy, prompt, Registry, provider, and model identities.
 - Add `EvidenceManifest` for focused commands/checks, exit status, output digest, runtime/toolchain versions, and timestamps.
@@ -106,7 +108,7 @@ The delivered `vgxness delivery issue|status|validate|invalidate` boundary build
 
 ### Slice 5 — Product hardening and rollout
 
-**Status: partial. The orchestration lifecycle CLI, generated-runtime smoke, and Delivery Authority inspection/gate CLI are implemented; incident bundles, automatic gate installation, broader crash matrices, and release rollout remain.**
+**Status: Partial.** The orchestration lifecycle CLI, generated-runtime smoke, and Delivery Authority inspection/gate CLI are implemented; incident bundles, automatic gate installation, broader crash matrices, and release rollout remain.
 
 - Add `vgxness orchestrate status|resume|cancel|explain` and review/gate inspection commands.
 - Export a sanitized incident bundle with plan, timeline, identities, failures, and digests but no secret values or unrestricted prompts.

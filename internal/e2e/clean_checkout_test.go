@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/vgxness/vgxness/internal/bridge"
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
@@ -72,7 +74,16 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 		"vgxness-review-resilience.md",
 		"vgxness-review-refuter.md",
 	}
-	for _, path := range append([]string{launcher, manager, memoryPlugin}, reviewerPaths(configDirectory, reviewers)...) {
+	sddProfiles := []string{
+		"vgxness-sdd-research.md",
+		"vgxness-sdd-proposal.md",
+		"vgxness-sdd-spec.md",
+		"vgxness-sdd-design.md",
+		"vgxness-sdd-tasks.md",
+		"vgxness-sdd-apply.md",
+	}
+	managedProfiles := append(reviewerPaths(configDirectory, reviewers), reviewerPaths(configDirectory, sddProfiles)...)
+	for _, path := range append([]string{launcher, manager, memoryPlugin}, managedProfiles...) {
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.Mode().IsRegular() {
 			t.Fatalf("expected installed regular file %s: %v", path, statErr)
@@ -82,9 +93,14 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 	if err != nil ||
 		!bytes.Contains(pluginData, []byte("opencode-plugin/vgxness-memory")) ||
 		!bytes.Contains(pluginData, []byte("vgxness_memory_search")) ||
+		!bytes.Contains(pluginData, []byte("vgxness_sdd_set_interaction_mode")) ||
 		bytes.Contains(pluginData, []byte("vgxness_orchestrate")) ||
 		bytes.Contains(pluginData, []byte("vgxness_native_edit")) {
-		t.Fatalf("setup did not install the bounded memory-only plugin: %v", err)
+		t.Fatalf("setup did not install the bounded storage-only plugin: %v", err)
+	}
+	managerData, err := os.ReadFile(manager)
+	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 28")) || !bytes.Contains(managerData, []byte("At the start of every accepted SDD change")) {
+		t.Fatalf("setup did not install the executable SDD manager contract: %v", err)
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {
 		t.Fatalf("retire source executable: %v", err)
@@ -96,6 +112,38 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 	)
 	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") {
 		t.Fatalf("installed setup is not healthy:\n%s", statusOutput)
+	}
+
+	var createdEnvelope struct {
+		SchemaVersion int        `json:"schemaVersion"`
+		Result        sdd.Change `json:"result"`
+	}
+	decodeJSON(t, runWithInput(t, environment, workspace, `{"schemaVersion":1,"idempotencyKey":"hermetic-lifecycle-1","title":"Hermetic lifecycle","backend":"memory","interactionMode":"automatic","plan":"low"}`, launcher, "sdd", "create", "--stdin", "--json", "--workspace", workspace), &createdEnvelope)
+	change := createdEnvelope.Result
+	if createdEnvelope.SchemaVersion != 1 || change.ID == "" || change.StateVersion != 1 || change.Phase != sdd.PhaseExplore {
+		t.Fatalf("unexpected SDD change: %+v", createdEnvelope)
+	}
+	var modeEnvelope struct {
+		Result sdd.Change `json:"result"`
+	}
+	decodeJSON(t, runWithInput(t, environment, workspace, fmt.Sprintf(`{"schemaVersion":1,"changeId":%q,"interactionMode":"interactive","expectedStateVersion":1}`, change.ID), launcher, "sdd", "set-interaction-mode", "--stdin", "--json", "--workspace", workspace), &modeEnvelope)
+	if modeEnvelope.Result.InteractionMode != sdd.InteractionInteractive || modeEnvelope.Result.StateVersion != 2 {
+		t.Fatalf("unexpected SDD mode update: %+v", modeEnvelope.Result)
+	}
+	var savedEnvelope struct {
+		Result sdd.Revision `json:"result"`
+	}
+	decodeJSON(t, runWithInput(t, environment, workspace, fmt.Sprintf(`{"schemaVersion":1,"changeId":%q,"artifact":"explore","content":"bounded research","expectedStateVersion":2}`, change.ID), launcher, "sdd", "save-revision", "--stdin", "--json", "--workspace", workspace), &savedEnvelope)
+	var acceptedEnvelope struct {
+		Result sdd.Revision `json:"result"`
+	}
+	decodeJSON(t, runWithInput(t, environment, workspace, fmt.Sprintf(`{"schemaVersion":1,"changeId":%q,"revisionId":%q,"expectedStateVersion":%d}`, change.ID, savedEnvelope.Result.ID, savedEnvelope.Result.StateVersion), launcher, "sdd", "accept-revision", "--stdin", "--json", "--workspace", workspace), &acceptedEnvelope)
+	var transitionEnvelope struct {
+		Result sdd.Change `json:"result"`
+	}
+	decodeJSON(t, runWithInput(t, environment, workspace, fmt.Sprintf(`{"schemaVersion":1,"changeId":%q,"targetPhase":"proposal","expectedStateVersion":%d}`, change.ID, acceptedEnvelope.Result.StateVersion), launcher, "sdd", "transition", "--stdin", "--json", "--workspace", workspace), &transitionEnvelope)
+	if transitionEnvelope.Result.Phase != sdd.PhaseProposal {
+		t.Fatalf("SDD lifecycle did not advance: %+v", transitionEnvelope.Result)
 	}
 
 	var health bridge.Response
@@ -151,17 +199,29 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 		t.Fatalf("unexpected continuity continuation: %#v", continued)
 	}
 	projectRoots, err := filepath.Glob(filepath.Join(homeDirectory, ".vgxness", "projects", "*"))
-	if err != nil || len(projectRoots) != 1 {
-		t.Fatalf("expected one project storage root, got %v: %v", projectRoots, err)
+	if err != nil || len(projectRoots) == 0 {
+		t.Fatalf("expected project storage roots, got %v: %v", projectRoots, err)
 	}
-	currentData, err := os.ReadFile(filepath.Join(projectRoots[0], "current-run.json"))
+	continuityRoot := ""
+	for _, root := range projectRoots {
+		if info, statErr := os.Stat(filepath.Join(root, "current-run.json")); statErr == nil && info.Mode().IsRegular() {
+			if continuityRoot != "" {
+				t.Fatalf("multiple active continuity roots: %s and %s", continuityRoot, root)
+			}
+			continuityRoot = root
+		}
+	}
+	if continuityRoot == "" {
+		t.Fatalf("active continuity root is missing from %v", projectRoots)
+	}
+	currentData, err := os.ReadFile(filepath.Join(continuityRoot, "current-run.json"))
 	if err != nil || !bytes.Contains(currentData, []byte(started.RunID)) || !bytes.Contains(currentData, []byte(continued.CapsuleID)) || !bytes.Contains(currentData, []byte(`"status": "paused"`)) {
 		t.Fatalf("continuity pointer was not persisted: err=%v\n%s", err, currentData)
 	}
 	if info, err := os.Stat(filepath.Join(homeDirectory, ".vgxness", "memory.db")); err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("global project-isolated memory store is missing: info=%v err=%v", info, err)
 	}
-	if _, err := os.Stat(filepath.Join(projectRoots[0], "memory.db")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(continuityRoot, "memory.db")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("legacy per-project memory store was recreated: %v", err)
 	}
 	finished := nativeDispatch(t, environment, workspace, launcher, "finish", bridge.DispatchRequest{
@@ -171,13 +231,13 @@ func TestCleanCheckoutSetupAndDispatch(t *testing.T) {
 	if !finished.OK || finished.RunID != started.RunID || finished.CapsuleID == continued.CapsuleID || finished.StateVersion != 3 || len(finished.MemoryRefs) != 4 {
 		t.Fatalf("unexpected continuity finish: %#v", finished)
 	}
-	if _, err := os.Stat(filepath.Join(projectRoots[0], "current-run.json")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(continuityRoot, "current-run.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("terminal continuity pointer still exists: %v", err)
 	}
-	if info, err := os.Stat(filepath.Join(projectRoots[0], "runs", started.RunID+".json")); err != nil || !info.Mode().IsRegular() {
+	if info, err := os.Stat(filepath.Join(continuityRoot, "runs", started.RunID+".json")); err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("terminal continuity snapshot is missing: info=%v err=%v", info, err)
 	}
-	logs, err = filepath.Glob(filepath.Join(projectRoots[0], "logs", "*.jsonl"))
+	logs, err = filepath.Glob(filepath.Join(continuityRoot, "logs", "*.jsonl"))
 	if err != nil || len(logs) != 2 {
 		t.Fatalf("expected isolated and continuity logs, got %v: %v", logs, err)
 	}

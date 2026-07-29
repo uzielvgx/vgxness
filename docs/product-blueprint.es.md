@@ -18,15 +18,15 @@ Las etiquetas de entrega de capacidades tienen significados precisos y respaldad
 
 ## 1. Propósito y audiencia
 
-VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por IA siga siendo comprensible, delimitado y recuperable. El candidato actual contiene una base funcional del plano de control local para identidades exactas, política, evidencia Chronicle, ejecución delimitada en OpenCode, memoria semántica, instalación y operación consciente de recuperación. El producto amplio Navigator/SDD sigue en construcción.
+VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por IA siga siendo comprensible, delimitado y recuperable. El candidato actual contiene una base funcional del plano de control local y un ciclo SDD nativo instalado en OpenCode con identidades exactas, política, evidencia Chronicle, almacenamiento semántico y estructurado aislado, delegación delimitada y operación consciente de recuperación. La recuperación enriquecida de SDD interrumpido, el routing neutral entre proveedores/sondeos de catálogo y la integración automática de delivery siguen planificados.
 
-**Implemented:** El repositorio compila un binario `vgxness` con composición de la aplicación, launcher permanente y versionado con activación atómica y rollback, resolución de almacenamiento, `status`/`doctor`, memoria propia SQLite/FTS5, validación de contratos en runtime, eventos Chronicle, publicación crash-atomic de instantáneas, estado de tareas y reparación terminal, Registry, Gatekeeper, composición de prompts, coordinación delimitada, ejecución del proveedor OpenCode, una proyección nativa de manager/revisores, un plugin OpenCode acotado solo a memoria, setup guiado, pruebas enfocadas y CI de Go. El CLI del puente de ejecución legacy permanece por compatibilidad, pero no se proyecta mediante el plugin.
+**Implemented:** El repositorio compila un binario `vgxness` con composición, launcher versionado con activación atómica y rollback, resolución de almacenamiento, `status`/`doctor`, SQLite/FTS5 esquema v5, validación de contratos, servicios Chronicle, Registry, Gatekeeper, prompts y ejecución OpenCode. La proyección instalada contiene 14 artefactos gestionados: manager v28, cinco revisores de solo lectura, seis perfiles SDD de solo lectura, plugin de almacenamiento v5 y manifiesto de planes de modelo. El plugin expone 18 herramientas de almacenamiento: cinco de memoria semántica y 13 de SDD. El CLI del puente legacy permanece por compatibilidad, pero no se proyecta mediante el plugin.
 
 **Implemented:** Chronicle anexa y verifica eventos JSONL, deriva estado de tareas, publica instantáneas activas mediante archivos SHA-256 inmutables más un único reemplazo atómico del puntero y recupera una eliminación interrumpida del puntero terminal. **Partial:** su alcance de recuperación sigue siendo menor que el futuro ciclo general de puntos de control/artefactos.
 
-**Contracts-only:** Los esquemas Draft 2020-12 de autoría independiente para rutas futuras de SDD, enrutamiento, artefactos y continuidad definen registros que el runtime delimitado actual aún no ejecuta. Los esquemas usados por el plano de control actual sí se validan en runtime.
+**Contracts-only:** Los esquemas Draft 2020-12 de autoría independiente para rutas futuras de routing neutral entre proveedores, artefactos y continuidad definen registros que los runtimes entregados aún no ejecutan. Las invariantes SDD nativas están implementadas en el dominio Go y SQLite esquema v5; los esquemas usados por rutas de compatibilidad actuales se validan en runtime.
 
-**Implemented/Partial:** El plano de control delimitado, la orquestación, la edición aislada, la validación y Delivery Authority permanecen implementados como superficie legacy de compatibilidad del CLI. No se proyectan en el manager nativo de OpenCode. La ruta interactiva usa herramientas directas de OpenCode, delegación Task nativa, skills nativas por nombre, SDD opcional y perfiles de revisión basados en evidencia. La eliminación o rediseño final de los servicios legacy, los artefactos SDD completos, la integración automática de delivery, una UX de autonomía más rica, la TUI, adaptadores adicionales y la recuperación semántica avanzada siguen planificados.
+**Implemented/Partial:** SDD nativo admite backends `memory`, `openspec` y `hybrid`, más modos por cambio `automatic` e `interactive`. Memoria es canónica en hybrid; OpenSpec queda delimitado a `openspec/changes/<safe-change-id>/`; el contenido divergente nunca se importa automáticamente. El manager es el único escritor del ciclo y workspace, los seis agentes SDD son de solo lectura, apply compone un patch ligado por hash y los cinco revisores son de solo lectura. Puente, orquestación del plano de control, mantenimiento, edición aislada, tickets/waves y Delivery Authority siguen como superficies CLI/de mantenimiento, no como scheduler instalado activo.
 
 ### Contrato del documento y la traducción
 
@@ -40,14 +40,14 @@ VGXNESS está dirigido a desarrolladores que desean que el trabajo asistido por 
 
 | Estado | Alcance |
 | --- | --- |
-| **Implemented** | Binario/composición Go; launcher y auto-instalación/actualización/rollback; almacenamiento y memoria propia SQLite/FTS5; validación de contratos en runtime; eventos Chronicle, publicación crash-atomic de instantáneas inmutables, estado de tareas y recuperación terminal; Registry/Gatekeeper; runner de prompts/proveedores; coordinador/plano de control delimitado; proyección nativa del manager/revisores de OpenCode con plugin solo de memoria; setup guiado; E2E hermético de setup/dispatch desde checkout limpio; pruebas y CI de Go. |
-| **Partial** | Runtime nativo de Navigator/planes/waves/joins visible para el manager, aún delimitado a operaciones soportadas y OpenCode; Delivery Authority tiene CLI explícita de recibos/gates pero no integración automática; continuidad amplia de planes/checkpoints/artefactos Chronicle y smoke nativo de Windows siguen incompletos. |
-| **Contracts-only** | Formas Draft 2020-12 y reglas semánticas para rutas futuras de SDD, enrutamiento, artefactos y continuidad que el runtime delimitado aún no ejecuta. |
-| **Planned** | Enrutamiento Navigator, flujos SDD y backends de artefactos completos, UX de autonomía/aprobación más rica, TUI mediante teclado, adaptadores opcionales, validación nativa de Windows y recuperación/ciclo semántico avanzados. |
+| **Implemented** | Binario/composición Go; launcher y auto-instalación/actualización/rollback; almacenamiento semántico y SDD estructurado esquema v5; ciclo/backends/modos SDD nativos; escrituras solo del manager; agentes SDD/revisión de solo lectura; proyección OpenSpec; validación de contratos; eventos Chronicle y recuperación delimitada; Registry/Gatekeeper; ejecución OpenCode; 14 artefactos gestionados y 18 herramientas; setup, pruebas y CI. |
+| **Partial** | Chronicle aún no ofrece reconstrucción enriquecida de SDD interrumpido; Delivery Authority sigue como CLI explícita de compatibilidad sin integración automática; el smoke nativo de Windows sigue incompleto. |
+| **Contracts-only** | Formas Draft 2020-12 y reglas semánticas para rutas futuras de routing neutral entre proveedores, artefactos y continuidad que los runtimes entregados aún no ejecutan. |
+| **Planned** | Recuperación Chronicle enriquecida de SDD interrumpido, routing neutral entre proveedores/sondeos de catálogo, integración automática de delivery, UX de autonomía/aprobación más rica, TUI, adaptadores adicionales, validación nativa de Windows y ciclo semántico avanzado. |
 | **Deferred** | Adaptadores de runtime adicionales, exposición MCP local opcional, más clientes MCP externos, recuperación semántica avanzada y superficies gráficas de producto. |
 | **Non-goal** | Artefactos copiados de terceros, autonomía destructiva silenciosa, verdad operativa oculta, dependencia rígida de un runtime o herramienta, integración con Engram, bucles de agentes sin límites, promoción automática de prototipos a producción o una interfaz propietaria de la política de negocio. |
 
-**Límite de la evidencia:** El runtime implementado incluye la máquina de estados de tareas, servicios Gatekeeper/Registry, ejecución del proveedor OpenCode, coordinación delimitada, auto-instalador binario headless y proyección nativa de manager/revisores. El plugin VGXNESS instalado en OpenCode expone únicamente búsqueda, lectura, guardado y olvido explícito sobre la memoria propia; los comandos del puente permanecen solo en el CLI como compatibilidad legacy. No se entregan TUI de configuración, servidor o cliente MCP propiedad del producto, integración con Engram, automatización Git, adaptadores de runtime adicionales ni mutación silenciosa de configuración del producto.
+**Límite de la evidencia:** El plugin de almacenamiento v5 expone cinco herramientas de memoria semántica y 13 de SDD; no tiene autoridad de filesystem, shell, scheduler, routing, edición, delegación ni ciclo de vida. Cada mutación SDD se cierra salvo que el contexto confiable identifique al manager superior rastreado. Los planes configuran slots exactos, pero no prueban disponibilidad de modelos en runtime. Los comandos del puente/plano de control/edición/delivery permanecen como compatibilidad. No se entregan TUI, MCP propio, Engram, integración automática de delivery, adaptadores adicionales ni mutación silenciosa de configuración.
 
 **Contracts-only — limitación:** Los esquemas bajo [`schemas/`](schemas/README.md) mezclan contratos de runtime entregados con comportamientos futuros y parciales. La validación en runtime solo demuestra los esquemas y rutas realmente invocados; las declaraciones `$schema` por sí solas no prueban la aplicación completa del producto.
 
@@ -91,26 +91,26 @@ VGXNESS utiliza cuatro grupos de conceptos distintos. No deben agruparse como un
 | Modos operativos | Responsabilidades con nombre usadas cuando una capacidad realiza trabajo SDD o de recuperación. | explore, propose, spec, design, tasks, apply, verify, archive, fix y recovery. |
 | Adaptadores | Traducciones reemplazables entre el plano de control y runtimes, herramientas, protocolos o almacenes externos. | OpenCode, CodeGraph, OpenPencil, MCP y adaptadores futuros. |
 
-**Planned:** Los nombres de capacidades describen responsabilidades estables del producto, no un proceso por nombre ni archivos de prompts específicos de un proveedor. `sdd-design` es un modo de Blueprint, `sdd-apply` es un modo de Forge y `sdd-verify` es un modo de Sentinel.
+**Implemented/Partial:** Los nombres de capacidades describen responsabilidades estables, no un proceso por nombre. Los perfiles SDD instalados realizan roles delimitados de research/proposal/spec/design/tasks/apply, con verificación y escrituras del ciclo propiedad del manager; el routing neutral entre proveedores sigue planificado.
 
 **Contracts-only:** Los términos de los esquemas existentes siguen siendo normativos para registros legibles por máquinas. Este plan maestro controla la taxonomía para personas, no las definiciones de campos de los esquemas.
 
-La división de entrega es intencional: la memoria propia, Registry, Gatekeeper, la ejecución delimitada validada por contratos, la publicación crash-atomic de instantáneas Chronicle y la ruta del proveedor OpenCode están **Implemented**; Chronicle sigue **Partial** solo para el modelo amplio de continuidad de puntos de control/artefactos; las capacidades de producto con nombre y los modos SDD completos siguen **Planned**.
+La división de entrega es intencional: memoria semántica propia, almacenamiento/ciclo SDD estructurado, Registry, Gatekeeper, ejecución delimitada validada, publicación crash-atomic de Chronicle y la ruta OpenCode están **Implemented**. Chronicle sigue **Partial** para recuperación enriquecida de SDD interrumpido y el routing neutral entre proveedores sigue **Planned**.
 
 ## 6. Modelo del sistema
 
-VGXNESS tiene un plano de control Go local **Implemented y delimitado** con límites explícitos de paquetes y dependencias. La base contractual y de scheduling determinista de Navigator es **Partial**; el enrutamiento de runtime y el producto SDD completo siguen **Planned**. La arquitectura Go se detalla en [`go-implementation.md`](go-implementation.md).
+VGXNESS tiene un plano de control Go local y un ciclo SDD nativo de OpenCode **Implemented y delimitado**, con límites explícitos de autoridad. El routing neutral entre proveedores/sondeos de catálogo y la recuperación enriquecida siguen **Planned**. La arquitectura Go se detalla en [`go-implementation.md`](go-implementation.md).
 
 ```text
-TUI planificada / CLI + proyección nativa OpenCode implementados
+TUI planificada / CLI + manager nativo OpenCode implementados
                             |
- composición, almacenamiento, contratos y Chronicle implementados
+ routing direct / Task de solo lectura / SDD del manager
                             |
- Registry/Gatekeeper + coordinador delimitado implementados
+ agentes SDD de solo lectura -> patch apply ligado por hash
                             |
-       ejecución del proveedor OpenCode implementada
+ solo el manager escribe, valida, acepta y transiciona
                             |
- MemoryStore implementado + proyección acotada de memoria en OpenCode
+ plugin v5 -> memoria semántica + SDD estructurado v5
 ```
 
 | Límite | Estado y responsabilidad |
@@ -119,10 +119,10 @@ TUI planificada / CLI + proyección nativa OpenCode implementados
 | CLI, auto-instalación y raíces de almacenamiento | **Implemented:** Instalar versiones inmutables detrás de un launcher permanente, activar actualizaciones atómicamente, hacer rollback de un nivel, resolver almacenamiento de proyecto/persona y ofrecer status, doctor, memoria, setup guiado, integración y comandos delimitados del puente. |
 | MemoryStore propio | **Implemented:** Almacenamiento semántico SQLite/FTS5, migraciones, campos de ciclo de vida, búsqueda filtrada, registros con procedencia, recuperación automática delimitada y candidatos propuestos por agentes bajo gobierno de VGXNESS. |
 | Chronicle | **Implemented/Partial:** Implementa lectura estricta de la ejecución actual, eventos JSONL verificados, instantáneas activas inmutables direccionadas por contenido, commits atómicos del puntero, reparación terminal, reproducción del estado de tareas, evidencia de cancelación y reconstrucción delimitada de recuperación. La continuidad general de puntos de control/artefactos sigue planificada. |
-| Esquemas y reglas semánticas | **Implemented/Contracts-only:** Paquetes, eventos, instantáneas, registros Registry, prompts y resultados actuales se validan en runtime; las formas futuras de SDD/continuidad siguen solo como contratos. |
+| Esquemas y reglas semánticas | **Implemented/Contracts-only:** Paquetes, eventos, instantáneas, registros Registry, prompts, resultados y reglas SDD nativas se validan; las formas futuras de routing/continuidad neutrales entre proveedores siguen solo como contratos. |
 | TUI mediante teclado | **Planned:** Ofrecer configuración e interacción enfocada sin controlar la política de instalación u orquestación. |
-| Coordinación delimitada | **Implemented, acotada:** Se entregan identidades Registry, política Gatekeeper, selección de proveedor, coordinación finita foreground/background, cancelación, recibos y operaciones delimitadas de status/read/write/review. El enrutamiento Navigator/SDD sigue planificado. |
-| Adaptador OpenCode | **Implemented:** Se entregan el adaptador reforzado, un `vgxness-manager` native-first, cinco perfiles de revisión de solo lectura, routing nativo de skills por nombre, un plugin acotado de memoria propia y setup explicativo con confirmación, sin modelo hijo fijo ni puente de ejecución. |
+| Coordinación delimitada | **Implemented, acotada:** El manager elige trabajo directo, lectura delimitada o SDD nativo. Como máximo se solapan cuatro subtrabajos independientes de solo lectura; síntesis y escrituras son secuenciales. Los servicios de compatibilidad permanecen separados. |
+| Adaptador OpenCode | **Implemented:** Manager v28, cinco revisores, seis perfiles SDD de solo lectura, plugin v5 y manifiesto low/medium/high forman 14 artefactos. El plan actual/predeterminado `medium` usa slots Luna Fast, Terra y Sol; cambiar plan o slot requiere reiniciar. |
 | Adaptador CodeGraph | **Implemented, opcional:** El manager y los revisores pueden usar la herramienta MCP de solo lectura `codegraph_explore` para evidencia estructural delimitada cuando existe un índice saludable; la fuente exacta y el diff siguen siendo las autoridades y alternativas. |
 | Adaptador OpenPencil | **Planned, opcional:** Ruta de diseño y prototipado; los artefactos son propuestas hasta implementarse y verificarse por separado. |
 | Otros adaptadores de runtime/MCP | **Deferred:** Pueden agregarse sin cambiar los contratos centrales. |
@@ -133,7 +133,7 @@ TUI planificada / CLI + proyección nativa OpenCode implementados
 
 ### Asistente de configuración
 
-**Implemented, headless:** El wizard de OpenCode detecta requisitos y rutas, explica los seis pasos y sus límites, muestra cambios propuestos, solicita aprobación, instala mediante servicios de aplicación, relee resultados, verifica el handshake y reporta rollback o reparación acotados. Una TUI más rica y el setup de adaptadores opcionales siguen planificados como extensiones separadas.
+**Implemented, headless:** El wizard detecta requisitos y rutas, explica los seis pasos, muestra cambios, solicita aprobación, instala los 14 artefactos mediante servicios, relee resultados, verifica el handshake y reporta recuperación. No afirma sondeos de disponibilidad de modelos en runtime. Una TUI más rica y el setup de adaptadores opcionales siguen planificados.
 
 El asistente puede detectar OpenCode, CodeGraph y OpenPencil. Solo puede ofrecer la instalación de un adaptador opcional ausente después de informar fuente, versión, comando, destino, uso de red, cambios de configuración y reversión. Rechazar un adaptador opcional conserva una alternativa admitida. La detección no autoriza instalación ni inicialización.
 
@@ -141,7 +141,7 @@ El asistente puede detectar OpenCode, CodeGraph y OpenPencil. Solo puede ofrecer
 
 ### Interacción con Navigator
 
-**Implemented/Partial:** El manager de OpenCode coincide con el idioma de la persona y elige trabajo directo inline, delegación Task nativa delimitada o SDD opcional aprobado por la persona. Carga skills aplicables mediante el registry nativo de OpenCode, puede consultar evidencia delimitada de CodeGraph, realiza ediciones y validación directamente y usa los cinco perfiles de revisión de solo lectura sobre un candidato congelado. El routing completo de artefactos SDD duraderos sigue planificado.
+**Implemented/Partial:** El manager coincide con el idioma y elige trabajo directo, delegación Task nativa de solo lectura o SDD aprobado. Carga skills, puede consultar CodeGraph, realiza todas las ediciones y validación y usa cinco revisores de solo lectura. El almacenamiento, backends, modos, transiciones y controles de proyección SDD están entregados; la recuperación Chronicle enriquecida sigue planificada.
 
 ### Perfiles de autonomía
 
@@ -174,7 +174,7 @@ Un rechazo incluye la condición fallida y la siguiente acción segura más pequ
 
 ## 8. Enrutamiento y SDD
 
-**Planned:** Navigator clasifica cada solicitud en la ruta adecuada más pequeña y persiste una decisión explicable.
+**Implemented/Partial:** El manager nativo clasifica cada solicitud en la ruta adecuada más pequeña. El estado SDD estructurado se persiste; los registros de routing neutrales entre proveedores y sondeos de catálogo siguen planificados.
 
 | Ruta | Uso |
 | --- | --- |
@@ -188,18 +188,18 @@ El modo operativo `tasks` pertenece a SDD y transforma requisitos y diseño apro
 
 ### Preflight y almacenes de artefactos
 
-**Planned:** El preflight automático utiliza política y evidencia del repositorio, y solo pregunta ante una ambigüedad importante. El preflight interactivo explica la decisión relevante antes del trabajo de fase.
+**Implemented/Partial:** El manager ofrece SDD opcional y almacena ejecución `automatic` o `interactive` por cambio. El modo automático avanza gates validados sin pausas rutinarias; el interactivo se detiene en cada límite. El preflight/sondeo de catálogo neutral entre proveedores y una UX de recuperación más amplia siguen planificados.
 
-**Contracts-only:** El contrato del backend propio usa `memory`. Engram no es un backend de runtime ni un adaptador planificado. No queda ninguna migración del esquema del backend de memoria como requisito previo de implementación. La resolución de preflight y la persistencia de artefactos SDD en runtime siguen planificadas.
+**Implemented:** El almacén SDD estructurado admite `memory`, `openspec` y `hybrid` en tablas SQLite aisladas. Se instalan seis perfiles de fase de solo lectura y el contrato secuencial del manager. El manager escribe mediante herramientas OpenCode; el plugin no accede al filesystem. Engram no es backend ni adaptador planificado.
 
 | Almacén visible | Mapeo del contrato | Entrega y comportamiento |
 | --- | --- | --- |
-| `memory` | `memory` → `MemoryStore` configurado | **Contracts-only para artefactos SDD:** usa referencias inmutables de memoria propia; el MemoryStore general está implementado, pero la integración como almacén SDD no. |
-| `openspec` | `openspec` | **Contracts-only:** persiste artefactos en la estructura OpenSpec cuando se implemente el preflight de runtime. |
-| `both` | `hybrid` | **Contracts-only:** mantiene sincronizados memoria y artefactos del sistema de archivos cuando se implemente el preflight de runtime. |
+| `memory` | `memory` → tablas SDD estructuradas | **Implemented:** cuerpos canónicos, cambios, artefactos, revisiones aceptadas inmutables y enlaces de entrada están aislados de las observaciones semánticas. |
+| `openspec` | `openspec` | **Implemented, bounded:** el archivo bajo `openspec/changes/<safe-change-id>/` es canónico; SQLite conserva ruta, digest, identidad y enlaces, pero no el cuerpo. El manager usa herramientas del workspace y registra evidencia verificada. |
+| `both` | `hybrid` | **Implemented, bounded:** memoria es canónica; render/compare deterministas y la reconciliación explícita de sobrescribir, inspeccionar o guardar como candidato evitan importaciones divergentes automáticas. |
 | desactivado | `none` | **Contracts-only:** no accede a artefactos SDD cuando la política permite omitirlos. |
 
-El orden de fases se basa en evidencia, no en ceremonia. Una fase solo se omite cuando su artefacto o decisión requerida existe y sigue siendo válida. Apply sigue requisitos y diseño aprobados; verify demuestra el resultado; archive cierra y sincroniza el estado final.
+El orden durable entregado es `explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete`. Cada guardado y aceptación se limita a la fase actual, y cada transición exige su artefacto aceptado; las transiciones con OpenSpec también exigen una proyección vigente enlazada a la misma revisión y digest. Todos los perfiles SDD son de solo lectura, incluido el compositor apply enlazado por hash. Pueden solaparse como máximo cuatro investigaciones independientes de solo lectura; solo el manager escribe archivos, ejecuta validación, persiste artefactos y realiza transiciones de forma secuencial.
 
 ## 9. Contexto y persistencia
 
@@ -213,7 +213,7 @@ El orden de fases se basa en evidencia, no en ceremonia. Una fase solo se omite 
 | --- | --- |
 | Chronicle | **Implemented/Partial:** Lee el puntero activo; valida, anexa, revierte y relee eventos JSONL; deriva estado de tareas/cancelaciones; publica instantáneas activas mediante archivos inmutables direccionados por contenido y repara una publicación terminal interrumpida. Los puntos de control generales y la recuperación rica de artefactos siguen planificados. |
 | MemoryStore de VGXNESS | **Implemented:** Autoridad semántica para observaciones duraderas tipadas con identidad, alcance, tema, procedencia, ciclo de vida, referencias, save/search/get, metadatos de sesión, recuperación/captura automática de tareas y `memoryCandidates` gobernados. Las actualizaciones contradictorias pasan a `needs_review`; la UX amplia de revisión humana sigue planificada. |
-| SQLite/FTS5 | **Implemented:** Una base predeterminada por usuario, vínculos canónicos de workspace, registros aislados por proyecto, cuatro migraciones, importación segura de bases heredadas, filtrado determinista y recuperación léxica detrás de `MemoryStore`; la indexación semántica avanzada sigue planificada. |
+| SQLite/FTS5 | **Implemented:** Una base predeterminada esquema v5, vínculos de workspace y dominios semántico/SDD aislados por proyecto. Una apertura v4 de solo lectura no puede migrar; siga [Memoria nativa](memory.md#upgrade-migration-caveat) y nunca elimine la base. |
 | Integración Engram | **Non-goal:** VGXNESS no instala, invoca, importa ni depende de Engram. |
 | Raíces de proyecto/persona | **Implemented:** Resuelve almacenamiento operativo local en `.vgxness/` o global en `~/.vgxness/projects/<project-id>/`; la memoria semántica predeterminada se comparte en `~/.vgxness/memory.db`. |
 
@@ -321,16 +321,17 @@ Navigator solo inicia trabajo concurrente cuando es seguro. Cada tarea en segund
 
 ### Horizontes de entrega
 
-La secuencia de dependencias hasta **delegación nativa adaptativa → recibos de Delivery Authority ligados al contenido** está implementada para la ruta acotada del plano de control OpenCode. La siguiente secuencia del producto es **integración automática de delivery → continuidad amplia de puntos de control/artefactos**. El smoke nativo de runtime/distribución en Windows queda diferido y no bloquea esta secuencia.
+La secuencia nativa **almacenamiento SDD estructurado → agentes de fase de solo lectura → apply/validación/ciclo propiedad del manager** está implementada. La siguiente secuencia es **recuperación Chronicle enriquecida → routing neutral/sondeos de catálogo → integración automática de delivery**. El smoke nativo de Windows queda diferido.
 
 | Horizonte | Estado | Resultado |
 | --- | --- | --- |
-| Base local del producto | **Implemented** | Composición Go, auto-instalación/actualización/rollback versionados, resolución de almacenamiento, memoria propia SQLite/FTS5, CLI/puente, status/doctor, pruebas y CI. |
-| Base de contratos de runtime | **Implemented/Contracts-only** | Valida contratos usados por el runtime delimitado; conserva formas futuras de SDD/continuidad solo como contratos hasta que existan sus rutas. |
+| Base local del producto | **Implemented** | Composición Go, auto-instalación/actualización/rollback, almacenamiento semántico/SDD esquema v5, CLI, puente de compatibilidad, status/doctor, pruebas y CI. |
+| Base de contratos de runtime | **Implemented/Contracts-only** | Valida contratos y reglas SDD usados por rutas entregadas; conserva formas futuras de routing/continuidad neutrales entre proveedores solo como contratos. |
 | Estado operativo Chronicle | **Implemented/Partial** | Entrega eventos verificados, reproducción de tareas/cancelaciones, instantáneas ligadas a digest, publicación atómica del puntero, reparación terminal y proyección de recuperación; falta ampliar la continuidad general de puntos de control/artefactos. |
-| Base de orquestación delimitada | **Implemented/Partial** | Registry/Gatekeeper, composición de prompts, ejecución OpenCode, coordinación finita, Navigator nativo, waves deterministas, autoridad durable, admisiones preparadas, fencing por slot/epoch, adopción de checkpoints, persistencia de planes/resultados, controles de recuperación, joins aceptados y recibos de Delivery Authority están entregados. La integración automática de delivery y los artefactos SDD/Chronicle completos siguen planificados. |
-| Adaptadores estructurales y de diseño | **Planned** | Agregar detección opcional de CodeGraph y OpenPencil, instalación por asistente, procedencia, alternativas seguras y validación Sentinel enfocada. |
-| Entrega segura | **Partial** | Existen unidades delimitadas, recibos de política, cancelación, restricciones de segundo plano de solo lectura, evidencia estricta de revisión, rollback de setup y controles de recuperación; el ciclo completo de habilidades, automatización Git/worktree y presupuestos de revisión del producto siguen planificados. |
+| Base SDD nativa | **Implemented/Partial** | Entrega backends, modos, revisiones/enlaces aislados, proyección OpenSpec, escrituras del manager, agentes de solo lectura y lecturas paralelas delimitadas; falta recuperación Chronicle enriquecida y routing neutral/sondeos de catálogo. |
+| Plano de control de compatibilidad | **Implemented** | Conserva bridge/orchestrate/ticket/wave/edit/Delivery Authority para CLI y mantenimiento sin proyectarlos como scheduler activo. |
+| Adaptadores estructurales y de diseño | **Partial/Planned** | La evidencia CodeGraph opcional y delimitada está implementada; sondeos neutrales amplios y OpenPencil siguen planificados. |
+| Entrega segura | **Partial** | Existen recibos/gates de compatibilidad y límites estrictos de revisión nativa; la integración automática sigue planificada. |
 | Expansión del ecosistema | **Deferred** | Agregar runtimes elegibles además de OpenCode, MCP local opcional, más clientes, recuperación semántica avanzada y superficies gráficas cuando los contratos sean estables. |
 
 ### No objetivos explícitos
@@ -352,25 +353,25 @@ Este es un mapa de revisión, no un sustituto de las definiciones anteriores.
 | Resultado, estado, canonicidad y contrato bilingüe | Secciones 1-2 | **Implemented**, **Partial**, **Contracts-only** y **Planned** están respaldados por evidencia; el inglés es canónico. |
 | Control humano, enseñanza, orientación crítica e idioma | Secciones 3 y 7 | **Planned**. |
 | Paridad limpia, procedencia y copia prohibida | Sección 4 | Regla documental **Implemented**; copiar es **Non-goal**. |
-| Capacidades, servicios, modos y adaptadores | Secciones 5, 6 y 10 | Registry/Gatekeeper/Chronicle y ejecución OpenCode están entregados en un runtime acotado; la base determinista de planeación/scheduling de Navigator es **Partial**, mientras su rol nativo en runtime, las demás capacidades con nombre y los modos SDD completos siguen como taxonomía **Planned**. |
-| Plano Go, estado con prioridad local, TUI, CLI y OpenCode | Secciones 6-7 | Go/CLI/almacenamiento/orquestación y el puente OpenCode **Implemented**; TUI **Planned**. |
+| Capacidades, servicios, modos y adaptadores | Secciones 5, 6 y 10 | Routing del manager y roles SDD delimitados están **Implemented**; routing neutral entre proveedores sigue **Planned**. |
+| Plano Go, estado local, TUI, CLI y OpenCode | Secciones 6-7 | Go/CLI/almacenamiento/SDD nativo OpenCode están **Implemented**; orquestación de compatibilidad queda separada; TUI **Planned**. |
 | Safe, Balanced, Autonomous, Custom y arrendamientos | Secciones 7 y 11 | **Planned**; se mantienen controles estrictos. |
-| `direct`, `explore`, `plan`, `sdd`, `recovery`; `plan` frente a `tasks` | Sección 8 | **Planned** y explícitamente distintos. |
-| Preflight automático/interactivo y backends de artefactos | Sección 8 | Identidad de backend **Contracts-only**; preflight de runtime **Planned**. |
+| `direct`, `explore`, `plan`, `sdd`, `recovery`; `plan` frente a `tasks` | Sección 8 | Selección nativa **Implemented/Partial**; persistencia neutral planificada; términos distintos. |
+| Preflight automático/interactivo y backends de artefactos | Sección 8 | Modos por cambio y `memory`/`openspec`/`hybrid` están **Implemented**. |
 | Paquetes pequeños y cápsulas de continuidad | Sección 9 | Los paquetes de ejecución delimitados están **Implemented**; las cápsulas generales de continuidad siguen **Planned**. |
 | Verdad operativa Chronicle y JSON/JSONL legible | Secciones 6 y 9 | Eventos, instantáneas ligadas a digest, reproducción de tareas, punteros atómicos, reparación terminal y proyección de recuperación están entregados; la continuidad amplia de puntos de control/artefactos mantiene Chronicle **Partial**. |
 | Autoridad semántica SQLite/FTS5 propia y alcance del conocimiento duradero | Sección 9 | Base save/search/get **Implemented**; ciclo avanzado **Planned**. |
 | Sin integración Engram en runtime | Secciones 2, 6 y 9 | **Non-goal**. |
-| Inteligencia estructural CodeGraph e instalación por asistente | Secciones 7 y 10 | **Planned, opcional**, con alternativa. |
+| Inteligencia estructural CodeGraph e instalación por asistente | Secciones 7 y 10 | Evidencia delimitada de solo lectura **Implemented, opcional**; instalación por asistente **Planned**. |
 | Diseño/prototipado OpenPencil e instalación por asistente | Secciones 7, 10 y 11 | **Planned, opcional**; sin promoción automática. |
 | Habilidades, resolución exacta, aprobaciones, revisiones y entrega | Sección 11 | La resolución/aprobación/evidencia de revisión delimitada es **Partial**; el ciclo completo de habilidades y la automatización de entrega siguen **Planned**. |
-| Fallos, cancelación, recuperación y supervisión en segundo plano | Secciones 3, 9 y 11 | La cancelación delimitada del proveedor, proyección de recuperación y restricciones de segundo plano de solo lectura están **Implemented/Partial**; la supervisión completa de Navigator sigue **Planned**. |
+| Fallos, cancelación, recuperación y supervisión en segundo plano | Secciones 3, 9 y 11 | Cancelación delimitada y supervisión de solo lectura están **Implemented**; recuperación Chronicle enriquecida de SDD interrumpido sigue **Planned**. |
 | Esquemas Draft 2020-12 y límite de validación | Secciones 1-2 y [`schemas/README.md`](schemas/README.md) | Las rutas actuales de runtime se validan; las formas solo futuras son **Contracts-only** y no se afirma validación completa de release. |
-| Base de runtime entregada | Secciones 1-2 y este mapa | Binario, almacenamiento, memoria, Chronicle, Registry/Gatekeeper, runner de proveedores, coordinador delimitado, sesiones nativas de Navigator/tareas, autoridad durable propietario/epoch, puente/setup OpenCode, recibos de Delivery Authority, pruebas y CI están **Implemented** dentro de los límites declarados; la continuidad SDD/Chronicle más amplia y la integración automática de delivery siguen **Partial/Planned**. |
+| Base de runtime entregada | Secciones 1-2 y este mapa | Binario, almacenamiento semántico/SDD v5, ciclo del manager, agentes de fase/revisión de solo lectura, autorización del plugin, backends/modos/proyección, setup OpenCode, subsistemas CLI de compatibilidad, pruebas y CI están **Implemented**; recuperación enriquecida, routing neutral/sondeos de catálogo y delivery automático siguen **Planned**. |
 
 ## Documentos complementarios
 
 - [`../README.md`](../README.md) — estado del repositorio y entrada bilingüe a la documentación.
 - [`go-implementation.md`](go-implementation.md) — paquetes entregados del plano de control Go, límites parciales Chronicle/Windows nativo, extensiones planificadas, interfaces, almacenamiento y evidencia de pruebas.
-- [`orchestration-flow.md`](orchestration-flow.md) — ciclo entregado de ejecución delimitada frente a extensiones planificadas de enrutamiento Navigator/SDD, artefactos, continuidad y recuperación.
+- [`orchestration-flow.md`](orchestration-flow.md) — ciclo SDD nativo activo, límite del plano de control de compatibilidad y extensiones planificadas de recuperación/routing/delivery.
 - [`schemas/README.md`](schemas/README.md) — índice de contratos legibles por máquinas y guía de validación disponible; los contratos no implican entrega de runtime.

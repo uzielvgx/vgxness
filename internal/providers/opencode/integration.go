@@ -53,6 +53,18 @@ permission:
   vgxness_memory_get: allow
   vgxness_memory_save: allow
   vgxness_memory_forget: ask
+  vgxness_sdd_create: allow
+  vgxness_sdd_list: allow
+  vgxness_sdd_get: allow
+  vgxness_sdd_save_revision: allow
+  vgxness_sdd_get_revision: allow
+  vgxness_sdd_list_revisions: allow
+  vgxness_sdd_accept_revision: allow
+  vgxness_sdd_transition: allow
+  vgxness_sdd_projection_status: allow
+  vgxness_sdd_record_projection: allow
+  vgxness_sdd_render_projection: allow
+  vgxness_sdd_compare_projection: allow
   bash:
     "*": allow
     "git push": deny
@@ -73,7 +85,7 @@ permission:
     "sudo *": deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 25 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 26 -->
 
 # Identity
 
@@ -146,6 +158,7 @@ OpenCode is the execution authority for normal work. Use ordinary workspace tool
 - Call vgxness_memory_recent as a fallback only when that bounded context block is absent or unavailable. Use vgxness_memory_search when prior project decisions or fixes may matter, then use vgxness_memory_get only for relevant full entries. Verify mutable claims against the repository.
 - Save material decisions, bug fixes, non-obvious discoveries, conventions, and configuration changes through vgxness_memory_save as soon as they become durable. Reuse one stable topic key for an evolving subject. Never save routine progress, transient status, speculation, credentials, secrets, personal data, raw command output, or full transcripts.
 - Use vgxness_memory_forget only when the user explicitly asks to forget a specific memory. Do not use any external memory system or duplicate the same fact across stores.
+- VGXNESS SDD tools persist structured records and render or compare supplied OpenSpec bytes only. They do not execute agents, access the filesystem, route work, or advance phases autonomously. In hybrid mode memory is canonical; divergent projection content requires an explicit save-revision call before it can become a candidate.
 - Inspect branch, HEAD, and working-tree state yourself. Preserve unrelated user changes. Never ask the user to run terminal, Git, filesystem, test, or diagnostic commands.
 - Diagnose before editing. For behavior changes, use a regression test or RED -> GREEN -> REFACTOR when the project can express it safely.
 - Run source-mutating formatters and generators before freezing the candidate. After freeze, only read-only review and validation may run; a source change creates a new candidate.
@@ -318,15 +331,16 @@ type Integration struct {
 }
 
 type artifact struct {
-	path         string
-	content      []byte
-	backup       string
-	present      bool
-	exact        bool
-	upgrade      bool
-	prior        []byte
-	predecessors [][]byte
-	recognize    func([]byte) bool
+	path          string
+	content       []byte
+	backup        string
+	present       bool
+	exact         bool
+	upgrade       bool
+	prior         []byte
+	predecessors  [][]byte
+	regenerations [][]byte
+	recognize     func([]byte) bool
 }
 
 type inspection struct {
@@ -409,6 +423,7 @@ func (service *Integration) Preview(ctx context.Context, options integration.Opt
 		return integration.Result{}, err
 	}
 	state.result.Changed = state.result.State == integration.StateAbsent || state.result.State == integration.StatePartial
+	state.result.RestartRequired = state.result.Changed
 	return state.result, nil
 }
 
@@ -417,7 +432,7 @@ func (service *Integration) Status(ctx context.Context, options integration.Opti
 	return state.result, err
 }
 
-func (service *Integration) Install(ctx context.Context, options integration.Options) (integration.Result, error) {
+func (service *Integration) Install(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
 	state, err := service.inspect(ctx, options)
 	if err != nil {
 		return integration.Result{}, err
@@ -446,7 +461,7 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 	defer func() {
 		if rollback {
 			for index := len(created) - 1; index >= 0; index-- {
-				rollbackInstalledArtifact(created[index])
+				returnErr = errors.Join(returnErr, rollbackInstalledArtifact(created[index]))
 			}
 		} else {
 			for _, item := range created {
@@ -476,10 +491,11 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 	}
 	rollback = false
 	verified.result.Changed = len(created) != 0
+	verified.result.RestartRequired = verified.result.Changed
 	return verified.result, nil
 }
 
-func (service *Integration) Uninstall(ctx context.Context, options integration.Options) (integration.Result, error) {
+func (service *Integration) Uninstall(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
 	state, err := service.inspect(ctx, options)
 	if err != nil {
 		return integration.Result{}, err
@@ -521,7 +537,7 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	defer func() {
 		if rollback {
 			for index := len(backups) - 1; index >= 0; index-- {
-				restoreWithoutOverwrite(backups[index].backup, backups[index].target)
+				returnErr = errors.Join(returnErr, restoreWithoutOverwrite(backups[index].backup, backups[index].target))
 			}
 		}
 	}()
@@ -538,13 +554,13 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 			return integration.Result{}, fmt.Errorf("backup OpenCode integration artifact: %w", err)
 		}
 		if err := syncDirectory(filepath.Dir(backupPath)); err != nil {
-			removeSameFileBestEffort(backupPath, item.path)
-			return integration.Result{}, fmt.Errorf("sync OpenCode integration backup: %w", err)
+			cleanupErr := removeSameFileDurably(backupPath, item.path)
+			return integration.Result{}, errors.Join(fmt.Errorf("sync OpenCode integration backup: %w", err), recoveryFailure("remove unsynced integration backup", cleanupErr))
 		}
 		backup, readErr := readRegularFile(backupPath)
 		if readErr != nil || !bytes.Equal(backup, expected) {
-			removeSameFileBestEffort(backupPath, item.path)
-			return integration.Result{}, fmt.Errorf("read back OpenCode integration backup: %w", integration.ErrDrift)
+			cleanupErr := removeSameFileDurably(backupPath, item.path)
+			return integration.Result{}, errors.Join(fmt.Errorf("read back OpenCode integration backup: %w", integration.ErrDrift), recoveryFailure("remove invalid integration backup", cleanupErr))
 		}
 		backups = append(backups, backedUpArtifact{target: item.path, backup: backupPath})
 		if err := removeSameFileDurably(item.path, backupPath); err != nil {
@@ -587,27 +603,51 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	reviewResiliencePath := filepath.Join(configDirectory, "agents", reviewResilienceName)
 	reviewRefuterPath := filepath.Join(configDirectory, "agents", reviewRefuterName)
 	toolPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
+	plan, err := requestedModelPlan(options, configDirectory)
+	if err != nil {
+		return inspection{}, err
+	}
 	toolContent, err := memoryPluginContent(service.executable)
 	if err != nil {
 		return inspection{}, err
 	}
 	result := integration.Result{
-		Provider: "opencode", State: integration.StateAbsent, Path: managerPath, ArtifactSHA256: artifactSHA256([]byte(managerPrompt)),
+		Provider: "opencode", State: integration.StateAbsent, Path: managerPath, ArtifactSHA256: artifactSHA256(plan.agents[managerAgentName]),
 		ToolPath: toolPath, ToolSHA256: artifactSHA256(toolContent), Bridge: integration.BridgeNotRequired,
+		ModelPlan: plan.config.ActivePlan, ModelProvider: plan.resolved.Provider,
+		ModelEfficient: plan.config.Efficient, ModelBalanced: plan.config.Balanced, ModelFrontier: plan.config.Frontier,
+		ManifestPath: manifestPath, ManifestSHA256: artifactSHA256(plan.manifest),
 	}
 	exists, drifted, containerErr := inspectDirectory(configDirectory)
 	if containerErr != nil {
 		return inspection{}, fmt.Errorf("inspect OpenCode integration directory: %w", containerErr)
 	}
+	_, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
+	regeneration := func(path string) [][]byte {
+		if installedPlanOK && len(installedPlanBytes[path]) != 0 {
+			return [][]byte{installedPlanBytes[path]}
+		}
+		return nil
+	}
+	managerPredecessors := append([][]byte{[]byte(managerPrompt)}, previousManagerPrompts()...)
 	state := inspection{result: result, artifacts: []artifact{
-		{path: managerPath, content: []byte(managerPrompt), backup: "vgxness-manager", predecessors: previousManagerPrompts()},
-		{path: reviewRiskPath, content: []byte(reviewRiskPrompt), backup: "vgxness-review-risk"},
-		{path: reviewReadabilityPath, content: []byte(reviewReadabilityPrompt), backup: "vgxness-review-readability"},
-		{path: reviewReliabilityPath, content: []byte(reviewReliabilityPrompt), backup: "vgxness-review-reliability"},
-		{path: reviewResiliencePath, content: []byte(reviewResiliencePrompt), backup: "vgxness-review-resilience"},
-		{path: reviewRefuterPath, content: []byte(reviewRefuterPrompt), backup: "vgxness-review-refuter"},
+		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: managerPredecessors, regenerations: regeneration(managerPath)},
+		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: [][]byte{[]byte(reviewRiskPrompt)}, regenerations: regeneration(reviewRiskPath)},
+		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: [][]byte{[]byte(reviewReadabilityPrompt)}, regenerations: regeneration(reviewReadabilityPath)},
+		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", predecessors: [][]byte{[]byte(reviewReliabilityPrompt)}, regenerations: regeneration(reviewReliabilityPath)},
+		{path: reviewResiliencePath, content: plan.agents[reviewResilienceName], backup: "vgxness-review-resilience", predecessors: [][]byte{[]byte(reviewResiliencePrompt)}, regenerations: regeneration(reviewResiliencePath)},
+		{path: reviewRefuterPath, content: plan.agents[reviewRefuterName], backup: "vgxness-review-refuter", predecessors: [][]byte{[]byte(reviewRefuterPrompt)}, regenerations: regeneration(reviewRefuterPath)},
+		{path: filepath.Join(configDirectory, "agents", sddResearchName), content: plan.agents[sddResearchName], backup: "vgxness-sdd-research", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddResearchName))},
+		{path: filepath.Join(configDirectory, "agents", sddProposalName), content: plan.agents[sddProposalName], backup: "vgxness-sdd-proposal", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddProposalName))},
+		{path: filepath.Join(configDirectory, "agents", sddSpecName), content: plan.agents[sddSpecName], backup: "vgxness-sdd-spec", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddSpecName))},
+		{path: filepath.Join(configDirectory, "agents", sddDesignName), content: plan.agents[sddDesignName], backup: "vgxness-sdd-design", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddDesignName))},
+		{path: filepath.Join(configDirectory, "agents", sddTasksName), content: plan.agents[sddTasksName], backup: "vgxness-sdd-tasks", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddTasksName))},
+		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
 		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
+		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
 	}}
+	state.result.ArtifactCount = len(state.artifacts)
 	if drifted {
 		state.result.State = integration.StateDrifted
 		return state, nil
@@ -644,7 +684,14 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		present++
 		item.exact = bytes.Equal(current, item.content)
 		if !item.exact {
-			if !isManagedPredecessor(current, item.content, item.predecessors, item.recognize) {
+			regenerated := false
+			for _, prior := range item.regenerations {
+				if bytes.Equal(current, prior) {
+					regenerated = true
+					break
+				}
+			}
+			if !regenerated && !isManagedPredecessor(current, item.content, item.predecessors, item.recognize) {
 				state.result.State = integration.StateDrifted
 				return state, nil
 			}
@@ -681,16 +728,13 @@ func installArtifact(ctx context.Context, item artifact) (installedArtifact, err
 		}
 		return installedArtifact{}, fmt.Errorf("install OpenCode integration artifact: %w", err)
 	}
-	if err := syncDirectory(filepath.Dir(item.path)); err != nil {
-		removeSameFileBestEffort(item.path, temporaryPath)
-		return installedArtifact{}, fmt.Errorf("sync OpenCode integration directory: %w", err)
-	}
 	installed := installedArtifact{path: item.path, temporary: temporaryPath, content: item.content}
+	if err := syncDirectory(filepath.Dir(item.path)); err != nil {
+		return installedArtifact{}, errors.Join(fmt.Errorf("sync OpenCode integration directory: %w", err), rollbackInstalledArtifact(installed))
+	}
 	readback, readErr := readRegularFile(item.path)
 	if readErr != nil || !bytes.Equal(readback, item.content) {
-		removeSameFileBestEffort(item.path, temporaryPath)
-		_ = os.Remove(temporaryPath)
-		return installedArtifact{}, fmt.Errorf("read back OpenCode integration artifact: %w", integration.ErrDrift)
+		return installedArtifact{}, errors.Join(fmt.Errorf("read back OpenCode integration artifact: %w", integration.ErrDrift), rollbackInstalledArtifact(installed))
 	}
 	return installed, nil
 }
@@ -748,13 +792,11 @@ func upgradeArtifact(ctx context.Context, item artifact) (installedArtifact, err
 	installed := installedArtifact{path: item.path, temporary: anchor, backup: backup, content: item.content}
 	keepAnchor, keepBackup = true, true
 	if err := syncDirectory(directory); err != nil {
-		rollbackInstalledArtifact(installed)
-		return installedArtifact{}, fmt.Errorf("sync OpenCode integration replacement: %w", err)
+		return installedArtifact{}, errors.Join(fmt.Errorf("sync OpenCode integration replacement: %w", err), rollbackInstalledArtifact(installed))
 	}
 	readback, readErr := readRegularFile(item.path)
 	if readErr != nil || !bytes.Equal(readback, item.content) || !sameFile(item.path, anchor) {
-		rollbackInstalledArtifact(installed)
-		return installedArtifact{}, fmt.Errorf("read back OpenCode integration replacement: %w", integration.ErrDrift)
+		return installedArtifact{}, errors.Join(fmt.Errorf("read back OpenCode integration replacement: %w", integration.ErrDrift), rollbackInstalledArtifact(installed))
 	}
 	return installed, nil
 }
@@ -813,7 +855,7 @@ func memoryPluginContent(executable string) ([]byte, error) {
 import { isAbsolute } from "node:path"
 import { tool } from "@opencode-ai/plugin"
 
-// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 3
+// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 5
 const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 const MAX_INPUT_BYTES = 64 * 1024
 const MAX_OUTPUT_BYTES = ` + fmt.Sprintf("%d", maxMemoryOutputBytes) + `
@@ -908,6 +950,111 @@ async function invokeMemory(operation, payload, context) {
   })
 }
 
+function sddText(value, limit, name) {
+  const text = String(value ?? "")
+  if (Buffer.byteLength(text) > limit) throw new Error("VGXNESS SDD " + name + " exceeded its bound")
+  return text
+}
+
+function sddInputs(value) {
+  if (!Array.isArray(value)) return []
+  if (value.length > 32) throw new Error("VGXNESS SDD inputs exceeded their bound")
+  return value.map((input) => ({
+    artifactId: sddText(input?.artifactId, 256, "artifact ID"),
+    revisionId: sddText(input?.revisionId, 256, "revision ID"),
+    digest: sddText(input?.digest, 64, "input digest"),
+  }))
+}
+
+function sddFailureCategory(value) {
+  const category = String(value ?? "").trim().split(":", 1)[0]
+  return ["invalid", "not_found", "conflict", "stale", "cancelled", "operational"].includes(category) ? category : "operational"
+}
+
+// VGXNESS SDD tools persist structured records and render or compare supplied bytes only.
+async function invokeSDD(operation, payload, context) {
+  const workspace = String(context?.directory ?? "")
+  if (!workspace || !isAbsolute(workspace)) throw new Error("VGXNESS SDD workspace is unavailable")
+  const input = JSON.stringify({ schemaVersion: 1, ...payload })
+  if (Buffer.byteLength(input) > MAX_INPUT_BYTES) throw new Error("VGXNESS SDD request exceeded its bound")
+  if (context?.abort?.aborted) throw new Error("VGXNESS SDD request was cancelled")
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(
+      VGXNESS_EXECUTABLE,
+      ["sdd", operation, "--stdin", "--json", "--workspace", workspace],
+      {
+        cwd: workspace,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          HOME: process.env.HOME,
+          USERPROFILE: process.env.USERPROFILE,
+          TMPDIR: process.env.TMPDIR,
+          SystemRoot: process.env.SystemRoot,
+        },
+      },
+    )
+    let stdout = ""
+    let stderr = ""
+    let settled = false
+    const finish = (error, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      context?.abort?.removeEventListener?.("abort", abort)
+      if (error) reject(error)
+      else resolve(value)
+    }
+    const abort = () => {
+      child.kill("SIGKILL")
+      finish(new Error("VGXNESS SDD request was cancelled"))
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL")
+      finish(new Error("VGXNESS SDD request timed out"))
+    }, TIMEOUT_MS)
+    context?.abort?.addEventListener?.("abort", abort, { once: true })
+    if (context?.abort?.aborted) return abort()
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk
+      if (Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) {
+        child.kill("SIGKILL")
+        finish(new Error("VGXNESS SDD response exceeded its bound"))
+      }
+    })
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk
+      if (Buffer.byteLength(stderr) > MAX_OUTPUT_BYTES) {
+        child.kill("SIGKILL")
+        finish(new Error("VGXNESS SDD failure exceeded its bound"))
+      }
+    })
+    child.on("error", () => finish(new Error("VGXNESS SDD process is unavailable")))
+    child.on("close", (code) => {
+      if (settled) return
+      if (code !== 0) {
+        const category = sddFailureCategory(stderr)
+        const failure = new Error("VGXNESS SDD request failed: " + category)
+        failure.code = "VGXNESS_SDD_" + category.toUpperCase()
+        return finish(failure)
+      }
+      try {
+        const envelope = JSON.parse(stdout)
+        if (envelope?.schemaVersion !== 1 || !("result" in envelope)) {
+          return finish(new Error("VGXNESS SDD response is invalid"))
+        }
+        finish(undefined, JSON.stringify(envelope.result))
+      } catch {
+        finish(new Error("VGXNESS SDD response is invalid"))
+      }
+    })
+    child.stdin.end(input)
+  })
+}
+
 function bounded(value, limit) {
   const bytes = Buffer.from(String(value ?? ""), "utf8")
   if (bytes.length <= limit) return bytes.toString("utf8")
@@ -937,6 +1084,14 @@ export const VGXNESSMemoryPlugin = async ({ directory }) => {
   const toolStarts = new Map()
   const controllers = new Map()
   let disposed = false
+
+  const invokeSDDMutation = async (operation, payload, context) => {
+    const sessionID = safeIdentifier(context?.sessionID)
+    if (!sessionID || childSessions.has(sessionID)) throw new Error("VGXNESS SDD mutation denied")
+    const state = sessions.get(sessionID)
+    if (!state?.topLevel || !state.manager) throw new Error("VGXNESS SDD mutation denied")
+    return await invokeSDD(operation, payload, context)
+  }
 
   const cleanupSession = (sessionID) => {
     sessions.delete(sessionID)
@@ -1164,6 +1319,173 @@ export const VGXNESSMemoryPlugin = async ({ directory }) => {
         return await invokeMemory("forget", { id: args.id }, context)
       },
     }),
+    vgxness_sdd_create: tool({
+      description: "Create one structured SDD change. This stores state only and does not execute a workflow.",
+      args: {
+        idempotencyKey: tool.schema.string().describe("Stable create key reused for retries of the same normalized change"),
+        title: tool.schema.string().describe("Change title"),
+        backend: tool.schema.string().describe("openspec, memory, or hybrid"),
+        interactionMode: tool.schema.string().describe("automatic or interactive"),
+        plan: tool.schema.string().describe("low, medium, or high"),
+      },
+      async execute(args, context) {
+        return await invokeSDDMutation("create", {
+          idempotencyKey: sddText(args.idempotencyKey, 256, "idempotency key"), title: sddText(args.title, 512, "title"), backend: args.backend,
+          interactionMode: args.interactionMode, plan: args.plan,
+        }, context)
+      },
+    }),
+    vgxness_sdd_list: tool({
+      description: "List structured SDD changes for the trusted workspace project.",
+      args: {
+        status: tool.schema.string().optional().describe("Optional active, completed, or cancelled status"),
+        limit: tool.schema.number().optional().describe("Maximum results from 1 to 100"),
+      },
+      async execute(args, context) {
+        const limit = Math.max(1, Math.min(100, Math.trunc(args.limit ?? 20)))
+        return await invokeSDD("list", { changeStatus: args.status ?? "", limit }, context)
+      },
+    }),
+    vgxness_sdd_get: tool({
+      description: "Get one structured SDD change by exact ID.",
+      args: { id: tool.schema.string().describe("Exact change ID") },
+      async execute(args, context) {
+        return await invokeSDD("get", { id: sddText(args.id, 256, "change ID") }, context)
+      },
+    }),
+    vgxness_sdd_set_interaction_mode: tool({
+      description: "Change one active SDD change between automatic and interactive phase execution using optimistic state versioning.",
+      args: {
+        changeId: tool.schema.string().describe("Exact change ID"),
+        interactionMode: tool.schema.string().describe("automatic or interactive"),
+        expectedStateVersion: tool.schema.number().describe("Optimistic change state version"),
+      },
+      async execute(args, context) {
+        return await invokeSDDMutation("set-interaction-mode", {
+          changeId: sddText(args.changeId, 256, "change ID"), interactionMode: args.interactionMode,
+          expectedStateVersion: Math.trunc(args.expectedStateVersion),
+        }, context)
+      },
+    }),
+    vgxness_sdd_save_revision: tool({
+      description: "Save supplied content as a candidate SDD artifact revision. This never accepts it or writes OpenSpec files.",
+      args: {
+        changeId: tool.schema.string().describe("Exact change ID"),
+        artifact: tool.schema.string().describe("explore, proposal, spec, design, tasks, apply, or verify artifact phase"),
+        content: tool.schema.string().describe("Candidate revision content"),
+        externalLocation: tool.schema.string().optional().describe("Exact repository-relative canonical path, required only for openspec backend"),
+        digest: tool.schema.string().optional().describe("Optional expected SHA-256 content digest"),
+        inputs: tool.schema.array(tool.schema.object({
+          artifactId: tool.schema.string(), revisionId: tool.schema.string(), digest: tool.schema.string(),
+        })).optional().describe("Accepted input revision bindings, maximum 32"),
+        inputDigest: tool.schema.string().optional().describe("Optional expected aggregate input digest"),
+        expectedStateVersion: tool.schema.number().describe("Optimistic change state version"),
+      },
+      async execute(args, context) {
+        return await invokeSDDMutation("save-revision", {
+          changeId: sddText(args.changeId, 256, "change ID"), artifact: args.artifact,
+          content: sddText(args.content, 48 * 1024, "content"), digest: args.digest ?? "",
+          externalLocation: sddText(args.externalLocation ?? "", 1024, "external location"),
+          inputs: sddInputs(args.inputs), inputDigest: args.inputDigest ?? "",
+          expectedStateVersion: Math.trunc(args.expectedStateVersion),
+        }, context)
+      },
+    }),
+    vgxness_sdd_get_revision: tool({
+      description: "Get one SDD artifact revision by exact change and revision IDs.",
+      args: { changeId: tool.schema.string(), revisionId: tool.schema.string() },
+      async execute(args, context) {
+        return await invokeSDD("get-revision", {
+          changeId: sddText(args.changeId, 256, "change ID"), revisionId: sddText(args.revisionId, 256, "revision ID"),
+        }, context)
+      },
+    }),
+    vgxness_sdd_list_revisions: tool({
+      description: "List bounded SDD revision summaries without body content. Use get-revision for one full body.",
+      args: {
+        changeId: tool.schema.string(), artifact: tool.schema.string().optional(),
+        limit: tool.schema.number().optional().describe("Maximum results from 1 to 100"),
+      },
+      async execute(args, context) {
+        const limit = Math.max(1, Math.min(100, Math.trunc(args.limit ?? 50)))
+        return await invokeSDD("list-revisions", {
+          changeId: sddText(args.changeId, 256, "change ID"), artifact: args.artifact ?? "", limit,
+        }, context)
+      },
+    }),
+    vgxness_sdd_accept_revision: tool({
+      description: "Accept one immutable candidate revision using optimistic state versioning.",
+      args: { changeId: tool.schema.string(), revisionId: tool.schema.string(), expectedStateVersion: tool.schema.number() },
+      async execute(args, context) {
+        return await invokeSDDMutation("accept-revision", {
+          changeId: sddText(args.changeId, 256, "change ID"), revisionId: sddText(args.revisionId, 256, "revision ID"),
+          expectedStateVersion: Math.trunc(args.expectedStateVersion),
+        }, context)
+      },
+    }),
+    vgxness_sdd_transition: tool({
+      description: "Record one explicit legal SDD phase transition or cancellation. No transition is automatic.",
+      args: {
+        changeId: tool.schema.string(), targetPhase: tool.schema.string().optional(),
+        cancel: tool.schema.boolean().optional(), expectedStateVersion: tool.schema.number(),
+      },
+      async execute(args, context) {
+        return await invokeSDDMutation("transition", {
+          changeId: sddText(args.changeId, 256, "change ID"), targetPhase: args.targetPhase ?? "",
+          cancel: args.cancel ?? false, expectedStateVersion: Math.trunc(args.expectedStateVersion),
+        }, context)
+      },
+    }),
+    vgxness_sdd_projection_status: tool({
+      description: "Read the recorded projection status for one SDD artifact.",
+      args: { changeId: tool.schema.string(), artifactId: tool.schema.string() },
+      async execute(args, context) {
+        return await invokeSDD("projection-status", {
+          changeId: sddText(args.changeId, 256, "change ID"), artifactId: sddText(args.artifactId, 256, "artifact ID"),
+        }, context)
+      },
+    }),
+    vgxness_sdd_record_projection: tool({
+      description: "Record supplied projection evidence. This does not access or write the filesystem.",
+      args: {
+        changeId: tool.schema.string(), artifactId: tool.schema.string(), revisionId: tool.schema.string(),
+        status: tool.schema.string(), digest: tool.schema.string(), location: tool.schema.string(),
+        expectedStateVersion: tool.schema.number(),
+      },
+      async execute(args, context) {
+        return await invokeSDDMutation("record-projection", {
+          changeId: sddText(args.changeId, 256, "change ID"), artifactId: sddText(args.artifactId, 256, "artifact ID"),
+          revisionId: sddText(args.revisionId, 256, "revision ID"), status: args.status,
+          digest: sddText(args.digest, 64, "projection digest"), location: sddText(args.location, 1024, "location"),
+          expectedStateVersion: Math.trunc(args.expectedStateVersion),
+        }, context)
+      },
+    }),
+    vgxness_sdd_render_projection: tool({
+      description: "Render deterministic managed OpenSpec bytes and a repository-relative target path from an accepted revision.",
+      args: { changeId: tool.schema.string(), revisionId: tool.schema.string() },
+      async execute(args, context) {
+        return await invokeSDD("render-projection", {
+          changeId: sddText(args.changeId, 256, "change ID"), revisionId: sddText(args.revisionId, 256, "revision ID"),
+        }, context)
+      },
+    }),
+    vgxness_sdd_compare_projection: tool({
+      description: "Compare caller-supplied OpenSpec bytes with accepted memory state. Divergence is never imported automatically.",
+      args: {
+        changeId: tool.schema.string(), revisionId: tool.schema.string(), relativePath: tool.schema.string(),
+        projectionContent: tool.schema.string().optional(), missing: tool.schema.boolean().optional(),
+        symlink: tool.schema.boolean().optional().describe("Must be false; symlink assumptions are rejected"),
+      },
+      async execute(args, context) {
+        return await invokeSDD("compare-projection", {
+          changeId: sddText(args.changeId, 256, "change ID"), revisionId: sddText(args.revisionId, 256, "revision ID"),
+          relativePath: sddText(args.relativePath, 512, "relative path"),
+          projectionContent: sddText(args.projectionContent ?? "", 48 * 1024, "projection content"),
+          missing: args.missing ?? false, symlink: args.symlink ?? false,
+        }, context)
+      },
+    }),
   },
   }
 }
@@ -1199,22 +1521,42 @@ func removeSameFileDurably(target, expected string) error {
 
 func removeSameFileBestEffort(target, expected string) { _ = removeSameFileDurably(target, expected) }
 
-func rollbackInstalledArtifact(item installedArtifact) {
+func recoveryFailure(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %s: %v", integration.ErrRecovery, action, err)
+}
+
+func rollbackInstalledArtifact(item installedArtifact) error {
 	current, err := readRegularFile(item.path)
 	unchanged := err == nil && bytes.Equal(current, item.content) && sameFile(item.path, item.temporary)
+	var recoveryErr error
+	if !unchanged {
+		recoveryErr = fmt.Errorf("%w: managed artifact changed before install rollback", integration.ErrRecovery)
+	}
 	if item.backup == "" {
 		if unchanged {
-			removeSameFileBestEffort(item.path, item.temporary)
+			if err := removeSameFileDurably(item.path, item.temporary); err != nil {
+				recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove installed artifact: %v", integration.ErrRecovery, err))
+			}
 		}
-		_ = os.Remove(item.temporary)
-		return
+		if err := os.Remove(item.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove install rollback anchor: %v", integration.ErrRecovery, err))
+		}
+		return recoveryErr
 	}
 	if unchanged {
-		if os.Rename(item.backup, item.path) == nil {
-			_ = syncDirectory(filepath.Dir(item.path))
+		if err := os.Rename(item.backup, item.path); err != nil {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: restore integration predecessor: %v", integration.ErrRecovery, err))
+		} else if err := syncDirectory(filepath.Dir(item.path)); err != nil {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: sync restored integration predecessor: %v", integration.ErrRecovery, err))
 		}
 	}
-	_ = os.Remove(item.temporary)
+	if err := os.Remove(item.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+		recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove integration replacement anchor: %v", integration.ErrRecovery, err))
+	}
+	return recoveryErr
 }
 
 func cleanupInstalledArtifact(item installedArtifact) {
@@ -1247,15 +1589,20 @@ func sameFile(first, second string) bool {
 	return firstErr == nil && secondErr == nil && firstInfo.Mode().IsRegular() && secondInfo.Mode().IsRegular() && os.SameFile(firstInfo, secondInfo)
 }
 
-func restoreWithoutOverwrite(backup, target string) {
+func restoreWithoutOverwrite(backup, target string) error {
 	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		return
+		return fmt.Errorf("%w: integration target changed before uninstall rollback", integration.ErrRecovery)
 	}
-	if err := os.Link(backup, target); err == nil {
-		if syncDirectory(filepath.Dir(target)) == nil {
-			removeSameFileBestEffort(backup, target)
-		}
+	if err := os.Link(backup, target); err != nil {
+		return fmt.Errorf("%w: restore uninstalled artifact: %v", integration.ErrRecovery, err)
 	}
+	if err := syncDirectory(filepath.Dir(target)); err != nil {
+		return fmt.Errorf("%w: sync restored uninstalled artifact: %v", integration.ErrRecovery, err)
+	}
+	if err := removeSameFileDurably(backup, target); err != nil {
+		return fmt.Errorf("%w: remove restored artifact backup: %v", integration.ErrRecovery, err)
+	}
+	return nil
 }
 
 func integrationConfigDirectory(options integration.Options) (string, error) {
@@ -1341,7 +1688,12 @@ func readRegularFile(path string) ([]byte, error) {
 }
 
 func previousManagerPrompts() [][]byte {
-	v24 := derivePredecessor([]byte(managerPrompt), []textReplacement{
+	v25 := derivePredecessor([]byte(managerPrompt), []textReplacement{
+		{old: "artifact: opencode-agent/vgxness-manager; version: 26", new: "artifact: opencode-agent/vgxness-manager; version: 25"},
+		{old: "  vgxness_sdd_create: allow\n  vgxness_sdd_list: allow\n  vgxness_sdd_get: allow\n  vgxness_sdd_save_revision: allow\n  vgxness_sdd_get_revision: allow\n  vgxness_sdd_list_revisions: allow\n  vgxness_sdd_accept_revision: allow\n  vgxness_sdd_transition: allow\n  vgxness_sdd_projection_status: allow\n  vgxness_sdd_record_projection: allow\n  vgxness_sdd_render_projection: allow\n  vgxness_sdd_compare_projection: allow\n", new: ""},
+		{old: "- VGXNESS SDD tools persist structured records and render or compare supplied OpenSpec bytes only. They do not execute agents, access the filesystem, route work, or advance phases autonomously. In hybrid mode memory is canonical; divergent projection content requires an explicit save-revision call before it can become a candidate.\n", new: ""},
+	})
+	v24 := derivePredecessor(v25, []textReplacement{
 		{old: "artifact: opencode-agent/vgxness-manager; version: 25", new: "artifact: opencode-agent/vgxness-manager; version: 24"},
 		{old: "  question: allow\n", new: ""},
 		{old: "\nResolve the user's intent as answer, exploration, plan-only, implementation, review, or recovery before acting. Route and execution topology are separate decisions: use the smallest capable route, then decide whether the manager can work inline or needs bounded delegation.\n", new: ""},
@@ -1387,10 +1739,114 @@ Do not claim TDD unless the failing RED evidence was observed before the product
 			new: "- VGXNESS-owned memory is the only persistent memory authority. At the start of work, use vgxness_memory_search when prior project decisions or fixes may matter, then use vgxness_memory_get only for relevant full entries. Verify mutable claims against the repository.",
 		},
 	})
-	return [][]byte{v24, v23, v22}
+	return [][]byte{v25, v24, v23, v22}
+}
+
+func previousMemoryPluginV4(current []byte) []byte {
+	previousV5 := derivePredecessor(current, []textReplacement{
+		{old: `
+function sddFailureCategory(value) {
+  const category = String(value ?? "").trim().split(":", 1)[0]
+  return ["invalid", "not_found", "conflict", "stale", "cancelled", "operational"].includes(category) ? category : "operational"
+}
+`, new: ""},
+		{old: "    let stderr = \"\"\n", new: "    let stderrBytes = 0\n"},
+		{old: `    child.stderr.on("data", (chunk) => {
+      stderr += chunk
+      if (Buffer.byteLength(stderr) > MAX_OUTPUT_BYTES) {
+`, new: `    child.stderr.on("data", (chunk) => {
+      stderrBytes += Buffer.byteLength(chunk)
+      if (stderrBytes > MAX_OUTPUT_BYTES) {
+`},
+		{old: `      if (code !== 0) {
+        const category = sddFailureCategory(stderr)
+        const failure = new Error("VGXNESS SDD request failed: " + category)
+        failure.code = "VGXNESS_SDD_" + category.toUpperCase()
+        return finish(failure)
+      }
+`, new: `      if (code !== 0) return finish(new Error("VGXNESS SDD request failed"))
+`},
+		{old: `
+  const invokeSDDMutation = async (operation, payload, context) => {
+    const sessionID = safeIdentifier(context?.sessionID)
+    if (!sessionID || childSessions.has(sessionID)) throw new Error("VGXNESS SDD mutation denied")
+    const state = sessions.get(sessionID)
+    if (!state?.topLevel || !state.manager) throw new Error("VGXNESS SDD mutation denied")
+    return await invokeSDD(operation, payload, context)
+  }
+`, new: ""},
+		{old: `        idempotencyKey: tool.schema.string().describe("Stable create key reused for retries of the same normalized change"),
+`, new: ""},
+		{old: `          idempotencyKey: sddText(args.idempotencyKey, 256, "idempotency key"), title: sddText(args.title, 512, "title"), backend: args.backend,
+`, new: `          title: sddText(args.title, 512, "title"), backend: args.backend,
+`},
+		{old: `      description: "List bounded SDD revision summaries without body content. Use get-revision for one full body.",`, new: `      description: "List bounded SDD artifact revisions for one change.",`},
+	})
+	for _, operation := range []string{"create", "set-interaction-mode", "save-revision", "accept-revision", "transition", "record-projection"} {
+		previousV5 = derivePredecessor(previousV5, []textReplacement{{
+			old: `invokeSDDMutation("` + operation + `"`, new: `invokeSDD("` + operation + `"`,
+		}})
+	}
+	value := derivePredecessor(previousV5, []textReplacement{
+		{old: "artifact: opencode-plugin/vgxness-memory; version: 5", new: "artifact: opencode-plugin/vgxness-memory; version: 4"},
+		{old: `    vgxness_sdd_set_interaction_mode: tool({
+      description: "Change one active SDD change between automatic and interactive phase execution using optimistic state versioning.",
+      args: {
+        changeId: tool.schema.string().describe("Exact change ID"),
+        interactionMode: tool.schema.string().describe("automatic or interactive"),
+        expectedStateVersion: tool.schema.number().describe("Optimistic change state version"),
+      },
+      async execute(args, context) {
+        return await invokeSDD("set-interaction-mode", {
+          changeId: sddText(args.changeId, 256, "change ID"), interactionMode: args.interactionMode,
+          expectedStateVersion: Math.trunc(args.expectedStateVersion),
+        }, context)
+      },
+    }),
+`, new: ""},
+		{old: `        externalLocation: tool.schema.string().optional().describe("Exact repository-relative canonical path, required only for openspec backend"),
+`, new: ""},
+		{old: `          externalLocation: sddText(args.externalLocation ?? "", 1024, "external location"),
+`, new: ""},
+	})
+	return value
+}
+
+func previousMemoryPluginV3(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 5")) {
+		current = previousMemoryPluginV4(current)
+	}
+	text := string(current)
+	if strings.Count(text, "artifact: opencode-plugin/vgxness-memory; version: 4") != 1 {
+		return nil
+	}
+	text = strings.Replace(text, "artifact: opencode-plugin/vgxness-memory; version: 4", "artifact: opencode-plugin/vgxness-memory; version: 3", 1)
+	helperStart := strings.Index(text, "\nfunction sddText(value, limit, name) {")
+	helperEnd := strings.Index(text, "\nfunction bounded(value, limit) {")
+	if helperStart < 0 || helperEnd <= helperStart {
+		return nil
+	}
+	text = text[:helperStart] + text[helperEnd:]
+	toolStart := strings.Index(text, "    vgxness_sdd_create: tool({")
+	if toolStart < 0 {
+		return nil
+	}
+	toolEnd := strings.Index(text[toolStart:], "\n  },\n  }\n}\n")
+	if toolEnd < 0 {
+		return nil
+	}
+	toolEnd += toolStart
+	text = text[:toolStart] + text[toolEnd+1:]
+	return []byte(text)
 }
 
 func previousMemoryPluginV2(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 5")) {
+		current = previousMemoryPluginV4(current)
+	}
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 4")) {
+		current = previousMemoryPluginV3(current)
+	}
 	value := derivePredecessor(current, []textReplacement{
 		{old: "artifact: opencode-plugin/vgxness-memory; version: 3", new: "artifact: opencode-plugin/vgxness-memory; version: 2"},
 		{old: "const MAX_CONTEXT_BYTES = 12 * 1024\nconst MAX_SESSIONS = 128\nconst MAX_CHILD_SESSIONS = 256\nconst MAX_TOOL_RECORDS = 32\nconst MAX_TOOL_STARTS = 256\nconst TOOL_TTL_MS = 5 * 60_000\n", new: ""},
@@ -1473,9 +1929,11 @@ func isPreviousMemoryPlugin(candidate []byte) bool {
 	if err != nil {
 		return false
 	}
-	v2 := previousMemoryPluginV2(generated)
+	v4 := previousMemoryPluginV4(generated)
+	v3 := previousMemoryPluginV3(v4)
+	v2 := previousMemoryPluginV2(v3)
 	v1 := previousMemoryPluginV1(v2)
-	return bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
+	return bytes.Equal(candidate, v4) || bytes.Equal(candidate, v3) || bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
 }
 
 func memoryPluginExecutable(content []byte) (string, bool) {
@@ -1535,5 +1993,3 @@ func artifactSHA256(content []byte) string {
 	digest := sha256.Sum256(content)
 	return hex.EncodeToString(digest[:])
 }
-
-func managerPromptSHA256() string { return artifactSHA256([]byte(managerPrompt)) }

@@ -13,6 +13,7 @@ import (
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
+	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
@@ -29,7 +30,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		return 1
 	}
-	return cli.RunProductRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, controlPlane, installer, setupRuntime, deliveryRuntime)
+	return cli.RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, controlPlane, installer, setupRuntime, deliveryRuntime, sddRuntime{})
 }
 
 func mustWorkspace() string {
@@ -146,3 +147,133 @@ func openStoreRead(ctx context.Context, opts config.Options) (*memory.Store, err
 	}
 	return memory.OpenRead(ctx, paths.Database)
 }
+
+type sddRuntime struct{}
+
+func (sddRuntime) ResolveSDDProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	return store.ResolveProject(ctx, workspace)
+}
+
+func (sddRuntime) CreateChange(ctx context.Context, opts config.Options, request sdd.CreateChangeRequest) (sdd.Change, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return sdd.Change{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).CreateChange(ctx, request)
+}
+
+func (sddRuntime) ListChanges(ctx context.Context, opts config.Options, request sdd.ListChangesRequest) ([]sdd.Change, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).ListChanges(ctx, request)
+}
+
+func (sddRuntime) GetChange(ctx context.Context, opts config.Options, request sdd.GetChangeRequest) (sdd.Change, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return sdd.Change{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).GetChange(ctx, request)
+}
+
+func (sddRuntime) UpdateInteractionMode(ctx context.Context, opts config.Options, request sdd.UpdateInteractionModeRequest) (sdd.Change, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return sdd.Change{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).UpdateInteractionMode(ctx, request)
+}
+
+func (sddRuntime) SaveRevision(ctx context.Context, opts config.Options, request sdd.SaveRevisionRequest) (sdd.Revision, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return sdd.Revision{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).SaveRevision(ctx, request)
+}
+
+func (sddRuntime) GetRevision(ctx context.Context, opts config.Options, request sdd.GetRevisionRequest) (sdd.Revision, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return sdd.Revision{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).GetRevision(ctx, request)
+}
+
+func (sddRuntime) ListRevisions(ctx context.Context, opts config.Options, request sdd.ListRevisionsRequest) ([]sdd.Revision, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).ListRevisions(ctx, request)
+}
+
+func (sddRuntime) AcceptRevision(ctx context.Context, opts config.Options, request sdd.AcceptRevisionRequest) (sdd.Revision, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return sdd.Revision{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).AcceptRevision(ctx, request)
+}
+
+func (sddRuntime) TransitionChange(ctx context.Context, opts config.Options, request sdd.TransitionChangeRequest) (sdd.Change, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return sdd.Change{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).TransitionChange(ctx, request)
+}
+
+func (sddRuntime) ProjectionStatus(ctx context.Context, opts config.Options, request sdd.ProjectionStatusRequest) (sdd.Projection, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return sdd.Projection{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).ProjectionStatus(ctx, request)
+}
+
+func (sddRuntime) RecordProjection(ctx context.Context, opts config.Options, request sdd.RecordProjectionRequest) (sdd.Projection, error) {
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return sdd.Projection{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).RecordProjection(ctx, request)
+}
+
+func (sddRuntime) RenderProjection(ctx context.Context, opts config.Options, request sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return sdd.ProjectionDocument{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).RenderProjection(ctx, request)
+}
+
+func (sddRuntime) CompareProjection(ctx context.Context, opts config.Options, request sdd.CompareProjectionRequest) (sdd.ProjectionComparison, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return sdd.ProjectionComparison{}, err
+	}
+	defer store.Close()
+	return sdd.NewService(store).CompareProjection(ctx, request)
+}
+
+var _ cli.SDDRuntime = sddRuntime{}
