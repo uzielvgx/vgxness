@@ -368,8 +368,8 @@ func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
 
 func TestIntegrationUpgradesExactInstalledHistoricalModelPlans(t *testing.T) {
 	for name, build := range map[string]func(sdd.ModelPlanConfig) (modelPlanBundle, error){
-		"v28": buildPreviousModelPlanBundle,
-		"v27": buildLegacyModelPlanBundle,
+		"v29": buildPreviousModelPlanBundle,
+		"v28": buildLegacyModelPlanBundle,
 	} {
 		t.Run(name, func(t *testing.T) {
 			configDirectory := filepath.Join(t.TempDir(), "opencode")
@@ -576,7 +576,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 29",
+		"artifact: opencode-agent/vgxness-manager; version: 30",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"OpenCode's native tools, skills, memory, Task subagents",

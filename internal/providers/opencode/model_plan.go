@@ -216,7 +216,7 @@ func previousModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) 
 		reviewRefuterName: sdd.RoleRefuter,
 	}
 	agents := make(map[string][]byte, 12)
-	manager, err := bindPreviousManager(plan.Roles[sdd.RoleManager])
+	manager, err := bindManagerV29(plan.Roles[sdd.RoleManager])
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func legacyModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 		reviewRefuterName: sdd.RoleRefuter,
 	}
 	agents := make(map[string][]byte, 12)
-	manager, err := bindManagerV27(plan.Roles[sdd.RoleManager])
+	manager, err := bindPreviousManager(plan.Roles[sdd.RoleManager])
 	if err != nil {
 		return nil, err
 	}
@@ -281,6 +281,24 @@ func legacyModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	bound, err := bindManagerV29(assignment)
+	if err != nil {
+		return nil, err
+	}
+	value := string(bound)
+	for _, replacement := range []textReplacement{
+		{old: "artifact: opencode-agent/vgxness-manager; version: 29", new: "artifact: opencode-agent/vgxness-manager; version: 30"},
+		{old: "# Native authority and delegation\n", new: managerEvidenceBoundedContract + "\n# Native authority and delegation\n"},
+	} {
+		if strings.Count(value, replacement.old) != 1 {
+			return nil, integration.ErrInvalid
+		}
+		value = strings.Replace(value, replacement.old, replacement.new, 1)
+	}
+	return []byte(value), nil
+}
+
+func bindManagerV29(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	bound, err := bindManagerV28(assignment)
 	if err != nil {
 		return nil, err
