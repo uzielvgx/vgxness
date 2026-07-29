@@ -61,10 +61,12 @@ type Prober interface {
 }
 
 type Service struct {
-	installer    selfinstall.Runtime
-	preview      integration.Runtime
-	integrations IntegrationFactory
-	prober       Prober
+	installer           selfinstall.Runtime
+	preview             integration.Runtime
+	integrations        IntegrationFactory
+	prober              Prober
+	managedIntegrations ManagedIntegrationFactory
+	backups             BackupEngineFactory
 }
 
 func New(installer selfinstall.Runtime, preview integration.Runtime, integrations IntegrationFactory, prober Prober) *Service {
@@ -77,7 +79,7 @@ func OpenCodeSteps() []Step {
 		{Number: 2, Title: "Instalar el launcher estable", Explanation: "Guardaré la versión exacta por SHA-256 y activaré el launcher permanente. No editaré PATH ni descargaré software.", Mutates: true},
 		{Number: 3, Title: "Instalar el manager y agentes nativos", Explanation: "Crearé un vgxness-manager, cinco revisores de solo lectura y seis agentes SDD especializados enlazados al plan de modelos activo. Explore y general integrados no se sobrescriben. El manager conserva la autoridad exclusiva sobre estado y fases.", Mutates: true},
 		{Number: 4, Title: "Instalar almacenamiento y plan VGXNESS", Explanation: "Instalaré el plugin de almacenamiento sin ejecución y un manifiesto no secreto que enlaza low/medium/high, los tres slots exactos y los hashes de los agentes. No se modifica opencode.json ni se enrutan modelos desde el plugin.", Mutates: true},
-		{Number: 5, Title: "Verificar archivos y conexión", Explanation: "Leeré nuevamente los 14 artefactos administrados, sus hashes y el manifiesto, y comprobaré el handshake real con OpenCode desde el workspace seleccionado. Los cambios de plan se cargan al reiniciar OpenCode."},
+		{Number: 5, Title: "Verificar archivos y conexión", Explanation: "Leeré nuevamente todos los artefactos administrados, sus hashes y el manifiesto, y comprobaré el handshake real con OpenCode desde el workspace seleccionado. Los cambios de plan se cargan al reiniciar OpenCode."},
 		{Number: 6, Title: "Explicar recuperación", Explanation: "Si una actualización falla antes de integrar OpenCode, intentaré volver a la versión anterior. Una primera instalación o una integración ya escrita se conserva para evitar borrados automáticos y se reporta cómo repararla."},
 	}
 }

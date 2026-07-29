@@ -65,9 +65,29 @@ type Result struct {
 	ArtifactCount   int
 }
 
+// ManagedArtifact identifies desired provider-owned content without exposing it.
+type ManagedArtifact struct {
+	RelativePath string
+	SHA256       string
+}
+
+// ManagedLayout is the immutable desired inventory for one integration root.
+type ManagedLayout struct {
+	Root            string
+	Artifacts       []ManagedArtifact
+	AggregateSHA256 string
+}
+
 type Runtime interface {
 	Preview(context.Context, Options) (Result, error)
 	Install(context.Context, Options) (Result, error)
 	Status(context.Context, Options) (Result, error)
 	Uninstall(context.Context, Options) (Result, error)
+}
+
+// ManagedRuntime adds recovery operations without widening ordinary CLI use.
+type ManagedRuntime interface {
+	Runtime
+	ManagedLayout(context.Context, Options) (ManagedLayout, error)
+	Reinstall(context.Context, Options) (Result, error)
 }

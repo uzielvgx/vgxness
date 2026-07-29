@@ -76,6 +76,8 @@ func (m *Model) initSetup() {
 	preview.FillHeight = false
 	m.setupViewport = preview
 	m.setupSelected = defaultSetupPlan
+	m.setupView = setupViewInstall
+	m.resetRecoveryState()
 }
 
 func (m *Model) loadSetupPlan() tea.Cmd {
@@ -182,6 +184,9 @@ func (m *Model) handleSetupApplied(msg setupAppliedMsg) {
 }
 
 func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.setupView == setupViewRecovery {
+		return m.updateRecoveryKey(msg)
+	}
 	if m.setupConfirm {
 		switch msg.String() {
 		case "y":
@@ -193,6 +198,11 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "tab":
+		m.cancelSetupOperation()
+		m.setupView = setupViewRecovery
+		m.resetRecoveryState()
+		return true, m.loadRecovery()
 	case "left", "h":
 		return true, m.selectSetupPlan(-1)
 	case "right", "l":
@@ -254,6 +264,9 @@ func (m Model) renderSetupRoute() []string {
 }
 
 func (m Model) setupRouteLines() []string {
+	if m.setupView == setupViewRecovery {
+		return m.recoveryRouteLines()
+	}
 	lines := []string{"OPENCODE SETUP", "selected plan  " + sanitizeTerminal(m.setupSelected)}
 	switch {
 	case m.setupApplying:
@@ -330,6 +343,9 @@ func (m Model) setupRouteLines() []string {
 }
 
 func (m Model) setupHelp() string {
+	if m.setupView == setupViewRecovery {
+		return m.recoveryHelp()
+	}
 	switch {
 	case m.setupApplying:
 		return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
@@ -340,7 +356,7 @@ func (m Model) setupHelp() string {
 	case m.setupApplyErr != nil:
 		return "[a] retry with confirmation  [r] reload  [Esc] Overview"
 	default:
-		return "[h/l or ←/→] plan  [a] apply  [j/k] scroll  [r] reload  [Esc] Overview"
+		return "[Tab] Backup & Recovery  [h/l or ←/→] plan  [a] apply  [j/k] scroll  [r] reload"
 	}
 }
 

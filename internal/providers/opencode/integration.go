@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -176,8 +177,9 @@ Return exactly one compact JSON object and no Markdown:
 )
 
 type Integration struct {
-	now        func() time.Time
-	executable string
+	now                 func() time.Time
+	executable          string
+	reinstallCheckpoint func(string, string) error
 }
 
 type artifact struct {
@@ -208,6 +210,12 @@ type installedArtifact struct {
 type backedUpArtifact struct {
 	target string
 	backup string
+}
+
+type reinstallAnchor struct {
+	target string
+	path   string
+	bytes  []byte
 }
 
 func NewIntegration() *Integration {
@@ -280,6 +288,213 @@ func (service *Integration) Preview(ctx context.Context, options integration.Opt
 func (service *Integration) Status(ctx context.Context, options integration.Options) (integration.Result, error) {
 	state, err := service.inspect(ctx, options)
 	return state.result, err
+}
+
+func (service *Integration) ManagedLayout(ctx context.Context, options integration.Options) (integration.ManagedLayout, error) {
+	state, err := service.inspect(ctx, options)
+	if err != nil {
+		return integration.ManagedLayout{}, err
+	}
+	root, err := integrationConfigDirectory(options)
+	if err != nil {
+		return integration.ManagedLayout{}, err
+	}
+	return managedLayout(root, state.artifacts)
+}
+
+func managedLayout(root string, artifacts []artifact) (integration.ManagedLayout, error) {
+	layout := integration.ManagedLayout{Root: root, Artifacts: make([]integration.ManagedArtifact, 0, len(artifacts))}
+	for _, item := range artifacts {
+		relative, err := filepath.Rel(root, item.path)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return integration.ManagedLayout{}, fmt.Errorf("%w: managed OpenCode artifact path", integration.ErrInvalid)
+		}
+		layout.Artifacts = append(layout.Artifacts, integration.ManagedArtifact{
+			RelativePath: filepath.ToSlash(relative),
+			SHA256:       artifactSHA256(item.content),
+		})
+	}
+	sort.Slice(layout.Artifacts, func(i, j int) bool { return layout.Artifacts[i].RelativePath < layout.Artifacts[j].RelativePath })
+	hash := sha256.New()
+	previous := ""
+	for _, item := range layout.Artifacts {
+		if item.RelativePath == previous {
+			return integration.ManagedLayout{}, fmt.Errorf("%w: duplicate managed OpenCode artifact", integration.ErrInvalid)
+		}
+		_, _ = io.WriteString(hash, item.RelativePath)
+		_, _ = hash.Write([]byte{0})
+		_, _ = io.WriteString(hash, item.SHA256)
+		_, _ = hash.Write([]byte{'\n'})
+		previous = item.RelativePath
+	}
+	layout.AggregateSHA256 = hex.EncodeToString(hash.Sum(nil))
+	return layout, nil
+}
+
+// Reinstall atomically regenerates the recognized managed set without touching
+// unrelated OpenCode files or creating the legacy uninstall backup directory.
+func (service *Integration) Reinstall(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
+	state, err := service.inspect(ctx, options)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	switch state.result.State {
+	case integration.StateInstalled, integration.StatePartial:
+	case integration.StateAbsent:
+		return integration.Result{}, fmt.Errorf("%w: managed OpenCode artifacts are absent", integration.ErrInvalid)
+	default:
+		return integration.Result{}, fmt.Errorf("%w: managed OpenCode artifacts", integration.ErrDrift)
+	}
+	if err := ctx.Err(); err != nil {
+		return integration.Result{}, err
+	}
+	root, err := integrationConfigDirectory(options)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	expectedLayout, err := managedLayout(root, state.artifacts)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	for _, item := range state.artifacts {
+		if err := prepareDirectory(filepath.Dir(item.path)); err != nil {
+			return integration.Result{}, fmt.Errorf("prepare OpenCode reinstall directory: %w", err)
+		}
+	}
+
+	anchors := make([]reinstallAnchor, 0, len(state.artifacts))
+	staged := make([]installedArtifact, 0, len(state.artifacts))
+	published := make([]installedArtifact, 0, len(state.artifacts))
+	rollback := true
+	defer func() {
+		if !rollback {
+			for _, item := range staged {
+				cleanupInstalledArtifact(item)
+			}
+			for _, anchor := range anchors {
+				_ = os.Remove(anchor.path)
+				_ = syncDirectory(filepath.Dir(anchor.target))
+			}
+			return
+		}
+		var recoveryErr error
+		for index := len(published) - 1; index >= 0; index-- {
+			recoveryErr = errors.Join(recoveryErr, rollbackInstalledArtifact(published[index]))
+		}
+		for index := len(anchors) - 1; index >= 0; index-- {
+			anchor := anchors[index]
+			if !sameFile(anchor.path, anchor.target) {
+				anchorBytes, anchorErr := readRegularFile(anchor.path)
+				if anchorErr != nil {
+					recoveryErr = errors.Join(recoveryErr, recoveryFailure("read reinstall rollback anchor", anchorErr))
+				} else if err := restoreWithoutOverwrite(anchor.path, anchor.target); err != nil {
+					recoveryErr = errors.Join(recoveryErr, err)
+				} else if restored, err := readRegularFile(anchor.target); err != nil || !bytes.Equal(restored, anchorBytes) {
+					recoveryErr = errors.Join(recoveryErr, recoveryFailure("verify restored reinstall predecessor", errors.Join(err, integration.ErrDrift)))
+				}
+			}
+			if err := os.Remove(anchor.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove reinstall rollback anchor", err))
+			}
+		}
+		for _, item := range staged {
+			if err := os.Remove(item.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove staged reinstall artifact", err))
+			}
+		}
+		returnErr = errors.Join(returnErr, recoveryErr)
+	}()
+
+	for _, item := range state.artifacts {
+		temporary, err := writeArtifactTemporary(ctx, item)
+		if err != nil {
+			return integration.Result{}, err
+		}
+		staged = append(staged, installedArtifact{path: item.path, temporary: temporary, content: item.content})
+	}
+	for _, item := range state.artifacts {
+		if !item.present {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return integration.Result{}, err
+		}
+		expected := item.content
+		if item.upgrade {
+			expected = item.prior
+		}
+		anchorPath, err := vacantTemporaryPath(filepath.Dir(item.path), ".vgxness-reinstall-old-*.tmp")
+		if err != nil {
+			return integration.Result{}, fmt.Errorf("prepare OpenCode reinstall rollback: %w", err)
+		}
+		if err := os.Rename(item.path, anchorPath); err != nil {
+			return integration.Result{}, fmt.Errorf("move OpenCode reinstall predecessor: %w", integration.ErrConflict)
+		}
+		anchor := reinstallAnchor{target: item.path, path: anchorPath, bytes: append([]byte(nil), expected...)}
+		anchors = append(anchors, anchor)
+		if err := syncDirectory(filepath.Dir(item.path)); err != nil {
+			return integration.Result{}, fmt.Errorf("sync moved OpenCode reinstall predecessor: %w", err)
+		}
+		readback, readErr := readRegularFile(anchorPath)
+		if readErr != nil || !bytes.Equal(readback, expected) {
+			return integration.Result{}, fmt.Errorf("%w: managed artifact changed before reinstall", integration.ErrConflict)
+		}
+		if service.reinstallCheckpoint != nil {
+			if err := service.reinstallCheckpoint("moved", item.path); err != nil {
+				return integration.Result{}, err
+			}
+		}
+	}
+	for _, item := range staged {
+		if err := ctx.Err(); err != nil {
+			return integration.Result{}, err
+		}
+		if err := os.Link(item.temporary, item.path); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return integration.Result{}, fmt.Errorf("%w: managed artifact changed during reinstall", integration.ErrConflict)
+			}
+			return integration.Result{}, fmt.Errorf("publish OpenCode reinstall artifact: %w", err)
+		}
+		published = append(published, item)
+		if err := syncDirectory(filepath.Dir(item.path)); err != nil {
+			return integration.Result{}, fmt.Errorf("sync OpenCode reinstall artifact: %w", err)
+		}
+		readback, readErr := readRegularFile(item.path)
+		if readErr != nil || !bytes.Equal(readback, item.content) || !sameFile(item.path, item.temporary) {
+			return integration.Result{}, fmt.Errorf("%w: read back OpenCode reinstall artifact", integration.ErrDrift)
+		}
+		if service.reinstallCheckpoint != nil {
+			if err := service.reinstallCheckpoint("published", item.path); err != nil {
+				return integration.Result{}, err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return integration.Result{}, err
+		}
+	}
+	verified, err := service.inspect(ctx, options)
+	if err != nil || verified.result.State != integration.StateInstalled {
+		return integration.Result{}, fmt.Errorf("read back OpenCode reinstall artifacts: %w", integration.ErrDrift)
+	}
+	actualLayout, err := managedLayout(root, verified.artifacts)
+	if err != nil || actualLayout.AggregateSHA256 != expectedLayout.AggregateSHA256 {
+		return integration.Result{}, fmt.Errorf("verify OpenCode reinstall layout: %w", integration.ErrDrift)
+	}
+	for _, anchor := range anchors {
+		if service.reinstallCheckpoint != nil {
+			if err := service.reinstallCheckpoint("verified", anchor.target); err != nil {
+				return integration.Result{}, err
+			}
+		}
+		readback, readErr := readRegularFile(anchor.path)
+		if readErr != nil || !bytes.Equal(readback, anchor.bytes) {
+			return integration.Result{}, fmt.Errorf("%w: reinstall predecessor anchor changed before cleanup", integration.ErrDrift)
+		}
+	}
+	rollback = false
+	verified.result.Changed = true
+	verified.result.RestartRequired = true
+	return verified.result, nil
 }
 
 func (service *Integration) Install(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {

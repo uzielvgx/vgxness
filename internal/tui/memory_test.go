@@ -10,6 +10,7 @@ import (
 )
 
 type recordingMemoryBackend struct {
+	fakeBackend
 	search MemorySearch
 	lookup MemoryLookup
 }

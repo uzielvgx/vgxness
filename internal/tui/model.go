@@ -51,6 +51,12 @@ type Backend interface {
 	SetupStatus(context.Context, Request) (SetupStatus, error)
 	PlanSetup(context.Context, SetupRequest) (SetupPlan, error)
 	ApplySetup(context.Context, SetupRequest) (SetupResult, error)
+	PlanRecovery(context.Context, RecoveryPlanRequest) (RecoveryPlan, error)
+	ListBackups(context.Context, BackupListRequest) (BackupListResult, error)
+	CreateBackup(context.Context, CreateBackupRequest) (BackupResult, error)
+	PreviewRestore(context.Context, RestorePreviewRequest) (RestorePreview, error)
+	RestoreBackup(context.Context, RestoreRequest) (RestoreResult, error)
+	ProtectedReinstall(context.Context, ProtectedReinstallRequest) (ProtectedReinstallResult, error)
 	Recent(context.Context, Request) ([]MemorySummary, error)
 	Search(context.Context, MemorySearch) ([]MemorySummary, error)
 	GetMemory(context.Context, MemoryLookup) (MemoryDetail, error)
@@ -162,39 +168,57 @@ type Model struct {
 	focus      focusArea
 	sections   list.Model
 
-	inspection        Inspection
-	inspectionErr     error
-	inspectionLoading bool
-	setup             SetupStatus
-	setupErr          error
-	setupLoading      bool
-	memories          []MemorySummary
-	memoriesErr       error
-	memoriesLoading   bool
-	memorySearch      textinput.Model
-	memoryList        list.Model
-	memoryViewport    viewport.Model
-	memoryDetail      MemoryDetail
-	memoryDetailReady bool
-	memoryStatus      string
-	memorySearching   bool
-	memorySearched    bool
-	memoryDetailLoad  bool
-	memoryGeneration  int
-	cancelMemory      context.CancelFunc
-	setupPlan         SetupPlan
-	setupResult       SetupResult
-	setupViewport     viewport.Model
-	setupSelected     string
-	setupPlanErr      error
-	setupApplyErr     error
-	setupPlanLoading  bool
-	setupConfirm      bool
-	setupApplying     bool
-	setupCancelAsked  bool
-	setupSucceeded    bool
-	setupGeneration   int
-	cancelSetup       context.CancelFunc
+	inspection             Inspection
+	inspectionErr          error
+	inspectionLoading      bool
+	setup                  SetupStatus
+	setupErr               error
+	setupLoading           bool
+	memories               []MemorySummary
+	memoriesErr            error
+	memoriesLoading        bool
+	memorySearch           textinput.Model
+	memoryList             list.Model
+	memoryViewport         viewport.Model
+	memoryDetail           MemoryDetail
+	memoryDetailReady      bool
+	memoryStatus           string
+	memorySearching        bool
+	memorySearched         bool
+	memoryDetailLoad       bool
+	memoryGeneration       int
+	cancelMemory           context.CancelFunc
+	setupPlan              SetupPlan
+	setupResult            SetupResult
+	setupViewport          viewport.Model
+	setupSelected          string
+	setupPlanErr           error
+	setupApplyErr          error
+	setupPlanLoading       bool
+	setupConfirm           bool
+	setupApplying          bool
+	setupCancelAsked       bool
+	setupSucceeded         bool
+	setupGeneration        int
+	cancelSetup            context.CancelFunc
+	setupView              setupView
+	recoveryMode           string
+	recoveryPlan           RecoveryPlan
+	recoveryBackups        []BackupSummary
+	recoveryPreview        RestorePreview
+	recoveryBackup         BackupResult
+	recoveryRestore        RestoreResult
+	recoveryReinstall      ProtectedReinstallResult
+	recoveryOperation      recoveryOperation
+	recoveryConfirm        recoveryConfirmation
+	recoveryFailure        recoveryFailure
+	recoverySnapshotIndex  int
+	recoveryConflictIndex  int
+	recoveryGeneration     int
+	recoveryCancelAsked    bool
+	recoveryRefreshPending bool
+	recoveryRefreshWarning bool
+	cancelRecovery         context.CancelFunc
 
 	spinner spinner.Model
 	help    help.Model
@@ -277,10 +301,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizeSetup()
 		return m, nil
 	case tea.KeyPressMsg:
-		if m.route == routeSetup && m.setupApplying {
+		if m.route == routeSetup && (m.setupApplying || m.recoveryOperation.mutating()) {
 			if msg.String() == "ctrl+c" && m.cancelSetup != nil {
-				m.cancelSetup()
-				m.setupCancelAsked = true
+				if m.setupApplying {
+					m.cancelSetup()
+					m.setupCancelAsked = true
+				}
+			}
+			if msg.String() == "ctrl+c" && m.cancelRecovery != nil && m.recoveryOperation.mutating() {
+				m.cancelRecovery()
+				m.recoveryCancelAsked = true
 			}
 			return m, nil
 		}
@@ -288,6 +318,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelCurrentLoad()
 			m.cancelMemoryOperation()
 			m.cancelSetupOperation()
+			m.cancelRecoveryOperation()
 			return m, tea.Quit
 		}
 		if m.route == routeSetup && m.tooSmall() {
@@ -295,6 +326,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelCurrentLoad()
 				m.cancelMemoryOperation()
 				m.cancelSetupOperation()
+				m.cancelRecoveryOperation()
 				return m, tea.Quit
 			}
 			return m, nil
@@ -313,6 +345,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelCurrentLoad()
 			m.cancelMemoryOperation()
 			m.cancelSetupOperation()
+			m.cancelRecoveryOperation()
 			return m, tea.Quit
 		}
 		if key.Matches(msg, m.keys.Help) {
@@ -346,6 +379,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelCurrentLoad()
 			m.cancelMemoryOperation()
 			m.cancelSetupOperation()
+			m.cancelRecoveryOperation()
 			m.memorySearched = false
 			m.memoryDetail = MemoryDetail{}
 			m.memoryDetailReady = false
@@ -402,6 +436,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case setupAppliedMsg:
 		m.handleSetupApplied(msg)
 		return m, nil
+	case recoveryLoadedMsg:
+		m.handleRecoveryLoaded(msg)
+		return m, nil
+	case recoveryBackupCreatedMsg:
+		return m, m.handleRecoveryBackupCreated(msg)
+	case recoveryPreviewLoadedMsg:
+		m.handleRecoveryPreviewLoaded(msg)
+		return m, nil
+	case recoveryRestoredMsg:
+		return m, m.handleRecoveryRestored(msg)
+	case recoveryReinstalledMsg:
+		return m, m.handleRecoveryReinstalled(msg)
 	case spinner.TickMsg:
 		if !m.loading() {
 			return m, nil
@@ -603,7 +649,7 @@ func (m Model) renderMemories() []string {
 }
 
 func (m Model) loading() bool {
-	return m.inspectionLoading || m.setupLoading || m.memoriesLoading || m.setupPlanLoading || m.setupApplying
+	return m.inspectionLoading || m.setupLoading || m.memoriesLoading || m.setupPlanLoading || m.setupApplying || m.recoveryOperation != recoveryOperationIdle
 }
 
 func (m *Model) cancelCurrentLoad() {
@@ -641,6 +687,7 @@ func (m *Model) setRoute(next route) {
 	}
 	if m.route == routeSetup && next != routeSetup {
 		m.cancelSetupOperation()
+		m.cancelRecoveryOperation()
 	}
 	previous := m.route
 	m.route = next
@@ -650,6 +697,7 @@ func (m *Model) setRoute(next route) {
 		return
 	}
 	if next == routeSetup && previous != routeSetup {
+		m.setupView = setupViewInstall
 		m.setupSelected = defaultSetupPlan
 		if validSetupPlan(m.setup.ModelPlan) {
 			m.setupSelected = m.setup.ModelPlan
@@ -661,6 +709,7 @@ func (m *Model) setRoute(next route) {
 		m.setupSucceeded = false
 		m.setupConfirm = false
 		m.setupViewport.GotoTop()
+		m.resetRecoveryState()
 	}
 	m.focus = focusContent
 }
