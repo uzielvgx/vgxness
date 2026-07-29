@@ -1572,15 +1572,61 @@ func inspectDirectory(path string) (exists, drifted bool, err error) {
 }
 
 func removeSameFileDurably(target, expected string) error {
+	return removeSameFileDurablyAtCheckpoint(target, expected, nil)
+}
+
+func removeSameFileDurablyAtCheckpoint(target, expected string, checkpoint func() error) error {
 	targetInfo, targetErr := os.Lstat(target)
 	expectedInfo, expectedErr := os.Lstat(expected)
-	if targetErr == nil && expectedErr == nil && os.SameFile(targetInfo, expectedInfo) {
-		if err := os.Remove(target); err != nil {
-			return err
-		}
-		return syncDirectory(filepath.Dir(target))
+	if targetErr != nil || expectedErr != nil || !os.SameFile(targetInfo, expectedInfo) {
+		return nil
 	}
-	return nil
+	directory := filepath.Dir(target)
+	quarantineDirectory, err := os.MkdirTemp(directory, ".vgxness-remove-*")
+	if err != nil {
+		return err
+	}
+	quarantine := filepath.Join(quarantineDirectory, "artifact")
+	if err := os.Rename(target, quarantine); err != nil {
+		_ = os.Remove(quarantineDirectory)
+		if errors.Is(err, os.ErrNotExist) {
+			return syncDirectory(directory)
+		}
+		return err
+	}
+	if checkpoint != nil {
+		if err := checkpoint(); err != nil {
+			return errors.Join(err, recoveryFailure("restore artifact after interrupted removal", restoreQuarantinedFile(quarantine, target)))
+		}
+	}
+	quarantinedInfo, err := os.Lstat(quarantine)
+	if err != nil || !os.SameFile(quarantinedInfo, expectedInfo) {
+		restoreErr := restoreQuarantinedFile(quarantine, target)
+		return errors.Join(fmt.Errorf("%w: integration artifact changed during removal", integration.ErrConflict), recoveryFailure("restore changed integration artifact", restoreErr))
+	}
+	if err := os.Remove(quarantine); err != nil {
+		return err
+	}
+	if err := os.Remove(quarantineDirectory); err != nil {
+		return err
+	}
+	return syncDirectory(directory)
+}
+
+func restoreQuarantinedFile(quarantine, target string) error {
+	if err := os.Link(quarantine, target); err != nil {
+		return fmt.Errorf("%w: target changed; artifact retained at %q: %v", integration.ErrRecovery, quarantine, err)
+	}
+	if err := syncDirectory(filepath.Dir(target)); err != nil {
+		return err
+	}
+	if err := os.Remove(quarantine); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Dir(quarantine)); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(target))
 }
 
 func removeSameFileBestEffort(target, expected string) { _ = removeSameFileDurably(target, expected) }

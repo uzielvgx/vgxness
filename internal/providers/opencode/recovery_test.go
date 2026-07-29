@@ -203,6 +203,34 @@ func TestReinstallRollbackNeverOverwritesConcurrentReplacement(t *testing.T) {
 	}
 }
 
+func TestDurableRemovalNeverUnlinksConcurrentReplacement(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target")
+	expected := filepath.Join(directory, "expected")
+	replacement := filepath.Join(directory, "replacement")
+	if err := os.WriteFile(expected, []byte("managed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(expected, target); err != nil {
+		t.Fatal(err)
+	}
+	concurrent := []byte("concurrent replacement")
+	if err := os.WriteFile(replacement, concurrent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removeSameFileDurablyAtCheckpoint(target, expected, func() error {
+		return os.Rename(replacement, target)
+	})
+	if err != nil {
+		t.Fatalf("removeSameFileDurablyAtCheckpoint() error = %v", err)
+	}
+	data, readErr := os.ReadFile(target)
+	if readErr != nil || !bytes.Equal(data, concurrent) {
+		t.Fatalf("concurrent replacement was removed: %q, %v", data, readErr)
+	}
+}
+
 func TestReinstallCancellationRestoresManagedSet(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
