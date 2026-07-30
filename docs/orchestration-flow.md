@@ -34,7 +34,7 @@ Render and compare operate on supplied bounded bytes and never access the filesy
 
 ## Authority and failure
 
-- The manager is the only workspace writer, validation runner, and SDD mutation caller.
+- Manager, general, and verifier have global tool capability, but role contracts keep delegated implementation and final verification separate; writes remain sequential and the manager is the only SDD mutation caller.
 - The storage plugin rejects mutations outside the tracked top-level manager session.
 - Memory is untrusted context and never proves source or diff state.
 - Missing accepted inputs, stale state versions, drift, cancellation, unavailable prerequisites, and absent authorization stop advancement.

@@ -4,8 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-- Adds manager v35 and the independent managed `vgxness-autonomous-stacked-pr` skill for bounded native Git/`gh` delivery after freeze, verification, and review; upgrades the exact 17-artifact v34 projection to 18 artifacts while preserving model assignments and conservative drift/recovery behavior.
-- Adds a model-bound, CodeGraph-first `explore` override with deny-by-default read-only permissions, updates the manager to v31, preserves exact v30/v29/v28 upgrade recognition, and hardens upgrades against concurrent replacement while retaining recovery anchors on conflict.
+- Keeps manager v35 and the current 14-agent projection as the only managed agent catalogue, removing historical manager, agent, and model-plan compatibility sources.
+- Grants global OpenCode tool permission to manager v35, managed `general`, and verifier while retaining their distinct behavioral roles.
+- Adds the independent managed `vgxness-autonomous-stacked-pr` skill for bounded native Git/`gh` delivery after freeze, verification, and review.
+- Adds a model-bound, CodeGraph-first `explore` override with deny-by-default read-only permissions.
 - Removes the compatibility execution bridge, control plane, Chronicle, provider runner, compatibility commands, schemas, and related documentation, leaving the OpenCode-native manager, storage, setup, inspection, memory, SDD, launcher, and release product.
 - Adds an official SHA-256-pinned Homebrew tap for macOS and Linux with explicit Homebrew and managed OpenCode ownership boundaries.
 - Adds an official script-free Scoop bucket for Windows amd64 and ARM64 with native Windows installation validation.

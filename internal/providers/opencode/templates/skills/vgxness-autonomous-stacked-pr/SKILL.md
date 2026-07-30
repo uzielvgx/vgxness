@@ -7,7 +7,7 @@ description: Use when autonomously delivering an eligible change as one review-r
 
 # VGXNESS autonomous stacked PR
 
-Use this policy only from the top-level VGXNESS Manager. Managed general remains the sole workspace writer; the manager remains the sole Git and GitHub actor. Use native `git` and `gh` commands directly. Do not introduce an adapter, custom typed Git or GitHub tool, stack engine, worktree writer, delivery daemon, or durable delivery state.
+Use this policy only from the top-level VGXNESS Manager. Managed general remains the delegated implementation worker; the manager remains the Git and GitHub delivery actor by role. Use native `git` and `gh` commands directly. Do not introduce an adapter, custom typed Git or GitHub tool, stack engine, worktree writer, delivery daemon, or durable delivery state.
 
 ## Eligibility and restrictions
 
@@ -20,7 +20,7 @@ Task restrictions always win and narrow transitively:
 - `no push` means no push and no PR;
 - `no PR` means no pull request.
 
-Never infer that a narrower restriction authorizes an earlier operation. Never carry delivery authority to another task. If the user names a different branch, remote, draft flow, or delivery operation, it is outside routine autonomous delivery and remains governed by the manager's default-deny permissions.
+Never infer that a narrower restriction authorizes an earlier operation. Never carry delivery authority to another task. If the user names a different branch, remote, draft flow, or delivery operation, it is outside routine autonomous delivery and requires explicit current-task authorization; global tool permission does not supply that authorization.
 
 ## Sizing and stack plan
 

@@ -17,14 +17,14 @@ VGXNESS es un manager nativo de OpenCode con almacenamiento local y herramientas
 - modos SDD `automatic` e `interactive` por cambio;
 - manager v35, otros 14 agentes ligados a modelos, plugin v5, manifiesto de modelos y un skill independiente de PR apiladas autónomas;
 - setup CLI/TUI de seis pasos con handshake delimitado de OpenCode 1.18.4+;
-- reconocimiento exacto de artefactos anteriores y upgrades conservadores;
+- reconocimiento current-only de manager y agentes, reconocimiento exacto de plugins de almacenamiento anteriores y desinstalación conservadora;
 - archivos de release, checksums y workflows deterministas.
 
 Los comandos y subsistemas de ejecución por compatibilidad no forman parte del producto entregado.
 
 ## Autoridad
 
-`general` administrado es el único escritor del workspace. El manager superior es la única autoridad para routing, síntesis, aceptación de candidatos y revisiones, transiciones y entrega nativa con Git/GitHub. Los seis perfiles SDD y los cinco revisores son de solo lectura. El plugin solo persiste memoria y SDD delimitados.
+Manager, `general` administrado y verifier tienen permisos globales `allow`; sus prompts conservan los roles de orquestación, implementación delegada y verificación no mutante. El manager superior sigue siendo la única autoridad para routing, síntesis, aceptación de candidatos y revisiones, y transiciones. Los seis perfiles SDD y los cinco revisores son de solo lectura. El plugin solo persiste memoria y SDD delimitados.
 
 El plugin expone 18 herramientas: cinco de memoria semántica y 13 de SDD. Cada mutación SDD exige el contexto confiable de la sesión superior rastreada. El plugin no ejecuta, enruta, edita, delega, selecciona modelos, accede a archivos del workspace ni avanza el ciclo por sí mismo.
 

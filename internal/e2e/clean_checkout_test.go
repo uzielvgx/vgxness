@@ -100,12 +100,12 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatalf("setup did not install the bounded storage-only plugin: %v", err)
 	}
 	managerData, err := os.ReadFile(manager)
-	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 34")) || !bytes.Contains(managerData, []byte("At the start of an accepted SDD change")) {
+	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 35")) || !bytes.Contains(managerData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(managerData, []byte("At the start of an accepted SDD change")) {
 		t.Fatalf("setup did not install the executable SDD manager contract: %v", err)
 	}
 	generalData, generalErr := os.ReadFile(general)
 	verifierData, verifierErr := os.ReadFile(verifier)
-	if generalErr != nil || verifierErr != nil || !bytes.Contains(generalData, []byte("sole ordinary workspace writer")) || !bytes.Contains(verifierData, []byte("artifact: opencode-agent/vgxness-verifier; version: 2")) || !bytes.Contains(verifierData, []byte("PASS|FAIL|INCONCLUSIVE")) {
+	if generalErr != nil || verifierErr != nil || !bytes.Contains(generalData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(generalData, []byte("delegated implementation worker")) || !bytes.Contains(verifierData, []byte("artifact: opencode-agent/vgxness-verifier; version: 2")) || !bytes.Contains(verifierData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(verifierData, []byte("PASS|FAIL|INCONCLUSIVE")) {
 		t.Fatalf("setup did not install managed writer/verifier contracts: general=%v verifier=%v", generalErr, verifierErr)
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {

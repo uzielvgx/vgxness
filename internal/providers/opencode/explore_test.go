@@ -15,6 +15,15 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
+func managerFrontmatter(t *testing.T, prompt string) string {
+	t.Helper()
+	frontmatter, _, ok := strings.Cut(prompt, "\n---\n")
+	if !ok {
+		t.Fatal("manager prompt has no frontmatter terminator")
+	}
+	return frontmatter
+}
+
 func TestManagedExploreAgentIsCodeGraphFirstAndStrictlyReadOnly(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)

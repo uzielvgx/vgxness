@@ -18,14 +18,14 @@ VGXNESS makes AI-assisted engineering understandable, bounded, and recoverable w
 - `automatic` and `interactive` per-change SDD modes;
 - manager v35, 14 other model-bound agents, plugin v5, model-plan manifest, and one independent autonomous stacked-PR skill;
 - six-step CLI/TUI setup with a bounded OpenCode 1.18.4+ handshake;
-- exact prior-artifact recognition and conservative upgrade/uninstall behavior;
+- current-only manager and agent recognition, exact storage-plugin predecessor recognition, and conservative uninstall behavior;
 - deterministic release archives, checksums, and workflows.
 
 Compatibility execution commands and subsystems are not part of the delivered product.
 
 ## Authority model
 
-OpenCode owns engineering execution. Managed `general` is the sole workspace writer. The top-level manager owns route selection, synthesis, candidate acceptance, revision acceptance, lifecycle transitions, and native Git/GitHub delivery. Every installed SDD and review profile is read-only. The plugin owns bounded memory and SDD persistence only.
+OpenCode owns engineering execution. Manager, managed `general`, and verifier have global tool permission; their prompts retain orchestration, delegated implementation, and non-mutating verification roles. The top-level manager owns route selection, synthesis, candidate acceptance, revision acceptance, and lifecycle transitions. Every installed SDD and review profile remains read-only. The plugin owns bounded memory and SDD persistence only.
 
 The plugin exposes 18 tools: five semantic-memory operations and 13 SDD operations. SDD mutation requires trusted context for the tracked top-level manager. The plugin cannot route, invoke agents, access workspace files, run shell commands, select models, edit, delegate, or advance state independently.
 
@@ -37,7 +37,7 @@ The projection contains exactly 18 artifacts:
 | --- | ---: | --- |
 | Manager v35 | 1 | Sole orchestration, lifecycle, Git, and GitHub actor. |
 | Explore override | 1 | CodeGraph-first and deny-by-default read-only discovery. |
-| General and verifier | 2 | Sole workspace writer and independent final validator. |
+| General and verifier | 2 | Global capability with delegated implementation and independent non-mutating validation roles. |
 | Reviewers | 5 | Hidden and read-only. |
 | SDD profiles | 6 | Hidden, read-only, model-bound phase roles. |
 | Storage plugin v5 | 1 | Memory and SDD storage only. |
