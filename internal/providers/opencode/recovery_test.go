@@ -31,6 +31,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 	}
 	wantPaths := []string{
 		"agents/explore.md",
+		"agents/general.md",
 		"agents/vgxness-manager.md",
 		"agents/vgxness-review-readability.md",
 		"agents/vgxness-review-refuter.md",
@@ -43,10 +44,11 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 		"agents/vgxness-sdd-research.md",
 		"agents/vgxness-sdd-spec.md",
 		"agents/vgxness-sdd-tasks.md",
+		"agents/vgxness-verifier.md",
 		"plugins/vgxness.ts",
 		"vgxness/model-plan.json",
 	}
-	if before.Root != configDirectory || len(before.Artifacts) != 15 || len(before.AggregateSHA256) != 64 {
+	if before.Root != configDirectory || len(before.Artifacts) != 17 || len(before.AggregateSHA256) != 64 {
 		t.Fatalf("unexpected layout: %+v", before)
 	}
 	paths := managedPaths(before)
@@ -55,7 +57,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 	}
 
 	installed, err := service.Install(context.Background(), options)
-	if err != nil || installed.ArtifactCount != 15 {
+	if err != nil || installed.ArtifactCount != 17 {
 		t.Fatalf("Install() = %+v, %v", installed, err)
 	}
 	for _, artifact := range before.Artifacts {

@@ -112,7 +112,7 @@ func TestSectionNavigatorOpensSystemAndEscReturnsOverview(t *testing.T) {
 	model = updateModel(t, model, setupLoadedMsg{generation: 1, value: SetupStatus{
 		Ready: true, SelfInstallState: "installed", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "installed", IntegrationPath: "/config/vgxness-manager.md",
-		ArtifactCount: 15, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: "medium",
+		ArtifactCount: 17, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: "medium",
 	}})
 
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'g', Text: "g"}))

@@ -16,7 +16,7 @@ import (
 
 func TestManagerV31DefinesEvidenceBoundedContract(t *testing.T) {
 	config := sdd.DefaultModelPlanConfig()
-	current, err := buildModelPlanBundle(config)
+	current, err := buildV31ModelPlanBundle(config)
 	testutil.NoError(t, err)
 	previous, err := buildV30ModelPlanBundle(config)
 	testutil.NoError(t, err)
@@ -46,6 +46,12 @@ func TestManagerV31DefinesEvidenceBoundedContract(t *testing.T) {
 	if got := artifactSHA256([]byte(managerPrompt)); got != "27ff0b19e70b796e386c39b57db3e83d2be029b583b10a0622e11cf121e8e13d" {
 		t.Errorf("embedded historical manager v27 bytes changed: sha256=%s", got)
 	}
+	if got := artifactSHA256(current.agents[managerAgentName]); got != "6bca613211e89ee8e5140f173519ee00be17a037774845c3e1c1db81aaf16b37" {
+		t.Errorf("frozen manager v31 bytes changed: sha256=%s", got)
+	}
+	if got := artifactSHA256(current.manifest); got != "b9cb67c5806a22c66859fd7b516141209a3deae0b83611bb95a82e83f72ce375" {
+		t.Errorf("frozen bundle v31 manifest changed: sha256=%s", got)
+	}
 }
 
 func TestManagerV31RejectsMissingOrDuplicateInsertionAnchor(t *testing.T) {
@@ -65,7 +71,7 @@ func TestManagerV31RejectsMissingOrDuplicateInsertionAnchor(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			managerPrompt = mutate(original)
-			_, err := bindManager(assignment)
+			_, err := bindManagerV31(assignment)
 			if !errors.Is(err, integration.ErrInvalid) {
 				t.Fatalf("anchor guard error=%v", err)
 			}
@@ -73,15 +79,17 @@ func TestManagerV31RejectsMissingOrDuplicateInsertionAnchor(t *testing.T) {
 	}
 }
 
-func TestHistoricalModelPlansRecognizeV30V29AndV28(t *testing.T) {
+func TestHistoricalModelPlansRecognizeV31V30V29AndV28(t *testing.T) {
 	config := sdd.DefaultModelPlanConfig()
 	for name, build := range map[string]struct {
-		version string
-		build   func(sdd.ModelPlanConfig) (modelPlanBundle, error)
+		version      string
+		applyVersion string
+		build        func(sdd.ModelPlanConfig) (modelPlanBundle, error)
 	}{
-		"immediate v30": {version: "version: 30", build: buildV30ModelPlanBundle},
-		"legacy v29":    {version: "version: 29", build: buildV29ModelPlanBundle},
-		"legacy v28":    {version: "version: 28", build: buildV28ModelPlanBundle},
+		"immediate v31": {version: "version: 31", applyVersion: "version: 2", build: buildV31ModelPlanBundle},
+		"immediate v30": {version: "version: 30", applyVersion: "version: 2", build: buildV30ModelPlanBundle},
+		"legacy v29":    {version: "version: 29", applyVersion: "version: 2", build: buildV29ModelPlanBundle},
+		"legacy v28":    {version: "version: 28", applyVersion: "version: 1", build: buildV28ModelPlanBundle},
 	} {
 		t.Run(name, func(t *testing.T) {
 			bundle, err := build.build(config)
@@ -89,12 +97,59 @@ func TestHistoricalModelPlansRecognizeV30V29AndV28(t *testing.T) {
 			if !bytes.Contains(bundle.agents[managerAgentName], []byte(build.version)) {
 				t.Fatalf("historical manager does not contain %q", build.version)
 			}
+			apply := bundle.agents[sddApplyName]
+			if !bytes.Contains(apply, []byte("artifact: opencode-agent/vgxness-sdd-apply; "+build.applyVersion)) {
+				t.Fatalf("historical apply does not contain %q", build.applyVersion)
+			}
+			if build.applyVersion == "version: 2" && !bytes.Contains(apply, []byte("The manager alone validates hashes, writes workspace files, runs tests, saves or accepts revisions, records projections, and advances lifecycle state.")) {
+				t.Fatal("historical v2 apply wording changed")
+			}
 			_, parsed, err := parseInstalledModelPlanManifest(bundle.manifest)
 			testutil.NoError(t, err)
 			if !bytes.Equal(parsed.manifest, bundle.manifest) {
 				t.Fatal("historical model-plan manifest did not round trip exactly")
 			}
 		})
+	}
+}
+
+func TestV31HistoricalManifestDigestsAcrossPlans(t *testing.T) {
+	want := map[sdd.Plan]string{
+		sdd.PlanLow:    "1ea2ff614b9732301eeb2a294aafcb48e555a9a8f2ebb744fca289c94eb7503c",
+		sdd.PlanMedium: "4b698045a53b2268c119434e450ba2a6b44136b9e1a3232c93f493f3ea6ad3ed",
+		sdd.PlanHigh:   "1e3b42cc57bdaef62b6fbd036e27e90533e1178be0f0ba4c4d1fa88880a3b630",
+	}
+	for plan, expected := range want {
+		config := sdd.DefaultModelPlanConfig()
+		config.ActivePlan = plan
+		config.Provenance = sdd.ModelPlanCLI
+		bundle, err := buildV31ModelPlanBundle(config)
+		testutil.NoError(t, err)
+		if got := artifactSHA256(bundle.manifest); got != expected {
+			t.Errorf("%s v31 manifest sha256=%s, want %s", plan, got, expected)
+		}
+		_, parsed, err := parseInstalledModelPlanManifest(bundle.manifest)
+		testutil.NoError(t, err)
+		if !bytes.Equal(parsed.manifest, bundle.manifest) {
+			t.Errorf("%s v31 manifest did not round trip", plan)
+		}
+	}
+}
+
+func TestV31HighPlanMatchesShippedManifest(t *testing.T) {
+	config := sdd.DefaultModelPlanConfig()
+	config.ActivePlan = sdd.PlanHigh
+	config.Provenance = sdd.ModelPlanCLI
+	bundle, err := buildV31ModelPlanBundle(config)
+	testutil.NoError(t, err)
+	const shippedSHA256 = "1e3b42cc57bdaef62b6fbd036e27e90533e1178be0f0ba4c4d1fa88880a3b630"
+	if got := artifactSHA256(bundle.manifest); got != shippedSHA256 {
+		t.Fatalf("high-plan v31 manifest sha256=%s, want shipped %s", got, shippedSHA256)
+	}
+	_, parsed, err := parseInstalledModelPlanManifest(bundle.manifest)
+	testutil.NoError(t, err)
+	if !bytes.Equal(parsed.manifest, bundle.manifest) {
+		t.Fatal("shipped high-plan v31 identity did not round trip")
 	}
 }
 
@@ -148,6 +203,35 @@ func TestIntegrationUpgradesOnlyExactManagedV30(t *testing.T) {
 			testutil.Require(t, err == nil && second.State == integration.StateInstalled && !second.Changed, "v31 install is not idempotent: result=%+v err=%v", second, err)
 		})
 	}
+}
+
+func TestIntegrationRejectsModifiedManagedV31(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	agentsDirectory := filepath.Join(configDirectory, "agents")
+	pluginsDirectory := filepath.Join(configDirectory, "plugins")
+	manifestDirectory := filepath.Join(configDirectory, "vgxness")
+	for _, directory := range []string{agentsDirectory, pluginsDirectory, manifestDirectory} {
+		testutil.NoError(t, os.MkdirAll(directory, 0o700))
+	}
+	previous, err := buildV31ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	for name, content := range previous.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(agentsDirectory, name), content, 0o600))
+	}
+	modified := append(append([]byte(nil), previous.agents[managerAgentName]...), []byte("\nuser modification\n")...)
+	managerPath := filepath.Join(agentsDirectory, managerAgentName)
+	testutil.NoError(t, os.WriteFile(managerPath, modified, 0o600))
+	testutil.NoError(t, os.WriteFile(filepath.Join(manifestDirectory, modelPlanManifestName), previous.manifest, 0o600))
+	service := NewIntegration()
+	plugin, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(filepath.Join(pluginsDirectory, memoryPluginName), previousMemoryPluginV4(plugin), 0o600))
+
+	options := integration.Options{ConfigDir: configDirectory}
+	status, statusErr := service.Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(managerPath)
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "modified v31 changed: status=%+v install=%v read=%v", status, installErr, readErr)
 }
 
 func managerFrontmatter(t *testing.T, prompt string) string {

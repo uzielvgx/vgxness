@@ -33,6 +33,37 @@ func TestApprovedRoleMatrices(t *testing.T) {
 	}
 }
 
+func TestImplementationAndVerificationRoleAssignments(t *testing.T) {
+	want := map[Plan]map[Role]RoleAssignment{
+		PlanLow: {
+			RoleImplementation: {Capability: CapabilityBalanced, Effort: EffortLow},
+			RoleVerification:   {Capability: CapabilityEfficient, Effort: EffortLow},
+		},
+		PlanMedium: {
+			RoleImplementation: {Capability: CapabilityBalanced, Effort: EffortMedium},
+			RoleVerification:   {Capability: CapabilityEfficient, Effort: EffortMedium},
+		},
+		PlanHigh: {
+			RoleImplementation: {Capability: CapabilityFrontier, Effort: EffortHigh},
+			RoleVerification:   {Capability: CapabilityBalanced, Effort: EffortHigh},
+		},
+	}
+	for plan, roles := range want {
+		matrix, err := RoleMatrix(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for role, assignment := range roles {
+			if got := matrix[role]; got != assignment {
+				t.Errorf("%s %s = %+v, want %+v", plan, role, got, assignment)
+			}
+		}
+	}
+	if got := len(AllRoles()); got != 14 {
+		t.Fatalf("roles = %d, want 14", got)
+	}
+}
+
 func TestResolveModelPlanAndEffortDegradation(t *testing.T) {
 	catalog := DefaultOpenAICatalog()
 	for index := range catalog.Models {

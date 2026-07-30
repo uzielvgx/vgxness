@@ -100,7 +100,7 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 			t.Fatalf("incomplete step %d: %#v", index, step)
 		}
 	}
-	if !strings.Contains(plan.Steps[2].Explanation, "sustitución administrada y de solo lectura para Explore") || strings.Contains(plan.Steps[2].Explanation, "Explore y general integrados no se sobrescriben") {
+	if !strings.Contains(plan.Steps[2].Explanation, "sustituciones administradas para Explore y general") || !strings.Contains(plan.Steps[2].Explanation, "verificador independiente") || !strings.Contains(plan.Steps[2].Explanation, "workspace de solo lectura con operaciones Git aprobadas por el usuario") || strings.Contains(plan.Steps[2].Explanation, "especialista de entrega Git") || strings.Contains(plan.Steps[2].Explanation, "General integrado no se sobrescribe") {
 		t.Fatalf("step 3 does not describe the managed Explore override: %q", plan.Steps[2].Explanation)
 	}
 }

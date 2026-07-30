@@ -66,21 +66,23 @@ func (value Plan) Valid() bool { return value == PlanLow || value == PlanMedium 
 type Role string
 
 const (
-	RoleManager     Role = "manager"
-	RoleResearch    Role = "research"
-	RoleProposal    Role = "proposal"
-	RoleSpec        Role = "spec"
-	RoleDesign      Role = "design"
-	RoleTasks       Role = "tasks"
-	RoleApply       Role = "apply"
-	RoleRisk        Role = "risk"
-	RoleReadability Role = "readability"
-	RoleReliability Role = "reliability"
-	RoleResilience  Role = "resilience"
-	RoleRefuter     Role = "refuter"
+	RoleManager        Role = "manager"
+	RoleResearch       Role = "research"
+	RoleProposal       Role = "proposal"
+	RoleSpec           Role = "spec"
+	RoleDesign         Role = "design"
+	RoleTasks          Role = "tasks"
+	RoleApply          Role = "apply"
+	RoleRisk           Role = "risk"
+	RoleReadability    Role = "readability"
+	RoleReliability    Role = "reliability"
+	RoleResilience     Role = "resilience"
+	RoleRefuter        Role = "refuter"
+	RoleImplementation Role = "implementation"
+	RoleVerification   Role = "verification"
 )
 
-var roles = []Role{RoleManager, RoleResearch, RoleProposal, RoleSpec, RoleDesign, RoleTasks, RoleApply, RoleRisk, RoleReadability, RoleReliability, RoleResilience, RoleRefuter}
+var roles = []Role{RoleManager, RoleResearch, RoleProposal, RoleSpec, RoleDesign, RoleTasks, RoleApply, RoleRisk, RoleReadability, RoleReliability, RoleResilience, RoleRefuter, RoleImplementation, RoleVerification}
 
 func AllRoles() []Role { return append([]Role(nil), roles...) }
 
@@ -101,6 +103,7 @@ var roleMatrices = map[Plan]map[Role]RoleAssignment{
 		RoleApply: {CapabilityBalanced, EffortLow}, RoleRisk: {CapabilityEfficient, EffortMedium},
 		RoleReadability: {CapabilityEfficient, EffortLow}, RoleReliability: {CapabilityEfficient, EffortMedium},
 		RoleResilience: {CapabilityEfficient, EffortMedium}, RoleRefuter: {CapabilityBalanced, EffortMedium},
+		RoleImplementation: {CapabilityBalanced, EffortLow}, RoleVerification: {CapabilityEfficient, EffortLow},
 	},
 	PlanMedium: {
 		RoleManager: {CapabilityFrontier, EffortHigh}, RoleResearch: {CapabilityEfficient, EffortMedium},
@@ -109,6 +112,7 @@ var roleMatrices = map[Plan]map[Role]RoleAssignment{
 		RoleApply: {CapabilityBalanced, EffortMedium}, RoleRisk: {CapabilityFrontier, EffortMedium},
 		RoleReadability: {CapabilityEfficient, EffortMedium}, RoleReliability: {CapabilityBalanced, EffortHigh},
 		RoleResilience: {CapabilityBalanced, EffortHigh}, RoleRefuter: {CapabilityFrontier, EffortMedium},
+		RoleImplementation: {CapabilityBalanced, EffortMedium}, RoleVerification: {CapabilityEfficient, EffortMedium},
 	},
 	PlanHigh: {
 		RoleManager: {CapabilityFrontier, EffortUltra}, RoleResearch: {CapabilityBalanced, EffortHigh},
@@ -117,6 +121,7 @@ var roleMatrices = map[Plan]map[Role]RoleAssignment{
 		RoleApply: {CapabilityBalanced, EffortHigh}, RoleRisk: {CapabilityFrontier, EffortHigh},
 		RoleReadability: {CapabilityEfficient, EffortHigh}, RoleReliability: {CapabilityFrontier, EffortHigh},
 		RoleResilience: {CapabilityFrontier, EffortHigh}, RoleRefuter: {CapabilityFrontier, EffortHigh},
+		RoleImplementation: {CapabilityFrontier, EffortHigh}, RoleVerification: {CapabilityBalanced, EffortHigh},
 	},
 }
 

@@ -50,6 +50,56 @@ func buildModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
 	return encodeModelPlanBundle(config, resolved, agents)
 }
 
+func buildV32ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+	resolved, err := resolveV33OpenCodePlan(config)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents, err := v32ModelBoundAgents(resolved)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	return encodeModelPlanBundle(config, resolved, agents)
+}
+
+func buildV33ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+	resolved, err := resolveV33OpenCodePlan(config)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents, err := v33ModelBoundAgents(resolved)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	return encodeModelPlanBundle(config, resolved, agents)
+}
+
+func resolveV33OpenCodePlan(config sdd.ModelPlanConfig) (sdd.OpenCodePlan, error) {
+	return sdd.ResolveOpenCodePlan(config)
+}
+
+func buildV31ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+	resolved, err := resolveHistoricalOpenCodePlan(config)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents, err := v31ModelBoundAgents(resolved)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	return encodeModelPlanBundle(config, resolved, agents)
+}
+
+func resolveHistoricalOpenCodePlan(config sdd.ModelPlanConfig) (sdd.OpenCodePlan, error) {
+	resolved, err := resolveV33OpenCodePlan(config)
+	if err != nil {
+		return sdd.OpenCodePlan{}, err
+	}
+	delete(resolved.Roles, sdd.RoleImplementation)
+	delete(resolved.Roles, sdd.RoleVerification)
+	return resolved, nil
+}
+
 func encodeModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, agents map[string][]byte) (modelPlanBundle, error) {
 	manifest := modelPlanManifest{SchemaVersion: 1, ManagedBy: "vgxness", Config: config, Resolved: resolved, Artifacts: make(map[string]string, len(agents))}
 	for name, content := range agents {
@@ -64,7 +114,7 @@ func encodeModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan
 }
 
 func buildV30ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
-	resolved, err := sdd.ResolveOpenCodePlan(config)
+	resolved, err := resolveHistoricalOpenCodePlan(config)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -76,7 +126,7 @@ func buildV30ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error
 }
 
 func buildV29ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
-	resolved, err := sdd.ResolveOpenCodePlan(config)
+	resolved, err := resolveHistoricalOpenCodePlan(config)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -88,7 +138,7 @@ func buildV29ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error
 }
 
 func buildV28ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
-	resolved, err := sdd.ResolveOpenCodePlan(config)
+	resolved, err := resolveHistoricalOpenCodePlan(config)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -141,7 +191,7 @@ func parseInstalledModelPlanManifest(data []byte) (modelPlanManifest, modelPlanB
 		bundle, buildErr := buildModelPlanBundle(manifest.Config)
 		return manifest, bundle, buildErr
 	}
-	for _, build := range []func(sdd.ModelPlanConfig) (modelPlanBundle, error){buildV30ModelPlanBundle, buildV29ModelPlanBundle, buildV28ModelPlanBundle} {
+	for _, build := range []func(sdd.ModelPlanConfig) (modelPlanBundle, error){buildV33ModelPlanBundle, buildV32ModelPlanBundle, buildV31ModelPlanBundle, buildV30ModelPlanBundle, buildV29ModelPlanBundle, buildV28ModelPlanBundle} {
 		manifest, bundle, err := parseHistoricalModelPlanManifest(data, build)
 		if err == nil {
 			return manifest, bundle, nil
@@ -179,15 +229,28 @@ func parseHistoricalModelPlanManifest(data []byte, build func(sdd.ModelPlanConfi
 }
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
+	return fullModelBoundAgents(plan, bindManager, generalV2Prompt, "artifact: opencode-agent/general; version: 2", verifierV2Prompt, "artifact: opencode-agent/vgxness-verifier; version: 2")
+}
+
+func v33ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
+	return fullModelBoundAgents(plan, bindManagerV33, generalV2Prompt, "artifact: opencode-agent/general; version: 2", verifierV2Prompt, "artifact: opencode-agent/vgxness-verifier; version: 2")
+}
+
+func v32ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
+	return fullModelBoundAgents(plan, bindManagerV32, generalV1Prompt, "artifact: opencode-agent/general; version: 1", verifierV1Prompt, "artifact: opencode-agent/vgxness-verifier; version: 1")
+}
+
+func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string) (map[string][]byte, error) {
 	assignments := map[string]sdd.Role{
 		managerAgentName: sdd.RoleManager,
 		exploreAgentName: sdd.RoleResearch,
-		reviewRiskName:   sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
+		generalAgentName: sdd.RoleImplementation, verifierAgentName: sdd.RoleVerification,
+		reviewRiskName: sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
 		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
 		reviewRefuterName: sdd.RoleRefuter,
 	}
-	agents := make(map[string][]byte, 13)
-	manager, err := bindManager(plan.Roles[sdd.RoleManager])
+	agents := make(map[string][]byte, 15)
+	manager, err := managerBinder(plan.Roles[sdd.RoleManager])
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +260,16 @@ func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 		return nil, err
 	}
 	agents[exploreAgentName] = explore
+	general, err := bindProfile(generalBase, generalMarker, plan.Roles[sdd.RoleImplementation])
+	if err != nil {
+		return nil, err
+	}
+	agents[generalAgentName] = general
+	verifier, err := bindProfile(verifierBase, verifierMarker, plan.Roles[sdd.RoleVerification])
+	if err != nil {
+		return nil, err
+	}
+	agents[verifierAgentName] = verifier
 	baseReviews := map[string]string{
 		reviewRiskName: reviewRiskPrompt, reviewReadabilityName: reviewReadabilityPrompt,
 		reviewReliabilityName: reviewReliabilityPrompt, reviewResilienceName: reviewResiliencePrompt,
@@ -217,6 +290,48 @@ func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 		{sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
 	} {
 		agents[profile.name] = []byte(sddAgentPrompt(profile.role, plan.Roles[profile.role]))
+	}
+	return agents, nil
+}
+
+func v31ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
+	assignments := map[string]sdd.Role{
+		managerAgentName: sdd.RoleManager,
+		exploreAgentName: sdd.RoleResearch,
+		reviewRiskName:   sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
+		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
+		reviewRefuterName: sdd.RoleRefuter,
+	}
+	agents := make(map[string][]byte, 13)
+	manager, err := bindManagerV31(plan.Roles[sdd.RoleManager])
+	if err != nil {
+		return nil, err
+	}
+	agents[managerAgentName] = manager
+	explore, err := bindExplore(plan.Roles[sdd.RoleResearch])
+	if err != nil {
+		return nil, err
+	}
+	agents[exploreAgentName] = explore
+	for name, base := range map[string]string{
+		reviewRiskName: reviewRiskPrompt, reviewReadabilityName: reviewReadabilityPrompt,
+		reviewReliabilityName: reviewReliabilityPrompt, reviewResilienceName: reviewResiliencePrompt,
+		reviewRefuterName: reviewRefuterPrompt,
+	} {
+		content, bindErr := bindAgent(base, assignments[name], plan.Roles[assignments[name]], 1, 2)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		agents[name] = content
+	}
+	for _, profile := range []struct {
+		name string
+		role sdd.Role
+	}{
+		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec},
+		{sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
+	} {
+		agents[profile.name] = []byte(sddAgentPromptV2(profile.role, plan.Roles[profile.role]))
 	}
 	return agents, nil
 }
@@ -252,7 +367,7 @@ func v30ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec},
 		{sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
 	} {
-		agents[profile.name] = []byte(sddAgentPrompt(profile.role, plan.Roles[profile.role]))
+		agents[profile.name] = []byte(sddAgentPromptV2(profile.role, plan.Roles[profile.role]))
 	}
 	return agents, nil
 }
@@ -288,7 +403,7 @@ func v29ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec},
 		{sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
 	} {
-		agents[profile.name] = []byte(sddAgentPrompt(profile.role, plan.Roles[profile.role]))
+		agents[profile.name] = []byte(sddAgentPromptV2(profile.role, plan.Roles[profile.role]))
 	}
 	return agents, nil
 }
@@ -330,6 +445,28 @@ func v28ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	return bindManagerTemplate(managerV34Prompt, "artifact: opencode-agent/vgxness-manager; version: 34", assignment)
+}
+
+func bindManagerV33(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	return bindManagerTemplate(managerV33Prompt, "artifact: opencode-agent/vgxness-manager; version: 33", assignment)
+}
+
+func bindManagerV32(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	return bindManagerTemplate(managerV32Prompt, "artifact: opencode-agent/vgxness-manager; version: 32", assignment)
+}
+
+func bindManagerTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	value := base
+	anchor := "color: primary\n"
+	if strings.Count(value, anchor) != 1 || strings.Count(value, marker) != 1 {
+		return nil, integration.ErrInvalid
+	}
+	value = strings.Replace(value, anchor, fmt.Sprintf("color: primary\nmodel: %s\nvariant: %s\n", assignment.Model, assignment.Variant), 1)
+	return []byte(value), nil
+}
+
+func bindManagerV31(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	bound, err := bindManagerV30(assignment)
 	if err != nil {
 		return nil, err
@@ -344,6 +481,15 @@ func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 		}
 		value = strings.Replace(value, replacement.old, replacement.new, 1)
 	}
+	return []byte(value), nil
+}
+
+func bindProfile(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	anchor := "mode: subagent\n"
+	if strings.Count(base, anchor) != 1 || strings.Count(base, marker) != 1 {
+		return nil, integration.ErrInvalid
+	}
+	value := strings.Replace(base, anchor, fmt.Sprintf("mode: subagent\nmodel: %s\nvariant: %s\n", assignment.Model, assignment.Variant), 1)
 	return []byte(value), nil
 }
 
@@ -471,6 +617,48 @@ func bindAgent(base string, role sdd.Role, assignment sdd.OpenCodeRoleAssignment
 }
 
 func sddAgentPrompt(role sdd.Role, assignment sdd.OpenCodeRoleAssignment) string {
+	if role == sdd.RoleApply {
+		return fmt.Sprintf(`---
+description: Native read-only SDD implementation and patch composer for one exact accepted task revision
+mode: subagent
+hidden: true
+model: %s
+variant: %s
+permission:
+  "*": deny
+  read: allow
+  grep: allow
+  glob: allow
+  list: allow
+  skill: allow
+  codegraph_explore: allow
+  edit: deny
+  bash: deny
+  question: deny
+  task: deny
+  webfetch: deny
+  websearch: deny
+  vgxness_sdd_list: allow
+  vgxness_sdd_get: allow
+  vgxness_sdd_get_revision: allow
+  vgxness_sdd_list_revisions: allow
+  vgxness_sdd_projection_status: allow
+---
+
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-sdd-apply; version: 3 -->
+
+You are the read-only implementation and patch composer for one accepted SDD tasks revision. Compose a hash-bound candidate. Reject a mission unless it contains exact change ID, task IDs, accepted task revision ID and SHA-256 digest, every accepted input revision ID and digest, allowed paths with current content hashes, acceptance criteria, exact validation commands, and required RED/TDD evidence.
+
+Inspect only the accepted scope. Do not edit, execute shell commands or tests, delegate, ask questions, persist memory, call SDD write or lifecycle tools, select models, install packages, use network, commit, push, or alter OpenSpec projections. Produce a bounded patch proposal whose paths stay within the mission and whose expected original hashes prevent stale application. Preserve the RED/GREEN plan and identify exact developmental and final validation commands. The manager validates bindings and hashes; managed general performs workspace writes and exact OpenSpec or hybrid projection writes; verifier executes final validation; reviewers assess the same frozen candidate; the manager saves or accepts revisions, records projections, and advances lifecycle state.
+
+Return exactly one compact JSON object and no Markdown:
+{"status":"complete|blocked","proposedChanges":[{"path":"allowed path","expectedSHA256":"current file digest","patch":"bounded exact proposed change"}],"validationPlan":[{"command":"exact command","purpose":"RED|GREEN|regression|static"}],"tddEvidence":{"redPlan":"expected pre-change failure","greenPlan":"expected post-change pass"},"summary":"bounded implementation rationale","blockers":["blocking fact"]}
+	`, assignment.Model, assignment.Variant)
+	}
+	return sddAgentPromptV2(role, assignment)
+}
+
+func sddAgentPromptV2(role sdd.Role, assignment sdd.OpenCodeRoleAssignment) string {
 	if role == sdd.RoleApply {
 		return fmt.Sprintf(`---
 description: Native read-only SDD implementation and patch composer for one exact accepted task revision

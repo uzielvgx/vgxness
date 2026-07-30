@@ -115,7 +115,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return code
 	}
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
-	fmt.Fprintf(stdout, "Pasos 3–4: %d artefactos de manager, Explore de solo lectura, revisores, agentes SDD, almacenamiento y plan verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
+	fmt.Fprintf(stdout, "Pasos 3–4: %d artefactos de manager, general, verificador, Explore, revisores, agentes SDD, almacenamiento y plan verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
 	fmt.Fprintf(stdout, "Paso 5: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
 	fmt.Fprintln(stdout, "Paso 6: no fue necesaria recuperación.")
 	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode y selecciona vgxness-manager para cargar el plan instalado.\n", result.Changed)
@@ -136,7 +136,7 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintf(writer, "  Launcher: %s (estado=%s)\n", terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.State)
 	fmt.Fprintf(writer, "  Versiones: %s\n", terminalSafe(plan.SelfInstall.DataDir))
 	fmt.Fprintf(writer, "  Manager: %s (estado=%s)\n", terminalSafe(plan.Integration.Path), plan.Integration.State)
-	fmt.Fprintf(writer, "  Proyección: manager + sustitución Explore de solo lectura + cinco revisores + seis agentes SDD + plugin de almacenamiento (%s)\n", terminalSafe(plan.Integration.ToolPath))
+	fmt.Fprintf(writer, "  Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario + Explore + general escritor + verificador + cinco revisores + seis agentes SDD + plugin de almacenamiento (%s)\n", terminalSafe(plan.Integration.ToolPath))
 	fmt.Fprintf(writer, "  Artefactos administrados: %d\n", plan.Integration.ArtifactCount)
 	fmt.Fprintf(writer, "  Plan de modelos: %s provider=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider))
 	fmt.Fprintf(writer, "  Slots: efficient=%s balanced=%s frontier=%s\n", terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier))

@@ -24,6 +24,27 @@ import (
 //go:embed templates/manager.md
 var managerPrompt string
 
+//go:embed templates/manager-v32.md
+var managerV32Prompt string
+
+//go:embed templates/manager-v33.md
+var managerV33Prompt string
+
+//go:embed templates/manager-v34.md
+var managerV34Prompt string
+
+//go:embed templates/general.md
+var generalV1Prompt string
+
+//go:embed templates/general-v2.md
+var generalV2Prompt string
+
+//go:embed templates/verifier.md
+var verifierV1Prompt string
+
+//go:embed templates/verifier-v2.md
+var verifierV2Prompt string
+
 //go:embed templates/evidence-bounded-contract.md
 var managerEvidenceBoundedContract string
 
@@ -33,6 +54,8 @@ var explorePrompt string
 const (
 	managerAgentName           = "vgxness-manager.md"
 	exploreAgentName           = "explore.md"
+	generalAgentName           = "general.md"
+	verifierAgentName          = "vgxness-verifier.md"
 	reviewRiskName             = "vgxness-review-risk.md"
 	reviewReadabilityName      = "vgxness-review-readability.md"
 	reviewReliabilityName      = "vgxness-review-reliability.md"
@@ -669,6 +692,8 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	}
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
 	explorePath := filepath.Join(configDirectory, "agents", exploreAgentName)
+	generalPath := filepath.Join(configDirectory, "agents", generalAgentName)
+	verifierPath := filepath.Join(configDirectory, "agents", verifierAgentName)
 	reviewRiskPath := filepath.Join(configDirectory, "agents", reviewRiskName)
 	reviewReadabilityPath := filepath.Join(configDirectory, "agents", reviewReadabilityName)
 	reviewReliabilityPath := filepath.Join(configDirectory, "agents", reviewReliabilityName)
@@ -706,6 +731,8 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: managerPredecessors, regenerations: regeneration(managerPath)},
 		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", regenerations: regeneration(explorePath)},
+		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", regenerations: regeneration(generalPath)},
+		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", regenerations: regeneration(verifierPath)},
 		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: [][]byte{[]byte(reviewRiskPrompt)}, regenerations: regeneration(reviewRiskPath)},
 		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: [][]byte{[]byte(reviewReadabilityPrompt)}, regenerations: regeneration(reviewReadabilityPath)},
 		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", predecessors: [][]byte{[]byte(reviewReliabilityPrompt)}, regenerations: regeneration(reviewReliabilityPath)},

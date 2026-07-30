@@ -88,7 +88,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
 			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
-			installed.ArtifactCount == 15 &&
+			installed.ArtifactCount == 17 &&
 			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired && os.IsNotExist(configErr) &&
 			bytes.Equal(data, bundle.agents[managerAgentName]) &&
@@ -247,7 +247,7 @@ func TestSDDAgentProfilesEnforceReadOnlyAndManagerWriterBoundaries(t *testing.T)
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"read-only implementation and patch composer", "edit: deny", "bash: deny", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "allowed paths with current content hashes", "exact validation commands", "RED/TDD evidence", "manager alone validates hashes", `"proposedChanges"`, `"expectedSHA256"`, `"validationPlan"`} {
+	for _, required := range []string{"read-only implementation and patch composer", "edit: deny", "bash: deny", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "allowed paths with current content hashes", "exact validation commands", "RED/TDD evidence", "manager validates bindings and hashes", `"proposedChanges"`, `"expectedSHA256"`, `"validationPlan"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing %q", required)
 		}
@@ -265,7 +265,7 @@ func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
 		config.ActivePlan = plan
 		bundle, err := buildModelPlanBundle(config)
 		testutil.NoError(t, err)
-		if len(bundle.agents) != 13 {
+		if len(bundle.agents) != 15 {
 			t.Fatalf("plan %s agents=%d", plan, len(bundle.agents))
 		}
 		for name, content := range bundle.agents {
@@ -359,7 +359,7 @@ func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
 	status, err := service.Status(context.Background(), options)
 	testutil.Require(t, err == nil && status.State == integration.StatePartial, "status=%+v err=%v", status, err)
 	installed, err := service.Install(context.Background(), options)
-	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.ArtifactCount == 15, "installed=%+v err=%v", installed, err)
+	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.ArtifactCount == 17, "installed=%+v err=%v", installed, err)
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for name, expected := range bundle.agents {
@@ -370,6 +370,9 @@ func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
 
 func TestIntegrationUpgradesExactInstalledHistoricalModelPlans(t *testing.T) {
 	for name, build := range map[string]func(sdd.ModelPlanConfig) (modelPlanBundle, error){
+		"v33": buildV33ModelPlanBundle,
+		"v32": buildV32ModelPlanBundle,
+		"v31": buildV31ModelPlanBundle,
 		"v30": buildV30ModelPlanBundle,
 		"v29": buildV29ModelPlanBundle,
 		"v28": buildV28ModelPlanBundle,
@@ -402,6 +405,128 @@ func TestIntegrationUpgradesExactInstalledHistoricalModelPlans(t *testing.T) {
 			testutil.NoError(t, err)
 			manager, err := os.ReadFile(filepath.Join(agentsDirectory, managerAgentName))
 			testutil.Require(t, err == nil && bytes.Equal(manager, current.agents[managerAgentName]), "%s manager was not upgraded exactly: %v", name, err)
+		})
+	}
+}
+
+func TestIntegrationUpgradesOnlyExactManagedV32High(t *testing.T) {
+	for _, modified := range []bool{false, true} {
+		name := "exact"
+		if modified {
+			name = "modified"
+		}
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			options := integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh}
+			service := NewIntegration()
+			installed, err := service.Install(context.Background(), options)
+			testutil.NoError(t, err)
+
+			config := sdd.DefaultModelPlanConfig()
+			config.ActivePlan = sdd.PlanHigh
+			config.Provenance = sdd.ModelPlanCLI
+			previous, err := buildV32ModelPlanBundle(config)
+			testutil.NoError(t, err)
+			for artifactName, content := range previous.agents {
+				testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", artifactName), content, 0o600))
+			}
+			testutil.NoError(t, os.WriteFile(installed.ManifestPath, previous.manifest, 0o600))
+			priorManager := previous.agents[managerAgentName]
+			if modified {
+				priorManager = append(append([]byte(nil), priorManager...), []byte("\nuser modification\n")...)
+				testutil.NoError(t, os.WriteFile(installed.Path, priorManager, 0o600))
+			}
+
+			status, err := service.Status(context.Background(), options)
+			testutil.NoError(t, err)
+			if modified {
+				_, installErr := service.Install(context.Background(), options)
+				after, readErr := os.ReadFile(installed.Path)
+				testutil.Require(t, status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, priorManager), "modified v32 changed: status=%+v err=%v", status, installErr)
+				return
+			}
+
+			testutil.Require(t, status.State == integration.StatePartial, "exact v32 status=%+v", status)
+			upgraded, err := service.Install(context.Background(), options)
+			testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed, "v32 upgrade=%+v err=%v", upgraded, err)
+			for artifactName, marker := range map[string]string{
+				managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 34",
+				generalAgentName:  "artifact: opencode-agent/general; version: 2",
+				verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 2",
+			} {
+				content, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", artifactName))
+				testutil.Require(t, readErr == nil && bytes.Contains(content, []byte(marker)), "upgraded %s missing %q: %v", artifactName, marker, readErr)
+			}
+		})
+	}
+}
+
+func TestIntegrationUpgradesOnlyExactManagedV33High(t *testing.T) {
+	for _, modified := range []bool{false, true} {
+		name := "exact"
+		if modified {
+			name = "modified"
+		}
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			options := integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh}
+			service := NewIntegration()
+			installed, err := service.Install(context.Background(), options)
+			testutil.NoError(t, err)
+
+			config := sdd.DefaultModelPlanConfig()
+			config.ActivePlan = sdd.PlanHigh
+			config.Provenance = sdd.ModelPlanCLI
+			previous, err := buildV33ModelPlanBundle(config)
+			testutil.NoError(t, err)
+			for artifactName, content := range previous.agents {
+				testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", artifactName), content, 0o600))
+			}
+			testutil.NoError(t, os.WriteFile(installed.ManifestPath, previous.manifest, 0o600))
+			priorManager := previous.agents[managerAgentName]
+			if modified {
+				priorManager = append(append([]byte(nil), priorManager...), []byte("\nuser modification\n")...)
+				testutil.NoError(t, os.WriteFile(installed.Path, priorManager, 0o600))
+			}
+
+			status, err := service.Status(context.Background(), options)
+			testutil.NoError(t, err)
+			if modified {
+				_, installErr := service.Install(context.Background(), options)
+				after, readErr := os.ReadFile(installed.Path)
+				testutil.Require(t, status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, priorManager), "modified v33 changed: status=%+v err=%v", status, installErr)
+				return
+			}
+
+			testutil.Require(t, status.State == integration.StatePartial, "exact v33 status=%+v", status)
+			upgraded, err := service.Install(context.Background(), options)
+			testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && upgraded.ArtifactCount == 17, "v33 upgrade=%+v err=%v", upgraded, err)
+			for artifactName, marker := range map[string]string{
+				managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 34",
+				generalAgentName:  "artifact: opencode-agent/general; version: 2",
+				verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 2",
+			} {
+				content, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", artifactName))
+				testutil.Require(t, readErr == nil && bytes.Contains(content, []byte(marker)), "upgraded %s missing %q: %v", artifactName, marker, readErr)
+			}
+		})
+	}
+}
+
+func TestIntegrationPreservesForeignGeneralAndVerifier(t *testing.T) {
+	for _, name := range []string{"general.md", "vgxness-verifier.md"} {
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			path := filepath.Join(configDirectory, "agents", name)
+			foreign := []byte("user-owned agent\n")
+			testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			testutil.NoError(t, os.WriteFile(path, foreign, 0o600))
+
+			service := NewIntegration()
+			status, statusErr := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+			_, installErr := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+			after, readErr := os.ReadFile(path)
+			testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, foreign), "foreign %s changed: status=%+v install=%v read=%v", name, status, installErr, readErr)
 		})
 	}
 }
@@ -579,24 +704,18 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 31",
+		"artifact: opencode-agent/vgxness-manager; version: 34",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
-		"OpenCode's native tools, skills, memory, Task subagents",
-		"Direct inline",
-		"Delegated direct",
-		"Optional SDD",
-		"OpenCode is the execution authority for normal work",
-		"VGXNESS-managed explore override and built-in general subagent",
+		"sole orchestration and SDD lifecycle authority",
+		"Use managed general for all authorized workspace writing",
+		"Use vgxness-verifier for independent final executable validation",
 		"relevant native skill names",
-		"load every clearly applicable skill through the skill tool",
-		"Pass exact skill names, never filesystem paths",
+		"Load every clearly applicable native skill through the skill tool",
 		"use one bounded codegraph_explore query",
-		"Exact source, Git diff, and test output remain authoritative",
-		"VGXNESS-owned memory is the only persistent memory authority",
+		"Exact source, Git diff, and observed command output remain candidate evidence",
+		"VGXNESS memory is context only",
 		"vgxness_memory_recent",
-		"automatically injected recent-memory reference block",
-		"only when that bounded context block is absent or unavailable",
 		"vgxness_memory_search",
 		"vgxness_memory_get",
 		"vgxness_memory_save",
@@ -605,14 +724,23 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"vgxness_sdd_get_revision", "vgxness_sdd_list_revisions", "vgxness_sdd_accept_revision",
 		"vgxness_sdd_transition", "vgxness_sdd_projection_status", "vgxness_sdd_record_projection",
 		"vgxness_sdd_render_projection", "vgxness_sdd_compare_projection",
-		"SDD tools persist structured records and render or compare supplied OpenSpec bytes only",
-		"do not execute agents, access the filesystem, route work, or advance phases autonomously",
 		"vgxness-sdd-research", "vgxness-sdd-proposal", "vgxness-sdd-spec", "vgxness-sdd-design", "vgxness-sdd-tasks", "vgxness-sdd-apply",
-		"manager alone owns SDD phase transitions",
-		"Do not use any external memory system",
-		"Never ask the user to run terminal, Git, filesystem, test, or diagnostic commands",
-		"one correction transaction and one scoped validation",
-		"Do not commit or push unless the user explicitly asks",
+		"The manager alone creates changes",
+		"Never ask the user to run commands",
+		"Do not commit or push without an explicit current-task request",
+		"Match the language and register of the user's direct conversation",
+		"technical artifacts neutral and in English by default",
+		"in-session launch log keyed by normalized goal and scope",
+		"Never launch the same task twice",
+		"unavailable, missing, or stale",
+		"continue with native reads and search without blocking",
+		"automatically injected recent-memory reference block",
+		"only when that bounded context block is absent or unavailable",
+		"Zero lenses", "One dominant lens", "Four lenses",
+		"severe inferential findings", "one batch", "one correction transaction and one scoped validation",
+		"installation, permissions, durability, or shared contracts",
+		"repository-confined `go fmt ./...` command and focused tests before freeze",
+		"verifier to run go test ./... and go vet ./...",
 	}
 	for _, contract := range required {
 		if !strings.Contains(prompt, contract) {
@@ -638,16 +766,21 @@ func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
 	required := []string{
 		"question: allow",
 		"Explore",
-		"Plan only",
+		"explicit task override",
+		"durable project default",
 		"Automatic mode",
 		"Interactive mode",
-		"task override",
-		"project default",
-		"native question tool",
+		"Automatic SDD",
+		"Interactive SDD",
+		"question tool",
+		"consequential decision",
+		"Inspect available evidence before asking",
 		"one blocking decision at a time",
 		"recommended option first",
+		"do not add an Other option",
+		"Allow multiple selections only when choices are genuinely compatible",
+		"at most one follow-up",
 		"RED -> GREEN -> REFACTOR",
-		"regression coverage",
 		"Do not claim TDD",
 		"VGXNESS memory is context only",
 	}
@@ -689,18 +822,39 @@ func TestManagerPromptDefinesExecutableSDDLifecycle(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"At the start of every accepted SDD change", "Automatic SDD", "Interactive SDD",
-		"vgxness_sdd_set_interaction_mode", "one accepted artifact for the current phase",
+		"At the start of an accepted SDD change", "Automatic SDD", "Interactive SDD",
+		"vgxness_sdd_set_interaction_mode", "accepted current-phase revision",
 		"explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete",
-		"at most four concurrent", "independent read-only", "single-authority and sequential",
+		"Automatic SDD advances each validated gate", "Interactive SDD pauses after each candidate artifact is validated",
+		"at most four concurrent Task calls", "independent read-only subwork", "single-authority and sequential",
+		"read-only and phase-bound", "performs transitions sequentially",
 		"memory backend", "OpenSpec backend", "hybrid backend", "externalLocation",
-		"ordinary OpenCode read and edit tools", "read back the exact path", "projection is current",
+		"OpenSpec writes", "repository-relative path", "read it back", "reject symlinks or path drift",
 		"overwrite the projection from memory", "inspect differences", "new candidate memory revision",
-		"changeId", "artifact", "acceptedInputs", "evidenceScope", "returnContract", "stable idempotencyKey",
-		"manager is the sole workspace writer", "run the RED/GREEN tests",
+		"changeId", "artifact", "accepted input artifact IDs", "evidence scope", "return contract", "stable idempotency key",
+		"Managed general performs workspace writes", "Verifier executes final validation",
+		"latest returned stateVersion", "reload state and reconcile", "never retry a write blindly",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Errorf("manager prompt is missing executable SDD contract %q", required)
+		}
+	}
+}
+
+func TestManagerPromptDefinesInstalledChildMissionSchemas(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	prompt := string(bundle.agents[managerAgentName])
+	for _, required := range []string{
+		"Verifier mission schema",
+		"frozen candidate digest", "digest procedure", "exact changed paths", "acceptance criteria", "evidence scope",
+		"exact permitted commands", "expected environment", "stop condition",
+		"Reviewer mission schema",
+		"mode", "candidate identity", "exact changedPaths", "diffScope", "exact skills", "verificationEvidence",
+		"lens-specific goal", "scope", "nonGoals", "acceptance", "evidence", "stop", "return contract",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Errorf("manager prompt is missing child mission field %q", required)
 		}
 	}
 }
@@ -843,7 +997,7 @@ func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"version: 2", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "The manager alone validates hashes, writes workspace files, runs tests", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
+	for _, required := range []string{"version: 3", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "managed general performs workspace writes", "verifier executes final validation", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing phase contract %q", required)
 		}

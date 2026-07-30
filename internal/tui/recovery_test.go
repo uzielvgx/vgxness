@@ -90,7 +90,7 @@ func TestSetupRecoveryTabDefaultsManagedLoadsRealStateAndSelectsSnapshots(t *tes
 		t.Fatalf("recovery load requests plan=%+v list=%+v", backend.planRequests, backend.listRequests)
 	}
 	view := model.View().Content
-	for _, expected := range []string{"CONTROLLED WRITE", "Backup & Recovery", "MANAGED", "/config/opencode", "/backups", "15", "20260729T120000", "2.0 KiB"} {
+	for _, expected := range []string{"CONTROLLED WRITE", "Backup & Recovery", "MANAGED", "/config/opencode", "/backups", "17", "20260729T120000", "2.0 KiB"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("recovery view missing %q:\n%s", expected, view)
 		}
@@ -289,12 +289,12 @@ func TestSetupRecoveryErrorRendersAccumulatedRestoreOutcome(t *testing.T) {
 
 func readyRecoveryBackend() *recordingRecoveryBackend {
 	return &recordingRecoveryBackend{
-		plan: RecoveryPlan{Mode: RecoveryModeManaged, SourceRoot: "/config/opencode", BackupRoot: "/backups", ArtifactCount: 15, LauncherState: "installed", IntegrationState: "installed", HandshakeOK: true, HandshakeStatus: "healthy", Ready: true},
+		plan: RecoveryPlan{Mode: RecoveryModeManaged, SourceRoot: "/config/opencode", BackupRoot: "/backups", ArtifactCount: 17, LauncherState: "installed", IntegrationState: "installed", HandshakeOK: true, HandshakeStatus: "healthy", Ready: true},
 		list: BackupListResult{Snapshots: []BackupSummary{
-			{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", CreatedAt: "2026-07-29T12:00:00Z", Mode: RecoveryModeManaged, FileCount: 15, TotalBytes: 2048},
+			{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", CreatedAt: "2026-07-29T12:00:00Z", Mode: RecoveryModeManaged, FileCount: 17, TotalBytes: 2048},
 			{SnapshotID: "20260728T120000.000000000Z-fedcba9876543210", CreatedAt: "2026-07-28T12:00:00Z", Mode: RecoveryModeFull, FileCount: 20, TotalBytes: 4096},
 		}},
-		backup:    BackupResult{Mode: RecoveryModeManaged, Snapshot: BackupSummary{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", Mode: RecoveryModeManaged, FileCount: 15}},
+		backup:    BackupResult{Mode: RecoveryModeManaged, Snapshot: BackupSummary{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", Mode: RecoveryModeManaged, FileCount: 17}},
 		preview:   RestorePreview{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", PreviewSHA256: strings.Repeat("a", 64), Missing: []string{"agents/missing.md"}, Identical: []string{"agents/same.md"}, Conflicts: []string{"agents/conflict.md", "plugins/conflict.ts"}},
 		restore:   RestoreResult{SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", Created: 1, Unresolved: []string{"plugins/conflict.ts"}},
 		reinstall: ProtectedReinstallResult{Mode: RecoveryModeManaged, SnapshotID: "20260729T120000.000000000Z-0123456789abcdef", SnapshotVerified: true, LauncherState: "installed", IntegrationState: "installed", HandshakeOK: true, HandshakeStatus: "healthy", RecoveryGuidance: "Retained snapshot is available."},
