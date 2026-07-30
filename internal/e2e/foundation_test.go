@@ -166,4 +166,34 @@ func TestFoundationProductContract(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	assertOpenCodeDocumentationContract(t)
+}
+
+func assertOpenCodeDocumentationContract(t *testing.T) {
+	t.Helper()
+	documents := map[string][]string{
+		"../../README.md":                     {"20 managed artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
+		"../../CHANGELOG.md":                  {"20 managed artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
+		"../../docs/product-blueprint.md":     {"exactly 20 artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
+		"../../docs/product-blueprint.es.md":  {"exactamente 20 artefactos", "fusi\u00f3n sem\u00e1ntica", "conserva intactos los bytes de cualquier `opencode.jsonc` existente", "default-agent.json"},
+		"../../docs/go-implementation.md":     {"20 exact managed artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
+		"../../docs/opencode-setup-wizard.md": {"20 managed artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
+	}
+	for path, claims := range documents {
+		content := readRepositoryFile(t, path)
+		currentContent := content
+		if path == "../../CHANGELOG.md" {
+			currentContent = strings.SplitN(content, "\n## v", 2)[0]
+		}
+		for _, claim := range claims {
+			if !strings.Contains(currentContent, claim) {
+				t.Errorf("%s omits OpenCode contract claim %q", path, claim)
+			}
+		}
+		for _, stale := range []string{"19 managed artifacts", "exactly 19 artifacts", "exactamente 19 artefactos", "dedicated `opencode.jsonc`", "exact `opencode.jsonc` overlay"} {
+			if strings.Contains(currentContent, stale) {
+				t.Errorf("%s contains stale OpenCode contract claim %q", path, stale)
+			}
+		}
+	}
 }

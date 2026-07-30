@@ -31,7 +31,7 @@ The plugin exposes 18 tools: five semantic-memory operations and 13 SDD operatio
 
 ## Managed artifacts
 
-The projection contains exactly 19 artifacts:
+The projection contains exactly 20 artifacts:
 
 | Artifact group | Count | Contract |
 | --- | ---: | --- |
@@ -42,7 +42,8 @@ The projection contains exactly 19 artifacts:
 | SDD profiles | 6 | Hidden, read-only, model-bound phase roles. |
 | Storage plugin v5 | 1 | Memory and SDD storage only. |
 | Model-plan manifest | 1 | Non-secret exact role/model and agent-digest bindings. |
-| Default-agent overlay | 1 | Exact `opencode.jsonc` selector for `vgxness-manager`; the user's `opencode.json` remains untouched. |
+| Default-agent selection | 1 | Semantic merge sets `default_agent="vgxness-manager"` in `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged. |
+| Restoration metadata | 1 | Bounded `<config-dir>/vgxness/default-agent.json` records whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup. |
 | Autonomous stacked-PR skill | 1 | Independent static native-delivery policy; not model-bound. |
 
 The default `medium` plan uses Luna Fast, Terra, and Sol slots. Plan or slot changes require OpenCode restart. The deprecated `--model` option remains a no-op.
@@ -57,7 +58,7 @@ SDD advances through `explore -> proposal -> spec -> design -> tasks -> apply ->
 
 ## Setup and health
 
-Setup previews all changes, requires confirmation, installs the stable launcher and exact artifacts, reads them back, and runs a bounded `opencode --version` handshake in an absolute existing workspace. Healthy requires OpenCode major 1 at version 1.18.4 or newer. Setup never downloads packages, edits `PATH` or the user's `opencode.json`, initializes CodeGraph, or probes model availability. It installs an exact `opencode.jsonc` overlay so OpenCode selects `vgxness-manager` by default and refuses foreign content at that managed path.
+Setup previews all changes, requires confirmation, installs the stable launcher and exact artifacts, reads them back, and runs a bounded `opencode --version` handshake in an absolute existing workspace. Healthy requires OpenCode major 1 at version 1.18.4 or newer. Setup never downloads packages, edits `PATH`, initializes CodeGraph, or probes model availability. It uses a semantic merge to select `vgxness-manager` through `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged. Bounded `<config-dir>/vgxness/default-agent.json` restoration metadata records whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup.
 
 ## Product principles
 
