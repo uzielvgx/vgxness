@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -123,11 +124,15 @@ func TestReleaseWorkflowContract(t *testing.T) {
 
 func readRepositoryFile(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate foundation test source")
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(data)
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }
 
 func TestFoundationProductContract(t *testing.T) {

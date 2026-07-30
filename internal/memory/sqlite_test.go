@@ -153,7 +153,7 @@ func TestImportLegacy_MergesProjectsIdempotentlyWithoutMutatingSource(t *testing
 	`)
 	testutil.NoError(t, err)
 	testutil.NoError(t, legacy.Close())
-	before := healthSnapshot(t, legacyPath)
+	before := durableStorageSnapshot(t, legacyPath)
 
 	targetPath := filepath.Join(t.TempDir(), "global.db")
 	store := openPath(t, targetPath)
@@ -170,7 +170,7 @@ func TestImportLegacy_MergesProjectsIdempotentlyWithoutMutatingSource(t *testing
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM legacy_imports`).Scan(&imports))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id='shared-session'`).Scan(&sessions))
 	testutil.Require(t, imports == 1 && sessions == 2, "idempotency or project session isolation failed: imports=%d sessions=%d", imports, sessions)
-	testutil.Require(t, before == healthSnapshot(t, legacyPath), "legacy source was mutated")
+	testutil.Require(t, before == durableStorageSnapshot(t, legacyPath), "legacy source was mutated")
 	testutil.NoError(t, store.Close())
 }
 
@@ -233,10 +233,10 @@ func TestHealthFile_RejectsFutureSchemaWithoutMutation(t *testing.T) {
 	_, err = db.Exec(`PRAGMA user_version=99`)
 	testutil.NoError(t, err)
 	testutil.NoError(t, db.Close())
-	before := healthSnapshot(t, path)
+	before := durableStorageSnapshot(t, path)
 	_, err = HealthFile(context.Background(), path)
 	testutil.Require(t, errors.Is(err, ErrMigration), "expected newer-schema rejection, got %v", err)
-	testutil.Require(t, before == healthSnapshot(t, path), "health mutated future schema")
+	testutil.Require(t, before == durableStorageSnapshot(t, path), "health mutated future schema")
 	db, err = sql.Open("sqlite", path)
 	testutil.NoError(t, err)
 	defer db.Close()
@@ -316,14 +316,26 @@ func TestStoreClose_ReturnsCheckpointAndCloseFailures(t *testing.T) {
 	testutil.Require(t, errors.Is(err, closeErr), "missing close failure: %v", err)
 }
 
-func TestStoreClose_ReturnsBusyCheckpointFailure(t *testing.T) {
-	store := &Store{
-		checkpoint: func() (int, int, int, error) { return 1, 0, 0, nil },
-		close:      func() error { return nil },
-	}
-	if err := store.Close(); err == nil {
-		t.Fatal("Store.Close accepted a busy checkpoint")
-	}
+func TestStoreClose_IgnoresBusyCheckpointButReturnsCheckpointError(t *testing.T) {
+	t.Run("busy", func(t *testing.T) {
+		store := &Store{
+			checkpoint: func() (int, int, int, error) { return 1, 0, 0, nil },
+			close:      func() error { return nil },
+		}
+		if err := store.Close(); err != nil {
+			t.Fatalf("Store.Close() error = %v, want nil", err)
+		}
+	})
+	t.Run("error", func(t *testing.T) {
+		checkpointErr := errors.New("checkpoint failed")
+		store := &Store{
+			checkpoint: func() (int, int, int, error) { return 0, 0, 0, checkpointErr },
+			close:      func() error { return nil },
+		}
+		if err := store.Close(); !errors.Is(err, checkpointErr) {
+			t.Fatalf("Store.Close() error = %v, want checkpoint error", err)
+		}
+	})
 }
 
 func TestMigrate_RollsBackAndReportsVersion(t *testing.T) {
@@ -492,19 +504,28 @@ func TestEnvironmentIsolation_NoAmbientHomeOrNetwork(t *testing.T) {
 	testutil.Require(t, err == nil && version == 5, "isolated health=%d %v", version, err)
 }
 
-func healthSnapshot(t *testing.T, path string) string {
+// durableStorageSnapshot hashes durable SQLite state. Read-only SQLite may
+// create an empty WAL or update -shm; neither contains durable WAL frames.
+func durableStorageSnapshot(t *testing.T, path string) string {
 	t.Helper()
-	hash := sha256.New()
-	for _, suffix := range []string{"", "-wal", "-shm"} {
+	parts := make([]string, 0, 2)
+	for _, suffix := range []string{"", "-wal"} {
 		data, err := os.ReadFile(path + suffix)
-		fmt.Fprintf(hash, "%s:%t:", suffix, err == nil)
 		if err == nil {
-			_, _ = hash.Write(data)
+			if suffix == "-wal" && len(data) == 0 {
+				parts = append(parts, suffix+":empty")
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s:%x", suffix, sha256.Sum256(data)))
 		} else if !os.IsNotExist(err) {
 			t.Fatal(err)
+		} else if suffix == "-wal" {
+			parts = append(parts, suffix+":empty")
+		} else {
+			parts = append(parts, suffix+":absent")
 		}
 	}
-	return fmt.Sprintf("%x", hash.Sum(nil))
+	return strings.Join(parts, ",")
 }
 
 func migratedPath(t *testing.T) string {
@@ -515,23 +536,43 @@ func migratedPath(t *testing.T) string {
 	return path
 }
 
-func healthWithoutMutation(t *testing.T, path string) (int, error) {
+func healthWithoutDurableMutation(t *testing.T, path string) (int, error) {
 	t.Helper()
-	before := healthSnapshot(t, path)
+	before := durableStorageSnapshot(t, path)
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, before == healthSnapshot(t, path), "health mutated %s", path)
+	after := durableStorageSnapshot(t, path)
+	testutil.Require(t, before == after, "health mutated durable state %s before=%s after=%s", path, before, after)
 	return version, err
 }
 
 func TestHealthFile_HealthyDatabaseWithoutMutation(t *testing.T) {
 	path := migratedPath(t)
-	version, err := healthWithoutMutation(t, path)
+	version, err := healthWithoutDurableMutation(t, path)
 	testutil.Require(t, err == nil && version == 5, "health=%d err=%v", version, err)
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	version, err = HealthFile(context.Background(), missing)
 	testutil.Require(t, err == nil && version == 0, "missing health=%d err=%v", version, err)
 	_, statErr := os.Stat(missing)
 	testutil.Require(t, os.IsNotExist(statErr), "health created missing database")
+}
+
+func TestHealthFile_SeesCommittedWALState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store := openPath(t, path)
+	defer store.Close()
+	mustSave(t, store, observation("wal-observation", "project-a", "WAL health token"))
+
+	version, err := HealthFile(context.Background(), path)
+	testutil.Require(t, err == nil && version == 5, "health=%d err=%v", version, err)
+}
+
+func TestSQLiteReadURI_IsReadOnly(t *testing.T) {
+	path := migratedPath(t)
+	db, err := sql.Open("sqlite", sqliteReadURI(path))
+	testutil.NoError(t, err)
+	defer db.Close()
+	_, err = db.Exec(`PRAGMA user_version=99`)
+	testutil.Require(t, err != nil, "read-only URI accepted a write")
 }
 
 func TestHealthFile_RejectsMissingRequiredTableWithoutMutation(t *testing.T) {
@@ -543,7 +584,7 @@ func TestHealthFile_RejectsMissingRequiredTableWithoutMutation(t *testing.T) {
 			_, err = db.Exec(`PRAGMA foreign_keys=OFF; DROP TABLE ` + table)
 			testutil.NoError(t, err)
 			testutil.NoError(t, db.Close())
-			_, err = healthWithoutMutation(t, path)
+			_, err = healthWithoutDurableMutation(t, path)
 			testutil.Require(t, errors.Is(err, ErrCorrupt), "expected missing-table corruption, got %v", err)
 		})
 	}
@@ -556,7 +597,7 @@ func TestHealthFile_RejectsUnusableFTSWithoutMutation(t *testing.T) {
 	_, err = db.Exec(`DROP TABLE observations_fts; CREATE TABLE observations_fts(id TEXT, content TEXT)`)
 	testutil.NoError(t, err)
 	testutil.NoError(t, db.Close())
-	_, err = healthWithoutMutation(t, path)
+	_, err = healthWithoutDurableMutation(t, path)
 	testutil.Require(t, errors.Is(err, ErrCorrupt), "expected unusable FTS corruption, got %v", err)
 }
 
@@ -567,7 +608,7 @@ func TestHealthFile_RejectsIntegrityFailureWithoutMutation(t *testing.T) {
 	_, err = file.WriteAt(make([]byte, 32), 100)
 	testutil.NoError(t, err)
 	testutil.NoError(t, file.Close())
-	_, err = healthWithoutMutation(t, path)
+	_, err = healthWithoutDurableMutation(t, path)
 	testutil.Require(t, errors.Is(err, ErrCorrupt), "expected integrity corruption, got %v", err)
 }
 
@@ -581,7 +622,7 @@ func TestHealthFile_RejectsForeignKeyViolationWithoutMutation(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO observation_refs(observation_id,target_id) VALUES(?,?)`, source.ID, "missing")
 	testutil.NoError(t, err)
 	testutil.NoError(t, db.Close())
-	_, err = healthWithoutMutation(t, path)
+	_, err = healthWithoutDurableMutation(t, path)
 	testutil.Require(t, errors.Is(err, ErrCorrupt), "expected foreign-key corruption, got %v", err)
 }
 
