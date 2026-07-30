@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -85,44 +86,47 @@ func (runtime *recordingRecoveryRuntime) ProtectedReinstall(_ context.Context, r
 func TestTUIRecoveryBackendMapsModesPathsAndClonesSlices(t *testing.T) {
 	runtime := &recordingRecoveryRuntime{}
 	backend := tuiBackend{recovery: runtime}
-	workspace := "workspace/../project"
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace", "..", "project")
+	expectedWorkspace := filepath.Clean(workspace)
+	backupRoot := filepath.Join(root, "backups")
 
-	plan, err := backend.PlanRecovery(context.Background(), tui.RecoveryPlanRequest{Workspace: workspace, BackupRoot: "/backups", Mode: "full"})
+	plan, err := backend.PlanRecovery(context.Background(), tui.RecoveryPlanRequest{Workspace: workspace, BackupRoot: backupRoot, Mode: "full"})
 	if err != nil || !plan.Ready || plan.Mode != "full" || plan.ArtifactCount != 17 || !plan.HandshakeOK || plan.HandshakeStatus != integration.HandshakeHealthy.String() {
 		t.Fatalf("PlanRecovery()=%+v, %v", plan, err)
 	}
-	if runtime.planRequest.Mode != opencodebackup.ModeFull || runtime.planRequest.BackupRoot != "/backups" || !strings.HasSuffix(runtime.planRequest.Options.Workspace, "/project") {
+	if runtime.planRequest.Mode != opencodebackup.ModeFull || runtime.planRequest.BackupRoot != backupRoot || runtime.planRequest.Options.Workspace != expectedWorkspace {
 		t.Fatalf("plan request=%+v", runtime.planRequest)
 	}
 
-	listed, err := backend.ListBackups(context.Background(), tui.BackupListRequest{Workspace: workspace, BackupRoot: "/backups"})
-	if err != nil || len(listed.Snapshots) != 1 || listed.Snapshots[0].CreatedAt != "2026-07-29T12:00:00Z" {
+	listed, err := backend.ListBackups(context.Background(), tui.BackupListRequest{Workspace: workspace, BackupRoot: backupRoot})
+	if err != nil || len(listed.Snapshots) != 1 || listed.Snapshots[0].CreatedAt != "2026-07-29T12:00:00Z" || runtime.listRequest.BackupRoot != backupRoot {
 		t.Fatalf("ListBackups()=%+v, %v", listed, err)
 	}
-	created, err := backend.CreateBackup(context.Background(), tui.CreateBackupRequest{Workspace: workspace, BackupRoot: "/backups", Mode: "managed"})
-	if err != nil || created.Snapshot.Mode != "managed" || runtime.createRequest.Mode != opencodebackup.ModeManaged {
+	created, err := backend.CreateBackup(context.Background(), tui.CreateBackupRequest{Workspace: workspace, BackupRoot: backupRoot, Mode: "managed"})
+	if err != nil || created.Snapshot.Mode != "managed" || runtime.createRequest.Mode != opencodebackup.ModeManaged || runtime.createRequest.BackupRoot != backupRoot {
 		t.Fatalf("CreateBackup()=%+v request=%+v err=%v", created, runtime.createRequest, err)
 	}
 
 	id := "20260729T120000.000000000Z-0123456789abcdef"
-	preview, err := backend.PreviewRestore(context.Background(), tui.RestorePreviewRequest{Workspace: workspace, BackupRoot: "/backups", SnapshotID: id})
-	if err != nil || len(preview.Conflicts) != 2 {
+	preview, err := backend.PreviewRestore(context.Background(), tui.RestorePreviewRequest{Workspace: workspace, BackupRoot: backupRoot, SnapshotID: id})
+	if err != nil || len(preview.Conflicts) != 2 || runtime.previewRequest.BackupRoot != backupRoot {
 		t.Fatalf("PreviewRestore()=%+v, %v", preview, err)
 	}
 	preview.Conflicts[0] = "changed"
 	if runtime.conflicts[0] == "changed" {
 		t.Fatal("preview conflicts alias setup result")
 	}
-	restored, err := backend.RestoreBackup(context.Background(), tui.RestoreRequest{Workspace: workspace, BackupRoot: "/backups", SnapshotID: id, PreviewSHA256: strings.Repeat("a", 64)})
-	if err != nil || restored.Created != 1 {
+	restored, err := backend.RestoreBackup(context.Background(), tui.RestoreRequest{Workspace: workspace, BackupRoot: backupRoot, SnapshotID: id, PreviewSHA256: strings.Repeat("a", 64)})
+	if err != nil || restored.Created != 1 || runtime.restoreRequest.BackupRoot != backupRoot {
 		t.Fatalf("RestoreBackup()=%+v request=%+v err=%v", restored, runtime.restoreRequest, err)
 	}
 	restored.Unresolved[0] = "changed"
 	if runtime.unresolved[0] == "changed" {
 		t.Fatal("restore unresolved paths alias setup result")
 	}
-	reinstalled, err := backend.ProtectedReinstall(context.Background(), tui.ProtectedReinstallRequest{Workspace: workspace, BackupRoot: "/backups", Mode: "full"})
-	if err != nil || !reinstalled.SnapshotVerified || reinstalled.Mode != "full" || runtime.reinstallRequest.Mode != opencodebackup.ModeFull || !reinstalled.HandshakeOK || reinstalled.HandshakeStatus != integration.HandshakeHealthy.String() {
+	reinstalled, err := backend.ProtectedReinstall(context.Background(), tui.ProtectedReinstallRequest{Workspace: workspace, BackupRoot: backupRoot, Mode: "full"})
+	if err != nil || !reinstalled.SnapshotVerified || reinstalled.Mode != "full" || runtime.reinstallRequest.Mode != opencodebackup.ModeFull || runtime.reinstallRequest.BackupRoot != backupRoot || !reinstalled.HandshakeOK || reinstalled.HandshakeStatus != integration.HandshakeHealthy.String() {
 		t.Fatalf("ProtectedReinstall()=%+v request=%+v err=%v", reinstalled, runtime.reinstallRequest, err)
 	}
 	reinstalled.RecoveryMissing[0] = "changed"

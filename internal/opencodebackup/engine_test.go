@@ -28,7 +28,7 @@ func TestCreateManagedAndFullInclusion(t *testing.T) {
 		}
 		assertEntryPaths(t, snapshot.Manifest.Entries, []string{"nested/agent.md", "opencode.json"})
 		assertPrivateSnapshot(t, backup, snapshot.Manifest)
-		if snapshot.Manifest.Entries[0].Mode != 0o755 {
+		if runtime.GOOS != "windows" && snapshot.Manifest.Entries[0].Mode != 0o755 {
 			t.Fatalf("source permission metadata = %#o, want 0755", snapshot.Manifest.Entries[0].Mode)
 		}
 	})
