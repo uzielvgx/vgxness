@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -41,7 +40,7 @@ func (s *Store) ImportLegacy(ctx context.Context, path string, targetProjects ..
 		return writeError(ctx, err)
 	}
 	defer conn.Close()
-	sourceURI := (&url.URL{Scheme: "file", Path: sourcePath, RawQuery: "mode=ro"}).String()
+	sourceURI := sqliteReadURI(sourcePath)
 	if _, err = conn.ExecContext(ctx, `ATTACH DATABASE ? AS legacy`, sourceURI); err != nil {
 		return fmt.Errorf("%w: legacy memory storage is unavailable", ErrCorrupt)
 	}

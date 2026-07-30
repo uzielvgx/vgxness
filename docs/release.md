@@ -24,10 +24,10 @@ Each archive expands to one directory named after the archive stem. That directo
 | `windows/amd64` | Alpha-supported | Native artifact version and preview/install/status smoke in the release workflow. |
 | `linux/arm64` | Preview / compile-only | Cross-built archive; no native release smoke. |
 | `windows/arm64` | Preview / compile-only | Cross-built archive; no native release smoke. |
-| `darwin/amd64` | Preview / compile-only | Cross-built archive; manually smoke-tested only when it matches the maintainer host. |
-| `darwin/arm64` | Preview / compile-only | Cross-built archive; manually smoke-tested only when it matches the maintainer host. |
+| `darwin/amd64` | Preview / compile-only | Cross-built archive; native CI smoke covers the CLI and focused filesystem/runtime packages, but no native release-archive smoke. |
+| `darwin/arm64` | Preview / compile-only | Cross-built archive; native CI smoke covers the CLI and focused filesystem/runtime packages, but no native release-archive smoke. |
 
-The complete repository test suite runs on Linux in CI. Windows CI intentionally covers installer and launcher contracts plus the native Windows self-install lifecycle; it does not claim that every repository package test runs natively on Windows.
+The complete repository test suite runs on Linux and Windows in CI. Windows also runs the native self-install lifecycle; macOS runs a native CLI smoke and focused filesystem/runtime package tests.
 
 ## Release process
 

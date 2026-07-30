@@ -105,6 +105,7 @@ type ProtectedReinstallPlan struct {
 	Integration          integration.Result
 	Layout               integration.ManagedLayout
 	Handshake            integration.Handshake
+	RecoveryPending      bool
 	Ready                bool
 	Blocker              string
 }
@@ -346,6 +347,18 @@ func (service *Service) prepareRecovery(ctx context.Context, options Options, ba
 		return prepared, nil
 	}
 	prepared.runtime = managed
+	if requireHandshake {
+		pending, pendingErr := managed.ReinstallPending(ctx, options.Integration)
+		if pendingErr != nil {
+			prepared.plan.Blocker = "The interrupted OpenCode reinstall marker is invalid; evidence was preserved for inspection."
+			return prepared, nil
+		}
+		if pending {
+			prepared.plan.RecoveryPending = true
+			prepared.plan.Blocker = "An interrupted OpenCode reinstall was detected; evidence was preserved and automatic mutation is blocked."
+			return prepared, nil
+		}
+	}
 	status, err := managed.Status(ctx, options.Integration)
 	prepared.plan.Integration = status
 	if err != nil {
@@ -362,10 +375,6 @@ func (service *Service) prepareRecovery(ctx context.Context, options Options, ba
 	}
 	prepared.plan.SourceRoot = layout.Root
 	prepared.plan.ManagedArtifactCount = len(layout.Artifacts)
-	if status.ArtifactCount > 0 && status.ArtifactCount != len(layout.Artifacts) {
-		prepared.plan.Blocker = "The managed OpenCode artifact inventory does not match provider status."
-		return prepared, nil
-	}
 	if requireHandshake {
 		if status.State == integration.StateDrifted {
 			prepared.plan.Blocker = "Managed OpenCode artifacts have drifted."

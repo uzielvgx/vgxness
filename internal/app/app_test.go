@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -101,6 +102,9 @@ func TestOpenCodeIntegrationRuntime_InstallStatusAndRecoverableUninstall(t *test
 }
 
 func TestVersionUsesLightweightPathWithoutWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows prevents removing the active working directory")
+	}
 	original, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -195,9 +199,10 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 	preview.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.plan.Steps[0].Title == "Check", "preview steps alias setupflow plan: %+v", runtime.plan.Steps)
 
-	result, err := backend.ApplySetup(context.Background(), tui.SetupRequest{Workspace: "/workspace", Plan: "low"})
+	applyWorkspace := filepath.Join(t.TempDir(), "workspace")
+	result, err := backend.ApplySetup(context.Background(), tui.SetupRequest{Workspace: applyWorkspace, Plan: "low"})
 	testutil.Require(t, err == nil && result.Changed && result.SelfInstallState == "installed" && result.IntegrationState == "installed" && result.ArtifactCount == 17 && result.HandshakeOK && result.RestartRequired && result.Recovery == "safe recovery", "result=%+v err=%v", result, err)
-	testutil.Require(t, runtime.applyOptions.Workspace == "/workspace" && runtime.applyOptions.Integration.ModelPlan == sdd.PlanLow, "apply options=%+v", runtime.applyOptions)
+	testutil.Require(t, runtime.applyOptions.Workspace == filepath.Clean(applyWorkspace) && runtime.applyOptions.Integration.ModelPlan == sdd.PlanLow, "apply options=%+v", runtime.applyOptions)
 	result.Plan.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.result.Plan.Steps[0].Title == "Check", "result steps alias setupflow result: %+v", runtime.result.Plan.Steps)
 }

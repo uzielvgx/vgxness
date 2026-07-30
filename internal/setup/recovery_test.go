@@ -217,6 +217,59 @@ func TestProtectedReinstallPlanUsesProviderArtifactCountWithoutFixedDuplicate(t 
 	}
 }
 
+func TestProtectedReinstallPlanUsesManagedLayoutWhenStatusIncludesAdditionalArtifact(t *testing.T) {
+	launcherStatus := managedLauncherForRecoveryTest(t)
+	layout := recoveryLayout(t.TempDir())
+	managed := &recoveryManaged{status: integration.Result{State: integration.StateInstalled, ArtifactCount: len(layout.Artifacts) + 1}, layout: layout}
+	service := recoveryService(launcherStatus, managed, &recoveryBackups{}, healthyRecoveryProber(), nil)
+
+	plan, err := service.PlanProtectedReinstall(context.Background(), ProtectedReinstallRequest{Options: Options{Workspace: t.TempDir()}, Mode: opencodebackup.ModeManaged, BackupRoot: t.TempDir()})
+	if err != nil || !plan.Ready || plan.ManagedArtifactCount != len(layout.Artifacts) {
+		t.Fatalf("PlanProtectedReinstall() = %+v, %v", plan, err)
+	}
+}
+
+func TestProtectedReinstallPendingEvidenceBlocksBeforeBackupMutation(t *testing.T) {
+	for name, pendingErr := range map[string]error{
+		"valid marker":   nil,
+		"invalid marker": errors.New("invalid pending evidence"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			launcherStatus := managedLauncherForRecoveryTest(t)
+			layout := recoveryLayout(t.TempDir())
+			managed := &recoveryManaged{
+				status: integration.Result{State: integration.StateInstalled}, layout: layout,
+				pending: pendingErr == nil, pendingErr: pendingErr,
+			}
+			backups := &recoveryBackups{snapshot: recoverySnapshot(layout.Root, opencodebackup.ModeManaged)}
+			service := recoveryService(launcherStatus, managed, backups, healthyRecoveryProber(), nil)
+			request := ProtectedReinstallRequest{Options: Options{Workspace: t.TempDir()}, Mode: opencodebackup.ModeManaged, BackupRoot: t.TempDir()}
+
+			plan, err := service.PlanProtectedReinstall(context.Background(), request)
+			if err != nil || plan.Ready || plan.Blocker == "" || (pendingErr == nil) != plan.RecoveryPending {
+				t.Fatalf("PlanProtectedReinstall() = %+v, %v", plan, err)
+			}
+			result, err := service.ProtectedReinstall(context.Background(), request)
+			if !errors.Is(err, ErrPrerequisite) || result.Plan.Blocker == "" || managed.reinstallCalls != 0 || backups.createMode != "" {
+				t.Fatalf("ProtectedReinstall() = %+v, %v; reinstall=%d backupMode=%q", result, err, managed.reinstallCalls, backups.createMode)
+			}
+		})
+	}
+}
+
+func TestPendingReinstallDoesNotBlockBackupListing(t *testing.T) {
+	launcherStatus := managedLauncherForRecoveryTest(t)
+	layout := recoveryLayout(t.TempDir())
+	managed := &recoveryManaged{status: integration.Result{State: integration.StatePartial}, layout: layout, pending: true}
+	backups := &recoveryBackups{list: []opencodebackup.Summary{{SnapshotID: "snapshot-1"}}}
+	service := recoveryService(launcherStatus, managed, backups, &recoveryProber{}, nil)
+
+	result, err := service.ListBackups(context.Background(), BackupListRequest{Options: Options{Workspace: t.TempDir()}, BackupRoot: t.TempDir()})
+	if err != nil || len(result.Backups) != 1 {
+		t.Fatalf("ListBackups() = %+v, %v", result, err)
+	}
+}
+
 func TestSetupExposesBackupAndMergeRestoreOperations(t *testing.T) {
 	launcherStatus := managedLauncherForRecoveryTest(t)
 	layout := recoveryLayout(t.TempDir())
@@ -254,6 +307,8 @@ type recoveryManaged struct {
 	reinstallCalls int
 	calls          *[]string
 	onReinstall    func()
+	pending        bool
+	pendingErr     error
 }
 
 func (f *recoveryManaged) Preview(context.Context, integration.Options) (integration.Result, error) {
@@ -276,6 +331,9 @@ func (f *recoveryManaged) ManagedLayout(context.Context, integration.Options) (i
 		*f.calls = append(*f.calls, "integration-layout")
 	}
 	return f.layout, nil
+}
+func (f *recoveryManaged) ReinstallPending(context.Context, integration.Options) (bool, error) {
+	return f.pending, f.pendingErr
 }
 func (f *recoveryManaged) Reinstall(context.Context, integration.Options) (integration.Result, error) {
 	f.reinstallCalls++

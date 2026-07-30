@@ -147,7 +147,7 @@ func ParseOpenSpecProjection(document []byte) (ParsedProjection, error) {
 		return ParsedProjection{}, ErrMalformedProjection
 	}
 	headerEnd := bytes.Index(document, []byte("\n"+openSpecHeaderSuffix))
-	if headerEnd < 0 || headerEnd > maxOpenSpecHeaderBytes {
+	if headerEnd < len(openSpecHeaderPrefix) || headerEnd > maxOpenSpecHeaderBytes {
 		return ParsedProjection{}, ErrMalformedProjection
 	}
 	header := string(document[len(openSpecHeaderPrefix):headerEnd])

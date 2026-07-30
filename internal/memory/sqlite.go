@@ -121,7 +121,7 @@ func OpenRead(ctx context.Context, path string) (*Store, error) {
 	} else if err != nil {
 		return nil, fmt.Errorf("%w: memory storage is unavailable", ErrCorrupt)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
+	dsn := sqliteReadURI(path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: memory storage is unavailable", ErrCorrupt)
@@ -150,13 +150,21 @@ func HealthFile(ctx context.Context, path string) (int, error) {
 	} else if err != nil {
 		return 0, fmt.Errorf("open memory store: %w", ErrCorrupt)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1"}).String()
+	dsn := sqliteReadURI(path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return 0, err
 	}
 	defer db.Close()
 	return (&Store{db: db}).Health(ctx)
+}
+
+func sqliteReadURI(path string) string {
+	uriPath := filepath.ToSlash(path)
+	if runtime.GOOS == "windows" && !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	return (&url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}).String()
 }
 
 func rejectSymlink(path string) error {
@@ -243,9 +251,8 @@ func (s *Store) Close() error {
 	}
 	var checkpointErr error
 	if !s.readOnly {
-		// Health inspection intentionally opens an immutable snapshot. Keep the
-		// main database complete by checkpointing committed WAL state whenever
-		// a writable application operation releases its store.
+		// Keep the main database complete by checkpointing committed WAL state
+		// whenever a writable application operation releases its store.
 		if s.checkpoint != nil {
 			busy, _, _, err := s.checkpoint()
 			checkpointErr = checkpointResult(busy, err)
@@ -261,12 +268,9 @@ func (s *Store) Close() error {
 	return errors.Join(checkpointErr, s.db.Close())
 }
 
-func checkpointResult(busy int, err error) error {
+func checkpointResult(_ int, err error) error {
 	if err != nil {
 		return fmt.Errorf("checkpoint memory store: %w", err)
-	}
-	if busy != 0 {
-		return errors.New("checkpoint memory store: busy")
 	}
 	return nil
 }
