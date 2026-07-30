@@ -74,6 +74,18 @@ func buildV33ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error
 	return encodeModelPlanBundle(config, resolved, agents)
 }
 
+func buildV34ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+	resolved, err := resolveV33OpenCodePlan(config)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents, err := v34ModelBoundAgents(resolved)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	return encodeModelPlanBundle(config, resolved, agents)
+}
+
 func resolveV33OpenCodePlan(config sdd.ModelPlanConfig) (sdd.OpenCodePlan, error) {
 	return sdd.ResolveOpenCodePlan(config)
 }
@@ -191,7 +203,7 @@ func parseInstalledModelPlanManifest(data []byte) (modelPlanManifest, modelPlanB
 		bundle, buildErr := buildModelPlanBundle(manifest.Config)
 		return manifest, bundle, buildErr
 	}
-	for _, build := range []func(sdd.ModelPlanConfig) (modelPlanBundle, error){buildV33ModelPlanBundle, buildV32ModelPlanBundle, buildV31ModelPlanBundle, buildV30ModelPlanBundle, buildV29ModelPlanBundle, buildV28ModelPlanBundle} {
+	for _, build := range []func(sdd.ModelPlanConfig) (modelPlanBundle, error){buildV34ModelPlanBundle, buildV33ModelPlanBundle, buildV32ModelPlanBundle, buildV31ModelPlanBundle, buildV30ModelPlanBundle, buildV29ModelPlanBundle, buildV28ModelPlanBundle} {
 		manifest, bundle, err := parseHistoricalModelPlanManifest(data, build)
 		if err == nil {
 			return manifest, bundle, nil
@@ -234,6 +246,10 @@ func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 
 func v33ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 	return fullModelBoundAgents(plan, bindManagerV33, generalV2Prompt, "artifact: opencode-agent/general; version: 2", verifierV2Prompt, "artifact: opencode-agent/vgxness-verifier; version: 2")
+}
+
+func v34ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
+	return fullModelBoundAgents(plan, bindManagerV34, generalV2Prompt, "artifact: opencode-agent/general; version: 2", verifierV2Prompt, "artifact: opencode-agent/vgxness-verifier; version: 2")
 }
 
 func v32ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
@@ -445,6 +461,10 @@ func v28ModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	return bindManagerTemplate(managerV35Prompt, "artifact: opencode-agent/vgxness-manager; version: 35", assignment)
+}
+
+func bindManagerV34(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	return bindManagerTemplate(managerV34Prompt, "artifact: opencode-agent/vgxness-manager; version: 34", assignment)
 }
 

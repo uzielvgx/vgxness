@@ -2,7 +2,7 @@
 
 VGXNESS is a local OpenCode-native manager product. The Go 1.26 repository delivers the `vgxness` executable, versioned self-installation, a keyboard-first TUI, SQLite/FTS5 schema v5, native memory and SDD storage, OpenSpec backends, guided setup, and release tooling.
 
-The installed projection has 15 managed artifacts: `vgxness-manager` v31, a CodeGraph-first read-only `explore` override, five read-only reviewers, six read-only SDD profiles, storage plugin v5, and the model-plan manifest. The plugin exposes five semantic-memory tools and 13 SDD tools. OpenCode owns execution; the manager is the sole workspace and lifecycle writer. The storage plugin never executes, routes, edits, or delegates, and SDD mutations fail closed outside the tracked top-level manager session.
+The installed projection has 18 managed artifacts: 15 model-bound agents headed by `vgxness-manager` v35, storage plugin v5, the model-plan manifest, and the independent `vgxness-autonomous-stacked-pr` skill. The plugin exposes five semantic-memory tools and 13 SDD tools. OpenCode owns execution; managed `general` is the sole workspace writer, while the manager owns orchestration, SDD lifecycle, and native Git/GitHub delivery. The storage plugin never executes, routes, edits, or delegates, and SDD mutations fail closed outside the tracked top-level manager session.
 
 The read-only `status` and `doctor` commands report storage root, database, and schema health. Compatibility execution commands and subsystems are not part of the product.
 
@@ -36,6 +36,8 @@ Native SDD supports `memory`, `openspec`, and `hybrid` backends plus per-change 
 By default, every workspace uses the project-isolated semantic and SDD domains in `~/.vgxness/memory.db`. Canonical workspace identity keeps same-named projects distinct. Older project-level databases are retained and are not imported automatically; explicit `--storage-root` and `--project-local` modes remain isolated overrides.
 
 The manager chooses direct work, bounded read-only delegation, or structured SDD. Up to four independent read-only subworks may overlap; synthesis, patch application, validation, acceptance, projection writes, and lifecycle transitions remain sequential and manager-owned.
+
+For eligible implementation tasks, manager v35 loads the managed skill and can create a fresh normalized branch, make normal commits, perform first pushes, and open non-draft stacked pull requests after freeze, verification, and review without a second routine approval. Explicit `local-only`, `no commit`, `no push`, and `no PR` restrictions narrow that flow. This is a static OpenCode policy: command globs do not prove argument semantics or guarantee Git, GitHub, credential, hook, network, or branch-protection behavior.
 
 **Non-goal:** VGXNESS will not copy third-party code, prompts, schemas, names, skills, or exact workflows, and it will not permit silent destructive autonomy or hide operational truth behind a CLI.
 

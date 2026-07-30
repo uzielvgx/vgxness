@@ -9,8 +9,8 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
-func TestCurrentBundleUsesManagerV34WithoutDeliveryAgent(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+func TestV34BundleUsesManagerV34WithoutDeliveryAgent(t *testing.T) {
+	bundle, err := buildV34ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	if len(bundle.agents) != 15 || len(bundle.resolved.Roles) != 14 {
 		t.Fatalf("current bundle agents=%d roles=%d", len(bundle.agents), len(bundle.resolved.Roles))
@@ -36,8 +36,8 @@ func TestCurrentBundleUsesManagerV34WithoutDeliveryAgent(t *testing.T) {
 	}
 }
 
-func TestManagerUsesGenericGitAskBeforeExactReadOnlyAllows(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+func TestManagerV34UsesGenericGitAskBeforeExactReadOnlyAllows(t *testing.T) {
+	bundle, err := buildV34ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	parts := strings.SplitN(prompt, "---", 3)

@@ -16,7 +16,7 @@ VGXNESS makes AI-assisted engineering understandable, bounded, and recoverable w
 - SQLite/FTS5 schema v5 with isolated semantic and SDD domains;
 - `memory`, `openspec`, and `hybrid` SDD backends;
 - `automatic` and `interactive` per-change SDD modes;
-- manager v31, a read-only `explore` override, five reviewers, six SDD profiles, plugin v5, and model-plan manifest;
+- manager v35, 14 other model-bound agents, plugin v5, model-plan manifest, and one independent autonomous stacked-PR skill;
 - six-step CLI/TUI setup with a bounded OpenCode 1.18.4+ handshake;
 - exact prior-artifact recognition and conservative upgrade/uninstall behavior;
 - deterministic release archives, checksums, and workflows.
@@ -25,24 +25,28 @@ Compatibility execution commands and subsystems are not part of the delivered pr
 
 ## Authority model
 
-OpenCode owns engineering execution. The top-level manager owns route selection, synthesis, workspace writes, validation, revision acceptance, projection writes, and lifecycle transitions. Every installed SDD and review profile is read-only. The plugin owns bounded memory and SDD persistence only.
+OpenCode owns engineering execution. Managed `general` is the sole workspace writer. The top-level manager owns route selection, synthesis, candidate acceptance, revision acceptance, lifecycle transitions, and native Git/GitHub delivery. Every installed SDD and review profile is read-only. The plugin owns bounded memory and SDD persistence only.
 
 The plugin exposes 18 tools: five semantic-memory operations and 13 SDD operations. SDD mutation requires trusted context for the tracked top-level manager. The plugin cannot route, invoke agents, access workspace files, run shell commands, select models, edit, delegate, or advance state independently.
 
 ## Managed artifacts
 
-The projection contains exactly 15 artifacts:
+The projection contains exactly 18 artifacts:
 
 | Artifact group | Count | Contract |
 | --- | ---: | --- |
-| Manager v31 | 1 | Sole workspace and lifecycle writer. |
+| Manager v35 | 1 | Sole orchestration, lifecycle, Git, and GitHub actor. |
 | Explore override | 1 | CodeGraph-first and deny-by-default read-only discovery. |
+| General and verifier | 2 | Sole workspace writer and independent final validator. |
 | Reviewers | 5 | Hidden and read-only. |
 | SDD profiles | 6 | Hidden, read-only, model-bound phase roles. |
 | Storage plugin v5 | 1 | Memory and SDD storage only. |
 | Model-plan manifest | 1 | Non-secret exact role/model and agent-digest bindings. |
+| Autonomous stacked-PR skill | 1 | Independent static native-delivery policy; not model-bound. |
 
 The default `medium` plan uses Luna Fast, Terra, and Sol slots. Plan or slot changes require OpenCode restart. The deprecated `--model` option remains a no-op.
+
+Eligible implementations default to 400 effective changed lines per slice and stack only above 800. After freeze, verification, and review, manager v35 may create fresh normalized branches, normal commits, first pushes, and non-draft pull requests without a second routine approval. Explicit task restrictions narrow transitively. Existing delivery state is read-only, cleanup is never automatic, and post-create mutation, worktree mutation, history rewriting, merge, force, release, credential, and configuration changes remain unsupported. OpenCode globs establish static policy ordering but do not prove argv semantics or external Git/GitHub behavior.
 
 ## Storage and SDD
 
@@ -69,6 +73,7 @@ Setup previews all changes, requires confirmation, installs the stable launcher 
 
 - No compatibility execution bridge or alternate Go scheduler.
 - No hidden shell or Git hooks.
+- No Go stack engine, worktree writer, delivery-state service, custom Git/GitHub tool, or network delivery test.
 - No automatic network/package installation.
 - No Engram dependency or automatic legacy database import.
 - No plugin-owned filesystem, execution, routing, delegation, or lifecycle authority.

@@ -88,7 +88,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
 			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
-			installed.ArtifactCount == 17 &&
+			installed.ArtifactCount == 18 &&
 			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired && os.IsNotExist(configErr) &&
 			bytes.Equal(data, bundle.agents[managerAgentName]) &&
@@ -111,6 +111,9 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	second, err := service.Install(context.Background(), options)
 	testutil.NoError(t, err)
 	testutil.Require(t, second.State == integration.StateInstalled && !second.Changed, "install was not idempotent: %#v", second)
+	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+	skill, err := os.ReadFile(skillPath)
+	testutil.Require(t, err == nil && bytes.Equal(skill, []byte(autonomousStackedPRSkill)), "managed skill differs: %v", err)
 }
 
 func TestIntegrationRefusesModifiedModelPlanManifest(t *testing.T) {
@@ -359,7 +362,7 @@ func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
 	status, err := service.Status(context.Background(), options)
 	testutil.Require(t, err == nil && status.State == integration.StatePartial, "status=%+v err=%v", status, err)
 	installed, err := service.Install(context.Background(), options)
-	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.ArtifactCount == 17, "installed=%+v err=%v", installed, err)
+	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.ArtifactCount == 18, "installed=%+v err=%v", installed, err)
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for name, expected := range bundle.agents {
@@ -370,6 +373,7 @@ func TestIntegrationUpgradesExactShippedV26ReviewerV1PluginV4Set(t *testing.T) {
 
 func TestIntegrationUpgradesExactInstalledHistoricalModelPlans(t *testing.T) {
 	for name, build := range map[string]func(sdd.ModelPlanConfig) (modelPlanBundle, error){
+		"v34": buildV34ModelPlanBundle,
 		"v33": buildV33ModelPlanBundle,
 		"v32": buildV32ModelPlanBundle,
 		"v31": buildV31ModelPlanBundle,
@@ -405,6 +409,85 @@ func TestIntegrationUpgradesExactInstalledHistoricalModelPlans(t *testing.T) {
 			testutil.NoError(t, err)
 			manager, err := os.ReadFile(filepath.Join(agentsDirectory, managerAgentName))
 			testutil.Require(t, err == nil && bytes.Equal(manager, current.agents[managerAgentName]), "%s manager was not upgraded exactly: %v", name, err)
+		})
+	}
+}
+
+func TestIntegrationUpgradesOnlyExactV34PlanAndPreservesModelAssignments(t *testing.T) {
+	for _, modified := range []bool{false, true} {
+		name := "exact"
+		if modified {
+			name = "modified"
+		}
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			service := NewIntegration()
+			installed, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+			testutil.NoError(t, err)
+
+			config, err := sdd.NewModelPlanConfig(sdd.PlanLow, "acme/fast", "acme/balanced", "acme/frontier")
+			testutil.NoError(t, err)
+			config.Provenance = sdd.ModelPlanCLI
+			previous, err := buildV34ModelPlanBundle(config)
+			testutil.NoError(t, err)
+			for artifactName, content := range previous.agents {
+				testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", artifactName), content, 0o600))
+			}
+			testutil.NoError(t, os.WriteFile(installed.ManifestPath, previous.manifest, 0o600))
+			skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+			testutil.NoError(t, os.Remove(skillPath))
+			priorManager := previous.agents[managerAgentName]
+			if modified {
+				priorManager = append(append([]byte(nil), priorManager...), []byte("\nuser modification\n")...)
+				testutil.NoError(t, os.WriteFile(installed.Path, priorManager, 0o600))
+			}
+
+			status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+			testutil.NoError(t, err)
+			if modified {
+				_, installErr := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+				after, readErr := os.ReadFile(installed.Path)
+				testutil.Require(t, status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, priorManager), "modified v34 changed: status=%+v err=%v", status, installErr)
+				return
+			}
+
+			testutil.Require(t, status.State == integration.StatePartial && status.ModelPlan == sdd.PlanLow && status.ModelProvider == "acme", "exact v34 status=%+v", status)
+			upgraded, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+			testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && upgraded.ArtifactCount == 18 && upgraded.ModelPlan == sdd.PlanLow && upgraded.ModelProvider == "acme", "v34 upgrade=%+v err=%v", upgraded, err)
+			current, err := buildModelPlanBundle(config)
+			testutil.NoError(t, err)
+			for artifactName, expected := range current.agents {
+				content, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", artifactName))
+				testutil.Require(t, readErr == nil && bytes.Equal(content, expected), "v34 upgrade changed model-bound bytes for %s: %v", artifactName, readErr)
+			}
+			skill, err := os.ReadFile(skillPath)
+			testutil.Require(t, err == nil && bytes.Equal(skill, []byte(autonomousStackedPRSkill)), "v34 upgrade did not install exact skill: %v", err)
+		})
+	}
+}
+
+func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
+	current := []byte(autonomousStackedPRSkill)
+	cases := map[string][]byte{
+		"foreign":  []byte("user-owned skill\n"),
+		"modified": append(append([]byte(nil), current...), []byte("\nuser modification\n")...),
+		"newer":    bytes.Replace(current, []byte("version: 1"), []byte("version: 2"), 1),
+	}
+	for name, candidate := range cases {
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			installed, err := service.Install(context.Background(), options)
+			testutil.NoError(t, err)
+			path := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+			testutil.NoError(t, os.WriteFile(path, candidate, 0o600))
+
+			status, statusErr := service.Status(context.Background(), options)
+			_, installErr := service.Install(context.Background(), options)
+			_, uninstallErr := service.Uninstall(context.Background(), options)
+			after, readErr := os.ReadFile(path)
+			testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && errors.Is(uninstallErr, integration.ErrDrift) && readErr == nil && bytes.Equal(after, candidate), "%s skill changed: installed=%+v status=%+v install=%v uninstall=%v read=%v", name, installed, status, installErr, uninstallErr, readErr)
 		})
 	}
 }
@@ -450,7 +533,7 @@ func TestIntegrationUpgradesOnlyExactManagedV32High(t *testing.T) {
 			upgraded, err := service.Install(context.Background(), options)
 			testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed, "v32 upgrade=%+v err=%v", upgraded, err)
 			for artifactName, marker := range map[string]string{
-				managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 34",
+				managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 35",
 				generalAgentName:  "artifact: opencode-agent/general; version: 2",
 				verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 2",
 			} {
@@ -500,9 +583,9 @@ func TestIntegrationUpgradesOnlyExactManagedV33High(t *testing.T) {
 
 			testutil.Require(t, status.State == integration.StatePartial, "exact v33 status=%+v", status)
 			upgraded, err := service.Install(context.Background(), options)
-			testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && upgraded.ArtifactCount == 17, "v33 upgrade=%+v err=%v", upgraded, err)
+			testutil.Require(t, err == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && upgraded.ArtifactCount == 18, "v33 upgrade=%+v err=%v", upgraded, err)
 			for artifactName, marker := range map[string]string{
-				managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 34",
+				managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 35",
 				generalAgentName:  "artifact: opencode-agent/general; version: 2",
 				verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 2",
 			} {
@@ -704,7 +787,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 34",
+		"artifact: opencode-agent/vgxness-manager; version: 35",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",
@@ -1264,6 +1347,9 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 		if _, statErr := os.Stat(filepath.Join(configDirectory, "agents", name)); !os.IsNotExist(statErr) {
 			t.Errorf("managed reviewer %s was not removed: %v", name, statErr)
 		}
+	}
+	if _, statErr := os.Stat(filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")); !os.IsNotExist(statErr) {
+		t.Errorf("managed stacked-PR skill was not removed: %v", statErr)
 	}
 	bundle, bundleErr := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, bundleErr)

@@ -102,7 +102,7 @@ func TestSetupRendersSuccessAndFailureRecovery(t *testing.T) {
 	model.setRoute(routeSetup)
 	model.setupGeneration = 4
 	model = updateModel(t, model, setupAppliedMsg{generation: 4, value: successfulSetupResult()})
-	for _, expected := range []string{"SETUP COMPLETE", "changed  yes", "/bin/vgxness", "artifacts  17", "healthy", "Restart OpenCode"} {
+	for _, expected := range []string{"SETUP COMPLETE", "changed  yes", "/bin/vgxness", "artifacts  18", "healthy", "Restart OpenCode"} {
 		if !strings.Contains(model.View().Content, expected) {
 			t.Fatalf("success missing %q:\n%s", expected, model.View().Content)
 		}
@@ -197,7 +197,7 @@ func readySetupPlan(plan string) SetupPlan {
 		Provider: "opencode", Steps: steps, Ready: true,
 		SelfInstallState: "absent", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "absent", IntegrationPath: "/config/agents/vgxness-manager.md",
-		ArtifactCount: 17, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: plan,
+		ArtifactCount: 18, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: plan,
 		ModelProvider: "openai", ModelEfficient: "openai/fast", ModelBalanced: "openai/balanced", ModelFrontier: "openai/frontier",
 	}
 }
@@ -207,7 +207,7 @@ func successfulSetupResult() SetupResult {
 		Plan: readySetupPlan("high"), Changed: true,
 		SelfInstallState: "installed", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "installed", IntegrationPath: "/config/agents/vgxness-manager.md",
-		ArtifactCount: 17, HandshakeOK: true, HandshakeStatus: "healthy", RestartRequired: true,
+		ArtifactCount: 18, HandshakeOK: true, HandshakeStatus: "healthy", RestartRequired: true,
 	}
 }
 

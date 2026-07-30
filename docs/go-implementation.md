@@ -12,12 +12,12 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
 | `internal/memory` | SQLite/FTS5 schema v5, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
-| `internal/providers/opencode` | Manager v31, read-only `explore` override, five reviewers, six SDD profiles, plugin v5, model-plan manifest, exact prior-artifact recognizers, sync plumbing, and the setup handshake. |
+| `internal/providers/opencode` | Manager v35, 14 other model-bound agents, independent autonomous stacked-PR skill, plugin v5, model-plan manifest, exact prior-artifact recognizers, sync plumbing, and the setup handshake. |
 | `internal/integration`, `internal/setup` | Managed artifact lifecycle and six-step CLI/TUI setup workflow. |
 | `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
 | `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |
 
-Compatibility execution packages and commands are not delivered. There is no Go provider runner, execution adapter, bridge, control plane, Chronicle, Gatekeeper, registry, prompt composer, coordinator, delivery authority, or runtime contract-schema layer.
+Compatibility execution packages and commands are not delivered. There is no Go provider runner, execution adapter, bridge, control plane, Chronicle, Gatekeeper, registry, prompt composer, coordinator, stack engine, worktree writer, delivery-state service, custom Git/GitHub tool, or runtime contract-schema layer. Native delivery policy lives only in the installed manager and skill.
 
 ## Dependency rules
 
@@ -41,16 +41,18 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 ## Managed projection
 
-The OpenCode projection contains 15 exact managed artifacts:
+The OpenCode projection contains 18 exact managed artifacts:
 
-- manager v31;
+- manager v35;
+- managed `general` and verifier profiles;
 - one CodeGraph-first, deny-by-default read-only `explore` override;
 - five hidden read-only reviewers;
 - six hidden read-only SDD profiles;
 - storage plugin v5;
-- one model-plan manifest.
+- one model-plan manifest;
+- one independent `vgxness-autonomous-stacked-pr` skill.
 
-Exact recognizers for catalogued prior manager, plugin, and model-plan bytes are upgrade-safety behavior. Foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
+The model plan still contains exactly 15 agents and does not contain the skill. Exact v34 model-bound bundles are parsed before v33 and upgrade from 17 to 18 artifacts without changing model configuration. Exact recognizers for catalogued prior manager, plugin, and model-plan bytes are upgrade-safety behavior. Foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
 
 ## Verification
 

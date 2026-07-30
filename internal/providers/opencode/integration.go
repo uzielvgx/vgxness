@@ -19,6 +19,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/launcher"
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 //go:embed templates/manager.md
@@ -32,6 +33,12 @@ var managerV33Prompt string
 
 //go:embed templates/manager-v34.md
 var managerV34Prompt string
+
+//go:embed templates/manager-v35.md
+var managerV35Prompt string
+
+//go:embed templates/skills/vgxness-autonomous-stacked-pr/SKILL.md
+var autonomousStackedPRSkill string
 
 //go:embed templates/general.md
 var generalV1Prompt string
@@ -52,19 +59,20 @@ var managerEvidenceBoundedContract string
 var explorePrompt string
 
 const (
-	managerAgentName           = "vgxness-manager.md"
-	exploreAgentName           = "explore.md"
-	generalAgentName           = "general.md"
-	verifierAgentName          = "vgxness-verifier.md"
-	reviewRiskName             = "vgxness-review-risk.md"
-	reviewReadabilityName      = "vgxness-review-readability.md"
-	reviewReliabilityName      = "vgxness-review-reliability.md"
-	reviewResilienceName       = "vgxness-review-resilience.md"
-	reviewRefuterName          = "vgxness-review-refuter.md"
-	memoryPluginName           = "vgxness.ts"
-	maxArtifactBytes           = 512 * 1024
-	maxMemoryOutputBytes       = 128 * 1024
-	nativeReviewSharedContract = `
+	managerAgentName             = "vgxness-manager.md"
+	exploreAgentName             = "explore.md"
+	generalAgentName             = "general.md"
+	verifierAgentName            = "vgxness-verifier.md"
+	reviewRiskName               = "vgxness-review-risk.md"
+	reviewReadabilityName        = "vgxness-review-readability.md"
+	reviewReliabilityName        = "vgxness-review-reliability.md"
+	reviewResilienceName         = "vgxness-review-resilience.md"
+	reviewRefuterName            = "vgxness-review-refuter.md"
+	memoryPluginName             = "vgxness.ts"
+	autonomousStackedPRSkillName = "vgxness-autonomous-stacked-pr"
+	maxArtifactBytes             = 512 * 1024
+	maxMemoryOutputBytes         = 128 * 1024
+	nativeReviewSharedContract   = `
 # Bounded review contract
 
 Accept only one parent mission containing:
@@ -701,6 +709,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	reviewRefuterPath := filepath.Join(configDirectory, "agents", reviewRefuterName)
 	toolPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
+	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
 	plan, err := requestedModelPlan(options, configDirectory)
 	if err != nil {
 		return inspection{}, err
@@ -727,7 +736,11 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		return nil
 	}
-	managerPredecessors := append([][]byte{[]byte(managerPrompt)}, previousManagerPrompts()...)
+	v34Manager, err := bindManagerV34(plan.resolved.Roles[sdd.RoleManager])
+	if err != nil {
+		return inspection{}, err
+	}
+	managerPredecessors := append([][]byte{v34Manager, []byte(managerPrompt)}, previousManagerPrompts()...)
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: managerPredecessors, regenerations: regeneration(managerPath)},
 		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", regenerations: regeneration(explorePath)},
@@ -745,6 +758,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: filepath.Join(configDirectory, "agents", sddTasksName), content: plan.agents[sddTasksName], backup: "vgxness-sdd-tasks", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddTasksName))},
 		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
 		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
+		{path: skillPath, content: []byte(autonomousStackedPRSkill), backup: "vgxness-autonomous-stacked-pr-skill"},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
 	}}
 	state.result.ArtifactCount = len(state.artifacts)

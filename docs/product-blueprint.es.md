@@ -15,7 +15,7 @@ VGXNESS es un manager nativo de OpenCode con almacenamiento local y herramientas
 - SQLite/FTS5 esquema v5 con dominios semántico y SDD aislados;
 - backends SDD `memory`, `openspec` e `hybrid`;
 - modos SDD `automatic` e `interactive` por cambio;
-- manager v31, una sustitución `explore` de solo lectura, cinco revisores, seis perfiles SDD, plugin v5 y manifiesto de modelos;
+- manager v35, otros 14 agentes ligados a modelos, plugin v5, manifiesto de modelos y un skill independiente de PR apiladas autónomas;
 - setup CLI/TUI de seis pasos con handshake delimitado de OpenCode 1.18.4+;
 - reconocimiento exacto de artefactos anteriores y upgrades conservadores;
 - archivos de release, checksums y workflows deterministas.
@@ -24,24 +24,28 @@ Los comandos y subsistemas de ejecución por compatibilidad no forman parte del 
 
 ## Autoridad
 
-El manager superior es la única autoridad para routing, síntesis, escrituras del workspace, validación, aceptación de revisiones, proyección y transiciones. Los seis perfiles SDD y los cinco revisores son de solo lectura. El plugin solo persiste memoria y SDD delimitados.
+`general` administrado es el único escritor del workspace. El manager superior es la única autoridad para routing, síntesis, aceptación de candidatos y revisiones, transiciones y entrega nativa con Git/GitHub. Los seis perfiles SDD y los cinco revisores son de solo lectura. El plugin solo persiste memoria y SDD delimitados.
 
 El plugin expone 18 herramientas: cinco de memoria semántica y 13 de SDD. Cada mutación SDD exige el contexto confiable de la sesión superior rastreada. El plugin no ejecuta, enruta, edita, delega, selecciona modelos, accede a archivos del workspace ni avanza el ciclo por sí mismo.
 
 ## Artefactos gestionados
 
-La proyección contiene exactamente 15 artefactos:
+La proyección contiene exactamente 18 artefactos:
 
 | Grupo | Cantidad | Contrato |
 | --- | ---: | --- |
-| Manager v31 | 1 | Único escritor de workspace y ciclo. |
+| Manager v35 | 1 | Única autoridad de orquestación, ciclo, Git y GitHub. |
 | Sustitución Explore | 1 | Descubrimiento CodeGraph-first, de solo lectura y denegado por defecto. |
+| General y verificador | 2 | Único escritor del workspace y validación final independiente. |
 | Revisores | 5 | Ocultos y de solo lectura. |
 | Perfiles SDD | 6 | Ocultos, de solo lectura y ligados a modelos. |
 | Plugin v5 | 1 | Solo almacenamiento de memoria y SDD. |
 | Manifiesto de modelos | 1 | Bindings exactos no secretos. |
+| Skill de PR apiladas | 1 | Política nativa estática e independiente del plan de modelos. |
 
 El plan `medium` usa slots Luna Fast, Terra y Sol. Cambiar plan o slot requiere reiniciar OpenCode. `--model` permanece como opción obsoleta sin efecto.
+
+Las implementaciones elegibles usan por defecto un objetivo de 400 líneas efectivas por slice y solo apilan por encima de 800. Tras freeze, verificación y review, manager v35 puede crear branches nuevas normalizadas, commits normales, primeros pushes y PR no draft sin una segunda aprobación rutinaria. Las restricciones explícitas se propagan de forma transitiva. El estado de entrega existente solo se reanuda en modo lectura, nunca hay cleanup automático y siguen sin soporte las mutaciones posteriores de PR, worktrees, historia, merge, force, releases, credenciales o configuración. Los globs de OpenCode expresan política estática; no prueban semántica argv ni comportamiento externo de Git o GitHub.
 
 ## Almacenamiento y SDD
 
@@ -68,6 +72,7 @@ Setup explica los cambios, requiere confirmación, instala launcher y artefactos
 
 - No existe puente de ejecución alternativo ni scheduler Go.
 - No se instalan hooks shell o Git.
+- No existe stack engine Go, writer de worktrees, estado persistente de entrega, herramienta Git/GitHub personalizada ni prueba de entrega por red.
 - No hay instalación automática por red.
 - No existe dependencia Engram ni importación automática de bases legacy.
 - El plugin no obtiene autoridad de filesystem, ejecución, routing, delegación o ciclo.

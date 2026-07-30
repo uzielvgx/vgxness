@@ -4,12 +4,12 @@ The wizard explains and verifies the complete OpenCode setup before changing any
 
 1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
 2. Install or update the permanent versioned launcher.
-3. Install `vgxness-manager`, the read-only `explore` override, five hidden read-only review profiles, and six hidden SDD profiles.
-4. Install the bounded VGXNESS-owned storage plugin and `<config-dir>/vgxness/model-plan.json`.
+3. Install `vgxness-manager`, managed `general` and verifier profiles, the read-only `explore` override, five hidden read-only review profiles, and six hidden SDD profiles.
+4. Install the bounded VGXNESS-owned storage plugin, `<config-dir>/vgxness/model-plan.json`, and the independent autonomous stacked-PR skill.
 5. Read back all managed identities and perform the live OpenCode handshake.
 6. Report recovery guidance if any step fails.
 
-The resulting 15 managed artifacts are 13 agents, storage plugin v5, and the model-plan manifest. The agents are manager v31, one CodeGraph-first read-only `explore` override, five read-only reviewers, and six read-only SDD profiles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The installed manager is the sole workspace and lifecycle writer; the wizard does not install a child execution model, skills, CodeGraph indexes, or Engram.
+The resulting 18 managed artifacts are 15 agents, storage plugin v5, the model-plan manifest, and one skill. The agents are manager v35, managed `general` and verifier profiles, one CodeGraph-first read-only `explore` override, five read-only reviewers, and six read-only SDD profiles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. Managed `general` is the sole workspace writer; the manager is the sole Git/GitHub and lifecycle authority. The wizard installs only the named skill, not a child execution model, CodeGraph index, or Engram.
 
 ## Commands
 
@@ -27,12 +27,15 @@ Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explic
 Preview is ready to apply when OpenCode responds healthily and no managed destination is drifted. Status is healthy when:
 
 - the permanent launcher identity is installed;
-- the manager, `explore` override, all five reviewer identities, and all six SDD identities are installed with the resolved model and variant;
+- all 15 agent identities (manager, `general`, verifier, `explore`, five reviewers, and six SDD profiles) are installed with the resolved model and variant;
 - the exact storage-only plugin is installed;
 - the canonical non-secret model-plan manifest binds all model-aware agent digests;
+- the exact independent stacked-PR skill is installed outside the model plan;
 - the bounded OpenCode handshake succeeds in the workspace.
 
 The wizard never edits `PATH` or `opencode.json`, downloads packages, silently initializes skills or CodeGraph, overwrites foreign content, commits, pushes, or performs destructive Git cleanup.
+
+Setup verifies exact bytes and static policy ordering only. It does not run a network delivery test or claim that OpenCode globs prove argv semantics, that `git` or `gh` will accept a command, or that credentials, hooks, GitHub, or branch protection permit delivery.
 
 Install and uninstall rollback is conservative and never overwrites concurrent content. If durable rollback or restoration cannot complete, setup reports an explicit recovery failure and preserves available backups for inspection. An interrupted exact old/new model-plan switch can be resumed; unrelated drift must be repaired first.
 
