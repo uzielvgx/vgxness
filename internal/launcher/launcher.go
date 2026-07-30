@@ -100,6 +100,17 @@ func Load(executable string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	manifest, err := decodeManifest(data)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if err := Validate(manifest, executable); err != nil {
+		return Manifest{}, err
+	}
+	return manifest, nil
+}
+
+func decodeManifest(data []byte) (Manifest, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var manifest Manifest
@@ -110,7 +121,7 @@ func Load(executable string) (Manifest, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return Manifest{}, ErrInvalid
 	}
-	if err := Validate(manifest, executable); err != nil {
+	if err := Validate(manifest, manifest.LauncherPath); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil

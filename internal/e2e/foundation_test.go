@@ -35,19 +35,19 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		}
 	})
 	t.Run("standard lanes are independent and aggregated", func(t *testing.T) {
-		lanes := []string{"coverage", "race", "static", "linux-e2e", "windows-compile", "windows-install"}
+		lanes := []string{"coverage", "race", "static", "linux-e2e", "fuzz-openspec", "fuzz-launcher-manifest", "windows-compile", "windows-install", "darwin-smoke"}
 		for _, lane := range lanes {
 			if !strings.Contains(workflow, "  "+lane+":\n") {
 				t.Errorf("workflow missing standard lane %q", lane)
 			}
 		}
-		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, race, static, linux-e2e, windows-compile, windows-install]") {
+		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, race, static, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]") {
 			t.Error("only the standard aggregate gate may depend on validation lanes")
 		}
 		if !strings.Contains(workflow, "  quality:\n    name: quality\n    if: ${{ always() }}") {
 			t.Error("workflow must preserve the always-running quality check required by branch protection")
 		}
-		for _, result := range []string{"needs.coverage.result", "needs.race.result", "needs.static.result", "needs.linux-e2e.result", "needs.windows-compile.result", "needs.windows-install.result"} {
+		for _, result := range []string{"needs.coverage.result", "needs.race.result", "needs.static.result", "needs.linux-e2e.result", "needs.fuzz-openspec.result", "needs.fuzz-launcher-manifest.result", "needs.windows-compile.result", "needs.windows-install.result", "needs.darwin-smoke.result"} {
 			if !strings.Contains(workflow, result) {
 				t.Errorf("aggregate gate does not require %q", result)
 			}
@@ -56,24 +56,30 @@ func TestGoCIWorkflowContract(t *testing.T) {
 	t.Run("all standard evidence is declared", func(t *testing.T) {
 		for _, command := range []string{
 			"go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...", "go test -count=1 -race ./...",
+			"go tool cover -func=coverage.out", "required=74.5", "Coverage floor failed:",
 			"go vet ./...", "gofmt -l .", "go mod tidy -diff", "git diff --check",
 			"go mod verify", "go build -trimpath ./...",
 			"go test -tags=e2e -count=1 -run '^TestCleanCheckoutSetupAndNativeSDD$' ./internal/e2e",
+			"go test -count=1 -run '^$' -fuzz '^FuzzParseOpenSpecProjection$' -fuzztime=10s ./internal/sdd",
+			"go test -count=1 -run '^$' -fuzz '^FuzzDecodeManifest$' -fuzztime=10s ./internal/launcher",
 			"GOOS=windows GOARCH=amd64 go test -count=1 -run '^$' -exec=/usr/bin/true ./...",
 			"GOOS=windows GOARCH=amd64 go test -tags=e2e -count=1 -run '^$' -exec=/usr/bin/true ./internal/e2e",
+			"go test -count=1 ./...",
+			"go build -trimpath -o vgxness ./cmd/vgxness", "./vgxness version",
+			"go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/providers/...",
 		} {
 			if !strings.Contains(workflow, command) {
 				t.Errorf("workflow missing gate %q", command)
 			}
 		}
 		if strings.Contains(workflow, "run: go test ./...") {
-			t.Error("coverage is the ordinary test evidence; a duplicate plain full-test pass is forbidden")
+			t.Error("coverage is the ordinary test evidence; an uncounted duplicate plain full-test pass is forbidden")
 		}
 		if strings.Contains(workflow, "go mod tidy\n") || strings.Contains(workflow, "go test -c -o") || strings.Contains(workflow, "while IFS=") {
 			t.Error("workflow contains a mutating tidy or serial Windows test compilation")
 		}
-		if strings.Count(workflow, "run: go mod download") != 4 {
-			t.Error("test lanes with nested offline builds must prefetch modules on cold runners")
+		if strings.Count(workflow, "run: go mod download") != 7 {
+			t.Error("the seven cold-runner test and smoke jobs must prefetch modules")
 		}
 	})
 	t.Run("coverage upload survives failure", func(t *testing.T) {

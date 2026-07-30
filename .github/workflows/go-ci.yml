@@ -36,6 +36,17 @@ jobs:
         run: go mod download
       - name: Test with coverage
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Enforce aggregate coverage floor
+        run: |
+          observed="$(go tool cover -func=coverage.out | awk '/^total:/{gsub("%", "", $3); print $3}')"
+          required=74.5
+          awk -v observed="$observed" -v required="$required" 'BEGIN {
+            if (observed == "" || observed + 0 < required + 0) {
+              printf "Coverage floor failed: observed %s%%, required %.1f%%\n", observed, required
+              exit 1
+            }
+            printf "Coverage floor passed: observed %s%%, required %.1f%%\n", observed, required
+          }'
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -100,6 +111,38 @@ jobs:
       - name: Hermetic clean-checkout E2E
         run: go test -tags=e2e -count=1 -run '^TestCleanCheckoutSetupAndNativeSDD$' ./internal/e2e
 
+  fuzz-openspec:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
+      - name: Prefetch modules
+        run: go mod download
+      - name: Fuzz OpenSpec projection parser
+        run: go test -count=1 -run '^$' -fuzz '^FuzzParseOpenSpecProjection$' -fuzztime=10s ./internal/sdd
+
+  fuzz-launcher-manifest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
+      - name: Prefetch modules
+        run: go mod download
+      - name: Fuzz launcher manifest decoder
+        run: go test -count=1 -run '^$' -fuzz '^FuzzDecodeManifest$' -fuzztime=10s ./internal/launcher
+
   windows-compile:
     runs-on: ubuntu-24.04
     steps:
@@ -134,14 +177,34 @@ jobs:
       - name: Prefetch modules
         run: go mod download
       - name: Installer tests
-        run: go test -count=1 ./internal/launcher ./internal/selfinstall ./internal/setup ./internal/cli
+        run: go test -count=1 ./...
       - name: Native Windows self-install lifecycle
         run: go test -tags=e2e -count=1 -run '^TestWindowsSelfInstallLifecycle$' ./internal/e2e
+
+  darwin-smoke:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
+      - name: Prefetch modules
+        run: go mod download
+      - name: Build and smoke native CLI
+        run: |
+          go build -trimpath -o vgxness ./cmd/vgxness
+          ./vgxness version
+      - name: Test native filesystem and runtime packages
+        run: go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/providers/...
 
   quality:
     name: quality
     if: ${{ always() }}
-    needs: [coverage, race, static, linux-e2e, windows-compile, windows-install]
+    needs: [coverage, race, static, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every standard lane
@@ -150,9 +213,12 @@ jobs:
           RACE_RESULT: ${{ needs.race.result }}
           STATIC_RESULT: ${{ needs.static.result }}
           LINUX_E2E_RESULT: ${{ needs.linux-e2e.result }}
+          FUZZ_OPENSPEC_RESULT: ${{ needs.fuzz-openspec.result }}
+          FUZZ_LAUNCHER_MANIFEST_RESULT: ${{ needs.fuzz-launcher-manifest.result }}
           WINDOWS_COMPILE_RESULT: ${{ needs.windows-compile.result }}
           WINDOWS_INSTALL_RESULT: ${{ needs.windows-install.result }}
+          DARWIN_SMOKE_RESULT: ${{ needs.darwin-smoke.result }}
         run: |
-          for result in "$COVERAGE_RESULT" "$RACE_RESULT" "$STATIC_RESULT" "$LINUX_E2E_RESULT" "$WINDOWS_COMPILE_RESULT" "$WINDOWS_INSTALL_RESULT"; do
+          for result in "$COVERAGE_RESULT" "$RACE_RESULT" "$STATIC_RESULT" "$LINUX_E2E_RESULT" "$FUZZ_OPENSPEC_RESULT" "$FUZZ_LAUNCHER_MANIFEST_RESULT" "$WINDOWS_COMPILE_RESULT" "$WINDOWS_INSTALL_RESULT" "$DARWIN_SMOKE_RESULT"; do
             test "$result" = success || exit 1
           done
