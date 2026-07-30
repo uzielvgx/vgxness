@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,11 @@ type reinstallPendingEntry struct {
 	SHA256 string `json:"sha256"`
 }
 
+type reinstallPendingEvidence struct {
+	info   os.FileInfo
+	digest [sha256.Size]byte
+}
+
 // ReinstallPending inspects provider-owned evidence without mutating it.
 func (service *Integration) ReinstallPending(ctx context.Context, options integration.Options) (bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -66,13 +72,13 @@ func (service *Integration) ReinstallPending(ctx context.Context, options integr
 	return true, nil
 }
 
-func (service *Integration) writeReinstallPending(ctx context.Context, root string, layout integration.ManagedLayout) (os.FileInfo, error) {
+func (service *Integration) writeReinstallPending(ctx context.Context, root string, layout integration.ManagedLayout) (reinstallPendingEvidence, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	operation := make([]byte, 16)
 	if _, err := rand.Read(operation); err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	marker := reinstallPendingMarker{
 		Version: reinstallPendingVersion, Operation: hex.EncodeToString(operation), Root: root,
@@ -83,43 +89,43 @@ func (service *Integration) writeReinstallPending(ctx context.Context, root stri
 		marker.Artifacts[index] = reinstallPendingEntry{Path: artifact.RelativePath, SHA256: artifact.SHA256}
 	}
 	if err := validateReinstallPending(root, marker); err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	body, err := json.Marshal(marker)
 	if err != nil || len(body)+1 > maxReinstallPendingBytes {
-		return nil, fmt.Errorf("encode reinstall pending marker")
+		return reinstallPendingEvidence{}, fmt.Errorf("encode reinstall pending marker")
 	}
 	body = append(body, '\n')
 	markerPath := filepath.Join(root, reinstallPendingName)
 	file, err := os.OpenFile(markerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	defer file.Close()
 	if err := file.Chmod(0o600); err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	if _, err := file.Write(body); err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	if err := file.Sync(); err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	opened, err := file.Stat()
 	if err != nil || !privatePendingFile(opened) {
-		return nil, fmt.Errorf("verify reinstall pending marker")
+		return reinstallPendingEvidence{}, fmt.Errorf("verify reinstall pending marker")
 	}
 	if err := file.Close(); err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	if err := syncDirectory(root); err != nil {
-		return nil, err
+		return reinstallPendingEvidence{}, err
 	}
 	after, err := os.Lstat(markerPath)
 	if err != nil || !privatePendingFile(after) || !os.SameFile(opened, after) {
-		return nil, fmt.Errorf("verify reinstall pending marker identity")
+		return reinstallPendingEvidence{}, fmt.Errorf("verify reinstall pending marker identity")
 	}
-	return opened, nil
+	return reinstallPendingEvidence{info: opened, digest: sha256.Sum256(body)}, nil
 }
 
 func readReinstallPending(root string) (reinstallPendingMarker, os.FileInfo, error) {
@@ -197,10 +203,9 @@ func pendingInventoryMatches(marker reinstallPendingMarker, layout integration.M
 	return true
 }
 
-func clearReinstallPending(root string, expected os.FileInfo) error {
+func clearReinstallPending(root string, expected reinstallPendingEvidence) error {
 	markerPath := filepath.Join(root, reinstallPendingName)
-	current, err := os.Lstat(markerPath)
-	if err != nil || !os.SameFile(current, expected) || !privatePendingFile(current) {
+	if err := matchesReinstallPendingEvidence(markerPath, expected); err != nil {
 		return fmt.Errorf("%w: reinstall pending marker changed before cleanup", integration.ErrRecovery)
 	}
 	quarantineDirectory, err := os.MkdirTemp(root, ".vgxness-reinstall-marker-*")
@@ -212,8 +217,7 @@ func clearReinstallPending(root string, expected os.FileInfo) error {
 		_ = os.Remove(quarantineDirectory)
 		return fmt.Errorf("%w: quarantine reinstall marker: %v", integration.ErrRecovery, err)
 	}
-	quarantined, err := os.Lstat(quarantine)
-	if err != nil || !os.SameFile(quarantined, expected) {
+	if err := matchesReinstallPendingEvidence(quarantine, expected); err != nil {
 		restoreErr := restoreQuarantinedFile(quarantine, markerPath)
 		return fmt.Errorf("%w: reinstall marker replaced during cleanup: %v", integration.ErrRecovery, restoreErr)
 	}
@@ -230,6 +234,29 @@ func clearReinstallPending(root string, expected os.FileInfo) error {
 	}
 	if err := syncDirectory(root); err != nil {
 		return fmt.Errorf("%w: sync reinstall marker cleanup: %v", integration.ErrRecovery, err)
+	}
+	return nil
+}
+
+func matchesReinstallPendingEvidence(markerPath string, expected reinstallPendingEvidence) error {
+	before, err := os.Lstat(markerPath)
+	if err != nil || expected.info == nil || !privatePendingFile(before) || !os.SameFile(before, expected.info) || before.Size() <= 0 || before.Size() > maxReinstallPendingBytes {
+		return fmt.Errorf("invalid reinstall pending marker identity")
+	}
+	file, err := os.Open(markerPath)
+	if err != nil {
+		return err
+	}
+	opened, statErr := file.Stat()
+	if statErr != nil || !privatePendingFile(opened) || !os.SameFile(before, opened) || !os.SameFile(opened, expected.info) {
+		_ = file.Close()
+		return fmt.Errorf("invalid reinstall pending marker identity")
+	}
+	body, readErr := io.ReadAll(io.LimitReader(file, maxReinstallPendingBytes+1))
+	closeErr := file.Close()
+	after, pathErr := os.Lstat(markerPath)
+	if readErr != nil || closeErr != nil || pathErr != nil || len(body) > maxReinstallPendingBytes || !privatePendingFile(after) || !os.SameFile(after, expected.info) || sha256.Sum256(body) != expected.digest {
+		return fmt.Errorf("invalid reinstall pending marker evidence")
 	}
 	return nil
 }
