@@ -30,18 +30,19 @@ El plugin expone 18 herramientas: cinco de memoria semántica y 13 de SDD. Cada 
 
 ## Artefactos gestionados
 
-La proyección contiene exactamente 19 artefactos:
+La proyección contiene exactamente 20 artefactos:
 
 | Grupo | Cantidad | Contrato |
 | --- | ---: | --- |
 | Manager v35 | 1 | Única autoridad de orquestación, ciclo, Git y GitHub. |
 | Sustitución Explore | 1 | Descubrimiento CodeGraph-first, de solo lectura y denegado por defecto. |
-| General y verificador | 2 | Único escritor del workspace y validación final independiente. |
+| General y verificador | 2 | `general`: implementación delegada y único escritor del workspace; verificador: validación final independiente y no mutante. |
 | Revisores | 5 | Ocultos y de solo lectura. |
 | Perfiles SDD | 6 | Ocultos, de solo lectura y ligados a modelos. |
 | Plugin v5 | 1 | Solo almacenamiento de memoria y SDD. |
 | Manifiesto de modelos | 1 | Bindings exactos no secretos. |
-| Overlay de agente predeterminado | 1 | Selector exacto `opencode.jsonc` para `vgxness-manager`; el `opencode.json` del usuario no se modifica. |
+| Selección de agente predeterminado | 1 | Una fusión semántica establece `default_agent="vgxness-manager"` en `opencode.json` y conserva valores JSON no relacionados; conserva intactos los bytes de cualquier `opencode.jsonc` existente. |
+| Metadatos de restauración | 1 | El registro acotado `<config-dir>/vgxness/default-agent.json` indica si `opencode.json` existía y cualquier valor predeterminado explícito anterior, para restaurarlo o eliminar una configuración creada por setup durante la desinstalación. |
 | Skill de PR apiladas | 1 | Política nativa estática e independiente del plan de modelos. |
 
 El plan `medium` usa slots Luna Fast, Terra y Sol. Cambiar plan o slot requiere reiniciar OpenCode. `--model` permanece como opción obsoleta sin efecto.
@@ -56,7 +57,7 @@ El ciclo es `explore -> proposal -> spec -> design -> tasks -> apply -> verify -
 
 ## Setup y salud
 
-Setup explica los cambios, requiere confirmación, instala launcher y artefactos exactos, los relee y ejecuta `opencode --version` con límites dentro de un workspace absoluto existente. Saludable exige OpenCode major 1 y versión mínima 1.18.4. Setup no descarga paquetes, modifica `PATH` ni el `opencode.json` del usuario, inicializa CodeGraph ni afirma disponibilidad de modelos. Instala un overlay `opencode.jsonc` exacto para que OpenCode seleccione `vgxness-manager` por defecto y rechaza contenido ajeno en esa ruta administrada.
+Setup explica los cambios, requiere confirmación, instala launcher y artefactos exactos, los relee y ejecuta `opencode --version` con límites dentro de un workspace absoluto existente. Saludable exige OpenCode major 1 y versión mínima 1.18.4. Setup no descarga paquetes, modifica `PATH`, inicializa CodeGraph ni afirma disponibilidad de modelos. Usa una fusión semántica para seleccionar `vgxness-manager` mediante `opencode.json` y conservar valores JSON no relacionados; conserva intactos los bytes de cualquier `opencode.jsonc` existente. El registro acotado `<config-dir>/vgxness/default-agent.json` indica si `opencode.json` existía y cualquier valor predeterminado explícito anterior, para restaurarlo o eliminar una configuración creada por setup durante la desinstalación.
 
 ## Principios
 

@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-- Installs a dedicated `opencode.jsonc` overlay that makes `vgxness-manager` the OpenCode default while preserving the user's `opencode.json` and refusing foreign overlay content.
+- Installs 20 managed artifacts, including a semantic merge that sets `default_agent="vgxness-manager"` in `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged, and bounded `default-agent.json` restoration metadata records whether `opencode.json` existed and any prior explicit default so uninstall can restore that default or remove a config created by setup.
 - Keeps manager v35 and the current 14-agent projection as the only managed agent catalogue, removing historical manager, agent, and model-plan compatibility sources.
 - Grants global OpenCode tool permission to manager v35, managed `general`, and verifier while retaining their distinct behavioral roles.
 - Adds the independent managed `vgxness-autonomous-stacked-pr` skill for bounded native Git/`gh` delivery after freeze, verification, and review.

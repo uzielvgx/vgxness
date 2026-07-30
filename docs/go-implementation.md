@@ -41,7 +41,7 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 ## Managed projection
 
-The OpenCode projection contains 19 exact managed artifacts:
+The OpenCode projection contains 20 exact managed artifacts:
 
 - manager v35 with global tool permission;
 - managed `general` and verifier profiles with global tool permission and distinct implementation/verification roles;
@@ -50,7 +50,8 @@ The OpenCode projection contains 19 exact managed artifacts:
 - six hidden read-only SDD profiles;
 - storage plugin v5;
 - one model-plan manifest;
-- one dedicated `opencode.jsonc` overlay selecting `vgxness-manager` as OpenCode's default agent without modifying the user's `opencode.json`;
+- one `opencode.json` default-agent selection using a semantic merge that preserves unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged;
+- one bounded `<config-dir>/vgxness/default-agent.json` restoration record of whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup;
 - one independent `vgxness-autonomous-stacked-pr` skill.
 
 The model plan contains exactly 15 agents and does not contain the skill. Manager, agent, and model-plan recognition is current-only; older versions are preserved as drift and require explicit removal or migration outside the integration. Exact catalogued storage-plugin predecessors remain recognizable. Foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
