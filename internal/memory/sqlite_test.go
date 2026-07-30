@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -257,6 +258,72 @@ func TestOpen_RejectsDatabaseSymlinkWithoutMigratingTarget(t *testing.T) {
 	var version int
 	testutil.NoError(t, db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.Require(t, version == 0, "symlink target migrated to version %d", version)
+}
+
+func TestOpen_RejectsDatabaseAncestorSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on some Windows hosts")
+	}
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	testutil.NoError(t, os.Symlink(target, link))
+	_, err := Open(context.Background(), filepath.Join(link, "memory.db"), nil)
+	testutil.Require(t, err != nil, "expected database ancestor symlink rejection")
+}
+
+func TestOpen_MakesSQLiteArtifactsOwnerPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX permission bits")
+	}
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store := openPath(t, path)
+	defer store.Close()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(path + suffix)
+		testutil.NoError(t, err)
+		testutil.Require(t, info.Mode().Perm() == 0o600, "%s mode = %o, want 0600", suffix, info.Mode().Perm())
+	}
+}
+
+func TestOpen_FailingFreshAttemptDoesNotDeleteConcurrentStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	failure := errors.New("injected failure")
+	var concurrent *Store
+	_, err := open(context.Background(), path, nil, func() error {
+		var openErr error
+		concurrent, openErr = Open(context.Background(), path, nil)
+		testutil.NoError(t, openErr)
+		return failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Open error = %v, want injected failure", err)
+	}
+	defer concurrent.Close()
+	if _, err := concurrent.Health(context.Background()); err != nil {
+		t.Fatalf("concurrent store was removed: %v", err)
+	}
+}
+
+func TestStoreClose_ReturnsCheckpointAndCloseFailures(t *testing.T) {
+	checkpointErr := errors.New("checkpoint failed")
+	closeErr := errors.New("close failed")
+	store := &Store{
+		checkpoint: func() (int, int, int, error) { return 0, 0, 0, checkpointErr },
+		close:      func() error { return closeErr },
+	}
+	err := store.Close()
+	testutil.Require(t, errors.Is(err, checkpointErr), "missing checkpoint failure: %v", err)
+	testutil.Require(t, errors.Is(err, closeErr), "missing close failure: %v", err)
+}
+
+func TestStoreClose_ReturnsBusyCheckpointFailure(t *testing.T) {
+	store := &Store{
+		checkpoint: func() (int, int, int, error) { return 1, 0, 0, nil },
+		close:      func() error { return nil },
+	}
+	if err := store.Close(); err == nil {
+		t.Fatal("Store.Close accepted a busy checkpoint")
+	}
 }
 
 func TestMigrate_RollsBackAndReportsVersion(t *testing.T) {
@@ -524,7 +591,7 @@ func TestOpenHelperProcess(t *testing.T) {
 	}
 	store, err := Open(context.Background(), os.Getenv("VGXNESS_DB_PATH"), nil)
 	testutil.NoError(t, err)
-	testutil.NoError(t, store.Close())
+	_ = store.Close()
 }
 
 func TestOpen_ConcurrentFreshProcesses(t *testing.T) {

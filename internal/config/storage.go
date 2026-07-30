@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 var ErrInvalid = errors.New("invalid")
@@ -32,6 +33,13 @@ func Prepare(ctx context.Context, opts Options) (Paths, error) {
 	if err != nil {
 		return Paths{}, err
 	}
+	if err := rejectSymlinkPath(root); err != nil {
+		return Paths{}, err
+	}
+	root, err = canonicalizeSystemPath(root)
+	if err != nil {
+		return Paths{}, err
+	}
 	_, statErr := os.Stat(root)
 	createdPath := ""
 	if os.IsNotExist(statErr) {
@@ -43,13 +51,29 @@ func Prepare(ctx context.Context, opts Options) (Paths, error) {
 		}
 		return Paths{}, fmt.Errorf("prepare storage root: %w", err)
 	}
+	if err := secureDirectory(root); err != nil {
+		if createdPath != "" {
+			cleanupCreatedRoot(root)
+		}
+		return Paths{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		if createdPath != "" {
 			cleanupCreatedRoot(root)
 		}
 		return Paths{}, err
 	}
-	return pathsForRoot(opts, root)
+	paths, err := pathsForRoot(opts, root)
+	if err != nil {
+		return Paths{}, err
+	}
+	if err := secureDirectory(filepath.Dir(paths.Database)); err != nil {
+		return Paths{}, err
+	}
+	if err := rejectSymlinkPath(paths.Database); err != nil {
+		return Paths{}, err
+	}
+	return paths, nil
 }
 
 func PathsFor(opts Options) (Paths, error) {
@@ -72,7 +96,7 @@ func pathsForRoot(opts Options, root string) (Paths, error) {
 				return Paths{}, fmt.Errorf("resolve home: %w", err)
 			}
 		}
-		database = filepath.Join(filepath.Clean(home), ".vgxness", "memory.db")
+		database = filepath.Join(filepath.Dir(filepath.Dir(root)), "memory.db")
 		if database != filepath.Join(root, "memory.db") {
 			legacy = filepath.Join(root, "memory.db")
 		}
@@ -85,6 +109,72 @@ func pathsForRoot(opts Options, root string) (Paths, error) {
 }
 
 func cleanupCreatedRoot(root string) { _ = os.Remove(root) }
+
+func secureDirectory(path string) error {
+	if err := rejectSymlinkPath(path); err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("prepare storage root: %w", ErrInvalid)
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		return fmt.Errorf("secure storage root: %w", err)
+	}
+	return nil
+}
+
+func rejectSymlinkPath(path string) error {
+	for candidate := filepath.Clean(path); ; candidate = filepath.Dir(candidate) {
+		info, err := os.Lstat(candidate)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 && !isSystemPathSymlink(candidate) {
+			return fmt.Errorf("%w: storage path must not traverse symlinks", ErrInvalid)
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("inspect storage path: %w", err)
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return nil
+		}
+	}
+}
+
+// isSystemPathSymlink permits only macOS's documented /var compatibility
+// symlink. All other symlinks in a configured storage path are rejected.
+func isSystemPathSymlink(path string) bool {
+	if runtime.GOOS != "darwin" || path != "/var" {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	return err == nil && resolved == "/private/var"
+}
+
+func canonicalizeSystemPath(path string) (string, error) {
+	clean := filepath.Clean(path)
+	ancestor := clean
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("inspect storage path: %w", err)
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			break
+		}
+		ancestor = parent
+	}
+	canonical, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return "", fmt.Errorf("resolve storage path: %w", err)
+	}
+	relative, err := filepath.Rel(ancestor, clean)
+	if err != nil {
+		return "", fmt.Errorf("resolve storage path: %w", err)
+	}
+	return filepath.Join(canonical, relative), nil
+}
 
 func firstMissing(path string) string {
 	parent := filepath.Dir(path)
