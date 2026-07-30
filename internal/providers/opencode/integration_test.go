@@ -81,6 +81,10 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.NoError(t, err)
 	manifestInfo, err := os.Stat(installed.ManifestPath)
 	testutil.NoError(t, err)
+	defaultAgentData, err := os.ReadFile(installed.DefaultAgentPath)
+	testutil.NoError(t, err)
+	defaultAgentInfo, err := os.Stat(installed.DefaultAgentPath)
+	testutil.NoError(t, err)
 	_, configErr := os.Stat(filepath.Join(configDirectory, "opencode.json"))
 	testutil.Require(t,
 		installed.State == integration.StateInstalled &&
@@ -88,15 +92,18 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
 			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
-			installed.ArtifactCount == 18 &&
+			installed.ArtifactCount == 19 &&
 			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired && os.IsNotExist(configErr) &&
+			installed.DefaultAgent == defaultAgentName &&
+			installed.DefaultAgentPath == filepath.Join(configDirectory, defaultAgentOverlayName) &&
+			bytes.Equal(defaultAgentData, []byte(defaultAgentOverlay)) &&
 			bytes.Equal(data, bundle.agents[managerAgentName]) &&
 			string(toolData) == string(expectedTool),
 		"unexpected install: %#v", installed,
 	)
 	if runtime.GOOS != "windows" {
-		testutil.Require(t, info.Mode().Perm() == 0o600 && toolInfo.Mode().Perm() == 0o600 && manifestInfo.Mode().Perm() == 0o600, "artifact modes=%o/%o/%o", info.Mode().Perm(), toolInfo.Mode().Perm(), manifestInfo.Mode().Perm())
+		testutil.Require(t, info.Mode().Perm() == 0o600 && toolInfo.Mode().Perm() == 0o600 && manifestInfo.Mode().Perm() == 0o600 && defaultAgentInfo.Mode().Perm() == 0o600, "artifact modes=%o/%o/%o/%o", info.Mode().Perm(), toolInfo.Mode().Perm(), manifestInfo.Mode().Perm(), defaultAgentInfo.Mode().Perm())
 	}
 
 	status, err := service.Status(context.Background(), options)
@@ -114,6 +121,47 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
 	skill, err := os.ReadFile(skillPath)
 	testutil.Require(t, err == nil && bytes.Equal(skill, []byte(autonomousStackedPRSkill)), "managed skill differs: %v", err)
+}
+
+func TestIntegration_DefaultAgentOverlayPreservesOpenCodeJSON(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	configPath := filepath.Join(configDirectory, "opencode.json")
+	config := []byte("{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"share\": \"disabled\",\n  \"mcp\": {\"codegraph\": {\"enabled\": true}}\n}\n")
+	testutil.NoError(t, os.WriteFile(configPath, config, 0o600))
+
+	service := NewIntegration()
+	installed, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	overlay, err := os.ReadFile(filepath.Join(configDirectory, defaultAgentOverlayName))
+	testutil.NoError(t, err)
+	testutil.Require(t,
+		bytes.Equal(after, config) &&
+			bytes.Equal(overlay, []byte(defaultAgentOverlay)) &&
+			installed.DefaultAgent == defaultAgentName,
+		"shared config changed or overlay missing: installed=%+v after=%q overlay=%q", installed, after, overlay,
+	)
+}
+
+func TestIntegration_RefusesForeignDefaultAgentOverlay(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	overlayPath := filepath.Join(configDirectory, defaultAgentOverlayName)
+	foreign := []byte("{\"default_agent\":\"build\"}\n")
+	testutil.NoError(t, os.WriteFile(overlayPath, foreign, 0o600))
+
+	service := NewIntegration()
+	preview, previewErr := service.Preview(context.Background(), integration.Options{ConfigDir: configDirectory})
+	_, installErr := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	after, readErr := os.ReadFile(overlayPath)
+	testutil.Require(t,
+		previewErr == nil && preview.State == integration.StateDrifted &&
+			errors.Is(installErr, integration.ErrConflict) &&
+			readErr == nil && bytes.Equal(after, foreign),
+		"foreign overlay changed: preview=%+v previewErr=%v installErr=%v readErr=%v after=%q", preview, previewErr, installErr, readErr, after,
+	)
 }
 
 func TestIntegrationRefusesModifiedModelPlanManifest(t *testing.T) {

@@ -48,9 +48,16 @@ const (
 	reviewRefuterName            = "vgxness-review-refuter.md"
 	memoryPluginName             = "vgxness.ts"
 	autonomousStackedPRSkillName = "vgxness-autonomous-stacked-pr"
+	defaultAgentName             = "vgxness-manager"
+	defaultAgentOverlayName      = "opencode.jsonc"
 	maxArtifactBytes             = 512 * 1024
 	maxMemoryOutputBytes         = 128 * 1024
-	nativeReviewSharedContract   = `
+	defaultAgentOverlay          = `{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "vgxness-manager"
+}
+`
+	nativeReviewSharedContract = `
 # Bounded review contract
 
 Accept only one parent mission containing:
@@ -688,6 +695,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	toolPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+	defaultAgentPath := filepath.Join(configDirectory, defaultAgentOverlayName)
 	plan, err := requestedModelPlan(options, configDirectory)
 	if err != nil {
 		return inspection{}, err
@@ -702,6 +710,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		ModelPlan: plan.config.ActivePlan, ModelProvider: plan.resolved.Provider,
 		ModelEfficient: plan.config.Efficient, ModelBalanced: plan.config.Balanced, ModelFrontier: plan.config.Frontier,
 		ManifestPath: manifestPath, ManifestSHA256: artifactSHA256(plan.manifest),
+		DefaultAgent: defaultAgentName, DefaultAgentPath: defaultAgentPath,
 	}
 	exists, drifted, containerErr := inspectDirectory(configDirectory)
 	if containerErr != nil {
@@ -733,6 +742,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
 		{path: skillPath, content: []byte(autonomousStackedPRSkill), backup: "vgxness-autonomous-stacked-pr-skill"},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
+		{path: defaultAgentPath, content: []byte(defaultAgentOverlay), backup: "vgxness-default-agent"},
 	}}
 	state.result.ArtifactCount = len(state.artifacts)
 	if drifted {

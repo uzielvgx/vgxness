@@ -68,6 +68,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	general := filepath.Join(configDirectory, "agents", "general.md")
 	verifier := filepath.Join(configDirectory, "agents", "vgxness-verifier.md")
 	memoryPlugin := filepath.Join(configDirectory, "plugins", "vgxness.ts")
+	defaultAgentConfig := filepath.Join(configDirectory, "opencode.jsonc")
 	reviewers := []string{
 		"vgxness-review-risk.md",
 		"vgxness-review-readability.md",
@@ -84,7 +85,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"vgxness-sdd-apply.md",
 	}
 	managedProfiles := append(reviewerPaths(configDirectory, reviewers), reviewerPaths(configDirectory, sddProfiles)...)
-	for _, path := range append([]string{launcher, manager, general, verifier, memoryPlugin}, managedProfiles...) {
+	for _, path := range append([]string{launcher, manager, general, verifier, memoryPlugin, defaultAgentConfig}, managedProfiles...) {
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.Mode().IsRegular() {
 			t.Fatalf("expected installed regular file %s: %v", path, statErr)
@@ -107,6 +108,10 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	verifierData, verifierErr := os.ReadFile(verifier)
 	if generalErr != nil || verifierErr != nil || !bytes.Contains(generalData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(generalData, []byte("delegated implementation worker")) || !bytes.Contains(verifierData, []byte("artifact: opencode-agent/vgxness-verifier; version: 2")) || !bytes.Contains(verifierData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(verifierData, []byte("PASS|FAIL|INCONCLUSIVE")) {
 		t.Fatalf("setup did not install managed writer/verifier contracts: general=%v verifier=%v", generalErr, verifierErr)
+	}
+	defaultAgentData, defaultAgentErr := os.ReadFile(defaultAgentConfig)
+	if defaultAgentErr != nil || !bytes.Contains(defaultAgentData, []byte(`"default_agent": "vgxness-manager"`)) {
+		t.Fatalf("setup did not select vgxness-manager by default: %v", defaultAgentErr)
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {
 		t.Fatalf("retire source executable: %v", err)

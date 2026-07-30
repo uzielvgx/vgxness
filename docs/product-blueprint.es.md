@@ -30,7 +30,7 @@ El plugin expone 18 herramientas: cinco de memoria semántica y 13 de SDD. Cada 
 
 ## Artefactos gestionados
 
-La proyección contiene exactamente 18 artefactos:
+La proyección contiene exactamente 19 artefactos:
 
 | Grupo | Cantidad | Contrato |
 | --- | ---: | --- |
@@ -41,6 +41,7 @@ La proyección contiene exactamente 18 artefactos:
 | Perfiles SDD | 6 | Ocultos, de solo lectura y ligados a modelos. |
 | Plugin v5 | 1 | Solo almacenamiento de memoria y SDD. |
 | Manifiesto de modelos | 1 | Bindings exactos no secretos. |
+| Overlay de agente predeterminado | 1 | Selector exacto `opencode.jsonc` para `vgxness-manager`; el `opencode.json` del usuario no se modifica. |
 | Skill de PR apiladas | 1 | Política nativa estática e independiente del plan de modelos. |
 
 El plan `medium` usa slots Luna Fast, Terra y Sol. Cambiar plan o slot requiere reiniciar OpenCode. `--model` permanece como opción obsoleta sin efecto.
@@ -55,7 +56,7 @@ El ciclo es `explore -> proposal -> spec -> design -> tasks -> apply -> verify -
 
 ## Setup y salud
 
-Setup explica los cambios, requiere confirmación, instala launcher y artefactos exactos, los relee y ejecuta `opencode --version` con límites dentro de un workspace absoluto existente. Saludable exige OpenCode major 1 y versión mínima 1.18.4. Setup no descarga paquetes, modifica `PATH` u `opencode.json`, inicializa CodeGraph ni afirma disponibilidad de modelos.
+Setup explica los cambios, requiere confirmación, instala launcher y artefactos exactos, los relee y ejecuta `opencode --version` con límites dentro de un workspace absoluto existente. Saludable exige OpenCode major 1 y versión mínima 1.18.4. Setup no descarga paquetes, modifica `PATH` ni el `opencode.json` del usuario, inicializa CodeGraph ni afirma disponibilidad de modelos. Instala un overlay `opencode.jsonc` exacto para que OpenCode seleccione `vgxness-manager` por defecto y rechaza contenido ajeno en esa ruta administrada.
 
 ## Principios
 

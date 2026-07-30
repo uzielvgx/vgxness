@@ -118,7 +118,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	fmt.Fprintf(stdout, "Pasos 3–4: %d artefactos de manager, general, verificador, Explore, revisores, agentes SDD, almacenamiento y plan verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
 	fmt.Fprintf(stdout, "Paso 5: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
 	fmt.Fprintln(stdout, "Paso 6: no fue necesaria recuperación.")
-	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode y selecciona vgxness-manager para cargar el plan instalado.\n", result.Changed)
+	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode para cargar vgxness-manager como agente predeterminado.\n", result.Changed)
 	return 0
 }
 
@@ -141,6 +141,7 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintf(writer, "  Plan de modelos: %s provider=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider))
 	fmt.Fprintf(writer, "  Slots: efficient=%s balanced=%s frontier=%s\n", terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier))
 	fmt.Fprintf(writer, "  Manifest: %s\n", terminalSafe(plan.Integration.ManifestPath))
+	fmt.Fprintf(writer, "  Agente predeterminado: %s (%s)\n", terminalSafe(plan.Integration.DefaultAgent), terminalSafe(plan.Integration.DefaultAgentPath))
 	fmt.Fprintf(writer, "  Workspace de verificación: %s\n", terminalSafe(workspace))
 	fmt.Fprintln(writer, "  Activación: reinicia OpenCode después de aplicar o cambiar el plan.")
 	fmt.Fprintln(writer, "\nLímites: no se editará PATH, no se descargará software, no se sobrescribirá contenido ajeno y no se habilitará shell arbitrario.")
@@ -152,6 +153,7 @@ func renderSetupStatus(writer io.Writer, plan setupflow.Plan, workspace string) 
 	fmt.Fprintf(writer, "Launcher: state=%s path=%s active_sha256=%s\n", plan.SelfInstall.State, terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.ActiveSHA256)
 	fmt.Fprintf(writer, "Integración: state=%s projection=native+sdd-storage artifacts=%d manager=%s storage_plugin=%s\n", plan.Integration.State, plan.Integration.ArtifactCount, terminalSafe(plan.Integration.Path), terminalSafe(plan.Integration.ToolPath))
 	fmt.Fprintf(writer, "Plan de modelos: %s provider=%s efficient=%s balanced=%s frontier=%s manifest=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider), terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier), terminalSafe(plan.Integration.ManifestPath))
+	fmt.Fprintf(writer, "Agente predeterminado: %s config=%s\n", terminalSafe(plan.Integration.DefaultAgent), terminalSafe(plan.Integration.DefaultAgentPath))
 	fmt.Fprintf(writer, "Handshake: ok=%t status=%s workspace=%s\n", plan.Handshake.OK, terminalSafe(plan.Handshake.Status.String()), terminalSafe(workspace))
 	if plan.Ready {
 		fmt.Fprintln(writer, "Resultado: configuración completa y saludable.")

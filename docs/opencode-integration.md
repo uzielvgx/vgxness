@@ -1,6 +1,6 @@
 # OpenCode integration
 
-VGXNESS installs 18 managed artifacts: 15 agents (`vgxness-manager` v35, managed `general` and verifier profiles, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, one non-secret model-plan manifest, and the independent `vgxness-autonomous-stacked-pr` skill. The skill is not model-bound and is absent from the model-plan manifest and `opencode.json`.
+VGXNESS installs 19 managed artifacts: 15 agents (`vgxness-manager` v35, managed `general` and verifier profiles, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, one non-secret model-plan manifest, a dedicated `opencode.jsonc` default-agent overlay, and the independent `vgxness-autonomous-stacked-pr` skill. The skill is not model-bound and is absent from the model-plan manifest and OpenCode configuration.
 
 The plugin exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
 
@@ -44,7 +44,7 @@ vgxness integrate opencode uninstall
 
 `--config-dir` can select a non-default OpenCode configuration directory. `--model-plan low|medium|high` selects the active matrix; `--model-efficient`, `--model-balanced`, and `--model-frontier` replace individual exact provider/model slots. Flags overlay the verified installed manifest, so omitted plan and slot values are preserved rather than reset. All slots must use one provider. The deprecated singular `--model` flag remains a no-op compatibility option and never overrides the plan.
 
-Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna-fast`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS does not create or modify `opencode.json` and the storage plugin does not route models.
+Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna-fast`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS leaves the user's `opencode.json` untouched and installs an exact, single-purpose `opencode.jsonc` overlay containing `default_agent: "vgxness-manager"`. Because OpenCode loads JSONC after JSON, the overlay selects the manager across interfaces. A pre-existing foreign `opencode.jsonc` is preserved and blocks installation instead of being overwritten. The storage plugin does not route models.
 
 Preview and status are read-only. The managed agent catalogue contains only manager v35 and the current 14 agent profiles. Older manager, agent, and model-plan artifacts are treated as drift and preserved byte-for-byte; they are never upgraded automatically. Exact catalogued storage-plugin predecessors remain upgradeable. Foreign, modified, malformed, equal-version drifted, or newer content is likewise refused and preserved, including content at the nested skill path. Uninstall removes only exact managed artifacts, writes recoverable hard-link backups, and refuses drift. A failed rollback or restore is returned as an explicit `recovery` failure instead of being hidden.
 
@@ -134,7 +134,7 @@ Manager, managed `general`, and verifier use a single global `allow` permission 
 The integration is installed only when manager v35, all other 14 agents, storage plugin v5, the model-plan manifest, and the autonomous stacked-PR skill match their managed identities exactly. Setup health combines:
 
 1. the permanent VGXNESS launcher is installed and verified;
-2. all 18 managed artifacts are installed without drift;
+2. all 19 managed artifacts are installed without drift, including the default-agent overlay;
 3. the bounded OpenCode handshake succeeds for the selected workspace.
 
 Restart OpenCode Desktop after installation or a plan switch so it reloads the profiles, model bindings, variants, storage plugin, and managed skill.

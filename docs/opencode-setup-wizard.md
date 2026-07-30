@@ -5,11 +5,11 @@ The wizard explains and verifies the complete OpenCode setup before changing any
 1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
 2. Install or update the permanent versioned launcher.
 3. Install `vgxness-manager`, managed `general` and verifier profiles, the read-only `explore` override, five hidden read-only review profiles, and six hidden SDD profiles.
-4. Install the bounded VGXNESS-owned storage plugin, `<config-dir>/vgxness/model-plan.json`, and the independent autonomous stacked-PR skill.
+4. Install the bounded VGXNESS-owned storage plugin, `<config-dir>/vgxness/model-plan.json`, the dedicated `opencode.jsonc` default-agent overlay, and the independent autonomous stacked-PR skill.
 5. Read back all managed identities and perform the live OpenCode handshake.
 6. Report recovery guidance if any step fails.
 
-The resulting 18 managed artifacts are 15 agents, storage plugin v5, the model-plan manifest, and one skill. The agents are manager v35, managed `general` and verifier profiles, one CodeGraph-first read-only `explore` override, five read-only reviewers, and six read-only SDD profiles. Manager, `general`, and verifier use global `allow` permissions while retaining orchestration, delegated implementation, and non-mutating verification roles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The wizard installs only the named skill, not a child execution model, CodeGraph index, or Engram.
+The resulting 19 managed artifacts are 15 agents, storage plugin v5, the model-plan manifest, one default-agent overlay, and one skill. The agents are manager v35, managed `general` and verifier profiles, one CodeGraph-first read-only `explore` override, five read-only reviewers, and six read-only SDD profiles. The overlay makes `vgxness-manager` the OpenCode default without modifying the user's `opencode.json`. Manager, `general`, and verifier use global `allow` permissions while retaining orchestration, delegated implementation, and non-mutating verification roles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The wizard installs only the named skill, not a child execution model, CodeGraph index, or Engram.
 
 ## Commands
 
@@ -31,9 +31,10 @@ Preview is ready to apply when OpenCode responds healthily and no managed destin
 - the exact storage-only plugin is installed;
 - the canonical non-secret model-plan manifest binds all model-aware agent digests;
 - the exact independent stacked-PR skill is installed outside the model plan;
+- the exact `opencode.jsonc` overlay selects `vgxness-manager` as the default agent;
 - the bounded OpenCode handshake succeeds in the workspace.
 
-The wizard never edits `PATH` or `opencode.json`, downloads packages, silently initializes skills or CodeGraph, overwrites foreign content, commits, pushes, or performs destructive Git cleanup.
+The wizard never edits `PATH` or the user's `opencode.json`, downloads packages, silently initializes skills or CodeGraph, overwrites foreign content, commits, pushes, or performs destructive Git cleanup. It owns only the exact single-purpose `opencode.jsonc` overlay and refuses a foreign file at that path.
 
 Setup verifies exact bytes and static policy ordering only. It does not run a network delivery test or claim that OpenCode globs prove argv semantics, that `git` or `gh` will accept a command, or that credentials, hooks, GitHub, or branch protection permit delivery.
 
