@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -437,6 +439,364 @@ func TestReinstallRevalidatesPredecessorAnchorBeforeCleanup(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(configDirectory, ".vgxness-backups")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("reinstall created legacy backup directory: %v", err)
+	}
+}
+
+func TestReinstallMarkerIsRemovedAfterSuccessAndHandledRollback(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		fail bool
+	}{
+		{name: "success"},
+		{name: "handled rollback", fail: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			if _, err := service.Install(context.Background(), options); err != nil {
+				t.Fatal(err)
+			}
+			markerObserved := false
+			injected := errors.New("handled reinstall failure")
+			service.reinstallCheckpoint = func(stage, _ string) error {
+				if stage != reinstallCheckpointPublished || markerObserved {
+					return nil
+				}
+				markerObserved = true
+				info, err := os.Lstat(filepath.Join(configDirectory, reinstallPendingName))
+				if err != nil || !privatePendingFile(info) {
+					t.Fatalf("pending marker was not durable before publication: %v", err)
+				}
+				if test.fail {
+					return injected
+				}
+				return nil
+			}
+			_, err := service.Reinstall(context.Background(), options)
+			if test.fail != errors.Is(err, injected) {
+				t.Fatalf("Reinstall() error = %v", err)
+			}
+			if !markerObserved {
+				t.Fatal("reinstall never exposed the pending marker")
+			}
+			if _, err := os.Lstat(filepath.Join(configDirectory, reinstallPendingName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("completed transaction retained marker: %v", err)
+			}
+		})
+	}
+}
+
+func TestReinstallCancellationBeforePendingCheckIsNotRecoveryFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	service := NewIntegration()
+	_, err := service.Reinstall(ctx, integration.Options{ConfigDir: filepath.Join(t.TempDir(), "opencode")})
+	if !errors.Is(err, context.Canceled) || errors.Is(err, integration.ErrRecovery) {
+		t.Fatalf("Reinstall() error = %v, want only context.Canceled", err)
+	}
+}
+
+func TestReinstallNeverOverwritesConcurrentDefaultAgentReplacement(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	if _, err := service.Install(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	defaultAgentPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	replacement := []byte("{\"default_agent\":\"user-agent\",\"concurrent\":true}\n")
+	replaced := false
+	service.reinstallCheckpoint = func(stage, target string) error {
+		if stage != reinstallCheckpointMoved || replaced || target == defaultAgentPath {
+			return nil
+		}
+		replaced = true
+		return os.WriteFile(defaultAgentPath, replacement, 0o600)
+	}
+	_, err := service.Reinstall(context.Background(), options)
+	if !replaced || !errors.Is(err, integration.ErrConflict) {
+		t.Fatalf("Reinstall() error = %v, replaced=%t", err, replaced)
+	}
+	current, readErr := os.ReadFile(defaultAgentPath)
+	if readErr != nil || !bytes.Equal(current, replacement) {
+		t.Fatalf("concurrent default-agent replacement changed: %q, %v", current, readErr)
+	}
+}
+
+func TestReinstallPreservesConcurrentPredecessorAnchor(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	if _, err := service.Install(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	competing := []byte("concurrent predecessor anchor")
+	anchorPath := ""
+	service.afterReinstallAnchorPath = func(path string) {
+		if anchorPath != "" {
+			return
+		}
+		anchorPath = path
+		if err := os.WriteFile(path, competing, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := service.Reinstall(context.Background(), options)
+	if anchorPath == "" || !errors.Is(err, integration.ErrConflict) {
+		t.Fatalf("Reinstall() error = %v, anchorPath=%q", err, anchorPath)
+	}
+	current, readErr := os.ReadFile(anchorPath)
+	if readErr != nil || !bytes.Equal(current, competing) {
+		t.Fatalf("concurrent predecessor anchor changed: %q, %v", current, readErr)
+	}
+}
+
+func TestReinstallInvalidConfigDirIsNotRecoveryFailure(t *testing.T) {
+	service := NewIntegration()
+	_, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: "relative"})
+	if !errors.Is(err, integration.ErrInvalid) || errors.Is(err, integration.ErrRecovery) {
+		t.Fatalf("Reinstall() error = %v, want ErrInvalid without ErrRecovery", err)
+	}
+}
+
+func TestReinstallRejectsDefaultAgentChangedDuringInspection(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		replacement []byte
+		remove      bool
+	}{
+		{name: "managed replacement", replacement: []byte("{\"default_agent\":\"vgxness-manager\",\"foreign\":true}\n")},
+		{name: "user-agent replacement", replacement: []byte("{\"default_agent\":\"user-agent\",\"foreign\":true}\n")},
+		{name: "deletion", remove: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			if _, err := service.Install(context.Background(), options); err != nil {
+				t.Fatal(err)
+			}
+			defaultAgentPath := filepath.Join(configDirectory, defaultAgentConfigName)
+			replaced := false
+			service.afterDefaultAgentSnapshot = func() {
+				if replaced {
+					return
+				}
+				replaced = true
+				if test.remove {
+					if err := os.Remove(defaultAgentPath); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+				if err := os.WriteFile(defaultAgentPath, test.replacement, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := service.Reinstall(context.Background(), options)
+			if !replaced || !errors.Is(err, integration.ErrDrift) {
+				t.Fatalf("Reinstall() error = %v, replaced=%t", err, replaced)
+			}
+			current, readErr := os.ReadFile(defaultAgentPath)
+			if test.remove {
+				if !errors.Is(readErr, os.ErrNotExist) {
+					t.Fatalf("concurrent default-agent deletion was not preserved: %q, %v", current, readErr)
+				}
+			} else if readErr != nil || !bytes.Equal(current, test.replacement) {
+				t.Fatalf("concurrent default-agent replacement changed: %q, %v", current, readErr)
+			}
+		})
+	}
+}
+
+func TestReinstallCrashLeavesPendingEvidenceAndBlocksMutation(t *testing.T) {
+	if stage := os.Getenv("VGXNESS_TEST_REINSTALL_CRASH_STAGE"); stage != "" {
+		service := NewIntegration()
+		service.reinstallCheckpoint = func(current, _ string) error {
+			if current == stage {
+				os.Exit(73)
+			}
+			return nil
+		}
+		_, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: os.Getenv("VGXNESS_TEST_REINSTALL_CRASH_ROOT")})
+		fmt.Fprintln(os.Stderr, "child reinstall returned without crash:", err)
+		os.Exit(74)
+	}
+
+	for _, stage := range []string{reinstallCheckpointMoved, reinstallCheckpointPublished, reinstallCheckpointVerified} {
+		t.Run(stage, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			if _, err := service.Install(context.Background(), options); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(os.Args[0], "-test.run=^TestReinstallCrashLeavesPendingEvidenceAndBlocksMutation$")
+			command.Env = append(os.Environ(),
+				"VGXNESS_TEST_REINSTALL_CRASH_STAGE="+stage,
+				"VGXNESS_TEST_REINSTALL_CRASH_ROOT="+configDirectory,
+			)
+			output, err := command.CombinedOutput()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 73 {
+				t.Fatalf("crash child error = %v, output=%s", err, output)
+			}
+			markerPath := filepath.Join(configDirectory, reinstallPendingName)
+			info, err := os.Lstat(markerPath)
+			if err != nil || !privatePendingFile(info) {
+				t.Fatalf("crash did not retain private marker: %v", err)
+			}
+			pending, err := service.ReinstallPending(context.Background(), options)
+			if err != nil || !pending {
+				t.Fatalf("ReinstallPending() = %t, %v", pending, err)
+			}
+			before, err := os.ReadFile(markerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.Reinstall(context.Background(), options); !errors.Is(err, integration.ErrRecovery) {
+				t.Fatalf("second Reinstall() error = %v, want ErrRecovery", err)
+			}
+			after, err := os.ReadFile(markerPath)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("blocked reinstall changed evidence: %v", err)
+			}
+		})
+	}
+}
+
+func TestReinstallPendingRejectsMalformedEvidenceWithoutMutation(t *testing.T) {
+	for name, body := range map[string][]byte{
+		"truncated":     []byte(`{"version":1`),
+		"duplicate key": []byte(`{"version":1,"version":1}`),
+		"unknown field": []byte(`{"unexpected":true}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			if err := os.MkdirAll(configDirectory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			markerPath := filepath.Join(configDirectory, reinstallPendingName)
+			if err := os.WriteFile(markerPath, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Lstat(markerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			if pending, err := service.ReinstallPending(context.Background(), options); err == nil || pending {
+				t.Fatalf("ReinstallPending() = %t, %v", pending, err)
+			}
+			if _, err := service.Reinstall(context.Background(), options); !errors.Is(err, integration.ErrRecovery) {
+				t.Fatalf("Reinstall() error = %v, want ErrRecovery", err)
+			}
+			after, statErr := os.Lstat(markerPath)
+			data, readErr := os.ReadFile(markerPath)
+			if statErr != nil || readErr != nil || !os.SameFile(before, after) || !bytes.Equal(data, body) {
+				t.Fatalf("malformed evidence changed: stat=%v read=%v", statErr, readErr)
+			}
+		})
+	}
+}
+
+func TestReinstallPendingRejectsUnsafeMarkerFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions and symlinks are not portable to Windows")
+	}
+	for _, test := range []struct {
+		name   string
+		unsafe func(string) error
+	}{
+		{name: "public permissions", unsafe: func(markerPath string) error { return os.Chmod(markerPath, 0o644) }},
+		{name: "symlink", unsafe: func(markerPath string) error {
+			target := markerPath + ".target"
+			if err := os.Rename(markerPath, target); err != nil {
+				return err
+			}
+			return os.Symlink(target, markerPath)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDirectory := t.TempDir()
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			layout, err := service.ManagedLayout(context.Background(), options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.writeReinstallPending(context.Background(), configDirectory, layout); err != nil {
+				t.Fatal(err)
+			}
+			markerPath := filepath.Join(configDirectory, reinstallPendingName)
+			if err := test.unsafe(markerPath); err != nil {
+				t.Fatal(err)
+			}
+			if pending, err := service.ReinstallPending(context.Background(), options); err == nil || pending {
+				t.Fatalf("ReinstallPending() = %t, %v", pending, err)
+			}
+			if _, err := service.Reinstall(context.Background(), options); !errors.Is(err, integration.ErrRecovery) {
+				t.Fatalf("Reinstall() error = %v, want ErrRecovery", err)
+			}
+		})
+	}
+}
+
+func TestClearReinstallPendingPreservesConcurrentReplacement(t *testing.T) {
+	configDirectory := t.TempDir()
+	markerPath := filepath.Join(configDirectory, reinstallPendingName)
+	if err := os.WriteFile(markerPath, []byte("expected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.Lstat(markerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := []byte("concurrent replacement")
+	temporary := filepath.Join(configDirectory, "replacement")
+	if err := os.WriteFile(temporary, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temporary, markerPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearReinstallPending(configDirectory, expected); !errors.Is(err, integration.ErrRecovery) {
+		t.Fatalf("clearReinstallPending() error = %v, want ErrRecovery", err)
+	}
+	data, err := os.ReadFile(markerPath)
+	if err != nil || !bytes.Equal(data, replacement) {
+		t.Fatalf("concurrent marker replacement changed: %q, %v", data, err)
+	}
+}
+
+func TestClearReinstallAnchorPreservesConcurrentReplacement(t *testing.T) {
+	directory := t.TempDir()
+	anchorPath := filepath.Join(directory, "anchor")
+	original := []byte("original predecessor")
+	if err := os.WriteFile(anchorPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(anchorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := []byte("concurrent anchor replacement")
+	temporary := filepath.Join(directory, "replacement")
+	if err := os.WriteFile(temporary, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temporary, anchorPath); err != nil {
+		t.Fatal(err)
+	}
+	err = clearReinstallAnchor(reinstallAnchor{target: filepath.Join(directory, "target"), path: anchorPath, bytes: original, info: info})
+	if !errors.Is(err, integration.ErrRecovery) {
+		t.Fatalf("clearReinstallAnchor() error = %v, want ErrRecovery", err)
+	}
+	current, readErr := os.ReadFile(anchorPath)
+	if readErr != nil || !bytes.Equal(current, replacement) {
+		t.Fatalf("concurrent anchor replacement changed: %q, %v", current, readErr)
 	}
 }
 

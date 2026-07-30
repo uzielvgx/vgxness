@@ -49,6 +49,9 @@ const (
 	memoryPluginName             = "vgxness.ts"
 	autonomousStackedPRSkillName = "vgxness-autonomous-stacked-pr"
 	defaultAgentName             = "vgxness-manager"
+	reinstallCheckpointMoved     = "moved"
+	reinstallCheckpointPublished = "published"
+	reinstallCheckpointVerified  = "verified"
 	defaultAgentConfigName       = "opencode.json"
 	defaultAgentStateName        = "default-agent.json"
 	maxDefaultAgentBytes         = 4 * 1024
@@ -194,24 +197,27 @@ Return exactly one compact JSON object and no Markdown:
 )
 
 type Integration struct {
-	now                 func() time.Time
-	executable          string
-	reinstallCheckpoint func(string, string) error
+	now                       func() time.Time
+	executable                string
+	reinstallCheckpoint       func(string, string) error
+	afterDefaultAgentSnapshot func()
+	afterReinstallAnchorPath  func(string)
 }
 
 type artifact struct {
-	path          string
-	content       []byte
-	backup        string
-	present       bool
-	exact         bool
-	upgrade       bool
-	prior         []byte
-	predecessors  [][]byte
-	regenerations [][]byte
-	recognize     func([]byte) bool
-	defaultAgent  *defaultAgentState
-	defaultState  bool
+	path                        string
+	content                     []byte
+	backup                      string
+	present                     bool
+	exact                       bool
+	upgrade                     bool
+	prior                       []byte
+	predecessors                [][]byte
+	regenerations               [][]byte
+	recognize                   func([]byte) bool
+	defaultAgent                *defaultAgentState
+	defaultAgentSnapshotPresent bool
+	defaultState                bool
 }
 
 type defaultAgentState struct {
@@ -246,6 +252,7 @@ type reinstallAnchor struct {
 	target string
 	path   string
 	bytes  []byte
+	info   os.FileInfo
 }
 
 func NewIntegration() *Integration {
@@ -367,6 +374,16 @@ func managedLayout(root string, artifacts []artifact) (integration.ManagedLayout
 // Reinstall atomically regenerates the recognized managed set without touching
 // unrelated OpenCode files or creating the legacy uninstall backup directory.
 func (service *Integration) Reinstall(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
+	pending, err := service.ReinstallPending(ctx, options)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, integration.ErrInvalid) {
+			return integration.Result{}, err
+		}
+		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
+	}
+	if pending {
+		return integration.Result{}, fmt.Errorf("%w: interrupted OpenCode reinstall evidence is present", integration.ErrRecovery)
+	}
 	state, err := service.inspect(ctx, options)
 	if err != nil {
 		return integration.Result{}, err
@@ -398,16 +415,29 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 	anchors := make([]reinstallAnchor, 0, len(state.artifacts))
 	staged := make([]installedArtifact, 0, len(state.artifacts))
 	published := make([]installedArtifact, 0, len(state.artifacts))
+	var pendingInfo os.FileInfo
 	rollback := true
 	defer func() {
 		if !rollback {
+			var cleanupErr error
 			for _, item := range staged {
-				cleanupInstalledArtifact(item)
+				if !sameFile(item.temporary, item.path) {
+					cleanupErr = errors.Join(cleanupErr, recoveryFailure("verify staged reinstall artifact before cleanup", integration.ErrConflict))
+				} else if err := removeSameFileDurably(item.temporary, item.path); err != nil {
+					cleanupErr = errors.Join(cleanupErr, recoveryFailure("remove staged reinstall artifact", err))
+				} else if _, err := os.Lstat(item.temporary); !errors.Is(err, os.ErrNotExist) {
+					cleanupErr = errors.Join(cleanupErr, recoveryFailure("verify staged reinstall artifact cleanup", errors.Join(err, integration.ErrConflict)))
+				}
 			}
 			for _, anchor := range anchors {
-				_ = os.Remove(anchor.path)
-				_ = syncDirectory(filepath.Dir(anchor.target))
+				if err := clearReinstallAnchor(anchor); err != nil {
+					cleanupErr = errors.Join(cleanupErr, recoveryFailure("remove reinstall predecessor anchor", err))
+				}
 			}
+			if cleanupErr == nil && pendingInfo != nil {
+				cleanupErr = clearReinstallPending(root, pendingInfo)
+			}
+			returnErr = errors.Join(returnErr, cleanupErr)
 			return
 		}
 		var recoveryErr error
@@ -438,6 +468,9 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove staged reinstall artifact", err))
 			}
 		}
+		if recoveryErr == nil && pendingInfo != nil {
+			recoveryErr = clearReinstallPending(root, pendingInfo)
+		}
 		returnErr = errors.Join(returnErr, recoveryErr)
 	}()
 
@@ -448,6 +481,10 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 		}
 		staged = append(staged, installedArtifact{path: item.path, temporary: temporary, content: item.content})
 	}
+	pendingInfo, err = service.writeReinstallPending(ctx, root, expectedLayout)
+	if err != nil {
+		return integration.Result{}, errors.Join(integration.ErrRecovery, fmt.Errorf("write reinstall pending marker: %w", err))
+	}
 	for _, item := range state.artifacts {
 		if !item.present {
 			continue
@@ -456,30 +493,46 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 			return integration.Result{}, err
 		}
 		expected := item.content
-		if item.defaultAgent != nil {
-			expected, _ = readRegularFile(item.path)
-		}
-		if item.upgrade {
+		if item.upgrade || item.defaultAgent != nil && item.prior != nil {
 			expected = item.prior
 		}
 		anchorPath, err := vacantTemporaryPath(filepath.Dir(item.path), ".vgxness-reinstall-old-*.tmp")
 		if err != nil {
 			return integration.Result{}, fmt.Errorf("prepare OpenCode reinstall rollback: %w", err)
 		}
-		if err := os.Rename(item.path, anchorPath); err != nil {
-			return integration.Result{}, fmt.Errorf("move OpenCode reinstall predecessor: %w", integration.ErrConflict)
+		if service.afterReinstallAnchorPath != nil {
+			service.afterReinstallAnchorPath(anchorPath)
+		}
+		if err := os.Link(item.path, anchorPath); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return integration.Result{}, fmt.Errorf("%w: OpenCode reinstall predecessor anchor changed", integration.ErrConflict)
+			}
+			return integration.Result{}, fmt.Errorf("link OpenCode reinstall predecessor: %w", integration.ErrConflict)
 		}
 		anchor := reinstallAnchor{target: item.path, path: anchorPath, bytes: append([]byte(nil), expected...)}
 		anchors = append(anchors, anchor)
+		anchorInfo, err := os.Lstat(anchorPath)
+		if err != nil {
+			return integration.Result{}, fmt.Errorf("inspect OpenCode reinstall predecessor: %w", err)
+		}
+		anchors[len(anchors)-1].info = anchorInfo
 		if err := syncDirectory(filepath.Dir(item.path)); err != nil {
-			return integration.Result{}, fmt.Errorf("sync moved OpenCode reinstall predecessor: %w", err)
+			return integration.Result{}, fmt.Errorf("sync linked OpenCode reinstall predecessor: %w", err)
 		}
 		readback, readErr := readRegularFile(anchorPath)
-		if readErr != nil || !bytes.Equal(readback, expected) {
+		if readErr != nil || !bytes.Equal(readback, expected) || !sameFile(item.path, anchorPath) {
 			return integration.Result{}, fmt.Errorf("%w: managed artifact changed before reinstall", integration.ErrConflict)
 		}
+		if err := removeSameFileDurably(item.path, anchorPath); err != nil {
+			return integration.Result{}, fmt.Errorf("remove OpenCode reinstall predecessor: %w", err)
+		}
+		if _, err := os.Lstat(item.path); err == nil {
+			return integration.Result{}, fmt.Errorf("%w: OpenCode reinstall predecessor was not removed", integration.ErrConflict)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return integration.Result{}, fmt.Errorf("verify removed OpenCode reinstall predecessor: %w", err)
+		}
 		if service.reinstallCheckpoint != nil {
-			if err := service.reinstallCheckpoint("moved", item.path); err != nil {
+			if err := service.reinstallCheckpoint(reinstallCheckpointMoved, item.path); err != nil {
 				return integration.Result{}, err
 			}
 		}
@@ -503,7 +556,7 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 			return integration.Result{}, fmt.Errorf("%w: read back OpenCode reinstall artifact", integration.ErrDrift)
 		}
 		if service.reinstallCheckpoint != nil {
-			if err := service.reinstallCheckpoint("published", item.path); err != nil {
+			if err := service.reinstallCheckpoint(reinstallCheckpointPublished, item.path); err != nil {
 				return integration.Result{}, err
 			}
 		}
@@ -521,7 +574,7 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 	}
 	for _, anchor := range anchors {
 		if service.reinstallCheckpoint != nil {
-			if err := service.reinstallCheckpoint("verified", anchor.target); err != nil {
+			if err := service.reinstallCheckpoint(reinstallCheckpointVerified, anchor.target); err != nil {
 				return integration.Result{}, err
 			}
 		}
@@ -800,9 +853,12 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
 	defaultAgentPath := filepath.Join(configDirectory, defaultAgentConfigName)
 	defaultAgentStatePath := filepath.Join(configDirectory, "vgxness", defaultAgentStateName)
-	defaultAgentConfig, defaultAgentStateContent, defaultAgentState, err := defaultAgentArtifacts(defaultAgentPath, defaultAgentStatePath)
+	defaultAgentConfig, defaultAgentStateContent, defaultAgentState, defaultAgentSnapshot, defaultAgentSnapshotPresent, err := defaultAgentArtifacts(defaultAgentPath, defaultAgentStatePath)
 	if err != nil {
 		return inspection{}, err
+	}
+	if service.afterDefaultAgentSnapshot != nil {
+		service.afterDefaultAgentSnapshot()
 	}
 	plan, err := requestedModelPlan(options, configDirectory)
 	if err != nil {
@@ -851,7 +907,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: skillPath, content: []byte(autonomousStackedPRSkill), backup: "vgxness-autonomous-stacked-pr-skill"},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
 		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true},
-		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", defaultAgent: &defaultAgentState},
+		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
 	}}
 	state.result.ArtifactCount = len(state.artifacts)
 	if drifted {
@@ -877,6 +933,10 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		current, readErr := readRegularFile(item.path)
 		if errors.Is(readErr, os.ErrNotExist) {
+			if item.defaultAgent != nil && item.defaultAgentSnapshotPresent {
+				state.result.State = integration.StateDrifted
+				return state, nil
+			}
 			continue
 		}
 		if readErr != nil {
@@ -888,6 +948,10 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		item.present = true
 		present++
+		if item.defaultAgent != nil && (!item.defaultAgentSnapshotPresent || !bytes.Equal(current, item.prior)) {
+			state.result.State = integration.StateDrifted
+			return state, nil
+		}
 		item.exact = bytes.Equal(current, item.content)
 		if !item.exact {
 			if item.defaultAgent != nil {
@@ -932,19 +996,19 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	return state, nil
 }
 
-func defaultAgentArtifacts(configPath, statePath string) ([]byte, []byte, defaultAgentState, error) {
-	config, exists, err := readOpenCodeConfig(configPath)
+func defaultAgentArtifacts(configPath, statePath string) ([]byte, []byte, defaultAgentState, []byte, bool, error) {
+	config, exists, snapshot, err := readOpenCodeConfig(configPath)
 	if err != nil {
-		return nil, nil, defaultAgentState{}, err
+		return nil, nil, defaultAgentState{}, nil, false, err
 	}
 	stateData, err := readRegularFile(statePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, nil, defaultAgentState{}, fmt.Errorf("inspect OpenCode default-agent state: %w", err)
+		return nil, nil, defaultAgentState{}, nil, false, fmt.Errorf("inspect OpenCode default-agent state: %w", err)
 	}
 	state := defaultAgentState{}
 	if err == nil {
 		if err := json.Unmarshal(stateData, &state); err != nil || !validDefaultAgentState(state) {
-			return nil, nil, defaultAgentState{}, fmt.Errorf("%w: OpenCode default-agent state", integration.ErrDrift)
+			return nil, nil, defaultAgentState{}, nil, false, fmt.Errorf("%w: OpenCode default-agent state", integration.ErrDrift)
 		}
 	} else {
 		state.ConfigExisted = exists
@@ -952,28 +1016,28 @@ func defaultAgentArtifacts(configPath, statePath string) ([]byte, []byte, defaul
 	}
 	content, err := withDefaultAgent(config, exists)
 	if err != nil {
-		return nil, nil, defaultAgentState{}, err
+		return nil, nil, defaultAgentState{}, nil, false, err
 	}
 	stateData, err = json.Marshal(state)
 	if err != nil {
-		return nil, nil, defaultAgentState{}, fmt.Errorf("encode OpenCode default-agent state: %w", err)
+		return nil, nil, defaultAgentState{}, nil, false, fmt.Errorf("encode OpenCode default-agent state: %w", err)
 	}
-	return content, append(stateData, '\n'), state, nil
+	return content, append(stateData, '\n'), state, snapshot, exists, nil
 }
 
-func readOpenCodeConfig(path string) (map[string]json.RawMessage, bool, error) {
+func readOpenCodeConfig(path string) (map[string]json.RawMessage, bool, []byte, error) {
 	data, err := readRegularFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return make(map[string]json.RawMessage), false, nil
+		return make(map[string]json.RawMessage), false, nil, nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("inspect OpenCode configuration: %w", err)
+		return nil, false, nil, fmt.Errorf("inspect OpenCode configuration: %w", err)
 	}
 	values := make(map[string]json.RawMessage)
 	if err := json.Unmarshal(data, &values); err != nil || values == nil {
-		return nil, false, fmt.Errorf("%w: opencode.json must contain a JSON object", integration.ErrInvalid)
+		return nil, false, nil, fmt.Errorf("%w: opencode.json must contain a JSON object", integration.ErrInvalid)
 	}
-	return values, true, nil
+	return values, true, data, nil
 }
 
 func validDefaultAgentState(state defaultAgentState) bool {
@@ -1944,6 +2008,49 @@ func cleanupInstalledArtifact(item installedArtifact) {
 		_ = os.Remove(item.backup)
 		_ = syncDirectory(filepath.Dir(item.path))
 	}
+}
+
+func clearReinstallAnchor(anchor reinstallAnchor) error {
+	current, err := os.Lstat(anchor.path)
+	if err != nil || anchor.info == nil || !os.SameFile(current, anchor.info) {
+		return fmt.Errorf("%w: reinstall predecessor anchor changed before cleanup", integration.ErrRecovery)
+	}
+	directory := filepath.Dir(anchor.path)
+	quarantineDirectory, err := os.MkdirTemp(directory, ".vgxness-reinstall-anchor-*")
+	if err != nil {
+		return err
+	}
+	quarantine := filepath.Join(quarantineDirectory, "anchor")
+	if err := os.Rename(anchor.path, quarantine); err != nil {
+		_ = os.Remove(quarantineDirectory)
+		return err
+	}
+	quarantined, err := os.Lstat(quarantine)
+	if err != nil || !os.SameFile(quarantined, anchor.info) {
+		return errors.Join(
+			fmt.Errorf("%w: reinstall predecessor anchor replaced during cleanup", integration.ErrRecovery),
+			recoveryFailure("restore replaced reinstall predecessor anchor", restoreQuarantinedFile(quarantine, anchor.path)),
+		)
+	}
+	content, err := readRegularFile(quarantine)
+	if err != nil || !bytes.Equal(content, anchor.bytes) {
+		return errors.Join(
+			fmt.Errorf("%w: reinstall predecessor anchor changed during cleanup", integration.ErrRecovery),
+			recoveryFailure("restore changed reinstall predecessor anchor", restoreQuarantinedFile(quarantine, anchor.path)),
+		)
+	}
+	if err := os.Remove(quarantine); err != nil {
+		return err
+	}
+	if err := os.Remove(quarantineDirectory); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(anchor.path); err == nil {
+		return fmt.Errorf("%w: reinstall predecessor anchor was replaced during cleanup", integration.ErrRecovery)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return syncDirectory(directory)
 }
 
 func vacantTemporaryPath(directory, pattern string) (string, error) {
