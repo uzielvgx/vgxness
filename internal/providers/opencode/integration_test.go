@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -85,19 +86,21 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.NoError(t, err)
 	defaultAgentInfo, err := os.Stat(installed.DefaultAgentPath)
 	testutil.NoError(t, err)
-	_, configErr := os.Stat(filepath.Join(configDirectory, "opencode.json"))
+	var defaultAgentConfig map[string]json.RawMessage
+	testutil.NoError(t, json.Unmarshal(defaultAgentData, &defaultAgentConfig))
 	testutil.Require(t,
 		installed.State == integration.StateInstalled &&
 			installed.Changed &&
 			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
 			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
-			installed.ArtifactCount == 19 &&
+			installed.ArtifactCount == 20 &&
 			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
-			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired && os.IsNotExist(configErr) &&
+			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired &&
 			installed.DefaultAgent == defaultAgentName &&
-			installed.DefaultAgentPath == filepath.Join(configDirectory, defaultAgentOverlayName) &&
-			bytes.Equal(defaultAgentData, []byte(defaultAgentOverlay)) &&
+			installed.DefaultAgentPath == filepath.Join(configDirectory, defaultAgentConfigName) &&
+			string(defaultAgentConfig["$schema"]) == `"https://opencode.ai/config.json"` &&
+			string(defaultAgentConfig["default_agent"]) == `"vgxness-manager"` &&
 			bytes.Equal(data, bundle.agents[managerAgentName]) &&
 			string(toolData) == string(expectedTool),
 		"unexpected install: %#v", installed,
@@ -123,45 +126,194 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.Require(t, err == nil && bytes.Equal(skill, []byte(autonomousStackedPRSkill)), "managed skill differs: %v", err)
 }
 
-func TestIntegration_DefaultAgentOverlayPreservesOpenCodeJSON(t *testing.T) {
+func TestIntegration_DefaultAgentConfigPreservesOpenCodeJSONAndJSONC(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
 	configPath := filepath.Join(configDirectory, "opencode.json")
 	config := []byte("{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"share\": \"disabled\",\n  \"mcp\": {\"codegraph\": {\"enabled\": true}}\n}\n")
 	testutil.NoError(t, os.WriteFile(configPath, config, 0o600))
+	jsoncPath := filepath.Join(configDirectory, "opencode.jsonc")
+	jsonc := []byte("// user-owned JSONC\n{\"default_agent\": \"build\"}\n")
+	testutil.NoError(t, os.WriteFile(jsoncPath, jsonc, 0o600))
 
 	service := NewIntegration()
 	installed, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	after, err := os.ReadFile(configPath)
 	testutil.NoError(t, err)
-	overlay, err := os.ReadFile(filepath.Join(configDirectory, defaultAgentOverlayName))
+	afterJSONC, err := os.ReadFile(jsoncPath)
 	testutil.NoError(t, err)
+	var got map[string]any
+	testutil.NoError(t, json.Unmarshal(after, &got))
+	var want map[string]any
+	testutil.NoError(t, json.Unmarshal(config, &want))
+	want["default_agent"] = defaultAgentName
 	testutil.Require(t,
-		bytes.Equal(after, config) &&
-			bytes.Equal(overlay, []byte(defaultAgentOverlay)) &&
-			installed.DefaultAgent == defaultAgentName,
-		"shared config changed or overlay missing: installed=%+v after=%q overlay=%q", installed, after, overlay,
+		reflect.DeepEqual(got, want) &&
+			bytes.Equal(afterJSONC, jsonc) &&
+			installed.DefaultAgent == defaultAgentName && installed.DefaultAgentPath == configPath,
+		"shared config or JSONC changed incorrectly: installed=%+v config=%q jsonc=%q", installed, after, afterJSONC,
 	)
 }
 
-func TestIntegration_RefusesForeignDefaultAgentOverlay(t *testing.T) {
+func TestIntegration_PreservesForeignOpenCodeJSONC(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
-	overlayPath := filepath.Join(configDirectory, defaultAgentOverlayName)
+	overlayPath := filepath.Join(configDirectory, "opencode.jsonc")
 	foreign := []byte("{\"default_agent\":\"build\"}\n")
 	testutil.NoError(t, os.WriteFile(overlayPath, foreign, 0o600))
 
 	service := NewIntegration()
 	preview, previewErr := service.Preview(context.Background(), integration.Options{ConfigDir: configDirectory})
-	_, installErr := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	installed, installErr := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	after, readErr := os.ReadFile(overlayPath)
 	testutil.Require(t,
-		previewErr == nil && preview.State == integration.StateDrifted &&
-			errors.Is(installErr, integration.ErrConflict) &&
+		previewErr == nil && preview.State == integration.StateAbsent &&
+			installErr == nil && installed.State == integration.StateInstalled &&
 			readErr == nil && bytes.Equal(after, foreign),
-		"foreign overlay changed: preview=%+v previewErr=%v installErr=%v readErr=%v after=%q", preview, previewErr, installErr, readErr, after,
+		"foreign JSONC changed: preview=%+v previewErr=%v installErr=%v readErr=%v after=%q", preview, previewErr, installErr, readErr, after,
 	)
+}
+
+func TestIntegration_UninstallRestoresPriorDefaultAgent(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	before := []byte("{\"default_agent\":\"build\",\"share\":\"disabled\"}\n")
+	testutil.NoError(t, os.WriteFile(configPath, before, 0o600))
+
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	removed, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	var restored map[string]any
+	testutil.NoError(t, json.Unmarshal(after, &restored))
+	_, stateErr := os.Stat(filepath.Join(configDirectory, "vgxness", defaultAgentStateName))
+	testutil.Require(t, removed.State == integration.StateAbsent && removed.RestartRequired && restored["default_agent"] == "build" && restored["share"] == "disabled" && os.IsNotExist(stateErr), "uninstall did not restore user config: result=%+v config=%q stateErr=%v", removed, after, stateErr)
+}
+
+func TestIntegration_UninstallRemovesFreshDefaultAgentConfig(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	removed, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	_, statErr := os.Stat(filepath.Join(configDirectory, defaultAgentConfigName))
+	testutil.Require(t, removed.RestartRequired && os.IsNotExist(statErr), "fresh config remained after uninstall: result=%+v err=%v", removed, statErr)
+}
+
+func TestIntegration_UninstallRetriesAfterFreshDefaultAgentConfigRemoval(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.Remove(configPath))
+
+	removed, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+	_, stateErr := os.Stat(filepath.Join(configDirectory, "vgxness", defaultAgentStateName))
+	testutil.Require(t, err == nil && removed.State == integration.StateAbsent && os.IsNotExist(stateErr), "fresh uninstall retry failed: result=%+v err=%v stateErr=%v", removed, err, stateErr)
+}
+
+func TestIntegration_UninstallPreservesFieldsAddedToFreshDefaultAgentConfig(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"$schema":"https://opencode.ai/config.json","default_agent":"vgxness-manager","user_option":true}`), 0o600))
+	_, err = service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	var got map[string]any
+	testutil.NoError(t, json.Unmarshal(after, &got))
+	testutil.Require(t, got["default_agent"] == nil && got["user_option"] == true, "uninstall removed user-expanded fresh config: %q", after)
+}
+
+func TestIntegration_PreservesCurrentUnrelatedOpenCodeConfigEdits(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	initial := []byte(`{"share":"disabled","token":"secret-sentinel"}`)
+	testutil.NoError(t, os.WriteFile(configPath, initial, 0o600))
+
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	metadata, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", defaultAgentStateName))
+	testutil.Require(t, err == nil && !bytes.Contains(metadata, []byte("secret-sentinel")), "metadata retained unrelated config: %q", metadata)
+	updated := []byte(`{"share":"disabled","token":"secret-sentinel","user_option":{"enabled":true},"default_agent":"vgxness-manager"}`)
+	testutil.NoError(t, os.WriteFile(configPath, updated, 0o600))
+
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	testutil.Require(t, status.State == integration.StateInstalled, "status drifted after unrelated edit: %+v", status)
+	_, err = service.Reinstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	_, err = service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	var got map[string]any
+	testutil.NoError(t, json.Unmarshal(after, &got))
+	testutil.Require(t, got["default_agent"] == nil && got["token"] == "secret-sentinel" && reflect.DeepEqual(got["user_option"], map[string]any{"enabled": true}), "uninstall did not preserve current unrelated edits: %q", after)
+}
+
+func TestIntegration_UninstallPreservesUserChangedDefaultAgent(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"build"}`), 0o600))
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","user_option":true}`), 0o600))
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	testutil.Require(t, status.State == integration.StatePartial, "user default change remained healthy: %+v", status)
+	_, err = service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	var got map[string]any
+	testutil.NoError(t, json.Unmarshal(after, &got))
+	testutil.Require(t, got["default_agent"] == "plan" && got["user_option"] == true, "uninstall overwrote the user's default: %q", after)
+}
+
+func TestIntegration_ReinstallRepairsDefaultAgentAndPreservesCurrentConfig(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"build","share":"disabled"}`), 0o600))
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","share":"disabled","user_option":true}`), 0o600))
+	reinstalled, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	var got map[string]any
+	testutil.NoError(t, json.Unmarshal(after, &got))
+	testutil.Require(t, reinstalled.State == integration.StateInstalled && got["default_agent"] == defaultAgentName && got["share"] == "disabled" && got["user_option"] == true, "reinstall did not safely repair default config: result=%+v config=%q", reinstalled, after)
+}
+
+func TestIntegration_RejectsMalformedOpenCodeJSONBeforeMutation(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	malformed := []byte("{not JSON}\n")
+	testutil.NoError(t, os.WriteFile(configPath, malformed, 0o600))
+
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	after, readErr := os.ReadFile(configPath)
+	testutil.Require(t, errors.Is(err, integration.ErrInvalid) && readErr == nil && bytes.Equal(after, malformed), "malformed config changed: err=%v read=%v config=%q", err, readErr, after)
 }
 
 func TestIntegrationRefusesModifiedModelPlanManifest(t *testing.T) {

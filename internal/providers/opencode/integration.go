@@ -49,15 +49,12 @@ const (
 	memoryPluginName             = "vgxness.ts"
 	autonomousStackedPRSkillName = "vgxness-autonomous-stacked-pr"
 	defaultAgentName             = "vgxness-manager"
-	defaultAgentOverlayName      = "opencode.jsonc"
+	defaultAgentConfigName       = "opencode.json"
+	defaultAgentStateName        = "default-agent.json"
+	maxDefaultAgentBytes         = 4 * 1024
 	maxArtifactBytes             = 512 * 1024
 	maxMemoryOutputBytes         = 128 * 1024
-	defaultAgentOverlay          = `{
-  "$schema": "https://opencode.ai/config.json",
-  "default_agent": "vgxness-manager"
-}
-`
-	nativeReviewSharedContract = `
+	nativeReviewSharedContract   = `
 # Bounded review contract
 
 Accept only one parent mission containing:
@@ -213,6 +210,14 @@ type artifact struct {
 	predecessors  [][]byte
 	regenerations [][]byte
 	recognize     func([]byte) bool
+	defaultAgent  *defaultAgentState
+	defaultState  bool
+}
+
+type defaultAgentState struct {
+	ConfigExisted       bool            `json:"config_existed"`
+	DefaultAgentExisted bool            `json:"default_agent_existed"`
+	DefaultAgent        json.RawMessage `json:"default_agent,omitempty"`
 }
 
 type inspection struct {
@@ -230,6 +235,11 @@ type installedArtifact struct {
 type backedUpArtifact struct {
 	target string
 	backup string
+}
+
+type defaultAgentUninstall struct {
+	replacement *installedArtifact
+	removal     *backedUpArtifact
 }
 
 type reinstallAnchor struct {
@@ -325,6 +335,9 @@ func (service *Integration) ManagedLayout(ctx context.Context, options integrati
 func managedLayout(root string, artifacts []artifact) (integration.ManagedLayout, error) {
 	layout := integration.ManagedLayout{Root: root, Artifacts: make([]integration.ManagedArtifact, 0, len(artifacts))}
 	for _, item := range artifacts {
+		if item.defaultAgent != nil {
+			continue
+		}
 		relative, err := filepath.Rel(root, item.path)
 		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			return integration.ManagedLayout{}, fmt.Errorf("%w: managed OpenCode artifact path", integration.ErrInvalid)
@@ -443,6 +456,9 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 			return integration.Result{}, err
 		}
 		expected := item.content
+		if item.defaultAgent != nil {
+			expected, _ = readRegularFile(item.path)
+		}
 		if item.upgrade {
 			expected = item.prior
 		}
@@ -611,6 +627,9 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 		backupPaths[item.path] = filepath.Join(backupDirectory, item.backup+"."+stamp+filepath.Ext(item.path))
 	}
 	for _, item := range state.artifacts {
+		if item.defaultAgent != nil {
+			continue
+		}
 		if !item.exact && !item.upgrade {
 			continue
 		}
@@ -621,17 +640,19 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 		}
 	}
 	backups := make([]backedUpArtifact, 0, len(state.artifacts))
+	var defaultChange defaultAgentUninstall
 	rollback := true
 	defer func() {
 		if rollback {
 			for index := len(backups) - 1; index >= 0; index-- {
 				returnErr = errors.Join(returnErr, restoreWithoutOverwrite(backups[index].backup, backups[index].target))
 			}
+			returnErr = errors.Join(returnErr, defaultChange.rollback())
 		}
 	}()
-	for _, item := range state.artifacts {
+	removeManaged := func(item artifact) error {
 		if !item.exact && !item.upgrade {
-			continue
+			return nil
 		}
 		expected := item.content
 		if item.upgrade {
@@ -639,31 +660,55 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 		}
 		backupPath := backupPaths[item.path]
 		if err := os.Link(item.path, backupPath); err != nil {
-			return integration.Result{}, fmt.Errorf("backup OpenCode integration artifact: %w", err)
+			return fmt.Errorf("backup OpenCode integration artifact: %w", err)
 		}
 		if err := syncDirectory(filepath.Dir(backupPath)); err != nil {
 			cleanupErr := removeSameFileDurably(backupPath, item.path)
-			return integration.Result{}, errors.Join(fmt.Errorf("sync OpenCode integration backup: %w", err), recoveryFailure("remove unsynced integration backup", cleanupErr))
+			return errors.Join(fmt.Errorf("sync OpenCode integration backup: %w", err), recoveryFailure("remove unsynced integration backup", cleanupErr))
 		}
 		backup, readErr := readRegularFile(backupPath)
 		if readErr != nil || !bytes.Equal(backup, expected) {
 			cleanupErr := removeSameFileDurably(backupPath, item.path)
-			return integration.Result{}, errors.Join(fmt.Errorf("read back OpenCode integration backup: %w", integration.ErrDrift), recoveryFailure("remove invalid integration backup", cleanupErr))
+			return errors.Join(fmt.Errorf("read back OpenCode integration backup: %w", integration.ErrDrift), recoveryFailure("remove invalid integration backup", cleanupErr))
 		}
 		backups = append(backups, backedUpArtifact{target: item.path, backup: backupPath})
 		if err := removeSameFileDurably(item.path, backupPath); err != nil {
-			return integration.Result{}, fmt.Errorf("sync OpenCode integration removal: %w", err)
+			return fmt.Errorf("sync OpenCode integration removal: %w", err)
 		}
 		if _, statErr := os.Lstat(item.path); !errors.Is(statErr, os.ErrNotExist) {
-			return integration.Result{}, fmt.Errorf("%w: integration artifact changed during uninstall", integration.ErrConflict)
+			return fmt.Errorf("%w: integration artifact changed during uninstall", integration.ErrConflict)
 		}
-		if err := ctx.Err(); err != nil {
+		return ctx.Err()
+	}
+	var defaultState *artifact
+	for _, item := range state.artifacts {
+		if item.defaultState {
+			copy := item
+			defaultState = &copy
+			continue
+		}
+		if item.defaultAgent != nil {
+			change, err := uninstallDefaultAgent(ctx, item)
+			if err != nil {
+				return integration.Result{}, err
+			}
+			defaultChange = change
+			continue
+		}
+		if err := removeManaged(item); err != nil {
+			return integration.Result{}, err
+		}
+	}
+	if defaultState != nil {
+		if err := removeManaged(*defaultState); err != nil {
 			return integration.Result{}, err
 		}
 	}
 	rollback = false
+	defaultChange.cleanup()
 	state.result.State = integration.StateAbsent
-	state.result.Changed = len(backups) != 0
+	state.result.Changed = len(backups) != 0 || defaultChange.replacement != nil || defaultChange.removal != nil
+	state.result.RestartRequired = state.result.Changed
 	for _, item := range backups {
 		if item.target == state.result.Path {
 			state.result.BackupPath = item.backup
@@ -673,6 +718,64 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 		}
 	}
 	return state.result, nil
+}
+
+func uninstallDefaultAgent(ctx context.Context, item artifact) (defaultAgentUninstall, error) {
+	if item.defaultAgent == nil {
+		return defaultAgentUninstall{}, integration.ErrInvalid
+	}
+	current, err := readRegularFile(item.path)
+	if errors.Is(err, os.ErrNotExist) && !item.defaultAgent.ConfigExisted {
+		return defaultAgentUninstall{}, nil
+	}
+	if err != nil {
+		return defaultAgentUninstall{}, fmt.Errorf("inspect OpenCode default-agent configuration: %w", err)
+	}
+	replacement, changed, remove, err := withoutDefaultAgent(current, *item.defaultAgent)
+	if err != nil {
+		return defaultAgentUninstall{}, err
+	}
+	if !changed {
+		return defaultAgentUninstall{}, nil
+	}
+	if remove {
+		anchor, err := vacantTemporaryPath(filepath.Dir(item.path), ".vgxness-default-agent-*.tmp")
+		if err != nil {
+			return defaultAgentUninstall{}, err
+		}
+		if err := os.Link(item.path, anchor); err != nil {
+			return defaultAgentUninstall{}, err
+		}
+		if err := removeSameFileDurably(item.path, anchor); err != nil {
+			_ = os.Remove(anchor)
+			return defaultAgentUninstall{}, err
+		}
+		return defaultAgentUninstall{removal: &backedUpArtifact{target: item.path, backup: anchor}}, nil
+	}
+	installed, err := upgradeArtifact(ctx, artifact{path: item.path, content: replacement, prior: current})
+	if err != nil {
+		return defaultAgentUninstall{}, err
+	}
+	return defaultAgentUninstall{replacement: &installed}, nil
+}
+
+func (change defaultAgentUninstall) rollback() error {
+	if change.replacement != nil {
+		return rollbackInstalledArtifact(*change.replacement)
+	}
+	if change.removal != nil {
+		return restoreWithoutOverwrite(change.removal.backup, change.removal.target)
+	}
+	return nil
+}
+
+func (change defaultAgentUninstall) cleanup() {
+	if change.replacement != nil {
+		cleanupInstalledArtifact(*change.replacement)
+	}
+	if change.removal != nil {
+		_ = os.Remove(change.removal.backup)
+	}
 }
 
 func (service *Integration) inspect(ctx context.Context, options integration.Options) (inspection, error) {
@@ -695,7 +798,12 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	toolPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
-	defaultAgentPath := filepath.Join(configDirectory, defaultAgentOverlayName)
+	defaultAgentPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	defaultAgentStatePath := filepath.Join(configDirectory, "vgxness", defaultAgentStateName)
+	defaultAgentConfig, defaultAgentStateContent, defaultAgentState, err := defaultAgentArtifacts(defaultAgentPath, defaultAgentStatePath)
+	if err != nil {
+		return inspection{}, err
+	}
 	plan, err := requestedModelPlan(options, configDirectory)
 	if err != nil {
 		return inspection{}, err
@@ -742,7 +850,8 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
 		{path: skillPath, content: []byte(autonomousStackedPRSkill), backup: "vgxness-autonomous-stacked-pr-skill"},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
-		{path: defaultAgentPath, content: []byte(defaultAgentOverlay), backup: "vgxness-default-agent"},
+		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true},
+		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", defaultAgent: &defaultAgentState},
 	}}
 	state.result.ArtifactCount = len(state.artifacts)
 	if drifted {
@@ -781,6 +890,16 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		present++
 		item.exact = bytes.Equal(current, item.content)
 		if !item.exact {
+			if item.defaultAgent != nil {
+				if defaultAgentIsManaged(current) {
+					item.exact = true
+					exact++
+					continue
+				}
+				item.upgrade = true
+				item.prior = append([]byte(nil), current...)
+				continue
+			}
 			regenerated := false
 			for _, prior := range item.regenerations {
 				if bytes.Equal(current, prior) {
@@ -811,6 +930,110 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		state.result.State = integration.StatePartial
 	}
 	return state, nil
+}
+
+func defaultAgentArtifacts(configPath, statePath string) ([]byte, []byte, defaultAgentState, error) {
+	config, exists, err := readOpenCodeConfig(configPath)
+	if err != nil {
+		return nil, nil, defaultAgentState{}, err
+	}
+	stateData, err := readRegularFile(statePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, defaultAgentState{}, fmt.Errorf("inspect OpenCode default-agent state: %w", err)
+	}
+	state := defaultAgentState{}
+	if err == nil {
+		if err := json.Unmarshal(stateData, &state); err != nil || !validDefaultAgentState(state) {
+			return nil, nil, defaultAgentState{}, fmt.Errorf("%w: OpenCode default-agent state", integration.ErrDrift)
+		}
+	} else {
+		state.ConfigExisted = exists
+		state.DefaultAgent, state.DefaultAgentExisted = config["default_agent"]
+	}
+	content, err := withDefaultAgent(config, exists)
+	if err != nil {
+		return nil, nil, defaultAgentState{}, err
+	}
+	stateData, err = json.Marshal(state)
+	if err != nil {
+		return nil, nil, defaultAgentState{}, fmt.Errorf("encode OpenCode default-agent state: %w", err)
+	}
+	return content, append(stateData, '\n'), state, nil
+}
+
+func readOpenCodeConfig(path string) (map[string]json.RawMessage, bool, error) {
+	data, err := readRegularFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return make(map[string]json.RawMessage), false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect OpenCode configuration: %w", err)
+	}
+	values := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(data, &values); err != nil || values == nil {
+		return nil, false, fmt.Errorf("%w: opencode.json must contain a JSON object", integration.ErrInvalid)
+	}
+	return values, true, nil
+}
+
+func validDefaultAgentState(state defaultAgentState) bool {
+	if !state.DefaultAgentExisted {
+		return len(state.DefaultAgent) == 0
+	}
+	return len(state.DefaultAgent) > 0 && len(state.DefaultAgent) <= maxDefaultAgentBytes && json.Valid(state.DefaultAgent)
+}
+
+func withDefaultAgent(values map[string]json.RawMessage, exists bool) ([]byte, error) {
+	if !exists {
+		schema, _ := json.Marshal("https://opencode.ai/config.json")
+		values["$schema"] = schema
+	}
+	defaultAgent, _ := json.Marshal(defaultAgentName)
+	values["default_agent"] = defaultAgent
+	encoded, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenCode configuration: %w", err)
+	}
+	return append(encoded, '\n'), nil
+}
+
+func defaultAgentIsManaged(config []byte) bool {
+	values := make(map[string]json.RawMessage)
+	if json.Unmarshal(config, &values) != nil || values == nil {
+		return false
+	}
+	return bytes.Equal(values["default_agent"], []byte(`"vgxness-manager"`))
+}
+
+func withoutDefaultAgent(config []byte, state defaultAgentState) ([]byte, bool, bool, error) {
+	values, _, err := readOpenCodeConfigFromBytes(config)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if !defaultAgentIsManaged(config) {
+		return nil, false, false, nil
+	}
+	if state.DefaultAgentExisted {
+		values["default_agent"] = state.DefaultAgent
+	} else {
+		delete(values, "default_agent")
+		if !state.ConfigExisted && len(values) == 1 && bytes.Equal(values["$schema"], []byte(`"https://opencode.ai/config.json"`)) {
+			return nil, true, true, nil
+		}
+	}
+	encoded, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return nil, false, false, fmt.Errorf("encode OpenCode configuration: %w", err)
+	}
+	return append(encoded, '\n'), true, false, nil
+}
+
+func readOpenCodeConfigFromBytes(data []byte) (map[string]json.RawMessage, bool, error) {
+	values := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(data, &values); err != nil || values == nil {
+		return nil, false, fmt.Errorf("%w: opencode.json must contain a JSON object", integration.ErrInvalid)
+	}
+	return values, true, nil
 }
 
 func installArtifact(ctx context.Context, item artifact) (installedArtifact, error) {

@@ -45,9 +45,9 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 		"agents/vgxness-sdd-spec.md",
 		"agents/vgxness-sdd-tasks.md",
 		"agents/vgxness-verifier.md",
-		"opencode.jsonc",
 		"plugins/vgxness.ts",
 		"skills/vgxness-autonomous-stacked-pr/SKILL.md",
+		"vgxness/default-agent.json",
 		"vgxness/model-plan.json",
 	}
 	if before.Root != configDirectory || len(before.Artifacts) != 19 || len(before.AggregateSHA256) != 64 {
@@ -59,7 +59,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 	}
 
 	installed, err := service.Install(context.Background(), options)
-	if err != nil || installed.ArtifactCount != 19 {
+	if err != nil || installed.ArtifactCount != 20 {
 		t.Fatalf("Install() = %+v, %v", installed, err)
 	}
 	for _, artifact := range before.Artifacts {
@@ -97,7 +97,7 @@ func TestReinstallChangesOnlyManagedArtifacts(t *testing.T) {
 	if _, err := service.Install(context.Background(), options); err != nil {
 		t.Fatal(err)
 	}
-	unrelated := []string{"opencode.json", "credentials.json", "plugins/user.ts", "agents/user.md"}
+	unrelated := []string{"opencode.jsonc", "credentials.json", "plugins/user.ts", "agents/user.md"}
 	before := make(map[string]os.FileInfo, len(unrelated))
 	for _, relative := range unrelated {
 		path := filepath.Join(configDirectory, filepath.FromSlash(relative))
