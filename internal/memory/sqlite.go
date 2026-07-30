@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -18,20 +19,32 @@ import (
 )
 
 type Store struct {
-	db       *sql.DB
-	now      func() time.Time
-	readOnly bool
+	db         *sql.DB
+	now        func() time.Time
+	readOnly   bool
+	checkpoint func() (busy, log, checkpointed int, err error)
+	close      func() error
 }
 
 func Open(ctx context.Context, path string, now func() time.Time) (*Store, error) {
+	return open(ctx, path, now, nil)
+}
+
+func open(ctx context.Context, path string, now func() time.Time, afterConfigure func() error) (*Store, error) {
 	if err := cancelled(ctx); err != nil {
 		return nil, err
 	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
-	_, statErr := os.Stat(path)
-	created := os.IsNotExist(statErr)
+	path, err := canonicalizeStoragePath(path)
+	if err != nil {
+		return nil, err
+	}
+	parentInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil || !parentInfo.IsDir() {
+		return nil, fmt.Errorf("open memory store: %w", ErrCorrupt)
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open memory store: %w", ErrCorrupt)
@@ -39,11 +52,10 @@ func Open(ctx context.Context, path string, now func() time.Time) (*Store, error
 	db.SetMaxOpenConns(1)
 	cleanup := func() {
 		_ = db.Close()
-		if created {
-			_ = os.Remove(path)
-			_ = os.Remove(path + "-wal")
-			_ = os.Remove(path + "-shm")
-		}
+	}
+	if err := validateDatabaseParent(path, parentInfo); err != nil {
+		cleanup()
+		return nil, err
 	}
 	for _, pragma := range []string{`PRAGMA busy_timeout=25`, `PRAGMA foreign_keys=ON`, `PRAGMA journal_mode=WAL`} {
 		for attempt := 0; ; attempt++ {
@@ -58,6 +70,20 @@ func Open(ctx context.Context, path string, now func() time.Time) (*Store, error
 				}
 				return nil, fmt.Errorf("configure memory store: %w", ErrCorrupt)
 			}
+		}
+	}
+	if err := secureSQLiteArtifacts(path); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := validateDatabaseParent(path, parentInfo); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if afterConfigure != nil {
+		if err := afterConfigure(); err != nil {
+			cleanup()
+			return nil, err
 		}
 	}
 	if err := applyMigrations(ctx, db, migrations); err != nil {
@@ -86,6 +112,10 @@ func OpenRead(ctx context.Context, path string) (*Store, error) {
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
+	path, err := canonicalizeStoragePath(path)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("%w: memory storage is absent", ErrCorrupt)
 	} else if err != nil {
@@ -111,6 +141,10 @@ func HealthFile(ctx context.Context, path string) (int, error) {
 	if err := rejectSymlink(path); err != nil {
 		return 0, err
 	}
+	path, err := canonicalizeStoragePath(path)
+	if err != nil {
+		return 0, err
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return 0, nil
 	} else if err != nil {
@@ -126,26 +160,115 @@ func HealthFile(ctx context.Context, path string) (int, error) {
 }
 
 func rejectSymlink(path string) error {
-	for _, candidate := range []string{filepath.Dir(path), path} {
-		if info, err := os.Lstat(candidate); err == nil && info.Mode()&os.ModeSymlink != 0 {
+	for candidate := filepath.Clean(path); ; candidate = filepath.Dir(candidate) {
+		if info, err := os.Lstat(candidate); err == nil && info.Mode()&os.ModeSymlink != 0 && !isSystemStorageSymlink(candidate) {
 			return fmt.Errorf("open memory store: %w", ErrCorrupt)
 		} else if err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("open memory store: %w", ErrCorrupt)
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			break
+		}
+	}
+	return nil
+}
+
+// SQLite accepts only path strings. Config.Prepare creates a private parent;
+// revalidation detects replacement. A same-user attacker can still race SQLite
+// between these checks, which is outside this path-based API's boundary.
+func canonicalizeStoragePath(path string) (string, error) {
+	clean := filepath.Clean(path)
+	ancestor := clean
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("open memory store: %w", ErrCorrupt)
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			break
+		}
+		ancestor = parent
+	}
+	canonical, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return "", fmt.Errorf("open memory store: %w", ErrCorrupt)
+	}
+	relative, err := filepath.Rel(ancestor, clean)
+	if err != nil {
+		return "", fmt.Errorf("open memory store: %w", ErrCorrupt)
+	}
+	return filepath.Join(canonical, relative), nil
+}
+
+func isSystemStorageSymlink(path string) bool {
+	if runtime.GOOS != "darwin" || path != "/var" {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	return err == nil && resolved == "/private/var"
+}
+
+func validateDatabaseParent(path string, expected os.FileInfo) error {
+	if err := rejectSymlink(path); err != nil {
+		return err
+	}
+	current, err := os.Stat(filepath.Dir(path))
+	if err != nil || !os.SameFile(expected, current) {
+		return fmt.Errorf("open memory store: %w", ErrCorrupt)
+	}
+	return nil
+}
+
+func secureSQLiteArtifacts(path string) error {
+	for _, artifact := range []string{path, path + "-wal", path + "-shm"} {
+		info, err := os.Lstat(artifact)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("open memory store: %w", ErrCorrupt)
+		}
+		if err := os.Chmod(artifact, 0o600); err != nil {
+			return fmt.Errorf("secure memory store: %w", err)
 		}
 	}
 	return nil
 }
 func (s *Store) Close() error {
-	if s == nil || s.db == nil {
+	if s == nil || s.db == nil && s.close == nil {
 		return nil
 	}
+	var checkpointErr error
 	if !s.readOnly {
 		// Health inspection intentionally opens an immutable snapshot. Keep the
 		// main database complete by checkpointing committed WAL state whenever
 		// a writable application operation releases its store.
-		_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+		if s.checkpoint != nil {
+			busy, _, _, err := s.checkpoint()
+			checkpointErr = checkpointResult(busy, err)
+		} else {
+			var busy, log, checkpointed int
+			err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &log, &checkpointed)
+			checkpointErr = checkpointResult(busy, err)
+		}
 	}
-	return s.db.Close()
+	if s.close != nil {
+		return errors.Join(checkpointErr, s.close())
+	}
+	return errors.Join(checkpointErr, s.db.Close())
+}
+
+func checkpointResult(busy int, err error) error {
+	if err != nil {
+		return fmt.Errorf("checkpoint memory store: %w", err)
+	}
+	if busy != 0 {
+		return errors.New("checkpoint memory store: busy")
+	}
+	return nil
 }
 func (s *Store) Health(ctx context.Context) (int, error) {
 	if err := cancelled(ctx); err != nil {

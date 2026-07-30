@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,11 +122,8 @@ func packageWithBuild(ctx context.Context, options Options, builder func(context
 		return fmt.Errorf("create staging directory: %w", err)
 	}
 	defer os.RemoveAll(stage)
-	assets := filepath.Join(stage, "assets")
+	assets := stage
 	work := filepath.Join(stage, "work")
-	if err := os.Mkdir(assets, 0o755); err != nil {
-		return fmt.Errorf("create asset staging: %w", err)
-	}
 	if err := os.Mkdir(work, 0o755); err != nil {
 		return fmt.Errorf("create build staging: %w", err)
 	}
@@ -189,56 +185,11 @@ func packageWithBuild(ctx context.Context, options Options, builder func(context
 	return nil
 }
 
-func publishAssets(assets, output string) (resultErr error) {
-	parentRoot, err := os.OpenRoot(filepath.Dir(output))
-	if err != nil {
-		return fmt.Errorf("open output parent: %w", err)
-	}
-	defer func() {
-		if err := parentRoot.Close(); resultErr == nil && err != nil {
-			resultErr = fmt.Errorf("close output parent: %w", err)
-		}
-	}()
+func publishAssets(assets, output string) error {
+	return publishAssetsWith(assets, output, publishNoReplace)
+}
 
-	outputName := filepath.Base(output)
-	outputInfo, err := parentRoot.Lstat(outputName)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := parentRoot.Mkdir(outputName, 0o755); err != nil {
-			return fmt.Errorf("reserve output directory: %w", err)
-		}
-		outputInfo, err = parentRoot.Lstat(outputName)
-	}
-	if err != nil {
-		return fmt.Errorf("inspect output before publish: %w", err)
-	}
-	if outputInfo.Mode()&os.ModeSymlink != 0 || !outputInfo.IsDir() {
-		return errors.New("output changed before publish: output must be a directory")
-	}
-
-	outputRoot, err := parentRoot.OpenRoot(outputName)
-	if err != nil {
-		return fmt.Errorf("open output directory: %w", err)
-	}
-	defer func() {
-		if err := outputRoot.Close(); resultErr == nil && err != nil {
-			resultErr = fmt.Errorf("close output directory: %w", err)
-		}
-	}()
-	rootInfo, err := outputRoot.Stat(".")
-	if err != nil {
-		return fmt.Errorf("inspect reserved output: %w", err)
-	}
-	if !os.SameFile(outputInfo, rootInfo) {
-		return errors.New("output changed before publish")
-	}
-	existing, err := fs.ReadDir(outputRoot.FS(), ".")
-	if err != nil {
-		return fmt.Errorf("read output before publish: %w", err)
-	}
-	if len(existing) != 0 {
-		return errors.New("output changed before publish: output directory is not empty")
-	}
-
+func publishAssetsWith(assets, output string, publish func(string, string) error) error {
 	entries, err := os.ReadDir(assets)
 	if err != nil {
 		return fmt.Errorf("read staged assets: %w", err)
@@ -251,41 +202,14 @@ func publishAssets(assets, output string) (resultErr error) {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("staged asset %s is not a regular file", entry.Name())
 		}
-		data, err := os.ReadFile(filepath.Join(assets, entry.Name()))
-		if err != nil {
-			return fmt.Errorf("read staged asset %s: %w", entry.Name(), err)
-		}
-		file, err := outputRoot.OpenFile(entry.Name(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
-		if err != nil {
-			return fmt.Errorf("reserve release asset %s: %w", entry.Name(), err)
-		}
-		if _, err := file.Write(data); err != nil {
-			_ = file.Close()
-			return fmt.Errorf("publish release asset %s: %w", entry.Name(), err)
-		}
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("close release asset %s: %w", entry.Name(), err)
-		}
 	}
-
-	currentInfo, err := parentRoot.Stat(outputName)
-	if err != nil {
-		return fmt.Errorf("inspect output after publish: %w", err)
+	if _, err := os.Lstat(output); err == nil {
+		return errors.New("output changed before publish: output already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect output before publish: %w", err)
 	}
-	if !os.SameFile(rootInfo, currentInfo) {
-		return errors.New("output changed during publish")
-	}
-	published, err := fs.ReadDir(outputRoot.FS(), ".")
-	if err != nil {
-		return fmt.Errorf("read output after publish: %w", err)
-	}
-	if len(published) != len(entries) {
-		return errors.New("output changed during publish")
-	}
-	for index := range entries {
-		if published[index].Name() != entries[index].Name() {
-			return errors.New("output changed during publish")
-		}
+	if err := publish(assets, output); err != nil {
+		return fmt.Errorf("publish staged release: %w", err)
 	}
 	return nil
 }
@@ -327,10 +251,8 @@ func validateOutput(output string) error {
 	if err != nil {
 		return fmt.Errorf("read output: %w", err)
 	}
-	if len(entries) != 0 {
-		return errors.New("output directory is not empty")
-	}
-	return nil
+	_ = entries
+	return errors.New("output directory already exists")
 }
 
 func build(ctx context.Context, repository, output string, target target, options Options) error {

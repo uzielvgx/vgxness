@@ -98,27 +98,21 @@ func (runtime memoryRuntime) Get(ctx context.Context, opts config.Options, reque
 }
 
 func (runtime memoryRuntime) Forget(ctx context.Context, opts config.Options, request memory.Forget) (memory.Entry, error) {
-	store, err := openStore(ctx, opts)
-	if err != nil {
-		return memory.Entry{}, err
-	}
-	defer store.Close()
-	return memory.NewMemoryService(store, runtime.producerName(), nil).Forget(ctx, request)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.Entry, error) {
+		return memory.NewMemoryService(store, runtime.producerName(), nil).Forget(ctx, request)
+	})
 }
 
 func (runtime memoryRuntime) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
-	var store *memory.Store
-	var err error
 	if runtime.readOnly {
-		store, err = openStoreRead(ctx, opts)
-	} else {
-		store, err = openStore(ctx, opts)
+		store, err := openStoreRead(ctx, opts)
+		if err != nil {
+			return "", err
+		}
+		defer store.Close()
+		return store.ResolveProject(ctx, workspace)
 	}
-	if err != nil {
-		return "", err
-	}
-	defer store.Close()
-	return store.ResolveProject(ctx, workspace)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (string, error) { return store.ResolveProject(ctx, workspace) })
 }
 
 type tuiInspectionRuntime interface {
@@ -454,12 +448,7 @@ func (runtime memoryRuntime) producerName() string {
 type storeRuntime struct{ opts config.Options }
 
 func (runtime storeRuntime) Save(ctx context.Context, item memory.Observation) (memory.Observation, error) {
-	store, err := openStore(ctx, runtime.opts)
-	if err != nil {
-		return memory.Observation{}, err
-	}
-	defer store.Close()
-	return store.Save(ctx, item)
+	return withWritableStore(ctx, runtime.opts, func(store *memory.Store) (memory.Observation, error) { return store.Save(ctx, item) })
 }
 
 func (runtime storeRuntime) Search(ctx context.Context, query memory.Search) ([]memory.Observation, error) {
@@ -505,24 +494,28 @@ func openStoreRead(ctx context.Context, opts config.Options) (*memory.Store, err
 	return memory.OpenRead(ctx, paths.Database)
 }
 
+func withWritableStore[T any](ctx context.Context, opts config.Options, operation func(*memory.Store) (T, error)) (T, error) {
+	return withStore(func() (*memory.Store, error) { return openStore(ctx, opts) }, operation, func(store *memory.Store) error { return store.Close() })
+}
+
+func withStore[T any](open func() (*memory.Store, error), operation func(*memory.Store) (T, error), close func(*memory.Store) error) (result T, resultErr error) {
+	var zero T
+	store, err := open()
+	if err != nil {
+		return zero, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, close(store)) }()
+	return operation(store)
+}
+
 type sddRuntime struct{}
 
 func (sddRuntime) ResolveSDDProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
-	store, err := openStore(ctx, opts)
-	if err != nil {
-		return "", err
-	}
-	defer store.Close()
-	return store.ResolveProject(ctx, workspace)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (string, error) { return store.ResolveProject(ctx, workspace) })
 }
 
 func (sddRuntime) CreateChange(ctx context.Context, opts config.Options, request sdd.CreateChangeRequest) (sdd.Change, error) {
-	store, err := openStore(ctx, opts)
-	if err != nil {
-		return sdd.Change{}, err
-	}
-	defer store.Close()
-	return sdd.NewService(store).CreateChange(ctx, request)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Change, error) { return sdd.NewService(store).CreateChange(ctx, request) })
 }
 
 func (sddRuntime) ListChanges(ctx context.Context, opts config.Options, request sdd.ListChangesRequest) ([]sdd.Change, error) {
@@ -544,21 +537,15 @@ func (sddRuntime) GetChange(ctx context.Context, opts config.Options, request sd
 }
 
 func (sddRuntime) UpdateInteractionMode(ctx context.Context, opts config.Options, request sdd.UpdateInteractionModeRequest) (sdd.Change, error) {
-	store, err := openStore(ctx, opts)
-	if err != nil {
-		return sdd.Change{}, err
-	}
-	defer store.Close()
-	return sdd.NewService(store).UpdateInteractionMode(ctx, request)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Change, error) {
+		return sdd.NewService(store).UpdateInteractionMode(ctx, request)
+	})
 }
 
 func (sddRuntime) SaveRevision(ctx context.Context, opts config.Options, request sdd.SaveRevisionRequest) (sdd.Revision, error) {
-	store, err := openStore(ctx, opts)
-	if err != nil {
-		return sdd.Revision{}, err
-	}
-	defer store.Close()
-	return sdd.NewService(store).SaveRevision(ctx, request)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Revision, error) {
+		return sdd.NewService(store).SaveRevision(ctx, request)
+	})
 }
 
 func (sddRuntime) GetRevision(ctx context.Context, opts config.Options, request sdd.GetRevisionRequest) (sdd.Revision, error) {
@@ -580,21 +567,15 @@ func (sddRuntime) ListRevisions(ctx context.Context, opts config.Options, reques
 }
 
 func (sddRuntime) AcceptRevision(ctx context.Context, opts config.Options, request sdd.AcceptRevisionRequest) (sdd.Revision, error) {
-	store, err := openStore(ctx, opts)
-	if err != nil {
-		return sdd.Revision{}, err
-	}
-	defer store.Close()
-	return sdd.NewService(store).AcceptRevision(ctx, request)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Revision, error) {
+		return sdd.NewService(store).AcceptRevision(ctx, request)
+	})
 }
 
 func (sddRuntime) TransitionChange(ctx context.Context, opts config.Options, request sdd.TransitionChangeRequest) (sdd.Change, error) {
-	store, err := openStore(ctx, opts)
-	if err != nil {
-		return sdd.Change{}, err
-	}
-	defer store.Close()
-	return sdd.NewService(store).TransitionChange(ctx, request)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Change, error) {
+		return sdd.NewService(store).TransitionChange(ctx, request)
+	})
 }
 
 func (sddRuntime) ProjectionStatus(ctx context.Context, opts config.Options, request sdd.ProjectionStatusRequest) (sdd.Projection, error) {
@@ -607,12 +588,9 @@ func (sddRuntime) ProjectionStatus(ctx context.Context, opts config.Options, req
 }
 
 func (sddRuntime) RecordProjection(ctx context.Context, opts config.Options, request sdd.RecordProjectionRequest) (sdd.Projection, error) {
-	store, err := openStore(ctx, opts)
-	if err != nil {
-		return sdd.Projection{}, err
-	}
-	defer store.Close()
-	return sdd.NewService(store).RecordProjection(ctx, request)
+	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Projection, error) {
+		return sdd.NewService(store).RecordProjection(ctx, request)
+	})
 }
 
 func (sddRuntime) RenderProjection(ctx context.Context, opts config.Options, request sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error) {

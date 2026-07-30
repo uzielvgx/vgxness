@@ -52,8 +52,8 @@ func TestValidateOutputRefusesTraversalAndNonemptyDirectory(t *testing.T) {
 	if err := os.Mkdir(empty, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateOutput(empty); err != nil {
-		t.Fatalf("empty output rejected: %v", err)
+	if err := validateOutput(empty); err == nil {
+		t.Fatal("empty output accepted")
 	}
 	if err := os.WriteFile(filepath.Join(empty, "existing"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -256,6 +256,44 @@ func TestPublishAssetsCreatesAbsentOutput(t *testing.T) {
 	}
 	if string(data) != "release" {
 		t.Fatalf("artifact = %q, want release", data)
+	}
+}
+
+func TestPublishAssetsPublicationFailureLeavesNoPartialOutputAndRetries(t *testing.T) {
+	assets := t.TempDir()
+	if err := os.WriteFile(filepath.Join(assets, "artifact"), []byte("release"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "dist")
+	if err := publishAssetsWith(assets, output, func(_, _ string) error { return errors.New("injected publication failure") }); err == nil {
+		t.Fatal("publishAssets succeeded despite injected publication failure")
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial output remains after failed publication: %v", err)
+	}
+	if err := publishAssets(assets, output); err != nil {
+		t.Fatalf("retry publishAssets: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "artifact"))
+	if err != nil || string(data) != "release" {
+		t.Fatalf("retried artifact = %q, %v", data, err)
+	}
+}
+
+func TestPublishAssetsDoesNotReplaceConcurrentDestination(t *testing.T) {
+	assets := t.TempDir()
+	if err := os.WriteFile(filepath.Join(assets, "artifact"), []byte("release"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "dist")
+	if err := os.Mkdir(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishAssets(assets, output); err == nil {
+		t.Fatal("publishAssets replaced an existing empty directory")
+	}
+	if _, err := os.Stat(output); err != nil {
+		t.Fatalf("concurrent destination disappeared: %v", err)
 	}
 }
 
