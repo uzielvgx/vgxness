@@ -415,7 +415,7 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 	anchors := make([]reinstallAnchor, 0, len(state.artifacts))
 	staged := make([]installedArtifact, 0, len(state.artifacts))
 	published := make([]installedArtifact, 0, len(state.artifacts))
-	var pendingInfo os.FileInfo
+	var pendingEvidence reinstallPendingEvidence
 	rollback := true
 	defer func() {
 		if !rollback {
@@ -434,8 +434,8 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 					cleanupErr = errors.Join(cleanupErr, recoveryFailure("remove reinstall predecessor anchor", err))
 				}
 			}
-			if cleanupErr == nil && pendingInfo != nil {
-				cleanupErr = clearReinstallPending(root, pendingInfo)
+			if cleanupErr == nil && pendingEvidence.info != nil {
+				cleanupErr = clearReinstallPending(root, pendingEvidence)
 			}
 			returnErr = errors.Join(returnErr, cleanupErr)
 			return
@@ -468,8 +468,8 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove staged reinstall artifact", err))
 			}
 		}
-		if recoveryErr == nil && pendingInfo != nil {
-			recoveryErr = clearReinstallPending(root, pendingInfo)
+		if recoveryErr == nil && pendingEvidence.info != nil {
+			recoveryErr = clearReinstallPending(root, pendingEvidence)
 		}
 		returnErr = errors.Join(returnErr, recoveryErr)
 	}()
@@ -481,7 +481,7 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 		}
 		staged = append(staged, installedArtifact{path: item.path, temporary: temporary, content: item.content})
 	}
-	pendingInfo, err = service.writeReinstallPending(ctx, root, expectedLayout)
+	pendingEvidence, err = service.writeReinstallPending(ctx, root, expectedLayout)
 	if err != nil {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, fmt.Errorf("write reinstall pending marker: %w", err))
 	}

@@ -406,7 +406,7 @@ func TestReinstallRevalidatesPredecessorAnchorBeforeCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldInfo, err := os.Stat(installed.Path)
+	predecessor, err := os.ReadFile(installed.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,8 +421,9 @@ func TestReinstallRevalidatesPredecessorAnchorBeforeCleanup(t *testing.T) {
 			return fmt.Errorf("find predecessor anchor: %v %v", anchors, err)
 		}
 		for _, anchor := range anchors {
-			info, statErr := os.Stat(anchor)
-			if statErr == nil && os.SameFile(oldInfo, info) {
+			info, statErr := os.Lstat(anchor)
+			contents, readErr := os.ReadFile(anchor)
+			if statErr == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 && readErr == nil && bytes.Equal(contents, predecessor) {
 				mutated = true
 				return os.WriteFile(anchor, changed, 0o600)
 			}
@@ -754,7 +755,7 @@ func TestClearReinstallPendingPreservesConcurrentReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacement := []byte("concurrent replacement")
+	replacement := []byte("replaced")
 	temporary := filepath.Join(configDirectory, "replacement")
 	if err := os.WriteFile(temporary, replacement, 0o600); err != nil {
 		t.Fatal(err)
@@ -762,7 +763,7 @@ func TestClearReinstallPendingPreservesConcurrentReplacement(t *testing.T) {
 	if err := os.Rename(temporary, markerPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := clearReinstallPending(configDirectory, expected); !errors.Is(err, integration.ErrRecovery) {
+	if err := clearReinstallPending(configDirectory, reinstallPendingEvidence{info: expected, digest: sha256.Sum256([]byte("expected"))}); !errors.Is(err, integration.ErrRecovery) {
 		t.Fatalf("clearReinstallPending() error = %v, want ErrRecovery", err)
 	}
 	data, err := os.ReadFile(markerPath)
