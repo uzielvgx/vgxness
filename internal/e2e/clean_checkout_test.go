@@ -68,7 +68,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	general := filepath.Join(configDirectory, "agents", "general.md")
 	verifier := filepath.Join(configDirectory, "agents", "vgxness-verifier.md")
 	memoryPlugin := filepath.Join(configDirectory, "plugins", "vgxness.ts")
-	defaultAgentConfig := filepath.Join(configDirectory, "opencode.jsonc")
+	defaultAgentConfig := filepath.Join(configDirectory, "opencode.json")
 	reviewers := []string{
 		"vgxness-review-risk.md",
 		"vgxness-review-readability.md",
