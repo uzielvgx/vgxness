@@ -511,9 +511,11 @@ func skipShortIntegration(t *testing.T) {
 func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
 	current := []byte(autonomousStackedPRSkill)
 	cases := map[string][]byte{
-		"foreign":  []byte("user-owned skill\n"),
-		"modified": append(append([]byte(nil), current...), []byte("\nuser modification\n")...),
-		"newer":    bytes.Replace(current, []byte("version: 1"), []byte("version: 2"), 1),
+		"foreign":      []byte("user-owned skill\n"),
+		"modified":     append(append([]byte(nil), current...), []byte("\nuser modification\n")...),
+		"modified v1":  append(append([]byte(nil), previousAutonomousStackedPRSkill...), []byte("\nuser modification\n")...),
+		"malformed v1": bytes.Replace([]byte(previousAutonomousStackedPRSkill), []byte("version: 1"), []byte("version: one"), 1),
+		"newer":        bytes.Replace(current, []byte("version: 2"), []byte("version: 3"), 1),
 	}
 	for name, candidate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -532,6 +534,23 @@ func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
 			testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && errors.Is(uninstallErr, integration.ErrDrift) && readErr == nil && bytes.Equal(after, candidate), "%s skill changed: installed=%+v status=%+v install=%v uninstall=%v read=%v", name, installed, status, installErr, uninstallErr, readErr)
 		})
 	}
+}
+
+func TestIntegrationUpgradesOnlyExactV1ManagedSkill(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	path := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+	testutil.NoError(t, os.WriteFile(path, []byte(previousAutonomousStackedPRSkill), 0o600))
+
+	upgraded, upgradeErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	testutil.Require(t,
+		upgradeErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && readErr == nil && bytes.Equal(after, []byte(autonomousStackedPRSkill)),
+		"exact v1 skill was not upgraded: installed=%+v err=%v read=%v", upgraded, upgradeErr, readErr,
+	)
 }
 
 func TestIntegrationPreservesForeignGeneralAndVerifier(t *testing.T) {
@@ -638,7 +657,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 35"), []byte("version: 34"), 1)
+	older := bytes.Replace(current, []byte("version: 36"), []byte("version: 35"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -727,7 +746,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 35",
+		"artifact: opencode-agent/vgxness-manager; version: 36",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",

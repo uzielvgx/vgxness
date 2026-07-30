@@ -22,12 +22,23 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 35",
+		"artifact: opencode-agent/vgxness-manager; version: 36",
 		"vgxness-autonomous-stacked-pr", "routine autonomous delivery",
 		"sole Git and GitHub actor", "delegated implementation worker",
+		"current-task merge authorization", "original inspected base branch",
+		"gh pr merge <number> --repo <repository> --merge --match-head-commit <expected-head-oid>",
+		"verified GitHub `owner/repo` identity", "validated full commit OID",
+		"expected base-tip OID", "before checks and again immediately before merge",
+		"fast-forward", "no cleanup",
+		"creating an additional checkout or worktree", "Switching the existing checkout back to the original base",
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("canonical current manager missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"git push <remote> --delete <head>"} {
+		if strings.Contains(manager, forbidden) {
+			t.Errorf("canonical current manager retains forbidden cleanup %q", forbidden)
 		}
 	}
 	if _, exists := bundle.agents[autonomousStackedPRSkillName]; exists {
@@ -44,19 +55,29 @@ func TestAutonomousStackedPRSkillHasExactIdentityAndNativePolicy(t *testing.T) {
 		t.Fatalf("skill frontmatter differs from accepted identity:\n%s", skill)
 	}
 	for _, required := range []string{
-		"artifact: opencode-skill/vgxness-autonomous-stacked-pr; version: 1",
+		"artifact: opencode-skill/vgxness-autonomous-stacked-pr; version: 2",
 		"400 effective changed lines", "more than 800 effective changed lines",
 		"explicit task override", "durable project memory default",
 		"git diff --numstat", "48 characters", "vgxness/<delivery-id>/slice-<ordinal>",
 		"use `task` if empty", "estimate guides only the initial plan", "actual measurement supersedes the estimate",
 		"actual total is more than 800 effective changed lines",
-		"one clean checkout", "linear immediate-parent topology", "no automatic cleanup",
+		"one clean checkout", "linear immediate-parent topology", "same original inspected base branch",
+		"merge commits preserve predecessor commits", "narrow after earlier slices land",
+		"no merge", "no cleanup", "current-task merge authorization",
 		"read-only resumption", "local-only", "no commit", "no push", "no PR",
 		"Initial branch creation uses the announced estimate", "re-plan before staging, commit, push, or PR creation",
 		"fresh branch", "normal commit", "first push", "non-draft pull request",
 		`git switch -c <head> <verified-start-commit>`,
 		`git push --set-upstream <verified-remote> <head>`,
 		`gh pr create --head <head> --base <base> --title "<title>" --body "<body>"`,
+		`gh pr merge <number> --repo <repository> --merge --match-head-commit <expected-head-oid>`,
+		"verified GitHub `owner/repo` identity", "validated full commit OID",
+		"expected base-tip OID", "before checks and again immediately before merge",
+		`gh pr checks <number> --repo <repository> --watch --fail-fast`,
+		"positive decimal PR number", "expected head OID", "successful required checks",
+		"predecessor merged state", "immediately before merge", "expected head/base/merge commit identity",
+		"fast-forward from the verified remote-tracking base", "git branch -d", "remote delivery branches are left intact",
+		"creating an additional checkout or worktree", "Switching the existing checkout back to the original base",
 		`<type>(<scope>): <summary> [slice <ordinal>/<total>]`,
 		`<summary> [<ordinal>/<total>]`,
 		`Stack: <delivery-id>, Slice: <ordinal>/<total>, Base: <base>, Head: <head>, Depends-On: <previous-PR-URL-or-none>`,
@@ -67,7 +88,7 @@ func TestAutonomousStackedPRSkillHasExactIdentityAndNativePolicy(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"worktree add", "worktree remove", "--force", "--amend", "gh pr edit", "gh pr merge",
+		"worktree add", "worktree remove", "--force", "--amend", "gh pr edit", "git push <remote> --delete <head>",
 		"persistent delivery state", "opencode.json", "custom Git tool", "custom GitHub tool",
 		"before the first Git mutation",
 		`Stack: <delivery-id>; Slice: <ordinal>/<total>; Base: <base>; Head: <head>; Depends-On: <previous-PR-URL-or-none>`,

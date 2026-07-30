@@ -16,7 +16,7 @@ VGXNESS makes AI-assisted engineering understandable, bounded, and recoverable w
 - SQLite/FTS5 schema v5 with isolated semantic and SDD domains;
 - `memory`, `openspec`, and `hybrid` SDD backends;
 - `automatic` and `interactive` per-change SDD modes;
-- manager v35, 14 other model-bound agents, plugin v5, model-plan manifest, and one independent autonomous stacked-PR skill;
+- manager v36, 14 other model-bound agents, plugin v5, model-plan manifest, and one independent autonomous stacked-PR skill;
 - six-step CLI/TUI setup with a bounded OpenCode 1.18.4+ handshake;
 - current-only manager and agent recognition, exact storage-plugin predecessor recognition, and conservative uninstall behavior;
 - deterministic release archives, checksums, and workflows.
@@ -35,7 +35,7 @@ The projection contains exactly 20 artifacts:
 
 | Artifact group | Count | Contract |
 | --- | ---: | --- |
-| Manager v35 | 1 | Sole orchestration, lifecycle, Git, and GitHub actor. |
+| Manager v36 | 1 | Sole orchestration, lifecycle, Git, and GitHub actor. |
 | Explore override | 1 | CodeGraph-first and deny-by-default read-only discovery. |
 | General and verifier | 2 | Global capability with delegated implementation and independent non-mutating validation roles. |
 | Reviewers | 5 | Hidden and read-only. |
@@ -48,7 +48,7 @@ The projection contains exactly 20 artifacts:
 
 The default `medium` plan uses Luna Fast, Terra, and Sol slots. Plan or slot changes require OpenCode restart. The deprecated `--model` option remains a no-op.
 
-Eligible implementations default to 400 effective changed lines per slice and stack only above 800. After freeze, verification, and review, manager v35 may create fresh normalized branches, normal commits, first pushes, and non-draft pull requests without a second routine approval. Explicit task restrictions narrow transitively. Existing delivery state is read-only, cleanup is never automatic, and post-create mutation, worktree mutation, history rewriting, merge, force, release, credential, and configuration changes remain unsupported. OpenCode globs establish static policy ordering but do not prove argv semantics or external Git/GitHub behavior.
+Eligible implementations default to 400 effective changed lines per slice and stack only above 800. Every stacked PR targets the same original inspected base, with immediate-parent commit ancestry and `Depends-On` metadata; merge commits preserve predecessor commits so later diffs narrow as earlier slices land. After freeze, verification, and review, manager v36 may create fresh normalized branches, normal commits, first pushes, and non-draft pull requests without a second routine approval. It may merge only PRs created by the same current eligible task, in ordinal order, using the repository's allowed merge-commit method with verified `owner/repo` binding and an exact full head OID. Each slice has an expected base-tip OID from a fresh original-base readback before checks; after each predecessor merge it advances from a fresh readback, and the PR base plus live remote base must match it before checks and immediately before merge. `no merge` is transitive, while `local-only`, `no commit`, `no push`, and `no PR` also prohibit merge. After verified merges and a clean worktree, it may fast-forward the original base from the verified remote-tracking base. Unless `no cleanup` applies, it may delete only exact current-delivery local branches proved merged with no open dependent PR; remote delivery branches are left intact. Existing delivery state remains read-only; any failed or ambiguous check, merge, host, auth, protection, topology, remote, or worktree state stops further mutation. OpenCode globs establish static policy ordering but do not prove argv semantics or external Git/GitHub behavior.
 
 ## Storage and SDD
 

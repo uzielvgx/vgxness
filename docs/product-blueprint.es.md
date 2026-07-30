@@ -15,7 +15,7 @@ VGXNESS es un manager nativo de OpenCode con almacenamiento local y herramientas
 - SQLite/FTS5 esquema v5 con dominios semántico y SDD aislados;
 - backends SDD `memory`, `openspec` e `hybrid`;
 - modos SDD `automatic` e `interactive` por cambio;
-- manager v35, otros 14 agentes ligados a modelos, plugin v5, manifiesto de modelos y un skill independiente de PR apiladas autónomas;
+- manager v36, otros 14 agentes ligados a modelos, plugin v5, manifiesto de modelos y un skill independiente de PR apiladas autónomas;
 - setup CLI/TUI de seis pasos con handshake delimitado de OpenCode 1.18.4+;
 - reconocimiento current-only de manager y agentes, reconocimiento exacto de plugins de almacenamiento anteriores y desinstalación conservadora;
 - archivos de release, checksums y workflows deterministas.
@@ -34,7 +34,7 @@ La proyección contiene exactamente 20 artefactos:
 
 | Grupo | Cantidad | Contrato |
 | --- | ---: | --- |
-| Manager v35 | 1 | Única autoridad de orquestación, ciclo, Git y GitHub. |
+| Manager v36 | 1 | Única autoridad de orquestación, ciclo, Git y GitHub. |
 | Sustitución Explore | 1 | Descubrimiento CodeGraph-first, de solo lectura y denegado por defecto. |
 | General y verificador | 2 | `general`: implementación delegada y único escritor del workspace; verificador: validación final independiente y no mutante. |
 | Revisores | 5 | Ocultos y de solo lectura. |
@@ -47,7 +47,7 @@ La proyección contiene exactamente 20 artefactos:
 
 El plan `medium` usa slots Luna Fast, Terra y Sol. Cambiar plan o slot requiere reiniciar OpenCode. `--model` permanece como opción obsoleta sin efecto.
 
-Las implementaciones elegibles usan por defecto un objetivo de 400 líneas efectivas por slice y solo apilan por encima de 800. Tras freeze, verificación y review, manager v35 puede crear branches nuevas normalizadas, commits normales, primeros pushes y PR no draft sin una segunda aprobación rutinaria. Las restricciones explícitas se propagan de forma transitiva. El estado de entrega existente solo se reanuda en modo lectura, nunca hay cleanup automático y siguen sin soporte las mutaciones posteriores de PR, worktrees, historia, merge, force, releases, credenciales o configuración. Los globs de OpenCode expresan política estática; no prueban semántica argv ni comportamiento externo de Git o GitHub.
+Las implementaciones elegibles usan por defecto un objetivo de 400 líneas efectivas por slice y solo apilan por encima de 800. Cada PR apilada apunta a la misma base original inspeccionada, mantiene ascendencia de commits de padre inmediato y registra `Depends-On`; los merge commits conservan los commits predecesores para que los diffs posteriores se reduzcan al aterrizar los slices anteriores. Tras freeze, verificación y review, manager v36 puede crear branches nuevas normalizadas, commits normales, primeros pushes y PR no draft sin una segunda aprobación rutinaria. Solo puede hacer merge de PR creadas por la misma tarea elegible actual, en orden ordinal y mediante el método de merge commit permitido por el repositorio, con binding del `owner/repo` verificado y el OID completo exacto de la cabeza. Cada slice tiene un OID esperado de punta de base obtenido de una relectura fresca de la base original antes de los checks; después de cada merge predecesor avanza con una relectura fresca, y la base de la PR y la base remota viva deben coincidir antes de los checks e inmediatamente antes del merge. `no merge` se propaga de forma transitiva; `local-only`, `no commit`, `no push` y `no PR` también prohíben merge. Después de merges verificados y un worktree limpio, puede avanzar la base original exclusivamente con fast-forward desde la base remote-tracking verificada. Salvo `no cleanup`, solo puede eliminar branches locales exactas de la entrega actual ya fusionadas y sin una PR abierta dependiente; las branches remotas de entrega se conservan intactas. El estado de entrega existente permanece en modo lectura; cualquier check, merge, host, auth, protección, topología, remoto o worktree fallido o ambiguo detiene nuevas mutaciones. Los globs de OpenCode expresan política estática; no prueban semántica argv ni comportamiento externo de Git o GitHub.
 
 ## Almacenamiento y SDD
 
