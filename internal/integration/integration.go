@@ -91,5 +91,6 @@ type Runtime interface {
 type ManagedRuntime interface {
 	Runtime
 	ManagedLayout(context.Context, Options) (ManagedLayout, error)
+	ReinstallPending(context.Context, Options) (bool, error)
 	Reinstall(context.Context, Options) (Result, error)
 }
