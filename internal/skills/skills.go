@@ -97,7 +97,7 @@ func skillsRoot(options Options) (string, error) {
 }
 
 func files() (map[string][]byte, error) {
-	return bundledFiles("agent-skill-engineer")
+	return bundledFiles("skills-creator")
 }
 
 func bundledFiles(skill string) (map[string][]byte, error) {
@@ -427,6 +427,11 @@ func predecessor(relative string, content []byte) bool {
 
 var predecessorDigests = map[string]string{
 	"SKILL.md": "c327cbe5604210494c40d413b03fa5f4c26462785dc3c2926aa291500908d35d", "LICENSE.txt": "1efd6091b70b35e21e7eb2ac1db17892a22ea60d32074e3f613c973833ca6e24", "skill-manifest.json": "6a1d59a957de5d6cbd74500b2c24cae2f3e166886a15219077095a6f531c0bd3", "agents/openai.yaml": "8b438047a165e0d562bda9670bfb46db643bd3dff27c63d71a4005a2873bbbc6", "assets/SKILL.template.md": "4700c62c712bd1409c796a04564f1386d49ecc8c8bae98e24ca739c2269d1d6a", "assets/eval-cases.template.json": "a65222a4a57a0c64db5d1b40da070ced6796fe38e5449e983ebb68a0b6e18f05", "references/authoring-methodology.md": "05d63276f6fa728cbbba6bc8154d5c19094505b8778b8587eeb78f747a1eb0b0", "references/evaluation-methodology.md": "092a7e740cd4fd726cd4da16d3015f33873fac992208b5b166901783d0602904", "references/forward-testing.md": "7935b58f939924b751c5bbd0cada648175bf77ce91dc2dba63b8676c6e3bac12", "references/security-review.md": "a8ed9556520ce6678ed5ca5b3e9268aeb48a48e3849b69120c1bd3b07e73ee95", "scripts/generate_openai_yaml.py": "1ee4de86048f6731081e205b0a0211722dc6aef9198400c6d3fb8e133d550ef5", "scripts/init_skill.py": "1a43b96f60d8f542b945c4121f598ce99c115500e8b71753bbc9e041476694a8", "scripts/run_evals.py": "d7a23dc13113866a169120586670a09d14b3c6cff97343e84f05564c65e4b5c2", "scripts/skill_utils.py": "c6b8364928a67ec7c2b8d5d7fe1fcd07f8402840116c8473dad84b9a56500e6c", "scripts/validate_skill.py": "b6171b38c4c624a45f8c8a48e9a20ba7f52529f1b16f2b4b685b9e3182c8fe1d",
+}
+
+// legacyV032Digests recognizes the complete VGXNESS agent-skill-engineer v0.3.2 package during its rename.
+var legacyV032Digests = map[string]string{
+	"LICENSE.txt": "904c73d094910aff6f8e7f0bd06ab953f55f879264680363095d03e64e9a28d7", "SKILL.md": "ad5ce595583c57d5f1466fc1648d231143b4399734405139ac7cb64cb078539e", "agents/openai.yaml": "8b438047a165e0d562bda9670bfb46db643bd3dff27c63d71a4005a2873bbbc6", "assets/SKILL.template.md": "4700c62c712bd1409c796a04564f1386d49ecc8c8bae98e24ca739c2269d1d6a", "assets/eval-cases.template.json": "667412fa4210e93a9e31065a59536a179b6f2cb2dba8ec714b349cd33e73d4d0", "references/authoring-methodology.md": "05d63276f6fa728cbbba6bc8154d5c19094505b8778b8587eeb78f747a1eb0b0", "references/evaluation-methodology.md": "092a7e740cd4fd726cd4da16d3015f33873fac992208b5b166901783d0602904", "references/forward-testing.md": "2c7401c985f8cd77faa13004e07e890688493e1160b5f380d2d9ccddfe8cd04e", "references/security-review.md": "a72f2c0f111e4708469399aa45192b2018ee8ea5d379bfb19b0e6ffcf471d93d", "scripts/generate_openai_yaml.py": "2dc3dd5f118450fc1106f1146be1f78cde2d0b673f8c8583dca0cb8e05fe7088", "scripts/init_skill.py": "162e6ad532aca13c245d84a3b7164d9cf21c69526f300ad9dab8190943cff43e", "scripts/run_evals.py": "54a82f989e180d85662d013385c6033e6aab21e50ed90a6a9ee3b1230a07f7ae", "scripts/skill_utils.py": "8f793b14451a3894c784ecedf736dbeba6d47da9939b0cea66372901fd062dc5", "scripts/validate_skill.py": "b6171b38c4c624a45f8c8a48e9a20ba7f52529f1b16f2b4b685b9e3182c8fe1d", "skill-manifest.json": "df28f085bab7c4ff44a167ffb97dac3f99438fb0be716dbfd8422b42be73f7e1",
 }
 
 func predecessorDigest(relative, actual string) bool { return predecessorDigests[relative] == actual }

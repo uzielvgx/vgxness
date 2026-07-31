@@ -251,7 +251,7 @@ def main() -> int:
             "name": args.name,
             "version": args.version,
             "owner": args.owner,
-            "provenance": "Scaffolded by agent-skill-engineer",
+            "provenance": "Scaffolded by skills-creator",
             "license_status": args.license_status,
             "created": date.today().isoformat(),
             "standard": "agentskills.io",

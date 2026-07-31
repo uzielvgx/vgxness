@@ -56,7 +56,7 @@ The OpenCode projection contains 20 exact managed artifacts:
 
 The model plan contains exactly 15 agents and does not contain the skill. Manager, agent, and model-plan recognition is current-only; older versions are preserved as drift and require explicit removal or migration outside the integration. Exact catalogued storage-plugin predecessors remain recognizable. Foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
 
-`internal/skills` separately owns the global 15-file `agent-skill-engineer` pack at `~/.agents/skills`, or an absolute `--skills-dir` override. Setup installs and verifies this pack as its third step. It is independent from the 20 OpenCode artifacts: the OpenCode-specific stacked-PR skill remains provider-owned, and OpenCode uninstall does not remove the global pack. Its selected root is descriptor-anchored with `os.Root`; exact partial packs resume or remove safely, while unknown bytes are drift. Windows retains atomic rename/readback/backups but lacks directory fsync crash durability.
+`internal/skills` separately owns the global 15-file `skills-creator` pack at `~/.agents/skills`, or an absolute `--skills-dir` override. Setup installs and verifies this pack as its third step. It is independent from the 20 OpenCode artifacts: the OpenCode-specific stacked-PR skill remains provider-owned, and OpenCode uninstall does not remove the global pack. Its selected root is descriptor-anchored with `os.Root`; exact partial packs resume or remove safely, while unknown bytes are drift. Windows retains atomic rename/readback/backups but lacks directory fsync crash durability.
 
 ## Verification
 

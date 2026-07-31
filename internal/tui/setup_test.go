@@ -45,7 +45,7 @@ func TestSetupNavigationLoadsInstalledPlanAndRendersControlledWritePreview(t *te
 		t.Fatalf("plan requests=%+v", backend.planRequests)
 	}
 	view := model.View().Content
-	for _, expected := range []string{"VGXNESS / SETUP / CONTROLLED WRITE", "READY TO APPLY", "selected plan  high", "7-STEP PLAN", "Global agent-skill-engineer", "Skill autónoma de OpenCode"} {
+	for _, expected := range []string{"VGXNESS / SETUP / CONTROLLED WRITE", "READY TO APPLY", "selected plan  high", "7-STEP PLAN", "Global skills-creator", "Skill autónoma de OpenCode"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("Setup preview missing %q:\n%s", expected, view)
 		}
@@ -188,7 +188,7 @@ func readySetupPlan(plan string) SetupPlan {
 	steps := []SetupStep{
 		{Number: 1, Title: "Requirements"},
 		{Number: 2, Title: "Launcher", Mutates: true},
-		{Number: 3, Title: "Global agent-skill-engineer", Mutates: true},
+		{Number: 3, Title: "Global skills-creator", Mutates: true},
 		{Number: 4, Title: "Skill autónoma de OpenCode", Mutates: true},
 		{Number: 5, Title: "Storage and model plan", Mutates: true},
 		{Number: 6, Title: "Verification"},

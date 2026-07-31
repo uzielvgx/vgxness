@@ -116,7 +116,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return code
 	}
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
-	fmt.Fprintf(stdout, "Paso 3: skill portable agent-skill-engineer verificada en %s\n", terminalSafe(result.Plan.Skills.Path))
+	fmt.Fprintf(stdout, "Paso 3: skill portable skills-creator verificada en %s\n", terminalSafe(result.Plan.Skills.Path))
 	fmt.Fprintf(stdout, "Pasos 4–5: %d artefactos de manager, general, verificador, Explore, revisores, agentes SDD, almacenamiento y plan verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
 	fmt.Fprintf(stdout, "Paso 6: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
 	fmt.Fprintln(stdout, "Paso 7: no fue necesaria recuperación.")

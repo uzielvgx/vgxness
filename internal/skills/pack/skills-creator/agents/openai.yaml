@@ -1,0 +1,6 @@
+interface:
+  display_name: "Skills Creator"
+  short_description: "Create, audit, test, and improve reliable Agent Skills"
+  default_prompt: "Use $skills-creator to turn this workflow into a focused, portable, evaluated Agent Skill."
+policy:
+  allow_implicit_invocation: true
