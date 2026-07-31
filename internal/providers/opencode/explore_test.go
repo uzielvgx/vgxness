@@ -45,13 +45,13 @@ permission:
   glob: allow
   list: allow
   skill: allow
-  codegraph_explore: allow`, assignment.Model, assignment.Variant)
+  codegraph_codegraph_explore: allow`, assignment.Model, assignment.Variant)
 	if got := managerFrontmatter(t, string(prompt)); got != expectedFrontmatter {
 		t.Fatalf("unexpected explore frontmatter:\n%s", got)
 	}
 	for _, contract := range []string{
 		"artifact: opencode-agent/explore; version: 1",
-		"Use codegraph_explore first",
+		"Use codegraph_codegraph_explore first",
 		"Do not use shell",
 	} {
 		if strings.Count(string(prompt), contract) != 1 {
