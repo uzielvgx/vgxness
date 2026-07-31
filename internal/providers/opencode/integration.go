@@ -920,7 +920,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	}
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", regenerations: regeneration(managerPath)},
-		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", regenerations: regeneration(explorePath)},
+		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{previousExplorePredecessor(plan.agents[exploreAgentName])}, regenerations: regeneration(explorePath)},
 		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", regenerations: regeneration(generalPath)},
 		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", regenerations: regeneration(verifierPath)},
 		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", regenerations: regeneration(reviewRiskPath)},
