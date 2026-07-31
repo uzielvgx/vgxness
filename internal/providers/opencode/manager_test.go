@@ -22,7 +22,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 38",
+		"artifact: opencode-agent/vgxness-manager; version: 39",
 		"automatically load `stacked-pr`", "routine autonomous delivery",
 		"Before delegating any workspace write", "clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate",
 		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
@@ -51,6 +51,35 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	if bytes.Contains(bundle.manifest, []byte(autonomousStackedPRSkillName)) || bytes.Contains(bundle.manifest, []byte("skills/")) {
 		t.Fatal("managed skill was added to model-plan manifest")
+	}
+}
+
+func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	prompt := string(bundle.agents[managerAgentName])
+	for _, required := range []string{
+		"Work directly only for conversation and non-repository explanations, decisions, orchestration, lifecycle/Git authority, and compact synthesis.",
+		"Default repository questions and diagnosis-only work to Explore.",
+		"Use managed general as the delegated implementation worker for clear authorized implementation; it owns necessary diagnosis, edits, and developmental checks, and the manager does not launch Explore first by default.",
+		"Reserve Explore -> General for genuine ambiguity or diagnosis requiring separation.",
+		"Avoid repeating child source exploration. Direct source inspection is exceptional for contradictory or missing evidence, candidate-identity mismatch, or severe findings; exact diff, path, status, and command evidence inspection remains mandatory.",
+		"Route structural CodeGraph work to the delegated worker and use one bounded codegraph_explore query before broad reads or search where applicable.",
+		"If CodeGraph is unavailable, missing, or stale, the delegated worker continues with native reads and search without blocking; it reads any specifically reported stale files directly.",
+		"conclusions, decisive references or changed paths, exact commands and results, assumptions, and blockers",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Errorf("manager prompt is missing delegation-first contract %q", required)
+		}
+	}
+	for _, superseded := range []string{
+		"Work directly when the task fits the manager context, delegate when separation protects focus or independent evidence, validate candidate identity, and report outcomes.",
+		"Work directly for explanation, bounded repository inspection, planning, decisions, and implementation that fit the manager context.",
+		"Use Explore only for diagnosis-only work, structural discovery, or real ambiguity that needs bounded read-only investigation.",
+	} {
+		if strings.Contains(prompt, superseded) {
+			t.Errorf("manager prompt retains superseded direct repository-work contract %q", superseded)
+		}
 	}
 }
 
