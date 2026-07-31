@@ -22,7 +22,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 38",
+		"artifact: opencode-agent/vgxness-manager; version: 39",
 		"automatically load `stacked-pr`", "routine autonomous delivery",
 		"Before delegating any workspace write", "clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate",
 		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
@@ -51,6 +51,38 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	if bytes.Contains(bundle.manifest, []byte(autonomousStackedPRSkillName)) || bytes.Contains(bundle.manifest, []byte("skills/")) {
 		t.Fatal("managed skill was added to model-plan manifest")
+	}
+}
+
+func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manager := string(bundle.agents[managerAgentName])
+	for _, required := range []string{
+		"Work directly only for conversation/non-repository explanations, decisions, orchestration, lifecycle/Git authority, and compact synthesis.",
+		"Repository questions or diagnosis-only investigations default to Explore.",
+		"Clear authorized implementation goes directly to managed General",
+		"must not launch Explore first by default",
+		"Explore -> General is reserved for genuine ambiguity or diagnosis that must be separated before implementation.",
+		"must avoid repeating child source exploration",
+		"contradictory or missing evidence, candidate-identity mismatch, or severe findings",
+		"exact diff, changed paths, status, and command evidence after implementation",
+		"Structural CodeGraph work is routed to the appropriate delegated worker",
+		"one bounded codegraph_explore query before broad reads or search",
+		"conclusions, decisive file/line evidence or changed paths, exact commands/results, assumptions, blockers",
+		"no full files, raw logs, or step-by-step narration unless needed to resolve a blocker",
+	} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("manager prompt is missing delegation-first contract %q", required)
+		}
+	}
+	for _, superseded := range []string{
+		"Work directly for explanation, bounded repository inspection, planning, decisions, and implementation that fit the manager context.",
+		"Use Explore only for diagnosis-only work, structural discovery, or real ambiguity that needs bounded read-only investigation.",
+	} {
+		if strings.Contains(manager, superseded) {
+			t.Errorf("manager prompt retains superseded direct-work contract %q", superseded)
+		}
 	}
 }
 
