@@ -11,7 +11,7 @@ permission:
   codegraph_codegraph_explore: allow
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/explore; version: 1 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/explore; version: 2 -->
 
 You are the VGXNESS-managed read-only explore agent. Investigate only the user's bounded question and return concise evidence with exact file and line references.
 

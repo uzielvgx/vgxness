@@ -101,26 +101,61 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 }
 
 func parseInstalledModelPlanManifest(data []byte) (modelPlanManifest, modelPlanBundle, error) {
-	manifest, err := parseModelPlanManifest(data)
+	manifest, err := decodeModelPlanManifest(data)
 	if err != nil {
 		return modelPlanManifest{}, modelPlanBundle{}, err
 	}
-	bundle, err := buildModelPlanBundle(manifest.Config)
+	bundle, err := modelPlanBundleForManifest(data, manifest.Config)
 	return manifest, bundle, err
 }
 
 func parseModelPlanManifest(data []byte) (modelPlanManifest, error) {
+	manifest, err := decodeModelPlanManifest(data)
+	if err != nil {
+		return modelPlanManifest{}, err
+	}
+	if _, err := modelPlanBundleForManifest(data, manifest.Config); err != nil {
+		return modelPlanManifest{}, err
+	}
+	return manifest, nil
+}
+
+func decodeModelPlanManifest(data []byte) (modelPlanManifest, error) {
 	var manifest modelPlanManifest
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) == nil || manifest.SchemaVersion != 1 || manifest.ManagedBy != "vgxness" {
 		return modelPlanManifest{}, integration.ErrDrift
 	}
-	bundle, err := buildModelPlanBundle(manifest.Config)
-	if err != nil || !bytes.Equal(bundle.manifest, data) {
-		return modelPlanManifest{}, integration.ErrDrift
-	}
 	return manifest, nil
+}
+
+func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+	current, err := buildModelPlanBundle(config)
+	if err != nil {
+		return modelPlanBundle{}, integration.ErrDrift
+	}
+	if bytes.Equal(current.manifest, data) {
+		return current, nil
+	}
+	predecessor, err := previousExploreModelPlanBundle(current)
+	if err != nil || !bytes.Equal(predecessor.manifest, data) {
+		return modelPlanBundle{}, integration.ErrDrift
+	}
+	return predecessor, nil
+}
+
+func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	predecessor := previousExplorePredecessor(current.agents[exploreAgentName])
+	if len(predecessor) == 0 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	agents := make(map[string][]byte, len(current.agents))
+	for name, content := range current.agents {
+		agents[name] = content
+	}
+	agents[exploreAgentName] = predecessor
+	return encodeModelPlanBundle(current.config, current.resolved, agents)
 }
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
@@ -207,12 +242,20 @@ func bindProfile(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]
 func bindExplore(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	value := explorePrompt
 	anchor := "mode: subagent\n"
-	marker := "artifact: opencode-agent/explore; version: 1"
+	marker := "artifact: opencode-agent/explore; version: 2"
 	if strings.Count(value, anchor) != 1 || strings.Count(value, marker) != 1 {
 		return nil, integration.ErrInvalid
 	}
 	value = strings.Replace(value, anchor, fmt.Sprintf("mode: subagent\nmodel: %s\nvariant: %s\n", assignment.Model, assignment.Variant), 1)
 	return []byte(value), nil
+}
+
+func previousExplorePredecessor(current []byte) []byte {
+	return derivePredecessor(current, []textReplacement{
+		{old: "codegraph_codegraph_explore: allow", new: "codegraph_explore: allow"},
+		{old: "artifact: opencode-agent/explore; version: 2", new: "artifact: opencode-agent/explore; version: 1"},
+		{old: "Use codegraph_codegraph_explore first", new: "Use codegraph_explore first"},
+	})
 }
 
 func bindAgent(base string, role sdd.Role, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
