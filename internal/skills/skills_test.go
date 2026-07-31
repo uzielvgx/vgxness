@@ -42,6 +42,163 @@ func TestValidRelative(t *testing.T) {
 	}
 }
 
+func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	if _, err := (&Service{catalog: &catalog{}}).Preview(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("explicit empty catalog error=%v, want ErrInvalid", err)
+	}
+	preview, err := New().Preview(context.Background(), Options{Dir: destination})
+	if err != nil || preview.FileCount == 0 {
+		t.Fatalf("default preview=%+v err=%v", preview, err)
+	}
+}
+
+func TestUninstallBeforeBackupFailureCleansEmptySession(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	if _, err := New().Install(context.Background(), Options{Dir: destination}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{beforeBackup: func(string) error { return errors.New("injected backup failure") }}
+	if _, err := service.Uninstall(context.Background(), Options{Dir: destination}); err == nil {
+		t.Fatal("Uninstall() error=nil")
+	}
+	if _, err := os.Lstat(filepath.Join(destination, ".vgxness-backups", "uninstall-0")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty session remains: %v", err)
+	}
+	if status, err := service.Status(context.Background(), Options{Dir: destination}); err != nil || status.State != StateInstalled {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	result, err := New().Uninstall(context.Background(), Options{Dir: destination})
+	if err != nil || filepath.Base(result.BackupPath) != "uninstall-0" {
+		t.Fatalf("retry result=%+v err=%v", result, err)
+	}
+}
+
+func TestUninstallPruneFailureReturnsDurableBackupPath(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	installed, err := New().Install(context.Background(), Options{Dir: destination})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{beforePrune: func() error { return errors.New("injected prune failure") }}
+	result, err := service.Uninstall(context.Background(), Options{Dir: destination})
+	if !errors.Is(err, ErrRecovery) || result.BackupPath == "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	for identity, want := range installed.Hashes {
+		actual, readErr := os.ReadFile(filepath.Join(result.BackupPath, filepath.FromSlash(identity)))
+		if readErr != nil || digest(actual) != want {
+			t.Fatalf("backup %s digest=%s err=%v", identity, digest(actual), readErr)
+		}
+	}
+}
+
+func TestCatalogLifecycleAggregatesSkillsAndPreservesExtras(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	service := &Service{catalog: &catalog{definitions: []skillDefinition{
+		{name: "alpha-skill", files: map[string][]byte{"guide.txt": []byte("alpha guide"), "SKILL.md": []byte("alpha skill")}},
+		{name: "beta-skill", files: map[string][]byte{"notes.txt": []byte("beta notes"), "SKILL.md": []byte("beta skill")}},
+	}}}
+
+	preview, err := service.Preview(context.Background(), Options{Dir: destination})
+	if err != nil || preview.State != StateAbsent || !preview.Changed || preview.FileCount != 4 {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	if _, ok := preview.Hashes["alpha-skill/SKILL.md"]; !ok {
+		t.Fatalf("canonical hashes=%v", preview.Hashes)
+	}
+	installed, err := service.Install(context.Background(), Options{Dir: destination})
+	if err != nil || installed.State != StateInstalled || !installed.Changed || installed.Path != destination {
+		t.Fatalf("installed=%+v err=%v", installed, err)
+	}
+	status, err := service.Status(context.Background(), Options{Dir: destination})
+	if err != nil || status.State != StateInstalled || status.Changed || status.FileCount != 4 || status.Path != destination {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	for _, identity := range []string{"alpha-skill/SKILL.md", "beta-skill/SKILL.md"} {
+		if _, ok := status.Hashes[identity]; !ok {
+			t.Fatalf("canonical hashes=%v", status.Hashes)
+		}
+	}
+	extra := filepath.Join(destination, "alpha-skill", "local.txt")
+	if err := os.WriteFile(extra, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := service.Uninstall(context.Background(), Options{Dir: destination})
+	if err != nil || removed.State != StateAbsent || !removed.Changed || removed.BackupPath == "" {
+		t.Fatalf("removed=%+v err=%v", removed, err)
+	}
+	for name, want := range installed.Hashes {
+		actual, err := os.ReadFile(filepath.Join(removed.BackupPath, filepath.FromSlash(name)))
+		if err != nil || digest(actual) != want {
+			t.Fatalf("backup %s digest=%s err=%v", name, digest(actual), err)
+		}
+	}
+	assertFileBytes(t, extra, []byte("keep"))
+	if status, err := service.Status(context.Background(), Options{Dir: destination}); err != nil || status.State != StateAbsent {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+}
+
+func TestCatalogRejectsNonCanonicalManagedIdentities(t *testing.T) {
+	for _, definition := range []skillDefinition{
+		{name: "Bad", files: map[string][]byte{"SKILL.md": []byte("x")}},
+		{name: "good-skill", files: map[string][]byte{"../SKILL.md": []byte("x")}},
+	} {
+		service := &Service{catalog: &catalog{definitions: []skillDefinition{definition}}}
+		_, err := service.Preview(context.Background(), Options{Dir: filepath.Join(t.TempDir(), "skills")})
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("definition=%+v err=%v", definition, err)
+		}
+	}
+	service := &Service{catalog: &catalog{definitions: []skillDefinition{
+		{name: "good-skill", files: map[string][]byte{"SKILL.md": []byte("x")}},
+		{name: "good-skill", files: map[string][]byte{"SKILL.md": []byte("y")}},
+	}}}
+	if _, err := service.Preview(context.Background(), Options{Dir: filepath.Join(t.TempDir(), "skills")}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate skill err=%v", err)
+	}
+}
+
+func TestValidSkillName(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		valid bool
+	}{
+		{name: "agent-skill-engineer", valid: true},
+		{name: "Bad"}, {name: "."}, {name: "../skill"}, {name: "skill\\name"},
+		{name: "skill:name"}, {name: "skill\x00name"}, {name: "/skill"}, {name: "-skill"},
+	} {
+		if got := validSkillName(test.name); got != test.valid {
+			t.Fatalf("validSkillName(%q)=%t, want %t", test.name, got, test.valid)
+		}
+	}
+}
+
+func TestCatalogInstallRollsBackAcrossSkills(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	service := &Service{
+		catalog: &catalog{definitions: []skillDefinition{
+			{name: "alpha-skill", files: map[string][]byte{"SKILL.md": []byte("alpha")}},
+			{name: "beta-skill", files: map[string][]byte{"SKILL.md": []byte("beta")}},
+		}},
+		afterPublish: func(identity string) error {
+			if identity == "beta-skill/SKILL.md" {
+				return errors.New("injected cross-skill failure")
+			}
+			return nil
+		},
+	}
+	if _, err := service.Install(context.Background(), Options{Dir: destination}); err == nil || errors.Is(err, ErrRecovery) {
+		t.Fatalf("Install() err=%v", err)
+	}
+	for _, identity := range []string{"alpha-skill/SKILL.md", "beta-skill/SKILL.md"} {
+		if _, err := os.Lstat(filepath.Join(destination, filepath.FromSlash(identity))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s publication remains: %v", identity, err)
+		}
+	}
+}
+
 func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
 	service := New()
@@ -335,8 +492,8 @@ func TestRollbackRestoresPredecessorAfterRenameFailure(t *testing.T) {
 func TestRollbackPreservesConcurrentReplacementAfterRenameFailure(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
 	root := filepath.Join(destination, "agent-skill-engineer")
-	service := &Service{afterRename: func(relative string) error {
-		if err := os.WriteFile(filepath.Join(root, relative), []byte("external"), 0o600); err != nil {
+	service := &Service{afterRename: func(identity string) error {
+		if err := os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o600); err != nil {
 			return err
 		}
 		return errors.New("injected post-rename failure")
@@ -361,8 +518,8 @@ func TestRollbackPreservesConcurrentReplacementAfterRenameFailure(t *testing.T) 
 func TestInstallPreservesReplacementBeforePublication(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
 	root := filepath.Join(destination, "agent-skill-engineer")
-	service := &Service{beforePublish: func(relative string) error {
-		return os.WriteFile(filepath.Join(root, relative), []byte("external"), 0o600)
+	service := &Service{beforePublish: func(identity string) error {
+		return os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o600)
 	}}
 	_, err := service.Install(context.Background(), Options{Dir: destination})
 	if !errors.Is(err, ErrConflict) && !errors.Is(err, ErrRecovery) {
@@ -525,7 +682,7 @@ func TestUninstallRetainsDurableBackupOutsideSkillTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.BackupPath == "" || filepath.Dir(filepath.Dir(result.BackupPath)) != filepath.Join(destination, ".vgxness-backups") {
+	if result.BackupPath == "" || filepath.Dir(result.BackupPath) != filepath.Join(destination, ".vgxness-backups") {
 		t.Fatalf("backup path=%q", result.BackupPath)
 	}
 	for relative, want := range installed.Hashes {
@@ -697,8 +854,8 @@ func TestPartialUnknownContentIsRefused(t *testing.T) {
 func TestRollbackPreservesConcurrentReplacement(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
 	root := filepath.Join(destination, "agent-skill-engineer")
-	service := &Service{afterPublish: func(relative string) error {
-		if err := os.WriteFile(filepath.Join(root, relative), []byte("external"), 0o644); err != nil {
+	service := &Service{afterPublish: func(identity string) error {
+		if err := os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o644); err != nil {
 			return err
 		}
 		return errors.New("injected failure")

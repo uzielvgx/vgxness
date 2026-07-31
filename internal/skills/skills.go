@@ -57,6 +57,7 @@ type Runtime interface {
 // Service deliberately keeps failure injection private; it is used only by
 // package tests to prove that the transaction recovers after publication.
 type Service struct {
+	catalog *catalog
 	// beforePublish and beforeRollback are deterministic test checkpoints for
 	// replacement races at the two no-overwrite boundaries.
 	beforePublish  func(string) error
@@ -65,6 +66,7 @@ type Service struct {
 	afterRename    func(string) error
 	beforeMove     func(source, destination string) error
 	beforeBackup   func(string) error
+	beforePrune    func() error
 	afterInspect   func()
 }
 
@@ -91,24 +93,24 @@ func skillsRoot(options Options) (string, error) {
 	return filepath.Clean(dir), nil
 }
 
-func target(options Options) (string, error) {
-	dir, err := skillsRoot(options)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "agent-skill-engineer"), nil
+func files() (map[string][]byte, error) {
+	return bundledFiles("agent-skill-engineer")
 }
 
-func files() (map[string][]byte, error) {
+func bundledFiles(skill string) (map[string][]byte, error) {
+	if !validSkillName(skill) {
+		return nil, ErrInvalid
+	}
 	entries := map[string][]byte{}
-	err := fs.WalkDir(bundled, "pack", func(name string, entry fs.DirEntry, err error) error {
+	prefix := "pack/" + skill + "/"
+	err := fs.WalkDir(bundled, "pack/"+skill, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
 			return nil
 		}
-		relative := strings.TrimPrefix(name, "pack/agent-skill-engineer/")
+		relative := strings.TrimPrefix(name, prefix)
 		if relative == name || !validRelative(relative) {
 			return ErrInvalid
 		}
@@ -143,7 +145,14 @@ func sorted(entries map[string][]byte) []string {
 }
 func publishOrder(entries map[string][]byte) []string {
 	names := sorted(entries)
-	sort.SliceStable(names, func(i, j int) bool { return names[i] != "SKILL.md" && names[j] == "SKILL.md" })
+	sort.SliceStable(names, func(i, j int) bool {
+		leftSkill, leftRelative, _ := strings.Cut(names[i], "/")
+		rightSkill, rightRelative, _ := strings.Cut(names[j], "/")
+		if leftSkill != rightSkill {
+			return leftSkill < rightSkill
+		}
+		return leftRelative != "SKILL.md" && rightRelative == "SKILL.md"
+	})
 	return names
 }
 
@@ -229,11 +238,11 @@ func openRoot(ctx context.Context, selected string, writable bool) (*os.Root, st
 }
 
 func (s *Service) inspect(options Options) (Result, map[string][]byte, error) {
-	rootPath, err := target(options)
+	rootPath, err := skillsRoot(options)
 	if err != nil {
 		return Result{}, nil, err
 	}
-	entries, err := files()
+	entries, err := s.entries()
 	if err != nil {
 		return Result{}, nil, err
 	}
@@ -246,22 +255,24 @@ func (s *Service) inspect(options Options) (Result, map[string][]byte, error) {
 		return result, entries, nil
 	}
 	defer r.Close()
-	info, err := r.Lstat("agent-skill-engineer")
-	if errors.Is(err, os.ErrNotExist) {
-		return result, entries, nil
-	}
-	if err != nil {
-		return result, entries, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		result.State = StateConflict
-		return result, entries, ErrConflict
+	for _, skill := range skillNames(entries) {
+		info, err := r.Lstat(native(skill))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return result, entries, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			result.State = StateConflict
+			return result, entries, ErrConflict
+		}
 	}
 	present, predecessors, missing := 0, 0, 0
-	for _, relative := range sorted(entries) {
-		actual, _, err := regular(r, filepath.Join("agent-skill-engineer", relative))
+	for _, identity := range sorted(entries) {
+		actual, _, err := regular(r, native(identity))
 		if errors.Is(err, os.ErrNotExist) {
-			pending, pendingErr := transactionPending(r, filepath.Join("agent-skill-engineer", relative))
+			pending, pendingErr := transactionPending(r, native(identity))
 			if pendingErr != nil {
 				return result, entries, pendingErr
 			}
@@ -275,7 +286,7 @@ func (s *Service) inspect(options Options) (Result, map[string][]byte, error) {
 			result.State = StateConflict
 			return result, entries, ErrConflict
 		}
-		pending, pendingErr := transactionPending(r, filepath.Join("agent-skill-engineer", relative))
+		pending, pendingErr := transactionPending(r, native(identity))
 		if pendingErr != nil {
 			return result, entries, pendingErr
 		}
@@ -283,10 +294,10 @@ func (s *Service) inspect(options Options) (Result, map[string][]byte, error) {
 			return result, entries, ErrRecovery
 		}
 		present++
-		if bytes.Equal(actual, entries[relative]) {
+		if bytes.Equal(actual, entries[identity]) {
 			continue
 		}
-		if predecessor(relative, actual) {
+		if s.predecessor(identity, actual) {
 			predecessors++
 			continue
 		}
@@ -353,11 +364,11 @@ type original struct {
 }
 
 func (s *Service) Install(ctx context.Context, options Options) (Result, error) {
-	rootPath, err := target(options)
+	rootPath, err := skillsRoot(options)
 	if err != nil {
 		return Result{}, err
 	}
-	entries, err := files()
+	entries, err := s.entries()
 	if err != nil {
 		return Result{}, err
 	}
@@ -393,9 +404,6 @@ func (s *Service) Install(ctx context.Context, options Options) (Result, error) 
 	if result.State == StateInstalled && !result.UpdateNeeded {
 		return result, nil
 	}
-	if err := ensureDirectory(ctx, r, "agent-skill-engineer"); err != nil {
-		return result, err
-	}
 	published := []original{}
 	var beforeRollback func(string) error
 	var beforeMove func(string, string) error
@@ -409,11 +417,11 @@ func (s *Service) Install(ctx context.Context, options Options) (Result, error) 
 		}
 		return result, cause
 	}
-	for _, relative := range publishOrder(entries) {
+	for _, identity := range publishOrder(entries) {
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
-		name := filepath.Join("agent-skill-engineer", relative)
+		name := native(identity)
 		if err := ensureDirectory(ctx, r, filepath.Dir(name)); err != nil {
 			return fail(err)
 		}
@@ -424,32 +432,32 @@ func (s *Service) Install(ctx context.Context, options Options) (Result, error) 
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fail(err)
 		}
-		if old.existed && bytes.Equal(old.data, entries[relative]) {
+		if old.existed && bytes.Equal(old.data, entries[identity]) {
 			continue
 		}
-		if old.existed && !predecessor(relative, old.data) {
+		if old.existed && !s.predecessor(identity, old.data) {
 			return fail(ErrDrift)
 		}
-		committed, err := publish(r, name, entries[relative], old.mode, old.data, old.existed, func() error {
+		committed, err := publish(r, name, entries[identity], old.mode, old.data, old.existed, func() error {
 			if s != nil && s.beforePublish != nil {
-				return s.beforePublish(relative)
+				return s.beforePublish(identity)
 			}
 			return nil
 		}, func() error {
 			if s != nil && s.afterRename != nil {
-				return s.afterRename(relative)
+				return s.afterRename(identity)
 			}
 			return nil
 		}, beforeMove)
 		if committed {
-			old.published = append([]byte(nil), entries[relative]...)
+			old.published = append([]byte(nil), entries[identity]...)
 			published = append(published, old)
 		}
 		if err != nil {
 			return fail(err)
 		}
 		if s != nil && s.afterPublish != nil {
-			if err := s.afterPublish(relative); err != nil {
+			if err := s.afterPublish(identity); err != nil {
 				return fail(err)
 			}
 		}
@@ -582,11 +590,11 @@ func transactionPath(name string, index int) string {
 // target is absent. A replacement at the target is never overwritten; keeping
 // both paths is deliberate recovery evidence.
 func recoverTransactions(ctx context.Context, r *os.Root, entries map[string][]byte) error {
-	for _, relative := range sorted(entries) {
+	for _, identity := range sorted(entries) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		name := filepath.Join("agent-skill-engineer", relative)
+		name := native(identity)
 		for i := 0; i < 128; i++ {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -746,6 +754,9 @@ func (s *Service) Uninstall(ctx context.Context, options Options) (Result, error
 			return result, err
 		}
 		if err := syncDirectory(r, filepath.Dir(session)); err != nil {
+			if cleanupErr := removeEmptyUninstallSession(r, session, nil); cleanupErr != nil {
+				return result, errors.Join(err, ErrRecovery, cleanupErr)
+			}
 			return result, err
 		}
 		allocated = true
@@ -754,10 +765,7 @@ func (s *Service) Uninstall(ctx context.Context, options Options) (Result, error
 	if !allocated {
 		return result, ErrConflict
 	}
-	backupRoot := filepath.Join(session, "agent-skill-engineer")
-	if err := ensureDirectory(ctx, r, backupRoot); err != nil {
-		return result, err
-	}
+	backupRoot := session
 	type backup struct {
 		name, stored string
 		data         []byte
@@ -790,13 +798,17 @@ func (s *Service) Uninstall(ctx context.Context, options Options) (Result, error
 		if err := errors.Join(recovery...); err != nil {
 			return result, errors.Join(cause, ErrRecovery, err)
 		}
+		if err := removeEmptyUninstallSession(r, session, entries); err != nil {
+			result.BackupPath = filepath.Join(rootPath, backupRoot)
+			return result, errors.Join(cause, ErrRecovery, err)
+		}
 		return result, cause
 	}
-	for _, relative := range sorted(entries) {
+	for _, identity := range sorted(entries) {
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
-		name := filepath.Join("agent-skill-engineer", relative)
+		name := native(identity)
 		data, _, err := regular(r, name)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -804,10 +816,10 @@ func (s *Service) Uninstall(ctx context.Context, options Options) (Result, error
 		if err != nil {
 			return fail(err)
 		}
-		if !bytes.Equal(data, entries[relative]) && !predecessor(relative, data) {
+		if !bytes.Equal(data, entries[identity]) && !s.predecessor(identity, data) {
 			return fail(ErrDrift)
 		}
-		stored := filepath.Join(backupRoot, relative)
+		stored := filepath.Join(backupRoot, native(identity))
 		if err := ensureDirectory(ctx, r, filepath.Dir(stored)); err != nil {
 			return fail(err)
 		}
@@ -821,21 +833,67 @@ func (s *Service) Uninstall(ctx context.Context, options Options) (Result, error
 		}
 		backups = append(backups, backup{name, stored, data})
 		if s != nil && s.afterPublish != nil {
-			if err := s.afterPublish(relative); err != nil {
+			if err := s.afterPublish(identity); err != nil {
 				return fail(err)
 			}
+		}
+	}
+	result.BackupPath = filepath.Join(rootPath, backupRoot)
+	if s != nil && s.beforePrune != nil {
+		if err := s.beforePrune(); err != nil {
+			return result, errors.Join(ErrRecovery, err)
 		}
 	}
 	if err := pruneManagedDirectories(r, entries); err != nil {
 		return result, errors.Join(ErrRecovery, err)
 	}
-	result.State, result.Changed, result.UpdateNeeded, result.BackupPath = StateAbsent, len(backups) > 0, false, filepath.Join(rootPath, backupRoot)
+	result.State, result.Changed, result.UpdateNeeded = StateAbsent, len(backups) > 0, false
 	return result, nil
 }
+
+// removeEmptyUninstallSession removes only directories created for a fully
+// rolled-back uninstall. Any unexpected content is retained as recovery evidence.
+func removeEmptyUninstallSession(r *os.Root, session string, entries map[string][]byte) error {
+	dirs := map[string]bool{session: true}
+	for identity := range entries {
+		for dir := filepath.Dir(filepath.Join(session, native(identity))); ; dir = filepath.Dir(dir) {
+			dirs[dir] = true
+			if dir == session {
+				break
+			}
+		}
+	}
+	names := make([]string, 0, len(dirs))
+	for name := range dirs {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
+	for _, name := range names {
+		info, err := r.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errors.Join(ErrRecovery, fmt.Errorf("unexpected uninstall session content at %s", name))
+		}
+		if err := r.Remove(name); err != nil {
+			return errors.Join(ErrRecovery, err)
+		}
+		if err := syncDirectory(r, filepath.Dir(name)); err != nil {
+			return errors.Join(ErrRecovery, err)
+		}
+	}
+	return nil
+}
+
 func pruneManagedDirectories(r *os.Root, entries map[string][]byte) error {
-	dirs := map[string]bool{"agent-skill-engineer": true}
-	for n := range entries {
-		dirs[filepath.Dir(filepath.Join("agent-skill-engineer", n))] = true
+	dirs := map[string]bool{}
+	for identity := range entries {
+		name := native(identity)
+		parts := strings.Split(filepath.Dir(name), string(filepath.Separator))
+		for i := len(parts); i > 0; i-- {
+			dirs[filepath.Join(parts[:i]...)] = true
+		}
 	}
 	names := make([]string, 0, len(dirs))
 	for n := range dirs {
