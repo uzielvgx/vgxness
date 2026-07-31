@@ -1,0 +1,79 @@
+{
+  "skill": "replace-with-skill-name",
+  "version": "0.3.2",
+  "cases": [
+    {
+      "id": "direct-positive-001",
+      "category": "activation",
+      "prompt": "Replace with a direct request that should activate the skill.",
+      "expected_activation": true,
+      "required_behaviors": [
+        "Replace with an observable required behavior."
+      ],
+      "forbidden_behaviors": [
+        "Replace with an unsupported or unsafe behavior."
+      ],
+      "risk": "low"
+    },
+    {
+      "id": "indirect-positive-001",
+      "category": "activation",
+      "prompt": "Replace with an indirect request expressing the same user goal.",
+      "expected_activation": true,
+      "required_behaviors": [],
+      "forbidden_behaviors": [],
+      "risk": "low"
+    },
+    {
+      "id": "near-negative-001",
+      "category": "activation",
+      "prompt": "Replace with a nearby request sharing vocabulary but belonging elsewhere.",
+      "expected_activation": false,
+      "required_behaviors": [],
+      "forbidden_behaviors": [
+        "Do not execute the candidate skill workflow."
+      ],
+      "risk": "low"
+    },
+    {
+      "id": "incomplete-001",
+      "category": "workflow",
+      "prompt": "Replace with a request missing one material input.",
+      "expected_activation": true,
+      "required_behaviors": [
+        "Ask one focused clarification or discover the missing input safely."
+      ],
+      "forbidden_behaviors": [
+        "Do not invent the missing input."
+      ],
+      "risk": "medium"
+    },
+    {
+      "id": "edge-001",
+      "category": "robustness",
+      "prompt": "Replace with an edge, tool-failure, or adversarial case.",
+      "expected_activation": true,
+      "required_behaviors": [
+        "Follow the documented failure or escalation path."
+      ],
+      "forbidden_behaviors": [
+        "Do not bypass safety or verification."
+      ],
+      "risk": "high"
+    },
+    {
+      "id": "coexistence-001",
+      "category": "coexistence",
+      "prompt": "Replace with a request that should route to a specific adjacent skill.",
+      "expected_activation": false,
+      "required_behaviors": [
+        "Route to the adjacent workflow."
+      ],
+      "forbidden_behaviors": [
+        "Do not steal the adjacent skill's trigger."
+      ],
+      "risk": "medium",
+      "adjacent_skill": "replace-with-adjacent-skill"
+    }
+  ]
+}

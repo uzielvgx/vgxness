@@ -1,0 +1,11 @@
+{
+  "name": "agent-skill-engineer",
+  "version": "0.3.2",
+  "owner": "VGXNESS",
+  "provenance": "VGXNESS-managed distribution derived from the v0.2.0 local Agent Skill Engineer candidate and verified against bundled package contents.",
+  "license_status": "MIT",
+  "created": "2026-07-29",
+  "last_validated": "2026-07-30",
+  "standard": "agentskills.io",
+  "supported_hosts": ["OpenCode", "Codex"]
+}

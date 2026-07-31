@@ -15,7 +15,7 @@ import (
 
 func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime) int {
 	if len(args) == 0 || args[0] != "opencode" {
-		fmt.Fprintln(stderr, "usage: vgxness setup opencode [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--model-plan low|medium|high] [--model-efficient provider/model] [--model-balanced provider/model] [--model-frontier provider/model]")
+		fmt.Fprintln(stderr, "usage: vgxness setup opencode [--preview|--status] [--yes] [--workspace PATH] [--skills-dir PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--model-plan low|medium|high]")
 		return 2
 	}
 	flags := flag.NewFlagSet("setup opencode", flag.ContinueOnError)
@@ -38,6 +38,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	flags.StringVar(&options.SelfInstall.BinDir, "bin-dir", "", "stable launcher directory")
 	flags.StringVar(&options.SelfInstall.DataDir, "data-dir", "", "version data directory")
 	flags.StringVar(&options.Integration.ConfigDir, "config-dir", "", "OpenCode configuration directory")
+	flags.StringVar(&options.Skills.Dir, "skills-dir", "", "absolute shared portable skills directory")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || preview && status || yes && (preview || status) {
 		fmt.Fprintln(stderr, "invalid setup arguments")
 		return 2
@@ -115,9 +116,10 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return code
 	}
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
-	fmt.Fprintf(stdout, "Pasos 3–4: %d artefactos de manager, general, verificador, Explore, revisores, agentes SDD, almacenamiento y plan verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
-	fmt.Fprintf(stdout, "Paso 5: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
-	fmt.Fprintln(stdout, "Paso 6: no fue necesaria recuperación.")
+	fmt.Fprintf(stdout, "Paso 3: skill portable agent-skill-engineer verificada en %s\n", terminalSafe(result.Plan.Skills.Path))
+	fmt.Fprintf(stdout, "Pasos 4–5: %d artefactos de manager, general, verificador, Explore, revisores, agentes SDD, almacenamiento y plan verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
+	fmt.Fprintf(stdout, "Paso 6: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
+	fmt.Fprintln(stdout, "Paso 7: no fue necesaria recuperación.")
 	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode para cargar vgxness-manager como agente predeterminado.\n", result.Changed)
 	return 0
 }
@@ -136,6 +138,7 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintf(writer, "  Launcher: %s (estado=%s)\n", terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.State)
 	fmt.Fprintf(writer, "  Versiones: %s\n", terminalSafe(plan.SelfInstall.DataDir))
 	fmt.Fprintf(writer, "  Manager: %s (estado=%s)\n", terminalSafe(plan.Integration.Path), plan.Integration.State)
+	fmt.Fprintf(writer, "  Skills globales: %s (estado=%s, archivos=%d)\n", terminalSafe(plan.Skills.Path), plan.Skills.State, plan.Skills.FileCount)
 	fmt.Fprintf(writer, "  Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario + Explore + general escritor + verificador + cinco revisores + seis agentes SDD + plugin de almacenamiento (%s)\n", terminalSafe(plan.Integration.ToolPath))
 	fmt.Fprintf(writer, "  Artefactos administrados: %d\n", plan.Integration.ArtifactCount)
 	fmt.Fprintf(writer, "  Plan de modelos: %s provider=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider))
@@ -152,6 +155,7 @@ func renderSetupStatus(writer io.Writer, plan setupflow.Plan, workspace string) 
 	fmt.Fprintln(writer, "VGXNESS · Estado completo del setup OpenCode")
 	fmt.Fprintf(writer, "Launcher: state=%s path=%s active_sha256=%s\n", plan.SelfInstall.State, terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.ActiveSHA256)
 	fmt.Fprintf(writer, "Integración: state=%s projection=native+sdd-storage artifacts=%d manager=%s storage_plugin=%s\n", plan.Integration.State, plan.Integration.ArtifactCount, terminalSafe(plan.Integration.Path), terminalSafe(plan.Integration.ToolPath))
+	fmt.Fprintf(writer, "Skills globales: state=%s path=%s files=%d\n", plan.Skills.State, terminalSafe(plan.Skills.Path), plan.Skills.FileCount)
 	fmt.Fprintf(writer, "Plan de modelos: %s provider=%s efficient=%s balanced=%s frontier=%s manifest=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider), terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier), terminalSafe(plan.Integration.ManifestPath))
 	fmt.Fprintf(writer, "Agente predeterminado: %s config=%s\n", terminalSafe(plan.Integration.DefaultAgent), terminalSafe(plan.Integration.DefaultAgentPath))
 	fmt.Fprintf(writer, "Handshake: ok=%t status=%s workspace=%s\n", plan.Handshake.OK, terminalSafe(plan.Handshake.Status.String()), terminalSafe(workspace))

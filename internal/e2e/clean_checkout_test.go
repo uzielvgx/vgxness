@@ -57,7 +57,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"setup", "opencode", "--yes", "--workspace", workspace,
 		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
 	)
-	for _, expected := range []string{"Paso 1 de 6", "Paso 6 de 6", "configuración completa", "handshake OpenCode=healthy"} {
+	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy"} {
 		if !strings.Contains(setupOutput, expected) {
 			t.Fatalf("setup output is missing %q:\n%s", expected, setupOutput)
 		}

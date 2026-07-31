@@ -32,6 +32,9 @@ type SetupPlan struct {
 	SelfInstallPath  string
 	IntegrationState string
 	IntegrationPath  string
+	SkillsState      string
+	SkillsPath       string
+	SkillsFileCount  int
 	ArtifactCount    int
 	ModelPlan        string
 	ModelProvider    string
@@ -50,6 +53,9 @@ type SetupResult struct {
 	SelfInstallPath  string
 	IntegrationState string
 	IntegrationPath  string
+	SkillsState      string
+	SkillsPath       string
+	SkillsFileCount  int
 	ArtifactCount    int
 	HandshakeOK      bool
 	HandshakeStatus  string
@@ -270,7 +276,7 @@ func (m Model) setupRouteLines() []string {
 	lines := []string{"OPENCODE SETUP", "selected plan  " + sanitizeTerminal(m.setupSelected)}
 	switch {
 	case m.setupApplying:
-		lines = append(lines, "", "... Applying verified six-step plan...", "No per-step progress is reported by the setup service.")
+		lines = append(lines, "", fmt.Sprintf("... Applying verified %d-step plan...", len(m.setupPlan.Steps)), "No per-step progress is reported by the setup service.")
 		if m.setupCancelAsked {
 			lines = append(lines, "! Cancellation requested. Waiting for setup recovery...")
 		}
@@ -286,6 +292,7 @@ func (m Model) setupRouteLines() []string {
 			"changed  "+changed,
 			"launcher  "+setupValue(result.SelfInstallState)+"  "+setupValue(result.SelfInstallPath),
 			"integration  "+setupValue(result.IntegrationState)+"  "+setupValue(result.IntegrationPath),
+			"shared skills  "+setupValue(result.SkillsState)+"  "+setupValue(result.SkillsPath),
 			fmt.Sprintf("artifacts  %d", result.ArtifactCount),
 			setupHandshake(result.HandshakeOK, result.HandshakeStatus),
 		)
@@ -316,6 +323,7 @@ func (m Model) setupRouteLines() []string {
 		readiness,
 		"launcher  "+setupValue(plan.SelfInstallState)+"  "+setupValue(plan.SelfInstallPath),
 		"integration  "+setupValue(plan.IntegrationState)+"  "+setupValue(plan.IntegrationPath),
+		"shared skills  "+setupValue(plan.SkillsState)+"  "+setupValue(plan.SkillsPath),
 		fmt.Sprintf("artifacts  %d", plan.ArtifactCount),
 		"model efficient  "+setupValue(plan.ModelEfficient),
 		"model balanced   "+setupValue(plan.ModelBalanced),
@@ -326,9 +334,9 @@ func (m Model) setupRouteLines() []string {
 		lines = append(lines, "Blocker: "+sanitizeTerminal(plan.Blocker))
 	}
 	if m.setupConfirm {
-		lines = append(lines, "", "! CONFIRM SETUP", "Apply this verified six-step plan? [y] yes  [n/Esc] cancel")
+		lines = append(lines, "", "! CONFIRM SETUP", fmt.Sprintf("Apply this verified %d-step plan? [y] yes  [n/Esc] cancel", len(plan.Steps)))
 	}
-	lines = append(lines, "", fmt.Sprintf("SIX-STEP PLAN (%d artifacts)", plan.ArtifactCount))
+	lines = append(lines, "", fmt.Sprintf("%d-STEP PLAN (%d artifacts)", len(plan.Steps), plan.ArtifactCount))
 	for _, step := range plan.Steps {
 		marker := "check"
 		if step.Mutates {

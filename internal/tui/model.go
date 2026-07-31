@@ -40,6 +40,9 @@ type SetupStatus struct {
 	SelfInstallPath  string
 	IntegrationState string
 	IntegrationPath  string
+	SkillsState      string
+	SkillsPath       string
+	SkillsFileCount  int
 	ArtifactCount    int
 	HandshakeOK      bool
 	HandshakeStatus  string

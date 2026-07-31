@@ -246,6 +246,9 @@ func (e *Engine) List(ctx context.Context) ([]Summary, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := ensurePrivateRoot(e.backupRoot); err != nil {
 		return nil, wrapFilesystem("prepare backup root", e.backupRoot, err)
 	}

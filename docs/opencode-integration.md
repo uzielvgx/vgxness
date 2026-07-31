@@ -42,7 +42,7 @@ vgxness integrate opencode status
 vgxness integrate opencode uninstall
 ```
 
-`--config-dir` can select a non-default OpenCode configuration directory. `--model-plan low|medium|high` selects the active matrix; `--model-efficient`, `--model-balanced`, and `--model-frontier` replace individual exact provider/model slots. Flags overlay the verified installed manifest, so omitted plan and slot values are preserved rather than reset. All slots must use one provider. The deprecated singular `--model` flag remains a no-op compatibility option and never overrides the plan.
+`--config-dir` can select a non-default OpenCode configuration directory and `--skills-dir` selects an absolute global portable-skills directory. `--model-plan low|medium|high` selects the active matrix; `--model-efficient`, `--model-balanced`, and `--model-frontier` replace individual exact provider/model slots. Flags overlay the verified installed manifest, so omitted plan and slot values are preserved rather than reset. All slots must use one provider. The deprecated singular `--model` flag remains a no-op compatibility option and never overrides the plan.
 
 Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna-fast`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS creates or updates `opencode.json` with `default_agent: "vgxness-manager"`, preserving every unrelated JSON value. It preserves any existing `opencode.jsonc` byte-for-byte. Bounded metadata at `<config-dir>/vgxness/default-agent.json` restores a prior explicit default during uninstall. The storage plugin does not route models.
 
@@ -134,7 +134,11 @@ Manager, managed `general`, and verifier use a single global `allow` permission 
 The integration is installed only when manager v36, all other 14 agents, storage plugin v5, the model-plan manifest, and the autonomous stacked-PR skill match their managed identities exactly. Setup health combines:
 
 1. the permanent VGXNESS launcher is installed and verified;
-2. all 20 managed artifacts are installed without drift, including the default-agent configuration and restoration metadata;
-3. the bounded OpenCode handshake succeeds for the selected workspace.
+2. all 20 OpenCode-managed artifacts are installed without drift, including the default-agent configuration and restoration metadata;
+3. the separate global 15-file `agent-skill-engineer` pack is installed without drift;
+4. the bounded OpenCode handshake succeeds for the selected workspace.
 
 Restart OpenCode Desktop after installation or a plan switch so it reloads the profiles, model bindings, variants, storage plugin, and managed skill.
+# Shared portable skills
+
+The managed 15-file `agent-skill-engineer` pack is installed automatically by setup and can be managed independently with `vgxness skills <preview|install|status|uninstall>` into `~/.agents/skills` (or an absolute `--skills-dir` override). OpenCode discovers that portable location, while the independent OpenCode stacked-PR skill remains provider-owned. `integrate opencode uninstall` is intentionally scoped to its 20 provider artifacts and never removes the shared pack.

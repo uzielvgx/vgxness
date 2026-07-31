@@ -12,8 +12,8 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
 | `internal/memory` | SQLite/FTS5 schema v5, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
-| `internal/providers/opencode` | Manager v35, 14 other model-bound agents, independent autonomous stacked-PR skill, plugin v5, model-plan manifest, current-only agent recognition, storage-plugin predecessor recognition, sync plumbing, and the setup handshake. |
-| `internal/integration`, `internal/setup` | Managed artifact lifecycle and six-step CLI/TUI setup workflow. |
+| `internal/providers/opencode` | Manager v36, 14 other model-bound agents, independent autonomous stacked-PR skill, plugin v5, model-plan manifest, current-only agent recognition, storage-plugin predecessor recognition, sync plumbing, and the setup handshake. |
+| `internal/integration`, `internal/setup`, `internal/skills` | Managed OpenCode lifecycle, independent global portable-skill lifecycle, and seven-step CLI/TUI setup workflow. |
 | `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
 | `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |
 
@@ -43,7 +43,7 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 The OpenCode projection contains 20 exact managed artifacts:
 
-- manager v35 with global tool permission;
+- manager v36 with global tool permission;
 - managed `general` and verifier profiles with global tool permission and distinct implementation/verification roles;
 - one CodeGraph-first, deny-by-default read-only `explore` override;
 - five hidden read-only reviewers;
@@ -55,6 +55,8 @@ The OpenCode projection contains 20 exact managed artifacts:
 - one independent `vgxness-autonomous-stacked-pr` skill.
 
 The model plan contains exactly 15 agents and does not contain the skill. Manager, agent, and model-plan recognition is current-only; older versions are preserved as drift and require explicit removal or migration outside the integration. Exact catalogued storage-plugin predecessors remain recognizable. Foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
+
+`internal/skills` separately owns the global 15-file `agent-skill-engineer` pack at `~/.agents/skills`, or an absolute `--skills-dir` override. Setup installs and verifies this pack as its third step. It is independent from the 20 OpenCode artifacts: the OpenCode-specific stacked-PR skill remains provider-owned, and OpenCode uninstall does not remove the global pack. Its selected root is descriptor-anchored with `os.Root`; exact partial packs resume or remove safely, while unknown bytes are drift. Windows retains atomic rename/readback/backups but lacks directory fsync crash durability.
 
 ## Verification
 

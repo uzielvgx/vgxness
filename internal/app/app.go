@@ -21,6 +21,7 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/vgxness/vgxness/internal/skills"
 	"github.com/vgxness/vgxness/internal/tui"
 )
 
@@ -33,6 +34,9 @@ type tuiLauncher func(context.Context, io.Reader, io.Writer, io.Writer, tui.Back
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher) int {
 	if len(args) > 0 && args[0] == "version" {
 		return cli.RunVersion(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "skills" {
+		return cli.RunSkills(ctx, args[1:], stdout, stderr, skills.New())
 	}
 	if len(args) > 0 && args[0] == "tui" && len(args) != 1 {
 		fmt.Fprintln(stderr, "usage: vgxness tui")
@@ -132,6 +136,7 @@ func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) 
 		Provider: preview.Provider, Ready: preview.Ready, Blocker: preview.Blocker,
 		SelfInstallState: preview.SelfInstallState, SelfInstallPath: preview.SelfInstallPath,
 		IntegrationState: preview.IntegrationState, IntegrationPath: preview.IntegrationPath,
+		SkillsState: preview.SkillsState, SkillsPath: preview.SkillsPath, SkillsFileCount: preview.SkillsFileCount,
 		ArtifactCount: preview.ArtifactCount,
 		HandshakeOK:   preview.HandshakeOK, HandshakeStatus: preview.HandshakeStatus, ModelPlan: preview.ModelPlan,
 	}, nil
@@ -156,6 +161,7 @@ func (backend tuiBackend) ApplySetup(ctx context.Context, request tui.SetupReque
 		Plan:             tuiSetupPlan(result.Plan),
 		SelfInstallState: fmt.Sprint(result.SelfInstall.State), SelfInstallPath: result.SelfInstall.LauncherPath,
 		IntegrationState: fmt.Sprint(result.Integration.State), IntegrationPath: result.Integration.Path,
+		SkillsState: fmt.Sprint(result.Plan.Skills.State), SkillsPath: result.Plan.Skills.Path, SkillsFileCount: result.Plan.Skills.FileCount,
 		ArtifactCount: result.Integration.ArtifactCount,
 		HandshakeOK:   result.Handshake.OK, HandshakeStatus: result.Handshake.Status.String(),
 		Recovery: result.Recovery, Changed: result.Changed, RestartRequired: result.Integration.RestartRequired,
@@ -331,6 +337,7 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 		Provider: plan.Provider, Steps: steps,
 		SelfInstallState: fmt.Sprint(plan.SelfInstall.State), SelfInstallPath: plan.SelfInstall.LauncherPath,
 		IntegrationState: fmt.Sprint(plan.Integration.State), IntegrationPath: plan.Integration.Path,
+		SkillsState: fmt.Sprint(plan.Skills.State), SkillsPath: plan.Skills.Path, SkillsFileCount: plan.Skills.FileCount,
 		ArtifactCount: plan.Integration.ArtifactCount,
 		ModelPlan:     fmt.Sprint(plan.Integration.ModelPlan), ModelProvider: plan.Integration.ModelProvider,
 		ModelEfficient: plan.Integration.ModelEfficient, ModelBalanced: plan.Integration.ModelBalanced,
