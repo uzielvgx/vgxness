@@ -190,7 +190,7 @@ func readySetupPlan(plan string) SetupPlan {
 		{Number: 2, Title: "Launcher", Mutates: true},
 		{Number: 3, Title: "Retire legacy provider skill", Mutates: true},
 		{Number: 4, Title: "OpenCode provider artifacts", Mutates: true},
-		{Number: 5, Title: "Global skills-creator, stacked-pr, cross-platform, and installer-lifecycle", Mutates: true},
+		{Number: 5, Title: "Global skills-creator, stacked-pr, cross-platform, installer-lifecycle, agent-evaluation, and ci-triage", Mutates: true},
 		{Number: 6, Title: "Verification"},
 		{Number: 7, Title: "Recovery"},
 	}

@@ -64,9 +64,9 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 	}
 }
 
-func TestBundledCatalogHasFourCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
+func TestBundledCatalogHasSixCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
 	catalog, err := bundledCatalog()
-	if err != nil || len(catalog.definitions) != 4 {
+	if err != nil || len(catalog.definitions) != 6 {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 	definition := catalog.definitions[0]
@@ -80,6 +80,12 @@ func TestBundledCatalogHasFourCanonicalSkillsAndOneLegacyMigration(t *testing.T)
 		t.Fatalf("definition=%+v", definition)
 	}
 	if definition = catalog.definitions[3]; definition.name != "installer-lifecycle" || definition.source != "installer-lifecycle" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[4]; definition.name != "agent-evaluation" || definition.source != "agent-evaluation" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[5]; definition.name != "ci-triage" || definition.source != "ci-triage" || len(definition.legacy) != 0 {
 		t.Fatalf("definition=%+v", definition)
 	}
 }
@@ -258,10 +264,10 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != StateInstalled || !result.Changed || result.FileCount != 18 {
+	if result.State != StateInstalled || !result.Changed || result.FileCount != 20 {
 		t.Fatalf("result=%+v", result)
 	}
-	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle"} {
+	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage"} {
 		if _, err := os.Lstat(filepath.Join(destination, name, "SKILL.md")); err != nil {
 			t.Fatalf("canonical %s activation file: %v", name, err)
 		}
@@ -913,7 +919,7 @@ func TestInstallRollbackRemovesOnlyEmptyDirectoriesItCreated(t *testing.T) {
 	if _, err := service.Install(context.Background(), Options{Dir: destination}); err == nil {
 		t.Fatal("expected install failure")
 	}
-	if info, err := os.Lstat(filepath.Join(destination, "cross-platform")); err != nil || !info.IsDir() {
+	if info, err := os.Lstat(filepath.Join(destination, "agent-evaluation")); err != nil || !info.IsDir() {
 		t.Fatalf("managed root info=%v err=%v", info, err)
 	}
 	if info, err := os.Lstat(destination); err != nil || !info.IsDir() {

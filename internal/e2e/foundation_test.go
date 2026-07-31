@@ -174,9 +174,9 @@ func assertOpenCodeDocumentationContract(t *testing.T) {
 	documents := map[string][]string{
 		"../../README.md":                     {"19 managed artifacts", "`vgxness-manager` v38", "cross-platform", "installer-lifecycle", "OpenCode uninstall never removes"},
 		"../../docs/opencode-integration.md":  {"19 managed artifacts", "cross-platform", "installer-lifecycle", "uninstall target"},
-		"../../docs/product-blueprint.md":     {"19 provider artifacts", "18 files", "cross-platform", "OpenCode uninstall never owns"},
-		"../../docs/product-blueprint.es.md":  {"19 artefactos", "18 archivos", "installer-lifecycle", "desinstalación de OpenCode"},
-		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "18-file", "cross-platform", "does not remove global skills"},
+		"../../docs/product-blueprint.md":     {"19 provider artifacts", "20 files", "agent-evaluation", "ci-triage", "OpenCode uninstall never owns"},
+		"../../docs/product-blueprint.es.md":  {"19 artefactos", "20 archivos", "agent-evaluation", "ci-triage", "desinstalación de OpenCode"},
+		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "20-file", "agent-evaluation", "ci-triage", "does not remove global skills"},
 		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "installer-lifecycle", "v1/v2/v3", "OpenCode uninstall does not own"},
 	}
 	for path, claims := range documents {
