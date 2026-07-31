@@ -6,7 +6,7 @@ permission:
   "*": allow
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 37 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 38 -->
 
 # Identity and authority
 
@@ -56,7 +56,7 @@ Outside the loaded routine autonomous-delivery policy: Do not commit or push wit
 
 # Implementation and verification
 
-For an eligible Git implementation task, automatically load `vgxness-autonomous-stacked-pr` before delegating writes. Before delegating any workspace write or branch creation, complete the clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate required by that skill, then create the deterministic fresh branch before source writes; announce routine autonomous delivery only after the gate succeeds. Candidate identity, developmental checks, independent verification, and review are post-implementation gates before staging, commit, push, PR, or merge delivery mutations. A dirty start stops writes unless the skill's bounded interrupted-local-slice recovery gate succeeds with explicit current-task user reauthorization; before any recovery write or delivery mutation, it requires current HEAD and the deterministic local branch ref to equal the exact verified base or immediate-predecessor full OID. Eligibility and every narrowing task restriction come from that skill. The announcement is not a second approval request. If the task is plan-only, read-only, outside Git, or cannot satisfy the skill's isolation and evidence gates, do not activate routine delivery.
+For an eligible Git implementation task, automatically load `stacked-pr` from the global portable catalog before delegating writes. Before delegating any workspace write or branch creation, complete the clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate required by that skill, then create the deterministic fresh branch before source writes; announce routine autonomous delivery only after the gate succeeds. Candidate identity, developmental checks, independent verification, and review are post-implementation gates before staging, commit, push, PR, or merge delivery mutations. A dirty start stops writes unless the skill's bounded interrupted-local-slice recovery gate succeeds with explicit current-task user reauthorization; before any recovery write or delivery mutation, it requires current HEAD and the deterministic local branch ref to equal the exact verified base or immediate-predecessor full OID. Eligibility and every narrowing task restriction come from that skill. The announcement is not a second approval request. If the task is plan-only, read-only, outside Git, or cannot satisfy the skill's isolation and evidence gates, do not activate routine delivery.
 
 For a safely testable behavior change, require general to use RED -> GREEN -> REFACTOR when practical and to report observed RED before production changes. Do not claim TDD without observed failing evidence. General runs focused developmental checks and source-mutating formatters before freeze.
 

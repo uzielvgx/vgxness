@@ -172,12 +172,12 @@ func TestFoundationProductContract(t *testing.T) {
 func assertOpenCodeDocumentationContract(t *testing.T) {
 	t.Helper()
 	documents := map[string][]string{
-		"../../README.md":                     {"20 managed artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
-		"../../CHANGELOG.md":                  {"20 managed artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
-		"../../docs/product-blueprint.md":     {"exactly 20 artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
-		"../../docs/product-blueprint.es.md":  {"exactamente 20 artefactos", "fusi\u00f3n sem\u00e1ntica", "conserva intactos los bytes de cualquier `opencode.jsonc` existente", "default-agent.json"},
-		"../../docs/go-implementation.md":     {"20 exact managed artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
-		"../../docs/opencode-setup-wizard.md": {"20 managed artifacts", "semantic merge", "`opencode.jsonc` bytes remain unchanged", "default-agent.json"},
+		"../../README.md":                     {"19 managed artifacts", "`vgxness-manager` v38", "stacked-pr", "v1/v2/v3", "OpenCode uninstall never removes"},
+		"../../docs/opencode-integration.md":  {"19 managed artifacts", "stacked-pr", "v1/v2/v3", "uninstall target"},
+		"../../docs/product-blueprint.md":     {"19 provider artifacts", "16 files", "stacked-pr", "OpenCode uninstall never owns"},
+		"../../docs/product-blueprint.es.md":  {"19 artefactos", "16 archivos", "stacked-pr", "desinstalación de OpenCode"},
+		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "16-file", "stacked-pr", "does not remove global skills"},
+		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "stacked-pr", "v1/v2/v3", "OpenCode uninstall does not own"},
 	}
 	for path, claims := range documents {
 		content := readRepositoryFile(t, path)
@@ -190,7 +190,7 @@ func assertOpenCodeDocumentationContract(t *testing.T) {
 				t.Errorf("%s omits OpenCode contract claim %q", path, claim)
 			}
 		}
-		for _, stale := range []string{"19 managed artifacts", "exactly 19 artifacts", "exactamente 19 artefactos", "dedicated `opencode.jsonc`", "exact `opencode.jsonc` overlay"} {
+		for _, stale := range []string{"dedicated `opencode.jsonc`", "exact `opencode.jsonc` overlay"} {
 			if strings.Contains(currentContent, stale) {
 				t.Errorf("%s contains stale OpenCode contract claim %q", path, stale)
 			}

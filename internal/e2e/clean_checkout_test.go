@@ -101,7 +101,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatalf("setup did not install the bounded storage-only plugin: %v", err)
 	}
 	managerData, err := os.ReadFile(manager)
-	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 37")) || !bytes.Contains(managerData, []byte("Before delegating any workspace write")) || !bytes.Contains(managerData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(managerData, []byte("At the start of an accepted SDD change")) {
+	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 38")) || !bytes.Contains(managerData, []byte("automatically load `stacked-pr`")) || bytes.Contains(managerData, []byte("automatically load `vgxness-autonomous-stacked-pr`")) || !bytes.Contains(managerData, []byte("Before delegating any workspace write")) || !bytes.Contains(managerData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(managerData, []byte("At the start of an accepted SDD change")) {
 		t.Fatalf("setup did not install the executable SDD manager contract: %v", err)
 	}
 	generalData, generalErr := os.ReadFile(general)

@@ -22,8 +22,8 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 37",
-		"vgxness-autonomous-stacked-pr", "routine autonomous delivery",
+		"artifact: opencode-agent/vgxness-manager; version: 38",
+		"automatically load `stacked-pr`", "routine autonomous delivery",
 		"Before delegating any workspace write", "clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate",
 		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
 		"sole Git and GitHub actor", "delegated implementation worker",
@@ -41,7 +41,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 			t.Errorf("canonical current manager missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"git push <remote> --delete <head>"} {
+	for _, forbidden := range []string{"git push <remote> --delete <head>", "automatically load `vgxness-autonomous-stacked-pr`"} {
 		if strings.Contains(manager, forbidden) {
 			t.Errorf("canonical current manager retains forbidden cleanup %q", forbidden)
 		}

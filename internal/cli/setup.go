@@ -15,7 +15,7 @@ import (
 
 func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime) int {
 	if len(args) == 0 || args[0] != "opencode" {
-		fmt.Fprintln(stderr, "usage: vgxness setup opencode [--preview|--status] [--yes] [--workspace PATH] [--skills-dir PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--model-plan low|medium|high]")
+		fmt.Fprintln(stderr, "usage: vgxness setup opencode [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--model-plan low|medium|high]")
 		return 2
 	}
 	flags := flag.NewFlagSet("setup opencode", flag.ContinueOnError)
@@ -38,7 +38,6 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	flags.StringVar(&options.SelfInstall.BinDir, "bin-dir", "", "stable launcher directory")
 	flags.StringVar(&options.SelfInstall.DataDir, "data-dir", "", "version data directory")
 	flags.StringVar(&options.Integration.ConfigDir, "config-dir", "", "OpenCode configuration directory")
-	flags.StringVar(&options.Skills.Dir, "skills-dir", "", "absolute shared portable skills directory")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || preview && status || yes && (preview || status) {
 		fmt.Fprintln(stderr, "invalid setup arguments")
 		return 2
@@ -116,8 +115,9 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return code
 	}
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
-	fmt.Fprintf(stdout, "Paso 3: skill portable skills-creator verificada en %s\n", terminalSafe(result.Plan.Skills.Path))
-	fmt.Fprintf(stdout, "Pasos 4–5: %d artefactos de manager, general, verificador, Explore, revisores, agentes SDD, almacenamiento y plan verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
+	fmt.Fprintln(stdout, "Paso 3: retiro exacto de la skill heredada del proveedor verificado.")
+	fmt.Fprintf(stdout, "Paso 4: %d artefactos del proveedor verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
+	fmt.Fprintf(stdout, "Paso 5: catálogo global de 16 archivos skills-creator + stacked-pr verificado en %s\n", terminalSafe(result.Plan.Skills.Path))
 	fmt.Fprintf(stdout, "Paso 6: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
 	fmt.Fprintln(stdout, "Paso 7: no fue necesaria recuperación.")
 	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode para cargar vgxness-manager como agente predeterminado.\n", result.Changed)

@@ -70,7 +70,7 @@ func TestSetupWizardPreviewExplainsAllStepsWithoutApplying(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--preview", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
 	output := stdout.String()
-	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 7") || !strings.Contains(output, "Paso 7 de 7") || !strings.Contains(output, "skills-creator") || !strings.Contains(output, "no la elimina") || !strings.Contains(output, "sustituciones administradas para Explore y general") || !strings.Contains(output, "workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "verificador independiente") || !strings.Contains(output, "plugin de almacenamiento") || !strings.Contains(output, "Artefactos administrados: 20") || !strings.Contains(output, "Agente predeterminado: vgxness-manager") || !strings.Contains(output, "no se modificó ningún archivo") {
+	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 7") || !strings.Contains(output, "Paso 7 de 7") || !strings.Contains(output, "skills-creator y stacked-pr") || !strings.Contains(output, "v1, v2 o v3") || !strings.Contains(output, "sustituciones administradas para Explore y general") || !strings.Contains(output, "workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "verificador independiente") || !strings.Contains(output, "plugin de almacenamiento") || !strings.Contains(output, "Artefactos administrados: 19") || !strings.Contains(output, "Agente predeterminado: vgxness-manager") || !strings.Contains(output, "no se modificó ningún archivo") {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, output, stderr.String())
 	}
 }
@@ -127,12 +127,21 @@ func TestSetupWizardDoesNotRequireASecondaryModel(t *testing.T) {
 	}
 }
 
+func TestSetupWizardRejectsCustomSkillsDirectoryBeforePlanning(t *testing.T) {
+	fake := &fakeSetupRuntime{plan: setupPlanFixture(true)}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--skills-dir", "/tmp/skills"}, strings.NewReader(""), &stdout, &stderr, fake)
+	if code != 2 || fake.planCalls != 0 || fake.applyCalls != 0 || !strings.Contains(stderr.String(), "invalid setup arguments") {
+		t.Fatalf("code=%d calls=%d/%d stderr=%q", code, fake.planCalls, fake.applyCalls, stderr.String())
+	}
+}
+
 func setupPlanFixture(ready bool) setupflow.Plan {
 	return setupflow.Plan{
 		Provider: "opencode", Steps: setupflow.OpenCodeSteps(), Ready: ready,
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/stable/vgxness", DataDir: "/data"},
-		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ToolPath: "/config/plugins/vgxness.ts", ArtifactCount: 20, ModelPlan: sdd.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna-fast", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json", DefaultAgent: "vgxness-manager", DefaultAgentPath: "/config/opencode.json"},
-		Skills:      skills.Result{State: skills.StateAbsent, Path: "/shared/skills/skills-creator", FileCount: 15},
+		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ToolPath: "/config/plugins/vgxness.ts", ArtifactCount: 19, ModelPlan: sdd.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna-fast", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json", DefaultAgent: "vgxness-manager", DefaultAgentPath: "/config/opencode.json"},
+		Skills:      skills.Result{State: skills.StateAbsent, Path: "/shared/skills", FileCount: 16},
 		Handshake:   integration.Handshake{OK: ready, Status: integration.HandshakeHealthy},
 	}
 }

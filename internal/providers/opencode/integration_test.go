@@ -94,7 +94,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
 			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
-			installed.ArtifactCount == 20 &&
+			installed.ArtifactCount == 19 &&
 			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired &&
 			installed.DefaultAgent == defaultAgentName &&
@@ -122,8 +122,8 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Require(t, second.State == integration.StateInstalled && !second.Changed, "install was not idempotent: %#v", second)
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
-	skill, err := os.ReadFile(skillPath)
-	testutil.Require(t, err == nil && bytes.Equal(skill, []byte(autonomousStackedPRSkill)), "managed skill differs: %v", err)
+	_, err = os.Stat(skillPath)
+	testutil.Require(t, os.IsNotExist(err), "retired provider skill remains active: %v", err)
 }
 
 func TestIntegration_DefaultAgentConfigPreservesOpenCodeJSONAndJSONC(t *testing.T) {
@@ -528,6 +528,7 @@ func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
 			installed, err := service.Install(context.Background(), options)
 			testutil.NoError(t, err)
 			path := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+			testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 			testutil.NoError(t, os.WriteFile(path, candidate, 0o600))
 
 			status, statusErr := service.Status(context.Background(), options)
@@ -539,8 +540,8 @@ func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
 	}
 }
 
-func TestIntegrationUpgradesOnlyExactV1OrV2ManagedSkill(t *testing.T) {
-	for name, predecessor := range map[string]string{"v1": previousAutonomousStackedPRSkill, "v2": previousAutonomousStackedPRSkillV2} {
+func TestIntegrationRetiresOnlyExactLegacyProviderSkill(t *testing.T) {
+	for name, predecessor := range map[string]string{"v1": previousAutonomousStackedPRSkill, "v2": previousAutonomousStackedPRSkillV2, "v3": autonomousStackedPRSkill} {
 		t.Run(name, func(t *testing.T) {
 			configDirectory := filepath.Join(t.TempDir(), "opencode")
 			service := NewIntegration()
@@ -548,16 +549,33 @@ func TestIntegrationUpgradesOnlyExactV1OrV2ManagedSkill(t *testing.T) {
 			_, err := service.Install(context.Background(), options)
 			testutil.NoError(t, err)
 			path := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+			testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 			testutil.NoError(t, os.WriteFile(path, []byte(predecessor), 0o600))
 
-			upgraded, upgradeErr := service.Install(context.Background(), options)
-			after, readErr := os.ReadFile(path)
+			retired, retireErr := service.Install(context.Background(), options)
+			_, readErr := os.Stat(path)
 			testutil.Require(t,
-				upgradeErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && readErr == nil && bytes.Equal(after, []byte(autonomousStackedPRSkill)),
-				"exact %s skill was not upgraded: installed=%+v err=%v read=%v", name, upgraded, upgradeErr, readErr,
+				retireErr == nil && retired.State == integration.StateInstalled && retired.Changed && os.IsNotExist(readErr),
+				"exact %s skill was not retired: installed=%+v err=%v read=%v", name, retired, retireErr, readErr,
 			)
 		})
 	}
+}
+
+func TestIntegrationRestoresRetiredSkillAfterLaterFailure(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	path := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+	legacy := []byte(previousAutonomousStackedPRSkillV2)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	testutil.NoError(t, os.WriteFile(path, legacy, 0o600))
+	service.afterRetirement = func() error { return errors.New("injected later failure") }
+	_, err = service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	testutil.Require(t, err != nil && readErr == nil && bytes.Equal(after, legacy), "retirement rollback err=%v read=%v after=%q", err, readErr, after)
 }
 
 func TestIntegrationPreservesForeignGeneralAndVerifier(t *testing.T) {
@@ -664,7 +682,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 37"), []byte("version: 36"), 1)
+	older := bytes.Replace(current, []byte("version: 38"), []byte("version: 37"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -753,7 +771,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 37",
+		"artifact: opencode-agent/vgxness-manager; version: 38",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",
