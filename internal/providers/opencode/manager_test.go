@@ -22,8 +22,10 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 36",
+		"artifact: opencode-agent/vgxness-manager; version: 37",
 		"vgxness-autonomous-stacked-pr", "routine autonomous delivery",
+		"Before delegating any workspace write", "clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate",
+		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
 		"sole Git and GitHub actor", "delegated implementation worker",
 		"current-task merge authorization", "original inspected base branch",
 		"gh pr merge <number> --repo <repository> --merge --match-head-commit <expected-head-oid>",
@@ -31,6 +33,9 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 		"expected base-tip OID", "before checks and again immediately before merge",
 		"fast-forward", "no cleanup",
 		"creating an additional checkout or worktree", "Switching the existing checkout back to the original base",
+		"Existing remote branches and PRs are read-only resumption",
+		"The only exception is the skill's bounded interrupted-local-slice recovery gate",
+		"dirty worktrees outside that exact bounded interrupted-local-slice recovery gate",
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("canonical current manager missing %q", required)
@@ -55,7 +60,14 @@ func TestAutonomousStackedPRSkillHasExactIdentityAndNativePolicy(t *testing.T) {
 		t.Fatalf("skill frontmatter differs from accepted identity:\n%s", skill)
 	}
 	for _, required := range []string{
-		"artifact: opencode-skill/vgxness-autonomous-stacked-pr; version: 2",
+		"artifact: opencode-skill/vgxness-autonomous-stacked-pr; version: 3",
+		"Before any source write", "clean porcelain including untracked", "base/upstream/remote/repository/ref proof",
+		"initial estimate and slice plan", "fresh branch before source writes",
+		"After each bounded write transaction", "actual numeric size", "stop and replan before further writes",
+		"explicit current-task user reauthorization", "deterministic expected branch name",
+		"no upstream, live remote head, or PR", "no staged changes", "complete worktree-inclusive digest including untracked",
+		"repeated focused checks, independent verification and selected review", "NEW PR",
+		"Existing remote branches and PRs are read-only resumption", "never receive retroactive merge or cleanup authority",
 		"400 effective changed lines", "more than 800 effective changed lines",
 		"explicit task override", "durable project memory default",
 		"git diff --numstat", "48 characters", "vgxness/<delivery-id>/slice-<ordinal>",
@@ -68,7 +80,7 @@ func TestAutonomousStackedPRSkillHasExactIdentityAndNativePolicy(t *testing.T) {
 		"Initial branch creation uses the announced estimate", "re-plan before staging, commit, push, or PR creation",
 		"fresh branch", "normal commit", "first push", "non-draft pull request",
 		`git switch -c <head> <verified-start-commit>`,
-		`git push --set-upstream <verified-remote> <head>`,
+		`git push --set-upstream --force-with-lease=refs/heads/<head>: <verified-remote> refs/heads/<head>:refs/heads/<head>`,
 		`gh pr create --head <head> --base <base> --title "<title>" --body "<body>"`,
 		`gh pr merge <number> --repo <repository> --merge --match-head-commit <expected-head-oid>`,
 		"verified GitHub `owner/repo` identity", "validated full commit OID",
@@ -88,13 +100,90 @@ func TestAutonomousStackedPRSkillHasExactIdentityAndNativePolicy(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"worktree add", "worktree remove", "--force", "--amend", "gh pr edit", "git push <remote> --delete <head>",
+		"worktree add", "worktree remove", "--amend", "gh pr edit", "git push <remote> --delete <head>",
 		"persistent delivery state", "opencode.json", "custom Git tool", "custom GitHub tool",
 		"before the first Git mutation",
 		`Stack: <delivery-id>; Slice: <ordinal>/<total>; Base: <base>; Head: <head>; Depends-On: <previous-PR-URL-or-none>`,
 	} {
 		if strings.Contains(skill, forbidden) {
 			t.Errorf("stacked-PR skill contains unsupported operation %q", forbidden)
+		}
+	}
+	const createOnlyLease = "git push --set-upstream --force-with-lease=refs/heads/<head>: <verified-remote> refs/heads/<head>:refs/heads/<head>"
+	if !strings.Contains(skill, createOnlyLease) {
+		t.Errorf("stacked-PR skill missing exact create-only lease push %q", createOnlyLease)
+	}
+	for remaining := skill; ; {
+		index := strings.Index(remaining, "--force")
+		if index < 0 {
+			break
+		}
+		remaining = remaining[index:]
+		if !strings.HasPrefix(remaining, "--force-with-lease=refs/heads/<head>:") {
+			t.Error("stacked-PR skill contains a generic or ambiguous force form")
+			break
+		}
+		remaining = remaining[len("--force"):]
+	}
+	for _, forbidden := range []string{
+		"git push --set-upstream <verified-remote> <head>",
+		"--force-with-lease=refs/heads/<head>:<expected-oid>",
+	} {
+		if strings.Contains(skill, forbidden) {
+			t.Errorf("stacked-PR skill contains unsafe first-publication behavior %q", forbidden)
+		}
+	}
+}
+
+func TestAutonomousStackedPRSkillOrdersGatesAndConstrainsRecovery(t *testing.T) {
+	skill := autonomousStackedPRSkill
+	preWrite := "Before any source write, complete the clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate"
+	branch := "Only then create that fresh branch before source writes."
+	postImplementation := "After implementation, and before staging, commit, push, PR, or merge delivery mutations, require candidate identity, successful developmental checks, independent verification, and review outcome."
+	for _, required := range []string{preWrite, branch, postImplementation} {
+		if !strings.Contains(skill, required) {
+			t.Errorf("stacked-PR skill missing gate phrase %q", required)
+		}
+	}
+	if strings.Index(skill, preWrite) > strings.Index(skill, branch) || strings.Index(skill, branch) > strings.Index(skill, postImplementation) {
+		t.Error("stacked-PR skill does not order pre-write, branch creation, and post-implementation gates")
+	}
+	for _, required := range []string{
+		"current HEAD and the deterministic local `refs/heads/<head>` must each equal the exact verified base or immediate-predecessor full OID",
+		"before any recovery write or delivery mutation",
+		"Existing remote branches and PRs remain read-only",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Errorf("stacked-PR skill missing recovery constraint %q", required)
+		}
+	}
+}
+
+func TestManagerMapsDeliveryMilestonesAndFirstPublicationPolicy(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manager := string(bundle.agents[managerAgentName])
+	const createOnlyLease = "git push --set-upstream --force-with-lease=refs/heads/<head>: <verified-remote> refs/heads/<head>:refs/heads/<head>"
+	for _, required := range []string{
+		createOnlyLease,
+		"all first remote publication, including clean and recovery paths",
+		"must fail if the remote ref exists and must never overwrite or update an existing ref",
+		"before any recovery write or delivery mutation, it requires current HEAD and the deterministic local branch ref to equal the exact verified base or immediate-predecessor full OID",
+		"IMPLEMENTED: intended workspace changes complete and developmental checks observed; not independently verified.",
+		"VERIFIED: exact frozen candidate passed independent verifier and required review.",
+		"DELIVERED: exact commit was published and a new current-task PR was created and read back.",
+		"MERGED: that PR was verified merged and base containment/readback succeeded.",
+		"INSTALLED: merged version was installed and installation/handshake readback succeeded.",
+	} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("canonical current manager missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"normal one-line commit, first push with `--set-upstream`",
+	} {
+		if strings.Contains(manager, forbidden) {
+			t.Errorf("canonical current manager retains unsafe publication behavior %q", forbidden)
 		}
 	}
 }

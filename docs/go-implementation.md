@@ -12,7 +12,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
 | `internal/memory` | SQLite/FTS5 schema v5, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
-| `internal/providers/opencode` | Manager v36, 14 other model-bound agents, independent autonomous stacked-PR skill, plugin v5, model-plan manifest, current-only agent recognition, storage-plugin predecessor recognition, sync plumbing, and the setup handshake. |
+| `internal/providers/opencode` | Manager v37, 14 other model-bound agents, independent autonomous stacked-PR skill v3, plugin v5, model-plan manifest, current-only agent recognition, exact v1/v2 skill predecessor recognition, sync plumbing, and the setup handshake. |
 | `internal/integration`, `internal/setup`, `internal/skills` | Managed OpenCode lifecycle, independent global portable-skill lifecycle, and seven-step CLI/TUI setup workflow. |
 | `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
 | `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |
@@ -43,7 +43,7 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 The OpenCode projection contains 20 exact managed artifacts:
 
-- manager v36 with global tool permission;
+- manager v37 with global tool permission and a pre-write delivery gate;
 - managed `general` and verifier profiles with global tool permission and distinct implementation/verification roles;
 - one CodeGraph-first, deny-by-default read-only `explore` override;
 - five hidden read-only reviewers;
