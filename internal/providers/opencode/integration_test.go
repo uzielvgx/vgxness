@@ -515,7 +515,10 @@ func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
 		"modified":     append(append([]byte(nil), current...), []byte("\nuser modification\n")...),
 		"modified v1":  append(append([]byte(nil), previousAutonomousStackedPRSkill...), []byte("\nuser modification\n")...),
 		"malformed v1": bytes.Replace([]byte(previousAutonomousStackedPRSkill), []byte("version: 1"), []byte("version: one"), 1),
-		"newer":        bytes.Replace(current, []byte("version: 2"), []byte("version: 3"), 1),
+		"modified v2":  append(append([]byte(nil), previousAutonomousStackedPRSkillV2...), []byte("\nuser modification\n")...),
+		"malformed v2": bytes.Replace([]byte(previousAutonomousStackedPRSkillV2), []byte("version: 2"), []byte("version: two"), 1),
+		"equal drift":  bytes.Replace(current, []byte("version: 3"), []byte("version: 3 "), 1),
+		"newer v4":     bytes.Replace(current, []byte("version: 3"), []byte("version: 4"), 1),
 	}
 	for name, candidate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -536,21 +539,25 @@ func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
 	}
 }
 
-func TestIntegrationUpgradesOnlyExactV1ManagedSkill(t *testing.T) {
-	configDirectory := filepath.Join(t.TempDir(), "opencode")
-	service := NewIntegration()
-	options := integration.Options{ConfigDir: configDirectory}
-	_, err := service.Install(context.Background(), options)
-	testutil.NoError(t, err)
-	path := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
-	testutil.NoError(t, os.WriteFile(path, []byte(previousAutonomousStackedPRSkill), 0o600))
+func TestIntegrationUpgradesOnlyExactV1OrV2ManagedSkill(t *testing.T) {
+	for name, predecessor := range map[string]string{"v1": previousAutonomousStackedPRSkill, "v2": previousAutonomousStackedPRSkillV2} {
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			_, err := service.Install(context.Background(), options)
+			testutil.NoError(t, err)
+			path := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+			testutil.NoError(t, os.WriteFile(path, []byte(predecessor), 0o600))
 
-	upgraded, upgradeErr := service.Install(context.Background(), options)
-	after, readErr := os.ReadFile(path)
-	testutil.Require(t,
-		upgradeErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && readErr == nil && bytes.Equal(after, []byte(autonomousStackedPRSkill)),
-		"exact v1 skill was not upgraded: installed=%+v err=%v read=%v", upgraded, upgradeErr, readErr,
-	)
+			upgraded, upgradeErr := service.Install(context.Background(), options)
+			after, readErr := os.ReadFile(path)
+			testutil.Require(t,
+				upgradeErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && readErr == nil && bytes.Equal(after, []byte(autonomousStackedPRSkill)),
+				"exact %s skill was not upgraded: installed=%+v err=%v read=%v", name, upgraded, upgradeErr, readErr,
+			)
+		})
+	}
 }
 
 func TestIntegrationPreservesForeignGeneralAndVerifier(t *testing.T) {
@@ -657,7 +664,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 36"), []byte("version: 35"), 1)
+	older := bytes.Replace(current, []byte("version: 37"), []byte("version: 36"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -746,7 +753,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 36",
+		"artifact: opencode-agent/vgxness-manager; version: 37",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",

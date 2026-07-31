@@ -30,6 +30,9 @@ var autonomousStackedPRSkill string
 //go:embed templates/skills/vgxness-autonomous-stacked-pr/SKILL.v1.md
 var previousAutonomousStackedPRSkill string
 
+//go:embed templates/skills/vgxness-autonomous-stacked-pr/SKILL.v2.md
+var previousAutonomousStackedPRSkillV2 string
+
 //go:embed templates/general.md
 var canonicalGeneralPrompt string
 
@@ -907,7 +910,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: filepath.Join(configDirectory, "agents", sddTasksName), content: plan.agents[sddTasksName], backup: "vgxness-sdd-tasks", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddTasksName))},
 		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
 		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
-		{path: skillPath, content: []byte(autonomousStackedPRSkill), backup: "vgxness-autonomous-stacked-pr-skill", predecessors: [][]byte{[]byte(previousAutonomousStackedPRSkill)}},
+		{path: skillPath, content: []byte(autonomousStackedPRSkill), backup: "vgxness-autonomous-stacked-pr-skill", predecessors: [][]byte{[]byte(previousAutonomousStackedPRSkill), []byte(previousAutonomousStackedPRSkillV2)}},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
 		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true},
 		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},

@@ -3,7 +3,7 @@ name: vgxness-autonomous-stacked-pr
 description: Use when autonomously delivering an eligible change as one review-ready pull request or a linear stack with native git and gh.
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-skill/vgxness-autonomous-stacked-pr; version: 3 -->
+<!-- managed-by: vgxness; artifact: opencode-skill/vgxness-autonomous-stacked-pr; version: 2 -->
 
 # VGXNESS autonomous stacked PR
 
@@ -11,7 +11,7 @@ Use this policy only from the top-level VGXNESS Manager. Managed general remains
 
 ## Eligibility and restrictions
 
-An eligible task is an authorized implementation in one clean Git checkout whose intended changed paths can be isolated. Do not announce routine autonomous delivery or delegate a workspace write until the pre-write gate below succeeds. The announcement is disclosure, not a request for another approval.
+An eligible task is an authorized implementation in one clean Git checkout whose intended changed paths can be isolated and whose freeze, focused checks, independent verification, and selected review have succeeded. Announce routine autonomous delivery when loading this skill. The announcement is disclosure, not a request for another approval.
 
 Task restrictions always win and narrow transitively:
 
@@ -32,36 +32,28 @@ Resolve sizing with this precedence: an explicit task override, then an explicit
 - Use one pull request at 800 effective changed lines or fewer.
 - Stack when the planned change is more than 800 effective changed lines.
 
-Estimate before implementation from the accepted scope and nearby evidence. The estimate guides only the initial plan. Initial branch creation uses the announced estimate and the verified start commit. After implementation, use numeric additions plus deletions from the worktree-inclusive one-commit `git diff --numstat` form for the exact intended candidate; this actual measurement supersedes the estimate. Treat binary entries, missing paths, unrelated changes, or an unexplained material estimate/actual mismatch as ineligible for routine delivery. If the actual total is more than 800 effective changed lines, re-plan before staging, commit, push, or PR creation. After each bounded write transaction, recompute actual numeric size; stop and replan before further writes if the slice exceeds 800 or scope/estimate materially drifts.
+Estimate before implementation from the accepted scope and nearby evidence. The estimate guides only the initial plan. Initial branch creation uses the announced estimate and the verified start commit. After implementation, use numeric additions plus deletions from the worktree-inclusive one-commit `git diff --numstat` form for the exact intended candidate; this actual measurement supersedes the estimate. Treat binary entries, missing paths, unrelated changes, or an unexplained material estimate/actual mismatch as ineligible for routine delivery. If the actual total is more than 800 effective changed lines, re-plan before staging, commit, push, or PR creation.
 
 Derive one deterministic delivery ID from the normalized task goal: lowercase ASCII letters and digits, replace each run of other characters with one hyphen, collapse and trim hyphens, use `task` if empty, and truncate to at most 48 characters without a trailing hyphen. Use branches named exactly `vgxness/<delivery-id>/slice-<ordinal>`, with positive decimal ordinals starting at 1.
 
 Each slice must be independently reviewable, preserve behavior at every boundary, and form a linear immediate-parent topology. Slice 1 starts from the inspected base branch. Every later slice starts from the committed branch immediately before it. Keep one clean checkout and one writer; do not create another checkout. Every PR in a stack targets the same original inspected base branch, while `Depends-On` records the immediate predecessor PR. The merge commits preserve predecessor commits, so later PR diffs narrow after earlier slices land.
 
-## Pre-write gate, freeze and native delivery
+## Freeze and native delivery
 
-Before any source write, complete the clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate: prove clean porcelain including untracked, expected HEAD, base/upstream/remote/repository/ref proof, intended paths, initial estimate and slice plan, and deterministic fresh branch name and absence from the verified start commit. Only then create that fresh branch before source writes. A dirty start stops writes unless the bounded interrupted-local-slice recovery gate succeeds. Verify the remote URL and GitHub repository identity, validate every branch ref, test local, cached remote, and live remote ref existence, and prove immediate-parent ancestry and zero unexpected divergence.
-
-After implementation, and before staging, commit, push, PR, or merge delivery mutations, require candidate identity, successful developmental checks, independent verification, and review outcome. Inspect worktree-inclusive one-commit base/path name-only, name-status, raw, check, and numstat diffs. Measure each specific untracked path with the permitted no-index numstat form. Before commit, inspect cached name-only, check, numstat, and full diff forms. Verify GitHub authentication and use PR list/view/checks readback to detect or report existing delivery state. Preserve unrelated changes and stage only intended paths.
+Before any routine mutation, establish the expected HEAD, base branch and upstream, exact porcelain-v1 status including untracked files, intended paths, candidate identity, successful developmental checks, independent verification, and review outcome. Verify the remote URL and GitHub repository identity, validate every branch ref, test local, cached remote, and live remote ref existence, and prove immediate-parent ancestry and zero unexpected divergence. After implementation, inspect worktree-inclusive one-commit base/path name-only, name-status, raw, check, and numstat diffs. Measure each specific untracked path with the permitted no-index numstat form. Before commit, inspect cached name-only, check, numstat, and full diff forms. Verify GitHub authentication and use PR list/view/checks readback to detect or report existing delivery state. Preserve unrelated changes and stage only intended paths.
 
 After those gates succeed, a fresh branch, normal commit, first push, and non-draft pull request need no second approval unless a task restriction forbids them. Use only these conceptual native command forms, with each placeholder replaced by a previously verified value:
 
 - `git switch -c <head> <verified-start-commit>`
 - `git commit -m "<type>(<scope>): <summary> [slice <ordinal>/<total>]"`
-- `git push --set-upstream --force-with-lease=refs/heads/<head>: <verified-remote> refs/heads/<head>:refs/heads/<head>`
+- `git push --set-upstream <verified-remote> <head>`
 - `gh pr create --head <head> --base <base> --title "<title>" --body "<body>"`
 
 Use only validated, option-free tokens for head, base, remote name, and start commit. Use the one-line PR title format `<summary> [<ordinal>/<total>]`. Use the comma-separated one-line PR body format `Stack: <delivery-id>, Slice: <ordinal>/<total>, Base: <base>, Head: <head>, Depends-On: <previous-PR-URL-or-none>`. The body emits stack metadata even for a one-slice delivery and contains no semicolon. The commit message, title, and body must each be one safe single argument: no newline, carriage return, control character, quote, backslash, shell metacharacter, substitution syntax, or option-shaped ` -` segment. Set every PR base to the original inspected base branch and record the created URL before constructing the next slice metadata.
 
-For all first remote publication, including clean and recovery paths, use only the exact create-only lease form above. Its empty lease expectation for `refs/heads/<head>` must fail if the remote ref exists and must never overwrite or update an existing ref. Generic force, a lease with a non-empty or ambiguous expectation, a fallback normal push after rejection, and a retry after branch appearance are forbidden. Existing remote branches and PRs remain read-only.
-
-## Bounded interrupted-local-slice recovery
-
-Without persistent state, recovery is available only with explicit current-task user reauthorization. It requires the deterministic expected branch name; an exact verified base or immediate predecessor full OID; current HEAD and the deterministic local `refs/heads/<head>` must each equal the exact verified base or immediate-predecessor full OID before any recovery write or delivery mutation; no upstream, live remote head, or PR; no staged changes; unchanged remote/repository/base; worktree paths wholly within the accepted current slice and no unrelated paths; a complete worktree-inclusive digest including untracked; actual slice <=800; repeated focused checks, independent verification and selected review. Only then may the current task stage, commit, first-push using the exact create-only lease form, and create a NEW PR. Merge authority applies only to that newly created current-task PR. Existing remote branches and PRs remain read-only and never receive retroactive merge or cleanup authority. Do not use stash, reset, worktree, or destructive recovery.
-
 ## Current-task landing and cleanup
 
-Ordinary eligible delivery grants current-task merge authorization only for PRs created by this same current task, after all freeze, verification, review, and delivery gates succeed and unless a restriction forbids merge. Existing remote branches and PRs are read-only resumption; they never receive retroactive merge or cleanup authority.
+Ordinary eligible delivery grants current-task merge authorization only for PRs created by this same current task, after all freeze, verification, review, and delivery gates succeed and unless a restriction forbids merge. Existing branches and PRs are read-only resumption; they never receive retroactive merge or cleanup authority.
 
 Land slices strictly in ordinal order, 1 through N. Before each merge, read back the exact current-task PR number, repository identity, head branch, original inspected base branch, non-draft state, expected head OID, predecessor merged state, conflict-free state, and successful required checks. `<repository>` is the verified GitHub `owner/repo` identity and `<expected-head-oid>` is a validated full commit OID. Set an expected base-tip OID per slice: slice 1 obtains it from the freshly fetched and read verified original base immediately before checks; after each successful predecessor merge, fetch and read back that base and advance the expected base-tip OID for the next slice. Check it before checks and again immediately before merge: the PR base ref and live verified remote base tip must equal that expected base-tip OID; stop on mismatch. A PR number must be a previously validated positive decimal PR number. Bounded waiting and readback may use `gh pr checks <number> --repo <repository> --watch --fail-fast`, but never merge failed, cancelled, pending, skipped-required, missing-required, or indeterminate checks. Re-read every value immediately before merge and stop on drift.
 

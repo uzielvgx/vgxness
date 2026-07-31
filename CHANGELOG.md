@@ -5,9 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 - Installs 20 managed artifacts, including a semantic merge that sets `default_agent="vgxness-manager"` in `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged, and bounded `default-agent.json` restoration metadata records whether `opencode.json` existed and any prior explicit default so uninstall can restore that default or remove a config created by setup.
-- Keeps manager v36 and the current 15-agent projection as the only managed agent catalogue, removing historical manager, agent, and model-plan compatibility sources.
-- Grants global OpenCode tool permission to manager v36, managed `general`, and verifier while retaining their distinct behavioral roles.
-- Adds the independent managed `vgxness-autonomous-stacked-pr` skill for bounded native Git/`gh` delivery after freeze, verification, and review.
+- Updates manager v37 and autonomous delivery skill v3: a clean pre-write delivery gate precedes implementation, while explicit reauthorization can recover only a verified unpublished local slice; remote branches and PRs remain read-only.
+- Grants global OpenCode tool permission to manager v37, managed `general`, and verifier while retaining their distinct behavioral roles.
+- Upgrades the independent managed `vgxness-autonomous-stacked-pr` skill to v3 with exact v1 and v2 predecessor migration only; modified, malformed, equal-version drifted, and newer content remain protected.
 - Adds a model-bound, CodeGraph-first `explore` override with deny-by-default read-only permissions.
 - Removes the compatibility execution bridge, control plane, Chronicle, provider runner, compatibility commands, schemas, and related documentation, leaving the OpenCode-native manager, storage, setup, inspection, memory, SDD, launcher, and release product.
 - Adds an official SHA-256-pinned Homebrew tap for macOS and Linux with explicit Homebrew and managed OpenCode ownership boundaries.
