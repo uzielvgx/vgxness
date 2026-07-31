@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -382,6 +383,8 @@ func TestLegacyIntermediateSymlinkRejectsBeforePublication(t *testing.T) {
 }
 
 func TestInstallMigrationFailurePreservesReplacementSession(t *testing.T) {
+	skipWindowsOpenDirectoryRenameRace(t)
+
 	destination := filepath.Join(t.TempDir(), "skills")
 	held := filepath.Join(filepath.Dir(destination), "held")
 	assertWrite(t, filepath.Join(destination, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
@@ -419,6 +422,8 @@ func TestInstallMigrationFailurePreservesReplacementSession(t *testing.T) {
 }
 
 func TestInstallMigrationFinalGateReturnsDurableConflict(t *testing.T) {
+	skipWindowsOpenDirectoryRenameRace(t)
+
 	parent := t.TempDir()
 	destination := filepath.Join(parent, "skills")
 	replaced := filepath.Join(parent, "replaced")
@@ -439,6 +444,8 @@ func TestInstallMigrationFinalGateReturnsDurableConflict(t *testing.T) {
 }
 
 func TestInstallMigrationSessionGateReturnsDurableConflict(t *testing.T) {
+	skipWindowsOpenDirectoryRenameRace(t)
+
 	parent := t.TempDir()
 	destination, held := filepath.Join(parent, "skills"), filepath.Join(parent, "held")
 	assertWrite(t, filepath.Join(destination, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
@@ -460,6 +467,13 @@ func TestInstallMigrationSessionGateReturnsDurableConflict(t *testing.T) {
 		t.Fatalf("replacement=%v", err)
 	}
 	assertFileBytes(t, filepath.Join(held, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+}
+
+func skipWindowsOpenDirectoryRenameRace(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows denies renaming directories with live os.Root handles; this test requires Unix race interleaving")
+	}
 }
 
 func syntheticMigrationService() *Service {
