@@ -17,6 +17,31 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestValidRelative(t *testing.T) {
+	tests := []struct {
+		name     string
+		relative string
+		valid    bool
+	}{
+		{name: "nested slash path", relative: "agents/openai.yaml", valid: true},
+		{name: "dot", relative: "."},
+		{name: "traversal", relative: "agents/../openai.yaml"},
+		{name: "absolute", relative: "/agents/openai.yaml"},
+		{name: "backslash", relative: "agents\\openai.yaml"},
+		{name: "colon", relative: "agents:openai.yaml"},
+		{name: "empty", relative: ""},
+		{name: "NUL", relative: "agents/\x00openai.yaml"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validRelative(test.relative); got != test.valid {
+				t.Fatalf("validRelative(%q) = %t, want %t", test.relative, got, test.valid)
+			}
+		})
+	}
+}
+
 func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
 	service := New()
@@ -38,6 +63,33 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	preview, err = service.Preview(context.Background(), Options{Dir: destination})
 	if err != nil || preview.Changed {
 		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+}
+
+func TestInstallRejectsSelectedRootReplacementAfterInspect(t *testing.T) {
+	parent := t.TempDir()
+	destination := filepath.Join(parent, "skills")
+	external := filepath.Join(parent, "external")
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(external, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{afterInspect: func() {
+		if err := os.Rename(destination, filepath.Join(parent, "skills-original")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(external, destination); err != nil {
+			t.Fatal(err)
+		}
+	}}
+
+	if _, err := service.Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Install() error = %v, want ErrConflict", err)
+	}
+	if _, err := os.Stat(filepath.Join(external, "agent-skill-engineer")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external publication err = %v, want not exist", err)
 	}
 }
 

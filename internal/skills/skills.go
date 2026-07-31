@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -87,9 +88,6 @@ func skillsRoot(options Options) (string, error) {
 	if !filepath.IsAbs(dir) || strings.IndexByte(dir, 0) >= 0 {
 		return "", ErrInvalid
 	}
-	if err := rejectExistingSymlinkComponents(filepath.Clean(dir)); err != nil {
-		return "", err
-	}
 	return filepath.Clean(dir), nil
 }
 
@@ -99,30 +97,6 @@ func target(options Options) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "agent-skill-engineer"), nil
-}
-
-// Explicit roots cannot contain a symlink in an existing component. This is
-// intentionally also applied after the default home anchor is resolved.
-func rejectExistingSymlinkComponents(path string) error {
-	volume := filepath.VolumeName(path)
-	current := volume + string(filepath.Separator)
-	for _, part := range strings.Split(strings.TrimPrefix(path, current), string(filepath.Separator)) {
-		if part == "" {
-			continue
-		}
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return ErrConflict
-		}
-	}
-	return nil
 }
 
 func files() (map[string][]byte, error) {
@@ -149,7 +123,7 @@ func files() (map[string][]byte, error) {
 }
 
 func validRelative(relative string) bool {
-	return relative != "" && fs.ValidPath(relative) && !filepath.IsAbs(relative) && filepath.Clean(relative) == relative && !strings.ContainsAny(relative, "\\:\x00")
+	return relative != "" && relative != "." && fs.ValidPath(relative) && !path.IsAbs(relative) && path.Clean(relative) == relative && !strings.ContainsAny(relative, "\\:\x00")
 }
 func digest(content []byte) string { sum := sha256.Sum256(content); return fmt.Sprintf("%x", sum) }
 func hashes(entries map[string][]byte) map[string]string {
@@ -178,15 +152,12 @@ func openExisting(options Options) (*os.Root, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	r, err := os.OpenRoot(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, path, nil
-	}
-	return r, path, err
+	return openRoot(context.Background(), path, false)
 }
 
-// openWritableRoot creates the missing selected-root chain through an anchored
-// Root opened at its nearest existing directory.
+// openWritableRoot creates the missing selected-root chain through the volume
+// root. Each component is identity-bound before advancing so a pathname
+// replacement cannot redirect later writes.
 func openWritableRoot(ctx context.Context, options Options) (*os.Root, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
@@ -195,49 +166,66 @@ func openWritableRoot(ctx context.Context, options Options) (*os.Root, string, e
 	if err != nil {
 		return nil, "", err
 	}
-	if r, err := os.OpenRoot(path); err == nil {
-		return r, path, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, path, err
+	return openRoot(ctx, path, true)
+}
+
+// openRoot walks from the filesystem volume root without reopening an
+// untrusted pathname. Its returned Root is owned by the caller.
+func openRoot(ctx context.Context, selected string, writable bool) (*os.Root, string, error) {
+	volumeRoot := filepath.VolumeName(selected) + string(filepath.Separator)
+	current, err := os.OpenRoot(volumeRoot)
+	if err != nil {
+		return nil, selected, err
 	}
-	missing := []string{}
-	ancestor := path
-	for {
-		info, err := os.Lstat(ancestor)
-		if errors.Is(err, os.ErrNotExist) {
-			missing = append(missing, filepath.Base(ancestor))
-			next := filepath.Dir(ancestor)
-			if next == ancestor {
-				return nil, path, ErrConflict
-			}
-			ancestor = next
+	closeCurrent := func(cause error) (*os.Root, string, error) {
+		return nil, selected, errors.Join(cause, current.Close())
+	}
+	components := strings.Split(strings.TrimPrefix(selected, volumeRoot), string(filepath.Separator))
+	for _, component := range components {
+		if component == "" || component == "." {
 			continue
 		}
+		if writable {
+			if err := ctx.Err(); err != nil {
+				return closeCurrent(err)
+			}
+		}
+		info, err := current.Lstat(component)
+		if errors.Is(err, os.ErrNotExist) {
+			if !writable {
+				return closeCurrent(nil)
+			}
+			if err := current.Mkdir(component, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+				return closeCurrent(err)
+			}
+			info, err = current.Lstat(component)
+		}
 		if err != nil {
-			return nil, path, err
+			return closeCurrent(err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return nil, path, ErrConflict
+			return closeCurrent(ErrConflict)
 		}
-		break
-	}
-	parentRoot, err := os.OpenRoot(ancestor)
-	if err != nil {
-		return nil, path, err
-	}
-	defer parentRoot.Close()
-	relative := "."
-	for index := len(missing) - 1; index >= 0; index-- {
-		if err := ctx.Err(); err != nil {
-			return nil, path, err
+		child, err := current.OpenRoot(component)
+		if err != nil {
+			return closeCurrent(err)
 		}
-		relative = filepath.Join(relative, missing[index])
-		if err := ensureDirectory(ctx, parentRoot, relative); err != nil {
-			return nil, path, err
+		childInfo, err := child.Stat(".")
+		if err != nil {
+			_ = child.Close()
+			return closeCurrent(err)
 		}
+		if !os.SameFile(info, childInfo) {
+			_ = child.Close()
+			return closeCurrent(ErrConflict)
+		}
+		if err := current.Close(); err != nil {
+			_ = child.Close()
+			return nil, selected, err
+		}
+		current = child
 	}
-	r, err := parentRoot.OpenRoot(relative)
-	return r, path, err
+	return current, selected, nil
 }
 
 func (s *Service) inspect(options Options) (Result, map[string][]byte, error) {
