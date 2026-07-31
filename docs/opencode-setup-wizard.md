@@ -4,7 +4,7 @@ The wizard explains and verifies the complete OpenCode setup before changing any
 
 1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
 2. Install or update the permanent versioned launcher.
-3. Install or verify the shared global 15-file `agent-skill-engineer` pack.
+3. Install or verify the shared global 15-file `skills-creator` pack.
 4. Install `vgxness-manager`, managed `general` and verifier profiles, the read-only `explore` override, five hidden read-only review profiles, and six hidden SDD profiles.
 5. Install the bounded VGXNESS-owned storage plugin, `<config-dir>/vgxness/model-plan.json`, the `opencode.json` default-agent selection and bounded `<config-dir>/vgxness/default-agent.json` restoration metadata, and the independent autonomous stacked-PR skill.
 6. Read back all managed identities and perform the live OpenCode handshake.
@@ -32,7 +32,7 @@ Preview is ready to apply when OpenCode responds healthily and no managed destin
 - the exact storage-only plugin is installed;
 - the canonical non-secret model-plan manifest binds all model-aware agent digests;
 - the exact independent stacked-PR skill is installed outside the model plan;
-- the separate global 15-file `agent-skill-engineer` pack is installed without drift; OpenCode uninstall does not own it;
+- the separate global 15-file `skills-creator` pack is installed without drift; OpenCode uninstall does not own it;
 - `opencode.json` semantically selects `vgxness-manager` as the default agent while preserving unrelated JSON values, existing `opencode.jsonc` bytes unchanged, and bounded `default-agent.json` restoration metadata recording whether the config existed and any prior explicit default;
 - the bounded OpenCode handshake succeeds in the workspace.
 

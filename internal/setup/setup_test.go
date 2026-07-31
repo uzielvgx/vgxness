@@ -123,7 +123,7 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 			t.Fatalf("incomplete step %d: %#v", index, step)
 		}
 	}
-	if !strings.Contains(plan.Steps[2].Title, "agent-skill-engineer") || !strings.Contains(plan.Steps[2].Explanation, "no la elimina") {
+	if !strings.Contains(plan.Steps[2].Title, "skills-creator") || !strings.Contains(plan.Steps[2].Explanation, "no la elimina") {
 		t.Fatalf("step 3 does not identify shared skill ownership: %#v", plan.Steps[2])
 	}
 	if !strings.Contains(plan.Steps[3].Title, "autónoma de OpenCode") || !strings.Contains(plan.Steps[3].Explanation, "15 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[3].Explanation, "vgxness-autonomous-stacked-pr") || !strings.Contains(plan.Steps[4].Explanation, "20 artefactos propiedad del proveedor") || !strings.Contains(plan.Steps[4].Explanation, "no están enlazados a modelos") {

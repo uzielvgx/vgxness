@@ -139,10 +139,10 @@ The integration is installed only when manager v37, all other 14 agents, storage
 
 1. the permanent VGXNESS launcher is installed and verified;
 2. all 20 OpenCode-managed artifacts are installed without drift, including the default-agent configuration and restoration metadata;
-3. the separate global 15-file `agent-skill-engineer` pack is installed without drift;
+3. the separate global 15-file `skills-creator` pack is installed without drift;
 4. the bounded OpenCode handshake succeeds for the selected workspace.
 
 Restart OpenCode Desktop after installation or a plan switch so it reloads the profiles, model bindings, variants, storage plugin, and managed skill.
 # Shared portable skills
 
-The managed 15-file `agent-skill-engineer` pack is installed automatically by setup and can be managed independently with `vgxness skills <preview|install|status|uninstall>` into `~/.agents/skills` (or an absolute `--skills-dir` override). OpenCode discovers that portable location, while the independent OpenCode stacked-PR skill remains provider-owned. `integrate opencode uninstall` is intentionally scoped to its 20 provider artifacts and never removes the shared pack.
+The managed 15-file `skills-creator` pack is installed automatically by setup and can be managed independently with `vgxness skills <preview|install|status|uninstall>` into `~/.agents/skills` (or an absolute `--skills-dir` override). OpenCode discovers that portable location, while the independent OpenCode stacked-PR skill remains provider-owned. `integrate opencode uninstall` is intentionally scoped to its 20 provider artifacts and never removes the shared pack.

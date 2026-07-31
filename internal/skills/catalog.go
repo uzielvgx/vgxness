@@ -78,7 +78,12 @@ func (s *Service) entries() (map[string][]byte, error) {
 }
 
 func bundledCatalog() (catalog, error) {
-	definition := skillDefinition{name: "agent-skill-engineer", source: "agent-skill-engineer", predecessors: predecessorDigests}
+	definition := skillDefinition{
+		name:         "skills-creator",
+		source:       "skills-creator",
+		predecessors: predecessorDigests,
+		legacy:       []legacyDefinition{{name: "agent-skill-engineer", digests: legacyV032Digests}},
+	}
 	entries, err := bundledFiles(definition.source)
 	if err != nil {
 		return catalog{}, err

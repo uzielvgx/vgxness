@@ -64,6 +64,17 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 	}
 }
 
+func TestBundledCatalogHasOneCanonicalSkillAndOneLegacyMigration(t *testing.T) {
+	catalog, err := bundledCatalog()
+	if err != nil || len(catalog.definitions) != 1 {
+		t.Fatalf("catalog=%+v err=%v", catalog, err)
+	}
+	definition := catalog.definitions[0]
+	if definition.name != "skills-creator" || definition.source != "skills-creator" || len(definition.legacy) != 1 || definition.legacy[0].name != "agent-skill-engineer" {
+		t.Fatalf("definition=%+v", definition)
+	}
+}
+
 func TestUninstallBeforeBackupFailureCleansEmptySession(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
 	if _, err := New().Install(context.Background(), Options{Dir: destination}); err != nil {
@@ -241,8 +252,11 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if result.State != StateInstalled || !result.Changed || result.FileCount == 0 {
 		t.Fatalf("result=%+v", result)
 	}
-	if _, err := os.Lstat(filepath.Join(destination, "agent-skill-engineer", "SKILL.md")); err != nil {
-		t.Fatalf("canonical agent-skill-engineer activation file: %v", err)
+	if _, err := os.Lstat(filepath.Join(destination, "skills-creator", "SKILL.md")); err != nil {
+		t.Fatalf("canonical skills-creator activation file: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "agent-skill-engineer")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy agent-skill-engineer remains active: %v", err)
 	}
 	status, err := service.Status(context.Background(), Options{Dir: destination})
 	if err != nil || status.State != StateInstalled || status.Changed {
@@ -516,7 +530,7 @@ func TestInstallRejectsSelectedRootReplacementAfterInspect(t *testing.T) {
 	if _, err := service.Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Install() error = %v, want ErrConflict", err)
 	}
-	if _, err := os.Stat(filepath.Join(external, "agent-skill-engineer")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(external, "skills-creator")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("external publication err = %v, want not exist", err)
 	}
 }
@@ -548,9 +562,25 @@ func TestPredecessorIdentityDigests(t *testing.T) {
 	}
 }
 
+func TestLegacyV032DigestMapIsCompleteAndDistinctFromCanonicalPackage(t *testing.T) {
+	want := map[string]string{
+		"LICENSE.txt": "904c73d094910aff6f8e7f0bd06ab953f55f879264680363095d03e64e9a28d7", "SKILL.md": "ad5ce595583c57d5f1466fc1648d231143b4399734405139ac7cb64cb078539e", "agents/openai.yaml": "8b438047a165e0d562bda9670bfb46db643bd3dff27c63d71a4005a2873bbbc6", "assets/SKILL.template.md": "4700c62c712bd1409c796a04564f1386d49ecc8c8bae98e24ca739c2269d1d6a", "assets/eval-cases.template.json": "667412fa4210e93a9e31065a59536a179b6f2cb2dba8ec714b349cd33e73d4d0", "references/authoring-methodology.md": "05d63276f6fa728cbbba6bc8154d5c19094505b8778b8587eeb78f747a1eb0b0", "references/evaluation-methodology.md": "092a7e740cd4fd726cd4da16d3015f33873fac992208b5b166901783d0602904", "references/forward-testing.md": "2c7401c985f8cd77faa13004e07e890688493e1160b5f380d2d9ccddfe8cd04e", "references/security-review.md": "a72f2c0f111e4708469399aa45192b2018ee8ea5d379bfb19b0e6ffcf471d93d", "scripts/generate_openai_yaml.py": "2dc3dd5f118450fc1106f1146be1f78cde2d0b673f8c8583dca0cb8e05fe7088", "scripts/init_skill.py": "162e6ad532aca13c245d84a3b7164d9cf21c69526f300ad9dab8190943cff43e", "scripts/run_evals.py": "54a82f989e180d85662d013385c6033e6aab21e50ed90a6a9ee3b1230a07f7ae", "scripts/skill_utils.py": "8f793b14451a3894c784ecedf736dbeba6d47da9939b0cea66372901fd062dc5", "scripts/validate_skill.py": "b6171b38c4c624a45f8c8a48e9a20ba7f52529f1b16f2b4b685b9e3182c8fe1d", "skill-manifest.json": "df28f085bab7c4ff44a167ffb97dac3f99438fb0be716dbfd8422b42be73f7e1",
+	}
+	if !mapsEqual(legacyV032Digests, want) {
+		t.Fatalf("legacy v0.3.2 digest map=%v want=%v", legacyV032Digests, want)
+	}
+	entries, err := files()
+	if err != nil || len(entries) != len(legacyV032Digests) {
+		t.Fatalf("canonical entries=%d legacy entries=%d err=%v", len(entries), len(legacyV032Digests), err)
+	}
+	if digest(entries["SKILL.md"]) == legacyV032Digests["SKILL.md"] || digest(entries["skill-manifest.json"]) == legacyV032Digests["skill-manifest.json"] {
+		t.Fatal("canonical rename metadata must differ from the legacy v0.3.2 package")
+	}
+}
+
 func TestInstallPreservesExtras(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	entries, err := files()
 	if err != nil {
 		t.Fatal(err)
@@ -587,7 +617,7 @@ func TestNearPredecessorAndManagedSymlinkAreRefused(t *testing.T) {
 	if _, err := service.Install(context.Background(), Options{Dir: destination}); err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	if err := os.WriteFile(filepath.Join(root, "LICENSE.txt"), []byte("near predecessor"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -607,7 +637,7 @@ func TestNearPredecessorAndManagedSymlinkAreRefused(t *testing.T) {
 
 func TestManagedRootAndAncestorSymlinksAreRefused(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -644,7 +674,7 @@ func TestInstallRejectsSelectedSkillsRootSymlinkBeforeWriting(t *testing.T) {
 	if _, err := New().Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("install err=%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(outside, "agent-skill-engineer")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(outside, "skills-creator")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("outside target err=%v", err)
 	}
 }
@@ -660,7 +690,7 @@ func TestInstallRejectsIntermediateSkillsRootSymlinkBeforeWriting(t *testing.T) 
 	if _, err := New().Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("err=%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(outside, "skills", "agent-skill-engineer")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(outside, "skills", "skills-creator")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("outside err=%v", err)
 	}
 }
@@ -700,7 +730,7 @@ func TestInstallRejectsSelectedSkillsRootFileBeforeWriting(t *testing.T) {
 
 func TestInstallRollbackRemovesPublishedFilesAfterPublishFailure(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	if _, err := New().Install(context.Background(), Options{Dir: destination}); err != nil {
 		t.Fatal(err)
 	}
@@ -724,7 +754,7 @@ func TestInstallRollsBackAfterRenameFailure(t *testing.T) {
 	if err == nil || errors.Is(err, ErrRecovery) {
 		t.Fatalf("err=%v", err)
 	}
-	if _, statErr := os.Lstat(filepath.Join(destination, "agent-skill-engineer", "LICENSE.txt")); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Lstat(filepath.Join(destination, "skills-creator", "LICENSE.txt")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("license err=%v", statErr)
 	}
 }
@@ -736,7 +766,7 @@ func TestRollbackRestoresPredecessorAfterRenameFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	name := filepath.Join("agent-skill-engineer", "SKILL.md")
+	name := filepath.Join("skills-creator", "SKILL.md")
 	if err := ensureDirectory(context.Background(), r, filepath.Dir(name)); err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +792,7 @@ func TestRollbackRestoresPredecessorAfterRenameFailure(t *testing.T) {
 
 func TestRollbackPreservesConcurrentReplacementAfterRenameFailure(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	service := &Service{afterRename: func(identity string) error {
 		if err := os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o600); err != nil {
 			return err
@@ -788,7 +818,7 @@ func TestRollbackPreservesConcurrentReplacementAfterRenameFailure(t *testing.T) 
 
 func TestInstallPreservesReplacementBeforePublication(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	service := &Service{beforePublish: func(identity string) error {
 		return os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o600)
 	}}
@@ -811,7 +841,7 @@ func TestInstallPreservesReplacementBeforePublication(t *testing.T) {
 
 func TestRollbackPreservesReplacementAtRollbackBoundary(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	service := &Service{
 		afterPublish: func(string) error { return errors.New("force rollback") },
 		beforeRollback: func(name string) error {
@@ -849,7 +879,7 @@ func TestInstallRecoversOrphanedTransactionBeforePublishing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	name := filepath.Join("agent-skill-engineer", "LICENSE.txt")
+	name := filepath.Join("skills-creator", "LICENSE.txt")
 	if err := ensureDirectory(context.Background(), r, filepath.Dir(name)); err != nil {
 		t.Fatal(err)
 	}
@@ -875,7 +905,7 @@ func TestInstallRollbackRemovesOnlyEmptyDirectoriesItCreated(t *testing.T) {
 	if _, err := service.Install(context.Background(), Options{Dir: destination}); err == nil {
 		t.Fatal("expected install failure")
 	}
-	if info, err := os.Lstat(filepath.Join(destination, "agent-skill-engineer")); err != nil || !info.IsDir() {
+	if info, err := os.Lstat(filepath.Join(destination, "skills-creator")); err != nil || !info.IsDir() {
 		t.Fatalf("managed root info=%v err=%v", info, err)
 	}
 	if info, err := os.Lstat(destination); err != nil || !info.IsDir() {
@@ -885,7 +915,7 @@ func TestInstallRollbackRemovesOnlyEmptyDirectoriesItCreated(t *testing.T) {
 
 func TestUninstallRollbackAndExtrasPreservation(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	if _, err := New().Install(context.Background(), Options{Dir: destination}); err != nil {
 		t.Fatal(err)
 	}
@@ -962,7 +992,7 @@ func TestUninstallRetainsDurableBackupOutsideSkillTree(t *testing.T) {
 			t.Fatalf("backup %s digest=%s err=%v", relative, digest(actual), err)
 		}
 	}
-	if _, err := os.Lstat(filepath.Join(destination, "agent-skill-engineer", ".vgxness-backups")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(destination, "skills-creator", ".vgxness-backups")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("hidden skill backup err=%v", err)
 	}
 }
@@ -1015,7 +1045,7 @@ func TestStatusIsAbsentAfterUninstallWithOrWithoutExtras(t *testing.T) {
 				t.Fatal(err)
 			}
 			if extra {
-				if err := os.WriteFile(filepath.Join(destination, "agent-skill-engineer", "local.txt"), []byte("keep"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(destination, "skills-creator", "local.txt"), []byte("keep"), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -1079,7 +1109,7 @@ func TestInstallDoesNotCreateRootWhenCancelledAfterInspection(t *testing.T) {
 
 func TestInstallResumesExactPartialPack(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	entries, err := files()
 	if err != nil {
 		t.Fatal(err)
@@ -1111,10 +1141,10 @@ func TestPartialUnknownContentIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(destination, "agent-skill-engineer"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(destination, "skills-creator"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(destination, "agent-skill-engineer", "LICENSE.txt"), []byte("foreign"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(destination, "skills-creator", "LICENSE.txt"), []byte("foreign"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := New().Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrDrift) || len(entries) == 0 {
@@ -1124,7 +1154,7 @@ func TestPartialUnknownContentIsRefused(t *testing.T) {
 
 func TestRollbackPreservesConcurrentReplacement(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "agent-skill-engineer")
+	root := filepath.Join(destination, "skills-creator")
 	service := &Service{afterPublish: func(identity string) error {
 		if err := os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o644); err != nil {
 			return err
@@ -1164,7 +1194,7 @@ func TestOpenedRootSurvivesSelectedRootReplacementWithoutEscaping(t *testing.T) 
 	if err == nil {
 		t.Fatal("expected transaction failure")
 	}
-	if _, err := os.Stat(filepath.Join(destination, "agent-skill-engineer")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(destination, "skills-creator")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("replacement root received writes: %v", err)
 	}
 }
@@ -1176,7 +1206,7 @@ func TestPublishPreservesTransactionDestinationCreatedAtMoveBoundary(t *testing.
 		t.Fatal(err)
 	}
 	defer r.Close()
-	name := filepath.Join("agent-skill-engineer", "SKILL.md")
+	name := filepath.Join("skills-creator", "SKILL.md")
 	if err := ensureDirectory(context.Background(), r, filepath.Dir(name)); err != nil {
 		t.Fatal(err)
 	}
