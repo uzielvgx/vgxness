@@ -1,16 +1,16 @@
 # Guided OpenCode setup
 
-The wizard explains and verifies the complete OpenCode setup before changing anything:
+The wizard explains and verifies the complete OpenCode setup before changing anything. Current ownership is 19 OpenCode-managed artifacts plus the separate global `skills-creator` and `stacked-pr` catalog; the legacy provider skill is not an active artifact.
 
 1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
 2. Install or update the permanent versioned launcher.
-3. Install or verify the shared global 15-file `skills-creator` pack.
+3. Retire exact legacy OpenCode `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes before global publication; modified or unknown bytes block without mutation.
 4. Install `vgxness-manager`, managed `general` and verifier profiles, the read-only `explore` override, five hidden read-only review profiles, and six hidden SDD profiles.
-5. Install the bounded VGXNESS-owned storage plugin, `<config-dir>/vgxness/model-plan.json`, the `opencode.json` default-agent selection and bounded `<config-dir>/vgxness/default-agent.json` restoration metadata, and the independent autonomous stacked-PR skill.
+5. Install the bounded VGXNESS-owned storage plugin, `<config-dir>/vgxness/model-plan.json`, the `opencode.json` default-agent selection and bounded `<config-dir>/vgxness/default-agent.json` restoration metadata, then publish global `skills-creator` and `stacked-pr`.
 6. Read back all managed identities and perform the live OpenCode handshake.
 7. Report recovery guidance if any step fails.
 
-The resulting 20 managed artifacts are 15 agents, storage plugin v5, the model-plan manifest, one default-agent selection, one restoration record, and one skill. The agents are manager v37, managed `general` and verifier profiles, one CodeGraph-first read-only `explore` override, five read-only reviewers, and six read-only SDD profiles. The v3 skill's exact v1/v2 predecessors alone are upgradeable. Manager v37 gates source writes on a clean checkout, identity, intended paths, sizing/slice plan, and fresh branch; only explicit reauthorization can recover a bounded unpublished local slice, never a remote branch or PR. The selection uses a semantic merge to set `default_agent="vgxness-manager"` in `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged. Bounded `<config-dir>/vgxness/default-agent.json` metadata records whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup. Manager, `general`, and verifier use global `allow` permissions while retaining orchestration, delegated implementation, and non-mutating verification roles. The plugin exposes exactly 18 tools: five semantic-memory operations and 13 structured SDD storage/projection operations. SDD mutations fail closed outside a tracked top-level manager session. The plugin never reads or writes OpenSpec files, invokes agents, routes work, edits, delegates, or runs lifecycle orchestration. The wizard installs only the named skill, not a child execution model, CodeGraph index, or Engram.
+The resulting 19 OpenCode artifacts are 15 agents, storage plugin v5, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v38, managed `general`, verifier, `explore`, five reviewers, and six SDD profiles. Official setup retires exact provider v1/v2/v3 bytes before publishing the global 16-file `skills-creator` and `stacked-pr` catalog; unknown or modified bytes block. OpenCode uninstall does not own global skills.
 
 ## Commands
 
@@ -21,7 +21,7 @@ vgxness setup opencode --yes
 vgxness setup opencode --status
 ```
 
-Use `--workspace`, `--bin-dir`, `--data-dir`, `--config-dir`, or `--skills-dir` to select explicit absolute destinations. Use `--model-plan low|medium|high` and the optional `--model-efficient`, `--model-balanced`, and `--model-frontier` exact provider/model slots to configure the installed profiles. These flags overlay the verified installed manifest; omitted values remain unchanged. Fresh no-flag setup selects `medium` with `openai/gpt-5.6-luna-fast`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. Setup validates configuration and managed identities; it does not claim to probe runtime model availability. `--model` is accepted only as a temporary no-op compatibility flag.
+Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explicit absolute destinations. Setup publishes portable skills to OpenCode's discoverable global root; use the lower-level `vgxness skills --skills-dir PATH` lifecycle only for isolated custom roots. Use `--model-plan low|medium|high` and the optional `--model-efficient`, `--model-balanced`, and `--model-frontier` exact provider/model slots to configure the installed profiles. These flags overlay the verified installed manifest; omitted values remain unchanged. Fresh no-flag setup selects `medium` with `openai/gpt-5.6-luna-fast`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. Setup validates configuration and managed identities; it does not claim to probe runtime model availability. `--model` is accepted only as a temporary no-op compatibility flag.
 
 ## Readiness
 
@@ -31,8 +31,8 @@ Preview is ready to apply when OpenCode responds healthily and no managed destin
 - all 15 agent identities (manager, `general`, verifier, `explore`, five reviewers, and six SDD profiles) are installed with the resolved model and variant;
 - the exact storage-only plugin is installed;
 - the canonical non-secret model-plan manifest binds all model-aware agent digests;
-- the exact independent stacked-PR skill is installed outside the model plan;
-- the separate global 15-file `skills-creator` pack is installed without drift; OpenCode uninstall does not own it;
+- the provider retirement path is absent after exact v1/v2/v3 retirement, and global `stacked-pr` is installed without drift;
+- the separate global 16-file `skills-creator` and `stacked-pr` catalog is installed without drift; OpenCode uninstall does not own it;
 - `opencode.json` semantically selects `vgxness-manager` as the default agent while preserving unrelated JSON values, existing `opencode.jsonc` bytes unchanged, and bounded `default-agent.json` restoration metadata recording whether the config existed and any prior explicit default;
 - the bounded OpenCode handshake succeeds in the workspace.
 

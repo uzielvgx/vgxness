@@ -64,13 +64,16 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 	}
 }
 
-func TestBundledCatalogHasOneCanonicalSkillAndOneLegacyMigration(t *testing.T) {
+func TestBundledCatalogHasTwoCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
 	catalog, err := bundledCatalog()
-	if err != nil || len(catalog.definitions) != 1 {
+	if err != nil || len(catalog.definitions) != 2 {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 	definition := catalog.definitions[0]
 	if definition.name != "skills-creator" || definition.source != "skills-creator" || len(definition.legacy) != 1 || definition.legacy[0].name != "agent-skill-engineer" {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[1]; definition.name != "stacked-pr" || definition.source != "stacked-pr" || len(definition.legacy) != 0 {
 		t.Fatalf("definition=%+v", definition)
 	}
 }
@@ -252,8 +255,10 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if result.State != StateInstalled || !result.Changed || result.FileCount == 0 {
 		t.Fatalf("result=%+v", result)
 	}
-	if _, err := os.Lstat(filepath.Join(destination, "skills-creator", "SKILL.md")); err != nil {
-		t.Fatalf("canonical skills-creator activation file: %v", err)
+	for _, name := range []string{"skills-creator", "stacked-pr"} {
+		if _, err := os.Lstat(filepath.Join(destination, name, "SKILL.md")); err != nil {
+			t.Fatalf("canonical %s activation file: %v", name, err)
+		}
 	}
 	if _, err := os.Lstat(filepath.Join(destination, "agent-skill-engineer")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("legacy agent-skill-engineer remains active: %v", err)
@@ -590,6 +595,18 @@ func TestInstallPreservesExtras(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(root, relative), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stacked, err := bundledFiles("stacked-pr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for relative, content := range stacked {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(destination, "stacked-pr", relative)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(destination, "stacked-pr", relative), content, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

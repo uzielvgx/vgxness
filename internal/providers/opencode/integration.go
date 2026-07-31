@@ -208,6 +208,7 @@ type Integration struct {
 	reinstallCheckpoint       func(string, string) error
 	afterDefaultAgentSnapshot func()
 	afterReinstallAnchorPath  func(string)
+	afterRetirement           func() error
 }
 
 type artifact struct {
@@ -235,6 +236,13 @@ type defaultAgentState struct {
 type inspection struct {
 	result    integration.Result
 	artifacts []artifact
+	retired   *retiredArtifact
+}
+
+type retiredArtifact struct {
+	path    string
+	content []byte
+	backup  string
 }
 
 type installedArtifact struct {
@@ -620,13 +628,20 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 		}
 	}
 	created := make([]installedArtifact, 0, len(state.artifacts))
+	retired := state.retired
 	rollback := true
 	defer func() {
 		if rollback {
+			if retired != nil && retired.backup != "" {
+				returnErr = errors.Join(returnErr, restoreRetiredArtifact(*retired))
+			}
 			for index := len(created) - 1; index >= 0; index-- {
 				returnErr = errors.Join(returnErr, rollbackInstalledArtifact(created[index]))
 			}
 		} else {
+			if retired != nil {
+				cleanupRetiredArtifact(*retired)
+			}
 			for _, item := range created {
 				cleanupInstalledArtifact(item)
 			}
@@ -648,12 +663,22 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 		}
 		created = append(created, installed)
 	}
+	if retired != nil {
+		if err := retireArtifact(retired); err != nil {
+			return integration.Result{}, err
+		}
+		if service.afterRetirement != nil {
+			if err := service.afterRetirement(); err != nil {
+				return integration.Result{}, err
+			}
+		}
+	}
 	verified, err := service.inspect(ctx, options)
 	if err != nil || verified.result.State != integration.StateInstalled {
 		return integration.Result{}, fmt.Errorf("read back OpenCode integration artifacts: %w", integration.ErrDrift)
 	}
 	rollback = false
-	verified.result.Changed = len(created) != 0
+	verified.result.Changed = len(created) != 0 || retired != nil
 	verified.result.RestartRequired = verified.result.Changed
 	return verified.result, nil
 }
@@ -910,11 +935,16 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: filepath.Join(configDirectory, "agents", sddTasksName), content: plan.agents[sddTasksName], backup: "vgxness-sdd-tasks", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddTasksName))},
 		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
 		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
-		{path: skillPath, content: []byte(autonomousStackedPRSkill), backup: "vgxness-autonomous-stacked-pr-skill", predecessors: [][]byte{[]byte(previousAutonomousStackedPRSkill), []byte(previousAutonomousStackedPRSkillV2)}},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
 		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true},
 		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
 	}}
+	retired, retirementErr := inspectRetiredSkill(skillPath)
+	if retirementErr != nil {
+		state.result.State = integration.StateDrifted
+		return state, nil
+	}
+	state.retired = retired
 	state.result.ArtifactCount = len(state.artifacts)
 	if drifted {
 		state.result.State = integration.StateDrifted
@@ -999,7 +1029,26 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	default:
 		state.result.State = integration.StatePartial
 	}
+	if state.retired != nil && state.result.State == integration.StateInstalled {
+		state.result.State = integration.StatePartial
+	}
 	return state, nil
+}
+
+func inspectRetiredSkill(path string) (*retiredArtifact, error) {
+	content, err := readRegularFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, known := range [][]byte{[]byte(autonomousStackedPRSkill), []byte(previousAutonomousStackedPRSkill), []byte(previousAutonomousStackedPRSkillV2)} {
+		if bytes.Equal(content, known) {
+			return &retiredArtifact{path: path, content: content}, nil
+		}
+	}
+	return nil, integration.ErrDrift
 }
 
 func defaultAgentArtifacts(configPath, statePath string) ([]byte, []byte, defaultAgentState, []byte, bool, error) {
@@ -1969,6 +2018,39 @@ func restoreQuarantinedFile(quarantine, target string) error {
 }
 
 func removeSameFileBestEffort(target, expected string) { _ = removeSameFileDurably(target, expected) }
+
+func retireArtifact(item *retiredArtifact) error {
+	directory := filepath.Dir(item.path)
+	backup, err := vacantTemporaryPath(directory, ".vgxness-retired-*.tmp")
+	if err != nil {
+		return fmt.Errorf("prepare retired OpenCode skill rollback: %w", err)
+	}
+	if err := os.Link(item.path, backup); err != nil {
+		return fmt.Errorf("%w: protect retired OpenCode skill", integration.ErrConflict)
+	}
+	current, err := readRegularFile(backup)
+	if err != nil || !bytes.Equal(current, item.content) || !sameFile(item.path, backup) {
+		_ = os.Remove(backup)
+		return fmt.Errorf("%w: retired OpenCode skill changed before removal", integration.ErrConflict)
+	}
+	if err := removeSameFileDurably(item.path, backup); err != nil {
+		return errors.Join(fmt.Errorf("retire OpenCode skill: %w", err), recoveryFailure("restore retired OpenCode skill", restoreWithoutOverwrite(backup, item.path)))
+	}
+	item.backup = backup
+	return nil
+}
+
+func restoreRetiredArtifact(item retiredArtifact) error {
+	if err := restoreWithoutOverwrite(item.backup, item.path); err != nil {
+		return recoveryFailure("restore retired OpenCode skill", err)
+	}
+	return nil
+}
+
+func cleanupRetiredArtifact(item retiredArtifact) {
+	_ = os.Remove(item.backup)
+	_ = os.Remove(filepath.Dir(item.path))
+}
 
 func recoveryFailure(action string, err error) error {
 	if err == nil {

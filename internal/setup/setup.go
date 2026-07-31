@@ -81,9 +81,9 @@ func OpenCodeSteps() []Step {
 	return []Step{
 		{Number: 1, Title: "Revisar requisitos y estado actual", Explanation: "Comprobaré el binario candidato, los destinos, el workspace y que OpenCode esté disponible y sea compatible. Esta revisión no escribe archivos ni exige un modelo secundario."},
 		{Number: 2, Title: "Instalar el launcher estable", Explanation: "Guardaré la versión exacta por SHA-256 y activaré el launcher permanente. No editaré PATH ni descargaré software.", Mutates: true},
-		{Number: 3, Title: "Instalar la skill global skills-creator", Explanation: "Instalaré o verificaré globalmente skills-creator en el directorio compartido de skills. Esta skill no pertenece a OpenCode y su desinstalación no la elimina.", Mutates: true},
-		{Number: 4, Title: "Instalar agentes y skill autónoma de OpenCode", Explanation: "Instalaré los 15 agentes enlazados al plan de modelos activo: vgxness-manager con workspace de solo lectura y operaciones Git aprobadas por el usuario, sustituciones administradas para Explore y general, un verificador independiente, cinco revisores de solo lectura y seis agentes SDD especializados. También instalaré la skill específica de OpenCode vgxness-autonomous-stacked-pr, independiente del pack portable compartido y no enlazada a un modelo. El manager conserva la autoridad exclusiva sobre estado y fases; general es el único escritor ordinario de código fuente.", Mutates: true},
-		{Number: 5, Title: "Completar artefactos del proveedor OpenCode", Explanation: "Junto con el paso 4, se instalan los 20 artefactos propiedad del proveedor: los 15 agentes enlazados a modelos, la skill autónoma, el plugin de almacenamiento sin ejecución, el manifiesto no secreto que enlaza low/medium/high, opencode.json con vgxness-manager como agente predeterminado y los metadatos de restauración. La skill autónoma, el plugin, el manifiesto, la configuración predeterminada y los metadatos de restauración no están enlazados a modelos; se preserva la configuración no relacionada.", Mutates: true},
+		{Number: 3, Title: "Retirar la skill autónoma heredada de OpenCode", Explanation: "Antes de publicar la skill portable, retiraré sólo bytes v1, v2 o v3 reconocidos de vgxness-autonomous-stacked-pr. Bytes modificados o desconocidos bloquean el wizard sin sobrescritura.", Mutates: true},
+		{Number: 4, Title: "Instalar los artefactos del proveedor OpenCode", Explanation: "Instalaré los 15 agentes enlazados al plan de modelos activo: vgxness-manager con workspace de solo lectura y operaciones Git aprobadas por el usuario, sustituciones administradas para Explore y general, un verificador independiente, cinco revisores de solo lectura y seis agentes SDD especializados. El manager conserva la autoridad exclusiva sobre estado y fases; general es el único escritor ordinario de código fuente.", Mutates: true},
+		{Number: 5, Title: "Publicar las skills globales portables", Explanation: "Después del retiro seguro, instalaré o verificaré globalmente skills-creator y stacked-pr en el directorio compartido de skills. Estas skills no pertenecen a OpenCode y su desinstalación no las elimina.", Mutates: true},
 		{Number: 6, Title: "Verificar archivos y conexión", Explanation: "Leeré nuevamente todos los artefactos administrados, sus hashes y el manifiesto, y comprobaré el handshake real con OpenCode desde el workspace seleccionado. Los cambios de plan se cargan al reiniciar OpenCode."},
 		{Number: 7, Title: "Explicar recuperación", Explanation: "Si una actualización falla antes de integrar OpenCode, intentaré volver a la versión anterior. Una primera instalación o una integración ya escrita se conserva para evitar borrados automáticos y se reporta cómo repararla."},
 	}
@@ -200,22 +200,9 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 	if err != nil {
 		return result, err
 	}
-	skillInstalled := skills.Result{State: skills.StateInstalled}
-	if service.skills != nil {
-		skillInstalled, err = service.skills.Install(ctx, options.Skills)
-		result.Plan.Skills = skillInstalled
-		if err != nil {
-			service.recoverBinary(ctx, options, plan, installed, &result)
-			if errors.Is(err, skills.ErrRecovery) {
-				service.discloseIncompleteSkills(&result)
-			}
-			return result, err
-		}
-	}
 	managed, err := service.integrations(installed.LauncherPath)
 	if err != nil {
 		service.recoverBinary(ctx, options, plan, installed, &result)
-		service.discloseSkills(&result, skillInstalled)
 		return result, err
 	}
 	integrated, err := managed.Install(ctx, options.Integration)
@@ -230,8 +217,21 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 			}
 			result.Recovery = message
 		}
-		service.discloseSkills(&result, skillInstalled)
 		return result, err
+	}
+	skillInstalled := skills.Result{State: skills.StateInstalled}
+	if service.skills != nil {
+		skillInstalled, err = service.skills.Install(ctx, options.Skills)
+		result.Plan.Skills = skillInstalled
+		if err != nil {
+			service.recoverBinary(ctx, options, plan, installed, &result)
+			if errors.Is(err, skills.ErrRecovery) {
+				service.discloseIncompleteSkills(&result)
+			} else {
+				service.discloseUnconfirmedGlobalSkills(&result)
+			}
+			return result, err
+		}
 	}
 	selfStatus, err := service.installer.Status(ctx, options.SelfInstall)
 	if err != nil || selfStatus.State != selfinstall.StateInstalled || selfStatus.ActiveSHA256 != installed.ActiveSHA256 {
@@ -277,7 +277,15 @@ func (service *Service) discloseSkills(result *Result, installed skills.Result) 
 }
 
 func (service *Service) discloseIncompleteSkills(result *Result) {
-	message := "El paquete global de skills puede haber quedado parcial o modificado; inspecciónalo con `vgxness skills status` antes de reintentar."
+	message := "La skill heredada del proveedor puede ya estar retirada y la publicación global no está confirmada; inspecciona con `vgxness skills status` y reintenta con `vgxness skills install`. El paquete global de skills puede haber quedado parcial o modificado; inspecciónalo con `vgxness skills status` antes de reintentar."
+	if result.Recovery != "" {
+		message = result.Recovery + " " + message
+	}
+	result.Recovery = message
+}
+
+func (service *Service) discloseUnconfirmedGlobalSkills(result *Result) {
+	message := "La skill heredada del proveedor puede ya estar retirada y la publicación global no está confirmada; inspecciona con `vgxness skills status` y reintenta con `vgxness skills install`."
 	if result.Recovery != "" {
 		message = result.Recovery + " " + message
 	}

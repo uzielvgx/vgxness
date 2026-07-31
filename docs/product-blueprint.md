@@ -1,6 +1,6 @@
 # VGXNESS Product Blueprint
 
-Current delivery policy: manager v37 and skill v3 require a clean pre-write gate (repository identity, intended paths, estimate/slice plan, and deterministic fresh branch) before branch creation, source writes, or a delivery announcement; candidate validation, developmental checks, independent verification, and review are post-implementation gates before delivery mutations. Only explicitly reauthorized, fully verified unpublished-local-slice recovery may proceed from dirt, and both current HEAD and the deterministic local ref must equal the exact verified base or immediate-predecessor OID; it cannot recover an existing remote branch or PR, or grant retroactive merge or cleanup authority. Every clean or recovery first publication uses the empty-expectation create-only lease `git push --set-upstream --force-with-lease=refs/heads/<head>: <verified-remote> refs/heads/<head>:refs/heads/<head>`, which fails rather than updating an existing remote ref. Skill migration accepts only exact embedded v1 and v2 predecessors.
+Current delivery policy: manager v38 loads global `stacked-pr` v3 and requires a clean pre-write gate before branch creation, source writes, or a delivery announcement. Only explicitly reauthorized, fully verified unpublished-local-slice recovery may proceed from dirt. Every first publication uses the empty-expectation create-only lease. Official setup retires exact provider v1/v2/v3 bytes before global publication; they are identity evidence only.
 
 Delivery labels are observable only: IMPLEMENTED means intended workspace changes and developmental checks are complete, but independent verification has not occurred; VERIFIED means the exact frozen candidate passed independent verification and required review; DELIVERED means the exact commit was published and a new current-task PR was created and read back; MERGED means that PR and base containment were read back; INSTALLED additionally requires installation and handshake readback. A later state is never inferred.
 
@@ -20,7 +20,7 @@ VGXNESS makes AI-assisted engineering understandable, bounded, and recoverable w
 - SQLite/FTS5 schema v5 with isolated semantic and SDD domains;
 - `memory`, `openspec`, and `hybrid` SDD backends;
 - `automatic` and `interactive` per-change SDD modes;
-- manager v37, 14 other model-bound agents, plugin v5, model-plan manifest, and one independent autonomous stacked-PR skill;
+- manager v38, 14 other model-bound agents, plugin v5, model-plan manifest, default-agent selection, restoration metadata, and the separate global `stacked-pr` skill;
 - seven-step CLI/TUI setup with a bounded OpenCode 1.18.4+ handshake and shared portable-skill verification;
 - current-only manager and agent recognition, exact storage-plugin predecessor recognition, and conservative uninstall behavior;
 - deterministic release archives, checksums, and workflows.
@@ -35,11 +35,11 @@ The plugin exposes 18 tools: five semantic-memory operations and 13 SDD operatio
 
 ## Managed artifacts
 
-The projection contains exactly 20 artifacts:
+The OpenCode projection contains exactly 19 provider artifacts:
 
 | Artifact group | Count | Contract |
 | --- | ---: | --- |
-| Manager v37 | 1 | Sole orchestration, lifecycle, Git, and GitHub actor. |
+| Manager v38 | 1 | Sole orchestration, lifecycle, Git, and GitHub actor. |
 | Explore override | 1 | CodeGraph-first and deny-by-default read-only discovery. |
 | General and verifier | 2 | Global capability with delegated implementation and independent non-mutating validation roles. |
 | Reviewers | 5 | Hidden and read-only. |
@@ -48,13 +48,12 @@ The projection contains exactly 20 artifacts:
 | Model-plan manifest | 1 | Non-secret exact role/model and agent-digest bindings. |
 | Default-agent selection | 1 | Semantic merge sets `default_agent="vgxness-manager"` in `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged. |
 | Restoration metadata | 1 | Bounded `<config-dir>/vgxness/default-agent.json` records whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup. |
-| Autonomous stacked-PR skill | 1 | Independent static native-delivery policy; not model-bound. |
 
 The default `medium` plan uses Luna Fast, Terra, and Sol slots. Plan or slot changes require OpenCode restart. The deprecated `--model` option remains a no-op.
 
-The separate global portable pack contains exactly 15 `skills-creator` files. `vgxness skills <preview|install|status|uninstall> [--skills-dir PATH]` manages it at `~/.agents/skills` by default, and setup installs it automatically. It is independently owned: the OpenCode-specific stacked-PR skill remains provider-owned, and OpenCode uninstall never removes the global pack. Exact desired/predecessor partial packs resume or uninstall safely; unknown bytes are drift. Windows uses atomic rename, readback, and backups but lacks directory fsync crash durability.
+The separate global portable catalog contains 16 files across `skills-creator` and `stacked-pr`. `vgxness skills <preview|install|status|uninstall> [--skills-dir PATH]` manages it at `~/.agents/skills` by default, and setup installs it after transactionally retiring exact provider-owned `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes. Unknown or modified legacy bytes block without mutation. OpenCode uninstall never owns global skills. Exact desired/predecessor partial packs resume or uninstall safely; unknown bytes are drift. Windows uses atomic rename, readback, and backups but lacks directory fsync crash durability.
 
-Eligible implementations default to 400 effective changed lines per slice and stack only above 800. Every stacked PR targets the same original inspected base, with immediate-parent commit ancestry and `Depends-On` metadata; merge commits preserve predecessor commits so later diffs narrow as earlier slices land. Manager v37 completes its clean pre-write gate (repository identity, intended paths, estimate/slice plan, and fresh branch) before source writes or the routine delivery announcement. After freeze, verification, and review, it may create fresh normalized branches, normal commits, first pushes, and non-draft pull requests without a second routine approval. It may merge only PRs created by the same current eligible task, in ordinal order, using the repository's allowed merge-commit method with verified `owner/repo` binding and an exact full head OID. Each slice has an expected base-tip OID from a fresh original-base readback before checks; after each predecessor merge it advances from a fresh readback, and the PR base plus live remote base must match it before checks and immediately before merge. `no merge` is transitive, while `local-only`, `no commit`, `no push`, and `no PR` also prohibit merge. Dirty state stops mutations except the exact bounded, explicitly reauthorized recovery of a verified unpublished local slice. Existing remote branches and PRs remain read-only and never gain retroactive merge or cleanup authority; only that bounded unpublished local-slice recovery is allowed. After verified merges and a clean worktree, it may fast-forward the original base from the verified remote-tracking base. Unless `no cleanup` applies, it may delete only exact current-delivery local branches proved merged with no open dependent PR; remote delivery branches are left intact. Any failed or ambiguous check, merge, host, auth, protection, topology, remote, or worktree state stops further mutation. OpenCode globs establish static policy ordering but do not prove argv semantics or external Git/GitHub behavior.
+Eligible implementations default to 400 effective changed lines per slice and stack only above 800. Every stacked PR targets the same original inspected base, with immediate-parent commit ancestry and `Depends-On` metadata; merge commits preserve predecessor commits so later diffs narrow as earlier slices land. Manager v38 completes its clean pre-write gate (repository identity, intended paths, estimate/slice plan, and fresh branch) before source writes or the routine delivery announcement. After freeze, verification, and review, it may create fresh normalized branches, normal commits, first pushes, and non-draft pull requests without a second routine approval. It may merge only PRs created by the same current eligible task, in ordinal order, using the repository's allowed merge-commit method with verified `owner/repo` binding and an exact full head OID. Each slice has an expected base-tip OID from a fresh original-base readback before checks; after each predecessor merge it advances from a fresh readback, and the PR base plus live remote base must match it before checks and immediately before merge. `no merge` is transitive, while `local-only`, `no commit`, `no push`, and `no PR` also prohibit merge. Dirty state stops mutations except the exact bounded, explicitly reauthorized recovery of a verified unpublished local slice. Existing remote branches and PRs remain read-only and never gain retroactive merge or cleanup authority; only that bounded unpublished local-slice recovery is allowed. After verified merges and a clean worktree, it may fast-forward the original base from the verified remote-tracking base. Unless `no cleanup` applies, it may delete only exact current-delivery local branches proved merged with no open dependent PR; remote delivery branches are left intact. Any failed or ambiguous check, merge, host, auth, protection, topology, remote, or worktree state stops further mutation. OpenCode globs establish static policy ordering but do not prove argv semantics or external Git/GitHub behavior.
 
 ## Storage and SDD
 
@@ -64,7 +63,7 @@ SDD advances through `explore -> proposal -> spec -> design -> tasks -> apply ->
 
 ## Setup and health
 
-Setup previews all changes, requires confirmation, installs the stable launcher, the global portable pack, and exact OpenCode artifacts, reads them back, and runs a bounded `opencode --version` handshake in an absolute existing workspace. Healthy requires OpenCode major 1 at version 1.18.4 or newer, all 20 provider artifacts, and the independent 15-file global pack. `--skills-dir` selects an absolute portable-skills destination. Setup never downloads packages, edits `PATH`, initializes CodeGraph, or probes model availability. It uses a semantic merge to select `vgxness-manager` through `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged. Bounded `<config-dir>/vgxness/default-agent.json` restoration metadata records whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup.
+Setup previews all changes, requires confirmation, installs the stable launcher and 19 exact OpenCode artifacts, retires exact provider v1/v2/v3 bytes, then publishes the global 16-file `skills-creator` and `stacked-pr` catalog. Unknown or modified legacy bytes block. OpenCode uninstall does not remove global skills.
 
 ## Product principles
 

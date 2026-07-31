@@ -50,6 +50,7 @@ type fakeIntegration struct {
 	installErr    error
 	statusErr     error
 	calls         []string
+	events        *[]string
 }
 
 func (fake *fakeIntegration) Preview(context.Context, integration.Options) (integration.Result, error) {
@@ -58,6 +59,9 @@ func (fake *fakeIntegration) Preview(context.Context, integration.Options) (inte
 }
 func (fake *fakeIntegration) Install(context.Context, integration.Options) (integration.Result, error) {
 	fake.calls = append(fake.calls, "integration-install")
+	if fake.events != nil {
+		*fake.events = append(*fake.events, "integration-install")
+	}
 	return fake.installResult, fake.installErr
 }
 func (fake *fakeIntegration) Status(context.Context, integration.Options) (integration.Result, error) {
@@ -79,6 +83,7 @@ type fakeSkills struct {
 	preview, install, status          skills.Result
 	previewErr, installErr, statusErr error
 	calls                             []string
+	events                            *[]string
 }
 
 func (fake *fakeSkills) Preview(context.Context, skills.Options) (skills.Result, error) {
@@ -87,6 +92,9 @@ func (fake *fakeSkills) Preview(context.Context, skills.Options) (skills.Result,
 }
 func (fake *fakeSkills) Install(context.Context, skills.Options) (skills.Result, error) {
 	fake.calls = append(fake.calls, "skills-install")
+	if fake.events != nil {
+		*fake.events = append(*fake.events, "skills-install")
+	}
 	return fake.install, fake.installErr
 }
 func (fake *fakeSkills) Status(context.Context, skills.Options) (skills.Result, error) {
@@ -123,10 +131,10 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 			t.Fatalf("incomplete step %d: %#v", index, step)
 		}
 	}
-	if !strings.Contains(plan.Steps[2].Title, "skills-creator") || !strings.Contains(plan.Steps[2].Explanation, "no la elimina") {
-		t.Fatalf("step 3 does not identify shared skill ownership: %#v", plan.Steps[2])
+	if !strings.Contains(plan.Steps[2].Title, "heredada") || !strings.Contains(plan.Steps[2].Explanation, "v1, v2 o v3") {
+		t.Fatalf("step 3 does not identify safe legacy retirement: %#v", plan.Steps[2])
 	}
-	if !strings.Contains(plan.Steps[3].Title, "autónoma de OpenCode") || !strings.Contains(plan.Steps[3].Explanation, "15 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[3].Explanation, "vgxness-autonomous-stacked-pr") || !strings.Contains(plan.Steps[4].Explanation, "20 artefactos propiedad del proveedor") || !strings.Contains(plan.Steps[4].Explanation, "no están enlazados a modelos") {
+	if !strings.Contains(plan.Steps[3].Title, "artefactos del proveedor") || !strings.Contains(plan.Steps[3].Explanation, "15 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[4].Explanation, "skills-creator y stacked-pr") || !strings.Contains(plan.Steps[4].Explanation, "no pertenecen a OpenCode") {
 		t.Fatalf("steps 4-5 do not describe model and provider ownership accurately: step4=%#v step5=%#v", plan.Steps[3], plan.Steps[4])
 	}
 }
@@ -174,6 +182,22 @@ func TestApplyInstallsThroughStableLauncherAndVerifiesEverything(t *testing.T) {
 	}
 	if strings.Join(managed.calls, ",") != "integration-install,integration-status" || health.calls != 2 {
 		t.Fatalf("managed=%v health=%d", managed.calls, health.calls)
+	}
+}
+
+func TestApplyRetiresProviderSkillBeforePublishingGlobalSkill(t *testing.T) {
+	var events []string
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+		statusResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	managed := &fakeIntegration{installResult: integration.Result{State: integration.StateInstalled}, statusResult: integration.Result{State: integration.StateInstalled}, events: &events}
+	shared := &fakeSkills{preview: skills.Result{State: skills.StateAbsent}, install: skills.Result{State: skills.StateInstalled}, status: skills.Result{State: skills.StateInstalled}, events: &events}
+	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	service.skills = shared
+	if _, err := service.Apply(context.Background(), Options{Workspace: "/workspace"}); err != nil || strings.Join(events, ",") != "integration-install,skills-install" {
+		t.Fatalf("err=%v events=%v", err, events)
 	}
 }
 
@@ -284,14 +308,14 @@ func TestApplyDoesNotInstallSkillsWhenLauncherFails(t *testing.T) {
 	}
 }
 
-func TestApplyDisclosesChangedSkillsAfterIntegrationFailure(t *testing.T) {
+func TestApplyDoesNotPublishSkillsAfterIntegrationFailure(t *testing.T) {
 	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}, installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)}}
 	shared := &fakeSkills{preview: skills.Result{State: skills.StateAbsent}, install: skills.Result{State: skills.StateInstalled, Changed: true}}
 	managed := &fakeIntegration{installErr: integration.ErrConflict}
 	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
 	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
-	if !errors.Is(err, integration.ErrConflict) || !strings.Contains(result.Recovery, "global de skills quedó instalado") {
+	if !errors.Is(err, integration.ErrConflict) || strings.Contains(result.Recovery, "global de skills quedó instalado") || strings.Contains(strings.Join(shared.calls, ","), "skills-install") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
@@ -308,7 +332,22 @@ func TestApplyDisclosesIncompleteSkillsRecovery(t *testing.T) {
 	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
 	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
-	if !errors.Is(err, skills.ErrRecovery) || result.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "vgxness skills status") || strings.Contains(result.Recovery, "verificado") {
+	if !errors.Is(err, skills.ErrRecovery) || result.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "revirtió") || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") || !strings.Contains(result.Recovery, "puede haber quedado parcial") || strings.Contains(result.Recovery, "verificado") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestApplyDisclosesUnconfirmedSkillsAfterOrdinaryInstallFailure(t *testing.T) {
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	managed := &fakeIntegration{installResult: integration.Result{State: integration.StateInstalled}}
+	shared := &fakeSkills{preview: skills.Result{State: skills.StateAbsent}, installErr: errors.New("publication failed")}
+	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	service.skills = shared
+	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	if err == nil || !strings.Contains(result.Recovery, "launcher administrado se conserva") || !strings.Contains(result.Recovery, "heredada del proveedor") || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") || strings.Contains(result.Recovery, "puede haber quedado parcial") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
