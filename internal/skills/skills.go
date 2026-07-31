@@ -60,14 +60,17 @@ type Service struct {
 	catalog *catalog
 	// beforePublish and beforeRollback are deterministic test checkpoints for
 	// replacement races at the two no-overwrite boundaries.
-	beforePublish  func(string) error
-	beforeRollback func(string) error
-	afterPublish   func(string) error
-	afterRename    func(string) error
-	beforeMove     func(source, destination string) error
-	beforeBackup   func(string) error
-	beforePrune    func() error
-	afterInspect   func()
+	beforePublish    func(string) error
+	beforeRollback   func(string) error
+	afterPublish     func(string) error
+	afterRename      func(string) error
+	beforeMove       func(source, destination string) error
+	beforeBackup     func(string) error
+	beforePrune      func() error
+	beforeBackupGate func()
+	beforeReadback   func()
+	beforeFinal      func()
+	afterInspect     func()
 }
 
 func New() *Service { return &Service{} }
@@ -237,7 +240,9 @@ func openRoot(ctx context.Context, selected string, writable bool) (*os.Root, st
 	return current, selected, nil
 }
 
-func (s *Service) inspect(options Options) (Result, map[string][]byte, error) {
+// inspect reads either a caller-owned root or opens and owns the selected root.
+// A borrowed root is identity-bound to the current selected pathname first.
+func (s *Service) inspect(options Options, held *os.Root) (Result, map[string][]byte, error) {
 	rootPath, err := skillsRoot(options)
 	if err != nil {
 		return Result{}, nil, err
@@ -247,15 +252,20 @@ func (s *Service) inspect(options Options) (Result, map[string][]byte, error) {
 		return Result{}, nil, err
 	}
 	result := Result{State: StateAbsent, Path: rootPath, FileCount: len(entries), Hashes: hashes(entries)}
-	r, _, err := openExisting(options)
-	if err != nil {
+	r := held
+	if r == nil {
+		r, _, err = openExisting(options)
+		if err != nil {
+			return result, entries, err
+		}
+		if r == nil {
+			return result, entries, nil
+		}
+		defer r.Close()
+	} else if err := selectedRoot(rootPath, r); err != nil {
 		return result, entries, err
 	}
-	if r == nil {
-		return result, entries, nil
-	}
-	defer r.Close()
-	for _, skill := range skillNames(entries) {
+	for _, skill := range s.managedSkillNames() {
 		info, err := r.Lstat(native(skill))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -304,15 +314,98 @@ func (s *Service) inspect(options Options) (Result, map[string][]byte, error) {
 		result.State = StateDrifted
 		return result, entries, ErrDrift
 	}
+	legacy, err := s.inspectLegacy(r, entries)
+	if err != nil {
+		return result, entries, err
+	}
 	if present == 0 {
+		result.UpdateNeeded = legacy
 		return result, entries, nil
 	}
 	if missing > 0 {
-		result.State = StatePartial
+		result.State, result.UpdateNeeded = StatePartial, predecessors > 0 || legacy
 		return result, entries, nil
 	}
-	result.State, result.UpdateNeeded = StateInstalled, predecessors > 0
+	result.State, result.UpdateNeeded = StateInstalled, predecessors > 0 || legacy
 	return result, entries, nil
+}
+
+func selectedRoot(path string, held *os.Root) error {
+	current, _, err := openRoot(context.Background(), path, false)
+	if err != nil || current == nil {
+		return errors.Join(ErrConflict, err)
+	}
+	currentInfo, currentErr := current.Stat(".")
+	heldInfo, heldErr := held.Stat(".")
+	closeErr := current.Close()
+	if currentErr != nil || heldErr != nil || closeErr != nil || !os.SameFile(currentInfo, heldInfo) {
+		return errors.Join(ErrConflict, currentErr, heldErr, closeErr)
+	}
+	return nil
+}
+
+func (s *Service) managedSkillNames() []string {
+	c, err := s.resolvedCatalog()
+	if err != nil {
+		return nil
+	}
+	names := map[string]bool{}
+	for _, definition := range c.definitions {
+		names[definition.name] = true
+		for _, legacy := range definition.legacy {
+			names[legacy.name] = true
+		}
+	}
+	ordered := make([]string, 0, len(names))
+	for name := range names {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+	return ordered
+}
+
+// inspectLegacy rejects unsafe roots and unknown managed bytes before any
+// desired publication. Extras outside the managed relative paths are ignored.
+func (s *Service) inspectLegacy(r *os.Root, entries map[string][]byte) (bool, error) {
+	c, err := s.resolvedCatalog()
+	if err != nil {
+		return false, err
+	}
+	present := false
+	for _, definition := range c.definitions {
+		for _, legacy := range definition.legacy {
+			info, err := r.Lstat(native(legacy.name))
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return false, ErrConflict
+			}
+			for relative, oldDigest := range legacy.digests {
+				parent, err := openRelativeRoot(context.Background(), r, filepath.Join(native(legacy.name), filepath.Dir(native(relative))), false)
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return false, ErrConflict
+				}
+				actual, _, readErr := regular(parent, filepath.Base(native(relative)))
+				err = errors.Join(readErr, parent.Close())
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return false, ErrConflict
+				}
+				identity := definition.name + "/" + relative
+				if !bytes.Equal(actual, entries[identity]) && digest(actual) != oldDigest && definition.predecessors[relative] != digest(actual) {
+					return false, ErrDrift
+				}
+				present = true
+			}
+		}
+	}
+	return present, nil
 }
 
 func regular(r *os.Root, name string) ([]byte, os.FileInfo, error) {
@@ -342,7 +435,7 @@ func (s *Service) Preview(ctx context.Context, options Options) (Result, error) 
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	result, _, err := s.inspect(options)
+	result, _, err := s.inspect(options, nil)
 	if result.State == StateAbsent || result.State == StatePartial || result.UpdateNeeded {
 		result.Changed = true
 	}
@@ -352,7 +445,7 @@ func (s *Service) Status(ctx context.Context, options Options) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	result, _, err := s.inspect(options)
+	result, _, err := s.inspect(options, nil)
 	return result, err
 }
 
@@ -376,7 +469,7 @@ func (s *Service) Install(ctx context.Context, options Options) (Result, error) 
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	result, entries, err = s.inspect(options)
+	result, entries, err = s.inspect(options, nil)
 	if err != nil && !errors.Is(err, ErrRecovery) {
 		return result, err
 	}
@@ -397,11 +490,14 @@ func (s *Service) Install(ctx context.Context, options Options) (Result, error) 
 	if err := recoverTransactions(ctx, r, entries); err != nil {
 		return result, errors.Join(ErrRecovery, err)
 	}
-	result, entries, err = s.inspect(options)
+	result, entries, err = s.inspect(options, r)
 	if err != nil {
 		return result, err
 	}
 	if result.State == StateInstalled && !result.UpdateNeeded {
+		if err := selectedRoot(rootPath, r); err != nil {
+			return result, err
+		}
 		return result, nil
 	}
 	published := []original{}
@@ -462,12 +558,350 @@ func (s *Service) Install(ctx context.Context, options Options) (Result, error) 
 			}
 		}
 	}
-	verified, err := s.Status(context.Background(), options)
-	if err != nil || verified.State != StateInstalled || verified.UpdateNeeded {
-		return fail(fmt.Errorf("%w: readback", ErrDrift))
+	verified, backupPath, migrated, migrationErr := s.migrateLegacy(ctx, r, entries, rootPath, func() (Result, error) {
+		if s != nil && s.beforeReadback != nil {
+			s.beforeReadback()
+		}
+		verified, _, err := s.inspect(options, r)
+		if err != nil {
+			return Result{}, err
+		}
+		if verified.State != StateInstalled || verified.UpdateNeeded {
+			return Result{}, fmt.Errorf("%w: readback", ErrDrift)
+		}
+		if s != nil && s.beforeFinal != nil {
+			s.beforeFinal()
+		}
+		return verified, nil
+	})
+	if migrationErr != nil {
+		if migrated { // durable migration succeeded; retain recovery evidence.
+			verified.BackupPath = backupPath
+			verified.Changed = migrated
+			return verified, errors.Join(ErrRecovery, migrationErr)
+		}
+		return fail(migrationErr)
 	}
-	verified.Changed = len(published) > 0
+	verified.Changed, verified.BackupPath = len(published) > 0 || migrated, backupPath
 	return verified, nil
+}
+
+type legacyMove struct {
+	sourceParent, backupParent *os.Root
+	source, stored             string
+	data                       []byte
+	mode                       os.FileMode
+	copied, removed            bool
+}
+
+// migrateLegacy copies from held source parents into held backup parents. The
+// descriptors bind every directory identity before a legacy file is removed.
+func (s *Service) migrateLegacy(ctx context.Context, r *os.Root, entries map[string][]byte, rootPath string, verify func() (Result, error)) (Result, string, bool, error) {
+	present, err := s.inspectLegacy(r, entries)
+	if err != nil || !present {
+		if err != nil {
+			return Result{}, "", false, err
+		}
+		verified, err := verify()
+		if err == nil {
+			err = selectedRoot(rootPath, r)
+		}
+		return verified, "", false, err
+	}
+	moves := []legacyMove{}
+	var base, sessionRoot *os.Root
+	var session string
+	closeRoots := func() error {
+		var errs []error
+		for i := len(moves) - 1; i >= 0; i-- {
+			errs = append(errs, moves[i].sourceParent.Close(), moves[i].backupParent.Close())
+		}
+		if sessionRoot != nil {
+			errs = append(errs, sessionRoot.Close())
+		}
+		if base != nil {
+			errs = append(errs, base.Close())
+		}
+		return errors.Join(errs...)
+	}
+	rollback := func(cause error) (Result, string, bool, error) {
+		var errs []error
+		for i := len(moves) - 1; i >= 0; i-- {
+			errs = append(errs, rollbackLegacyMove(&moves[i]))
+		}
+		errs = append(errs, closeRoots())
+		if recovery := errors.Join(errs...); recovery != nil || sessionRoot != nil {
+			return Result{}, "", false, errors.Join(cause, ErrRecovery, recovery)
+		}
+		return Result{}, "", false, cause
+	}
+	c, err := s.resolvedCatalog()
+	if err != nil {
+		return rollback(err)
+	}
+	for _, definition := range c.definitions {
+		for _, legacy := range definition.legacy {
+			for relative := range legacy.digests {
+				if err := ctx.Err(); err != nil {
+					return rollback(err)
+				}
+				parentName := filepath.Join(native(legacy.name), filepath.Dir(native(relative)))
+				sourceParent, err := openRelativeRoot(ctx, r, parentName, false)
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return rollback(ErrConflict)
+				}
+				name := filepath.Base(native(relative))
+				data, info, err := regular(sourceParent, name)
+				if errors.Is(err, os.ErrNotExist) {
+					_ = sourceParent.Close()
+					continue
+				}
+				if err != nil {
+					_ = sourceParent.Close()
+					return rollback(ErrConflict)
+				}
+				identity := definition.name + "/" + relative
+				if !bytes.Equal(data, entries[identity]) && digest(data) != legacy.digests[relative] && digest(data) != definition.predecessors[relative] {
+					_ = sourceParent.Close()
+					return rollback(ErrDrift)
+				}
+				if sessionRoot == nil {
+					base, err = openRelativeRoot(ctx, r, ".vgxness-backups", true)
+					if err == nil {
+						session, sessionRoot, err = allocateHeldBackupSession(base, "migrate")
+					}
+					if err != nil {
+						return Result{}, "", false, errors.Join(err, sourceParent.Close(), closeRoots())
+					}
+				}
+				backupParent, err := openRelativeRoot(ctx, sessionRoot, filepath.Join(native(legacy.name), filepath.Dir(native(relative))), true)
+				if err != nil {
+					_ = sourceParent.Close()
+					return rollback(err)
+				}
+				move := legacyMove{sourceParent: sourceParent, backupParent: backupParent, source: name, stored: name, data: data, mode: info.Mode().Perm()}
+				moves = append(moves, move)
+				if s != nil && s.beforeBackup != nil {
+					if err := s.beforeBackup(filepath.Join(".vgxness-backups", session, native(legacy.name), native(relative))); err != nil {
+						return rollback(err)
+					}
+				}
+				if err := copyAndRemoveLegacy(&moves[len(moves)-1]); err != nil {
+					return rollback(err)
+				}
+			}
+		}
+	}
+	verified, err := verify()
+	if err != nil {
+		return rollback(err)
+	}
+	if len(moves) == 0 {
+		return verified, "", false, selectedRoot(rootPath, r)
+	}
+	if s != nil && s.beforePrune != nil {
+		if err := s.beforePrune(); err != nil {
+			return verified, "", true, errors.Join(ErrRecovery, err, closeRoots())
+		}
+	}
+	if s != nil && s.beforeBackupGate != nil {
+		s.beforeBackupGate()
+	}
+	backupPath := filepath.Join(rootPath, ".vgxness-backups", session)
+	if err := migrationPaths(rootPath, r, sessionRoot, session); err != nil {
+		return verified, "", true, errors.Join(ErrRecovery, err, closeRoots())
+	}
+	if err := closeRoots(); err != nil {
+		return verified, backupPath, true, errors.Join(ErrRecovery, err)
+	}
+	return verified, backupPath, true, nil
+}
+
+func migrationPaths(rootPath string, held, session *os.Root, name string) (err error) {
+	current, _, err := openRoot(context.Background(), rootPath, false)
+	if err != nil || current == nil {
+		return errors.Join(ErrConflict, err)
+	}
+	defer func() { err = errors.Join(err, current.Close()) }()
+	currentInfo, currentErr := current.Stat(".")
+	heldInfo, heldErr := held.Stat(".")
+	if currentErr != nil || heldErr != nil || !os.SameFile(currentInfo, heldInfo) {
+		return errors.Join(ErrConflict, currentErr, heldErr)
+	}
+	fresh, err := openRelativeRoot(context.Background(), current, filepath.Join(".vgxness-backups", name), false)
+	if err != nil {
+		return errors.Join(ErrConflict, err)
+	}
+	defer func() { err = errors.Join(err, fresh.Close()) }()
+	freshInfo, freshErr := fresh.Stat(".")
+	sessionInfo, sessionErr := session.Stat(".")
+	if freshErr != nil || sessionErr != nil || !os.SameFile(freshInfo, sessionInfo) {
+		return errors.Join(ErrConflict, freshErr, sessionErr)
+	}
+	return nil
+}
+
+func openRelativeRoot(ctx context.Context, root *os.Root, name string, create bool) (*os.Root, error) {
+	name = filepath.Clean(name)
+	if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+		return nil, ErrInvalid
+	}
+	current, err := root.OpenRoot(".")
+	if err != nil {
+		return nil, err
+	}
+	for _, component := range strings.Split(name, string(filepath.Separator)) {
+		if component == "." || component == "" {
+			continue
+		}
+		info, err := current.Lstat(component)
+		if errors.Is(err, os.ErrNotExist) && create {
+			if err := ctx.Err(); err != nil {
+				_ = current.Close()
+				return nil, err
+			}
+			if err = current.Mkdir(component, 0o755); err == nil || errors.Is(err, os.ErrExist) {
+				err = nil
+			}
+			if err == nil {
+				err = syncDirectory(current, ".")
+			}
+			if err == nil {
+				info, err = current.Lstat(component)
+			}
+		}
+		if err != nil {
+			_ = current.Close()
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			_ = current.Close()
+			return nil, ErrConflict
+		}
+		child, err := current.OpenRoot(component)
+		if err != nil {
+			_ = current.Close()
+			return nil, err
+		}
+		childInfo, err := child.Stat(".")
+		if err != nil || !os.SameFile(info, childInfo) {
+			_ = child.Close()
+			_ = current.Close()
+			return nil, ErrConflict
+		}
+		if err := current.Close(); err != nil {
+			_ = child.Close()
+			return nil, err
+		}
+		current = child
+	}
+	return current, nil
+}
+
+func allocateHeldBackupSession(root *os.Root, prefix string) (string, *os.Root, error) {
+	for i := 0; i < 128; i++ {
+		name := fmt.Sprintf("%s-%d", prefix, i)
+		if err := root.Mkdir(name, 0o755); errors.Is(err, os.ErrExist) {
+			continue
+		} else if err != nil {
+			return "", nil, err
+		}
+		if err := syncDirectory(root, "."); err != nil {
+			return "", nil, cleanupHeldSession(root, name, err)
+		}
+		session, err := openRelativeRoot(context.Background(), root, name, false)
+		if err != nil {
+			return "", nil, cleanupHeldSession(root, name, err)
+		}
+		return name, session, nil
+	}
+	return "", nil, ErrConflict
+}
+
+func cleanupHeldSession(base *os.Root, name string, cause error) error {
+	return errors.Join(cause, ErrRecovery)
+}
+
+func copyAndRemoveLegacy(move *legacyMove) error {
+	if _, err := move.backupParent.Lstat(move.stored); !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(ErrConflict, err)
+	}
+	f, err := move.backupParent.OpenFile(move.stored, os.O_WRONLY|os.O_CREATE|os.O_EXCL, move.mode)
+	if err != nil {
+		return err
+	}
+	if err = f.Chmod(move.mode); err != nil {
+		_ = f.Close()
+		return err
+	}
+	_, err = f.Write(move.data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	move.copied = true
+	backup, _, err := regular(move.backupParent, move.stored)
+	if err != nil || !bytes.Equal(backup, move.data) {
+		return errors.Join(ErrRecovery, ErrConflict, err)
+	}
+	current, _, err := regular(move.sourceParent, move.source)
+	if err != nil || !bytes.Equal(current, move.data) {
+		return errors.Join(ErrRecovery, ErrConflict, err)
+	}
+	if err := move.sourceParent.Remove(move.source); err != nil {
+		return errors.Join(ErrRecovery, err)
+	}
+	move.removed = true
+	return errors.Join(syncDirectory(move.backupParent, "."), syncDirectory(move.sourceParent, "."))
+}
+
+func rollbackLegacyMove(move *legacyMove) error {
+	if !move.copied {
+		return nil
+	}
+	backup, _, err := regular(move.backupParent, move.stored)
+	if err != nil || !bytes.Equal(backup, move.data) {
+		return errors.Join(ErrRecovery, ErrConflict, err)
+	}
+	if move.removed {
+		if _, err := move.sourceParent.Lstat(move.source); !errors.Is(err, os.ErrNotExist) {
+			return errors.Join(ErrRecovery, err)
+		}
+		f, err := move.sourceParent.OpenFile(move.source, os.O_WRONLY|os.O_CREATE|os.O_EXCL, move.mode)
+		if err != nil {
+			return errors.Join(ErrRecovery, err)
+		}
+		if err = f.Chmod(move.mode); err != nil {
+			_ = f.Close()
+			return errors.Join(ErrRecovery, err)
+		}
+		_, err = f.Write(move.data)
+		if err == nil {
+			err = f.Sync()
+		}
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return errors.Join(ErrRecovery, err)
+		}
+		current, _, err := regular(move.sourceParent, move.source)
+		if err != nil || !bytes.Equal(current, move.data) {
+			return errors.Join(ErrRecovery, ErrConflict, err)
+		}
+	}
+	if err := move.backupParent.Remove(move.stored); err != nil {
+		return errors.Join(ErrRecovery, err)
+	}
+	return errors.Join(syncDirectory(move.sourceParent, "."), syncDirectory(move.backupParent, "."))
 }
 
 func ensureDirectory(ctx context.Context, r *os.Root, name string) error {
@@ -723,7 +1157,7 @@ func removeExpected(r *os.Root, name string, expected []byte, beforeMove func(st
 }
 
 func (s *Service) Uninstall(ctx context.Context, options Options) (Result, error) {
-	result, entries, err := s.inspect(options)
+	result, entries, err := s.inspect(options, nil)
 	if err != nil {
 		return result, err
 	}

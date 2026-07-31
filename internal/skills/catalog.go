@@ -8,8 +8,15 @@ import (
 
 type skillDefinition struct {
 	name         string
+	source       string
 	files        map[string][]byte
 	predecessors map[string]string
+	legacy       []legacyDefinition
+}
+
+type legacyDefinition struct {
+	name    string
+	digests map[string]string
 }
 
 type catalog struct{ definitions []skillDefinition }
@@ -32,12 +39,12 @@ func (s *Service) entries() (map[string][]byte, error) {
 		return nil, ErrInvalid
 	}
 	entries := make(map[string][]byte)
-	skills := map[string]bool{}
+	owners := map[string]bool{}
 	for _, definition := range c.definitions {
-		if !validSkillName(definition.name) || skills[definition.name] || len(definition.files) == 0 {
+		if !validSkillName(definition.name) || (definition.source != "" && !validSkillName(definition.source)) || owners[definition.name] || len(definition.files) == 0 {
 			return nil, ErrInvalid
 		}
-		skills[definition.name] = true
+		owners[definition.name] = true
 		for relative, content := range definition.files {
 			if !validRelative(relative) {
 				return nil, ErrInvalid
@@ -49,8 +56,21 @@ func (s *Service) entries() (map[string][]byte, error) {
 			entries[identity] = content
 		}
 		for relative := range definition.predecessors {
-			if !validRelative(relative) {
+			if _, exists := definition.files[relative]; !validRelative(relative) || !exists {
 				return nil, ErrInvalid
+			}
+		}
+		legacy := map[string]bool{}
+		for _, source := range definition.legacy {
+			if !validSkillName(source.name) || source.name == definition.name || owners[source.name] || legacy[source.name] || len(source.digests) == 0 {
+				return nil, ErrInvalid
+			}
+			legacy[source.name] = true
+			owners[source.name] = true
+			for relative := range source.digests {
+				if _, exists := definition.files[relative]; !validRelative(relative) || !exists {
+					return nil, ErrInvalid
+				}
 			}
 		}
 	}
@@ -58,8 +78,8 @@ func (s *Service) entries() (map[string][]byte, error) {
 }
 
 func bundledCatalog() (catalog, error) {
-	definition := skillDefinition{name: "agent-skill-engineer", predecessors: predecessorDigests}
-	entries, err := bundledFiles(definition.name)
+	definition := skillDefinition{name: "agent-skill-engineer", source: "agent-skill-engineer", predecessors: predecessorDigests}
+	entries, err := bundledFiles(definition.source)
 	if err != nil {
 		return catalog{}, err
 	}
@@ -102,7 +122,16 @@ func (s *Service) predecessor(identity string, content []byte) bool {
 	}
 	for _, definition := range c.definitions {
 		if relative, ok := strings.CutPrefix(identity, definition.name+"/"); ok {
-			return definition.predecessors[relative] == digest(content)
+			actual := digest(content)
+			if definition.predecessors[relative] == actual {
+				return true
+			}
+			for _, legacy := range definition.legacy {
+				if legacy.digests[relative] == actual {
+					return true
+				}
+			}
+			return false
 		}
 	}
 	return false
