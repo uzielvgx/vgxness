@@ -172,12 +172,12 @@ func TestFoundationProductContract(t *testing.T) {
 func assertOpenCodeDocumentationContract(t *testing.T) {
 	t.Helper()
 	documents := map[string][]string{
-		"../../README.md":                     {"19 managed artifacts", "`vgxness-manager` v38", "stacked-pr", "v1/v2/v3", "OpenCode uninstall never removes"},
-		"../../docs/opencode-integration.md":  {"19 managed artifacts", "stacked-pr", "v1/v2/v3", "uninstall target"},
-		"../../docs/product-blueprint.md":     {"19 provider artifacts", "16 files", "stacked-pr", "OpenCode uninstall never owns"},
-		"../../docs/product-blueprint.es.md":  {"19 artefactos", "16 archivos", "stacked-pr", "desinstalación de OpenCode"},
-		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "16-file", "stacked-pr", "does not remove global skills"},
-		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "stacked-pr", "v1/v2/v3", "OpenCode uninstall does not own"},
+		"../../README.md":                     {"19 managed artifacts", "`vgxness-manager` v38", "cross-platform", "installer-lifecycle", "OpenCode uninstall never removes"},
+		"../../docs/opencode-integration.md":  {"19 managed artifacts", "cross-platform", "installer-lifecycle", "uninstall target"},
+		"../../docs/product-blueprint.md":     {"19 provider artifacts", "18 files", "cross-platform", "OpenCode uninstall never owns"},
+		"../../docs/product-blueprint.es.md":  {"19 artefactos", "18 archivos", "installer-lifecycle", "desinstalación de OpenCode"},
+		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "18-file", "cross-platform", "does not remove global skills"},
+		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "installer-lifecycle", "v1/v2/v3", "OpenCode uninstall does not own"},
 	}
 	for path, claims := range documents {
 		content := readRepositoryFile(t, path)
@@ -195,5 +195,18 @@ func assertOpenCodeDocumentationContract(t *testing.T) {
 				t.Errorf("%s contains stale OpenCode contract claim %q", path, stale)
 			}
 		}
+	}
+	integration := readRepositoryFile(t, "../../docs/opencode-integration.md")
+	for _, claim := range []string{
+		"`vgxness setup opencode` supports `--config-dir` and the model flags",
+		"publishes global skills to the default discoverable root",
+		"Only lower-level `vgxness skills <preview|install|status|uninstall> --skills-dir PATH` supports isolated custom roots",
+	} {
+		if !strings.Contains(integration, claim) {
+			t.Errorf("opencode integration omits setup/skills-root distinction %q", claim)
+		}
+	}
+	if strings.Contains(integration, "`--skills-dir` selects an absolute global portable-skills directory") {
+		t.Error("opencode integration incorrectly advertises --skills-dir on setup")
 	}
 }

@@ -94,7 +94,17 @@ func bundledCatalog() (catalog, error) {
 	if err != nil {
 		return catalog{}, err
 	}
-	return catalog{definitions: []skillDefinition{creator, stackedPR}}, nil
+	crossPlatform := skillDefinition{name: "cross-platform", source: "cross-platform"}
+	crossPlatform.files, err = bundledFiles(crossPlatform.source)
+	if err != nil {
+		return catalog{}, err
+	}
+	installerLifecycle := skillDefinition{name: "installer-lifecycle", source: "installer-lifecycle"}
+	installerLifecycle.files, err = bundledFiles(installerLifecycle.source)
+	if err != nil {
+		return catalog{}, err
+	}
+	return catalog{definitions: []skillDefinition{creator, stackedPR, crossPlatform, installerLifecycle}}, nil
 }
 
 func validSkillName(name string) bool {

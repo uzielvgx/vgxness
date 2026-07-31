@@ -64,9 +64,9 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 	}
 }
 
-func TestBundledCatalogHasTwoCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
+func TestBundledCatalogHasFourCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
 	catalog, err := bundledCatalog()
-	if err != nil || len(catalog.definitions) != 2 {
+	if err != nil || len(catalog.definitions) != 4 {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 	definition := catalog.definitions[0]
@@ -74,6 +74,12 @@ func TestBundledCatalogHasTwoCanonicalSkillsAndOneLegacyMigration(t *testing.T) 
 		t.Fatalf("definition=%+v", definition)
 	}
 	if definition = catalog.definitions[1]; definition.name != "stacked-pr" || definition.source != "stacked-pr" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[2]; definition.name != "cross-platform" || definition.source != "cross-platform" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[3]; definition.name != "installer-lifecycle" || definition.source != "installer-lifecycle" || len(definition.legacy) != 0 {
 		t.Fatalf("definition=%+v", definition)
 	}
 }
@@ -252,10 +258,10 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != StateInstalled || !result.Changed || result.FileCount == 0 {
+	if result.State != StateInstalled || !result.Changed || result.FileCount != 18 {
 		t.Fatalf("result=%+v", result)
 	}
-	for _, name := range []string{"skills-creator", "stacked-pr"} {
+	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle"} {
 		if _, err := os.Lstat(filepath.Join(destination, name, "SKILL.md")); err != nil {
 			t.Fatalf("canonical %s activation file: %v", name, err)
 		}
@@ -586,27 +592,15 @@ func TestLegacyV032DigestMapIsCompleteAndDistinctFromCanonicalPackage(t *testing
 func TestInstallPreservesExtras(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
 	root := filepath.Join(destination, "skills-creator")
-	entries, err := files()
+	entries, err := New().entries()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for relative, content := range entries {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, relative)), 0o755); err != nil {
+	for identity, content := range entries {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(destination, native(identity))), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(root, relative), content, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	stacked, err := bundledFiles("stacked-pr")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for relative, content := range stacked {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(destination, "stacked-pr", relative)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(destination, "stacked-pr", relative), content, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(destination, native(identity)), content, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -630,11 +624,11 @@ func TestInstallPreservesExtras(t *testing.T) {
 
 func TestNearPredecessorAndManagedSymlinkAreRefused(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
+	root := filepath.Join(destination, "skills-creator")
 	service := New()
 	if _, err := service.Install(context.Background(), Options{Dir: destination}); err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Join(destination, "skills-creator")
 	if err := os.WriteFile(filepath.Join(root, "LICENSE.txt"), []byte("near predecessor"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -809,7 +803,6 @@ func TestRollbackRestoresPredecessorAfterRenameFailure(t *testing.T) {
 
 func TestRollbackPreservesConcurrentReplacementAfterRenameFailure(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "skills-creator")
 	service := &Service{afterRename: func(identity string) error {
 		if err := os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o600); err != nil {
 			return err
@@ -820,12 +813,12 @@ func TestRollbackPreservesConcurrentReplacementAfterRenameFailure(t *testing.T) 
 	if !errors.Is(err, ErrRecovery) {
 		t.Fatalf("err=%v", err)
 	}
-	entries, err := files()
+	entries, err := New().entries()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for relative := range entries {
-		actual, err := os.ReadFile(filepath.Join(root, relative))
+	for identity := range entries {
+		actual, err := os.ReadFile(filepath.Join(destination, native(identity)))
 		if err == nil && string(actual) == "external" {
 			return
 		}
@@ -835,7 +828,6 @@ func TestRollbackPreservesConcurrentReplacementAfterRenameFailure(t *testing.T) 
 
 func TestInstallPreservesReplacementBeforePublication(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "skills-creator")
 	service := &Service{beforePublish: func(identity string) error {
 		return os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o600)
 	}}
@@ -843,12 +835,12 @@ func TestInstallPreservesReplacementBeforePublication(t *testing.T) {
 	if !errors.Is(err, ErrConflict) && !errors.Is(err, ErrRecovery) {
 		t.Fatalf("err=%v", err)
 	}
-	entries, readErr := files()
+	entries, readErr := New().entries()
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	for relative := range entries {
-		actual, readErr := os.ReadFile(filepath.Join(root, relative))
+	for identity := range entries {
+		actual, readErr := os.ReadFile(filepath.Join(destination, native(identity)))
 		if readErr == nil && string(actual) == "external" {
 			return
 		}
@@ -858,7 +850,6 @@ func TestInstallPreservesReplacementBeforePublication(t *testing.T) {
 
 func TestRollbackPreservesReplacementAtRollbackBoundary(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "skills-creator")
 	service := &Service{
 		afterPublish: func(string) error { return errors.New("force rollback") },
 		beforeRollback: func(name string) error {
@@ -869,12 +860,12 @@ func TestRollbackPreservesReplacementAtRollbackBoundary(t *testing.T) {
 	if !errors.Is(err, ErrRecovery) {
 		t.Fatalf("err=%v", err)
 	}
-	entries, readErr := files()
+	entries, readErr := New().entries()
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	for relative := range entries {
-		actual, readErr := os.ReadFile(filepath.Join(root, relative))
+	for identity := range entries {
+		actual, readErr := os.ReadFile(filepath.Join(destination, native(identity)))
 		if readErr == nil && string(actual) == "external" {
 			return
 		}
@@ -922,7 +913,7 @@ func TestInstallRollbackRemovesOnlyEmptyDirectoriesItCreated(t *testing.T) {
 	if _, err := service.Install(context.Background(), Options{Dir: destination}); err == nil {
 		t.Fatal("expected install failure")
 	}
-	if info, err := os.Lstat(filepath.Join(destination, "skills-creator")); err != nil || !info.IsDir() {
+	if info, err := os.Lstat(filepath.Join(destination, "cross-platform")); err != nil || !info.IsDir() {
 		t.Fatalf("managed root info=%v err=%v", info, err)
 	}
 	if info, err := os.Lstat(destination); err != nil || !info.IsDir() {
@@ -1171,7 +1162,6 @@ func TestPartialUnknownContentIsRefused(t *testing.T) {
 
 func TestRollbackPreservesConcurrentReplacement(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
-	root := filepath.Join(destination, "skills-creator")
 	service := &Service{afterPublish: func(identity string) error {
 		if err := os.WriteFile(filepath.Join(destination, filepath.FromSlash(identity)), []byte("external"), 0o644); err != nil {
 			return err
@@ -1182,12 +1172,12 @@ func TestRollbackPreservesConcurrentReplacement(t *testing.T) {
 	if !errors.Is(err, ErrRecovery) {
 		t.Fatalf("err=%v", err)
 	}
-	entries, readErr := files()
+	entries, readErr := New().entries()
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	for relative := range entries {
-		if actual, readErr := os.ReadFile(filepath.Join(root, relative)); readErr == nil && string(actual) == "external" {
+	for identity := range entries {
+		if actual, readErr := os.ReadFile(filepath.Join(destination, native(identity))); readErr == nil && string(actual) == "external" {
 			return
 		}
 	}

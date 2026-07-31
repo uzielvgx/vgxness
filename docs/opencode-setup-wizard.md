@@ -1,16 +1,16 @@
 # Guided OpenCode setup
 
-The wizard explains and verifies the complete OpenCode setup before changing anything. Current ownership is 19 OpenCode-managed artifacts plus the separate global `skills-creator` and `stacked-pr` catalog; the legacy provider skill is not an active artifact.
+The wizard explains and verifies the complete OpenCode setup before changing anything. Current ownership is 19 OpenCode-managed artifacts plus the separate global `skills-creator`, `stacked-pr`, `cross-platform`, and `installer-lifecycle` catalog; the legacy provider skill is not an active artifact.
 
 1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
 2. Install or update the permanent versioned launcher.
 3. Retire exact legacy OpenCode `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes before global publication; modified or unknown bytes block without mutation.
 4. Install `vgxness-manager`, managed `general` and verifier profiles, the read-only `explore` override, five hidden read-only review profiles, and six hidden SDD profiles.
-5. Install the bounded VGXNESS-owned storage plugin, `<config-dir>/vgxness/model-plan.json`, the `opencode.json` default-agent selection and bounded `<config-dir>/vgxness/default-agent.json` restoration metadata, then publish global `skills-creator` and `stacked-pr`.
+5. Install the bounded VGXNESS-owned storage plugin, `<config-dir>/vgxness/model-plan.json`, the `opencode.json` default-agent selection and bounded `<config-dir>/vgxness/default-agent.json` restoration metadata, then publish global `skills-creator`, `stacked-pr`, `cross-platform`, and `installer-lifecycle`.
 6. Read back all managed identities and perform the live OpenCode handshake.
 7. Report recovery guidance if any step fails.
 
-The resulting 19 OpenCode artifacts are 15 agents, storage plugin v5, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v38, managed `general`, verifier, `explore`, five reviewers, and six SDD profiles. Official setup retires exact provider v1/v2/v3 bytes before publishing the global 16-file `skills-creator` and `stacked-pr` catalog; unknown or modified bytes block. OpenCode uninstall does not own global skills.
+The resulting 19 OpenCode artifacts are 15 agents, storage plugin v5, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v38, managed `general`, verifier, `explore`, five reviewers, and six SDD profiles. Official setup retires exact provider v1/v2/v3 bytes before publishing the global 18-file `skills-creator`, `stacked-pr`, `cross-platform`, and `installer-lifecycle` catalog; unknown or modified bytes block. OpenCode uninstall does not own global skills.
 
 ## Commands
 
@@ -32,7 +32,7 @@ Preview is ready to apply when OpenCode responds healthily and no managed destin
 - the exact storage-only plugin is installed;
 - the canonical non-secret model-plan manifest binds all model-aware agent digests;
 - the provider retirement path is absent after exact v1/v2/v3 retirement, and global `stacked-pr` is installed without drift;
-- the separate global 16-file `skills-creator` and `stacked-pr` catalog is installed without drift; OpenCode uninstall does not own it;
+- the separate global 18-file `skills-creator`, `stacked-pr`, `cross-platform`, and `installer-lifecycle` catalog is installed without drift; OpenCode uninstall does not own it;
 - `opencode.json` semantically selects `vgxness-manager` as the default agent while preserving unrelated JSON values, existing `opencode.jsonc` bytes unchanged, and bounded `default-agent.json` restoration metadata recording whether the config existed and any prior explicit default;
 - the bounded OpenCode handshake succeeds in the workspace.
 

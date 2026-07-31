@@ -1,12 +1,12 @@
 # OpenCode integration
 
-OpenCode owns 19 managed artifacts. The global portable catalog owns `skills-creator` and `stacked-pr`; official setup retires only exact provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes before publishing `stacked-pr`, while modified or unknown bytes block without mutation.
+OpenCode owns 19 managed artifacts. The global portable catalog owns `skills-creator`, `stacked-pr`, `cross-platform`, and `installer-lifecycle`; official setup retires only exact provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes before publishing `stacked-pr`, while modified or unknown bytes block without mutation.
 
 Current delivery policy is manager v38 and global `stacked-pr` v3. Before branch creation and source writes or a routine delivery announcement, v38 requires clean untracked-inclusive porcelain, repository/base/ref identity, intended paths, an estimate and slice plan, and a deterministic fresh branch; candidate identity, developmental checks, independent verification, and review are post-implementation gates before delivery mutations. A dirty checkout stops writes except for explicitly current-task reauthorized recovery of a verified unpublished local slice. All first publications use only the empty-expectation create-only lease; existing remote branches and PRs remain read-only. Provider v1/v2/v3 bytes are retirement identities only, not activatable skills.
 
 Delivery labels are evidence-only: IMPLEMENTED requires completed workspace changes and observed developmental checks, but not independent verification; VERIFIED requires the exact frozen candidate to pass independent verification and review; DELIVERED requires the exact commit to be published and a new current-task PR created and read back; MERGED requires that PR merge and base containment/readback; INSTALLED additionally requires installation and handshake readback. No later state is inferred.
 
-VGXNESS installs 19 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v38, managed `general` and verifier profiles, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. The separate global catalog owns `skills-creator` and `stacked-pr`; neither is an OpenCode artifact, model-plan entry, or uninstall target.
+VGXNESS installs 19 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v38, managed `general` and verifier profiles, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. The separate global catalog owns `skills-creator`, `stacked-pr`, `cross-platform`, and `installer-lifecycle`; none is an OpenCode artifact, model-plan entry, or uninstall target.
 
 The plugin exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
 
@@ -48,7 +48,7 @@ vgxness integrate opencode status
 vgxness integrate opencode uninstall
 ```
 
-`--config-dir` can select a non-default OpenCode configuration directory and `--skills-dir` selects an absolute global portable-skills directory. `--model-plan low|medium|high` selects the active matrix; `--model-efficient`, `--model-balanced`, and `--model-frontier` replace individual exact provider/model slots. Flags overlay the verified installed manifest, so omitted plan and slot values are preserved rather than reset. All slots must use one provider. The deprecated singular `--model` flag remains a no-op compatibility option and never overrides the plan.
+`vgxness setup opencode` supports `--config-dir` and the model flags, then publishes global skills to the default discoverable root. Only lower-level `vgxness skills <preview|install|status|uninstall> --skills-dir PATH` supports isolated custom roots. `--model-plan low|medium|high` selects the active matrix; `--model-efficient`, `--model-balanced`, and `--model-frontier` replace individual exact provider/model slots. Flags overlay the verified installed manifest, so omitted plan and slot values are preserved rather than reset. All slots must use one provider. The deprecated singular `--model` flag remains a no-op compatibility option and never overrides the plan.
 
 Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna-fast`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS creates or updates `opencode.json` with `default_agent: "vgxness-manager"`, preserving every unrelated JSON value. It preserves any existing `opencode.jsonc` byte-for-byte. Bounded metadata at `<config-dir>/vgxness/default-agent.json` restores a prior explicit default during uninstall. The storage plugin does not route models.
 
@@ -141,10 +141,10 @@ The integration is installed only when manager v38, all other 14 agents, storage
 
 1. the permanent VGXNESS launcher is installed and verified;
 2. all 19 OpenCode-managed artifacts are installed without drift: 15 agents, plugin, model-plan manifest, default-agent selection, and restoration metadata;
-3. the separate global 16-file `skills-creator` and `stacked-pr` catalog is installed without drift;
+3. the separate global 18-file `skills-creator`, `stacked-pr`, `cross-platform`, and `installer-lifecycle` catalog is installed without drift;
 4. the bounded OpenCode handshake succeeds for the selected workspace.
 
 Restart OpenCode Desktop after installation or a plan switch so it reloads the profiles, model bindings, variants, storage plugin, and global portable skills.
 # Shared portable skills
 
-The global 16-file `skills-creator` and `stacked-pr` catalog is installed automatically by setup and can be managed independently with `vgxness skills <preview|install|status|uninstall>` into `~/.agents/skills` (or an absolute `--skills-dir` override). Exact provider v1/v2/v3 bytes retire before global publication; unknown or modified bytes block. `integrate opencode uninstall` is scoped to its 19 provider artifacts and never removes global skills.
+The global 18-file `skills-creator`, `stacked-pr`, `cross-platform`, and `installer-lifecycle` catalog is installed automatically by setup and can be managed independently with `vgxness skills <preview|install|status|uninstall>` into `~/.agents/skills` (or an absolute `--skills-dir` override). Exact provider v1/v2/v3 bytes retire before global publication; unknown or modified bytes block. `integrate opencode uninstall` is scoped to its 19 provider artifacts and never removes global skills.
