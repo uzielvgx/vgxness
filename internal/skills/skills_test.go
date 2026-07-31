@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -170,6 +171,23 @@ func TestCatalogRejectsNonCanonicalManagedIdentities(t *testing.T) {
 	}
 }
 
+func TestCatalogRejectsUnownedDigestPathsAndDuplicateInstalledNames(t *testing.T) {
+	invalid := []catalog{
+		{definitions: []skillDefinition{{name: "skills-creator", files: map[string][]byte{"SKILL.md": []byte("x")}, predecessors: map[string]string{"missing.txt": "digest"}}}},
+		{definitions: []skillDefinition{{name: "skills-creator", files: map[string][]byte{"SKILL.md": []byte("x")}, legacy: []legacyDefinition{{name: "agent-skill-engineer", digests: map[string]string{"missing.txt": "digest"}}}}}},
+		{definitions: []skillDefinition{
+			{name: "alpha-skill", files: map[string][]byte{"SKILL.md": []byte("x")}, legacy: []legacyDefinition{{name: "beta-skill", digests: map[string]string{"SKILL.md": "digest"}}}},
+			{name: "beta-skill", files: map[string][]byte{"SKILL.md": []byte("x")}},
+		}},
+	}
+	for _, value := range invalid {
+		service := &Service{catalog: &value}
+		if _, err := service.Preview(context.Background(), Options{Dir: filepath.Join(t.TempDir(), "skills")}); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("catalog=%+v err=%v", value, err)
+		}
+	}
+}
+
 func TestValidSkillName(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -223,6 +241,9 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if result.State != StateInstalled || !result.Changed || result.FileCount == 0 {
 		t.Fatalf("result=%+v", result)
 	}
+	if _, err := os.Lstat(filepath.Join(destination, "agent-skill-engineer", "SKILL.md")); err != nil {
+		t.Fatalf("canonical agent-skill-engineer activation file: %v", err)
+	}
 	status, err := service.Status(context.Background(), Options{Dir: destination})
 	if err != nil || status.State != StateInstalled || status.Changed {
 		t.Fatalf("status=%+v err=%v", status, err)
@@ -230,6 +251,246 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	preview, err = service.Preview(context.Background(), Options{Dir: destination})
 	if err != nil || preview.Changed {
 		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+}
+
+func TestInstallMigratesCompleteAndPartialRecognizedLegacyPackage(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprintf("partial=%t", partial), func(t *testing.T) {
+			destination := filepath.Join(t.TempDir(), "skills")
+			service := syntheticMigrationService()
+			legacy := filepath.Join(destination, "agent-skill-engineer")
+			if err := os.MkdirAll(filepath.Join(legacy, "nested"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			assertWrite(t, filepath.Join(legacy, "SKILL.md"), []byte("old skill"))
+			if !partial {
+				assertWrite(t, filepath.Join(legacy, "nested", "guide.txt"), []byte("old guide"))
+			}
+			extra := filepath.Join(legacy, "local.txt")
+			assertWrite(t, extra, []byte("keep"))
+			preview, err := service.Preview(context.Background(), Options{Dir: destination})
+			if err != nil || !preview.Changed || !preview.UpdateNeeded {
+				t.Fatalf("preview=%+v err=%v", preview, err)
+			}
+			result, err := service.Install(context.Background(), Options{Dir: destination})
+			if err != nil || !result.Changed || result.BackupPath == "" {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			assertFileBytes(t, filepath.Join(destination, "skills-creator", "SKILL.md"), []byte("new skill"))
+			if _, err := os.Lstat(filepath.Join(legacy, "SKILL.md")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("legacy active=%v", err)
+			}
+			assertFileBytes(t, extra, []byte("keep"))
+			if _, err := os.Lstat(filepath.Join(legacy, "nested")); err != nil {
+				t.Fatalf("managed nested directory=%v", err)
+			}
+			assertFileBytes(t, filepath.Join(result.BackupPath, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+			guide := filepath.Join(result.BackupPath, "agent-skill-engineer", "nested", "guide.txt")
+			if partial {
+				if _, err := os.Lstat(guide); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("partial backup guide=%v", err)
+				}
+			} else {
+				assertFileBytes(t, guide, []byte("old guide"))
+			}
+		})
+	}
+}
+
+func TestInstallLegacyDisappearsBeforeMoveHasNoBackup(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	service := syntheticMigrationService()
+	if _, err := service.Install(context.Background(), Options{Dir: destination}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(destination, "agent-skill-engineer", "SKILL.md")
+	assertWrite(t, legacy, []byte("old skill"))
+	service.afterInspect = func() { _ = os.Remove(legacy) }
+	result, err := service.Install(context.Background(), Options{Dir: destination})
+	if err != nil || result.Changed || result.BackupPath != "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, ".vgxness-backups")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup=%v", err)
+	}
+}
+
+func TestInstallRejectsUnknownLegacyBytesBeforeDesiredPublication(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	assertWrite(t, filepath.Join(destination, "agent-skill-engineer", "SKILL.md"), []byte("foreign"))
+	service := syntheticMigrationService()
+	if _, err := service.Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrDrift) {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "skills-creator")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new writes=%v", err)
+	}
+}
+
+func TestDesiredPathRecognizesConfiguredLegacyDigestAsUpdate(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	service := syntheticMigrationService()
+	assertWrite(t, filepath.Join(destination, "skills-creator", "SKILL.md"), []byte("old skill"))
+	preview, err := service.Preview(context.Background(), Options{Dir: destination})
+	if err != nil || preview.State != StatePartial || !preview.UpdateNeeded {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	if _, err := service.Install(context.Background(), Options{Dir: destination}); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, filepath.Join(destination, "skills-creator", "SKILL.md"), []byte("new skill"))
+
+	assertWrite(t, filepath.Join(destination, "skills-creator", "SKILL.md"), []byte("foreign"))
+	if _, err := service.Preview(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrDrift) {
+		t.Fatalf("unknown desired bytes err=%v", err)
+	}
+}
+
+func TestPreviewRejectsLegacySymlinkRoot(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(destination, "agent-skill-engineer")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New().Preview(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestLegacyIntermediateSymlinkRejectsBeforePublication(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	sibling := filepath.Join(destination, "sibling")
+	assertWrite(t, filepath.Join(destination, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+	assertWrite(t, filepath.Join(sibling, "guide.txt"), []byte("old guide"))
+	if err := os.Symlink(filepath.Join("..", "sibling"), filepath.Join(destination, "agent-skill-engineer", "nested")); err != nil {
+		t.Fatal(err)
+	}
+	service := syntheticMigrationService()
+	preview, err := service.Preview(context.Background(), Options{Dir: destination})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	if _, err := service.Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Install() err=%v", err)
+	}
+	assertFileBytes(t, filepath.Join(sibling, "guide.txt"), []byte("old guide"))
+	if _, err := os.Lstat(filepath.Join(destination, "skills-creator")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("desired activation=%v", err)
+	}
+}
+
+func TestInstallMigrationFailurePreservesReplacementSession(t *testing.T) {
+	skipWindowsOpenDirectoryRenameRace(t)
+
+	destination := filepath.Join(t.TempDir(), "skills")
+	held := filepath.Join(filepath.Dir(destination), "held")
+	assertWrite(t, filepath.Join(destination, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+	assertWrite(t, filepath.Join(destination, "agent-skill-engineer", "nested", "guide.txt"), []byte("old guide"))
+	service := syntheticMigrationService()
+	backups := 0
+	service.beforeBackup = func(string) error {
+		backups++
+		if backups == 2 {
+			session := filepath.Join(destination, ".vgxness-backups", "migrate-0")
+			if err := os.Rename(session, held); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(session, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return errors.New("injected migration failure")
+		}
+		return nil
+	}
+	if _, err := service.Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrRecovery) {
+		t.Fatal("Install() error=nil")
+	}
+	assertFileBytes(t, filepath.Join(destination, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+	assertFileBytes(t, filepath.Join(destination, "agent-skill-engineer", "nested", "guide.txt"), []byte("old guide"))
+	if _, err := os.Lstat(filepath.Join(destination, "skills-creator", "SKILL.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("desired active=%v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, ".vgxness-backups", "migrate-0")); err != nil {
+		t.Fatalf("replacement session=%v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(held, "agent-skill-engineer", "SKILL.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("held managed data=%v", err)
+	}
+}
+
+func TestInstallMigrationFinalGateReturnsDurableConflict(t *testing.T) {
+	skipWindowsOpenDirectoryRenameRace(t)
+
+	parent := t.TempDir()
+	destination := filepath.Join(parent, "skills")
+	replaced := filepath.Join(parent, "replaced")
+	assertWrite(t, filepath.Join(destination, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+	service := syntheticMigrationService()
+	service.beforeFinal = func() {
+		if err := os.Rename(destination, replaced); err != nil {
+			t.Fatal(err)
+		}
+		assertWrite(t, filepath.Join(destination, "replacement"), []byte("keep"))
+	}
+	result, err := service.Install(context.Background(), Options{Dir: destination})
+	if !errors.Is(err, ErrConflict) || !errors.Is(err, ErrRecovery) || !result.Changed || result.BackupPath != "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	assertFileBytes(t, filepath.Join(replaced, ".vgxness-backups", "migrate-0", "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+	assertFileBytes(t, filepath.Join(destination, "replacement"), []byte("keep"))
+}
+
+func TestInstallMigrationSessionGateReturnsDurableConflict(t *testing.T) {
+	skipWindowsOpenDirectoryRenameRace(t)
+
+	parent := t.TempDir()
+	destination, held := filepath.Join(parent, "skills"), filepath.Join(parent, "held")
+	assertWrite(t, filepath.Join(destination, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+	service := syntheticMigrationService()
+	service.beforeBackupGate = func() {
+		session := filepath.Join(destination, ".vgxness-backups", "migrate-0")
+		if err := os.Rename(session, held); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(session, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := service.Install(context.Background(), Options{Dir: destination})
+	if !errors.Is(err, ErrConflict) || !errors.Is(err, ErrRecovery) || !result.Changed || result.BackupPath != "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, ".vgxness-backups", "migrate-0")); err != nil {
+		t.Fatalf("replacement=%v", err)
+	}
+	assertFileBytes(t, filepath.Join(held, "agent-skill-engineer", "SKILL.md"), []byte("old skill"))
+}
+
+func skipWindowsOpenDirectoryRenameRace(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows denies renaming directories with live os.Root handles; this test requires Unix race interleaving")
+	}
+}
+
+func syntheticMigrationService() *Service {
+	legacy := map[string]string{"SKILL.md": digest([]byte("old skill")), "nested/guide.txt": digest([]byte("old guide"))}
+	return &Service{catalog: &catalog{definitions: []skillDefinition{{
+		name: "skills-creator", source: "skills-creator", files: map[string][]byte{"SKILL.md": []byte("new skill"), "nested/guide.txt": []byte("new guide")},
+		legacy: []legacyDefinition{{name: "agent-skill-engineer", digests: legacy}},
+	}}}}
+}
+
+func assertWrite(t *testing.T, name string, data []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
