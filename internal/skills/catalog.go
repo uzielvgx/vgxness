@@ -114,7 +114,12 @@ func bundledCatalog() (catalog, error) {
 	if err != nil {
 		return catalog{}, err
 	}
-	return catalog{definitions: []skillDefinition{creator, stackedPR, crossPlatform, installerLifecycle, agentEvaluation, ciTriage}}, nil
+	securityBoundary := skillDefinition{name: "security-boundary", source: "security-boundary"}
+	securityBoundary.files, err = bundledFiles(securityBoundary.source)
+	if err != nil {
+		return catalog{}, err
+	}
+	return catalog{definitions: []skillDefinition{creator, stackedPR, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary}}, nil
 }
 
 func validSkillName(name string) bool {
