@@ -19,6 +19,7 @@ import (
 	"github.com/vgxness/vgxness/internal/launcher"
 	"github.com/vgxness/vgxness/internal/opencodebackup"
 	"github.com/vgxness/vgxness/internal/selfinstall"
+	"github.com/vgxness/vgxness/internal/skills"
 )
 
 type ManagedIntegrationFactory func(string) (integration.ManagedRuntime, error)
@@ -41,6 +42,7 @@ func NewWithRecovery(installer selfinstall.Runtime, preview integration.Runtime,
 		ordinary = func(path string) (integration.Runtime, error) { return integrations(path) }
 	}
 	service := New(installer, preview, ordinary, prober)
+	service.skills = skills.New()
 	service.managedIntegrations = integrations
 	service.backups = backups
 	return service
@@ -288,7 +290,7 @@ func (service *Service) ProtectedReinstall(ctx context.Context, request Protecte
 	handshake, err := service.prober.Probe(ctx, request.Options.Workspace)
 	result.Handshake = handshake
 	if err != nil || !handshake.OK {
-		result.Recovery.Guidance = "The integration is installed and the verified snapshot is retained. Repair the OpenCode handshake before retrying."
+		result.Recovery.Guidance = "La integración está instalada y se conserva la instantánea verificada. Corrige la conexión con OpenCode antes de reintentar."
 		return result, fmt.Errorf("%w: OpenCode handshake", ErrVerification)
 	}
 	return result, nil
@@ -300,7 +302,7 @@ func (service *Service) recoverMissingManaged(ctx context.Context, prepared reco
 	result.Recovery.Attempted = true
 	preview, err := prepared.engine.PreviewRestore(recoveryCtx, snapshot.Manifest.SnapshotID)
 	if err != nil {
-		result.Recovery.Guidance = "The verified snapshot was retained; inspect the integration before retrying recovery."
+		result.Recovery.Guidance = "Se conserva la instantánea verificada; inspecciona la integración antes de reintentar la recuperación."
 		return err
 	}
 	managed := make(map[string]struct{}, len(prepared.plan.Layout.Artifacts))
@@ -314,7 +316,7 @@ func (service *Service) recoverMissingManaged(ctx context.Context, prepared reco
 	}
 	sort.Strings(result.Recovery.Missing)
 	if len(result.Recovery.Missing) == 0 {
-		result.Recovery.Guidance = "The verified snapshot was retained; no missing managed files were eligible for automatic merge recovery."
+		result.Recovery.Guidance = "Se conserva la instantánea verificada; no hay archivos administrados ausentes aptos para la recuperación automática por fusión."
 		return nil
 	}
 	restored, err := prepared.engine.Restore(recoveryCtx, opencodebackup.RestoreRequest{
@@ -323,10 +325,10 @@ func (service *Service) recoverMissingManaged(ctx context.Context, prepared reco
 	})
 	result.Recovery.Result = restored
 	if err != nil {
-		result.Recovery.Guidance = "The verified snapshot was retained; inspect unresolved managed paths before retrying."
+		result.Recovery.Guidance = "Se conserva la instantánea verificada; inspecciona las rutas administradas sin resolver antes de reintentar."
 		return err
 	}
-	result.Recovery.Guidance = "Missing managed files were merge-restored from the retained verified snapshot; existing conflicts were not overwritten."
+	result.Recovery.Guidance = "Los archivos administrados ausentes se restauraron por fusión desde la instantánea verificada conservada; no se sobrescribieron los conflictos existentes."
 	return nil
 }
 
@@ -338,24 +340,24 @@ func (service *Service) prepareRecovery(ctx context.Context, options Options, ba
 	launcherStatus, metadata, err := service.currentLauncher(ctx, options)
 	prepared.plan.Launcher = launcherStatus
 	if err != nil {
-		prepared.plan.Blocker = "The managed launcher is not installed and verified."
+		prepared.plan.Blocker = "El launcher administrado no está instalado y verificado."
 		return prepared, nil
 	}
 	managed, err := service.managedIntegrations(launcherStatus.LauncherPath)
 	if err != nil || managed == nil {
-		prepared.plan.Blocker = "The managed OpenCode integration is unavailable."
+		prepared.plan.Blocker = "La integración administrada de OpenCode no está disponible."
 		return prepared, nil
 	}
 	prepared.runtime = managed
 	if requireHandshake {
 		pending, pendingErr := managed.ReinstallPending(ctx, options.Integration)
 		if pendingErr != nil {
-			prepared.plan.Blocker = "The interrupted OpenCode reinstall marker is invalid; evidence was preserved for inspection."
+			prepared.plan.Blocker = "El marcador de reinstalación interrumpida de OpenCode no es válido; se conservaron las evidencias para su inspección."
 			return prepared, nil
 		}
 		if pending {
 			prepared.plan.RecoveryPending = true
-			prepared.plan.Blocker = "An interrupted OpenCode reinstall was detected; evidence was preserved and automatic mutation is blocked."
+			prepared.plan.Blocker = "Se detectó una reinstalación interrumpida de OpenCode; se conservaron las evidencias y se bloqueó la modificación automática."
 			return prepared, nil
 		}
 	}
@@ -370,30 +372,30 @@ func (service *Service) prepareRecovery(ctx context.Context, options Options, ba
 		return prepared, err
 	}
 	if err := validateManagedLayout(layout); err != nil {
-		prepared.plan.Blocker = "The managed OpenCode artifact inventory is invalid."
+		prepared.plan.Blocker = "El inventario de artefactos administrados de OpenCode no es válido."
 		return prepared, nil
 	}
 	prepared.plan.SourceRoot = layout.Root
 	prepared.plan.ManagedArtifactCount = len(layout.Artifacts)
 	if requireHandshake {
 		if status.State == integration.StateDrifted {
-			prepared.plan.Blocker = "Managed OpenCode artifacts have drifted."
+			prepared.plan.Blocker = "Los artefactos administrados de OpenCode presentan drift."
 			return prepared, nil
 		}
 		if status.State != integration.StateInstalled {
-			prepared.plan.Blocker = "The managed OpenCode integration is incomplete."
+			prepared.plan.Blocker = "La integración administrada de OpenCode está incompleta."
 			return prepared, nil
 		}
 		handshake, handshakeErr := service.prober.Probe(ctx, options.Workspace)
 		prepared.plan.Handshake = handshake
 		if handshakeErr != nil || !handshake.OK {
-			prepared.plan.Blocker = "The OpenCode handshake is not healthy."
+			prepared.plan.Blocker = "La conexión con OpenCode no está saludable."
 			return prepared, nil
 		}
 	}
 	backupRoot, err := resolveBackupRoot(options, backupOverride)
 	if err != nil || pathsContainEachOther(layout.Root, backupRoot) {
-		prepared.plan.Blocker = "The backup destination is invalid."
+		prepared.plan.Blocker = "El destino de respaldo no es válido."
 		return prepared, nil
 	}
 	prepared.plan.BackupRoot = backupRoot
@@ -405,7 +407,7 @@ func (service *Service) prepareRecovery(ctx context.Context, options Options, ba
 		SourceRoot: layout.Root, BackupRoot: backupRoot, ManagedPaths: managedPaths, Launcher: metadata,
 	})
 	if err != nil || engine == nil {
-		prepared.plan.Blocker = "The backup destination is invalid."
+		prepared.plan.Blocker = "El destino de respaldo no es válido."
 		return prepared, nil
 	}
 	prepared.engine = engine

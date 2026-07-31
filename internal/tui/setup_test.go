@@ -45,7 +45,7 @@ func TestSetupNavigationLoadsInstalledPlanAndRendersControlledWritePreview(t *te
 		t.Fatalf("plan requests=%+v", backend.planRequests)
 	}
 	view := model.View().Content
-	for _, expected := range []string{"VGXNESS / SETUP / CONTROLLED WRITE", "READY TO APPLY", "selected plan  high", "6. Recovery"} {
+	for _, expected := range []string{"VGXNESS / SETUP / CONTROLLED WRITE", "READY TO APPLY", "selected plan  high", "7-STEP PLAN", "Global agent-skill-engineer", "Skill autónoma de OpenCode"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("Setup preview missing %q:\n%s", expected, view)
 		}
@@ -86,7 +86,7 @@ func TestSetupRequiresExplicitConfirmationAndSelectedPlanReachesApply(t *testing
 	model = updateModel(t, model, keyPress("a"))
 	updated, applyCmd := model.Update(keyPress("y"))
 	model = updated.(Model)
-	if applyCmd == nil || len(backend.applyRequests) != 0 || !strings.Contains(model.View().Content, "Applying verified six-step plan...") {
+	if applyCmd == nil || len(backend.applyRequests) != 0 || !strings.Contains(model.View().Content, "Applying verified 7-step plan...") {
 		t.Fatalf("confirmed apply state invalid: cmd=%v requests=%+v", applyCmd, backend.applyRequests)
 	}
 	model = updateModel(t, model, applyCmd())
@@ -102,7 +102,7 @@ func TestSetupRendersSuccessAndFailureRecovery(t *testing.T) {
 	model.setRoute(routeSetup)
 	model.setupGeneration = 4
 	model = updateModel(t, model, setupAppliedMsg{generation: 4, value: successfulSetupResult()})
-	for _, expected := range []string{"SETUP COMPLETE", "changed  yes", "/bin/vgxness", "artifacts  19", "healthy", "Restart OpenCode"} {
+	for _, expected := range []string{"SETUP COMPLETE", "changed  yes", "/bin/vgxness", "artifacts  20", "healthy", "Restart OpenCode"} {
 		if !strings.Contains(model.View().Content, expected) {
 			t.Fatalf("success missing %q:\n%s", expected, model.View().Content)
 		}
@@ -188,16 +188,17 @@ func readySetupPlan(plan string) SetupPlan {
 	steps := []SetupStep{
 		{Number: 1, Title: "Requirements"},
 		{Number: 2, Title: "Launcher", Mutates: true},
-		{Number: 3, Title: "Manager and agents", Mutates: true},
-		{Number: 4, Title: "Storage and model plan", Mutates: true},
-		{Number: 5, Title: "Verification"},
-		{Number: 6, Title: "Recovery"},
+		{Number: 3, Title: "Global agent-skill-engineer", Mutates: true},
+		{Number: 4, Title: "Skill autónoma de OpenCode", Mutates: true},
+		{Number: 5, Title: "Storage and model plan", Mutates: true},
+		{Number: 6, Title: "Verification"},
+		{Number: 7, Title: "Recovery"},
 	}
 	return SetupPlan{
 		Provider: "opencode", Steps: steps, Ready: true,
 		SelfInstallState: "absent", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "absent", IntegrationPath: "/config/agents/vgxness-manager.md",
-		ArtifactCount: 19, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: plan,
+		ArtifactCount: 20, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: plan,
 		ModelProvider: "openai", ModelEfficient: "openai/fast", ModelBalanced: "openai/balanced", ModelFrontier: "openai/frontier",
 	}
 }
@@ -207,7 +208,7 @@ func successfulSetupResult() SetupResult {
 		Plan: readySetupPlan("high"), Changed: true,
 		SelfInstallState: "installed", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "installed", IntegrationPath: "/config/agents/vgxness-manager.md",
-		ArtifactCount: 19, HandshakeOK: true, HandshakeStatus: "healthy", RestartRequired: true,
+		ArtifactCount: 20, HandshakeOK: true, HandshakeStatus: "healthy", RestartRequired: true,
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/vgxness/vgxness/internal/skills"
 )
 
 type fakeSetupRuntime struct {
@@ -69,7 +70,7 @@ func TestSetupWizardPreviewExplainsAllStepsWithoutApplying(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--preview", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
 	output := stdout.String()
-	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 6") || !strings.Contains(output, "Paso 6 de 6") || !strings.Contains(output, "sustituciones administradas para Explore y general") || !strings.Contains(output, "workspace de solo lectura con operaciones Git aprobadas por el usuario") || !strings.Contains(output, "Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "verificador independiente") || !strings.Contains(output, "plugin de almacenamiento") || !strings.Contains(output, "Artefactos administrados: 20") || !strings.Contains(output, "Agente predeterminado: vgxness-manager") || !strings.Contains(output, "no se modificó ningún archivo") {
+	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 7") || !strings.Contains(output, "Paso 7 de 7") || !strings.Contains(output, "agent-skill-engineer") || !strings.Contains(output, "no la elimina") || !strings.Contains(output, "sustituciones administradas para Explore y general") || !strings.Contains(output, "workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "verificador independiente") || !strings.Contains(output, "plugin de almacenamiento") || !strings.Contains(output, "Artefactos administrados: 20") || !strings.Contains(output, "Agente predeterminado: vgxness-manager") || !strings.Contains(output, "no se modificó ningún archivo") {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, output, stderr.String())
 	}
 }
@@ -131,6 +132,7 @@ func setupPlanFixture(ready bool) setupflow.Plan {
 		Provider: "opencode", Steps: setupflow.OpenCodeSteps(), Ready: ready,
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/stable/vgxness", DataDir: "/data"},
 		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ToolPath: "/config/plugins/vgxness.ts", ArtifactCount: 20, ModelPlan: sdd.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna-fast", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json", DefaultAgent: "vgxness-manager", DefaultAgentPath: "/config/opencode.json"},
+		Skills:      skills.Result{State: skills.StateAbsent, Path: "/shared/skills/agent-skill-engineer", FileCount: 15},
 		Handshake:   integration.Handshake{OK: ready, Status: integration.HandshakeHealthy},
 	}
 }

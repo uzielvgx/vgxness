@@ -138,7 +138,7 @@ func TestProtectedReinstallHandshakeFailureReturnsExplicitGuidance(t *testing.T)
 	backups := &recoveryBackups{snapshot: recoverySnapshot(layout.Root, opencodebackup.ModeManaged)}
 	service := recoveryService(launcherStatus, managed, backups, &recoveryProber{responses: []integration.Handshake{{OK: true, Status: integration.HandshakeHealthy}, {Status: integration.HandshakeIncompatible}}}, nil)
 	result, err := service.ProtectedReinstall(context.Background(), ProtectedReinstallRequest{Options: Options{Workspace: t.TempDir()}, Mode: opencodebackup.ModeManaged, BackupRoot: t.TempDir()})
-	if !errors.Is(err, ErrVerification) || result.Integration.State != integration.StateInstalled || result.Snapshot.Manifest.SnapshotID == "" || result.Handshake.Status != integration.HandshakeIncompatible || !strings.Contains(result.Recovery.Guidance, "installed") || !strings.Contains(result.Recovery.Guidance, "snapshot") || !strings.Contains(result.Recovery.Guidance, "handshake") {
+	if !errors.Is(err, ErrVerification) || result.Integration.State != integration.StateInstalled || result.Snapshot.Manifest.SnapshotID == "" || result.Handshake.Status != integration.HandshakeIncompatible || !strings.Contains(result.Recovery.Guidance, "integración") || !strings.Contains(result.Recovery.Guidance, "instantánea") || !strings.Contains(result.Recovery.Guidance, "conexión") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
@@ -176,6 +176,9 @@ func TestProtectedReinstallRecoveryRestoresOnlyMissingManagedPaths(t *testing.T)
 	if !reflect.DeepEqual(backups.restoreRequest.IncludePaths, []string{missingManaged}) || len(backups.restoreRequest.ReplaceConflicts) != 0 {
 		t.Fatalf("recovery restore request = %+v", backups.restoreRequest)
 	}
+	if !strings.Contains(result.Recovery.Guidance, "archivos administrados ausentes") || !strings.Contains(result.Recovery.Guidance, "no se sobrescribieron") {
+		t.Fatalf("recovery guidance=%q", result.Recovery.Guidance)
+	}
 	if backups.previewCtxErr != nil || backups.restoreCtxErr != nil {
 		t.Fatalf("bounded recovery inherited cancellation: preview=%v restore=%v", backups.previewCtxErr, backups.restoreCtxErr)
 	}
@@ -192,14 +195,14 @@ func TestProtectedReinstallPlanBlocksInvalidModeRootAndInventory(t *testing.T) {
 
 	managed.layout.Artifacts = managed.layout.Artifacts[:16]
 	plan, err := service.PlanProtectedReinstall(context.Background(), ProtectedReinstallRequest{Options: Options{Workspace: t.TempDir()}, Mode: opencodebackup.ModeManaged, BackupRoot: t.TempDir()})
-	if err != nil || plan.Ready || plan.Blocker == "" {
+	if err != nil || plan.Ready || plan.Blocker != "El inventario de artefactos administrados de OpenCode no es válido." {
 		t.Fatalf("invalid inventory plan=%+v err=%v", plan, err)
 	}
 
 	managed.layout = layout
 	service.backups = func(opencodebackup.Options) (BackupEngine, error) { return nil, opencodebackup.ErrInvalid }
 	plan, err = service.PlanProtectedReinstall(context.Background(), ProtectedReinstallRequest{Options: Options{Workspace: t.TempDir()}, Mode: opencodebackup.ModeManaged, BackupRoot: filepath.Join(layout.Root, "nested")})
-	if err != nil || plan.Ready || plan.Blocker == "" {
+	if err != nil || plan.Ready || plan.Blocker != "El destino de respaldo no es válido." {
 		t.Fatalf("nested root plan=%+v err=%v", plan, err)
 	}
 }

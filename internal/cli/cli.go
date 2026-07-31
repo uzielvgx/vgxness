@@ -15,6 +15,7 @@ import (
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/vgxness/vgxness/internal/skills"
 )
 
 type Inspector interface {
@@ -42,7 +43,7 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|sdd|integrate|self|setup>")
+		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|sdd|integrate|self|skills|setup>")
 		return 2
 	}
 	command := args[0]
@@ -114,6 +115,8 @@ func failure(err error) (int, string) {
 	switch {
 	case errors.Is(err, integration.ErrRecovery):
 		return 1, "recovery: integration rollback failed; inspect managed artifacts and backups"
+	case errors.Is(err, skills.ErrRecovery):
+		return 1, "recovery: skills rollback failed; inspect managed artifacts and backups"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return 130, "cancelled: operation cancelled"
 	case errors.Is(err, memory.ErrInvalid):
@@ -138,6 +141,12 @@ func failure(err error) (int, string) {
 		return 1, "conflict: self-install target contains unmanaged content"
 	case errors.Is(err, selfinstall.ErrDrift):
 		return 1, "drift: managed self-install differs from its manifest"
+	case errors.Is(err, skills.ErrInvalid):
+		return 2, "invalid: skills request is invalid"
+	case errors.Is(err, skills.ErrConflict):
+		return 1, "conflict: skills target contains unmanaged content"
+	case errors.Is(err, skills.ErrDrift):
+		return 1, "drift: managed skills content differs from its bundle"
 	case errors.Is(err, selfinstall.ErrNoRollback):
 		return 1, "not_found: no previous managed version is available"
 	case errors.Is(err, setupflow.ErrInvalid):
