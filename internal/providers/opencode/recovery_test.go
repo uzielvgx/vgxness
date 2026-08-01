@@ -267,14 +267,275 @@ func TestUpgradeNeverOverwritesConcurrentReplacement(t *testing.T) {
 	if readErr != nil || !bytes.Equal(data, concurrent) {
 		t.Fatalf("concurrent replacement changed: %q, %v", data, readErr)
 	}
-	anchors, globErr := filepath.Glob(filepath.Join(directory, ".vgxness-previous-*.tmp"))
+	anchors, globErr := filepath.Glob(filepath.Join(retainedAnchorRoot(directory), ".vgxness-previous-*.tmp"))
 	if globErr != nil || len(anchors) != 1 {
-		t.Fatalf("predecessor recovery anchor = %v, %v", anchors, globErr)
+		t.Fatalf("predecessor recovery anchor = %v, %v; upgrade error = %v", anchors, globErr, err)
 	}
 	backup, backupErr := os.ReadFile(anchors[0])
 	if backupErr != nil || !bytes.Equal(backup, prior) {
 		t.Fatalf("predecessor recovery anchor changed: %q, %v", backup, backupErr)
 	}
+}
+
+func TestUpgradeRejectsHeldDescriptorRewriteAfterQuarantine(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior, current, concurrent := []byte("managed predecessor"), []byte("managed replacement"), []byte("concurrent quarantined rewrite")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := openDeleteSharingWriter(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	_, err = upgradeArtifactAtStagedCheckpoint(context.Background(), artifact{path: target, content: current, prior: prior}, nil, func() error {
+		if err := writer.Truncate(0); err != nil {
+			return err
+		}
+		if _, err := writer.WriteAt(concurrent, 0); err != nil {
+			return err
+		}
+		return writer.Sync()
+	})
+	data, readErr := os.ReadFile(target)
+	if !errors.Is(err, integration.ErrConflict) || readErr != nil || !bytes.Equal(data, concurrent) {
+		t.Fatalf("upgrade error=%v data=%q read=%v", err, data, readErr)
+	}
+}
+
+func TestUpgradeRetainsHeldDescriptorWritesAfterPublication(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior, current, concurrent := []byte("managed predecessor"), []byte("managed replacement"), []byte("post-publication predecessor write")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := openDeleteSharingWriter(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	installed, err := upgradeArtifactWithCheckpoints(context.Background(), artifact{path: target, content: current, prior: prior, retainedRoot: directory}, nil, nil, func() error {
+		if err := writer.Truncate(0); err != nil {
+			return err
+		}
+		if _, err := writer.WriteAt(concurrent, 0); err != nil {
+			return err
+		}
+		return writer.Sync()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupInstalledArtifact(installed); err != nil {
+		t.Fatal(err)
+	}
+	managed, managedErr := os.ReadFile(target)
+	anchor, anchorErr := os.ReadFile(installed.backup)
+	if managedErr != nil || anchorErr != nil || !bytes.Equal(managed, current) || !bytes.Equal(anchor, concurrent) {
+		t.Fatalf("managed=%q managedErr=%v anchor=%q anchorErr=%v", managed, managedErr, anchor, anchorErr)
+	}
+}
+
+func TestUpgradeRollbackRestoresRetainedConcurrentPredecessor(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior, current, concurrent := []byte("managed predecessor"), []byte("managed replacement"), []byte("post-publication predecessor write")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := openDeleteSharingWriter(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	installed, err := upgradeArtifactWithCheckpoints(context.Background(), artifact{path: target, content: current, prior: prior, retainedRoot: directory}, nil, nil, func() error {
+		if err := writer.Truncate(0); err != nil {
+			return err
+		}
+		_, err := writer.WriteAt(concurrent, 0)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rollbackInstalledArtifact(installed); err != nil {
+		t.Fatal(err)
+	}
+	restored, restoredErr := os.ReadFile(target)
+	if restoredErr != nil || !bytes.Equal(restored, concurrent) || !sameFile(target, installed.backup) {
+		t.Fatalf("restored=%q err=%v", restored, restoredErr)
+	}
+}
+
+func TestUpgradeRetainsPublishedMarkerBeforeQuarantineFailure(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior := []byte("managed predecessor")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := upgradeArtifactAtCheckpoint(context.Background(), artifact{path: target, content: []byte("managed replacement"), prior: prior, retainedRoot: directory}, func() error { return errors.New("stop before quarantine") })
+	inventory, retainedErr := retainedPredecessorInventory(directory)
+	retained := inventory.markers
+	if err == nil || retainedErr != nil || len(retained) != 1 {
+		t.Fatalf("upgrade=%v retained=%+v retainedErr=%v", err, retained, retainedErr)
+	}
+}
+
+func TestIntegrationReportsInvalidRetainedPredecessorEvidenceWithoutDeletion(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	if _, err := service.Install(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	directory := retainedPredecessorRoot(configDirectory)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(directory, strings.Repeat("a", 32)+".json")
+	malformed := []byte("{bad}\n")
+	if err := os.WriteFile(marker, malformed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, statusErr := NewIntegration().Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(marker)
+	if statusErr != nil || status.State != integration.StateDrifted || status.RetainedPredecessorCount != 1 || status.RetainedPredecessorPath != directory || !errors.Is(installErr, integration.ErrConflict) || readErr != nil || !bytes.Equal(after, malformed) {
+		t.Fatalf("status=%+v statusErr=%v installErr=%v after=%q readErr=%v", status, statusErr, installErr, after, readErr)
+	}
+}
+
+func TestIntegrationReportsValidRetainedPredecessorEvidenceWithoutDrift(t *testing.T) {
+	service, options, _, _ := retainedEvidenceFixture(t)
+	status, err := service.Status(context.Background(), options)
+	if err != nil || status.State != integration.StateInstalled || status.RetainedPredecessorCount != 1 || status.RetainedPredecessorPath != retainedPredecessorRoot(options.ConfigDir) {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+}
+func TestIntegrationReportsInvalidRetainedAnchorsWithoutDeletion(t *testing.T) {
+	for name, create := range map[string]func(string, string) error{
+		"orphan":  func(path, _ string) error { return os.WriteFile(path, []byte("orphan"), 0o600) },
+		"unknown": func(path, _ string) error { return os.WriteFile(path, []byte("unknown"), 0o600) },
+		"symlink": func(path, target string) error { return os.Symlink(target, path) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if name == "symlink" && runtime.GOOS == "windows" {
+				t.Skip("symlink privileges vary on Windows")
+			}
+			root := filepath.Join(t.TempDir(), "opencode")
+			service, options := NewIntegration(), integration.Options{ConfigDir: root}
+			if _, err := service.Install(context.Background(), options); err != nil {
+				t.Fatal(err)
+			}
+			if err := prepareRetainedPredecessorDirectories(root); err != nil {
+				t.Fatal(err)
+			}
+			entryName := ".unexpected"
+			if name == "orphan" {
+				entryName = ".vgxness-previous-orphan.tmp"
+			}
+			path := filepath.Join(retainedAnchorRoot(root), entryName)
+			if err := create(path, filepath.Join(root, "opencode.json")); err != nil {
+				t.Fatal(err)
+			}
+			status, statusErr := service.Status(context.Background(), options)
+			before, _ := os.ReadFile(path)
+			_, installErr := service.Install(context.Background(), options)
+			after, readErr := os.ReadFile(path)
+			if statusErr != nil || status.State != integration.StateDrifted || status.RetainedPredecessorCount != 1 || !errors.Is(installErr, integration.ErrConflict) || readErr != nil || !bytes.Equal(before, after) {
+				t.Fatalf("status=%+v statusErr=%v installErr=%v", status, statusErr, installErr)
+			}
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("anchor entry was deleted: %v", err)
+			}
+		})
+	}
+}
+
+func TestIntegrationAcceptsPairedRetainedMarkerPublicationAlias(t *testing.T) {
+	service, options, _, marker := retainedEvidenceFixture(t)
+	alias := filepath.Join(retainedPredecessorRoot(options.ConfigDir), ".vgxness-retained-crash.tmp")
+	if err := os.Link(marker, alias); err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.Status(context.Background(), options)
+	if err != nil || status.State != integration.StateInstalled || status.RetainedPredecessorCount != 1 {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+}
+
+func TestIntegrationRejectsInvalidRetainedMarkerPublicationAliasesWithoutDeletion(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		wantCount int
+		mutate    func(string, string, []byte) error
+	}{
+		{name: "unpaired", wantCount: 1, mutate: func(marker, alias string, _ []byte) error { return os.Rename(marker, alias) }},
+		{name: "copy", wantCount: 2, mutate: func(_ string, alias string, body []byte) error { return os.WriteFile(alias, body, 0o600) }},
+		{name: "malformed", wantCount: 2, mutate: func(_ string, alias string, _ []byte) error { return os.WriteFile(alias, []byte("{bad}\n"), 0o600) }},
+		{name: "symlink", wantCount: 2, mutate: func(marker, alias string, _ []byte) error {
+			if runtime.GOOS == "windows" {
+				return nil
+			}
+			return os.Symlink(marker, alias)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.name == "symlink" && runtime.GOOS == "windows" {
+				t.Skip("symlink privileges vary on Windows")
+			}
+			service, options, _, marker := retainedEvidenceFixture(t)
+			body, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			alias := filepath.Join(retainedPredecessorRoot(options.ConfigDir), ".vgxness-retained-invalid.tmp")
+			if err := test.mutate(marker, alias, body); err != nil {
+				t.Fatal(err)
+			}
+			if test.name == "unpaired" {
+				if err := os.Remove(filepath.Join(retainedAnchorRoot(options.ConfigDir), ".vgxness-previous-retained.tmp")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			status, err := service.Status(context.Background(), options)
+			if err != nil || status.State != integration.StateDrifted || status.RetainedPredecessorCount != test.wantCount {
+				t.Fatalf("status=%+v err=%v", status, err)
+			}
+			if _, err := os.Lstat(alias); err != nil {
+				t.Fatalf("invalid alias was deleted: %v", err)
+			}
+		})
+	}
+}
+
+func retainedEvidenceFixture(t *testing.T) (*Integration, integration.Options, integration.Result, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "opencode")
+	service, options := NewIntegration(), integration.Options{ConfigDir: root}
+	installed, err := service.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareRetainedPredecessorDirectories(root); err != nil {
+		t.Fatal(err)
+	}
+	anchor := filepath.Join(retainedAnchorRoot(root), ".vgxness-previous-retained.tmp")
+	predecessor, err := os.ReadFile(installed.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(installed.Path, anchor); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := persistRetainedPredecessor(root, installed.Path, anchor, predecessor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, options, installed, marker
 }
 
 func TestReinstallCancellationRestoresManagedSet(t *testing.T) {
@@ -658,6 +919,7 @@ func TestReinstallCrashLeavesPendingEvidenceAndBlocksMutation(t *testing.T) {
 			if _, err := service.Reinstall(context.Background(), options); !errors.Is(err, integration.ErrRecovery) {
 				t.Fatalf("second Reinstall() error = %v, want ErrRecovery", err)
 			}
+			assertPendingBlocksOrdinaryMutation(t, service, options)
 			after, err := os.ReadFile(markerPath)
 			if err != nil || !bytes.Equal(before, after) {
 				t.Fatalf("blocked reinstall changed evidence: %v", err)
@@ -693,12 +955,21 @@ func TestReinstallPendingRejectsMalformedEvidenceWithoutMutation(t *testing.T) {
 			if _, err := service.Reinstall(context.Background(), options); !errors.Is(err, integration.ErrRecovery) {
 				t.Fatalf("Reinstall() error = %v, want ErrRecovery", err)
 			}
+			assertPendingBlocksOrdinaryMutation(t, service, options)
 			after, statErr := os.Lstat(markerPath)
 			data, readErr := os.ReadFile(markerPath)
 			if statErr != nil || readErr != nil || !os.SameFile(before, after) || !bytes.Equal(data, body) {
 				t.Fatalf("malformed evidence changed: stat=%v read=%v", statErr, readErr)
 			}
 		})
+	}
+}
+
+func assertPendingBlocksOrdinaryMutation(t *testing.T, service *Integration, options integration.Options) {
+	for index, mutation := range []func(context.Context, integration.Options) (integration.Result, error){service.Install, service.Uninstall} {
+		if _, err := mutation(context.Background(), options); !errors.Is(err, integration.ErrRecovery) {
+			t.Fatalf("mutation[%d] error = %v, want ErrRecovery", index, err)
+		}
 	}
 }
 
