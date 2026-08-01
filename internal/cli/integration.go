@@ -54,6 +54,10 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 	var output strings.Builder
 	fmt.Fprintf(&output, "provider=%s\nstate=%s\nprojection=native+sdd-storage\nmanaged_artifacts=%d\npath=%s\nartifact_sha256=%s\nstorage_plugin=%s\nstorage_plugin_sha256=%s\nchanged=%t\n", terminalSafe(result.Provider), result.State, result.ArtifactCount, terminalSafe(result.Path), terminalSafe(result.ArtifactSHA256), terminalSafe(result.ToolPath), terminalSafe(result.ToolSHA256), result.Changed)
 	fmt.Fprintf(&output, "model_plan=%s\nmodel_provider=%s\nmodel_efficient=%s\nmodel_balanced=%s\nmodel_frontier=%s\nmodel_manifest=%s\nmodel_manifest_sha256=%s\nrestart_required=%t\n", result.ModelPlan, terminalSafe(result.ModelProvider), terminalSafe(result.ModelEfficient), terminalSafe(result.ModelBalanced), terminalSafe(result.ModelFrontier), terminalSafe(result.ManifestPath), result.ManifestSHA256, result.RestartRequired)
+	fmt.Fprintf(&output, "directory_durability=%s\n", terminalSafe(result.DirectoryDurability))
+	if result.RetainedPredecessorCount != 0 {
+		fmt.Fprintf(&output, "retained_predecessors=%d\nretained_predecessor_location=%s\n", result.RetainedPredecessorCount, terminalSafe(result.RetainedPredecessorPath))
+	}
 	fmt.Fprintf(&output, "default_agent=%s\ndefault_agent_config=%s\n", terminalSafe(result.DefaultAgent), terminalSafe(result.DefaultAgentPath))
 	if result.BackupPath != "" {
 		fmt.Fprintf(&output, "backup=%s\n", terminalSafe(result.BackupPath))
