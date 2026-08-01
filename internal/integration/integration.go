@@ -45,26 +45,29 @@ type Options struct {
 }
 
 type Result struct {
-	Provider         string
-	State            State
-	Path             string
-	ArtifactSHA256   string
-	ToolPath         string
-	ToolSHA256       string
-	Changed          bool
-	BackupPath       string
-	ToolBackupPath   string
-	ModelPlan        sdd.Plan
-	ModelProvider    string
-	ModelEfficient   string
-	ModelBalanced    string
-	ModelFrontier    string
-	ManifestPath     string
-	ManifestSHA256   string
-	DefaultAgent     string
-	DefaultAgentPath string
-	RestartRequired  bool
-	ArtifactCount    int
+	Provider                 string
+	State                    State
+	Path                     string
+	ArtifactSHA256           string
+	ToolPath                 string
+	ToolSHA256               string
+	Changed                  bool
+	BackupPath               string
+	ToolBackupPath           string
+	ModelPlan                sdd.Plan
+	ModelProvider            string
+	ModelEfficient           string
+	ModelBalanced            string
+	ModelFrontier            string
+	ManifestPath             string
+	ManifestSHA256           string
+	DefaultAgent             string
+	DefaultAgentPath         string
+	RestartRequired          bool
+	ArtifactCount            int
+	RetainedPredecessorCount int
+	RetainedPredecessorPath  string
+	DirectoryDurability      string
 }
 
 // ManagedArtifact identifies desired provider-owned content without exposing it.
