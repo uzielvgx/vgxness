@@ -19,6 +19,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/launcher"
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 //go:embed templates/manager.md
@@ -936,12 +937,12 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", regenerations: regeneration(reviewReliabilityPath)},
 		{path: reviewResiliencePath, content: plan.agents[reviewResilienceName], backup: "vgxness-review-resilience", regenerations: regeneration(reviewResiliencePath)},
 		{path: reviewRefuterPath, content: plan.agents[reviewRefuterName], backup: "vgxness-review-refuter", regenerations: regeneration(reviewRefuterPath)},
-		{path: filepath.Join(configDirectory, "agents", sddResearchName), content: plan.agents[sddResearchName], backup: "vgxness-sdd-research", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddResearchName))},
-		{path: filepath.Join(configDirectory, "agents", sddProposalName), content: plan.agents[sddProposalName], backup: "vgxness-sdd-proposal", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddProposalName))},
-		{path: filepath.Join(configDirectory, "agents", sddSpecName), content: plan.agents[sddSpecName], backup: "vgxness-sdd-spec", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddSpecName))},
-		{path: filepath.Join(configDirectory, "agents", sddDesignName), content: plan.agents[sddDesignName], backup: "vgxness-sdd-design", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddDesignName))},
-		{path: filepath.Join(configDirectory, "agents", sddTasksName), content: plan.agents[sddTasksName], backup: "vgxness-sdd-tasks", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddTasksName))},
-		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
+		{path: filepath.Join(configDirectory, "agents", sddResearchName), content: plan.agents[sddResearchName], backup: "vgxness-sdd-research", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleResearch, plan.agents[sddResearchName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddResearchName))},
+		{path: filepath.Join(configDirectory, "agents", sddProposalName), content: plan.agents[sddProposalName], backup: "vgxness-sdd-proposal", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleProposal, plan.agents[sddProposalName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddProposalName))},
+		{path: filepath.Join(configDirectory, "agents", sddSpecName), content: plan.agents[sddSpecName], backup: "vgxness-sdd-spec", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleSpec, plan.agents[sddSpecName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddSpecName))},
+		{path: filepath.Join(configDirectory, "agents", sddDesignName), content: plan.agents[sddDesignName], backup: "vgxness-sdd-design", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleDesign, plan.agents[sddDesignName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddDesignName))},
+		{path: filepath.Join(configDirectory, "agents", sddTasksName), content: plan.agents[sddTasksName], backup: "vgxness-sdd-tasks", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleTasks, plan.agents[sddTasksName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddTasksName))},
+		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleApply, plan.agents[sddApplyName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
 		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
 		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true},
