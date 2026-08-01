@@ -149,7 +149,22 @@ func bundledCatalog() (catalog, error) {
 	if err != nil {
 		return catalog{}, err
 	}
-	return catalog{definitions: []skillDefinition{creator, stackedPR, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary, documentationStrategy, productRequirements, softwareArchitectureDocs, userDocumentation, apiDocumentation, qualityTestDocumentation}}, nil
+	operationsRunbooks := skillDefinition{name: "operations-runbooks", source: "operations-runbooks"}
+	operationsRunbooks.files, err = bundledFiles(operationsRunbooks.source)
+	if err != nil {
+		return catalog{}, err
+	}
+	governanceComplianceDocs := skillDefinition{name: "governance-compliance-docs", source: "governance-compliance-docs"}
+	governanceComplianceDocs.files, err = bundledFiles(governanceComplianceDocs.source)
+	if err != nil {
+		return catalog{}, err
+	}
+	releaseLifecycleDocs := skillDefinition{name: "release-lifecycle-docs", source: "release-lifecycle-docs"}
+	releaseLifecycleDocs.files, err = bundledFiles(releaseLifecycleDocs.source)
+	if err != nil {
+		return catalog{}, err
+	}
+	return catalog{definitions: []skillDefinition{creator, stackedPR, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary, documentationStrategy, productRequirements, softwareArchitectureDocs, userDocumentation, apiDocumentation, qualityTestDocumentation, operationsRunbooks, governanceComplianceDocs, releaseLifecycleDocs}}, nil
 }
 
 func validSkillName(name string) bool {
