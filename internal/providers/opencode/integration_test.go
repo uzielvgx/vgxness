@@ -1033,7 +1033,7 @@ func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
 		profile := string(bundle.agents[name])
 		for _, required := range []string{
-			"version: 2", "changeId", "artifact", "acceptedInputs", "evidenceScope", "returnContract",
+			"version: 3", "changeId", "artifact", "acceptedInputs", "evidenceScope", "returnContract",
 			`"status":"complete|blocked"`, `"candidateContent"`, `"evidence"`, `"openQuestions"`,
 		} {
 			if !strings.Contains(profile, required) {
@@ -1042,7 +1042,7 @@ func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"version: 3", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "managed general performs workspace writes", "verifier executes final validation", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
+	for _, required := range []string{"version: 4", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "managed general performs workspace writes", "verifier executes final validation", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing phase contract %q", required)
 		}
