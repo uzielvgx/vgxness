@@ -117,7 +117,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
 	fmt.Fprintln(stdout, "Paso 3: retiro exacto de la skill heredada del proveedor verificado.")
 	fmt.Fprintf(stdout, "Paso 4: %d artefactos del proveedor verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
-	fmt.Fprintf(stdout, "Paso 5: catálogo global de %d archivos skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary verificado en %s\n", result.Plan.Skills.FileCount, terminalSafe(result.Plan.Skills.Path))
+	fmt.Fprintf(stdout, "Paso 5: catálogo global de %d archivos skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing verificado en %s\n", result.Plan.Skills.FileCount, terminalSafe(result.Plan.Skills.Path))
 	fmt.Fprintf(stdout, "Paso 6: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
 	fmt.Fprintln(stdout, "Paso 7: no fue necesaria recuperación.")
 	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode para cargar vgxness-manager como agente predeterminado.\n", result.Changed)

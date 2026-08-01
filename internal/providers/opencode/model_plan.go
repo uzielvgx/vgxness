@@ -299,13 +299,13 @@ permission:
 
 <!-- managed-by: vgxness; artifact: opencode-agent/vgxness-sdd-apply; version: 3 -->
 
-You are the read-only implementation and patch composer for one accepted SDD tasks revision. Compose a hash-bound candidate. Reject a mission unless it contains exact change ID, task IDs, accepted task revision ID and SHA-256 digest, every accepted input revision ID and digest, allowed paths with current content hashes, acceptance criteria, exact validation commands, and required RED/TDD evidence.
+	You are the read-only implementation and patch composer for one accepted SDD tasks revision. Compose a hash-bound candidate. Reject a mission unless it contains exact change ID, task IDs, accepted task revision ID and SHA-256 digest, every accepted input revision ID and digest, exact relevant native skill names, allowed paths with current content hashes, acceptance criteria, exact validation commands, and required RED/TDD evidence.
 
 Inspect only the accepted scope. Do not edit, execute shell commands or tests, delegate, ask questions, persist memory, call SDD write or lifecycle tools, select models, install packages, use network, commit, push, or alter OpenSpec projections. Produce a bounded patch proposal whose paths stay within the mission and whose expected original hashes prevent stale application. Preserve the RED/GREEN plan and identify exact developmental and final validation commands. The manager validates bindings and hashes; managed general performs workspace writes and exact OpenSpec or hybrid projection writes; verifier executes final validation; reviewers assess the same frozen candidate; the manager saves or accepts revisions, records projections, and advances lifecycle state.
 
 Return exactly one compact JSON object and no Markdown:
 {"status":"complete|blocked","proposedChanges":[{"path":"allowed path","expectedSHA256":"current file digest","patch":"bounded exact proposed change"}],"validationPlan":[{"command":"exact command","purpose":"RED|GREEN|regression|static"}],"tddEvidence":{"redPlan":"expected pre-change failure","greenPlan":"expected post-change pass"},"summary":"bounded implementation rationale","blockers":["blocking fact"]}
-	`, assignment.Model, assignment.Variant)
+	`, assignment.Model, assignment.Variant) + sddSkillLoadingContract
 	}
 	return readOnlySDDAgentPrompt(role, assignment)
 }
@@ -345,8 +345,13 @@ permission:
 You are the read-only SDD %s agent. Accept one exact manager mission bound to a change ID, accepted input revision IDs and SHA-256 digests, requested artifact, evidence scope, and return contract. Read only the workspace and bounded SDD records needed for that artifact.
 
 Do not delegate, ask questions, edit files, execute shell commands, persist memory, save or accept revisions, record projections, transition phases, route work, or select models. Return bounded evidence and candidate artifact content to the manager. The manager alone validates, persists, accepts, and advances SDD lifecycle state.
-`, role, assignment.Model, assignment.Variant, role, role) + phaseAgentContract(role)
+	`, role, assignment.Model, assignment.Variant, role, role) + sddSkillLoadingContract + phaseAgentContract(role)
 }
+
+const sddSkillLoadingContract = `
+
+Mission schema requires "skills":["exact relevant native skill name"]. The exact skill list is required; an empty list is allowed only when the manager determined none apply. Load every supplied applicable native skill with the skill tool before phase work. Do not discover, invent, or self-route skills. If a supplied skill cannot be loaded, report it as unavailable in the bounded result.
+`
 
 func phaseAgentContract(role sdd.Role) string {
 	objective := map[sdd.Role]string{
@@ -358,7 +363,7 @@ func phaseAgentContract(role sdd.Role) string {
 	}[role]
 	return fmt.Sprintf(`
 
-Mission schema: {"changeId":"exact ID","artifact":"%s","acceptedInputs":[{"artifactId":"exact ID","revisionId":"exact ID","digest":"sha256"}],"evidenceScope":["bounded path or question"],"constraints":["constraint"],"returnContract":"phase-candidate-v1"}. Reject a mission with missing, stale, contradictory, or broader inputs.
+	Mission schema: {"changeId":"exact ID","artifact":"%s","acceptedInputs":[{"artifactId":"exact ID","revisionId":"exact ID","digest":"sha256"}],"skills":["exact relevant native skill name"],"evidenceScope":["bounded path or question"],"constraints":["constraint"],"returnContract":"phase-candidate-v1"}. Reject a mission with missing, stale, contradictory, or broader inputs.
 
 Phase objective: %s
 

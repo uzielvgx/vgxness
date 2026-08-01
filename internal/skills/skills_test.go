@@ -64,9 +64,9 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 	}
 }
 
-func TestBundledCatalogHasSixteenCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
+func TestBundledCatalogHasSeventeenCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
 	catalog, err := bundledCatalog()
-	if err != nil || len(catalog.definitions) != 16 {
+	if err != nil || len(catalog.definitions) != 17 {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 	definition := catalog.definitions[0]
@@ -116,6 +116,9 @@ func TestBundledCatalogHasSixteenCanonicalSkillsAndOneLegacyMigration(t *testing
 		t.Fatalf("definition=%+v", definition)
 	}
 	if definition = catalog.definitions[15]; definition.name != "release-lifecycle-docs" || definition.source != "release-lifecycle-docs" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[16]; definition.name != "end-to-end-testing" || definition.source != "end-to-end-testing" || len(definition.legacy) != 0 {
 		t.Fatalf("definition=%+v", definition)
 	}
 }
@@ -294,10 +297,10 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != StateInstalled || !result.Changed || result.FileCount != 40 {
+	if result.State != StateInstalled || !result.Changed || result.FileCount != 41 {
 		t.Fatalf("result=%+v", result)
 	}
-	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs", "user-documentation", "api-documentation", "quality-test-documentation", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs"} {
+	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs", "user-documentation", "api-documentation", "quality-test-documentation", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "end-to-end-testing"} {
 		if _, err := os.Lstat(filepath.Join(destination, name, "SKILL.md")); err != nil {
 			t.Fatalf("canonical %s activation file: %v", name, err)
 		}

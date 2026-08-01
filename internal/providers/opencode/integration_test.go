@@ -433,12 +433,12 @@ func TestIntegrationRejectsOldAgentsBehindNewManifest(t *testing.T) {
 	testutil.Require(t, err == nil && status.State == integration.StateDrifted, "new-manifest/old-agent status=%+v err=%v", status, err)
 }
 
-func TestSDDAgentProfilesEnforceReadOnlyAndManagerWriterBoundaries(t *testing.T) {
+func TestSDDAgentProfilesEnforceReadOnlySkillLoadingAndManagerWriterBoundaries(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
+	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName, sddApplyName} {
 		profile := string(bundle.agents[name])
-		for _, required := range []string{"mode: subagent", "hidden: true", "model: ", "variant: ", `"*": deny`, "read: allow", "grep: allow", "glob: allow", "list: allow", "skill: allow", "codegraph_explore: allow", "edit: deny", "bash: deny", "question: deny", "task: deny", "manager alone"} {
+		for _, required := range []string{"mode: subagent", "hidden: true", "model: ", "variant: ", `"*": deny`, "read: allow", "grep: allow", "glob: allow", "list: allow", "skill: allow", "codegraph_explore: allow", "edit: deny", "bash: deny", "question: deny", "task: deny", `"skills":["exact relevant native skill name"]`, "exact skill list is required", "empty list is allowed only when the manager determined none apply", "Load every supplied applicable native skill with the skill tool before phase work", "Do not discover, invent, or self-route skills", "report it as unavailable"} {
 			if !strings.Contains(profile, required) {
 				t.Errorf("%s missing %q", name, required)
 			}
