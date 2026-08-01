@@ -64,9 +64,9 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 	}
 }
 
-func TestBundledCatalogHasTenCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
+func TestBundledCatalogHasThirteenCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
 	catalog, err := bundledCatalog()
-	if err != nil || len(catalog.definitions) != 10 {
+	if err != nil || len(catalog.definitions) != 13 {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 	definition := catalog.definitions[0]
@@ -98,6 +98,15 @@ func TestBundledCatalogHasTenCanonicalSkillsAndOneLegacyMigration(t *testing.T) 
 		t.Fatalf("definition=%+v", definition)
 	}
 	if definition = catalog.definitions[9]; definition.name != "software-architecture-docs" || definition.source != "software-architecture-docs" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[10]; definition.name != "user-documentation" || definition.source != "user-documentation" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[11]; definition.name != "api-documentation" || definition.source != "api-documentation" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[12]; definition.name != "quality-test-documentation" || definition.source != "quality-test-documentation" || len(definition.legacy) != 0 {
 		t.Fatalf("definition=%+v", definition)
 	}
 }
@@ -276,10 +285,10 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != StateInstalled || !result.Changed || result.FileCount != 28 {
+	if result.State != StateInstalled || !result.Changed || result.FileCount != 34 {
 		t.Fatalf("result=%+v", result)
 	}
-	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs"} {
+	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs", "user-documentation", "api-documentation", "quality-test-documentation"} {
 		if _, err := os.Lstat(filepath.Join(destination, name, "SKILL.md")); err != nil {
 			t.Fatalf("canonical %s activation file: %v", name, err)
 		}
