@@ -92,10 +92,128 @@ func completeV1ExploreBundle(t *testing.T) modelPlanBundle {
 
 func writeCompleteV1ExploreBundle(t *testing.T, configDirectory string, bundle modelPlanBundle) {
 	t.Helper()
+	testutil.NoError(t, os.MkdirAll(filepath.Join(configDirectory, "agents"), 0o700))
+	testutil.NoError(t, os.MkdirAll(filepath.Join(configDirectory, "vgxness"), 0o700))
 	for name, content := range bundle.agents {
 		testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", name), content, 0o600))
 	}
 	testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "vgxness", modelPlanManifestName), bundle.manifest, 0o600))
+}
+
+func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	predecessor, err := previousSDDModelPlanBundle(current)
+	testutil.NoError(t, err)
+	if artifactSHA256(predecessor.manifest) != "95d8e93138c080fff9182e9755d03b298852a5c14a4c57b36d7c4c9546fd34ea" {
+		t.Fatalf("prior SDD manifest=%s", artifactSHA256(predecessor.manifest))
+	}
+	for name, digest := range map[string]string{sddResearchName: "7bcd1f18790e34c48c3c684cbc5c409d0b9163422e89b49a3f389cc026b53906", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
+		if artifactSHA256(predecessor.agents[name]) != digest {
+			t.Fatalf("prior SDD %s digest", name)
+		}
+	}
+	priorExplore, err := previousExploreModelPlanBundle(current)
+	testutil.NoError(t, err)
+	combined, err := previousSDDModelPlanBundle(priorExplore)
+	testutil.NoError(t, err)
+	if artifactSHA256(combined.manifest) != "f22813df4a31abd480558111661692ef08525a9e82668e867bf17187a03176e0" {
+		t.Fatalf("combined manifest=%s", artifactSHA256(combined.manifest))
+	}
+}
+
+func TestIntegrationSDDPredecessorBundles(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "opencode")
+	service, options := NewIntegration(), integration.Options{ConfigDir: config}
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	prior, err := previousSDDModelPlanBundle(current)
+	testutil.NoError(t, err)
+	combinedBase, err := previousExploreModelPlanBundle(current)
+	testutil.NoError(t, err)
+	combined, err := previousSDDModelPlanBundle(combinedBase)
+	testutil.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		bundle modelPlanBundle
+		mutate func()
+	}{
+		{"mixed SDD", prior, func() {
+			for _, name := range []string{sddResearchName, sddApplyName} {
+				testutil.NoError(t, os.WriteFile(filepath.Join(config, "agents", name), current.agents[name], 0o600))
+			}
+		}},
+		{"combined", combined, func() {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeCompleteV1ExploreBundle(t, config, tc.bundle)
+			tc.mutate()
+			preview, previewErr := service.Preview(context.Background(), options)
+			installed, installErr := service.Install(context.Background(), options)
+			status, statusErr := NewIntegration().Status(context.Background(), options)
+			idempotent, idempotentErr := service.Install(context.Background(), options)
+			testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled && status.RetainedPredecessorCount > 0 && status.RetainedPredecessorPath != "" && idempotentErr == nil && !idempotent.Changed, "preview=%+v install=%v status=%+v idempotent=%+v", preview, installErr, status, idempotent)
+		})
+	}
+}
+
+func TestIntegrationRejectsInvalidSDDPredecessorBundles(t *testing.T) {
+	for name, mutate := range map[string]func(modelPlanBundle) (string, []byte){
+		"modified SDD": func(b modelPlanBundle) (string, []byte) {
+			p := filepath.Join("agents", sddSpecName)
+			return p, append(b.agents[sddSpecName], '!')
+		},
+		"modified combined": func(b modelPlanBundle) (string, []byte) {
+			p := filepath.Join("agents", exploreAgentName)
+			return p, append(b.agents[exploreAgentName], '!')
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := filepath.Join(t.TempDir(), "opencode")
+			current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+			testutil.NoError(t, err)
+			bundle, err := previousSDDModelPlanBundle(current)
+			testutil.NoError(t, err)
+			if name == "modified combined" {
+				base, e := previousExploreModelPlanBundle(current)
+				testutil.NoError(t, e)
+				bundle, e = previousSDDModelPlanBundle(base)
+				testutil.NoError(t, e)
+			}
+			writeCompleteV1ExploreBundle(t, config, bundle)
+			relative, modified := mutate(bundle)
+			target := filepath.Join(config, relative)
+			testutil.NoError(t, os.WriteFile(target, modified, 0o600))
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: config}
+			preview, previewErr := service.Preview(context.Background(), options)
+			_, installErr := service.Install(context.Background(), options)
+			after, readErr := os.ReadFile(target)
+			testutil.Require(t, previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "preview=%+v install=%v", preview, installErr)
+		})
+	}
+}
+
+func TestIntegrationRejectsIncompleteSDDPredecessorManifest(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "opencode")
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	agents := map[string][]byte{}
+	for name, content := range current.agents {
+		agents[name] = content
+	}
+	agents[sddResearchName] = previousSDDAgentPredecessor(sdd.RoleResearch, current.agents[sddResearchName])
+	incomplete, err := encodeModelPlanBundle(current.config, current.resolved, agents)
+	testutil.NoError(t, err)
+	writeCompleteV1ExploreBundle(t, config, current)
+	target := filepath.Join(config, "vgxness", modelPlanManifestName)
+	testutil.NoError(t, os.WriteFile(target, incomplete.manifest, 0o600))
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: config}
+	_, previewErr := service.Preview(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(target)
+	testutil.Require(t, errors.Is(previewErr, integration.ErrConflict) && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, incomplete.manifest), "preview=%v install=%v", previewErr, installErr)
 }
 
 func TestIntegrationUpgradesExactCompleteV1ExploreBundle(t *testing.T) {
