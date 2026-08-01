@@ -12,7 +12,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
 | `internal/memory` | SQLite/FTS5 schema v5, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
-| `internal/providers/opencode` | Manager v38, 14 other model-bound agents, plugin v5, model-plan manifest, exact v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. |
+| `internal/providers/opencode` | Manager v39, 14 other model-bound agents, plugin v5, model-plan manifest, exact v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. |
 | `internal/integration`, `internal/setup`, `internal/skills` | Managed OpenCode lifecycle, independent global portable-skill lifecycle, and seven-step CLI/TUI setup workflow. |
 | `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
 | `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |
@@ -43,7 +43,7 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 The OpenCode projection contains 19 exact managed artifacts:
 
-- manager v38 with global tool permission and a pre-write delivery gate;
+- manager v39 with global tool permission and a pre-write delivery gate;
 - managed `general` and verifier profiles with global tool permission and distinct implementation/verification roles;
 - one CodeGraph-first, deny-by-default read-only `explore` override;
 - five hidden read-only reviewers;
@@ -55,7 +55,7 @@ The OpenCode projection contains 19 exact managed artifacts:
 
 The model plan contains exactly 15 agents and does not contain the skill. Manager, agent, and model-plan recognition is current-only; older versions are preserved as drift and require explicit removal or migration outside the integration. Exact catalogued storage-plugin predecessors remain recognizable. Foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
 
-`internal/skills` separately owns the global 40-file, 16-skill `skills-creator`, `stacked-pr`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, and `release-lifecycle-docs` catalog at `~/.agents/skills`, or an absolute `--skills-dir` override. Official setup retires exact provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes before global publication; OpenCode uninstall does not remove global skills. Its selected root is descriptor-anchored with `os.Root`; exact partial packs resume or remove safely, while unknown bytes are drift. Windows retains atomic rename/readback/backups but lacks directory fsync crash durability.
+`internal/skills` separately owns the global 41-file, 17-skill `skills-creator`, `stacked-pr`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, and `end-to-end-testing` catalog at `~/.agents/skills`, or an absolute `--skills-dir` override. Official setup retires exact provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes before global publication; OpenCode uninstall does not remove global skills. Its selected root is descriptor-anchored with `os.Root`; exact partial packs resume or remove safely, while unknown bytes are drift. Windows retains atomic rename/readback/backups but lacks directory fsync crash durability.
 
 ## Verification
 

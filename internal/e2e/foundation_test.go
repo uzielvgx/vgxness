@@ -172,12 +172,12 @@ func TestFoundationProductContract(t *testing.T) {
 func assertOpenCodeDocumentationContract(t *testing.T) {
 	t.Helper()
 	documents := map[string][]string{
-		"../../README.md":                     {"19 managed artifacts", "40-file", "`vgxness-manager` v38", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "OpenCode uninstall never removes"},
-		"../../docs/opencode-integration.md":  {"19 managed artifacts", "40-file", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "uninstall target"},
-		"../../docs/product-blueprint.md":     {"19 provider artifacts", "40 files", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "OpenCode uninstall never owns"},
-		"../../docs/product-blueprint.es.md":  {"19 artefactos", "40 archivos", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "desinstalación de OpenCode"},
-		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "40-file", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "does not remove global skills"},
-		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "40-file", "documentation-strategy", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "v1/v2/v3", "OpenCode uninstall does not own"},
+		"../../README.md":                     {"19 managed artifacts", "41-file", "17-skill", "`vgxness-manager` v39", "end-to-end-testing", "OpenCode uninstall never removes"},
+		"../../docs/opencode-integration.md":  {"19 managed artifacts", "41-file", "17-skill", "v39", "end-to-end-testing", "uninstall target"},
+		"../../docs/product-blueprint.md":     {"19 provider artifacts", "41 files", "17 skills", "v39", "end-to-end-testing", "OpenCode uninstall never owns"},
+		"../../docs/product-blueprint.es.md":  {"19 artefactos", "41 archivos", "17 skills", "v39", "end-to-end-testing", "desinstalación de OpenCode"},
+		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "41-file", "17-skill", "v39", "end-to-end-testing", "does not remove global skills"},
+		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "41-file", "17-skill", "v39", "end-to-end-testing", "v1/v2/v3", "OpenCode uninstall does not own"},
 	}
 	for path, claims := range documents {
 		content := readRepositoryFile(t, path)
