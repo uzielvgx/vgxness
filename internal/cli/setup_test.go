@@ -49,6 +49,7 @@ func TestSetupWizardModelPlanFlagsAndRestartMessaging(t *testing.T) {
 	plan.Integration.ModelBalanced = "acme/balanced"
 	plan.Integration.ModelFrontier = "acme/frontier"
 	plan.Integration.ManifestPath = "/config/vgxness/model-plan.json"
+	plan.Integration.DirectoryDurability = "fsync"
 	fake := &fakeSetupRuntime{plan: plan}
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{
@@ -58,10 +59,28 @@ func TestSetupWizardModelPlanFlagsAndRestartMessaging(t *testing.T) {
 	if code != 0 || stderr.Len() != 0 || fake.options.Integration.ModelPlan != sdd.PlanHigh || fake.options.Integration.ModelFrontier != "acme/frontier" {
 		t.Fatalf("code=%d options=%+v stderr=%q", code, fake.options, stderr.String())
 	}
-	for _, expected := range []string{"Plan de modelos: high", "acme/fast", "acme/balanced", "acme/frontier", "reinicia OpenCode"} {
+	for _, expected := range []string{"Plan de modelos: high", "acme/fast", "acme/balanced", "acme/frontier", "Durabilidad de directorio: fsync.", "reinicia OpenCode"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Fatalf("output missing %q: %q", expected, stdout.String())
 		}
+	}
+}
+
+func TestSetupRendersBestEffortDirectoryDurability(t *testing.T) {
+	plan := setupPlanFixture(true)
+	plan.Integration.DirectoryDurability = "file-sync-namespace-best-effort"
+	var output bytes.Buffer
+	renderSetupPlan(&output, plan, "/workspace")
+	renderSetupStatus(&output, plan, "/workspace")
+	if !strings.Contains(output.String(), "Durabilidad de directorio: mejor esfuerzo") {
+		t.Fatalf("output=%q", output.String())
+	}
+	result := setupflow.Result{Integration: plan.Integration, Plan: plan, Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}}
+	fake := &fakeSetupRuntime{plan: plan, result: result}
+	output.Reset()
+	var stderr bytes.Buffer
+	if code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &output, &stderr, fake); code != 0 || stderr.Len() != 0 || !strings.Contains(output.String(), "Durabilidad de directorio: mejor esfuerzo") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, output.String(), stderr.String())
 	}
 }
 

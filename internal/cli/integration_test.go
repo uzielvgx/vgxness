@@ -24,7 +24,7 @@ func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
 	runtime := &fakeIntegrationRuntime{result: integration.Result{
 		Provider: "opencode", State: integration.StateAbsent, ModelPlan: sdd.PlanHigh, ModelProvider: "acme",
 		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
-		ManifestPath: "/tmp/config/vgxness/model-plan.json", RestartRequired: true,
+		ManifestPath: "/tmp/config/vgxness/model-plan.json", RestartRequired: true, DirectoryDurability: "fsync",
 	}}
 	code, stdout, stderr := runIntegrationTest([]string{
 		"integrate", "opencode", "preview", "--model-plan", "high",
@@ -34,10 +34,21 @@ func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
 	if code != 0 || stderr != "" || runtime.options.ModelPlan != sdd.PlanHigh || runtime.options.ModelEfficient != "acme/fast" {
 		t.Fatalf("code=%d options=%+v stderr=%q", code, runtime.options, stderr)
 	}
-	for _, expected := range []string{"model_plan=high", "model_provider=acme", "model_efficient=acme/fast", "model_balanced=acme/balanced", "model_frontier=acme/frontier", "model_manifest=/tmp/config/vgxness/model-plan.json", "restart_required=true"} {
+	for _, expected := range []string{"model_plan=high", "model_provider=acme", "model_efficient=acme/fast", "model_balanced=acme/balanced", "model_frontier=acme/frontier", "model_manifest=/tmp/config/vgxness/model-plan.json", "restart_required=true", "directory_durability=fsync"} {
 		if !strings.Contains(stdout, expected+"\n") {
 			t.Fatalf("output missing %q: %q", expected, stdout)
 		}
+	}
+	if strings.Contains(stdout, "retained_predecessors=") {
+		t.Fatalf("zero retained predecessors were rendered: %q", stdout)
+	}
+}
+
+func TestIntegrationCLIRendersRetainedPredecessorEvidence(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, RetainedPredecessorCount: 2, RetainedPredecessorPath: "/config/vgxness/retained-predecessors"}}
+	_, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", "status"}, runtime)
+	if stderr != "" || !strings.Contains(stdout, "retained_predecessors=2\n") || !strings.Contains(stdout, "retained_predecessor_location=/config/vgxness/retained-predecessors\n") {
+		t.Fatalf("stdout=%q stderr=%q", stdout, stderr)
 	}
 }
 
