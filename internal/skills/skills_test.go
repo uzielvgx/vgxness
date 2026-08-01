@@ -64,9 +64,9 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 	}
 }
 
-func TestBundledCatalogHasEightCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
+func TestBundledCatalogHasTenCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
 	catalog, err := bundledCatalog()
-	if err != nil || len(catalog.definitions) != 8 {
+	if err != nil || len(catalog.definitions) != 10 {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 	definition := catalog.definitions[0]
@@ -92,6 +92,12 @@ func TestBundledCatalogHasEightCanonicalSkillsAndOneLegacyMigration(t *testing.T
 		t.Fatalf("definition=%+v", definition)
 	}
 	if definition = catalog.definitions[7]; definition.name != "documentation-strategy" || definition.source != "documentation-strategy" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[8]; definition.name != "product-requirements" || definition.source != "product-requirements" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[9]; definition.name != "software-architecture-docs" || definition.source != "software-architecture-docs" || len(definition.legacy) != 0 {
 		t.Fatalf("definition=%+v", definition)
 	}
 }
@@ -270,10 +276,10 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != StateInstalled || !result.Changed || result.FileCount != 24 {
+	if result.State != StateInstalled || !result.Changed || result.FileCount != 28 {
 		t.Fatalf("result=%+v", result)
 	}
-	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy"} {
+	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs"} {
 		if _, err := os.Lstat(filepath.Join(destination, name, "SKILL.md")); err != nil {
 			t.Fatalf("canonical %s activation file: %v", name, err)
 		}
