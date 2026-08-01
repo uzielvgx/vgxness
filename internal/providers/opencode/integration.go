@@ -213,6 +213,7 @@ type Integration struct {
 
 type artifact struct {
 	path                        string
+	retainedRoot                string
 	content                     []byte
 	backup                      string
 	present                     bool
@@ -643,7 +644,7 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 				cleanupRetiredArtifact(*retired)
 			}
 			for _, item := range created {
-				cleanupInstalledArtifact(item)
+				returnErr = errors.Join(returnErr, cleanupInstalledArtifact(item))
 			}
 		}
 	}()
@@ -939,6 +940,18 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true},
 		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
 	}}
+	for index := range state.artifacts {
+		state.artifacts[index].retainedRoot = configDirectory
+	}
+	retained, retainedErr := retainedPredecessors(configDirectory)
+	if retainedErr != nil || len(retained) != 0 {
+		state.result.RetainedPredecessorCount = len(retained)
+		state.result.RetainedPredecessorPath = retainedPredecessorRoot(configDirectory)
+	}
+	if retainedErr != nil {
+		state.result.State = integration.StateDrifted
+		return state, nil
+	}
 	retired, retirementErr := inspectRetiredSkill(skillPath)
 	if retirementErr != nil {
 		state.result.State = integration.StateDrifted
@@ -1183,6 +1196,17 @@ func upgradeArtifact(ctx context.Context, item artifact) (installedArtifact, err
 }
 
 func upgradeArtifactAtCheckpoint(ctx context.Context, item artifact, checkpoint func() error) (installedArtifact, error) {
+	return upgradeArtifactWithCheckpoints(ctx, item, checkpoint, nil, nil)
+}
+
+func upgradeArtifactAtStagedCheckpoint(ctx context.Context, item artifact, beforeQuarantine, afterQuarantine func() error) (installedArtifact, error) {
+	return upgradeArtifactWithCheckpoints(ctx, item, beforeQuarantine, afterQuarantine, nil)
+}
+
+func upgradeArtifactWithCheckpoints(ctx context.Context, item artifact, beforeQuarantine, afterQuarantine, afterPublish func() error) (installedArtifact, error) {
+	if !retainedPredecessorSupported() {
+		return installedArtifact{}, fmt.Errorf("%w: retained predecessor durability is unsupported", integration.ErrConflict)
+	}
 	temporary, err := writeArtifactTemporary(ctx, item)
 	if err != nil {
 		return installedArtifact{}, err
@@ -1194,7 +1218,14 @@ func upgradeArtifactAtCheckpoint(ctx context.Context, item artifact, checkpoint 
 		}
 	}()
 	directory := filepath.Dir(item.path)
-	backup, err := vacantTemporaryPath(directory, ".vgxness-previous-*.tmp")
+	retainedRoot := item.retainedRoot
+	if retainedRoot == "" {
+		retainedRoot = filepath.Dir(item.path)
+	}
+	if err := prepareRetainedPredecessorDirectories(retainedRoot); err != nil {
+		return installedArtifact{}, fmt.Errorf("%w: prepare retained predecessor directory", integration.ErrConflict)
+	}
+	backup, err := vacantTemporaryPath(retainedAnchorRoot(retainedRoot), ".vgxness-previous-*.tmp")
 	if err != nil {
 		return installedArtifact{}, fmt.Errorf("prepare OpenCode integration rollback: %w", err)
 	}
@@ -1211,6 +1242,16 @@ func upgradeArtifactAtCheckpoint(ctx context.Context, item artifact, checkpoint 
 	if readErr != nil || !bytes.Equal(prior, item.prior) || !sameFile(item.path, backup) {
 		return installedArtifact{}, fmt.Errorf("%w: OpenCode integration artifact changed before upgrade", integration.ErrConflict)
 	}
+	if err := syncDirectory(retainedAnchorRoot(retainedRoot)); err != nil {
+		return installedArtifact{}, fmt.Errorf("%w: sync retained predecessor anchor", integration.ErrConflict)
+	}
+	markerPath, markerErr := persistRetainedPredecessor(retainedRoot, item.path, backup, item.prior)
+	if markerPath != "" {
+		keepBackup = true
+	}
+	if markerErr != nil {
+		return installedArtifact{}, fmt.Errorf("%w: persist OpenCode integration predecessor: %v", integration.ErrConflict, markerErr)
+	}
 	if err := syncDirectory(directory); err != nil {
 		return installedArtifact{}, fmt.Errorf("sync OpenCode integration predecessor: %w", err)
 	}
@@ -1221,14 +1262,36 @@ func upgradeArtifactAtCheckpoint(ctx context.Context, item artifact, checkpoint 
 	if err := ctx.Err(); err != nil {
 		return installedArtifact{}, err
 	}
-	if checkpoint != nil {
-		if err := checkpoint(); err != nil {
+	if beforeQuarantine != nil {
+		if err := beforeQuarantine(); err != nil {
 			return installedArtifact{}, err
 		}
+	}
+	current, readErr = readRegularFile(item.path)
+	if readErr != nil || !bytes.Equal(current, item.prior) || !sameFile(item.path, backup) {
+		keepBackup = true
+		return installedArtifact{}, fmt.Errorf("%w: OpenCode integration artifact changed before quarantine", integration.ErrConflict)
 	}
 	if err := removeSameFileDurably(item.path, backup); err != nil {
 		keepBackup = true
 		return installedArtifact{}, fmt.Errorf("remove OpenCode integration predecessor; retained at %q: %w", backup, err)
+	}
+	if afterQuarantine != nil {
+		if err := afterQuarantine(); err != nil {
+			restoreErr := restoreWithoutOverwrite(backup, item.path)
+			if restoreErr != nil {
+				keepBackup = true
+			}
+			return installedArtifact{}, errors.Join(err, recoveryFailure("restore integration predecessor after quarantine", restoreErr))
+		}
+	}
+	prior, readErr = readRegularFile(backup)
+	if readErr != nil || !bytes.Equal(prior, item.prior) {
+		restoreErr := restoreWithoutOverwrite(backup, item.path)
+		if restoreErr != nil {
+			keepBackup = true
+		}
+		return installedArtifact{}, errors.Join(fmt.Errorf("%w: OpenCode integration predecessor changed after quarantine", integration.ErrConflict), recoveryFailure("restore changed integration predecessor", restoreErr))
 	}
 	if err := os.Link(temporary, item.path); err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -1249,6 +1312,11 @@ func upgradeArtifactAtCheckpoint(ctx context.Context, item artifact, checkpoint 
 	readback, readErr := readRegularFile(item.path)
 	if readErr != nil || !bytes.Equal(readback, item.content) || !sameFile(item.path, temporary) {
 		return installedArtifact{}, errors.Join(fmt.Errorf("read back OpenCode integration replacement: %w", integration.ErrDrift), rollbackInstalledArtifact(installed))
+	}
+	if afterPublish != nil {
+		if err := afterPublish(); err != nil {
+			return installedArtifact{}, err
+		}
 	}
 	return installed, nil
 }
@@ -2078,7 +2146,9 @@ func rollbackInstalledArtifact(item installedArtifact) error {
 		return recoveryErr
 	}
 	if unchanged {
-		if err := os.Rename(item.backup, item.path); err != nil {
+		if err := removeSameFileDurably(item.path, item.temporary); err != nil {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove integration replacement: %v", integration.ErrRecovery, err))
+		} else if err := os.Link(item.backup, item.path); err != nil {
 			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: restore integration predecessor: %v", integration.ErrRecovery, err))
 		} else if err := syncDirectory(filepath.Dir(item.path)); err != nil {
 			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: sync restored integration predecessor: %v", integration.ErrRecovery, err))
@@ -2090,12 +2160,14 @@ func rollbackInstalledArtifact(item installedArtifact) error {
 	return recoveryErr
 }
 
-func cleanupInstalledArtifact(item installedArtifact) {
-	_ = os.Remove(item.temporary)
-	if item.backup != "" {
-		_ = os.Remove(item.backup)
-		_ = syncDirectory(filepath.Dir(item.path))
+func cleanupInstalledArtifact(item installedArtifact) error {
+	if err := os.Remove(item.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: remove integration replacement temporary: %v", integration.ErrRecovery, err)
 	}
+	if err := syncDirectory(filepath.Dir(item.path)); err != nil {
+		return fmt.Errorf("%w: sync integration replacement cleanup: %v", integration.ErrRecovery, err)
+	}
+	return nil
 }
 
 func clearReinstallAnchor(anchor reinstallAnchor) error {

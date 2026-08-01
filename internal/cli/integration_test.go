@@ -39,6 +39,17 @@ func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
 			t.Fatalf("output missing %q: %q", expected, stdout)
 		}
 	}
+	if strings.Contains(stdout, "retained_predecessors=") {
+		t.Fatalf("zero retained predecessors were rendered: %q", stdout)
+	}
+}
+
+func TestIntegrationCLIRendersRetainedPredecessorEvidence(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, RetainedPredecessorCount: 2, RetainedPredecessorPath: "/config/vgxness/retained-predecessors"}}
+	_, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", "status"}, runtime)
+	if stderr != "" || !strings.Contains(stdout, "retained_predecessors=2\n") || !strings.Contains(stdout, "retained_predecessor_location=/config/vgxness/retained-predecessors\n") {
+		t.Fatalf("stdout=%q stderr=%q", stdout, stderr)
+	}
 }
 
 func (runtime *fakeIntegrationRuntime) Preview(_ context.Context, options integration.Options) (integration.Result, error) {

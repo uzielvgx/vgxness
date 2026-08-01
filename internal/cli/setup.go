@@ -117,9 +117,16 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
 	fmt.Fprintln(stdout, "Paso 3: retiro exacto de la skill heredada del proveedor verificado.")
 	fmt.Fprintf(stdout, "Paso 4: %d artefactos del proveedor verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
+	if result.Integration.RetainedPredecessorCount != 0 {
+		fmt.Fprintf(stdout, "Recuperación retenida: %d anclas en %s\n", result.Integration.RetainedPredecessorCount, terminalSafe(result.Integration.RetainedPredecessorPath))
+	}
 	fmt.Fprintf(stdout, "Paso 5: catálogo global de %d archivos skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing verificado en %s\n", result.Plan.Skills.FileCount, terminalSafe(result.Plan.Skills.Path))
 	fmt.Fprintf(stdout, "Paso 6: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
-	fmt.Fprintln(stdout, "Paso 7: no fue necesaria recuperación.")
+	if result.Integration.RetainedPredecessorCount == 0 {
+		fmt.Fprintln(stdout, "Paso 7: no fue necesaria recuperación.")
+	} else {
+		fmt.Fprintln(stdout, "Paso 7: se retuvo evidencia de recuperación; no se eliminó automáticamente.")
+	}
 	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode para cargar vgxness-manager como agente predeterminado.\n", result.Changed)
 	return 0
 }
@@ -144,6 +151,9 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintf(writer, "  Plan de modelos: %s provider=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider))
 	fmt.Fprintf(writer, "  Slots: efficient=%s balanced=%s frontier=%s\n", terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier))
 	fmt.Fprintf(writer, "  Manifest: %s\n", terminalSafe(plan.Integration.ManifestPath))
+	if plan.Integration.RetainedPredecessorCount != 0 {
+		fmt.Fprintf(writer, "  Recuperación retenida: count=%d location=%s\n", plan.Integration.RetainedPredecessorCount, terminalSafe(plan.Integration.RetainedPredecessorPath))
+	}
 	fmt.Fprintf(writer, "  Agente predeterminado: %s (%s)\n", terminalSafe(plan.Integration.DefaultAgent), terminalSafe(plan.Integration.DefaultAgentPath))
 	fmt.Fprintf(writer, "  Workspace de verificación: %s\n", terminalSafe(workspace))
 	fmt.Fprintln(writer, "  Activación: reinicia OpenCode después de aplicar o cambiar el plan.")
@@ -158,6 +168,9 @@ func renderSetupStatus(writer io.Writer, plan setupflow.Plan, workspace string) 
 	fmt.Fprintf(writer, "Skills globales: state=%s path=%s files=%d\n", plan.Skills.State, terminalSafe(plan.Skills.Path), plan.Skills.FileCount)
 	fmt.Fprintf(writer, "Plan de modelos: %s provider=%s efficient=%s balanced=%s frontier=%s manifest=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider), terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier), terminalSafe(plan.Integration.ManifestPath))
 	fmt.Fprintf(writer, "Agente predeterminado: %s config=%s\n", terminalSafe(plan.Integration.DefaultAgent), terminalSafe(plan.Integration.DefaultAgentPath))
+	if plan.Integration.RetainedPredecessorCount != 0 {
+		fmt.Fprintf(writer, "Recuperación retenida: count=%d location=%s\n", plan.Integration.RetainedPredecessorCount, terminalSafe(plan.Integration.RetainedPredecessorPath))
+	}
 	fmt.Fprintf(writer, "Handshake: ok=%t status=%s workspace=%s\n", plan.Handshake.OK, terminalSafe(plan.Handshake.Status.String()), terminalSafe(workspace))
 	if plan.Ready {
 		fmt.Fprintln(writer, "Resultado: configuración completa y saludable.")

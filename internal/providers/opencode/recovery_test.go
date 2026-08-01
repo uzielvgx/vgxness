@@ -267,13 +267,236 @@ func TestUpgradeNeverOverwritesConcurrentReplacement(t *testing.T) {
 	if readErr != nil || !bytes.Equal(data, concurrent) {
 		t.Fatalf("concurrent replacement changed: %q, %v", data, readErr)
 	}
-	anchors, globErr := filepath.Glob(filepath.Join(directory, ".vgxness-previous-*.tmp"))
+	anchors, globErr := filepath.Glob(filepath.Join(retainedAnchorRoot(directory), ".vgxness-previous-*.tmp"))
 	if globErr != nil || len(anchors) != 1 {
 		t.Fatalf("predecessor recovery anchor = %v, %v", anchors, globErr)
 	}
 	backup, backupErr := os.ReadFile(anchors[0])
 	if backupErr != nil || !bytes.Equal(backup, prior) {
 		t.Fatalf("predecessor recovery anchor changed: %q, %v", backup, backupErr)
+	}
+}
+
+func TestUpgradeRejectsInPlaceConcurrentPredecessorRewrite(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior := []byte("managed predecessor")
+	current := []byte("managed replacement")
+	concurrent := []byte("concurrent same-inode rewrite")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := upgradeArtifactAtCheckpoint(context.Background(), artifact{path: target, content: current, prior: prior}, func() error {
+		file, openErr := os.OpenFile(target, os.O_WRONLY|os.O_TRUNC, 0)
+		if openErr != nil {
+			return openErr
+		}
+		if _, writeErr := file.Write(concurrent); writeErr != nil {
+			_ = file.Close()
+			return writeErr
+		}
+		return file.Close()
+	})
+	data, readErr := os.ReadFile(target)
+	if !errors.Is(err, integration.ErrConflict) || readErr != nil || !bytes.Equal(data, concurrent) {
+		t.Fatalf("upgrade error=%v data=%q read=%v", err, data, readErr)
+	}
+}
+
+func TestUpgradeRejectsHeldDescriptorRewriteAfterQuarantine(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior := []byte("managed predecessor")
+	current := []byte("managed replacement")
+	concurrent := []byte("concurrent quarantined rewrite")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(target, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+
+	_, err = upgradeArtifactAtStagedCheckpoint(context.Background(), artifact{path: target, content: current, prior: prior}, nil, func() error {
+		if truncateErr := writer.Truncate(0); truncateErr != nil {
+			return truncateErr
+		}
+		if _, writeErr := writer.WriteAt(concurrent, 0); writeErr != nil {
+			return writeErr
+		}
+		return writer.Sync()
+	})
+	data, readErr := os.ReadFile(target)
+	if !errors.Is(err, integration.ErrConflict) || readErr != nil || !bytes.Equal(data, concurrent) || bytes.Equal(data, current) {
+		t.Fatalf("upgrade error=%v data=%q read=%v", err, data, readErr)
+	}
+}
+
+func TestUpgradeRetainsHeldDescriptorWritesAfterPublication(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior := []byte("managed predecessor")
+	current := []byte("managed replacement")
+	concurrent := []byte("post-publication predecessor write")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(target, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+
+	installed, err := upgradeArtifactWithCheckpoints(context.Background(), artifact{path: target, content: current, prior: prior, retainedRoot: directory}, nil, nil, func() error {
+		if truncateErr := writer.Truncate(0); truncateErr != nil {
+			return truncateErr
+		}
+		if _, writeErr := writer.WriteAt(concurrent, 0); writeErr != nil {
+			return writeErr
+		}
+		return writer.Sync()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupInstalledArtifact(installed)
+	managed, managedErr := os.ReadFile(target)
+	anchor, anchorErr := os.ReadFile(installed.backup)
+	if managedErr != nil || anchorErr != nil || !bytes.Equal(managed, current) || !bytes.Equal(anchor, concurrent) {
+		t.Fatalf("managed=%q managedErr=%v anchor=%q anchorErr=%v", managed, managedErr, anchor, anchorErr)
+	}
+}
+
+func TestUpgradeRollbackRestoresRetainedConcurrentPredecessor(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior := []byte("managed predecessor")
+	current := []byte("managed replacement")
+	concurrent := []byte("post-publication predecessor write")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(target, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	installed, err := upgradeArtifactWithCheckpoints(context.Background(), artifact{path: target, content: current, prior: prior, retainedRoot: directory}, nil, nil, func() error {
+		if truncateErr := writer.Truncate(0); truncateErr != nil {
+			return truncateErr
+		}
+		if _, writeErr := writer.WriteAt(concurrent, 0); writeErr != nil {
+			return writeErr
+		}
+		return writer.Sync()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rollbackInstalledArtifact(installed); err != nil {
+		t.Fatal(err)
+	}
+	restored, restoredErr := os.ReadFile(target)
+	anchor, anchorErr := os.ReadFile(installed.backup)
+	if restoredErr != nil || anchorErr != nil || !bytes.Equal(restored, concurrent) || !bytes.Equal(anchor, concurrent) || !sameFile(target, installed.backup) {
+		t.Fatalf("restored=%q restoredErr=%v anchor=%q anchorErr=%v", restored, restoredErr, anchor, anchorErr)
+	}
+}
+
+func TestUpgradeRetainsPublishedMarkerAndAnchorBeforeQuarantineFailure(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed")
+	prior := []byte("managed predecessor")
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := upgradeArtifactAtCheckpoint(context.Background(), artifact{path: target, content: []byte("managed replacement"), prior: prior, retainedRoot: directory}, func() error {
+		return errors.New("stop before quarantine")
+	})
+	retained, retainedErr := retainedPredecessors(directory)
+	data, readErr := os.ReadFile(target)
+	if err == nil || retainedErr != nil || len(retained) != 1 || readErr != nil || !bytes.Equal(data, prior) {
+		t.Fatalf("upgrade=%v retained=%+v retainedErr=%v target=%q readErr=%v", err, retained, retainedErr, data, readErr)
+	}
+}
+
+func TestRetainedPredecessorEvidenceFailsClosedWithoutDeletion(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "agents", "managed")
+	if err := prepareRetainedPredecessorDirectories(root); err != nil {
+		t.Fatal(err)
+	}
+	anchor := filepath.Join(retainedAnchorRoot(root), ".vgxness-previous-retained.tmp")
+	prior := []byte("managed predecessor")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, anchor); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := persistRetainedPredecessor(root, target, anchor, prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(anchor); err != nil {
+		t.Fatal(err)
+	}
+	_, retainedErr := retainedPredecessors(root)
+	if _, markerErr := os.Lstat(marker); retainedErr == nil || markerErr != nil {
+		t.Fatalf("retainedErr=%v markerErr=%v", retainedErr, markerErr)
+	}
+}
+
+func TestRetainedPredecessorSymlinkMarkerFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink privileges vary on Windows")
+	}
+	root := t.TempDir()
+	directory := retainedPredecessorRoot(root)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(root, "foreign")
+	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(directory, strings.Repeat("a", 32)+".json")
+	if err := os.Symlink(foreign, marker); err != nil {
+		t.Fatal(err)
+	}
+	_, retainedErr := retainedPredecessors(root)
+	data, readErr := os.ReadFile(foreign)
+	if retainedErr == nil || readErr != nil || !bytes.Equal(data, []byte("foreign")) {
+		t.Fatalf("retainedErr=%v data=%q readErr=%v", retainedErr, data, readErr)
+	}
+}
+
+func TestIntegrationReportsInvalidRetainedPredecessorEvidenceWithoutDeletion(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	if _, err := service.Install(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	directory := retainedPredecessorRoot(configDirectory)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(directory, strings.Repeat("a", 32)+".json")
+	malformed := []byte("{bad}\n")
+	if err := os.WriteFile(marker, malformed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, statusErr := NewIntegration().Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(marker)
+	if statusErr != nil || status.State != integration.StateDrifted || status.RetainedPredecessorCount != 1 || status.RetainedPredecessorPath != directory || !errors.Is(installErr, integration.ErrConflict) || readErr != nil || !bytes.Equal(after, malformed) {
+		t.Fatalf("status=%+v statusErr=%v installErr=%v after=%q readErr=%v", status, statusErr, installErr, after, readErr)
 	}
 }
 
