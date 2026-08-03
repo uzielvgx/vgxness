@@ -8,11 +8,18 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 var ErrUnauthenticated = errors.New("syncapi unauthenticated")
+var errResponseWrite = errors.New("syncapi response write failure")
+
+// FailureObserver receives only a fixed failure classification and response status.
+// Request contents and backend errors are never passed to it.
+type FailureObserver func(status int, err error)
 
 // Identity is the non-secret identity authenticated for a sync request.
 type Identity struct {
@@ -45,30 +52,50 @@ type capabilitiesFunc func(context.Context) CapabilitiesResponse
 type handler struct {
 	authenticator Authenticator
 	capabilities  capabilitiesFunc
+	limits        *requestLimits
+	observer      FailureObserver
 }
 
 // NewHandler returns the HTTP handler for the implemented sync v1 endpoints.
 func NewHandler(authenticator Authenticator) http.Handler {
-	return newHandler(authenticator, nil)
+	return NewServerHandler(authenticator, nil)
+}
+
+// NewServerHandler returns a server handler with fixed non-blocking global (64)
+// and per-device (4) concurrency limits.
+func NewServerHandler(authenticator Authenticator, observer FailureObserver) http.Handler {
+	return newHandlerWithLimits(authenticator, nil, observer)
 }
 
 func newHandler(authenticator Authenticator, capabilities capabilitiesFunc) http.Handler {
+	return newHandlerWithLimits(authenticator, capabilities, nil)
+}
+
+func newHandlerWithLimits(authenticator Authenticator, capabilities capabilitiesFunc, observer FailureObserver) http.Handler {
 	if capabilities == nil {
 		capabilities = func(context.Context) CapabilitiesResponse {
 			return CapabilitiesResponse{ProtocolVersion: ProtocolVersion, Capabilities: []string{"capabilities"}}
 		}
 	}
-	return &handler{authenticator: authenticator, capabilities: capabilities}
+	return &handler{authenticator: authenticator, capabilities: capabilities, limits: newRequestLimits(), observer: observer}
 }
 
 func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if !handler.limits.acquireGlobal() {
+		writeError(writer, http.StatusTooManyRequests, ErrorLimitExceeded, false, handler.observer)
+		return
+	}
+	defer handler.limits.releaseGlobal()
+	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
+	defer cancel()
+	request = request.WithContext(ctx)
 	if request.URL.Path != "/v1/sync/capabilities" {
-		writeError(writer, http.StatusNotFound, ErrorInvalidInput, false)
+		writeError(writer, http.StatusNotFound, ErrorInvalidInput, false, handler.observer)
 		return
 	}
 	if request.Method != http.MethodGet {
 		writer.Header().Set("Allow", http.MethodGet)
-		writeError(writer, http.StatusMethodNotAllowed, ErrorInvalidInput, false)
+		writeError(writer, http.StatusMethodNotAllowed, ErrorInvalidInput, false, handler.observer)
 		return
 	}
 
@@ -78,20 +105,25 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		if status == http.StatusUnauthorized {
 			code = ErrorUnauthorized
 		}
-		writeError(writer, status, code, status == http.StatusUnauthorized)
+		writeError(writer, status, code, status == http.StatusUnauthorized, handler.observer)
 		return
 	}
+	if !handler.limits.acquireDevice(identity.DeviceID) {
+		writeError(writer, http.StatusTooManyRequests, ErrorLimitExceeded, false, handler.observer)
+		return
+	}
+	defer handler.limits.releaseDevice(identity.DeviceID)
 	if len(request.Header.Values("Accept")) != 1 || request.Header.Get("Accept") != MediaType {
-		writeError(writer, http.StatusNotAcceptable, ErrorUnsupportedVersion, false)
+		writeError(writer, http.StatusNotAcceptable, ErrorUnsupportedVersion, false, handler.observer)
 		return
 	}
 	if request.Body != nil && requestHasBody(request.Body) {
-		writeError(writer, http.StatusBadRequest, ErrorInvalidInput, false)
+		writeError(writer, http.StatusBadRequest, ErrorInvalidInput, false, handler.observer)
 		return
 	}
 
 	response := handler.capabilities(request.WithContext(context.WithValue(request.Context(), identityContextKey{}, identity)).Context())
-	writeJSON(writer, http.StatusOK, response, false)
+	writeJSON(writer, http.StatusOK, response, false, handler.observer)
 }
 
 func (handler *handler) authenticate(request *http.Request) (Identity, int) {
@@ -157,20 +189,96 @@ func requestHasBody(body io.ReadCloser) bool {
 	return true
 }
 
-func writeError(writer http.ResponseWriter, status int, code ErrorCode, authenticate bool) {
+func writeError(writer http.ResponseWriter, status int, code ErrorCode, authenticate bool, observer FailureObserver) {
 	writeJSON(writer, status, struct {
 		ProtocolVersion int       `json:"protocol_version"`
 		Error           ErrorCode `json:"error"`
-	}{ProtocolVersion: ProtocolVersion, Error: code}, authenticate)
+	}{ProtocolVersion: ProtocolVersion, Error: code}, authenticate, observer)
 }
 
-func writeJSON(writer http.ResponseWriter, status int, value any, authenticate bool) {
+func writeJSON(writer http.ResponseWriter, status int, value any, authenticate bool, observer FailureObserver) {
 	writer.Header().Set("Content-Type", MediaType)
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	if authenticate {
 		writer.Header().Set("WWW-Authenticate", "Bearer")
 	}
-	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(value)
+	observed := &observingWriter{ResponseWriter: writer, status: status, observer: observer}
+	observed.WriteHeader(status)
+	if err := json.NewEncoder(observed).Encode(value); err != nil {
+		observed.fail()
+	}
+}
+
+type observingWriter struct {
+	http.ResponseWriter
+	status   int
+	observer FailureObserver
+	failed   bool
+}
+
+func (writer *observingWriter) Write(value []byte) (int, error) {
+	n, err := writer.ResponseWriter.Write(value)
+	if err != nil {
+		writer.fail()
+	}
+	return n, err
+}
+func (writer *observingWriter) fail() {
+	if !writer.failed && writer.observer != nil {
+		writer.failed = true
+		writer.observer(writer.status, errResponseWrite)
+	}
+}
+
+type requestLimits struct {
+	global  chan struct{}
+	mu      sync.Mutex
+	devices map[string]*deviceLimit
+}
+type deviceLimit struct {
+	semaphore chan struct{}
+	active    int
+}
+
+func newRequestLimits() *requestLimits {
+	return &requestLimits{global: make(chan struct{}, 64), devices: make(map[string]*deviceLimit)}
+}
+func (limits *requestLimits) acquireGlobal() bool {
+	select {
+	case limits.global <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+func (limits *requestLimits) releaseGlobal() { <-limits.global }
+func (limits *requestLimits) acquireDevice(id uuid.UUID) bool {
+	key := id.String()
+	limits.mu.Lock()
+	limit := limits.devices[key]
+	if limit == nil {
+		limit = &deviceLimit{semaphore: make(chan struct{}, 4)}
+		limits.devices[key] = limit
+	}
+	select {
+	case limit.semaphore <- struct{}{}:
+		limit.active++
+		limits.mu.Unlock()
+		return true
+	default:
+		limits.mu.Unlock()
+		return false
+	}
+}
+func (limits *requestLimits) releaseDevice(id uuid.UUID) {
+	key := id.String()
+	limits.mu.Lock()
+	limit := limits.devices[key]
+	<-limit.semaphore
+	limit.active--
+	if limit.active == 0 {
+		delete(limits.devices, key)
+	}
+	limits.mu.Unlock()
 }
