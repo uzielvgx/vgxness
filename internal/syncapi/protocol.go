@@ -32,6 +32,11 @@ type PushRequest struct {
 	Items           []syncservice.Mutation `json:"items"`
 }
 
+type PushResponse struct {
+	ProtocolVersion int                  `json:"protocol_version"`
+	Results         []syncservice.Result `json:"results"`
+}
+
 type PullRequest struct {
 	ProtocolVersion int                `json:"protocol_version"`
 	Cursor          syncservice.Cursor `json:"cursor"`
@@ -106,6 +111,40 @@ func ValidatePushRequest(request PushRequest) error {
 		}
 	}
 	return nil
+}
+
+// ValidatePushResponse validates ordered terminal results against their request.
+func ValidatePushResponse(request PushRequest, response PushResponse) error {
+	if response.ProtocolVersion != ProtocolVersion || len(response.Results) != len(request.Items) || len(response.Results) == 0 || len(response.Results) > MaxPushItems {
+		return ErrInvalidRequest
+	}
+	for index, result := range response.Results {
+		if result.MutationID == "" || result.MutationID != request.Items[index].MutationID {
+			return ErrInvalidRequest
+		}
+		switch result.Disposition {
+		case syncservice.DispositionAccepted, syncservice.DispositionPreviouslyAccepted:
+			if result.Sequence == nil || *result.Sequence < 1 || result.Version < 1 || result.Code != "" || result.Retryable {
+				return ErrInvalidRequest
+			}
+		case syncservice.DispositionRejected:
+			if result.Sequence != nil || result.Version != 0 || result.Retryable || !safeResultCode(result.Code) {
+				return ErrInvalidRequest
+			}
+		default:
+			return ErrInvalidRequest
+		}
+	}
+	return nil
+}
+
+func safeResultCode(code string) bool {
+	switch code {
+	case "invalid_device", "revoked", "invalid_input", "unsupported_semantic", "mutation_id_hash_mismatch", "invalid_replay", "invalid_base", "stale_base", "invalid_prerequisite", "topic_collision":
+		return true
+	default:
+		return false
+	}
 }
 
 func ValidatePullRequest(request *PullRequest) error {

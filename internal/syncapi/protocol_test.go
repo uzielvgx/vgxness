@@ -78,3 +78,24 @@ func TestPullResponseHardening(t *testing.T) {
 		t.Fatal("cursor")
 	}
 }
+
+func TestPushResultOrderingAndTerminalContract(t *testing.T) {
+	request := PushRequest{ProtocolVersion: 1, Items: []syncservice.Mutation{{MutationID: "a"}, {MutationID: "b"}, {MutationID: "c"}}}
+	valid := PushResponse{ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "a", Disposition: syncservice.DispositionAccepted, Sequence: ptr(int64(9)), Version: 1}, {MutationID: "b", Disposition: syncservice.DispositionPreviouslyAccepted, Sequence: ptr(int64(3)), Version: 1}, {MutationID: "c", Disposition: syncservice.DispositionRejected, Code: "unsupported_semantic"}}}
+	if err := ValidatePushResponse(request, valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, response := range []PushResponse{{ProtocolVersion: 1, Results: valid.Results[:2]}, {ProtocolVersion: 1, Results: []syncservice.Result{valid.Results[1], valid.Results[0], valid.Results[2]}}, {ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "other", Disposition: syncservice.DispositionAccepted, Sequence: ptr(1), Version: 1}}}} {
+		if err := ValidatePushResponse(request, response); err == nil {
+			t.Fatalf("accepted unmatched response: %+v", response)
+		}
+	}
+	for _, result := range []syncservice.Result{{MutationID: "a", Disposition: syncservice.DispositionConflict, Sequence: ptr(int64(1))}, {MutationID: "a", Disposition: syncservice.DispositionRejected, Code: "contains content"}, {MutationID: "a", Disposition: syncservice.DispositionAccepted, Sequence: ptr(int64(2))}, {MutationID: "a", Disposition: syncservice.DispositionAccepted, Version: 1}} {
+		response := PushResponse{ProtocolVersion: 1, Results: []syncservice.Result{result}}
+		if err := ValidatePushResponse(PushRequest{Items: []syncservice.Mutation{{MutationID: "a"}}}, response); err == nil {
+			t.Fatalf("accepted invalid result: %+v", result)
+		}
+	}
+}
+
+func ptr(value int64) *int64 { return &value }
