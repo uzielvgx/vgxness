@@ -23,6 +23,20 @@ concurrency:
 jobs:
   coverage:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: vgxness_test
+          POSTGRES_PASSWORD: vgxness_test
+          POSTGRES_DB: vgxness_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vgxness_test -d vgxness_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,6 +49,8 @@ jobs:
       - name: Prefetch modules
         run: go mod download
       - name: Test with coverage
+        env:
+          VGXNESS_TEST_POSTGRES_DSN: postgresql://vgxness_test:vgxness_test@localhost:5432/vgxness_test?sslmode=disable
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: Enforce aggregate coverage floor
         run: |
