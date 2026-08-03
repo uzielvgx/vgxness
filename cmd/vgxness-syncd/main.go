@@ -2,21 +2,31 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncpg"
 )
 
-const compensationTimeout = 5 * time.Second
+const (
+	compensationTimeout  = 5 * time.Second
+	defaultListenAddress = "127.0.0.1:8787"
+)
 
 type deviceRepository interface {
 	IssueDevice(context.Context, string) (syncpg.DeviceCredential, error)
@@ -24,10 +34,11 @@ type deviceRepository interface {
 }
 
 var (
-	run      = runDevice
-	getenv   = os.Getenv
-	setup    = defaultSetup
-	terminal = func(value any) bool {
+	run       = runCommand
+	getenv    = os.Getenv
+	setup     = defaultSetup
+	listenTCP = net.Listen
+	terminal  = func(value any) bool {
 		file, ok := value.(interface{ Fd() uintptr })
 		return ok && term.IsTerminal(file.Fd())
 	}
@@ -52,6 +63,148 @@ func runDevice(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	default:
 		return usage(stderr, "usage: vgxness-syncd device <issue|revoke>")
 	}
+}
+
+func runCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "serve" {
+		return runServe(ctx, args[1:], stderr)
+	}
+	return runDevice(ctx, args, stdin, stdout, stderr)
+}
+
+func runServe(ctx context.Context, args []string, stderr io.Writer) int {
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	listen := flags.String("listen", defaultListenAddress, "listen address")
+	allowInsecure := flags.Bool("development-allow-insecure-non-loopback", false, "development only")
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !validListenAddress(*listen, *allowInsecure) {
+		fmt.Fprintln(stderr, "serve requires a literal loopback listen address")
+		return 2
+	}
+	if *allowInsecure && !isLoopbackAddress(*listen) {
+		fmt.Fprintln(stderr, "WARNING: development insecure non-loopback listener enabled")
+	}
+	repository, cleanup, ok := configuredServeRepository(ctx)
+	if !ok {
+		fmt.Fprintln(stderr, "serve setup failed")
+		return 1
+	}
+	defer cleanup()
+	listener, err := listenTCP("tcp", *listen)
+	if err != nil {
+		fmt.Fprintln(stderr, "serve listen failed")
+		return 1
+	}
+	defer listener.Close()
+	server := newServer(repository, stderr)
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	select {
+	case <-ctx.Done():
+		shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := server.Shutdown(shutdown)
+		cancel()
+		if err != nil {
+			fmt.Fprintln(stderr, "serve shutdown failed")
+			return 1
+		}
+		<-served
+		return 0
+	case err := <-served:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintln(stderr, "serve failed")
+			return 1
+		}
+		return 0
+	}
+}
+
+func newServer(repository *syncpg.Repository, stderr io.Writer) *http.Server {
+	return &http.Server{
+		Handler:           syncapi.NewServerHandler(repositoryAuthenticator{repository}, responseFailureObserver(stderr)),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+}
+
+func responseFailureObserver(stderr io.Writer) syncapi.FailureObserver {
+	var mutex sync.Mutex
+	return func(int, error) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		fmt.Fprintln(stderr, "serve response write failed")
+	}
+}
+
+func validListenAddress(address string, allowInsecure bool) bool {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" {
+		return false
+	}
+	value, err := strconv.Atoi(port)
+	if err != nil || value < 1 || value > 65535 {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || allowInsecure)
+}
+
+func isLoopbackAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	return err == nil && net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
+}
+
+type repositoryAuthenticator struct{ repository *syncpg.Repository }
+
+func (adapter repositoryAuthenticator) Authenticate(ctx context.Context, bearer string) (syncapi.Identity, error) {
+	identity, err := adapter.repository.AuthenticateDevice(ctx, bearer)
+	if errors.Is(err, syncpg.ErrUnauthenticated) {
+		return syncapi.Identity{}, syncapi.ErrUnauthenticated
+	}
+	if err != nil {
+		return syncapi.Identity{}, err
+	}
+	return syncapi.Identity{OwnerID: identity.OwnerID, DeviceID: identity.ID}, nil
+}
+
+func configuredServeRepository(ctx context.Context) (*syncpg.Repository, func(), bool) {
+	dsn, ownerText := getenv("VGXNESS_SYNC_POSTGRES_DSN"), getenv("VGXNESS_SYNC_OWNER_ID")
+	owner, err := uuid.Parse(ownerText)
+	if dsn == "" || err != nil || owner == uuid.Nil || owner.String() != ownerText {
+		return nil, nil, false
+	}
+	repository, cleanup, err := setupServe(ctx, dsn, owner)
+	return repository, cleanup, err == nil
+}
+
+func setupServe(ctx context.Context, dsn string, owner uuid.UUID) (*syncpg.Repository, func(), error) {
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = syncpg.Migrate(ctx, conn); err != nil {
+		conn.Close(context.Background())
+		return nil, nil, err
+	}
+	if err = conn.Close(context.Background()); err != nil {
+		return nil, nil, err
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	repository, err := syncpg.NewRepository(pool, owner)
+	if err == nil {
+		err = repository.EnsureOwner(ctx)
+	}
+	if err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+	return repository, pool.Close, nil
 }
 
 func runIssue(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {

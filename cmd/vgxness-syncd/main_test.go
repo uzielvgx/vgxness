@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncpg"
 )
 
@@ -305,6 +309,135 @@ func TestRunRevokeAllowsRedirectedOutput(t *testing.T) {
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 || repo.revokes != 1 || repo.revokedID != id {
 		t.Fatal("unexpected revoke result")
+	}
+}
+
+func TestServeRejectsUnsafeListenBeforeConfiguration(t *testing.T) {
+	oldGetenv := getenv
+	getenv = func(string) string { t.Fatal("environment read before listen validation"); return "" }
+	t.Cleanup(func() { getenv = oldGetenv })
+	var stderr strings.Builder
+	if got := runServe(context.Background(), []string{"--listen", "0.0.0.0:8787"}, &stderr); got != 2 {
+		t.Fatalf("exit code = %d, want 2", got)
+	}
+	if !strings.Contains(stderr.String(), "loopback") {
+		t.Fatal("unsafe listen was not rejected")
+	}
+}
+
+func TestServeValidationDefaultsAndDevelopmentOverride(t *testing.T) {
+	if defaultListenAddress != "127.0.0.1:8787" || !validListenAddress(defaultListenAddress, false) {
+		t.Fatal("default listener is not the exact safe address")
+	}
+	for _, address := range []string{"", ":8787", "0.0.0.0:8787", "localhost:8787", "example.com:8787", "127.0.0.1:0"} {
+		if validListenAddress(address, false) {
+			t.Fatalf("unsafe address accepted: %q", address)
+		}
+	}
+	if !validListenAddress("203.0.113.1:8787", true) {
+		t.Fatal("development override rejected literal public address")
+	}
+}
+
+type failingHTTPWriter struct{ header http.Header }
+
+func (writer *failingHTTPWriter) Header() http.Header       { return writer.header }
+func (writer *failingHTTPWriter) Write([]byte) (int, error) { return 0, errors.New("response content") }
+func (writer *failingHTTPWriter) WriteHeader(int)           {}
+
+func TestServerConfigurationAndContentFreeObserver(t *testing.T) {
+	var stderr strings.Builder
+	server := newServer(nil, &stderr)
+	if server.ReadHeaderTimeout != 5*time.Second || server.ReadTimeout != 15*time.Second || server.WriteTimeout != 30*time.Second || server.IdleTimeout != 60*time.Second || server.MaxHeaderBytes != 16<<10 {
+		t.Fatal("server timeouts or header limit changed")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/unknown", nil)
+	server.Handler.ServeHTTP(&failingHTTPWriter{header: make(http.Header)}, request)
+	if stderr.String() != "serve response write failed\n" || strings.Contains(stderr.String(), "response content") {
+		t.Fatal("observer leaked response content")
+	}
+}
+
+func TestServeRealListenerLifecycle(t *testing.T) {
+	dsn := os.Getenv("VGXNESS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("VGXNESS_TEST_POSTGRES_DSN is not set")
+	}
+	owner := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	repository, cleanup, err := defaultSetup(context.Background(), dsn, owner)
+	if err != nil {
+		t.Fatal("setup failed")
+	}
+	defer cleanup()
+	credential, err := repository.IssueDevice(context.Background(), "serve-test")
+	if err != nil {
+		t.Fatal("issue failed")
+	}
+	oldGetenv := getenv
+	getenv = func(name string) string {
+		if name == "VGXNESS_SYNC_POSTGRES_DSN" {
+			return dsn
+		}
+		if name == "VGXNESS_SYNC_OWNER_ID" {
+			return owner.String()
+		}
+		return ""
+	}
+	t.Cleanup(func() { getenv = oldGetenv })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal("pre-open listener failed")
+	}
+	oldListen := listenTCP
+	seenListen := make(chan string, 1)
+	listenTCP = func(network, address string) (net.Listener, error) {
+		seenListen <- network + " " + address
+		return listener, nil
+	}
+	t.Cleanup(func() { listenTCP = oldListen })
+	done := make(chan int, 1)
+	go func() { done <- runServe(ctx, []string{"--listen", defaultListenAddress}, io.Discard) }()
+	request, err := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/v1/sync/capabilities", nil)
+	if err != nil {
+		t.Fatal("request failed")
+	}
+	request.Header.Set("Authorization", "Bearer "+credential.Bearer)
+	request.Header.Set("Accept", syncapi.MediaType)
+	client := &http.Client{Timeout: 100 * time.Millisecond}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		response, requestErr := client.Do(request)
+		if requestErr == nil {
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d", response.StatusCode)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("listener did not start")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := <-seenListen; got != "tcp "+defaultListenAddress {
+		t.Fatalf("listen arguments = %q", got)
+	}
+	if err := repository.RevokeDevice(context.Background(), credential.ID); err != nil {
+		t.Fatal("revoke failed")
+	}
+	response, err := client.Do(request)
+	if err != nil || response.StatusCode != http.StatusUnauthorized {
+		if response != nil {
+			response.Body.Close()
+		}
+		t.Fatal("revoked device was not denied")
+	}
+	response.Body.Close()
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code = %d", code)
 	}
 }
 

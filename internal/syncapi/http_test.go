@@ -9,20 +9,102 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
 
+func TestHandlerLimitsGlobalAndDevice(t *testing.T) {
+	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	handler := newHandlerWithLimits(&testAuthenticator{identity: identity}, func(context.Context) CapabilitiesResponse {
+		entered <- struct{}{}
+		<-release
+		return CapabilitiesResponse{ProtocolVersion: ProtocolVersion}
+	}, nil)
+	request := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/v1/sync/capabilities", nil)
+		r.Header.Set("Authorization", "Bearer "+testBearer)
+		r.Header.Set("Accept", MediaType)
+		return r
+	}
+	responses := make(chan *httptest.ResponseRecorder, 5)
+	for range 4 {
+		go func() { r := httptest.NewRecorder(); handler.ServeHTTP(r, request()); responses <- r }()
+	}
+	for range 4 {
+		<-entered
+	}
+	rejected := httptest.NewRecorder()
+	handler.ServeHTTP(rejected, request())
+	if rejected.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rejected.Code)
+	}
+	close(release)
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for range 4 {
+		select {
+		case <-responses:
+		case <-timer.C:
+			t.Fatal("requests did not complete")
+		}
+	}
+}
+
+func TestRequestLimitsGlobalAndDeviceCleanup(t *testing.T) {
+	limits := newRequestLimits()
+	for range 64 {
+		if !limits.acquireGlobal() {
+			t.Fatal("global limit rejected before capacity")
+		}
+	}
+	if limits.acquireGlobal() {
+		t.Fatal("global limit did not reject saturation")
+	}
+	for range 64 {
+		limits.releaseGlobal()
+	}
+	device := uuid.New()
+	for range 4 {
+		if !limits.acquireDevice(device) {
+			t.Fatal("device limit rejected before capacity")
+		}
+	}
+	if limits.acquireDevice(device) {
+		t.Fatal("device limit did not reject saturation")
+	}
+	other := uuid.New()
+	if !limits.acquireDevice(other) {
+		t.Fatal("one device limited another device")
+	}
+	limits.releaseDevice(other)
+	for range 4 {
+		limits.releaseDevice(device)
+	}
+	limits.mu.Lock()
+	deferred := len(limits.devices)
+	limits.mu.Unlock()
+	if deferred != 0 {
+		t.Fatalf("device limiter entries = %d, want 0", deferred)
+	}
+}
+
 const testBearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 type testAuthenticator struct {
+	mu       sync.Mutex
 	identity Identity
 	err      error
 	calls    int
 }
 
 func (auth *testAuthenticator) Authenticate(_ context.Context, bearer string) (Identity, error) {
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
 	auth.calls++
 	if bearer != testBearer {
 		return Identity{}, ErrUnauthenticated
@@ -31,6 +113,46 @@ func (auth *testAuthenticator) Authenticate(_ context.Context, bearer string) (I
 }
 
 type zeroThenDataReader struct{ reads int }
+
+type failingResponseWriter struct{ header http.Header }
+
+func (writer *failingResponseWriter) Header() http.Header { return writer.header }
+func (writer *failingResponseWriter) Write([]byte) (int, error) {
+	return 0, errors.New("secret response body")
+}
+func (writer *failingResponseWriter) WriteHeader(int) {}
+
+func TestResponseFailureObserverIsContentFree(t *testing.T) {
+	writer := &failingResponseWriter{header: make(http.Header)}
+	var status int
+	var observed error
+	writeJSON(writer, http.StatusOK, map[string]string{"secret": "secret response body"}, false, func(got int, err error) {
+		status, observed = got, err
+	})
+	if status != http.StatusOK || !errors.Is(observed, errResponseWrite) || strings.Contains(observed.Error(), "secret") {
+		t.Fatal("observer received unsafe failure data")
+	}
+}
+
+func TestHandlerAppliesThirtySecondRequestDeadline(t *testing.T) {
+	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	seen := time.Duration(0)
+	handler := newHandlerWithLimits(&testAuthenticator{identity: identity}, func(ctx context.Context) CapabilitiesResponse {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("request deadline missing")
+		}
+		seen = time.Until(deadline)
+		return CapabilitiesResponse{ProtocolVersion: ProtocolVersion}
+	}, nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/sync/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer "+testBearer)
+	request.Header.Set("Accept", MediaType)
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+	if seen <= 29*time.Second || seen > 30*time.Second {
+		t.Fatalf("deadline = %s, want about 30s", seen)
+	}
+}
 
 func (reader *zeroThenDataReader) Read(value []byte) (int, error) {
 	reader.reads++
