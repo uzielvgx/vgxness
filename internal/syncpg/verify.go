@@ -55,7 +55,8 @@ func VerifyRecovery(ctx context.Context, conn *pgx.Conn) error {
 		  OR m.record_id IS DISTINCT FROM c.record_id
 		  OR m.disposition IS DISTINCT FROM c.change_kind
 		  OR m.canonical_version IS DISTINCT FROM c.canonical_version
-		  OR v.record_version IS DISTINCT FROM c.canonical_version
+			 OR (c.change_kind = 'conflict' AND (v.record_version IS DISTINCT FROM m.base_version + 1 OR v.base_version IS DISTINCT FROM m.base_version))
+			 OR (c.change_kind <> 'conflict' AND v.record_version IS DISTINCT FROM c.canonical_version)
 		  OR v.source_device_id IS DISTINCT FROM c.mutation_device_id
 		  OR v.source_mutation_id IS DISTINCT FROM c.mutation_id
 		  OR v.disposition IS DISTINCT FROM c.change_kind

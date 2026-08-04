@@ -136,6 +136,14 @@ func ValidatePushResponse(request PushRequest, response PushResponse) error {
 				return ErrInvalidRequest
 			}
 			sequenceMutationIDs[*result.Sequence] = result.MutationID
+		case syncservice.DispositionConflict:
+			if result.Sequence == nil || *result.Sequence < 1 || result.Version < 1 || result.Code != "" || result.Retryable {
+				return ErrInvalidRequest
+			}
+			if mutationID, ok := sequenceMutationIDs[*result.Sequence]; ok && mutationID != result.MutationID {
+				return ErrInvalidRequest
+			}
+			sequenceMutationIDs[*result.Sequence] = result.MutationID
 		case syncservice.DispositionRejected:
 			if result.Sequence != nil || result.Version != 0 || result.Retryable || !safeResultCode(result.Code) {
 				return ErrInvalidRequest

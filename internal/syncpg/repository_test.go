@@ -420,10 +420,6 @@ func TestRepositoryPushRejectsPrerequisitesAndMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := mutationEffects(t, ctx, conn)
-	stale := seed[4]
-	stale.MutationID, stale.Kind, stale.BaseVersion = uuid.NewString(), syncservice.MutationUpdate, 2
-	collision := mutationObservation("collision", "one", "", nil, 0)
-	collision.Observation.TopicKey = "shared"
 	crossSession := mutationObservation("cross-session", "two", "session", nil, 0)
 	crossReference := mutationObservation("cross-reference", "one", "", []string{"reference"}, 0)
 	observationMove := seed[5]
@@ -433,7 +429,7 @@ func TestRepositoryPushRejectsPrerequisitesAndMoves(t *testing.T) {
 	for _, test := range []struct {
 		mutation syncservice.Mutation
 		code     string
-	}{{stale, "stale_base"}, {collision, "topic_collision"}, {mutationObservation("missing", "one", "missing", nil, 0), "invalid_prerequisite"}, {crossSession, "invalid_prerequisite"}, {crossReference, "invalid_prerequisite"}, {observationMove, "invalid_prerequisite"}, {sessionMove, "invalid_prerequisite"}} {
+	}{{mutationObservation("missing", "one", "missing", nil, 0), "invalid_prerequisite"}, {crossSession, "invalid_prerequisite"}, {crossReference, "invalid_prerequisite"}, {observationMove, "invalid_prerequisite"}, {sessionMove, "invalid_prerequisite"}} {
 		got, err := repo.Push(ctx, device.ID, []syncservice.Mutation{test.mutation})
 		if err != nil || got[0].Disposition != syncservice.DispositionRejected || got[0].Code != test.code {
 			t.Fatalf("rejection = %+v, %v; want %s", got, err, test.code)
@@ -622,6 +618,216 @@ func TestRepositoryMutationRollsBackPrerequisiteQueryFailure(t *testing.T) {
 	if err != nil || result[0].Sequence == nil || *result[0].Sequence != state.NextSeq {
 		t.Fatalf("retry = %+v, %v", result, err)
 	}
+}
+
+func TestRepositoryConflictRetainsCompetingObservationAndReplays(t *testing.T) {
+	ctx, repo, conn, first, second := conflictRepository(t)
+	seed := []syncservice.Mutation{mutationProject("project", 0), mutationSession("session", "project", 0), mutationObservation("reference", "project", "session", nil, 0), mutationObservation("target", "project", "session", []string{"reference"}, 0)}
+	if _, err := repo.Push(ctx, first, seed); err != nil {
+		t.Fatal(err)
+	}
+	accepted := updateObservation(seed[3], 1, "canonical")
+	if got, err := repo.Push(ctx, first, []syncservice.Mutation{accepted}); err != nil || got[0].Disposition != syncservice.DispositionAccepted {
+		t.Fatalf("accepted update = %+v, %v", got, err)
+	}
+	conflict := updateObservation(seed[3], 1, "competing")
+	got, err := repo.Push(ctx, second, []syncservice.Mutation{conflict})
+	if err != nil || len(got) != 1 || got[0].Disposition != syncservice.DispositionConflict || got[0].Sequence == nil || *got[0].Sequence != 6 || got[0].Version != 2 {
+		t.Fatalf("stale update = %+v, %v", got, err)
+	}
+	var content, lifecycle, review, snapshot string
+	var version int64
+	if err := conn.QueryRow(ctx, "SELECT content, lifecycle, review_state, version, (SELECT snapshot::text FROM record_versions WHERE record_id='target' AND disposition='conflict') FROM observations WHERE id='target'").Scan(&content, &lifecycle, &review, &version, &snapshot); err != nil || content != "canonical" || lifecycle != "active" || review != "needs_review" || version != 2 || !strings.Contains(snapshot, "competing") {
+		t.Fatalf("canonical/conflict snapshot = %q/%q/%q/%d/%q, %v", content, lifecycle, review, version, snapshot, err)
+	}
+	if err := VerifyRecovery(ctx, conn); err != nil {
+		t.Fatalf("deep stale conflict recovery: %v", err)
+	}
+	var mutations, versions, changes, conflicts, next int
+	if err := conn.QueryRow(ctx, "SELECT (SELECT count(*) FROM mutations), (SELECT count(*) FROM record_versions), (SELECT count(*) FROM changes), (SELECT count(*) FROM observation_conflicts), (SELECT next_seq FROM owner_sync_state)").Scan(&mutations, &versions, &changes, &conflicts, &next); err != nil || mutations != 6 || versions != 6 || changes != 6 || conflicts != 1 || next != 7 {
+		t.Fatalf("conflict effects = %d/%d/%d/%d/%d, %v", mutations, versions, changes, conflicts, next, err)
+	}
+	replay, err := repo.Push(ctx, second, []syncservice.Mutation{conflict})
+	if err != nil || len(replay) != 1 || replay[0].MutationID != got[0].MutationID || replay[0].Disposition != got[0].Disposition || replay[0].Version != got[0].Version || replay[0].Sequence == nil || got[0].Sequence == nil || *replay[0].Sequence != *got[0].Sequence || replay[0].Code != got[0].Code || replay[0].Retryable != got[0].Retryable {
+		t.Fatalf("conflict replay = %+v, %v; want %+v", replay, err, got[0])
+	}
+	before := mutationEffects(t, ctx, conn)
+	mismatch := conflict
+	mismatch.Observation = &syncservice.Observation{}
+	*mismatch.Observation = *conflict.Observation
+	mismatch.Observation.Content = "changed hash"
+	if rejected, err := repo.Push(ctx, second, []syncservice.Mutation{mismatch}); err != nil || rejected[0].Disposition != syncservice.DispositionRejected || rejected[0].Code != "mutation_id_hash_mismatch" || mutationEffects(t, ctx, conn) != before {
+		t.Fatalf("hash mismatch = %+v, %v", rejected, err)
+	}
+	wrongOwner, err := NewRepository(conn, uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejected, err := wrongOwner.Push(ctx, second, []syncservice.Mutation{updateObservation(seed[3], 1, "wrong owner")}); !errors.Is(err, ErrOwnerConflict) || rejected != nil {
+		t.Fatalf("wrong owner conflict = %+v, %v", rejected, err)
+	}
+}
+
+func TestRepositoryMutationArchiveFreesTopicAfterConflicts(t *testing.T) {
+	ctx, repo, conn, first, second := conflictRepository(t)
+	project := mutationProject("project", 0)
+	holder := mutationObservation("holder", "project", "", nil, 0)
+	holder.Observation.TopicKey = "shared"
+	other := mutationObservation("other", "project", "", nil, 0)
+	if _, err := repo.Push(ctx, first, []syncservice.Mutation{project, holder, other}); err != nil {
+		t.Fatal(err)
+	}
+	occupied := updateObservation(other, 1, "competing update")
+	occupied.Observation.TopicKey = "shared"
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{occupied}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("occupied update = %+v, %v", got, err)
+	}
+	create := mutationObservation("create-conflict", "project", "", nil, 0)
+	create.Observation.TopicKey = "shared"
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{create}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("occupied create = %+v, %v", got, err)
+	}
+	var holderState, createdState, createdReview string
+	if err := conn.QueryRow(ctx, "SELECT (SELECT lifecycle FROM observations WHERE id='holder'), (SELECT lifecycle FROM observations WHERE id='create-conflict'), (SELECT review_state FROM observations WHERE id='create-conflict')").Scan(&holderState, &createdState, &createdReview); err != nil || holderState != "active" || createdState != "archived" || createdReview != "needs_review" {
+		t.Fatalf("topic holders = %q/%q/%q, %v", holderState, createdState, createdReview, err)
+	}
+	var mutationVersion, changeVersion int64
+	if err := conn.QueryRow(ctx, "SELECT m.canonical_version, c.canonical_version FROM mutations m JOIN changes c ON c.owner_id=m.owner_id AND c.seq=m.canonical_seq WHERE m.record_id='create-conflict'").Scan(&mutationVersion, &changeVersion); err != nil || mutationVersion < 1 || mutationVersion != changeVersion {
+		t.Fatalf("topic conflict canonical versions = %d/%d, %v", mutationVersion, changeVersion, err)
+	}
+	if err := VerifyRecovery(ctx, conn); err != nil {
+		t.Fatalf("topic create conflict recovery: %v", err)
+	}
+	archive := updateObservation(holder, 1, "archived")
+	archive.Kind, archive.Observation.Lifecycle, archive.Observation.Review = syncservice.MutationArchive, syncservice.LifecycleArchived, syncservice.ReviewClear
+	if got, err := repo.Push(ctx, first, []syncservice.Mutation{archive}); err != nil || got[0].Disposition != syncservice.DispositionAccepted {
+		t.Fatalf("archive = %+v, %v", got, err)
+	}
+	claim := mutationObservation("claim", "project", "", nil, 0)
+	claim.Observation.TopicKey = "shared"
+	if got, err := repo.Push(ctx, first, []syncservice.Mutation{claim}); err != nil || got[0].Disposition != syncservice.DispositionAccepted {
+		t.Fatalf("topic reuse = %+v, %v", got, err)
+	}
+}
+
+func TestRepositoryLifecycleResolveAndTombstone(t *testing.T) {
+	ctx, repo, conn, first, second := conflictRepository(t)
+	project, target := mutationProject("project", 0), mutationObservation("target", "project", "", nil, 0)
+	if _, err := repo.Push(ctx, first, []syncservice.Mutation{project, target}); err != nil {
+		t.Fatal(err)
+	}
+	accepted := updateObservation(target, 1, "canonical")
+	mustNoError(t, pushAccepted(ctx, repo, first, accepted))
+	stale := updateObservation(target, 1, "competing")
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{stale}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("stale = %+v, %v", got, err)
+	}
+	var conflictID string
+	mustNoError(t, conn.QueryRow(ctx, "SELECT conflict_id FROM observation_conflicts WHERE observation_id='target' AND status='unresolved'").Scan(&conflictID))
+	resolved := updateObservation(target, 2, "resolved")
+	resolved.Kind, resolved.Observation, resolved.Project, resolved.Session = syncservice.MutationResolve, nil, nil, nil
+	resolved.Resolution = &syncservice.Resolution{ConflictIDs: []string{strings.ToUpper(conflictID)}, Observation: updateObservation(target, 2, "resolved").Observation}
+	mustNoError(t, pushAccepted(ctx, repo, first, resolved))
+	var status string
+	var resolvedSeq int64
+	mustNoError(t, conn.QueryRow(ctx, "SELECT status, resolved_seq FROM observation_conflicts WHERE conflict_id=$1", conflictID).Scan(&status, &resolvedSeq))
+	if status != "resolved" || resolvedSeq != 5 {
+		t.Fatalf("resolution linkage = %q/%d", status, resolvedSeq)
+	}
+	tombstone := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "target", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 3, Tombstone: &syncservice.Tombstone{DeletedAt: time.Now().UTC()}}
+	mustNoError(t, pushAccepted(ctx, repo, first, tombstone))
+	postTombstone := updateObservation(target, 3, "resurrection")
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{postTombstone}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("post-tombstone stale = %+v, %v", got, err)
+	}
+	var lifecycle, content string
+	mustNoError(t, conn.QueryRow(ctx, "SELECT lifecycle, content FROM observations WHERE id='target'").Scan(&lifecycle, &content))
+	if lifecycle != "tombstoned" || content != "" {
+		t.Fatalf("tombstone canonical = %q/%q", lifecycle, content)
+	}
+	for _, mutation := range []syncservice.Mutation{
+		updateObservation(target, 4, "current-base resurrection"),
+		func() syncservice.Mutation {
+			m := updateObservation(target, 4, "current-base archive")
+			m.Kind, m.Observation.Lifecycle = syncservice.MutationArchive, syncservice.LifecycleArchived
+			return m
+		}(),
+	} {
+		if got, err := repo.Push(ctx, first, []syncservice.Mutation{mutation}); err != nil || got[0].Disposition != syncservice.DispositionRejected {
+			t.Fatalf("tombstoned current-base mutation = %+v, %v", got, err)
+		}
+	}
+	cannotResolve := resolved
+	cannotResolve.MutationID, cannotResolve.BaseVersion = uuid.NewString(), 4
+	if got, err := repo.Push(ctx, first, []syncservice.Mutation{cannotResolve}); err != nil || got[0].Disposition != syncservice.DispositionRejected {
+		t.Fatalf("tombstoned resolution = %+v, %v", got, err)
+	}
+	if err := conn.QueryRow(ctx, "SELECT lifecycle, content FROM observations WHERE id='target'").Scan(&lifecycle, &content); err != nil || lifecycle != "tombstoned" || content != "" {
+		t.Fatalf("tombstone after current-base mutations = %q/%q, %v", lifecycle, content, err)
+	}
+}
+
+func TestRepositoryConflictRollbackWithoutSequenceGap(t *testing.T) {
+	ctx, conn := context.Background(), testConn(t)
+	mustNoError(t, Migrate(ctx, conn))
+	db := &changeFailDB{conn: conn}
+	repo, err := NewRepository(db, uuid.New())
+	mustNoError(t, err)
+	mustNoError(t, repo.EnsureOwner(ctx))
+	first, err := repo.IssueDevice(ctx, "first")
+	mustNoError(t, err)
+	second, err := repo.IssueDevice(ctx, "second")
+	mustNoError(t, err)
+	project, target := mutationProject("project", 0), mutationObservation("target", "project", "", nil, 0)
+	if _, err := repo.Push(ctx, first.ID, []syncservice.Mutation{project, target}); err != nil {
+		t.Fatal(err)
+	}
+	mustNoError(t, pushAccepted(ctx, repo, first.ID, updateObservation(target, 1, "canonical")))
+	before, err := repo.OwnerState(ctx)
+	mustNoError(t, err)
+	db.fail = true
+	got, err := repo.Push(ctx, second.ID, []syncservice.Mutation{updateObservation(target, 1, "competing")})
+	db.fail = false
+	if !errors.Is(err, ErrRepository) || got != nil {
+		t.Fatalf("conflict persistence failure = %+v, %v", got, err)
+	}
+	after, err := repo.OwnerState(ctx)
+	if err != nil || after.NextSeq != before.NextSeq {
+		t.Fatalf("sequence after rollback = %d, %v; want %d", after.NextSeq, err, before.NextSeq)
+	}
+	if got, err := repo.Push(ctx, second.ID, []syncservice.Mutation{updateObservation(target, 1, "competing")}); err != nil || got[0].Sequence == nil || *got[0].Sequence != before.NextSeq {
+		t.Fatalf("conflict retry = %+v, %v", got, err)
+	}
+}
+
+func conflictRepository(t *testing.T) (context.Context, *Repository, *pgx.Conn, uuid.UUID, uuid.UUID) {
+	t.Helper()
+	ctx, conn := context.Background(), testConn(t)
+	mustNoError(t, Migrate(ctx, conn))
+	repo, err := NewRepository(conn, uuid.New())
+	mustNoError(t, err)
+	mustNoError(t, repo.EnsureOwner(ctx))
+	first, err := repo.IssueDevice(ctx, "first")
+	mustNoError(t, err)
+	second, err := repo.IssueDevice(ctx, "second")
+	mustNoError(t, err)
+	return ctx, repo, conn, first.ID, second.ID
+}
+
+func updateObservation(m syncservice.Mutation, base int64, content string) syncservice.Mutation {
+	m.MutationID, m.Kind, m.BaseVersion = uuid.NewString(), syncservice.MutationUpdate, base
+	o := *m.Observation
+	o.Content, o.UpdatedAt = content, time.Now().UTC()
+	m.Observation = &o
+	return m
+}
+
+func pushAccepted(ctx context.Context, repo *Repository, device uuid.UUID, mutation syncservice.Mutation) error {
+	got, err := repo.Push(ctx, device, []syncservice.Mutation{mutation})
+	if err != nil || len(got) != 1 || got[0].Disposition != syncservice.DispositionAccepted {
+		return errors.New("mutation was not accepted")
+	}
+	return nil
 }
 
 func mutationEffects(t *testing.T, ctx context.Context, conn *pgx.Conn) int {
