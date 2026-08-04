@@ -94,11 +94,21 @@ type Mutation struct {
 }
 
 type Change struct {
-	Sequence         int64    `json:"sequence"`
-	CanonicalVersion int64    `json:"canonical_version"`
-	Mutation         Mutation `json:"mutation"`
-	ChangeHash       string   `json:"change_hash"`
+	Sequence          int64             `json:"sequence"`
+	CanonicalVersion  int64             `json:"canonical_version"`
+	HashVersion       *int              `json:"hash_version,omitempty"`
+	ChangeDisposition ChangeDisposition `json:"change_disposition,omitempty"`
+	ConflictID        string            `json:"conflict_id,omitempty"`
+	Mutation          Mutation          `json:"mutation"`
+	ChangeHash        string            `json:"change_hash"`
 }
+
+type ChangeDisposition string
+
+const (
+	ChangeDispositionAccepted ChangeDisposition = "accepted"
+	ChangeDispositionConflict ChangeDisposition = "conflict"
+)
 
 type Cursor struct {
 	HistoryID string `json:"history_id"`

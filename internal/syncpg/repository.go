@@ -201,12 +201,13 @@ func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncse
 	if watermark < cursor.Position || watermark > head {
 		return syncservice.PullPage{}, ErrRepository
 	}
-	rows, err := tx.Query(ctx, `SELECT c.seq, c.record_kind, c.record_id, c.canonical_version,
-		m.mutation_id, m.kind, m.base_version, m.resolution_conflict_ids, v.snapshot, t.deleted_at
+	rows, err := tx.Query(ctx, `SELECT c.seq, c.record_kind, c.record_id, c.canonical_version, c.change_kind,
+		m.mutation_id, m.kind, m.base_version, m.resolution_conflict_ids, v.snapshot, t.deleted_at, f.conflict_ids
 		FROM `+table("changes")+` c
 		JOIN `+table("mutations")+` m ON m.owner_id=c.owner_id AND m.device_id=c.mutation_device_id AND m.mutation_id=c.mutation_id AND m.record_id=c.record_id AND m.canonical_seq=c.seq AND m.canonical_version=c.canonical_version AND m.disposition=c.change_kind
 		JOIN `+table("record_versions")+` v ON v.owner_id=c.owner_id AND v.id=c.version_id AND v.record_kind=c.record_kind AND v.record_id=c.record_id AND v.source_device_id=c.mutation_device_id AND v.source_mutation_id=c.mutation_id AND v.disposition=c.change_kind AND ((c.change_kind='conflict' AND v.record_version=m.base_version+1 AND v.base_version=m.base_version) OR (c.change_kind='accepted' AND v.base_version=m.base_version AND v.record_version=m.base_version+1 AND v.record_version=c.canonical_version))
 		LEFT JOIN `+table("tombstones")+` t ON t.owner_id=c.owner_id AND t.version_id=c.version_id AND t.record_kind=c.record_kind AND t.record_id=c.record_id
+		LEFT JOIN LATERAL (SELECT array_agg(conflict_id) AS conflict_ids FROM `+table("observation_conflicts")+` f WHERE f.owner_id=c.owner_id AND f.created_seq=c.seq AND f.observation_id=c.record_id AND f.competing_version_id=c.version_id AND f.canonical_version=c.canonical_version) f ON true
 		WHERE c.owner_id=$1 AND c.seq>$2 AND c.seq<=$3 ORDER BY c.seq LIMIT $4`, r.ownerID, cursor.Position, watermark, limit+1)
 	if err != nil {
 		return syncservice.PullPage{}, repositoryError(ctx)
@@ -218,12 +219,12 @@ func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncse
 	remaining := syncservice.MaxPullResponseBytes - 4<<10
 	for rows.Next() {
 		var sequence, version, base int64
-		var recordKind, recordID, kind string
+		var recordKind, recordID, kind, changeKind string
 		var mutationID uuid.UUID
-		var conflictIDs []uuid.UUID
+		var conflictIDs, createdConflictIDs []uuid.UUID
 		var snapshot []byte
 		var deletedAt *time.Time
-		if err := rows.Scan(&sequence, &recordKind, &recordID, &version, &mutationID, &kind, &base, &conflictIDs, &snapshot, &deletedAt); err != nil {
+		if err := rows.Scan(&sequence, &recordKind, &recordID, &version, &changeKind, &mutationID, &kind, &base, &conflictIDs, &snapshot, &deletedAt, &createdConflictIDs); err != nil {
 			return syncservice.PullPage{}, repositoryError(ctx)
 		}
 		if sequence != expected {
@@ -238,6 +239,22 @@ func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncse
 			return syncservice.PullPage{}, ErrRepository
 		}
 		change := syncservice.Change{Sequence: sequence, CanonicalVersion: version, Mutation: mutation}
+		switch changeKind {
+		case string(syncservice.DispositionConflict):
+			if len(createdConflictIDs) != 1 {
+				return syncservice.PullPage{}, ErrRepository
+			}
+			change.HashVersion, change.ChangeDisposition, change.ConflictID = hashVersion(2), syncservice.ChangeDispositionConflict, createdConflictIDs[0].String()
+		case string(syncservice.DispositionAccepted):
+			if len(createdConflictIDs) != 0 {
+				return syncservice.PullPage{}, ErrRepository
+			}
+			if mutation.Kind == syncservice.MutationTombstone || mutation.Kind == syncservice.MutationResolve {
+				change.HashVersion, change.ChangeDisposition = hashVersion(2), syncservice.ChangeDispositionAccepted
+			}
+		default:
+			return syncservice.PullPage{}, ErrRepository
+		}
 		change.ChangeHash, err = syncservice.CanonicalChangeHash(change)
 		if err != nil {
 			return syncservice.PullPage{}, ErrRepository
@@ -270,6 +287,8 @@ func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncse
 	}
 	return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: state.HistoryID.String(), Position: position, Watermark: watermark}, HasMore: hasMore, Changes: changes}, nil
 }
+
+func hashVersion(value int) *int { return &value }
 
 func pullMutation(recordKind, recordID, kind string, mutationID uuid.UUID, base int64, conflictIDs []uuid.UUID, snapshot []byte, deletedAt *time.Time) (syncservice.Mutation, bool) {
 	m := syncservice.Mutation{MutationID: mutationID.String(), RecordID: recordID, RecordKind: syncservice.RecordKind(recordKind), Kind: syncservice.MutationKind(kind), BaseVersion: base}
@@ -426,6 +445,9 @@ func (r *Repository) pushOne(ctx context.Context, deviceID uuid.UUID, mutation s
 			return syncservice.Result{}, repositoryError(ctx)
 		}
 		topicCollision = true
+	}
+	if topicCollision && mutation.Kind != syncservice.MutationCreate && mutation.Kind != syncservice.MutationUpdate {
+		return reject("invalid_prerequisite")
 	}
 	conflict := mutation.RecordKind == syncservice.RecordKindObservation &&
 		((mutation.Kind == syncservice.MutationUpdate && current != mutation.BaseVersion) || topicCollision)

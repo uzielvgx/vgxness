@@ -808,6 +808,108 @@ func TestRepositoryPullWatermarkAndResolveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPullRejectsInvalidSpecialBackendChange(t *testing.T) {
+	ctx, repo, conn, first, second := conflictRepository(t)
+	target := mutationObservation("target", "project", "", nil, 0)
+	mustNoError(t, pushAccepted(ctx, repo, first, mutationProject("project", 0)))
+	mustNoError(t, pushAccepted(ctx, repo, first, target))
+	mustNoError(t, pushAccepted(ctx, repo, first, updateObservation(target, 1, "canonical")))
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{updateObservation(target, 1, "competing")}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("conflict = %+v, %v", got, err)
+	}
+	_, err := conn.Exec(ctx, "DELETE FROM observation_conflicts WHERE observation_id='target'")
+	mustNoError(t, err)
+	if page, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 10); !errors.Is(err, ErrRepository) || len(page.Changes) != 0 {
+		t.Fatalf("invalid special backend change = %+v, %v", page, err)
+	}
+}
+
+func TestPullConflictMapsCanonicalConflictIDAndV2Hash(t *testing.T) {
+	ctx, repo, conn, first, second := conflictRepository(t)
+	target := mutationObservation("target", "project", "", nil, 0)
+	mustNoError(t, pushAccepted(ctx, repo, first, mutationProject("project", 0)))
+	mustNoError(t, pushAccepted(ctx, repo, first, target))
+	mustNoError(t, pushAccepted(ctx, repo, first, updateObservation(target, 1, "canonical")))
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{updateObservation(target, 1, "competing")}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("conflict = %+v, %v", got, err)
+	}
+	var conflictID string
+	mustNoError(t, conn.QueryRow(ctx, "SELECT conflict_id FROM observation_conflicts WHERE observation_id='target'").Scan(&conflictID))
+	page, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 10)
+	mustNoError(t, err)
+	change := page.Changes[len(page.Changes)-1]
+	if change.HashVersion == nil || *change.HashVersion != 2 || change.ChangeDisposition != syncservice.ChangeDispositionConflict || change.ConflictID != conflictID || syncservice.VerifyChangeHash(change) != nil {
+		t.Fatalf("conflict pull = %+v", change)
+	}
+}
+
+func TestPullAcceptedSpecialMapsV2WithoutConflictID(t *testing.T) {
+	ctx, repo, _, device, _ := conflictRepository(t)
+	target := mutationObservation("target", "project", "", nil, 0)
+	mustNoError(t, pushAccepted(ctx, repo, device, mutationProject("project", 0)))
+	mustNoError(t, pushAccepted(ctx, repo, device, target))
+	mustNoError(t, pushAccepted(ctx, repo, device, syncservice.Mutation{MutationID: uuid.NewString(), RecordID: target.RecordID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: time.Now().UTC()}}))
+	page, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 10)
+	mustNoError(t, err)
+	change := page.Changes[len(page.Changes)-1]
+	if change.HashVersion == nil || *change.HashVersion != 2 || change.ChangeDisposition != syncservice.ChangeDispositionAccepted || change.ConflictID != "" || syncservice.VerifyChangeHash(change) != nil {
+		t.Fatalf("accepted special pull = %+v", change)
+	}
+}
+
+func TestAcceptedConflictLinkCorruptionIsRejected(t *testing.T) {
+	ctx, repo, conn, device, _ := conflictRepository(t)
+	target := mutationObservation("target", "project", "", nil, 0)
+	mustNoError(t, pushAccepted(ctx, repo, device, mutationProject("project", 0)))
+	mustNoError(t, pushAccepted(ctx, repo, device, target))
+	mustNoError(t, pushAccepted(ctx, repo, device, syncservice.Mutation{MutationID: uuid.NewString(), RecordID: target.RecordID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: time.Now().UTC()}}))
+	var seq, version int64
+	var versionID int64
+	mustNoError(t, conn.QueryRow(ctx, "SELECT seq, canonical_version, version_id FROM changes WHERE record_id=$1 AND change_kind='accepted' ORDER BY seq DESC LIMIT 1", target.RecordID).Scan(&seq, &version, &versionID))
+	if _, err := conn.Exec(ctx, "INSERT INTO observation_conflicts(owner_id,conflict_id,observation_id,canonical_version,competing_version_id,status,created_seq) VALUES ($1,$2,$3,$4,$5,'unresolved',$6)", repo.ownerID, uuid.New(), target.RecordID, version, versionID, seq); err == nil {
+		t.Fatal("accepted conflict link corruption was inserted")
+	}
+	page, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 10)
+	mustNoError(t, err)
+	change := page.Changes[len(page.Changes)-1]
+	if len(page.Changes) != 3 || change.HashVersion == nil || *change.HashVersion != 2 || change.ChangeDisposition != syncservice.ChangeDispositionAccepted || change.ConflictID != "" || syncservice.VerifyChangeHash(change) != nil {
+		t.Fatalf("accepted special pull after rejected corruption = %+v", page)
+	}
+}
+
+func TestPushRejectsArchiveTopicCollisionWithoutConflictHistory(t *testing.T) {
+	ctx, repo, conn, first, _ := conflictRepository(t)
+	target := mutationObservation("target", "project", "", nil, 0)
+	holder := mutationObservation("holder", "project", "", nil, 0)
+	holder.Observation.TopicKey = "taken"
+	mustNoError(t, pushAccepted(ctx, repo, first, mutationProject("project", 0)))
+	mustNoError(t, pushAccepted(ctx, repo, first, holder))
+	mustNoError(t, pushAccepted(ctx, repo, first, target))
+	archive := updateObservation(target, 1, "archived")
+	archive.Kind, archive.Observation.Lifecycle, archive.Observation.TopicKey = syncservice.MutationArchive, syncservice.LifecycleArchived, "taken"
+	var before int
+	mustNoError(t, conn.QueryRow(ctx, "SELECT count(*) FROM changes").Scan(&before))
+	got, err := repo.Push(ctx, first, []syncservice.Mutation{archive})
+	if err != nil || len(got) != 1 || got[0].Disposition != syncservice.DispositionRejected || got[0].Code != "invalid_prerequisite" {
+		t.Fatalf("archive topic collision = %+v, %v", got, err)
+	}
+	var after int
+	mustNoError(t, conn.QueryRow(ctx, "SELECT count(*) FROM changes").Scan(&after))
+	if after != before {
+		t.Fatalf("changes = %d, want %d", after, before)
+	}
+}
+
+func TestPullOwnerIsolationDoesNotExposeForeignConflict(t *testing.T) {
+	ctx, repo, _, first, _ := conflictRepository(t)
+	mustNoError(t, pushAccepted(ctx, repo, first, mutationProject("project", 0)))
+	foreign, err := NewRepository(repo.db, uuid.New())
+	mustNoError(t, err)
+	if page, err := foreign.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 10); !errors.Is(err, ErrRepository) || len(page.Changes) != 0 {
+		t.Fatalf("foreign pull = %+v, %v", page, err)
+	}
+}
+
 func TestRepositoryPullRejectsSwappedResolveIdentityAndSequence(t *testing.T) {
 	ctx, repo, conn, first, second := conflictRepository(t)
 	project, target := mutationProject("project", 0), mutationObservation("target", "project", "", nil, 0)
@@ -1051,8 +1153,8 @@ func TestRepositoryPullRetainsResolveIDsAndLifecyclePayloads(t *testing.T) {
 	competing.Observation.TopicKey = "taken"
 	competing.Kind, competing.Resolution = syncservice.MutationResolve, &syncservice.Resolution{ConflictIDs: []string{ids[0].String(), ids[1].String()}, Observation: competing.Observation}
 	competing.Observation = nil
-	if got, err := repo.Push(ctx, second, []syncservice.Mutation{competing}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
-		t.Fatalf("resolve conflict = %+v, %v", got, err)
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{competing}); err != nil || got[0].Disposition != syncservice.DispositionRejected || got[0].Code != "invalid_prerequisite" {
+		t.Fatalf("resolve topic collision = %+v, %v", got, err)
 	}
 	archive := updateObservation(target, 3, "archived")
 	archive.Kind, archive.Observation.Lifecycle = syncservice.MutationArchive, syncservice.LifecycleArchived
@@ -1061,7 +1163,7 @@ func TestRepositoryPullRetainsResolveIDsAndLifecyclePayloads(t *testing.T) {
 	mustNoError(t, pushAccepted(ctx, repo, first, tombstone))
 	page, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 20)
 	mustNoError(t, err)
-	if page.HasMore || len(page.Changes) != 10 {
+	if page.HasMore || len(page.Changes) != 9 {
 		t.Fatalf("page = %+v", page)
 	}
 	for _, change := range page.Changes {
@@ -1079,7 +1181,14 @@ func TestRepositoryPullRetainsResolveIDsAndLifecyclePayloads(t *testing.T) {
 			t.Fatalf("change %d hash changed", index+1)
 		}
 	}
-	if got := page.Changes[6].Mutation.Resolution.ConflictIDs; !reflect.DeepEqual(got, []string{ids[1].String(), ids[0].String()}) || !reflect.DeepEqual(page.Changes[7].Mutation.Resolution.ConflictIDs, []string{ids[0].String(), ids[1].String()}) || page.Changes[8].Mutation.Observation.Lifecycle != syncservice.LifecycleArchived || page.Changes[9].Mutation.Tombstone.DeletedAt.IsZero() {
+	var resolves int
+	for _, change := range page.Changes {
+		if change.Mutation.Kind == syncservice.MutationResolve {
+			resolves++
+		}
+	}
+	resolvedIDs := page.Changes[6].Mutation.Resolution.ConflictIDs
+	if resolves != 1 || !reflect.DeepEqual(resolvedIDs, []string{ids[1].String(), ids[0].String()}) || page.Changes[7].Mutation.Observation.Lifecycle != syncservice.LifecycleArchived || page.Changes[8].Mutation.Tombstone.DeletedAt.IsZero() {
 		t.Fatalf("pulled lifecycle/resolve payload = %+v", page.Changes)
 	}
 	var nonResolve int

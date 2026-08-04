@@ -33,19 +33,64 @@ type canonicalChange struct {
 	Mutation         Mutation `json:"mutation"`
 }
 
+type canonicalChangeV2 struct {
+	HashVersion       int               `json:"hash_version"`
+	Sequence          int64             `json:"sequence"`
+	CanonicalVersion  int64             `json:"canonical_version"`
+	ChangeDisposition ChangeDisposition `json:"change_disposition"`
+	ConflictID        string            `json:"conflict_id"`
+	Mutation          Mutation          `json:"mutation"`
+}
+
 // CanonicalChangeHash returns the replay-consistency hash for a pulled change.
 func CanonicalChangeHash(change Change) (string, error) {
-	encoded, err := json.Marshal(canonicalChange{
-		HashVersion:      1,
-		Sequence:         change.Sequence,
-		CanonicalVersion: change.CanonicalVersion,
-		Mutation:         change.Mutation,
-	})
+	if err := ValidateChangeEnvelope(change); err != nil {
+		return "", err
+	}
+	var (
+		encoded []byte
+		err     error
+	)
+	if change.HashVersion != nil && *change.HashVersion == 2 {
+		encoded, err = json.Marshal(canonicalChangeV2{HashVersion: *change.HashVersion, Sequence: change.Sequence, CanonicalVersion: change.CanonicalVersion, ChangeDisposition: change.ChangeDisposition, ConflictID: change.ConflictID, Mutation: change.Mutation})
+	} else {
+		encoded, err = json.Marshal(canonicalChange{HashVersion: 1, Sequence: change.Sequence, CanonicalVersion: change.CanonicalVersion, Mutation: change.Mutation})
+	}
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// ValidateChangeEnvelope verifies the versioned pull envelope independently of
+// the mutation payload validation performed at the protocol boundary.
+func ValidateChangeEnvelope(change Change) error {
+	if change.Sequence < 1 || change.CanonicalVersion < 1 {
+		return ErrInvalidChangeHash
+	}
+	if change.HashVersion == nil || *change.HashVersion == 1 {
+		if change.ChangeDisposition != "" || change.ConflictID != "" || change.Mutation.Kind == MutationTombstone || change.Mutation.Kind == MutationResolve {
+			return ErrInvalidChangeHash
+		}
+		return nil
+	}
+	if *change.HashVersion != 2 {
+		return ErrInvalidChangeHash
+	}
+	switch change.Mutation.Kind {
+	case MutationCreate, MutationUpdate:
+		if change.Mutation.RecordKind != RecordKindObservation || change.ChangeDisposition != ChangeDispositionConflict || !isUUID(change.ConflictID) {
+			return ErrInvalidChangeHash
+		}
+	case MutationTombstone, MutationResolve:
+		if change.ChangeDisposition != ChangeDispositionAccepted || change.ConflictID != "" {
+			return ErrInvalidChangeHash
+		}
+	default:
+		return ErrInvalidChangeHash
+	}
+	return nil
 }
 
 // VerifyChangeHash verifies a pulled change's replay-consistency hash.

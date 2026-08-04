@@ -1,6 +1,7 @@
 package syncservice
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -163,3 +164,41 @@ func TestLegacyIDsAndBootstrapCreates(t *testing.T) {
 		t.Fatal("archived update")
 	}
 }
+
+func TestCanonicalChangeHashV1OrdinaryGoldenUnchanged(t *testing.T) {
+	base := `{"sequence":1,"canonical_version":1,"mutation":{"mutation_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","record_id":"project","record_kind":"project","kind":"create","base_version":0,"project":{"id":"project"}}}`
+	for _, wire := range []string{base, strings.TrimSuffix(base, "}") + `,"hash_version":1}`} {
+		var decoded Change
+		if err := json.Unmarshal([]byte(wire), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		hash, err := CanonicalChangeHash(decoded)
+		if err != nil || hash != "11d715b99da25ca73ef871a74b0543901f57937632ca7ea47eee5ec4157bac08" {
+			t.Fatalf("v1 hash = %q, %v", hash, err)
+		}
+	}
+}
+
+func TestCanonicalChangeHashV2SpecialEnvelope(t *testing.T) {
+	ordinary := Change{Sequence: 1, CanonicalVersion: 1, Mutation: validMutation(MutationCreate)}
+	ordinary.Mutation.BaseVersion = 0
+	special := ordinary
+	special.HashVersion, special.ChangeDisposition, special.ConflictID = hashVersion(2), ChangeDispositionConflict, "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91"
+	ordinaryHash, _ := CanonicalChangeHash(ordinary)
+	specialHash, _ := CanonicalChangeHash(special)
+	if specialHash == ordinaryHash {
+		t.Fatal("v2 special envelope used the v1 hash")
+	}
+}
+
+func TestVerifyChangeHashRejectsTamperedOrUnsupportedV2(t *testing.T) {
+	change := Change{Sequence: 1, CanonicalVersion: 1, Mutation: Mutation{MutationID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91", RecordID: "project", RecordKind: RecordKindProject, Kind: MutationCreate, Project: &Project{ID: "project"}}}
+	special := change
+	special.HashVersion, special.ChangeDisposition = hashVersion(2), ChangeDispositionAccepted
+	special.ChangeHash, _ = CanonicalChangeHash(special)
+	if VerifyChangeHash(special) == nil {
+		t.Fatal("accepted unsupported v2 envelope")
+	}
+}
+
+func hashVersion(value int) *int { return &value }

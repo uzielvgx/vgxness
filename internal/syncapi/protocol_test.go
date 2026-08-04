@@ -155,10 +155,36 @@ func TestPullChangeHashContractAndDecoder(t *testing.T) {
 			t.Fatalf("accepted invalid hash: %s", changeJSON)
 		}
 	}
-	unknown := strings.TrimSuffix(string(encoded), "}") + `,"future_change":true}`
-	unknown = strings.Replace(string(response(unknown)), `"changes"`, `"future_root":true,"changes"`, 1)
+	unknown := strings.Replace(string(response(string(encoded))), `"changes"`, `"future_root":true,"changes"`, 1)
 	if _, err := DecodePullResponse([]byte(unknown)); err != nil {
 		t.Fatalf("unknown additive fields: %v", err)
+	}
+}
+
+func TestDecodePullResponseRejectsInvalidSpecialHashEnvelope(t *testing.T) {
+	change := pullProjectChange(1)
+	invalid := strings.Replace(change, `,"change_hash"`, `,"hash_version":2,"change_disposition":"accepted","conflict_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","change_hash"`, 1)
+	body := []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[` + invalid + `]}`)
+	if _, err := DecodePullResponse(body); err == nil {
+		t.Fatal("accepted malformed v2 accepted envelope")
+	}
+}
+
+func TestDecodePullResponseRejectsExplicitZeroHashVersion(t *testing.T) {
+	change := strings.TrimSuffix(pullProjectChange(1), "}") + `,"hash_version":0}`
+	body := []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[` + change + `]}`)
+	if _, err := DecodePullResponse(body); err == nil {
+		t.Fatal("accepted explicit hash_version zero")
+	}
+}
+
+func TestDecodePullResponseRejectsUnknownChangeFieldsAndDispositionAlias(t *testing.T) {
+	for _, field := range []string{`"future_change":true`, `"disposition":"accepted"`} {
+		change := strings.TrimSuffix(pullProjectChange(1), "}") + `,` + field + `}`
+		body := []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[` + change + `]}`)
+		if _, err := DecodePullResponse(body); err == nil {
+			t.Fatalf("accepted unknown change field %s", field)
+		}
 	}
 }
 
