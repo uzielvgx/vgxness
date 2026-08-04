@@ -328,6 +328,12 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 }
 
 func (s *Store) syncSchemaHealthy(ctx context.Context) bool {
+	for _, table := range []string{"projects", "sessions", "observations"} {
+		schema, ok := s.schemaSQL(ctx, "table", table)
+		if !ok || !schemaHas(schema, "sync_version integer not null default 0 check (sync_version >= 0)") {
+			return false
+		}
+	}
 	profileSQL, ok := s.schemaSQL(ctx, "table", "sync_profiles")
 	if !ok || !s.schemaColumns(ctx, "sync_profiles", "singleton", "enabled", "endpoint", "device_id", "credential_ref", "created_at", "updated_at") || !schemaHas(profileSQL,
 		"singleton integer primary key check (singleton = 1)",
@@ -561,6 +567,9 @@ func (s *Store) Save(ctx context.Context, item Observation) (Observation, error)
 	if err := insertObservation(ctx, tx, item); err != nil {
 		return Observation{}, err
 	}
+	if err := s.enqueueLocalWrite(ctx, tx, item); err != nil {
+		return Observation{}, err
+	}
 	if err := commit(ctx, tx); err != nil {
 		return Observation{}, err
 	}
@@ -617,6 +626,9 @@ func (s *Store) updateTx(ctx context.Context, tx *sql.Tx, existing, item Observa
 	}
 	if err != nil {
 		return Observation{}, writeError(ctx, err)
+	}
+	if err := s.enqueueLocalWrite(ctx, tx, item); err != nil {
+		return Observation{}, err
 	}
 	if err := commit(ctx, tx); err != nil {
 		return Observation{}, err
