@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,6 +25,15 @@ type Store struct {
 	readOnly   bool
 	checkpoint func() (busy, log, checkpointed int, err error)
 	close      func() error
+	syncMu     sync.Mutex
+	syncInbox  syncInboxCache
+}
+
+type syncInboxCache struct {
+	known       bool
+	dataVersion int64
+	historyID   string
+	position    int64
 }
 
 func Open(ctx context.Context, path string, now func() time.Time) (*Store, error) {
@@ -249,6 +259,8 @@ func (s *Store) Close() error {
 	if s == nil || s.db == nil && s.close == nil {
 		return nil
 	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
 	var checkpointErr error
 	if !s.readOnly {
 		// Keep the main database complete by checkpointing committed WAL state

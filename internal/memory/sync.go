@@ -256,10 +256,7 @@ func (s *Store) enqueueLocalWrite(ctx context.Context, tx *sql.Tx, item Observat
 	if err != nil {
 		return writeError(ctx, err)
 	}
-	if enabled == 0 {
-		return nil
-	}
-	if enabled != 1 {
+	if enabled != 0 && enabled != 1 {
 		return fmt.Errorf("%w: invalid sync profile", ErrCorrupt)
 	}
 	projectVersion, err := syncVersion(ctx, tx, `SELECT sync_version FROM projects WHERE id=?`, item.Project)
@@ -332,6 +329,418 @@ func (s *Store) enqueueIdentity(ctx context.Context, tx *sql.Tx, mutation syncse
 		return fmt.Errorf("%w: sync identity snapshot", ErrConflict)
 	}
 	return nil
+}
+
+// ApplyPulledChange atomically records one verified, ordered remote change.
+func (s *Store) ApplyPulledChange(ctx context.Context, historyID string, change syncservice.Change) error {
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	if !canonicalUUIDPattern.MatchString(historyID) || change.Sequence <= 0 || change.CanonicalVersion <= 0 || syncservice.ValidateMutation(change.Mutation) != nil || syncservice.VerifyChangeHash(change) != nil {
+		return fmt.Errorf("%w: invalid pulled change", ErrInvalid)
+	}
+	hash, err := hex.DecodeString(change.ChangeHash)
+	if err != nil || len(hash) != 32 || !ordinaryPulledMutation(change.Mutation) {
+		return fmt.Errorf("%w: invalid pulled change", ErrInvalid)
+	}
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.syncInbox.known = false
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	epoch, err := syncDataVersion(ctx, tx)
+	if err != nil {
+		s.syncInbox.known = false
+		return err
+	}
+	position, replay, cached, err := cachedPulledCursor(ctx, tx, historyID, change.Sequence, hash, s.syncInbox, epoch)
+	if !cached && err == nil {
+		position, replay, err = pulledCursor(ctx, tx, historyID, change.Sequence, hash)
+	}
+	if err != nil {
+		s.syncInbox.known = false
+		return err
+	}
+	if replay {
+		if err = commit(ctx, tx); err != nil {
+			s.syncInbox.known = false
+			return err
+		}
+		s.syncInbox = syncInboxCache{known: true, dataVersion: epoch, historyID: historyID, position: position}
+		return nil
+	}
+	if position == int64(^uint64(0)>>1) || change.Sequence != position+1 {
+		return fmt.Errorf("%w: noncontiguous pulled change", ErrConflict)
+	}
+	var pending int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox WHERE record_kind=? AND record_id=? AND state IN ('pending','retry')`, change.Mutation.RecordKind, change.Mutation.RecordID).Scan(&pending); err != nil {
+		s.syncInbox.known = false
+		return writeError(ctx, err)
+	}
+	if pending != 0 {
+		return fmt.Errorf("%w: local sync work is pending", ErrConflict)
+	}
+	if err = s.applyPulledMutation(ctx, tx, change); err != nil {
+		if !cached || !errors.Is(err, ErrConflict) && !errors.Is(err, ErrInvalid) && !errors.Is(err, ErrNotFound) {
+			s.syncInbox.known = false
+		}
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sync_inbox(history_id,seq,change_hash,applied_at) VALUES(?,?,?,?)`, historyID, change.Sequence, hash, now); err != nil {
+		s.syncInbox.known = false
+		return writeError(ctx, err)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sync_cursor(singleton,history_id,position,updated_at) VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET history_id=excluded.history_id,position=excluded.position,updated_at=excluded.updated_at`, historyID, change.Sequence, now); err != nil {
+		s.syncInbox.known = false
+		return writeError(ctx, err)
+	}
+	if err = commit(ctx, tx); err != nil {
+		s.syncInbox.known = false
+		return err
+	}
+	s.syncInbox = syncInboxCache{known: true, dataVersion: epoch, historyID: historyID, position: change.Sequence}
+	return nil
+}
+
+func ordinaryPulledMutation(m syncservice.Mutation) bool {
+	if m.RecordKind == syncservice.RecordKindProject || m.RecordKind == syncservice.RecordKindSession {
+		return m.Kind == syncservice.MutationCreate || m.Kind == syncservice.MutationUpdate
+	}
+	if m.RecordKind != syncservice.RecordKindObservation || m.Observation == nil || m.Observation.Review != syncservice.ReviewClear {
+		return false
+	}
+	switch m.Kind {
+	case syncservice.MutationCreate:
+		return m.Observation.Lifecycle == syncservice.LifecycleActive || m.Observation.Lifecycle == syncservice.LifecycleArchived
+	case syncservice.MutationUpdate:
+		return m.Observation.Lifecycle == syncservice.LifecycleActive
+	case syncservice.MutationArchive:
+		return m.Observation.Lifecycle == syncservice.LifecycleArchived
+	default:
+		return false
+	}
+}
+
+func syncDataVersion(ctx context.Context, tx *sql.Tx) (int64, error) {
+	var version int64
+	if err := tx.QueryRowContext(ctx, `PRAGMA data_version`).Scan(&version); err != nil {
+		return 0, writeError(ctx, err)
+	}
+	if version < 0 {
+		return 0, fmt.Errorf("%w: invalid sync data version", ErrCorrupt)
+	}
+	return version, nil
+}
+
+func cachedPulledCursor(ctx context.Context, tx *sql.Tx, historyID string, sequence int64, hash []byte, cache syncInboxCache, epoch int64) (int64, bool, bool, error) {
+	if !cache.known || cache.dataVersion != epoch {
+		return 0, false, false, nil
+	}
+	var durableHistory string
+	var position, updated int64
+	err := tx.QueryRowContext(ctx, `SELECT history_id,position,updated_at FROM sync_cursor WHERE singleton=1`).Scan(&durableHistory, &position, &updated)
+	if errors.Is(err, sql.ErrNoRows) || err != nil || !canonicalUUIDPattern.MatchString(durableHistory) || position < 0 || !validStoredSyncTime(updated, time.Unix(0, updated)) || durableHistory != cache.historyID || position != cache.position || durableHistory != historyID {
+		return 0, false, false, nil
+	}
+	if position > 0 {
+		if _, err = pulledInboxRow(ctx, tx, historyID, position); err != nil {
+			return 0, false, true, err
+		}
+	}
+	if sequence <= position {
+		stored, rowErr := pulledInboxRow(ctx, tx, historyID, sequence)
+		if rowErr != nil || !bytes.Equal(stored, hash) {
+			return 0, false, true, fmt.Errorf("%w: pulled replay does not match inbox", ErrCorrupt)
+		}
+		return position, true, true, nil
+	}
+	var next int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_inbox WHERE history_id=? AND seq=?`, historyID, position+1).Scan(&next); err != nil {
+		return 0, false, true, writeError(ctx, err)
+	}
+	if next != 0 {
+		return 0, false, true, fmt.Errorf("%w: cursor inbox mismatch", ErrCorrupt)
+	}
+	return position, false, true, nil
+}
+
+func pulledInboxRow(ctx context.Context, tx *sql.Tx, historyID string, sequence int64) ([]byte, error) {
+	var history, historyType, sequenceType, hashType, appliedType string
+	var storedSequence, applied int64
+	var hash []byte
+	err := tx.QueryRowContext(ctx, `SELECT history_id,seq,change_hash,applied_at,typeof(history_id),typeof(seq),typeof(change_hash),typeof(applied_at) FROM sync_inbox WHERE history_id=? AND seq=?`, historyID, sequence).Scan(&history, &storedSequence, &hash, &applied, &historyType, &sequenceType, &hashType, &appliedType)
+	if err != nil || historyType != "text" || sequenceType != "integer" || hashType != "blob" || appliedType != "integer" || history != historyID || !canonicalUUIDPattern.MatchString(history) || storedSequence != sequence || sequence <= 0 || len(hash) != 32 || !validStoredSyncTime(applied, time.Unix(0, applied)) {
+		return nil, fmt.Errorf("%w: cursor inbox mismatch", ErrCorrupt)
+	}
+	return hash, nil
+}
+
+func pulledCursor(ctx context.Context, tx *sql.Tx, historyID string, sequence int64, hash []byte) (int64, bool, error) {
+	var storedHistory string
+	var position, updated int64
+	err := tx.QueryRowContext(ctx, `SELECT history_id,position,updated_at FROM sync_cursor WHERE singleton=1`).Scan(&storedHistory, &position, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		if sequence != 1 {
+			return 0, false, fmt.Errorf("%w: pulled history gap", ErrConflict)
+		}
+		return 0, false, pulledInboxEmpty(ctx, tx)
+	}
+	if err != nil || !canonicalUUIDPattern.MatchString(storedHistory) || position < 0 || !validStoredSyncTime(updated, time.Unix(0, updated)) || storedHistory != historyID {
+		return 0, false, fmt.Errorf("%w: invalid pulled cursor", ErrCorrupt)
+	}
+	if err := pulledInboxConsistent(ctx, tx, historyID, position); err != nil {
+		return 0, false, err
+	}
+	if sequence > position {
+		return position, false, nil
+	}
+	var storedHash []byte
+	err = tx.QueryRowContext(ctx, `SELECT change_hash FROM sync_inbox WHERE history_id=? AND seq=?`, historyID, sequence).Scan(&storedHash)
+	if err != nil || len(storedHash) != 32 || !bytes.Equal(storedHash, hash) {
+		return 0, false, fmt.Errorf("%w: pulled replay does not match inbox", ErrCorrupt)
+	}
+	return position, true, nil
+}
+
+func pulledInboxEmpty(ctx context.Context, tx *sql.Tx) error {
+	var count int64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_inbox`).Scan(&count); err != nil {
+		return writeError(ctx, err)
+	}
+	if count != 0 {
+		return fmt.Errorf("%w: inbox without cursor", ErrCorrupt)
+	}
+	return nil
+}
+
+func pulledInboxConsistent(ctx context.Context, tx *sql.Tx, historyID string, position int64) error {
+	rows, err := tx.QueryContext(ctx, `SELECT history_id,seq,change_hash,applied_at,typeof(history_id),typeof(seq),typeof(change_hash),typeof(applied_at) FROM sync_inbox ORDER BY seq`)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer rows.Close()
+	expected := int64(1)
+	for rows.Next() {
+		var storedHistory, historyType, sequenceType, hashType, appliedType string
+		var sequence, applied int64
+		var hash []byte
+		if err := rows.Scan(&storedHistory, &sequence, &hash, &applied, &historyType, &sequenceType, &hashType, &appliedType); err != nil {
+			return writeError(ctx, err)
+		}
+		if historyType != "text" || sequenceType != "integer" || hashType != "blob" || appliedType != "integer" || storedHistory != historyID || !canonicalUUIDPattern.MatchString(storedHistory) || sequence != expected || len(hash) != 32 || !validStoredSyncTime(applied, time.Unix(0, applied)) {
+			return fmt.Errorf("%w: cursor inbox mismatch", ErrCorrupt)
+		}
+		expected++
+	}
+	if err := rows.Err(); err != nil {
+		return writeError(ctx, err)
+	}
+	if expected-1 != position {
+		return fmt.Errorf("%w: cursor inbox mismatch", ErrCorrupt)
+	}
+	return nil
+}
+
+func (s *Store) applyPulledMutation(ctx context.Context, tx *sql.Tx, change syncservice.Change) error {
+	m := change.Mutation
+	switch m.RecordKind {
+	case syncservice.RecordKindProject:
+		return applyPulledIdentity(ctx, tx, `SELECT sync_version FROM projects WHERE id=?`, `INSERT INTO projects(id,sync_version) VALUES(?,?)`, `UPDATE projects SET sync_version=? WHERE id=?`, m.RecordID, change.CanonicalVersion, m.BaseVersion, m.Kind)
+	case syncservice.RecordKindSession:
+		if err := pulledProject(ctx, tx, m.Session.ProjectID); err != nil {
+			return err
+		}
+		return applyPulledSession(ctx, tx, m.Session, change)
+	case syncservice.RecordKindObservation:
+		return applyPulledObservation(ctx, tx, m.Observation, change)
+	}
+	return fmt.Errorf("%w: unsupported pulled record", ErrInvalid)
+}
+
+func applyPulledIdentity(ctx context.Context, tx *sql.Tx, selectVersion, insert, update, id string, canonical, base int64, kind syncservice.MutationKind) error {
+	var version int64
+	err := tx.QueryRowContext(ctx, selectVersion, id).Scan(&version)
+	if kind == syncservice.MutationCreate {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return writeError(ctx, err)
+		}
+		if !errors.Is(err, sql.ErrNoRows) || base != 0 || canonical != 1 {
+			return fmt.Errorf("%w: pulled create version", ErrConflict)
+		}
+		if _, err = tx.ExecContext(ctx, insert, id, canonical); err != nil {
+			return conflictOrWrite(ctx, err)
+		}
+		return nil
+	}
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: pulled record missing", ErrConflict)
+		}
+		return writeError(ctx, err)
+	}
+	if version < 0 {
+		return fmt.Errorf("%w: pulled record version", ErrCorrupt)
+	}
+	if version != base || canonical != base+1 {
+		return fmt.Errorf("%w: pulled version", ErrConflict)
+	}
+	if _, err = tx.ExecContext(ctx, update, canonical, id); err != nil {
+		return writeError(ctx, err)
+	}
+	return nil
+}
+
+func pulledProject(ctx context.Context, tx *sql.Tx, id string) error {
+	var version int64
+	if err := tx.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, id).Scan(&version); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: session project missing", ErrConflict)
+		}
+		return writeError(ctx, err)
+	}
+	if version < 0 {
+		return fmt.Errorf("%w: project version", ErrCorrupt)
+	}
+	return nil
+}
+
+func applyPulledSession(ctx context.Context, tx *sql.Tx, session *syncservice.Session, change syncservice.Change) error {
+	var project string
+	var version int64
+	err := tx.QueryRowContext(ctx, `SELECT project_id,sync_version FROM sessions WHERE id=?`, session.ID).Scan(&project, &version)
+	if change.Mutation.Kind == syncservice.MutationCreate {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return writeError(ctx, err)
+		}
+		if !errors.Is(err, sql.ErrNoRows) || change.CanonicalVersion != 1 {
+			return fmt.Errorf("%w: pulled session create", ErrConflict)
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,project_id,sync_version) VALUES(?,?,?)`, session.ID, session.ProjectID, 1)
+		if err != nil {
+			return conflictOrWrite(ctx, err)
+		}
+		return nil
+	}
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: pulled session missing", ErrConflict)
+		}
+		return writeError(ctx, err)
+	}
+	if version < 0 {
+		return fmt.Errorf("%w: pulled session version", ErrCorrupt)
+	}
+	if project != session.ProjectID || version != change.Mutation.BaseVersion || change.CanonicalVersion != version+1 {
+		return fmt.Errorf("%w: pulled session version", ErrConflict)
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET sync_version=? WHERE id=?`, change.CanonicalVersion, session.ID)
+	return writeApplyError(ctx, err)
+}
+
+func applyPulledObservation(ctx context.Context, tx *sql.Tx, observation *syncservice.Observation, change syncservice.Change) error {
+	item, err := pulledObservation(observation)
+	if err != nil {
+		return err
+	}
+	if err = pulledProject(ctx, tx, item.Project); err != nil {
+		return err
+	}
+	if item.Session != "" {
+		var n int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sessions WHERE id=? AND project_id=?`, item.Session, item.Project).Scan(&n); err != nil {
+			return writeError(ctx, err)
+		}
+		if n != 1 {
+			return fmt.Errorf("%w: observation session missing", ErrConflict)
+		}
+	}
+	if err = validateReferences(ctx, tx, item); err != nil {
+		return err
+	}
+	var existing Observation
+	var found bool
+	existing, found, err = loadOne(tx.QueryRowContext(ctx, observationSelect+` WHERE o.id=?`, item.ID))
+	if err != nil {
+		return err
+	}
+	if change.Mutation.Kind == syncservice.MutationCreate {
+		if found || change.Mutation.BaseVersion != 0 || change.CanonicalVersion != 1 {
+			return fmt.Errorf("%w: pulled observation create", ErrConflict)
+		}
+		if err = insertObservation(ctx, tx, item); err != nil {
+			return err
+		}
+		if item.State == StateArchived {
+			if _, err = tx.ExecContext(ctx, `DELETE FROM observations_fts WHERE id=?`, item.ID); err != nil {
+				return writeError(ctx, err)
+			}
+		}
+	} else {
+		if !found || existing.Project != item.Project || existing.Scope != item.Scope || !existing.CreatedAt.Equal(item.CreatedAt) {
+			return fmt.Errorf("%w: pulled observation identity", ErrConflict)
+		}
+		existingVersion, versionErr := syncVersion(ctx, tx, `SELECT sync_version FROM observations WHERE id=?`, item.ID)
+		if versionErr != nil {
+			return versionErr
+		}
+		if existingVersion != change.Mutation.BaseVersion || change.CanonicalVersion != existingVersion+1 {
+			return fmt.Errorf("%w: pulled observation version", ErrConflict)
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE observations SET title=?,session_id=?,type=?,content=?,topic_key=?,producer=?,source_provider=?,source_id=?,state=?,updated_at=?,review_after=? WHERE id=?`, item.Title, nullable(item.Session), item.Type, item.Content, nullable(item.TopicKey), item.Provenance.Producer, item.Provenance.SourceProvider, item.Provenance.SourceID, item.State, item.UpdatedAt.UnixNano(), nullableTime(item.ReviewAfter), item.ID)
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `DELETE FROM observation_refs WHERE observation_id=?`, item.ID)
+		}
+		if err == nil {
+			err = insertReferences(ctx, tx, item)
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `DELETE FROM observations_fts WHERE id=?`, item.ID)
+		}
+		if err == nil && item.State == StateActive {
+			_, err = tx.ExecContext(ctx, `INSERT INTO observations_fts(id,content) VALUES(?,?)`, item.ID, item.Content)
+		}
+		if err != nil {
+			return conflictOrWrite(ctx, err)
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE observations SET sync_version=? WHERE id=?`, change.CanonicalVersion, item.ID)
+	return writeApplyError(ctx, err)
+}
+
+func pulledObservation(value *syncservice.Observation) (Observation, error) {
+	created, createdOK := syncUnixNano(value.CreatedAt.UTC().Round(0))
+	updated, updatedOK := syncUnixNano(value.UpdatedAt.UTC().Round(0))
+	if !createdOK || !updatedOK || updated < created {
+		return Observation{}, fmt.Errorf("%w: invalid pulled timestamp", ErrInvalid)
+	}
+	var reviewAfter *time.Time
+	if value.ReviewAfter != nil {
+		nanos, ok := syncUnixNano(value.ReviewAfter.UTC().Round(0))
+		if !ok {
+			return Observation{}, fmt.Errorf("%w: invalid pulled review time", ErrInvalid)
+		}
+		normalized := time.Unix(0, nanos).UTC()
+		reviewAfter = &normalized
+	}
+	state := StateActive
+	if value.Lifecycle == syncservice.LifecycleArchived {
+		state = StateArchived
+	}
+	return Observation{ID: value.ID, Title: value.Title, Project: value.ProjectID, Session: value.SessionID, Scope: Scope(value.Scope), Type: value.Type, Content: value.Content, TopicKey: value.TopicKey, References: append([]string(nil), value.References...), Provenance: Provenance{Producer: value.Provenance.Producer, SourceProvider: value.Provenance.SourceProvider, SourceID: value.Provenance.SourceID}, State: state, CreatedAt: time.Unix(0, created).UTC(), UpdatedAt: time.Unix(0, updated).UTC(), ReviewAfter: reviewAfter}, nil
+}
+
+func writeApplyError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	return writeError(ctx, err)
 }
 
 func syncObservation(item Observation) syncservice.Observation {
