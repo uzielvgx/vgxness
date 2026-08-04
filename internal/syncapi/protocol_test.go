@@ -3,6 +3,7 @@ package syncapi
 import (
 	"errors"
 	"github.com/vgxness/vgxness/internal/syncservice"
+	"math"
 	"strings"
 	"testing"
 )
@@ -78,3 +79,39 @@ func TestPullResponseHardening(t *testing.T) {
 		t.Fatal("cursor")
 	}
 }
+
+func TestPushResponseIsRequestBoundOrderedAndTerminal(t *testing.T) {
+	request := PushRequest{ProtocolVersion: 1, Items: []syncservice.Mutation{{MutationID: "a", BaseVersion: 7}, {MutationID: "b", BaseVersion: 12}, {MutationID: "c", BaseVersion: 4}}}
+	valid := PushResponse{ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "a", Disposition: syncservice.DispositionAccepted, Sequence: resultSequence(9), Version: 8}, {MutationID: "b", Disposition: syncservice.DispositionPreviouslyAccepted, Sequence: resultSequence(3), Version: 13}, {MutationID: "c", Disposition: syncservice.DispositionRejected, Code: "unsupported_semantic"}}}
+	if err := ValidatePushResponse(request, valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePushResponse(PushRequest{Items: []syncservice.Mutation{{MutationID: "overflow", BaseVersion: math.MaxInt64}}}, PushResponse{ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "overflow", Disposition: syncservice.DispositionAccepted, Sequence: resultSequence(1), Version: math.MinInt64}}}); err == nil {
+		t.Fatal("accepted overflowed version")
+	}
+	for _, response := range []PushResponse{{ProtocolVersion: 1, Results: valid.Results[:2]}, {ProtocolVersion: 1, Results: []syncservice.Result{valid.Results[1], valid.Results[0], valid.Results[2]}}, {ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "other", Disposition: syncservice.DispositionAccepted, Sequence: resultSequence(1), Version: 1}}}} {
+		if err := ValidatePushResponse(request, response); err == nil {
+			t.Fatalf("accepted unmatched response: %+v", response)
+		}
+	}
+	for _, result := range []syncservice.Result{{MutationID: "a", Disposition: syncservice.DispositionConflict, Sequence: resultSequence(1)}, {MutationID: "a", Disposition: syncservice.DispositionRejected, Code: "contains content"}, {MutationID: "a", Disposition: syncservice.DispositionAccepted, Sequence: resultSequence(2)}, {MutationID: "a", Disposition: syncservice.DispositionAccepted, Version: 1}} {
+		if err := ValidatePushResponse(PushRequest{Items: []syncservice.Mutation{{MutationID: "a"}}}, PushResponse{ProtocolVersion: 1, Results: []syncservice.Result{result}}); err == nil {
+			t.Fatalf("accepted invalid result: %+v", result)
+		}
+	}
+	for _, response := range []PushResponse{
+		{ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "a", Disposition: syncservice.DispositionAccepted, Sequence: resultSequence(9), Version: 7}, {MutationID: "b", Disposition: syncservice.DispositionPreviouslyAccepted, Sequence: resultSequence(3), Version: 13}, {MutationID: "c", Disposition: syncservice.DispositionRejected, Code: "unsupported_semantic"}}},
+		{ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "a", Disposition: syncservice.DispositionAccepted, Sequence: resultSequence(9), Version: 8}, {MutationID: "b", Disposition: syncservice.DispositionPreviouslyAccepted, Sequence: resultSequence(9), Version: 13}, {MutationID: "c", Disposition: syncservice.DispositionRejected, Code: "unsupported_semantic"}}},
+	} {
+		if err := ValidatePushResponse(request, response); err == nil {
+			t.Fatalf("accepted invalid version or sequence owner: %+v", response)
+		}
+	}
+	duplicateRequest := PushRequest{ProtocolVersion: 1, Items: []syncservice.Mutation{{MutationID: "a", BaseVersion: 7}, {MutationID: "a", BaseVersion: 7}}}
+	duplicateResponse := PushResponse{ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "a", Disposition: syncservice.DispositionAccepted, Sequence: resultSequence(9), Version: 8}, {MutationID: "a", Disposition: syncservice.DispositionPreviouslyAccepted, Sequence: resultSequence(9), Version: 8}}}
+	if err := ValidatePushResponse(duplicateRequest, duplicateResponse); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func resultSequence(value int64) *int64 { return &value }
