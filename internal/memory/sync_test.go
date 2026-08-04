@@ -663,7 +663,7 @@ func TestApplyPulledChangeRejectsInvalidOrderingAndLocalWork(t *testing.T) {
 	for name, change := range map[string]syncservice.Change{"hash": badHash, "gap": pulledChange(t, 2, 1, project.Mutation), "tombstone": tombstone, "resolve": resolve} {
 		t.Run(name, func(t *testing.T) {
 			err := store.ApplyPulledChange(ctx, history, change)
-			if name == "gap" {
+			if name == "gap" || name == "tombstone" || name == "resolve" {
 				testutil.Require(t, errors.Is(err, ErrConflict), "error=%v", err)
 			} else {
 				testutil.Require(t, errors.Is(err, ErrInvalid), "error=%v", err)
@@ -915,5 +915,309 @@ func pulledChange(t *testing.T, sequence, version int64, mutation syncservice.Mu
 	var err error
 	change.ChangeHash, err = syncservice.CanonicalChangeHash(change)
 	testutil.NoError(t, err)
+	return change
+}
+
+func TestApplyPulledPageRejectsInvalidPageWithoutWrites(t *testing.T) {
+	store := openTestStore(t)
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-446655440201", Position: 2, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440202", "project"))}}
+	err := store.ApplyPulledPage(context.Background(), page, nil)
+	var projects, inbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.Require(t, errors.Is(err, ErrInvalid) && projects == 0 && inbox == 0, "err=%v projects=%d inbox=%d", err, projects, inbox)
+}
+
+func TestApplyPulledPageRollsBackWholePage(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440203"
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{
+		pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440204", "project")),
+		pulledChange(t, 2, 1, pulledObservationMutation("bad", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "bad", []string{"missing"})),
+	}}
+	err := store.ApplyPulledPage(context.Background(), page, nil)
+	var projects, inbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.Require(t, errors.Is(err, ErrNotFound) && projects == 0 && inbox == 0, "err=%v projects=%d inbox=%d", err, projects, inbox)
+}
+
+func TestApplyPulledChangeUsesPagePrimitive(t *testing.T) {
+	store := openTestStore(t)
+	change := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440205", "project"))
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), "550e8400-e29b-41d4-a716-446655440206", change))
+}
+
+func TestPulledConflictStoresLosslessSnapshot(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440207"
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440208", "project"))))
+	mutation := pulledObservationMutation("conflict", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "competitor", nil)
+	change := specialChange(t, 2, 1, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440209", mutation)
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, change))
+	var snapshot []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT snapshot FROM sync_conflicts WHERE conflict_id=?`, change.ConflictID).Scan(&snapshot))
+	var projects, observations int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
+	testutil.Require(t, len(snapshot) > 0 && projects == 1 && observations == 0, "snapshot=%q projects=%d observations=%d", snapshot, projects, observations)
+}
+
+func TestPulledTombstoneHidesButRetainsInboundReferences(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440210"
+	project := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440211", "project"))
+	target := pulledChange(t, 2, 1, pulledObservationMutation("target", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "target", nil))
+	referrer := pulledChange(t, 3, 1, pulledObservationMutation("referrer", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "referrer", []string{"target"}))
+	for _, change := range []syncservice.Change{project, target, referrer} {
+		testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, change))
+	}
+	tombstone := specialChange(t, 4, 2, syncservice.ChangeDispositionAccepted, "", syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440212", RecordID: "target", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: fixedTime}})
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, tombstone))
+	_, err := store.Get(context.Background(), "target", "project", ScopeProject)
+	var inbound, outgoing int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observation_refs WHERE target_id='target'`).Scan(&inbound))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observation_refs WHERE observation_id='target'`).Scan(&outgoing))
+	testutil.Require(t, errors.Is(err, ErrNotFound) && inbound == 1 && outgoing == 0, "err=%v refs=%d/%d", err, inbound, outgoing)
+}
+
+func TestPulledResolveRequiresExactUnresolvedIDsAndRollsBack(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440213"
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440214", "project"))))
+	local := pulledChange(t, 2, 1, pulledObservationMutation("record", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "local", nil))
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, local))
+	conflict := specialChange(t, 3, 1, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440215", pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "other", nil))
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, conflict))
+	winner := pulledObservationMutation("record", syncservice.MutationResolve, 1, syncservice.LifecycleActive, "winner", nil)
+	winner.Observation, winner.Resolution = nil, &syncservice.Resolution{ConflictIDs: []string{"550e8400-e29b-41d4-a716-446655440216"}, Observation: pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "winner", nil).Observation}
+	err := store.ApplyPulledChange(context.Background(), history, specialChange(t, 4, 2, syncservice.ChangeDispositionAccepted, "", winner))
+	got, getErr := store.Get(context.Background(), "record", "project", ScopeProject)
+	testutil.Require(t, errors.Is(err, ErrConflict) && getErr == nil && got.Content == "local", "err=%v got=%+v get=%v", err, got, getErr)
+}
+
+func TestLocalAndOrdinaryPulledWritesRejectTombstonedID(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440217"
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440218", "project"))))
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, pulledChange(t, 2, 1, pulledObservationMutation("target", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "target", nil))))
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, specialChange(t, 3, 2, syncservice.ChangeDispositionAccepted, "", syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440219", RecordID: "target", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: fixedTime}})))
+	ordinary := pulledChange(t, 4, 3, pulledObservationMutation("target", syncservice.MutationUpdate, 2, syncservice.LifecycleActive, "revive", nil))
+	reference := observation("reference", "project", "reference")
+	reference.References = []string{"target"}
+	_, localErr := store.Save(context.Background(), reference)
+	testutil.Require(t, errors.Is(store.ApplyPulledChange(context.Background(), history, ordinary), ErrConflict) && errors.Is(localErr, ErrConflict), "ordinary=%v local=%v", store.ApplyPulledChange(context.Background(), history, ordinary), localErr)
+}
+
+func TestForgetRejectsTombstonedObservationTransactionally(t *testing.T) {
+	for _, profile := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sync profile=%t", profile), func(t *testing.T) {
+			store := openTestStore(t)
+			if profile {
+				enableSync(t, store)
+			}
+			history := "550e8400-e29b-41d4-a716-446655440236"
+			testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440237", "project"))))
+			testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, pulledChange(t, 2, 1, pulledObservationMutation("target", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "retained content", nil))))
+			testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, specialChange(t, 3, 2, syncservice.ChangeDispositionAccepted, "", syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440238", RecordID: "target", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: fixedTime}})))
+			var beforeState, beforeContent, beforeTombstone string
+			var beforeVersion, beforeOutbox, beforeInbox, beforeCursor int
+			testutil.NoError(t, store.db.QueryRow(`SELECT state,content,sync_version FROM observations WHERE id='target'`).Scan(&beforeState, &beforeContent, &beforeVersion))
+			testutil.NoError(t, store.db.QueryRow(`SELECT quote(provenance) FROM sync_tombstones WHERE record_id='target'`).Scan(&beforeTombstone))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&beforeOutbox))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&beforeInbox))
+			testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&beforeCursor))
+
+			err := func() error {
+				_, err := store.Forget(context.Background(), "target", "project", ScopeProject)
+				return err
+			}()
+			var state, content, tombstone string
+			var version, outbox, inbox, cursor int
+			testutil.NoError(t, store.db.QueryRow(`SELECT state,content,sync_version FROM observations WHERE id='target'`).Scan(&state, &content, &version))
+			testutil.NoError(t, store.db.QueryRow(`SELECT quote(provenance) FROM sync_tombstones WHERE record_id='target'`).Scan(&tombstone))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+			testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
+			_, getErr := store.Get(context.Background(), "target", "project", ScopeProject)
+			testutil.Require(t, errors.Is(err, ErrConflict) && errors.Is(getErr, ErrNotFound) && state == beforeState && content == beforeContent && version == beforeVersion && tombstone == beforeTombstone && outbox == beforeOutbox && inbox == beforeInbox && cursor == beforeCursor, "forget=%v get=%v observation=%q/%q/%d tombstone=%q outbox=%d/%d inbox=%d/%d cursor=%d/%d", err, getErr, state, content, version, tombstone, outbox, beforeOutbox, inbox, beforeInbox, cursor, beforeCursor)
+		})
+	}
+}
+
+func TestApplyPulledPageTwoHandlesRereadDurableState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	first, second := openPath(t, path), openPath(t, path)
+	defer first.Close()
+	defer second.Close()
+	history := "550e8400-e29b-41d4-a716-446655440220"
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 3}, HasMore: true, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440221", "project"))}}
+	testutil.NoError(t, first.ApplyPulledPage(context.Background(), page, nil))
+	secondPage := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 3, Watermark: 3}, Changes: []syncservice.Change{pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-446655440229", "second")), pulledChange(t, 3, 1, syncMutation("550e8400-e29b-41d4-a716-446655440230", "third"))}}
+	testutil.NoError(t, second.ApplyPulledPage(context.Background(), secondPage, nil))
+	testutil.NoError(t, first.ApplyPulledPage(context.Background(), page, nil))
+	overlap := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 4, Watermark: 4}, Changes: []syncservice.Change{pulledChange(t, 3, 1, syncMutation("550e8400-e29b-41d4-a716-446655440230", "third")), pulledChange(t, 4, 1, syncMutation("550e8400-e29b-41d4-a716-446655440231", "fourth"))}}
+	testutil.NoError(t, second.ApplyPulledPage(context.Background(), overlap, nil))
+	var inbox, position int
+	testutil.NoError(t, second.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.NoError(t, second.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&position))
+	testutil.Require(t, inbox == 4 && position == 4, "inbox=%d position=%d", inbox, position)
+}
+
+func TestApplyPulledPageCursorFailureRollsBackAndPreservesCache(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	history := "550e8400-e29b-41d4-a716-446655440222"
+	first := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, HasMore: true, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440223", "project"))}}
+	testutil.NoError(t, store.ApplyPulledPage(ctx, first, &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 2, Phase: "projects"}))
+	_, err := store.db.Exec(`CREATE TRIGGER fail_cursor BEFORE UPDATE ON sync_cursor BEGIN SELECT RAISE(ABORT, 'test'); END`)
+	testutil.NoError(t, err)
+	next := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 2, 1, pulledObservationMutation("rolled-back", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "content", nil))}}
+	checkpoint := &BootstrapCheckpoint{HistoryID: history, Position: 2, Watermark: 2, Phase: "observations"}
+	err = store.ApplyPulledPage(ctx, next, checkpoint)
+	var observations, position int
+	var phase string
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations WHERE id='rolled-back'`).Scan(&observations))
+	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&position))
+	testutil.NoError(t, store.db.QueryRow(`SELECT phase FROM sync_bootstrap`).Scan(&phase))
+	testutil.Require(t, errors.Is(err, ErrCorrupt) && observations == 0 && position == 1 && phase == "projects" && store.syncInbox.known && store.syncInbox.position == 1, "err=%v observations=%d position=%d phase=%q cache=%+v", err, observations, position, phase, store.syncInbox)
+	_, err = store.db.Exec(`DROP TRIGGER fail_cursor`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, store.ApplyPulledPage(ctx, next, checkpoint))
+	testutil.Require(t, store.syncInbox.known && store.syncInbox.position == 2, "cache=%+v", store.syncInbox)
+}
+
+func TestPulledPageCheckpointRereadsPriorDurableState(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440226"
+	first := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, HasMore: true, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440227", "project"))}}
+	checkpoint := &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 2, Phase: "projects"}
+	testutil.NoError(t, store.ApplyPulledPage(context.Background(), first, checkpoint))
+	second := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-446655440228", "next"))}}
+	checkpoint.Position, checkpoint.Phase = 2, "sessions"
+	testutil.NoError(t, store.ApplyPulledPage(context.Background(), second, checkpoint))
+	var payload string
+	testutil.NoError(t, store.db.QueryRow(`SELECT checkpoint FROM sync_bootstrap`).Scan(&payload))
+	testutil.Require(t, !strings.Contains(payload, "phase"), "checkpoint=%s", payload)
+}
+
+func TestApplyPulledPageAcceptsEmptyEOFAndPreservesCursor(t *testing.T) {
+	ctx := context.Background()
+	history := "550e8400-e29b-41d4-a716-446655440224"
+	t.Run("initial checkpoint", func(t *testing.T) {
+		store := openTestStore(t)
+		checkpoint := &BootstrapCheckpoint{HistoryID: history, Position: 0, Watermark: 0, Phase: "complete"}
+		testutil.NoError(t, store.ApplyPulledPage(ctx, syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history}}, checkpoint))
+		var cursors int
+		var phase string
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursors))
+		testutil.NoError(t, store.db.QueryRow(`SELECT phase FROM sync_bootstrap`).Scan(&phase))
+		testutil.Require(t, cursors == 0 && phase == "complete" && store.syncInbox.known && store.syncInbox.position == 0, "cursors=%d phase=%q cache=%+v", cursors, phase, store.syncInbox)
+	})
+	t.Run("resumed watermark", func(t *testing.T) {
+		store := openTestStore(t)
+		testutil.NoError(t, store.ApplyPulledChange(ctx, history, pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440225", "project"))))
+		testutil.NoError(t, store.ApplyPulledChange(ctx, history, pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-446655440226", "next"))))
+		testutil.NoError(t, store.ApplyPulledPage(ctx, syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}}, nil))
+		var position int
+		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&position))
+		testutil.Require(t, position == 2 && store.syncInbox.known && store.syncInbox.position == 2, "position=%d cache=%+v", position, store.syncInbox)
+	})
+}
+
+func TestApplyPulledPageEmptyEOFFailsClosedOnCursorTypeCorruption(t *testing.T) {
+	ctx := context.Background()
+	for name, mutation := range map[string]string{
+		"history":  `history_id=CAST(history_id AS BLOB)`,
+		"position": `position=CAST(position AS BLOB)`,
+		"updated":  `updated_at=CAST(updated_at AS BLOB)`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := openTestStore(t)
+			store.db.SetMaxOpenConns(1)
+			store.db.SetMaxIdleConns(1)
+			history := "550e8400-e29b-41d4-a716-446655440234"
+			page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440235", "project"))}}
+			testutil.NoError(t, store.ApplyPulledPage(ctx, page, nil))
+
+			conn, err := store.db.Conn(ctx)
+			testutil.NoError(t, err)
+			testutil.NoError(t, func() error {
+				defer conn.Close()
+				if _, err := conn.ExecContext(ctx, `PRAGMA ignore_check_constraints=ON`); err != nil {
+					return err
+				}
+				defer conn.ExecContext(ctx, `PRAGMA ignore_check_constraints=OFF`)
+				_, err := conn.ExecContext(ctx, `UPDATE sync_cursor SET `+mutation+` WHERE singleton=1`)
+				return err
+			}())
+
+			var before string
+			testutil.NoError(t, store.db.QueryRow(`SELECT quote(history_id)||'/'||quote(position)||'/'||quote(updated_at) FROM sync_cursor WHERE singleton=1`).Scan(&before))
+			err = store.ApplyPulledPage(ctx, syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}}, nil)
+			var after string
+			var projects, inbox int
+			testutil.NoError(t, store.db.QueryRow(`SELECT quote(history_id)||'/'||quote(position)||'/'||quote(updated_at) FROM sync_cursor WHERE singleton=1`).Scan(&after))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+			testutil.Require(t, errors.Is(err, ErrCorrupt) && !store.syncInbox.known && before == after && projects == 1 && inbox == 1, "err=%v cache=%+v cursor=%q/%q projects=%d inbox=%d", err, store.syncInbox, before, after, projects, inbox)
+		})
+	}
+}
+
+func TestApplyPulledPageRejectsHasMoreMismatchBeforeTransaction(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440227"
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440228", "project"))}}
+	err := store.ApplyPulledPage(context.Background(), page, nil)
+	var projects, cursors int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursors))
+	testutil.Require(t, errors.Is(err, ErrInvalid) && projects == 0 && cursors == 0, "err=%v projects=%d cursors=%d", err, projects, cursors)
+	testutil.Require(t, errors.Is(store.ApplyPulledPage(context.Background(), syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history}, HasMore: true}, nil), ErrInvalid), "empty HasMore mismatch accepted")
+}
+
+func TestPulledPageCheckpointPhaseOrderAndCompleteTerminality(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	history := "550e8400-e29b-41d4-a716-446655440229"
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, HasMore: true, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440230", "project"))}}
+	checkpoint := func(phase string) *BootstrapCheckpoint {
+		return &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 2, Phase: phase}
+	}
+	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("projects")))
+	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("sessions")))
+	testutil.Require(t, errors.Is(store.ApplyPulledPage(ctx, page, checkpoint("projects")), ErrConflict), "checkpoint phase regressed")
+	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("observations")))
+	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("complete")))
+	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("complete")))
+	testutil.Require(t, errors.Is(store.ApplyPulledPage(ctx, page, checkpoint("observations")), ErrConflict), "complete downgrade accepted")
+	advance := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-446655440233", "next"))}}
+	testutil.Require(t, errors.Is(store.ApplyPulledPage(ctx, advance, &BootstrapCheckpoint{HistoryID: history, Position: 2, Watermark: 2, Phase: "complete"}), ErrConflict), "complete advance accepted")
+}
+
+func TestApplyPulledPageCloseInvalidatesPrimedCache(t *testing.T) {
+	store := openTestStore(t)
+	change := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440231", "project"))
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), "550e8400-e29b-41d4-a716-446655440232", change))
+	testutil.Require(t, store.syncInbox.known, "cache was not primed: %+v", store.syncInbox)
+	testutil.NoError(t, store.Close())
+	testutil.Require(t, !store.syncInbox.known, "cache=%+v", store.syncInbox)
+}
+
+func TestApplyPulledPageCorruptionInvalidatesCache(t *testing.T) {
+	store := openTestStore(t)
+	_, err := store.db.Exec(`DROP TABLE sync_cursor`)
+	testutil.NoError(t, err)
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-446655440224", Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440225", "project"))}}
+	err = store.ApplyPulledPage(context.Background(), page, nil)
+	testutil.Require(t, errors.Is(err, ErrCorrupt) && !store.syncInbox.known, "err=%v cache=%+v", err, store.syncInbox)
+}
+
+func specialChange(t *testing.T, sequence, version int64, disposition syncservice.ChangeDisposition, conflictID string, mutation syncservice.Mutation) syncservice.Change {
+	t.Helper()
+	hashVersion := 2
+	change := syncservice.Change{Sequence: sequence, CanonicalVersion: version, HashVersion: &hashVersion, ChangeDisposition: disposition, ConflictID: conflictID, Mutation: mutation}
+	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
 	return change
 }
