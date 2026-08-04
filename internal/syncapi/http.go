@@ -40,6 +40,7 @@ type Authenticator interface {
 type SyncBackend interface {
 	Push(context.Context, uuid.UUID, []syncservice.Mutation) ([]syncservice.Result, error)
 	Pull(context.Context, uuid.UUID, syncservice.Cursor, int) (syncservice.PullPage, error)
+	Discover(context.Context, uuid.UUID) (syncservice.Discovery, error)
 }
 
 // CapabilitiesResponse is the v1 capabilities representation.
@@ -108,11 +109,11 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
 	request = request.WithContext(ctx)
-	if request.URL.Path != "/v1/sync/capabilities" && request.URL.Path != "/v1/sync/push" && request.URL.Path != "/v1/sync/pull" {
+	if request.URL.Path != "/v1/sync/capabilities" && request.URL.Path != "/v1/sync/push" && request.URL.Path != "/v1/sync/pull" && request.URL.Path != "/v1/sync/discovery" {
 		writeError(writer, http.StatusNotFound, ErrorInvalidInput, false, handler.observer)
 		return
 	}
-	validMethod := request.URL.Path == "/v1/sync/capabilities" && request.Method == http.MethodGet || request.URL.Path == "/v1/sync/push" && request.Method == http.MethodPost || request.URL.Path == "/v1/sync/pull" && request.Method == http.MethodGet
+	validMethod := request.URL.Path == "/v1/sync/capabilities" && request.Method == http.MethodGet || request.URL.Path == "/v1/sync/push" && request.Method == http.MethodPost || request.URL.Path == "/v1/sync/pull" && request.Method == http.MethodGet || request.URL.Path == "/v1/sync/discovery" && request.Method == http.MethodGet
 	if !validMethod {
 		if request.URL.Path == "/v1/sync/push" {
 			writer.Header().Set("Allow", http.MethodPost)
@@ -149,6 +150,25 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		writeJSON(writer, http.StatusOK, handler.capabilities(ctx), false, handler.observer)
+	case "/v1/sync/discovery":
+		if request.Body != nil && requestHasBody(request.Body) {
+			writeError(writer, http.StatusBadRequest, ErrorInvalidInput, false, handler.observer)
+			return
+		}
+		if handler.backend == nil {
+			writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+			return
+		}
+		discovery, err := handler.backend.Discover(ctx, identity.DeviceID)
+		if errors.Is(err, ErrUnauthenticated) {
+			writeError(writer, http.StatusUnauthorized, ErrorUnauthorized, true, handler.observer)
+			return
+		}
+		if err != nil || syncservice.ValidateDiscovery(discovery) != nil {
+			writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+			return
+		}
+		writeJSON(writer, http.StatusOK, discovery, false, handler.observer)
 	case "/v1/sync/push":
 		handler.servePush(writer, request.WithContext(ctx), identity)
 	case "/v1/sync/pull":

@@ -55,6 +55,9 @@ type PullResponse struct {
 	Changes         []PullChange `json:"changes,omitempty"`
 }
 
+// DiscoveryResponse is the v1 authenticated bootstrap discovery response.
+type DiscoveryResponse = syncservice.Discovery
+
 type ErrorCode string
 
 const (
@@ -92,6 +95,18 @@ func DecodePullRequest(body []byte) (PullRequest, error) {
 		return PullRequest{}, err
 	}
 	return request, nil
+}
+
+// DecodeDiscoveryResponse decodes a strict, bounded discovery response.
+func DecodeDiscoveryResponse(body []byte) (DiscoveryResponse, error) {
+	var response DiscoveryResponse
+	if err := decodeStrict(body, &response); err != nil {
+		return DiscoveryResponse{}, err
+	}
+	if err := syncservice.ValidateDiscovery(response); err != nil {
+		return DiscoveryResponse{}, ErrInvalidRequest
+	}
+	return response, nil
 }
 
 func ValidatePushRequest(request PushRequest) error {
@@ -236,6 +251,22 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 	return response, nil
 }
 
+// DecodeStrictPullResponse rejects duplicate and unknown fields for untrusted clients.
+func DecodeStrictPullResponse(body []byte) (PullResponse, error) {
+	var envelope struct {
+		ProtocolVersion int               `json:"protocol_version"`
+		HistoryID       string            `json:"history_id"`
+		Position        int64             `json:"position"`
+		Watermark       int64             `json:"watermark,omitempty"`
+		HasMore         bool              `json:"has_more"`
+		Changes         []json.RawMessage `json:"changes,omitempty"`
+	}
+	if err := decodeStrict(body, &envelope); err != nil {
+		return PullResponse{}, err
+	}
+	return DecodePullResponse(body)
+}
+
 func decodePullChange(body []byte, change *syncservice.Change) error {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
@@ -255,6 +286,9 @@ func decodeStrict(body []byte, value any) error {
 	if len(body) == 0 || !utf8.Valid(body) {
 		return ErrInvalidRequest
 	}
+	if hasDuplicateFields(body) {
+		return ErrInvalidRequest
+	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
@@ -264,6 +298,51 @@ func decodeStrict(body []byte, value any) error {
 		return ErrInvalidRequest
 	}
 	return nil
+}
+
+func hasDuplicateFields(body []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	var walk func() bool
+	walk = func() bool {
+		token, err := decoder.Token()
+		if err != nil {
+			return true
+		}
+		delimiter, ok := token.(json.Delim)
+		if !ok {
+			return false
+		}
+		switch delimiter {
+		case '{':
+			seen := map[string]struct{}{}
+			for decoder.More() {
+				key, err := decoder.Token()
+				if err != nil {
+					return true
+				}
+				name, ok := key.(string)
+				if !ok {
+					return true
+				}
+				if _, exists := seen[name]; exists {
+					return true
+				}
+				seen[name] = struct{}{}
+				if walk() {
+					return true
+				}
+			}
+		case '[':
+			for decoder.More() {
+				if walk() {
+					return true
+				}
+			}
+		}
+		_, err = decoder.Token()
+		return err != nil
+	}
+	return walk()
 }
 
 func CodeFor(err error) ErrorCode {

@@ -116,6 +116,18 @@ type Cursor struct {
 	Watermark int64  `json:"watermark,omitempty"`
 }
 
+// Capability identifies an optional sync protocol feature.
+type Capability string
+
+const CapabilityBootstrapDiscovery Capability = "bootstrap_discovery"
+
+// Discovery is the authenticated owner-scoped bootstrap metadata response.
+type Discovery struct {
+	ProtocolVersion int          `json:"protocol_version"`
+	HistoryID       string       `json:"history_id"`
+	Capabilities    []Capability `json:"capabilities"`
+}
+
 type PullPage struct {
 	Cursor  Cursor   `json:"cursor"`
 	HasMore bool     `json:"has_more"`

@@ -16,6 +16,24 @@ func TestRequestDecodingBoundsAndIdentityFields(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeDiscoveryResponseIsStrict(t *testing.T) {
+	valid := []byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery"]}`)
+	if _, err := DecodeDiscoveryResponse(valid); err != nil {
+		t.Fatalf("valid discovery: %v", err)
+	}
+	for _, body := range [][]byte{
+		[]byte(`{"protocol_version":1,"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery"]}`),
+		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery"],"extra":true}`),
+		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery"]}{}`),
+		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery","bootstrap_discovery"]}`),
+		[]byte{0xff},
+	} {
+		if _, err := DecodeDiscoveryResponse(body); err == nil {
+			t.Fatalf("accepted invalid discovery: %q", body)
+		}
+	}
+}
 func TestSafeErrorMappingAndResponseSize(t *testing.T) {
 	for e, c := range map[error]ErrorCode{syncservice.ErrInvalidMutation: ErrorInvalidInput, syncservice.ErrLimitExceeded: ErrorLimitExceeded, syncservice.ErrUnsupportedSemantic: ErrorUnsupportedSemantic, ErrUnsupportedVersion: ErrorUnsupportedVersion} {
 		if CodeFor(e) != c {

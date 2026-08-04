@@ -172,6 +172,11 @@ func (adapter repositoryBackend) Pull(ctx context.Context, deviceID uuid.UUID, c
 	return page, repositoryBackendError(err)
 }
 
+func (adapter repositoryBackend) Discover(ctx context.Context, deviceID uuid.UUID) (syncservice.Discovery, error) {
+	discovery, err := adapter.repository.Discover(ctx, deviceID)
+	return discovery, repositoryBackendError(err)
+}
+
 func repositoryBackendError(err error) error {
 	if errors.Is(err, syncpg.ErrUnauthenticated) {
 		return syncapi.ErrUnauthenticated

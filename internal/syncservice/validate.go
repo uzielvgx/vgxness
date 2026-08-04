@@ -163,6 +163,24 @@ func ValidateCursor(cursor Cursor) error {
 	return nil
 }
 
+// ValidateDiscovery validates the fixed v1 bootstrap discovery representation.
+func ValidateDiscovery(value Discovery) error {
+	if value.ProtocolVersion != 1 || !isUUID(value.HistoryID) || strings.ToLower(value.HistoryID) != value.HistoryID || len(value.Capabilities) == 0 || len(value.Capabilities) > 8 {
+		return ErrInvalidCursor
+	}
+	seen := make(map[Capability]struct{}, len(value.Capabilities))
+	for _, capability := range value.Capabilities {
+		if capability != CapabilityBootstrapDiscovery {
+			return ErrUnsupportedSemantic
+		}
+		if _, ok := seen[capability]; ok {
+			return ErrInvalidCursor
+		}
+		seen[capability] = struct{}{}
+	}
+	return nil
+}
+
 func validRecordKind(kind RecordKind) bool {
 	return kind == RecordKindProject || kind == RecordKindSession || kind == RecordKindObservation
 }

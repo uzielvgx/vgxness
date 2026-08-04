@@ -143,6 +143,42 @@ func (r *Repository) OwnerState(ctx context.Context) (OwnerSyncState, error) {
 	return state, nil
 }
 
+// Discover returns canonical owner-scoped bootstrap metadata for an active device.
+func (r *Repository) Discover(ctx context.Context, deviceID uuid.UUID) (syncservice.Discovery, error) {
+	if deviceID == uuid.Nil {
+		return syncservice.Discovery{}, ErrRepository
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return syncservice.Discovery{}, repositoryError(ctx)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err = tx.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"); err != nil {
+		return syncservice.Discovery{}, repositoryError(ctx)
+	}
+	schema, err := recoverySchema(ctx, tx)
+	if err != nil || !repositoryMigrationsValid(ctx, tx, schema) {
+		return syncservice.Discovery{}, repositoryError(ctx)
+	}
+	owners, err := r.owners(ctx, tx, schema)
+	if err != nil || len(owners) != 1 || owners[0] != r.ownerID {
+		return syncservice.Discovery{}, ErrUnauthenticated
+	}
+	table := func(name string) string { return pgx.Identifier{schema, name}.Sanitize() }
+	var revoked bool
+	if err = tx.QueryRow(ctx, "SELECT revoked_at IS NOT NULL FROM "+table("devices")+" WHERE owner_id=$1 AND id=$2", r.ownerID, deviceID).Scan(&revoked); err != nil || revoked {
+		return syncservice.Discovery{}, ErrUnauthenticated
+	}
+	state, err := r.ownerState(ctx, tx, schema)
+	if err != nil {
+		return syncservice.Discovery{}, repositoryError(ctx)
+	}
+	if err = commitRepository(ctx, tx); err != nil {
+		return syncservice.Discovery{}, err
+	}
+	return syncservice.Discovery{ProtocolVersion: 1, HistoryID: state.HistoryID.String(), Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, nil
+}
+
 // Push applies each mutation in its own transaction.
 func (r *Repository) Push(ctx context.Context, deviceID uuid.UUID, mutations []syncservice.Mutation) ([]syncservice.Result, error) {
 	results := make([]syncservice.Result, 0, len(mutations))
