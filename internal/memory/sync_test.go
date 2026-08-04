@@ -655,7 +655,12 @@ func TestApplyPulledChangeRejectsInvalidOrderingAndLocalWork(t *testing.T) {
 	resolveObservation := resolveMutation.Observation
 	resolveMutation.Observation = nil
 	resolveMutation.Resolution = &syncservice.Resolution{ConflictIDs: []string{"550e8400-e29b-41d4-a716-446655440114"}, Observation: resolveObservation}
-	for name, change := range map[string]syncservice.Change{"hash": badHash, "gap": pulledChange(t, 2, 1, project.Mutation), "tombstone": pulledChange(t, 1, 1, syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440112", RecordID: "x", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: fixedTime}}), "resolve": pulledChange(t, 1, 1, resolveMutation)} {
+	specialVersion := 2
+	tombstone := syncservice.Change{Sequence: 1, CanonicalVersion: 1, HashVersion: &specialVersion, ChangeDisposition: syncservice.ChangeDispositionAccepted, Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440112", RecordID: "x", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: fixedTime}}}
+	tombstone.ChangeHash, _ = syncservice.CanonicalChangeHash(tombstone)
+	resolve := syncservice.Change{Sequence: 1, CanonicalVersion: 1, HashVersion: &specialVersion, ChangeDisposition: syncservice.ChangeDispositionAccepted, Mutation: resolveMutation}
+	resolve.ChangeHash, _ = syncservice.CanonicalChangeHash(resolve)
+	for name, change := range map[string]syncservice.Change{"hash": badHash, "gap": pulledChange(t, 2, 1, project.Mutation), "tombstone": tombstone, "resolve": resolve} {
 		t.Run(name, func(t *testing.T) {
 			err := store.ApplyPulledChange(ctx, history, change)
 			if name == "gap" {

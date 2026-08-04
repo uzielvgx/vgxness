@@ -188,12 +188,25 @@ func ValidatePullRequest(request *PullRequest) error {
 }
 
 func DecodePullResponse(body []byte) (PullResponse, error) {
-	var response PullResponse
+	var envelope struct {
+		ProtocolVersion int               `json:"protocol_version"`
+		HistoryID       string            `json:"history_id"`
+		Position        int64             `json:"position"`
+		Watermark       int64             `json:"watermark,omitempty"`
+		HasMore         bool              `json:"has_more"`
+		Changes         []json.RawMessage `json:"changes,omitempty"`
+	}
 	if len(body) > MaxPullResponseBytes {
 		return PullResponse{}, ErrLimitExceeded
 	}
-	if len(body) == 0 || !utf8.Valid(body) || jsonDepth(body) > MaxJSONDepth || json.Unmarshal(body, &response) != nil {
+	if len(body) == 0 || !utf8.Valid(body) || jsonDepth(body) > MaxJSONDepth || json.Unmarshal(body, &envelope) != nil {
 		return PullResponse{}, ErrInvalidRequest
+	}
+	response := PullResponse{ProtocolVersion: envelope.ProtocolVersion, HistoryID: envelope.HistoryID, Position: envelope.Position, Watermark: envelope.Watermark, HasMore: envelope.HasMore, Changes: make([]syncservice.Change, len(envelope.Changes))}
+	for index, raw := range envelope.Changes {
+		if err := decodePullChange(raw, &response.Changes[index]); err != nil {
+			return PullResponse{}, ErrInvalidRequest
+		}
 	}
 	if response.ProtocolVersion != ProtocolVersion {
 		return PullResponse{}, ErrUnsupportedVersion
@@ -212,7 +225,7 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 	}
 	var previous int64
 	for _, change := range response.Changes {
-		if change.Sequence <= previous || previous > 0 && change.Sequence != previous+1 || change.CanonicalVersion < 1 || response.Watermark > 0 && change.Sequence > response.Watermark || syncservice.ValidateMutation(change.Mutation) != nil || syncservice.VerifyChangeHash(change) != nil {
+		if change.Sequence <= previous || previous > 0 && change.Sequence != previous+1 || change.CanonicalVersion < 1 || response.Watermark > 0 && change.Sequence > response.Watermark || syncservice.ValidateMutation(change.Mutation) != nil || syncservice.ValidateChangeEnvelope(change) != nil || syncservice.VerifyChangeHash(change) != nil {
 			return PullResponse{}, ErrInvalidRequest
 		}
 		previous = change.Sequence
@@ -221,6 +234,18 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 		return PullResponse{}, ErrInvalidRequest
 	}
 	return response, nil
+}
+
+func decodePullChange(body []byte, change *syncservice.Change) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(change); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func decodeStrict(body []byte, value any) error {
