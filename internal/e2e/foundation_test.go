@@ -152,8 +152,8 @@ func TestFoundationProductContract(t *testing.T) {
 		}
 	}
 	migrations, err := filepath.Glob("../memory/migrations/*.sql")
-	if err != nil || len(migrations) != 7 {
-		t.Fatalf("foundation must retain exactly seven migrations: %v %v", migrations, err)
+	if err != nil || len(migrations) != 8 {
+		t.Fatalf("foundation must retain exactly eight migrations: %v %v", migrations, err)
 	}
 	if err := filepath.WalkDir("../../.github", func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {

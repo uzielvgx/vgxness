@@ -315,7 +315,7 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox')`).Scan(&probe); err != nil || probe != 13 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap')`).Scan(&probe); err != nil || probe != 18 {
 		return 0, fmt.Errorf("%w: required schema unavailable", ErrCorrupt)
 	}
 	if !s.syncSchemaHealthy(ctx) {
@@ -364,7 +364,58 @@ func (s *Store) syncSchemaHealthy(ctx context.Context) bool {
 		return false
 	}
 	indexSQL, ok := s.schemaSQL(ctx, "index", "sync_outbox_due_idx")
-	return ok && strings.TrimSpace(strings.ToLower(indexSQL)) == "create index sync_outbox_due_idx on sync_outbox(next_attempt_at, created_at, id)" && s.schemaIndexColumns(ctx, "sync_outbox_due_idx", "next_attempt_at", "created_at", "id")
+	if !ok || strings.TrimSpace(strings.ToLower(indexSQL)) != "create index sync_outbox_due_idx on sync_outbox(next_attempt_at, created_at, id)" || !s.schemaIndexColumns(ctx, "sync_outbox_due_idx", "next_attempt_at", "created_at", "id") {
+		return false
+	}
+	return s.syncV8SchemaHealthy(ctx)
+}
+
+func (s *Store) syncV8SchemaHealthy(ctx context.Context) bool {
+	want := schemaV8Objects()
+	for _, table := range []struct {
+		name    string
+		columns []string
+	}{
+		{"sync_inbox", []string{"history_id", "seq", "change_hash", "applied_at"}},
+		{"sync_cursor", []string{"singleton", "history_id", "position", "updated_at"}},
+		{"sync_tombstones", []string{"history_id", "seq", "record_kind", "record_id", "canonical_version", "payload_version", "provenance", "deleted_at"}},
+		{"sync_conflicts", []string{"conflict_id", "history_id", "created_seq", "record_kind", "record_id", "canonical_version", "competing_version_id", "status", "resolved_seq", "payload_version", "snapshot", "created_at", "updated_at"}},
+		{"sync_bootstrap", []string{"singleton", "phase", "payload_version", "checkpoint", "created_at", "updated_at"}},
+	} {
+		schema, ok := s.schemaSQL(ctx, "table", table.name)
+		if !ok || normalizeSchemaSQL(schema) != want["table:"+table.name] || !s.schemaColumns(ctx, table.name, table.columns...) {
+			return false
+		}
+	}
+	for _, index := range []struct {
+		name    string
+		columns []string
+	}{
+		{"sync_tombstones_record_idx", []string{"record_kind", "record_id", "canonical_version"}},
+		{"sync_conflicts_unresolved_idx", []string{"status", "record_kind", "record_id", "created_seq"}},
+	} {
+		schema, ok := s.schemaSQL(ctx, "index", index.name)
+		if !ok || normalizeSchemaSQL(schema) != want["index:"+index.name] || !s.schemaIndexColumns(ctx, index.name, index.columns...) {
+			return false
+		}
+	}
+	return true
+}
+
+func schemaV8Objects() map[string]string {
+	objects := make(map[string]string, 7)
+	for _, statement := range strings.Split(schemaV8, ";") {
+		fields := strings.Fields(statement)
+		if len(fields) < 3 || !strings.EqualFold(fields[0], "create") || !(strings.EqualFold(fields[1], "table") || strings.EqualFold(fields[1], "index")) {
+			continue
+		}
+		objects[strings.ToLower(fields[1])+":"+strings.ToLower(fields[2])] = normalizeSchemaSQL(statement)
+	}
+	return objects
+}
+
+func normalizeSchemaSQL(schema string) string {
+	return strings.ToLower(strings.Join(strings.Fields(schema), " "))
 }
 
 func schemaHas(schema string, fragments ...string) bool {

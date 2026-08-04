@@ -30,6 +30,9 @@ var schemaV6 string
 //go:embed migrations/007_local_write_versions.sql
 var schemaV7 string
 
+//go:embed migrations/008_sync_inbox_cursor_conflicts_bootstrap.sql
+var schemaV8 string
+
 type migration struct {
 	version int
 	sql     string
@@ -43,6 +46,7 @@ var migrations = []migration{
 	{version: 5, sql: schemaV5},
 	{version: 6, sql: schemaV6},
 	{version: 7, sql: schemaV7},
+	{version: 8, sql: schemaV8},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
