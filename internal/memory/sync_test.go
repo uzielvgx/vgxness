@@ -29,11 +29,82 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 7, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 8, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
 	}
+}
+
+func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(schemaV1 + schemaV2 + schemaV3 + schemaV4 + schemaV5 + schemaV6 + schemaV7 + `
+		PRAGMA user_version=7;
+		INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at)
+		VALUES('existing','project','project','learning','durable memory','test','active',1,1);
+		INSERT INTO sync_outbox(mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,state,attempts,next_attempt_at,last_error_code,created_at,updated_at)
+		VALUES('550e8400-e29b-41d4-a716-446655440000','project','project','create',0,1,'{}','pending',0,1,'',1,1);`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+
+	store := openPath(t, path)
+	defer store.Close()
+	version, err := store.Health(context.Background())
+	testutil.Require(t, err == nil && version == 8, "health=%d err=%v", version, err)
+	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
+	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
+	var count int
+	err = store.db.QueryRow(`SELECT (SELECT count(*) FROM sync_inbox) + (SELECT count(*) FROM sync_cursor) + (SELECT count(*) FROM sync_tombstones) + (SELECT count(*) FROM sync_conflicts) + (SELECT count(*) FROM sync_bootstrap)`).Scan(&count)
+	testutil.Require(t, err == nil && count == 0, "new sync rows=%d err=%v", count, err)
+	var outbox int
+	err = store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox)
+	testutil.Require(t, err == nil && outbox == 1, "outbox=%d err=%v", outbox, err)
+}
+
+func TestSyncV8SchemaAndIndexesFailClosed(t *testing.T) {
+	for name, mutation := range map[string]string{
+		"inbox table":     `DROP TABLE sync_inbox; CREATE TABLE sync_inbox(history_id TEXT, seq INTEGER)`,
+		"cursor table":    `DROP TABLE sync_cursor; CREATE TABLE sync_cursor(singleton INTEGER PRIMARY KEY, history_id TEXT, position INTEGER, updated_at INTEGER)`,
+		"tombstone index": `DROP INDEX sync_tombstones_record_idx; CREATE INDEX sync_tombstones_record_idx ON sync_tombstones(record_id, record_kind, canonical_version)`,
+		"conflict index":  `DROP INDEX sync_conflicts_unresolved_idx; CREATE INDEX sync_conflicts_unresolved_idx ON sync_conflicts(status, record_id, record_kind, created_seq)`,
+		"bootstrap table": `DROP TABLE sync_bootstrap; CREATE TABLE sync_bootstrap(singleton INTEGER PRIMARY KEY, phase TEXT, payload_version INTEGER, checkpoint BLOB, created_at INTEGER, updated_at INTEGER)`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := openTestStore(t)
+			_, err := store.db.Exec(mutation)
+			testutil.NoError(t, err)
+			_, err = store.Health(context.Background())
+			testutil.Require(t, errors.Is(err, ErrCorrupt), "health error=%v", err)
+		})
+	}
+}
+
+func TestSyncV8Constraints(t *testing.T) {
+	t.Run("duplicate conflict ID", func(t *testing.T) {
+		store := openTestStore(t)
+		insert := `INSERT INTO sync_conflicts(conflict_id,history_id,created_seq,record_kind,record_id,canonical_version,competing_version_id,status,resolved_seq,payload_version,snapshot,created_at,updated_at)
+			VALUES('550e8400-e29b-41d4-a716-446655440000','550e8400-e29b-41d4-a716-446655440001',?,'observation','record',1,'550e8400-e29b-41d4-a716-446655440002','unresolved',NULL,1,X'7B7D',1,1)`
+		_, err := store.db.Exec(insert, 1)
+		testutil.NoError(t, err)
+		_, err = store.db.Exec(insert, 2)
+		testutil.Require(t, err != nil, "duplicate conflict ID accepted")
+	})
+	t.Run("weakened inbox check", func(t *testing.T) {
+		store := openTestStore(t)
+		_, err := store.db.Exec(`DROP TABLE sync_inbox;
+			CREATE TABLE sync_inbox (
+				history_id TEXT NOT NULL CHECK (typeof(history_id) = 'text' AND length(CAST(history_id AS BLOB)) = 36 AND history_id GLOB '????????-????-[1-5]???-[89ab]???-????????????' AND history_id NOT GLOB '*[^0-9a-f-]*' OR 1=1),
+				seq INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq > 0),
+				change_hash BLOB NOT NULL CHECK (typeof(change_hash) = 'blob' AND length(change_hash) = 32),
+				applied_at INTEGER NOT NULL CHECK (typeof(applied_at) = 'integer' AND applied_at > 0),
+				PRIMARY KEY (history_id, seq)
+			)`)
+		testutil.NoError(t, err)
+		_, err = store.Health(context.Background())
+		testutil.Require(t, errors.Is(err, ErrCorrupt), "health error=%v", err)
+	})
 }
 
 func TestSyncProfileRejectsRawCredentials(t *testing.T) {
@@ -475,7 +546,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 7 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 8 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {
