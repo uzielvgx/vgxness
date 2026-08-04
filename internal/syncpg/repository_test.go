@@ -1128,6 +1128,41 @@ func TestRepositoryPullRejectsUnsafeCursorDeviceOwnerAndGap(t *testing.T) {
 	}
 }
 
+func TestRepositoryDiscoverIsOwnerScopedAndReadOnly(t *testing.T) {
+	ctx, repo, conn, device, _ := conflictRepository(t)
+	before, err := repo.OwnerState(ctx)
+	mustNoError(t, err)
+	beforeEffects := mutationEffects(t, ctx, conn)
+	var beforeDevices int
+	mustNoError(t, conn.QueryRow(ctx, "SELECT count(*) FROM devices").Scan(&beforeDevices))
+	discovery, err := repo.Discover(ctx, device)
+	if err != nil || discovery.ProtocolVersion != 1 || discovery.HistoryID != before.HistoryID.String() || !reflect.DeepEqual(discovery.Capabilities, []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}) {
+		t.Fatalf("Discover() = %+v, %v", discovery, err)
+	}
+	revoked, err := repo.IssueDevice(ctx, "revoked")
+	mustNoError(t, err)
+	mustNoError(t, repo.RevokeDevice(ctx, revoked.ID))
+	wrongOwner, err := NewRepository(conn, uuid.New())
+	mustNoError(t, err)
+	for _, test := range []struct {
+		repo *Repository
+		id   uuid.UUID
+	}{
+		{repo, uuid.New()}, {repo, revoked.ID}, {wrongOwner, device},
+	} {
+		if _, err := test.repo.Discover(ctx, test.id); !errors.Is(err, ErrUnauthenticated) {
+			t.Fatalf("Discover(%s) error = %v", test.id, err)
+		}
+	}
+	after, err := repo.OwnerState(ctx)
+	mustNoError(t, err)
+	var afterDevices int
+	mustNoError(t, conn.QueryRow(ctx, "SELECT count(*) FROM devices").Scan(&afterDevices))
+	if after != before || mutationEffects(t, ctx, conn) != beforeEffects || afterDevices != beforeDevices+1 {
+		t.Fatalf("Discover mutated state: owner=%+v effects=%d devices=%d", after, mutationEffects(t, ctx, conn), afterDevices)
+	}
+}
+
 func TestRepositoryPullRetainsResolveIDsAndLifecyclePayloads(t *testing.T) {
 	ctx, repo, conn, first, second := conflictRepository(t)
 	project := mutationProject("project", 0)

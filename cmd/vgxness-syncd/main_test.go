@@ -365,6 +365,10 @@ func (backend *serverTestBackend) Pull(context.Context, uuid.UUID, syncservice.C
 	return syncservice.PullPage{}, nil
 }
 
+func (backend *serverTestBackend) Discover(context.Context, uuid.UUID) (syncservice.Discovery, error) {
+	return syncservice.Discovery{ProtocolVersion: 1, HistoryID: "123e4567-e89b-12d3-a456-426614174000", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, nil
+}
+
 func TestServerConfigurationAndContentFreeObserver(t *testing.T) {
 	var stderr strings.Builder
 	server := newServer(nil, nil, &stderr)
@@ -400,6 +404,10 @@ func TestServeWiresConfiguredRepositoryAsAuthenticatorAndSyncBackend(t *testing.
 func TestRepositoryBackendMapsUnauthenticated(t *testing.T) {
 	if !errors.Is(repositoryBackendError(syncpg.ErrUnauthenticated), syncapi.ErrUnauthenticated) {
 		t.Fatal("repository unauthenticated error was not mapped")
+	}
+	sentinel := errors.New("repository sentinel")
+	if !errors.Is(repositoryBackendError(sentinel), sentinel) {
+		t.Fatal("ordinary repository error was not preserved")
 	}
 }
 

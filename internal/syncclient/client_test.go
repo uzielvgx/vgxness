@@ -1,0 +1,158 @@
+package syncclient
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/vgxness/vgxness/internal/syncapi"
+	"github.com/vgxness/vgxness/internal/syncservice"
+)
+
+type closingReader struct {
+	io.Reader
+	closed bool
+}
+
+func (r *closingReader) Close() error { r.closed = true; return nil }
+
+type testDoer func(*http.Request) (*http.Response, error)
+
+func (do testDoer) Do(request *http.Request) (*http.Response, error) { return do(request) }
+
+func TestDiscoverUsesExactAuthenticatedGET(t *testing.T) {
+	const credential = "secret-credential"
+	client, err := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/sync/discovery" || request.URL.RawQuery != "" || request.Header.Get("Authorization") != "Bearer "+credential || request.Header.Get("Accept") != mediaType || request.Body != nil {
+			t.Fatalf("unexpected request: %s %s headers=%v", request.Method, request.URL, request.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery"]}`))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Discover(context.Background(), credential); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+}
+
+func TestNewRejectsNonHTTPS(t *testing.T) {
+	if _, err := New("http://sync.example", testDoer(func(*http.Request) (*http.Response, error) { return nil, nil })); err == nil {
+		t.Fatal("accepted HTTP endpoint")
+	}
+}
+
+func TestClientDoesNotFollowCredentialBearingRedirects(t *testing.T) {
+	const credential = "secret-credential"
+	var calls int
+	var authorization string
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		authorization = request.Header.Get("Authorization")
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer target.Close()
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, target.URL, http.StatusFound)
+	}))
+	defer origin.Close()
+	client, err := New(origin.URL, origin.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Discover(context.Background(), credential)
+	if !errors.Is(err, ErrRemote) || calls != 0 || authorization != "" || strings.Contains(err.Error(), credential) || strings.Contains(err.Error(), target.URL) {
+		t.Fatalf("err=%v calls=%d authorization=%q", err, calls, authorization)
+	}
+}
+
+func TestPullRejectsResponseForAnotherHistory(t *testing.T) {
+	history := uuid.NewString()
+	client, err := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/sync/pull" || request.URL.Query().Get("history_id") != history || request.URL.Query().Get("after") != "0" || request.URL.Query().Get("limit") != "1" || request.Body != nil {
+			t.Fatalf("unexpected pull request: %s", request.URL)
+		}
+		body := `{"protocol_version":1,"history_id":"` + uuid.NewString() + `","position":0,"has_more":false}`
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Pull(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, 1)
+	if !errors.Is(err, ErrRemote) {
+		t.Fatalf("error = %v, want %v", err, ErrRemote)
+	}
+}
+
+func TestPullUsesExactContinuationRequestAndClosesBody(t *testing.T) {
+	history := uuid.NewString()
+	change := syncservice.Change{Sequence: 3, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}}
+	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
+	body, _ := json.Marshal(syncapi.PullResponse{ProtocolVersion: 1, HistoryID: history, Position: 3, Watermark: 5, HasMore: true, Changes: []syncservice.Change{change}})
+	reader := &closingReader{Reader: strings.NewReader(string(body))}
+	client, _ := New("https://sync.example", testDoer(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/sync/pull" || r.URL.RawQuery != "after=2&history_id="+history+"&limit=3&watermark=5" || len(r.Header.Values("Authorization")) != 1 || len(r.Header.Values("Accept")) != 1 || r.Body != nil {
+			t.Fatalf("request=%s headers=%v", r.URL, r.Header)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{mediaType}}, Body: reader}, nil
+	}))
+	if page, err := client.Pull(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 5}, 3); err != nil || page.Position != 3 || !reader.closed {
+		t.Fatalf("page=%+v err=%v closed=%v", page, err, reader.closed)
+	}
+}
+
+func TestClientRejectsUnsafeResponsesWithoutSecrets(t *testing.T) {
+	credential, secret := "secret-credential", "server-private-value"
+	for _, test := range []struct {
+		name                            string
+		status                          int
+		header                          http.Header
+		body                            string
+		nilResponse, nilBody, transport bool
+		want                            error
+	}{
+		{"404", 404, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrDiscoveryUnsupported}, {"401", 401, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnauthorized}, {"503", 503, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnavailable}, {"500", 500, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrRemote}, {"duplicate", 200, http.Header{"Content-Type": []string{mediaType, mediaType}}, secret, false, false, false, ErrRemote}, {"wrong", 200, http.Header{"Content-Type": []string{"text/plain"}}, secret, false, false, false, ErrRemote}, {"duplicate json", 200, http.Header{"Content-Type": []string{mediaType}}, `{"protocol_version":1,"protocol_version":1}`, false, false, false, ErrRemote}, {"unknown", 200, http.Header{"Content-Type": []string{mediaType}}, `{"extra":1}`, false, false, false, ErrRemote}, {"utf8", 200, http.Header{"Content-Type": []string{mediaType}}, string([]byte{0xff}), false, false, false, ErrRemote}, {"nil response", 0, nil, "", true, false, false, ErrRemote}, {"nil body", 200, http.Header{"Content-Type": []string{mediaType}}, "", false, true, false, ErrRemote}, {"transport", 200, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, true, ErrRemote},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var reader *closingReader
+			client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+				if test.nilResponse {
+					return nil, nil
+				}
+				if test.nilBody {
+					return &http.Response{StatusCode: test.status, Header: test.header}, nil
+				}
+				reader = &closingReader{Reader: strings.NewReader(test.body)}
+				response := &http.Response{StatusCode: test.status, Header: test.header, Body: reader}
+				if test.transport {
+					return response, errors.New(secret)
+				}
+				return response, nil
+			}))
+			_, err := client.Discover(context.Background(), credential)
+			if !errors.Is(err, test.want) || strings.Contains(err.Error(), credential) || strings.Contains(err.Error(), secret) || (reader != nil && !reader.closed) {
+				t.Fatalf("err=%v closed=%v", err, reader != nil && reader.closed)
+			}
+		})
+	}
+}
+
+func TestClientRejectsInvalidEndpointAndCredential(t *testing.T) {
+	for _, endpoint := range []string{"http://sync.example", "https://u@sync.example", "https://sync.example?q=1", "https://sync.example#x", "https://sync.example/path", "https:opaque"} {
+		if _, err := New(endpoint, testDoer(func(*http.Request) (*http.Response, error) { t.Fatal("called"); return nil, nil })); !errors.Is(err, ErrInvalidEndpoint) {
+			t.Fatalf("endpoint %q: %v", endpoint, err)
+		}
+	}
+	for _, credential := range []string{"", "a b", "a\nb"} {
+		client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) { t.Fatal("called"); return nil, nil }))
+		if _, err := client.Discover(context.Background(), credential); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("credential %q: %v", credential, err)
+		}
+	}
+}

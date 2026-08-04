@@ -320,16 +320,19 @@ func assertError(t *testing.T, recorder *httptest.ResponseRecorder, code ErrorCo
 }
 
 type testSyncBackend struct {
-	mu       sync.Mutex
-	pushes   int
-	pulls    int
-	deviceID uuid.UUID
-	items    []syncservice.Mutation
-	cursor   syncservice.Cursor
-	limit    int
-	pushErr  error
-	pullErr  error
-	page     syncservice.PullPage
+	mu          sync.Mutex
+	pushes      int
+	pulls       int
+	discovers   int
+	deviceID    uuid.UUID
+	items       []syncservice.Mutation
+	cursor      syncservice.Cursor
+	limit       int
+	pushErr     error
+	pullErr     error
+	discoverErr error
+	page        syncservice.PullPage
+	discovery   syncservice.Discovery
 }
 
 func (backend *testSyncBackend) Push(_ context.Context, deviceID uuid.UUID, items []syncservice.Mutation) ([]syncservice.Result, error) {
@@ -354,6 +357,17 @@ func (backend *testSyncBackend) Pull(_ context.Context, deviceID uuid.UUID, curs
 	backend.pulls++
 	backend.deviceID, backend.cursor, backend.limit = deviceID, cursor, limit
 	return backend.page, backend.pullErr
+}
+
+func (backend *testSyncBackend) Discover(_ context.Context, deviceID uuid.UUID) (syncservice.Discovery, error) {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	backend.discovers++
+	backend.deviceID = deviceID
+	if backend.discovery.ProtocolVersion == 0 {
+		backend.discovery = syncservice.Discovery{ProtocolVersion: 1, HistoryID: "123e4567-e89b-12d3-a456-426614174000", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
+	}
+	return backend.discovery, backend.discoverErr
 }
 
 func validProjectMutation(id string) syncservice.Mutation {
@@ -618,6 +632,56 @@ func TestSyncBackendUnauthenticatedIsUnauthorized(t *testing.T) {
 				t.Fatalf("status = %d, want 401", recorder.Code)
 			}
 			assertError(t, recorder, ErrorUnauthorized, true)
+		})
+	}
+}
+
+func TestDiscoveryRequiresAuthenticatedBodyFreeGET(t *testing.T) {
+	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	backend := &testSyncBackend{}
+	request := httptest.NewRequest(http.MethodGet, "/v1/sync/discovery", nil)
+	request.Header.Set("Authorization", "Bearer "+testBearer)
+	request.Header.Set("Accept", MediaType)
+	recorder := httptest.NewRecorder()
+	NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || backend.discovers != 1 || backend.deviceID != identity.DeviceID {
+		t.Fatalf("status/discovers/device = %d/%d/%s", recorder.Code, backend.discovers, backend.deviceID)
+	}
+	assertHeaders(t, recorder, false)
+	var discovery DiscoveryResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &discovery); err != nil || syncservice.ValidateDiscovery(discovery) != nil {
+		t.Fatalf("discovery = %#v, err=%v", discovery, err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1/sync/discovery", nil)
+	request.Header.Set("Authorization", "Bearer "+testBearer)
+	request.Header.Set("Accept", MediaType)
+	recorder = httptest.NewRecorder()
+	NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("method status = %d", recorder.Code)
+	}
+}
+
+func TestDiscoveryBackendFailuresAreTypedAndSafe(t *testing.T) {
+	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	for _, test := range []struct {
+		name    string
+		backend *testSyncBackend
+		status  int
+	}{
+		{"unauthenticated", &testSyncBackend{discoverErr: ErrUnauthenticated}, http.StatusUnauthorized},
+		{"unavailable", &testSyncBackend{discoverErr: errors.New("credential secret")}, http.StatusServiceUnavailable},
+		{"invalid", &testSyncBackend{discovery: syncservice.Discovery{ProtocolVersion: 2}}, http.StatusServiceUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/v1/sync/discovery", nil)
+			request.Header.Set("Authorization", "Bearer "+testBearer)
+			request.Header.Set("Accept", MediaType)
+			recorder := httptest.NewRecorder()
+			NewSyncServerHandler(&testAuthenticator{identity: identity}, test.backend, nil).ServeHTTP(recorder, request)
+			if recorder.Code != test.status || strings.Contains(recorder.Body.String(), "secret") {
+				t.Fatalf("status/body = %d/%q", recorder.Code, recorder.Body.String())
+			}
 		})
 	}
 }

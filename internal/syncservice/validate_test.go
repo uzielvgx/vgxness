@@ -12,6 +12,27 @@ func newValidObservation() *Observation {
 	now := time.Now().UTC()
 	return &Observation{ID: "observation-1", Title: "Title", ProjectID: "project-1", SessionID: "session-1", Scope: "project", Type: "note", Content: "normal\nmultiline content", TopicKey: "topic-1", Provenance: Provenance{Producer: "client", SourceProvider: "manual", SourceID: "source-1"}, Lifecycle: LifecycleActive, Review: ReviewClear, CreatedAt: now, UpdatedAt: now, References: []string{"reference-1"}}
 }
+
+func TestValidateDiscoveryRequiresCanonicalHistoryAndCapabilities(t *testing.T) {
+	valid := Discovery{ProtocolVersion: 1, HistoryID: "123e4567-e89b-12d3-a456-426614174000", Capabilities: []Capability{CapabilityBootstrapDiscovery}}
+	if err := ValidateDiscovery(valid); err != nil {
+		t.Fatalf("valid discovery: %v", err)
+	}
+	for _, value := range []Discovery{
+		{ProtocolVersion: 2, HistoryID: valid.HistoryID, Capabilities: valid.Capabilities},
+		{ProtocolVersion: 1, HistoryID: "123E4567-E89B-12D3-A456-426614174000", Capabilities: valid.Capabilities},
+		{ProtocolVersion: 1, HistoryID: valid.HistoryID, Capabilities: []Capability{"unknown"}},
+		{ProtocolVersion: 1, HistoryID: valid.HistoryID, Capabilities: []Capability{CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery}},
+		{ProtocolVersion: 1, HistoryID: valid.HistoryID},
+		{ProtocolVersion: 1, HistoryID: valid.HistoryID, Capabilities: []Capability{}},
+		{ProtocolVersion: 1, HistoryID: valid.HistoryID, Capabilities: []Capability{"", CapabilityBootstrapDiscovery}},
+		{ProtocolVersion: 1, HistoryID: valid.HistoryID, Capabilities: []Capability{CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery, CapabilityBootstrapDiscovery}},
+	} {
+		if ValidateDiscovery(value) == nil {
+			t.Fatalf("accepted invalid discovery: %#v", value)
+		}
+	}
+}
 func validMutation(kind MutationKind) Mutation {
 	return Mutation{MutationID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91", RecordID: "observation-1", RecordKind: RecordKindObservation, Kind: kind, BaseVersion: 1, Observation: newValidObservation()}
 }
