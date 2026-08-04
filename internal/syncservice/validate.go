@@ -1,6 +1,9 @@
 package syncservice
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -16,11 +19,51 @@ const (
 
 var (
 	ErrInvalidMutation     = errors.New("invalid sync mutation")
+	ErrInvalidChangeHash   = errors.New("invalid sync change hash")
 	ErrInvalidCursor       = errors.New("invalid sync cursor")
 	ErrLimitExceeded       = errors.New("sync limit exceeded")
 	ErrUnsupportedSemantic = errors.New("unsupported sync semantic")
 	uuidPattern            = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 )
+
+type canonicalChange struct {
+	HashVersion      int      `json:"hash_version"`
+	Sequence         int64    `json:"sequence"`
+	CanonicalVersion int64    `json:"canonical_version"`
+	Mutation         Mutation `json:"mutation"`
+}
+
+// CanonicalChangeHash returns the replay-consistency hash for a pulled change.
+func CanonicalChangeHash(change Change) (string, error) {
+	encoded, err := json.Marshal(canonicalChange{
+		HashVersion:      1,
+		Sequence:         change.Sequence,
+		CanonicalVersion: change.CanonicalVersion,
+		Mutation:         change.Mutation,
+	})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// VerifyChangeHash verifies a pulled change's replay-consistency hash.
+func VerifyChangeHash(change Change) error {
+	if len(change.ChangeHash) != sha256.Size*2 {
+		return ErrInvalidChangeHash
+	}
+	for _, character := range change.ChangeHash {
+		if character < '0' || character > '9' && character < 'a' || character > 'f' {
+			return ErrInvalidChangeHash
+		}
+	}
+	expected, err := CanonicalChangeHash(change)
+	if err != nil || change.ChangeHash != expected {
+		return ErrInvalidChangeHash
+	}
+	return nil
+}
 
 func ValidateMutation(m Mutation) error {
 	if !validRecordKind(m.RecordKind) || !validMutationKind(m.RecordKind, m.Kind) {

@@ -384,7 +384,8 @@ func TestPushSuccessPreservesOrderAndAuthenticatedDevice(t *testing.T) {
 
 func TestPullQueryDefaultsWatermarkAndResponse(t *testing.T) {
 	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
-	backend := &testSyncBackend{page: syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history.String(), Position: 2, Watermark: 4}, HasMore: true, Changes: []syncservice.Change{{Sequence: 1, CanonicalVersion: 1, Mutation: validProjectMutation(uuid.NewString())}, {Sequence: 2, CanonicalVersion: 1, Mutation: validProjectMutation(uuid.NewString())}}}}
+	first, second := authoredPullChange(t, 1), authoredPullChange(t, 2)
+	backend := &testSyncBackend{page: syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history.String(), Position: 2, Watermark: 4}, HasMore: true, Changes: []syncservice.Change{first, second}}}
 	request := httptest.NewRequest(http.MethodGet, "/v1/sync/pull?history_id="+history.String()+"&after=0", nil)
 	request.Header.Set("Authorization", "Bearer "+testBearer)
 	request.Header.Set("Accept", MediaType)
@@ -394,8 +395,13 @@ func TestPullQueryDefaultsWatermarkAndResponse(t *testing.T) {
 		t.Fatalf("pull result = status %d calls %d device %s limit %d cursor %#v", recorder.Code, backend.pulls, backend.deviceID, backend.limit, backend.cursor)
 	}
 	var response PullResponse
-	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || response.HistoryID != history.String() || response.Position != 2 || response.Watermark != 4 || !response.HasMore {
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || response.HistoryID != history.String() || response.Position != 2 || response.Watermark != 4 || !response.HasMore || len(response.Changes) != 2 {
 		t.Fatalf("response = %s", recorder.Body.String())
+	}
+	for _, change := range response.Changes {
+		if err := syncservice.VerifyChangeHash(change); err != nil {
+			t.Fatalf("response hash = %v", err)
+		}
 	}
 }
 
@@ -477,7 +483,7 @@ func TestSyncEndpointsRejectInvalidRequestsWithoutBackendEffects(t *testing.T) {
 func TestPullRejectsUnboundBackendPages(t *testing.T) {
 	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
 	change := func(sequence int64) syncservice.Change {
-		return syncservice.Change{Sequence: sequence, CanonicalVersion: 1, Mutation: validProjectMutation(uuid.NewString())}
+		return authoredPullChange(t, sequence)
 	}
 	for _, test := range []struct {
 		name   string
@@ -519,6 +525,43 @@ func TestPullRejectsUnboundBackendPages(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPullRejectsInvalidBackendChangeHashes(t *testing.T) {
+	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	valid := authoredPullChange(t, 1)
+	stale := valid
+	stale.Mutation = validProjectMutation(uuid.NewString())
+	for _, test := range []struct {
+		name   string
+		change syncservice.Change
+	}{
+		{"missing", func() syncservice.Change { change := valid; change.ChangeHash = ""; return change }()},
+		{"stale", stale},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &testSyncBackend{page: syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history.String(), Position: 1, Watermark: 1}, Changes: []syncservice.Change{test.change}}}
+			request := httptest.NewRequest(http.MethodGet, "/v1/sync/pull?history_id="+history.String()+"&after=0", nil)
+			request.Header.Set("Authorization", "Bearer "+testBearer)
+			request.Header.Set("Accept", MediaType)
+			recorder := httptest.NewRecorder()
+			NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil).ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusServiceUnavailable || strings.Contains(recorder.Body.String(), test.change.Mutation.RecordID) {
+				t.Fatalf("unsafe status/body = %d/%q", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func authoredPullChange(t *testing.T, sequence int64) syncservice.Change {
+	t.Helper()
+	change := syncservice.Change{Sequence: sequence, CanonicalVersion: 1, Mutation: validProjectMutation(uuid.NewString())}
+	var err error
+	change.ChangeHash, err = syncservice.CanonicalChangeHash(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return change
 }
 
 func TestSyncBackendErrorsAreSafe(t *testing.T) {

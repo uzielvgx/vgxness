@@ -238,6 +238,10 @@ func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncse
 			return syncservice.PullPage{}, ErrRepository
 		}
 		change := syncservice.Change{Sequence: sequence, CanonicalVersion: version, Mutation: mutation}
+		change.ChangeHash, err = syncservice.CanonicalChangeHash(change)
+		if err != nil {
+			return syncservice.PullPage{}, ErrRepository
+		}
 		encoded, err := json.Marshal(change)
 		if err != nil || len(encoded) > remaining && len(changes) == 0 {
 			return syncservice.PullPage{}, ErrRepository

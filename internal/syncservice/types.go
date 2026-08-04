@@ -97,6 +97,7 @@ type Change struct {
 	Sequence         int64    `json:"sequence"`
 	CanonicalVersion int64    `json:"canonical_version"`
 	Mutation         Mutation `json:"mutation"`
+	ChangeHash       string   `json:"change_hash"`
 }
 
 type Cursor struct {

@@ -287,7 +287,7 @@ func validatePullPage(request PullRequest, page syncservice.PullPage) error {
 	}
 	expected := request.Cursor.Position + 1
 	for _, change := range page.Changes {
-		if change.Sequence != expected {
+		if change.Sequence != expected || syncservice.VerifyChangeHash(change) != nil {
 			return ErrInvalidRequest
 		}
 		expected++
