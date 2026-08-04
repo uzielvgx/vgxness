@@ -16,12 +16,15 @@ var ErrMigration = errors.New("syncpg migration")
 //go:embed migrations/001_initial.sql
 var initialSchema string
 
+//go:embed migrations/002_resolution_conflict_ids.sql
+var resolutionConflictIDsSchema string
+
 type migration struct {
 	version int64
 	sql     string
 }
 
-var migrations = []migration{{version: 1, sql: initialSchema}}
+var migrations = []migration{{version: 1, sql: initialSchema}, {version: 2, sql: resolutionConflictIDsSchema}}
 
 // Migrate applies embedded, forward-only PostgreSQL schema migrations.
 func Migrate(ctx context.Context, conn *pgx.Conn) error {

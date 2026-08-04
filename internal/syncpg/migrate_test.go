@@ -121,3 +121,61 @@ func TestMigrateRejectsSchemaDrift(t *testing.T) {
 		})
 	}
 }
+
+func TestMigrateResolutionConflictIDsConstraint(t *testing.T) {
+	ctx, conn := context.Background(), testConn(t)
+	if err := applyMigrations(ctx, conn, migrations[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) != 2 {
+		t.Fatalf("migrations = %d, want 2", len(migrations))
+	}
+	var checksum string
+	if err := conn.QueryRow(ctx, "SELECT checksum FROM sync_schema_migrations WHERE version=2").Scan(&checksum); err != nil || checksum != migrationChecksum(migrations[1].sql) {
+		t.Fatalf("v2 ledger = %q, %v", checksum, err)
+	}
+	if _, err := conn.Exec(ctx, "INSERT INTO owners(id) VALUES ('11111111-1111-1111-1111-111111111111')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "INSERT INTO devices(id,owner_id,display_name,credential_hash,credential_prefix) VALUES ('22222222-2222-2222-2222-222222222222','11111111-1111-1111-1111-111111111111','device',decode(repeat('00',32),'hex'),'p')"); err != nil {
+		t.Fatal(err)
+	}
+	valid := "INSERT INTO mutations(owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version,resolution_conflict_ids) VALUES ('11111111-1111-1111-1111-111111111111','22222222-2222-2222-2222-222222222222',$1,decode('00','hex'),'resolve','record',1,'accepted',$2,2,ARRAY['33333333-3333-3333-3333-333333333333'::uuid])"
+	if _, err := conn.Exec(ctx, valid, "44444444-4444-4444-4444-444444444444", 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		"INSERT INTO mutations(owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version,resolution_conflict_ids) VALUES ('11111111-1111-1111-1111-111111111111','22222222-2222-2222-2222-222222222222','55555555-5555-5555-5555-555555555555',decode('00','hex'),'resolve','record',1,'accepted',2,2,'{}')",
+		"INSERT INTO mutations(owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version,resolution_conflict_ids) VALUES ('11111111-1111-1111-1111-111111111111','22222222-2222-2222-2222-222222222222','66666666-6666-6666-6666-666666666666',decode('00','hex'),'update','record',1,'accepted',3,2,ARRAY['33333333-3333-3333-3333-333333333333'::uuid])",
+	} {
+		if _, err := conn.Exec(ctx, query); err == nil {
+			t.Fatalf("constraint accepted %q", query)
+		}
+	}
+}
+
+func TestMigrateRefusesUnrecoverableV1ResolveAtomically(t *testing.T) {
+	ctx, conn := context.Background(), testConn(t)
+	mustNoError(t, applyMigrations(ctx, conn, migrations[:1]))
+	for _, statement := range []string{
+		"INSERT INTO owners(id) VALUES ('11111111-1111-1111-1111-111111111111')",
+		"INSERT INTO devices(id,owner_id,display_name,credential_hash,credential_prefix) VALUES ('22222222-2222-2222-2222-222222222222','11111111-1111-1111-1111-111111111111','device',decode(repeat('00',32),'hex'),'p')",
+		"INSERT INTO mutations(owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version) VALUES ('11111111-1111-1111-1111-111111111111','22222222-2222-2222-2222-222222222222','33333333-3333-3333-3333-333333333333',decode('00','hex'),'resolve','target',1,'accepted',1,2)",
+	} {
+		_, err := conn.Exec(ctx, statement)
+		mustNoError(t, err)
+	}
+	if err := Migrate(ctx, conn); err == nil {
+		t.Fatal("Migrate accepted unrecoverable v1 resolve")
+	}
+	var column, ledger, resolves int
+	mustNoError(t, conn.QueryRow(ctx, "SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='mutations' AND column_name='resolution_conflict_ids'").Scan(&column))
+	mustNoError(t, conn.QueryRow(ctx, "SELECT count(*) FROM sync_schema_migrations WHERE version=2").Scan(&ledger))
+	mustNoError(t, conn.QueryRow(ctx, "SELECT count(*) FROM mutations WHERE kind='resolve'").Scan(&resolves))
+	if column != 0 || ledger != 0 || resolves != 1 {
+		t.Fatalf("failed upgrade changed v1 state: %d/%d/%d", column, ledger, resolves)
+	}
+}

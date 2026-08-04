@@ -2,6 +2,8 @@ package syncservice
 
 import "time"
 
+const MaxPullResponseBytes = 2 << 20
+
 type RecordKind string
 
 const (
@@ -92,13 +94,21 @@ type Mutation struct {
 }
 
 type Change struct {
-	Sequence int64    `json:"sequence"`
-	Mutation Mutation `json:"mutation"`
+	Sequence         int64    `json:"sequence"`
+	CanonicalVersion int64    `json:"canonical_version"`
+	Mutation         Mutation `json:"mutation"`
 }
 
 type Cursor struct {
 	HistoryID string `json:"history_id"`
 	Position  int64  `json:"position"`
+	Watermark int64  `json:"watermark,omitempty"`
+}
+
+type PullPage struct {
+	Cursor  Cursor   `json:"cursor"`
+	HasMore bool     `json:"has_more"`
+	Changes []Change `json:"changes,omitempty"`
 }
 
 type Result struct {
