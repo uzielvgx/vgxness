@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncpg"
+	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
 const (
@@ -96,7 +97,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer listener.Close()
-	server := newServer(repository, stderr)
+	server := newServer(repositoryAuthenticator{repository}, repositoryBackend{repository}, stderr)
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	select {
@@ -119,9 +120,9 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	}
 }
 
-func newServer(repository *syncpg.Repository, stderr io.Writer) *http.Server {
+func newServer(authenticator syncapi.Authenticator, backend syncapi.SyncBackend, stderr io.Writer) *http.Server {
 	return &http.Server{
-		Handler:           syncapi.NewServerHandler(repositoryAuthenticator{repository}, responseFailureObserver(stderr)),
+		Handler:           syncapi.NewSyncServerHandler(authenticator, backend, responseFailureObserver(stderr)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -158,6 +159,25 @@ func isLoopbackAddress(address string) bool {
 }
 
 type repositoryAuthenticator struct{ repository *syncpg.Repository }
+
+type repositoryBackend struct{ repository *syncpg.Repository }
+
+func (adapter repositoryBackend) Push(ctx context.Context, deviceID uuid.UUID, mutations []syncservice.Mutation) ([]syncservice.Result, error) {
+	results, err := adapter.repository.Push(ctx, deviceID, mutations)
+	return results, repositoryBackendError(err)
+}
+
+func (adapter repositoryBackend) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncservice.Cursor, limit int) (syncservice.PullPage, error) {
+	page, err := adapter.repository.Pull(ctx, deviceID, cursor, limit)
+	return page, repositoryBackendError(err)
+}
+
+func repositoryBackendError(err error) error {
+	if errors.Is(err, syncpg.ErrUnauthenticated) {
+		return syncapi.ErrUnauthenticated
+	}
+	return err
+}
 
 func (adapter repositoryAuthenticator) Authenticate(ctx context.Context, bearer string) (syncapi.Identity, error) {
 	identity, err := adapter.repository.AuthenticateDevice(ctx, bearer)
