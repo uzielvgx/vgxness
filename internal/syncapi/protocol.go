@@ -15,7 +15,7 @@ const (
 	ProtocolVersion      = 1
 	MediaType            = "application/vnd.vgxness.sync+json;version=1"
 	MaxBodyBytes         = 1 << 20
-	MaxPullResponseBytes = 2 << 20
+	MaxPullResponseBytes = syncservice.MaxPullResponseBytes
 	MaxPushItems         = 16
 	DefaultPullLimit     = 10
 	MaxPullLimit         = 25
@@ -44,15 +44,13 @@ type PullRequest struct {
 	Limit           int                `json:"limit,omitempty"`
 }
 
-type PullChange struct {
-	Sequence int64                `json:"sequence"`
-	Mutation syncservice.Mutation `json:"mutation"`
-}
+type PullChange = syncservice.Change
 
 type PullResponse struct {
 	ProtocolVersion int          `json:"protocol_version"`
 	HistoryID       string       `json:"history_id"`
 	Position        int64        `json:"position"`
+	Watermark       int64        `json:"watermark,omitempty"`
 	HasMore         bool         `json:"has_more"`
 	Changes         []PullChange `json:"changes,omitempty"`
 }
@@ -183,6 +181,9 @@ func ValidatePullRequest(request *PullRequest) error {
 	if err := syncservice.ValidateCursor(request.Cursor); err != nil {
 		return err
 	}
+	if request.Cursor.Watermark < 0 || request.Cursor.Watermark > 0 && request.Cursor.Watermark < request.Cursor.Position {
+		return syncservice.ErrInvalidCursor
+	}
 	return nil
 }
 
@@ -200,12 +201,18 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 	if syncservice.ValidateCursor(syncservice.Cursor{HistoryID: response.HistoryID, Position: response.Position}) != nil {
 		return PullResponse{}, ErrInvalidRequest
 	}
+	if response.Watermark < 0 || response.Watermark > 0 && response.Position > response.Watermark {
+		return PullResponse{}, ErrInvalidRequest
+	}
+	if response.Watermark > 0 && response.HasMore != (response.Position < response.Watermark) {
+		return PullResponse{}, ErrInvalidRequest
+	}
 	if len(response.Changes) > MaxPullLimit {
 		return PullResponse{}, ErrLimitExceeded
 	}
 	var previous int64
 	for _, change := range response.Changes {
-		if change.Sequence <= previous || syncservice.ValidateMutation(change.Mutation) != nil {
+		if change.Sequence <= previous || previous > 0 && change.Sequence != previous+1 || change.CanonicalVersion < 1 || response.Watermark > 0 && change.Sequence > response.Watermark || syncservice.ValidateMutation(change.Mutation) != nil {
 			return PullResponse{}, ErrInvalidRequest
 		}
 		previous = change.Sequence

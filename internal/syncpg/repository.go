@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -155,6 +156,170 @@ func (r *Repository) Push(ctx context.Context, deviceID uuid.UUID, mutations []s
 	return results, nil
 }
 
+// Pull returns an immutable, owner-scoped prefix of synchronized history.
+func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncservice.Cursor, limit int) (syncservice.PullPage, error) {
+	if deviceID == uuid.Nil || limit < 1 || limit > 25 || syncservice.ValidateCursor(cursor) != nil {
+		return syncservice.PullPage{}, ErrRepository
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return syncservice.PullPage{}, repositoryError(ctx)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err = tx.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"); err != nil {
+		return syncservice.PullPage{}, repositoryError(ctx)
+	}
+	schema, err := recoverySchema(ctx, tx)
+	if err != nil || !repositoryMigrationsValid(ctx, tx, schema) {
+		return syncservice.PullPage{}, repositoryError(ctx)
+	}
+	owners, err := r.owners(ctx, tx, schema)
+	if err != nil || len(owners) != 1 || owners[0] != r.ownerID {
+		return syncservice.PullPage{}, repositoryError(ctx)
+	}
+	table := func(name string) string { return pgx.Identifier{schema, name}.Sanitize() }
+	var revoked bool
+	if err = tx.QueryRow(ctx, "SELECT revoked_at IS NOT NULL FROM "+table("devices")+" WHERE owner_id=$1 AND id=$2", r.ownerID, deviceID).Scan(&revoked); err != nil || revoked {
+		return syncservice.PullPage{}, ErrUnauthenticated
+	}
+	state, err := r.ownerState(ctx, tx, schema)
+	if err != nil {
+		return syncservice.PullPage{}, repositoryError(ctx)
+	}
+	if !resolveArraysValid(ctx, tx, table, r.ownerID) {
+		return syncservice.PullPage{}, ErrRepository
+	}
+	historyID, err := uuid.Parse(cursor.HistoryID)
+	if err != nil || historyID != state.HistoryID {
+		return syncservice.PullPage{}, ErrRepository
+	}
+	head := state.NextSeq - 1
+	watermark := cursor.Watermark
+	if watermark == 0 {
+		watermark = head
+	}
+	if watermark < cursor.Position || watermark > head {
+		return syncservice.PullPage{}, ErrRepository
+	}
+	rows, err := tx.Query(ctx, `SELECT c.seq, c.record_kind, c.record_id, c.canonical_version,
+		m.mutation_id, m.kind, m.base_version, m.resolution_conflict_ids, v.snapshot, t.deleted_at
+		FROM `+table("changes")+` c
+		JOIN `+table("mutations")+` m ON m.owner_id=c.owner_id AND m.device_id=c.mutation_device_id AND m.mutation_id=c.mutation_id AND m.record_id=c.record_id AND m.canonical_seq=c.seq AND m.canonical_version=c.canonical_version AND m.disposition=c.change_kind
+		JOIN `+table("record_versions")+` v ON v.owner_id=c.owner_id AND v.id=c.version_id AND v.record_kind=c.record_kind AND v.record_id=c.record_id AND v.source_device_id=c.mutation_device_id AND v.source_mutation_id=c.mutation_id AND v.disposition=c.change_kind AND ((c.change_kind='conflict' AND v.record_version=m.base_version+1 AND v.base_version=m.base_version) OR (c.change_kind='accepted' AND v.base_version=m.base_version AND v.record_version=m.base_version+1 AND v.record_version=c.canonical_version))
+		LEFT JOIN `+table("tombstones")+` t ON t.owner_id=c.owner_id AND t.version_id=c.version_id AND t.record_kind=c.record_kind AND t.record_id=c.record_id
+		WHERE c.owner_id=$1 AND c.seq>$2 AND c.seq<=$3 ORDER BY c.seq LIMIT $4`, r.ownerID, cursor.Position, watermark, limit+1)
+	if err != nil {
+		return syncservice.PullPage{}, repositoryError(ctx)
+	}
+	defer rows.Close()
+	changes := make([]syncservice.Change, 0, limit)
+	hasMore := false
+	expected := cursor.Position + 1
+	remaining := syncservice.MaxPullResponseBytes - 4<<10
+	for rows.Next() {
+		var sequence, version, base int64
+		var recordKind, recordID, kind string
+		var mutationID uuid.UUID
+		var conflictIDs []uuid.UUID
+		var snapshot []byte
+		var deletedAt *time.Time
+		if err := rows.Scan(&sequence, &recordKind, &recordID, &version, &mutationID, &kind, &base, &conflictIDs, &snapshot, &deletedAt); err != nil {
+			return syncservice.PullPage{}, repositoryError(ctx)
+		}
+		if sequence != expected {
+			return syncservice.PullPage{}, ErrRepository
+		}
+		if len(changes) == limit {
+			hasMore = true
+			break
+		}
+		mutation, ok := pullMutation(recordKind, recordID, kind, mutationID, base, conflictIDs, snapshot, deletedAt)
+		if !ok || version < 1 || syncservice.ValidateMutation(mutation) != nil {
+			return syncservice.PullPage{}, ErrRepository
+		}
+		change := syncservice.Change{Sequence: sequence, CanonicalVersion: version, Mutation: mutation}
+		encoded, err := json.Marshal(change)
+		if err != nil || len(encoded) > remaining && len(changes) == 0 {
+			return syncservice.PullPage{}, ErrRepository
+		}
+		if len(encoded) > remaining {
+			hasMore = true
+			break
+		}
+		remaining -= len(encoded)
+		changes = append(changes, change)
+		expected++
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return syncservice.PullPage{}, repositoryError(ctx)
+	}
+	if !hasMore && expected-1 != watermark {
+		return syncservice.PullPage{}, ErrRepository
+	}
+	position := cursor.Position
+	if len(changes) != 0 {
+		position = changes[len(changes)-1].Sequence
+	}
+	if err := commitRepository(ctx, tx); err != nil {
+		return syncservice.PullPage{}, err
+	}
+	return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: state.HistoryID.String(), Position: position, Watermark: watermark}, HasMore: hasMore, Changes: changes}, nil
+}
+
+func pullMutation(recordKind, recordID, kind string, mutationID uuid.UUID, base int64, conflictIDs []uuid.UUID, snapshot []byte, deletedAt *time.Time) (syncservice.Mutation, bool) {
+	m := syncservice.Mutation{MutationID: mutationID.String(), RecordID: recordID, RecordKind: syncservice.RecordKind(recordKind), Kind: syncservice.MutationKind(kind), BaseVersion: base}
+	switch m.Kind {
+	case syncservice.MutationTombstone:
+		if deletedAt == nil || json.Unmarshal(snapshot, &m.Tombstone) != nil || m.Tombstone == nil || !timestampsWithinMicrosecond(m.Tombstone.DeletedAt, *deletedAt) {
+			return syncservice.Mutation{}, false
+		}
+	case syncservice.MutationResolve:
+		if len(conflictIDs) == 0 || json.Unmarshal(snapshot, &m.Observation) != nil || m.Observation == nil {
+			return syncservice.Mutation{}, false
+		}
+		m.Resolution = &syncservice.Resolution{Observation: m.Observation, ConflictIDs: make([]string, len(conflictIDs))}
+		m.Observation = nil
+		for i, id := range conflictIDs {
+			m.Resolution.ConflictIDs[i] = id.String()
+		}
+	case syncservice.MutationCreate, syncservice.MutationUpdate:
+		switch m.RecordKind {
+		case syncservice.RecordKindProject:
+			if json.Unmarshal(snapshot, &m.Project) != nil || m.Project == nil {
+				return syncservice.Mutation{}, false
+			}
+		case syncservice.RecordKindSession:
+			if json.Unmarshal(snapshot, &m.Session) != nil || m.Session == nil {
+				return syncservice.Mutation{}, false
+			}
+		case syncservice.RecordKindObservation:
+			if json.Unmarshal(snapshot, &m.Observation) != nil || m.Observation == nil {
+				return syncservice.Mutation{}, false
+			}
+		default:
+			return syncservice.Mutation{}, false
+		}
+	case syncservice.MutationArchive:
+		if json.Unmarshal(snapshot, &m.Observation) != nil || m.Observation == nil {
+			return syncservice.Mutation{}, false
+		}
+	default:
+		return syncservice.Mutation{}, false
+	}
+	return m, true
+}
+
+func timestampsWithinMicrosecond(left, right time.Time) bool {
+	if left.Equal(right) {
+		return true
+	}
+	if left.Before(right) {
+		return right.Sub(left) < time.Microsecond
+	}
+	return left.Sub(right) < time.Microsecond
+}
+
 func (r *Repository) pushOne(ctx context.Context, deviceID uuid.UUID, mutation syncservice.Mutation) (syncservice.Result, error) {
 	tx, schema, err := r.pushTransaction(ctx)
 	if err != nil {
@@ -244,6 +409,9 @@ func (r *Repository) pushOne(ctx context.Context, deviceID uuid.UUID, mutation s
 		resolution.ConflictIDs = conflictIDs
 		payloadMutation.Resolution = &resolution
 		payloadMutation.Observation = mutation.Resolution.Observation
+		if !r.resolveIDsExist(ctx, tx, table, mutation.RecordID, conflictIDs) {
+			return reject("invalid_prerequisite")
+		}
 	}
 	if err := r.validatePrerequisites(ctx, tx, table, payloadMutation); err != nil {
 		return reject("invalid_prerequisite")
@@ -276,7 +444,7 @@ func (r *Repository) pushOne(ctx context.Context, deviceID uuid.UUID, mutation s
 	if state, err = canonicalPayload(payloadMutation); err != nil {
 		return syncservice.Result{}, repositoryError(ctx)
 	}
-	if _, err = tx.Exec(ctx, "INSERT INTO "+table("mutations")+" (owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version) VALUES ($1,$2,$3,$4,$5,$6,$7,'accepted',$8,$9)", r.ownerID, deviceID, mutationID, hash[:], mutation.Kind, mutation.RecordID, mutation.BaseVersion, next, version); err != nil {
+	if _, err = tx.Exec(ctx, "INSERT INTO "+table("mutations")+" (owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version,resolution_conflict_ids) VALUES ($1,$2,$3,$4,$5,$6,$7,'accepted',$8,$9,$10)", r.ownerID, deviceID, mutationID, hash[:], mutation.Kind, mutation.RecordID, mutation.BaseVersion, next, version, resolutionConflictIDs(payloadMutation)); err != nil {
 		return syncservice.Result{}, repositoryError(ctx)
 	}
 	var versionID int64
@@ -381,7 +549,7 @@ func (r *Repository) writeConflict(ctx context.Context, tx pgx.Tx, table func(st
 	if !exists {
 		canonical = version
 	}
-	if _, err := tx.Exec(ctx, "INSERT INTO "+table("mutations")+" (owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version) VALUES ($1,$2,$3,$4,$5,$6,$7,'conflict',$8,$9)", r.ownerID, device, mutationID, hash[:], m.Kind, m.RecordID, m.BaseVersion, seq, canonical); err != nil {
+	if _, err := tx.Exec(ctx, "INSERT INTO "+table("mutations")+" (owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version,resolution_conflict_ids) VALUES ($1,$2,$3,$4,$5,$6,$7,'conflict',$8,$9,$10)", r.ownerID, device, mutationID, hash[:], m.Kind, m.RecordID, m.BaseVersion, seq, canonical, resolutionConflictIDs(m)); err != nil {
 		return syncservice.Result{}, repositoryError(ctx)
 	}
 	state, err := canonicalPayload(m)
@@ -444,16 +612,52 @@ func (r *Repository) unresolvedConflicts(ctx context.Context, tx pgx.Tx, table f
 	return err == nil && count == len(ids)
 }
 
+func (r *Repository) resolveIDsExist(ctx context.Context, tx pgx.Tx, table func(string) string, id string, ids []string) bool {
+	var count int
+	err := tx.QueryRow(ctx, "SELECT count(*) FROM "+table("observation_conflicts")+" WHERE owner_id=$1 AND observation_id=$2 AND conflict_id::text=ANY($3)", r.ownerID, id, ids).Scan(&count)
+	return err == nil && count == len(ids)
+}
+
 func normalizeConflictIDs(ids []string) ([]string, bool) {
 	normalized := make([]string, len(ids))
+	seen := make(map[string]struct{}, len(ids))
 	for index, id := range ids {
 		parsed, err := uuid.Parse(id)
 		if err != nil {
 			return nil, false
 		}
 		normalized[index] = parsed.String()
+		if _, exists := seen[normalized[index]]; exists {
+			return nil, false
+		}
+		seen[normalized[index]] = struct{}{}
 	}
 	return normalized, true
+}
+
+func resolveArraysValid(ctx context.Context, tx pgx.Tx, table func(string) string, owner any) bool {
+	var ok bool
+	err := tx.QueryRow(ctx, `SELECT NOT EXISTS (
+		SELECT 1 FROM `+table("mutations")+` m LEFT JOIN `+table("changes")+` c ON c.owner_id=m.owner_id AND c.mutation_device_id=m.device_id AND c.mutation_id=m.mutation_id AND c.seq=m.canonical_seq
+		WHERE ($1::uuid IS NULL OR m.owner_id=$1) AND m.kind='resolve' AND (
+			m.resolution_conflict_ids IS NULL OR c.owner_id IS NULL OR c.record_kind IS DISTINCT FROM 'observation'
+			OR cardinality(m.resolution_conflict_ids) <> (SELECT count(DISTINCT id) FROM unnest(m.resolution_conflict_ids) id)
+			OR EXISTS (SELECT 1 FROM unnest(m.resolution_conflict_ids) id LEFT JOIN `+table("observation_conflicts")+` f ON f.owner_id=m.owner_id AND f.conflict_id=id AND f.observation_id=m.record_id WHERE f.conflict_id IS NULL)
+			OR (m.disposition='accepted' AND (EXISTS (SELECT 1 FROM `+table("observation_conflicts")+` f WHERE f.owner_id=m.owner_id AND f.observation_id=m.record_id AND f.resolved_seq=m.canonical_seq AND NOT f.conflict_id=ANY(m.resolution_conflict_ids)) OR EXISTS (SELECT 1 FROM unnest(m.resolution_conflict_ids) id WHERE NOT EXISTS (SELECT 1 FROM `+table("observation_conflicts")+` f WHERE f.owner_id=m.owner_id AND f.observation_id=m.record_id AND f.resolved_seq=m.canonical_seq AND f.conflict_id=id))))
+		)
+	)`, owner).Scan(&ok)
+	return err == nil && ok
+}
+
+func resolutionConflictIDs(m syncservice.Mutation) []uuid.UUID {
+	if m.Kind != syncservice.MutationResolve || m.Resolution == nil {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(m.Resolution.ConflictIDs))
+	for i, id := range m.Resolution.ConflictIDs {
+		ids[i], _ = uuid.Parse(id)
+	}
+	return ids
 }
 
 func (r *Repository) writeTombstone(ctx context.Context, tx pgx.Tx, table func(string) string, id string, version int64) error {

@@ -2,9 +2,12 @@ package syncpg
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
@@ -765,6 +769,360 @@ func TestRepositoryLifecycleResolveAndTombstone(t *testing.T) {
 	if err := conn.QueryRow(ctx, "SELECT lifecycle, content FROM observations WHERE id='target'").Scan(&lifecycle, &content); err != nil || lifecycle != "tombstoned" || content != "" {
 		t.Fatalf("tombstone after current-base mutations = %q/%q, %v", lifecycle, content, err)
 	}
+}
+
+func TestRepositoryPullWatermarkAndResolveRoundTrip(t *testing.T) {
+	ctx, repo, conn, first, second := conflictRepository(t)
+	project, target := mutationProject("project", 0), mutationObservation("target", "project", "", nil, 0)
+	mustNoError(t, pushAccepted(ctx, repo, first, project))
+	mustNoError(t, pushAccepted(ctx, repo, first, target))
+	mustNoError(t, pushAccepted(ctx, repo, first, updateObservation(target, 1, "canonical")))
+	stale := updateObservation(target, 1, "competing")
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{stale}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("conflict = %+v, %v", got, err)
+	}
+	var conflictID string
+	mustNoError(t, conn.QueryRow(ctx, "SELECT conflict_id FROM observation_conflicts WHERE observation_id='target'").Scan(&conflictID))
+	resolve := updateObservation(target, 2, "resolved")
+	resolve.Kind, resolve.Observation, resolve.Resolution = syncservice.MutationResolve, nil, &syncservice.Resolution{ConflictIDs: []string{conflictID}, Observation: updateObservation(target, 2, "resolved").Observation}
+	mustNoError(t, pushAccepted(ctx, repo, first, resolve))
+	page, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 2)
+	mustNoError(t, err)
+	if !page.HasMore || page.Cursor.Watermark != 5 || page.Cursor.Position != 2 {
+		t.Fatalf("first page = %+v", page)
+	}
+	mustNoError(t, pushAccepted(ctx, repo, first, mutationObservation("later", "project", "", nil, 0)))
+	page, err = repo.Pull(ctx, first, page.Cursor, 4)
+	mustNoError(t, err)
+	if page.HasMore || len(page.Changes) != 3 || page.Changes[2].Mutation.Kind != syncservice.MutationResolve || len(page.Changes[2].Mutation.Resolution.ConflictIDs) != 1 || page.Changes[2].Mutation.Resolution.ConflictIDs[0] != conflictID {
+		t.Fatalf("fixed-watermark page = %+v", page)
+	}
+	if _, err := conn.Exec(ctx, "UPDATE mutations SET resolution_conflict_ids=NULL WHERE kind='resolve'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 10); !errors.Is(err, ErrRepository) {
+		t.Fatalf("old resolve pull = %v", err)
+	}
+	if err := VerifyRecovery(ctx, conn); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("old resolve recovery = %v", err)
+	}
+}
+
+func TestRepositoryPullRejectsSwappedResolveIdentityAndSequence(t *testing.T) {
+	ctx, repo, conn, first, second := conflictRepository(t)
+	project, target := mutationProject("project", 0), mutationObservation("target", "project", "", nil, 0)
+	mustNoError(t, pushAccepted(ctx, repo, first, project))
+	mustNoError(t, pushAccepted(ctx, repo, first, target))
+	mustNoError(t, pushAccepted(ctx, repo, first, updateObservation(target, 1, "canonical")))
+
+	resolve := func(base int64, content string) syncservice.Mutation {
+		if got, err := repo.Push(ctx, second, []syncservice.Mutation{updateObservation(target, base, "competing")}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+			t.Fatalf("conflict = %+v, %v", got, err)
+		}
+		var conflictID string
+		mustNoError(t, conn.QueryRow(ctx, "SELECT conflict_id FROM observation_conflicts WHERE observation_id='target' AND status='unresolved'").Scan(&conflictID))
+		resolved := updateObservation(target, base+1, content)
+		resolved.Kind, resolved.Resolution = syncservice.MutationResolve, &syncservice.Resolution{ConflictIDs: []string{conflictID}, Observation: resolved.Observation}
+		resolved.Observation = nil
+		mustNoError(t, pushAccepted(ctx, repo, first, resolved))
+		return resolved
+	}
+	firstResolve, secondResolve := resolve(1, "first resolved"), resolve(2, "second resolved")
+
+	var firstSeq, secondSeq, temporarySeq int64
+	var firstIDs, secondIDs []uuid.UUID
+	mustNoError(t, conn.QueryRow(ctx, "SELECT canonical_seq, resolution_conflict_ids FROM mutations WHERE mutation_id=$1", firstResolve.MutationID).Scan(&firstSeq, &firstIDs))
+	mustNoError(t, conn.QueryRow(ctx, "SELECT canonical_seq, resolution_conflict_ids FROM mutations WHERE mutation_id=$1", secondResolve.MutationID).Scan(&secondSeq, &secondIDs))
+	mustNoError(t, conn.QueryRow(ctx, "SELECT COALESCE(MAX(canonical_seq), 0)+1 FROM mutations WHERE owner_id=$1", repo.ownerID).Scan(&temporarySeq))
+	tx, err := conn.Begin(ctx)
+	mustNoError(t, err)
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, "UPDATE mutations SET canonical_seq=$1 WHERE owner_id=$2 AND mutation_id=$3", temporarySeq, repo.ownerID, firstResolve.MutationID)
+	mustNoError(t, err)
+	_, err = tx.Exec(ctx, "UPDATE mutations SET canonical_seq=$1, resolution_conflict_ids=$2 WHERE owner_id=$3 AND mutation_id=$4", firstSeq, firstIDs, repo.ownerID, secondResolve.MutationID)
+	mustNoError(t, err)
+	_, err = tx.Exec(ctx, "UPDATE mutations SET canonical_seq=$1, resolution_conflict_ids=$2 WHERE owner_id=$3 AND mutation_id=$4", secondSeq, secondIDs, repo.ownerID, firstResolve.MutationID)
+	mustNoError(t, err)
+	mustNoError(t, tx.Commit(ctx))
+
+	page, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 20)
+	if !errors.Is(err, ErrRepository) || len(page.Changes) != 0 {
+		t.Fatalf("swapped resolve pull = %+v, %v", page, err)
+	}
+	if err := VerifyRecovery(ctx, conn); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("swapped resolve recovery = %v", err)
+	}
+}
+
+func TestRepositoryPullBoundsEncodedResponsesAndContinues(t *testing.T) {
+	ctx, repo, _, device, _ := conflictRepository(t)
+	mustNoError(t, pushAccepted(ctx, repo, device, mutationProject("project", 0)))
+	references := make([]string, syncservice.MaxReferences)
+	for index := range references {
+		references[index] = fmt.Sprintf("seed-%03d-%s", index, strings.Repeat("r", syncservice.MaxRecordIDBytes-9))
+		mustNoError(t, pushAccepted(ctx, repo, device, mutationObservation(references[index], "project", "", nil, 0)))
+	}
+	for index := 0; index < 25; index++ {
+		mutation := mutationObservation(fmt.Sprintf("large-%03d", index), "project", "", references, 0)
+		mutation.Observation.Content = strings.Repeat("c", syncservice.MaxContentBytes)
+		mutation.Observation.Title = strings.Repeat("t", syncservice.MaxFieldBytes)
+		mutation.Observation.TopicKey = fmt.Sprintf("topic-%03d-%s", index, strings.Repeat("k", syncservice.MaxFieldBytes-10))
+		mutation.Observation.Type = strings.Repeat("y", syncservice.MaxFieldBytes)
+		mutation.Observation.Provenance = syncservice.Provenance{Producer: strings.Repeat("p", syncservice.MaxFieldBytes), SourceProvider: strings.Repeat("s", syncservice.MaxFieldBytes), SourceID: strings.Repeat("i", syncservice.MaxFieldBytes)}
+		mustNoError(t, pushAccepted(ctx, repo, device, mutation))
+	}
+	history := mustHistory(t, repo)
+	oldPage, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: history, Position: 129}, 25)
+	mustNoError(t, err)
+	oldResponse, err := json.Marshal(syncapi.PullResponse{ProtocolVersion: syncapi.ProtocolVersion, HistoryID: history, Position: oldPage.Cursor.Position, Watermark: oldPage.Cursor.Watermark, HasMore: oldPage.HasMore, Changes: oldPage.Changes})
+	mustNoError(t, err)
+	if len(oldPage.Changes) == 25 {
+		t.Logf("unbounded-shaped response = %d bytes", len(oldResponse))
+	}
+	seen := make([]int64, 0, 154)
+	cursor := syncservice.Cursor{HistoryID: history}
+	for {
+		page, err := repo.Pull(ctx, device, cursor, 25)
+		mustNoError(t, err)
+		response, err := json.Marshal(syncapi.PullResponse{ProtocolVersion: syncapi.ProtocolVersion, HistoryID: history, Position: page.Cursor.Position, Watermark: page.Cursor.Watermark, HasMore: page.HasMore, Changes: page.Changes})
+		mustNoError(t, err)
+		if len(response) > syncapi.MaxPullResponseBytes {
+			t.Fatalf("response = %d bytes, want at most %d", len(response), syncapi.MaxPullResponseBytes)
+		}
+		if _, err := syncapi.DecodePullResponse(response); err != nil || page.HasMore != (page.Cursor.Position < page.Cursor.Watermark) {
+			t.Fatalf("response/page = %+v, %v", page, err)
+		}
+		for _, change := range page.Changes {
+			seen = append(seen, change.Sequence)
+		}
+		if !page.HasMore {
+			break
+		}
+		cursor = page.Cursor
+	}
+	if len(seen) != 154 {
+		t.Fatalf("sequences = %d, want 154", len(seen))
+	}
+	for index, sequence := range seen {
+		if sequence != int64(index+1) {
+			t.Fatalf("sequence %d = %d", index, sequence)
+		}
+	}
+}
+
+func TestRepositoryPullRejectsCorruptCanonicalVersionAndTombstoneTime(t *testing.T) {
+	ctx, repo, conn, device, _ := conflictRepository(t)
+	mustNoError(t, pushAccepted(ctx, repo, device, mutationProject("project", 0)))
+	target := mutationObservation("target", "project", "", nil, 0)
+	mustNoError(t, pushAccepted(ctx, repo, device, target))
+	deletedAt := time.Unix(1_700_000_000, 123_456_789).UTC()
+	tombstone := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: target.RecordID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: deletedAt}}
+	mustNoError(t, pushAccepted(ctx, repo, device, tombstone))
+	history := mustHistory(t, repo)
+	if _, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: history}, 10); err != nil {
+		t.Fatalf("nanosecond tombstone pull = %v", err)
+	}
+	if _, err := conn.Exec(ctx, "UPDATE tombstones SET deleted_at=deleted_at + interval '2 microseconds' WHERE record_id=$1", target.RecordID); err != nil {
+		t.Fatal(err)
+	}
+	if page, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: history}, 10); !errors.Is(err, ErrRepository) || len(page.Changes) != 0 {
+		t.Fatalf("tampered tombstone pull = %+v, %v", page, err)
+	}
+	if _, err := conn.Exec(ctx, "UPDATE tombstones SET deleted_at=$1 WHERE record_id=$2", deletedAt, target.RecordID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "UPDATE mutations SET canonical_version=canonical_version+1 WHERE mutation_id=$1", tombstone.MutationID); err != nil {
+		t.Fatal(err)
+	}
+	if page, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: history}, 10); !errors.Is(err, ErrRepository) || len(page.Changes) != 0 {
+		t.Fatalf("tampered canonical version pull = %+v, %v", page, err)
+	}
+}
+
+func TestPullMutationRejectsTimestampOutsideDuration(t *testing.T) {
+	deletedAt := time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
+	databaseTime := time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)
+	snapshot, err := json.Marshal(syncservice.Tombstone{DeletedAt: deletedAt})
+	mustNoError(t, err)
+	if _, ok := pullMutation(string(syncservice.RecordKindObservation), "target", string(syncservice.MutationTombstone), uuid.New(), 1, nil, snapshot, &databaseTime); ok {
+		t.Fatal("overflowed tombstone timestamp accepted")
+	}
+}
+
+func TestRepositoryPullAndRecoveryRejectAcceptedBaseMetadataCorruption(t *testing.T) {
+	ctx, repo, conn, device, _ := conflictRepository(t)
+	mustNoError(t, pushAccepted(ctx, repo, device, mutationProject("project", 0)))
+	target := mutationObservation("target", "project", "", nil, 0)
+	mustNoError(t, pushAccepted(ctx, repo, device, target))
+	accepted := updateObservation(target, 1, "canonical")
+	mustNoError(t, pushAccepted(ctx, repo, device, accepted))
+	if _, err := conn.Exec(ctx, "UPDATE mutations SET base_version=0 WHERE mutation_id=$1", accepted.MutationID); err != nil {
+		t.Fatal(err)
+	}
+	history := mustHistory(t, repo)
+	if page, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: history}, 10); !errors.Is(err, ErrRepository) || len(page.Changes) != 0 {
+		t.Fatalf("corrupt accepted base pull = %+v, %v", page, err)
+	}
+	if err := VerifyRecovery(ctx, conn); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("corrupt accepted base recovery = %v", err)
+	}
+}
+
+func TestRepositoryPullRejectsUnsafeCursorDeviceOwnerAndGap(t *testing.T) {
+	ctx, repo, conn, device, _ := conflictRepository(t)
+	mustNoError(t, pushAccepted(ctx, repo, device, mutationProject("project", 0)))
+	mustNoError(t, pushAccepted(ctx, repo, device, mutationProject("project-two", 0)))
+	history := mustHistory(t, repo)
+	_, err := repo.OwnerState(ctx)
+	mustNoError(t, err)
+	effects := mutationEffects(t, ctx, conn)
+	revoked, err := repo.IssueDevice(ctx, "revoked")
+	mustNoError(t, err)
+	mustNoError(t, repo.RevokeDevice(ctx, revoked.ID))
+	wrongOwner, err := NewRepository(conn, uuid.New())
+	mustNoError(t, err)
+	for _, test := range []struct {
+		repo   *Repository
+		device uuid.UUID
+		cursor syncservice.Cursor
+		err    error
+	}{
+		{repo, uuid.New(), syncservice.Cursor{HistoryID: history}, ErrUnauthenticated},
+		{repo, revoked.ID, syncservice.Cursor{HistoryID: history}, ErrUnauthenticated},
+		{repo, device, syncservice.Cursor{HistoryID: history, Position: 3}, ErrRepository},
+		{repo, device, syncservice.Cursor{HistoryID: history, Watermark: 3}, ErrRepository},
+		{repo, device, syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 1}, ErrRepository},
+		{repo, device, syncservice.Cursor{HistoryID: history, Position: 2}, nil},
+		{repo, device, syncservice.Cursor{HistoryID: uuid.NewString()}, ErrRepository},
+		{wrongOwner, device, syncservice.Cursor{HistoryID: history}, ErrRepository},
+	} {
+		_, got := test.repo.Pull(ctx, test.device, test.cursor, 1)
+		if !errors.Is(got, test.err) {
+			t.Fatalf("Pull(%+v) = %v, want %v", test.cursor, got, test.err)
+		}
+	}
+	var snapshot []byte
+	mustNoError(t, conn.QueryRow(ctx, "SELECT v.snapshot FROM changes c JOIN record_versions v ON v.id=c.version_id WHERE c.seq=1").Scan(&snapshot))
+	if _, err := conn.Exec(ctx, "UPDATE record_versions SET snapshot='null' WHERE id=(SELECT version_id FROM changes WHERE seq=1)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: history}, 1); !errors.Is(err, ErrRepository) {
+		t.Fatalf("corrupt snapshot pull = %v", err)
+	}
+	var one int
+	mustNoError(t, conn.QueryRow(ctx, "SELECT 1").Scan(&one))
+	if _, err := conn.Exec(ctx, "UPDATE record_versions SET snapshot=$1 WHERE id=(SELECT version_id FROM changes WHERE seq=1)", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "DELETE FROM changes WHERE seq=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: history}, 1); !errors.Is(err, ErrRepository) {
+		t.Fatalf("gapped pull = %v", err)
+	}
+	_, err = repo.OwnerState(ctx)
+	if got := mutationEffects(t, ctx, conn); got != effects-1 || err == nil {
+		t.Fatalf("pull side effects = %d/%v", got, err)
+	}
+}
+
+func TestRepositoryPullRetainsResolveIDsAndLifecyclePayloads(t *testing.T) {
+	ctx, repo, conn, first, second := conflictRepository(t)
+	project := mutationProject("project", 0)
+	holder := mutationObservation("holder", "project", "", nil, 0)
+	holder.Observation.TopicKey = "taken"
+	target := mutationObservation("target", "project", "", nil, 0)
+	if _, err := repo.Push(ctx, first, []syncservice.Mutation{project, holder, target}); err != nil {
+		t.Fatal(err)
+	}
+	mustNoError(t, pushAccepted(ctx, repo, first, updateObservation(target, 1, "canonical")))
+	for range 2 {
+		if got, err := repo.Push(ctx, second, []syncservice.Mutation{updateObservation(target, 1, "competing")}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+			t.Fatalf("conflict = %+v, %v", got, err)
+		}
+	}
+	var ids []uuid.UUID
+	mustNoError(t, conn.QueryRow(ctx, "SELECT array_agg(conflict_id ORDER BY created_seq) FROM observation_conflicts WHERE observation_id='target'").Scan(&ids))
+	accepted := updateObservation(target, 2, "resolved")
+	accepted.Kind, accepted.Resolution = syncservice.MutationResolve, &syncservice.Resolution{ConflictIDs: []string{ids[1].String(), ids[0].String()}, Observation: accepted.Observation}
+	accepted.Observation = nil
+	mustNoError(t, pushAccepted(ctx, repo, first, accepted))
+	competing := updateObservation(target, 3, "conflict resolve")
+	competing.Observation.TopicKey = "taken"
+	competing.Kind, competing.Resolution = syncservice.MutationResolve, &syncservice.Resolution{ConflictIDs: []string{ids[0].String(), ids[1].String()}, Observation: competing.Observation}
+	competing.Observation = nil
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{competing}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("resolve conflict = %+v, %v", got, err)
+	}
+	archive := updateObservation(target, 3, "archived")
+	archive.Kind, archive.Observation.Lifecycle = syncservice.MutationArchive, syncservice.LifecycleArchived
+	mustNoError(t, pushAccepted(ctx, repo, first, archive))
+	tombstone := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "target", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 4, Tombstone: &syncservice.Tombstone{DeletedAt: time.Now().UTC()}}
+	mustNoError(t, pushAccepted(ctx, repo, first, tombstone))
+	page, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 20)
+	mustNoError(t, err)
+	if page.HasMore || len(page.Changes) != 10 {
+		t.Fatalf("page = %+v", page)
+	}
+	for _, change := range page.Changes {
+		if err := syncservice.ValidateMutation(change.Mutation); err != nil {
+			t.Fatalf("change %d = %v", change.Sequence, err)
+		}
+	}
+	if got := page.Changes[6].Mutation.Resolution.ConflictIDs; !reflect.DeepEqual(got, []string{ids[1].String(), ids[0].String()}) || !reflect.DeepEqual(page.Changes[7].Mutation.Resolution.ConflictIDs, []string{ids[0].String(), ids[1].String()}) || page.Changes[8].Mutation.Observation.Lifecycle != syncservice.LifecycleArchived || page.Changes[9].Mutation.Tombstone.DeletedAt.IsZero() {
+		t.Fatalf("pulled lifecycle/resolve payload = %+v", page.Changes)
+	}
+	var nonResolve int
+	mustNoError(t, conn.QueryRow(ctx, "SELECT count(*) FROM mutations WHERE kind<>'resolve' AND resolution_conflict_ids IS NOT NULL").Scan(&nonResolve))
+	if nonResolve != 0 {
+		t.Fatalf("non-resolve IDs = %d", nonResolve)
+	}
+	var original []uuid.UUID
+	mustNoError(t, conn.QueryRow(ctx, "SELECT resolution_conflict_ids FROM mutations WHERE kind='resolve' AND disposition='accepted'").Scan(&original))
+	for _, ids := range [][]uuid.UUID{{uuid.New()}, {original[0], original[0]}, {original[0]}} {
+		if _, err := conn.Exec(ctx, "UPDATE mutations SET resolution_conflict_ids=$1 WHERE kind='resolve' AND disposition='accepted'", ids); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 20); !errors.Is(err, ErrRepository) {
+			t.Fatalf("corrupt resolve pull = %v", err)
+		}
+		if err := VerifyRecovery(ctx, conn); !errors.Is(err, ErrRecovery) {
+			t.Fatalf("corrupt resolve recovery = %v", err)
+		}
+		if _, err := conn.Exec(ctx, "UPDATE mutations SET resolution_conflict_ids=$1 WHERE kind='resolve' AND disposition='accepted'", original); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRepositoryResolveRejectsCaseDuplicateBeforeTopicEffects(t *testing.T) {
+	ctx, repo, conn, device, second := conflictRepository(t)
+	holder, target := mutationObservation("holder", "project", "", nil, 0), mutationObservation("target", "project", "", nil, 0)
+	holder.Observation.TopicKey = "taken"
+	mustNoError(t, pushAccepted(ctx, repo, device, mutationProject("project", 0)))
+	mustNoError(t, pushAccepted(ctx, repo, device, holder))
+	mustNoError(t, pushAccepted(ctx, repo, device, target))
+	mustNoError(t, pushAccepted(ctx, repo, device, updateObservation(target, 1, "canonical")))
+	if got, err := repo.Push(ctx, second, []syncservice.Mutation{updateObservation(target, 1, "competing")}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("seed conflict = %+v, %v", got, err)
+	}
+	var id string
+	mustNoError(t, conn.QueryRow(ctx, "SELECT conflict_id FROM observation_conflicts WHERE observation_id='target'").Scan(&id))
+	bad := updateObservation(target, 2, "resolve")
+	bad.Observation.TopicKey = "taken"
+	bad.Kind, bad.Resolution = syncservice.MutationResolve, &syncservice.Resolution{ConflictIDs: []string{strings.ToUpper(id), id}, Observation: bad.Observation}
+	bad.Observation = nil
+	before := mutationEffects(t, ctx, conn)
+	if got, err := repo.Push(ctx, device, []syncservice.Mutation{bad}); err != nil || got[0].Disposition != syncservice.DispositionRejected || got[0].Code != "invalid_prerequisite" || mutationEffects(t, ctx, conn) != before {
+		t.Fatalf("case duplicate = %+v, %v", got, err)
+	}
+}
+
+func mustHistory(t *testing.T, repo *Repository) string {
+	t.Helper()
+	state, err := repo.OwnerState(context.Background())
+	mustNoError(t, err)
+	return state.HistoryID.String()
 }
 
 func TestRepositoryConflictRollbackWithoutSequenceGap(t *testing.T) {

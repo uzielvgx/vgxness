@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/vgxness/vgxness/internal/syncservice"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,37 @@ func TestPullResponseHardening(t *testing.T) {
 	if CodeFor(syncservice.ErrInvalidCursor) != ErrorCursor {
 		t.Fatal("cursor")
 	}
+}
+
+func TestValidatePullResponseWatermarkAndBounds(t *testing.T) {
+	legacy := []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"has_more":false}`)
+	if response, err := DecodePullResponse(legacy); err != nil || response.Watermark != 0 {
+		t.Fatalf("legacy response = %+v, %v", response, err)
+	}
+	for _, body := range [][]byte{
+		[]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":0,"watermark":-1,"has_more":false}`),
+		[]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":2,"watermark":1,"has_more":false}`),
+		[]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":3,"watermark":3,"has_more":false,"changes":[` + pullProjectChange(1) + `,` + pullProjectChange(3) + `]}`),
+		[]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[` + pullProjectChange(2) + `]}`),
+		[]byte(strings.Replace(string(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[`+pullProjectChange(1)+`]}`), `"canonical_version":1`, `"canonical_version":0`, 1)),
+		[]byte(strings.Replace(string(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[`+pullProjectChange(1)+`]}`), `"canonical_version":1`, `"canonical_version":-1`, 1)),
+		[]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":true,"changes":[` + pullProjectChange(1) + `]}`),
+		[]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":2,"has_more":false,"changes":[` + pullProjectChange(1) + `]}`),
+	} {
+		if _, err := DecodePullResponse(body); err == nil {
+			t.Fatalf("accepted invalid watermark: %s", body)
+		}
+	}
+	if _, err := DecodePullResponse([]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[` + pullProjectChange(1) + `]}`)); err != nil {
+		t.Fatalf("valid canonical version: %v", err)
+	}
+	if _, err := DecodePullResponse([]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":2,"has_more":true,"changes":[` + pullProjectChange(1) + `]}`)); err != nil {
+		t.Fatalf("valid incomplete watermark: %v", err)
+	}
+}
+
+func pullProjectChange(sequence int) string {
+	return `{"sequence":` + strconv.Itoa(sequence) + `,"canonical_version":1,"mutation":{"mutation_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","record_id":"project","record_kind":"project","kind":"create","base_version":0,"project":{"id":"project"}}}`
 }
 
 func TestPushResponseIsRequestBoundOrderedAndTerminal(t *testing.T) {
