@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -117,20 +118,31 @@ func (s *Store) DueSyncOutbox(ctx context.Context, due time.Time) ([]SyncOutboxE
 	if !ok {
 		return nil, fmt.Errorf("%w: invalid due time", ErrInvalid)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,CASE WHEN length(payload) BETWEEN 1 AND 1048576 THEN payload ELSE NULL END,state,attempts,last_error_code,next_attempt_at,created_at,updated_at FROM sync_outbox WHERE next_attempt_at<=? ORDER BY created_at,id LIMIT 16`, dueNanos)
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		CASE WHEN typeof(mutation_id)='text' AND length(CAST(mutation_id AS BLOB))=36 THEN mutation_id ELSE NULL END,
+		CASE WHEN record_kind IN ('project','session','observation') THEN record_kind ELSE NULL END,
+		CASE WHEN typeof(record_id)='text' AND length(CAST(record_id AS BLOB)) BETWEEN 1 AND 1024 THEN record_id ELSE NULL END,
+		CASE WHEN mutation_kind IN ('create','update','archive','tombstone','resolve') THEN mutation_kind ELSE NULL END,
+		base_version,payload_version,CASE WHEN length(CAST(payload AS BLOB)) BETWEEN 1 AND 1048576 THEN payload ELSE NULL END,
+		CASE WHEN state IN ('pending','retry') THEN state ELSE NULL END,
+		attempts,CASE WHEN typeof(last_error_code)='text' AND length(CAST(last_error_code AS BLOB))<=64 THEN last_error_code ELSE NULL END,next_attempt_at,created_at,updated_at
+		FROM sync_outbox WHERE next_attempt_at<=? ORDER BY created_at,id LIMIT 16`, dueNanos)
 	if err != nil {
 		return nil, writeError(ctx, err)
 	}
 	defer rows.Close()
 	entries := make([]SyncOutboxEntry, 0, maxDueSyncOutbox)
 	for rows.Next() {
-		var id, recordKind, recordID, kind, state, lastErrorCode string
+		var id, recordKind, recordID, kind, state, lastErrorCode sql.NullString
 		var baseVersion, payloadVersion, attempts, nextAttempt, created, updated int64
 		var payload []byte
 		if err := rows.Scan(&id, &recordKind, &recordID, &kind, &baseVersion, &payloadVersion, &payload, &state, &attempts, &lastErrorCode, &nextAttempt, &created, &updated); err != nil {
 			return nil, writeError(ctx, err)
 		}
-		entry, err := decodeSyncOutboxEntry(id, recordKind, recordID, kind, baseVersion, payloadVersion, payload, state, attempts, lastErrorCode, nextAttempt, created, updated)
+		if !id.Valid || !recordKind.Valid || !recordID.Valid || !kind.Valid || payload == nil || !state.Valid || !lastErrorCode.Valid {
+			return nil, fmt.Errorf("%w: invalid sync outbox entry", ErrCorrupt)
+		}
+		entry, err := decodeSyncOutboxEntry(id.String, recordKind.String, recordID.String, kind.String, baseVersion, payloadVersion, payload, state.String, attempts, lastErrorCode.String, nextAttempt, created, updated)
 		if err != nil {
 			return nil, err
 		}
@@ -211,20 +223,127 @@ func (s *Store) insertSyncOutbox(ctx context.Context, tx *sql.Tx, mutation syncs
 	if inserted == 1 {
 		return nil
 	}
-	var recordKind, recordID, kind string
+	var recordKind, recordID, kind sql.NullString
 	var baseVersion, payloadVersion int64
 	var existingPayload []byte
-	err = tx.QueryRowContext(ctx, `SELECT record_kind,record_id,mutation_kind,base_version,payload_version,CASE WHEN length(payload) BETWEEN 1 AND 1048576 THEN payload ELSE NULL END FROM sync_outbox WHERE mutation_id=?`, mutation.MutationID).Scan(&recordKind, &recordID, &kind, &baseVersion, &payloadVersion, &existingPayload)
+	err = tx.QueryRowContext(ctx, `SELECT
+		CASE WHEN record_kind IN ('project','session','observation') THEN record_kind ELSE NULL END,
+		CASE WHEN typeof(record_id)='text' AND length(CAST(record_id AS BLOB)) BETWEEN 1 AND 1024 THEN record_id ELSE NULL END,
+		CASE WHEN mutation_kind IN ('create','update','archive','tombstone','resolve') THEN mutation_kind ELSE NULL END,
+		base_version,payload_version,CASE WHEN length(CAST(payload AS BLOB)) BETWEEN 1 AND 1048576 THEN payload ELSE NULL END
+		FROM sync_outbox WHERE mutation_id=?`, mutation.MutationID).Scan(&recordKind, &recordID, &kind, &baseVersion, &payloadVersion, &existingPayload)
 	if err != nil {
 		return writeError(ctx, err)
 	}
-	if existingPayload == nil {
+	if !recordKind.Valid || !recordID.Valid || !kind.Valid || existingPayload == nil {
 		return fmt.Errorf("%w: invalid sync outbox payload", ErrCorrupt)
 	}
-	if recordKind != string(mutation.RecordKind) || recordID != mutation.RecordID || kind != string(mutation.Kind) || baseVersion != mutation.BaseVersion || payloadVersion != 1 || !bytes.Equal(existingPayload, payload) {
+	if recordKind.String != string(mutation.RecordKind) || recordID.String != mutation.RecordID || kind.String != string(mutation.Kind) || baseVersion != mutation.BaseVersion || payloadVersion != 1 || !bytes.Equal(existingPayload, payload) {
 		return fmt.Errorf("%w: sync mutation identity", ErrConflict)
 	}
 	return nil
+}
+
+// enqueueLocalWrite adds the local semantic mutation and any missing identity
+// snapshots to the same transaction. Canonical versions only advance when a
+// future remote acknowledgement or pull is accepted.
+func (s *Store) enqueueLocalWrite(ctx context.Context, tx *sql.Tx, item Observation) error {
+	var enabled int
+	err := tx.QueryRowContext(ctx, `SELECT enabled FROM sync_profiles WHERE singleton=1`).Scan(&enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	if enabled == 0 {
+		return nil
+	}
+	if enabled != 1 {
+		return fmt.Errorf("%w: invalid sync profile", ErrCorrupt)
+	}
+	projectVersion, err := syncVersion(ctx, tx, `SELECT sync_version FROM projects WHERE id=?`, item.Project)
+	if err != nil {
+		return err
+	}
+	if projectVersion == 0 {
+		if err = s.enqueueIdentity(ctx, tx, syncservice.Mutation{RecordID: item.Project, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: item.Project}}); err != nil {
+			return err
+		}
+	}
+	if item.Session != "" {
+		sessionVersion, sessionErr := syncVersion(ctx, tx, `SELECT sync_version FROM sessions WHERE id=? AND project_id=?`, item.Session, item.Project)
+		if sessionErr != nil {
+			return sessionErr
+		}
+		if sessionVersion == 0 {
+			if err = s.enqueueIdentity(ctx, tx, syncservice.Mutation{RecordID: item.Session, RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: item.Session, ProjectID: item.Project}}); err != nil {
+				return err
+			}
+		}
+	}
+	version, err := syncVersion(ctx, tx, `SELECT sync_version FROM observations WHERE id=?`, item.ID)
+	if err != nil {
+		return err
+	}
+	snapshot := syncObservation(item)
+	kind := syncservice.MutationCreate
+	if version > 0 {
+		kind = syncservice.MutationUpdate
+		if item.State == StateArchived {
+			kind = syncservice.MutationArchive
+		}
+	}
+	_, err = s.enqueueSyncOutbox(ctx, tx, syncservice.Mutation{RecordID: item.ID, RecordKind: syncservice.RecordKindObservation, Kind: kind, BaseVersion: version, Observation: &snapshot})
+	return err
+}
+
+func syncVersion(ctx context.Context, tx *sql.Tx, query string, args ...any) (int64, error) {
+	var version int64
+	if err := tx.QueryRowContext(ctx, query, args...).Scan(&version); err != nil {
+		return 0, writeError(ctx, err)
+	}
+	if version < 0 {
+		return 0, fmt.Errorf("%w: invalid sync version", ErrCorrupt)
+	}
+	return version, nil
+}
+
+func (s *Store) enqueueIdentity(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation) error {
+	var id sql.NullString
+	var payload []byte
+	err := tx.QueryRowContext(ctx, `SELECT CASE WHEN typeof(mutation_id)='text' AND length(CAST(mutation_id AS BLOB))=36 THEN mutation_id ELSE NULL END,CASE WHEN length(CAST(payload AS BLOB)) BETWEEN 1 AND 1048576 THEN payload ELSE NULL END FROM sync_outbox WHERE record_kind=? AND record_id=? AND mutation_kind='create' AND base_version=0 ORDER BY id LIMIT 1`, mutation.RecordKind, mutation.RecordID).Scan(&id, &payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = s.enqueueSyncOutbox(ctx, tx, mutation)
+		return err
+	}
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	if !id.Valid || !canonicalUUIDPattern.MatchString(id.String) {
+		return fmt.Errorf("%w: invalid sync outbox mutation id", ErrCorrupt)
+	}
+	if payload == nil {
+		return fmt.Errorf("%w: invalid sync outbox payload", ErrCorrupt)
+	}
+	mutation.MutationID = id.String
+	expected, marshalErr := json.Marshal(mutation)
+	if marshalErr != nil || !bytes.Equal(payload, expected) {
+		return fmt.Errorf("%w: sync identity snapshot", ErrConflict)
+	}
+	return nil
+}
+
+func syncObservation(item Observation) syncservice.Observation {
+	review := syncservice.ReviewClear
+	if item.State == StateNeedsReview {
+		review = syncservice.ReviewNeedsReview
+	}
+	lifecycle := syncservice.LifecycleActive
+	if item.State == StateArchived {
+		lifecycle = syncservice.LifecycleArchived
+	}
+	return syncservice.Observation{ID: item.ID, Title: item.Title, ProjectID: item.Project, SessionID: item.Session, Scope: string(item.Scope), Type: item.Type, Content: item.Content, TopicKey: item.TopicKey, References: append([]string(nil), item.References...), Provenance: syncservice.Provenance{Producer: item.Provenance.Producer, SourceProvider: item.Provenance.SourceProvider, SourceID: item.Provenance.SourceID}, Lifecycle: lifecycle, Review: review, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt, ReviewAfter: item.ReviewAfter}
 }
 
 func decodeSyncOutboxEntry(id, recordKind, recordID, kind string, baseVersion, payloadVersion int64, payload []byte, state string, attempts int64, lastErrorCode string, nextAttempt, created, updated int64) (SyncOutboxEntry, error) {

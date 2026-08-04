@@ -43,6 +43,9 @@ func (s *Store) Forget(ctx context.Context, id, project string, scope Scope) (Ob
 	if _, err = tx.ExecContext(ctx, `DELETE FROM observations_fts WHERE id=?`, id); err != nil {
 		return Observation{}, writeError(ctx, err)
 	}
+	if err = s.enqueueLocalWrite(ctx, tx, item); err != nil {
+		return Observation{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		if errors.Is(err, sql.ErrTxDone) {
 			return Observation{}, fmt.Errorf("%w: forget transaction", ErrCorrupt)
