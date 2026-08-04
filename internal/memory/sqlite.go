@@ -261,6 +261,7 @@ func (s *Store) Close() error {
 	}
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	s.syncInbox = syncInboxCache{}
 	var checkpointErr error
 	if !s.readOnly {
 		// Keep the main database complete by checkpointing committed WAL state
@@ -606,6 +607,9 @@ func (s *Store) Save(ctx context.Context, item Observation) (Observation, error)
 		return Observation{}, writeError(ctx, err)
 	}
 	defer tx.Rollback()
+	if err := rejectTombstoned(ctx, tx, item.ID); err != nil {
+		return Observation{}, err
+	}
 	if item.TopicKey != "" {
 		existing, found, err := loadOne(tx.QueryRowContext(ctx, observationSelect+` WHERE o.project_id=? AND o.scope=? AND o.topic_key=?`, item.Project, item.Scope, item.TopicKey))
 		if err != nil {
@@ -663,6 +667,9 @@ func (s *Store) Update(ctx context.Context, item Observation) (Observation, erro
 	return s.updateTx(ctx, tx, existing, item)
 }
 func (s *Store) updateTx(ctx context.Context, tx *sql.Tx, existing, item Observation) (Observation, error) {
+	if err := rejectTombstoned(ctx, tx, existing.ID); err != nil {
+		return Observation{}, err
+	}
 	if existing.Project != item.Project || existing.Scope != item.Scope || existing.CreatedAt != item.CreatedAt && !item.CreatedAt.IsZero() {
 		return Observation{}, fmt.Errorf("%w: identity boundary cannot change", ErrConflict)
 	}
@@ -715,7 +722,7 @@ func (s *Store) Search(ctx context.Context, filter Search) ([]Observation, error
 			return nil, fmt.Errorf("%w: invalid lifecycle filter", ErrInvalid)
 		}
 	}
-	query := observationColumns + ` FROM observations o JOIN observations_fts ON observations_fts.id=o.id WHERE o.project_id=?`
+	query := observationColumns + ` FROM observations o JOIN observations_fts ON observations_fts.id=o.id WHERE o.project_id=? AND NOT EXISTS(SELECT 1 FROM sync_tombstones t WHERE t.record_kind='observation' AND t.record_id=o.id)`
 	args := []any{filter.Project}
 	if filter.Scope != "" {
 		query += ` AND o.scope=?`
@@ -777,7 +784,7 @@ func (s *Store) Recent(ctx context.Context, request Recent) ([]Observation, erro
 		}
 		stateValues[i] = string(state)
 	}
-	query := observationColumns + ` FROM observations o WHERE o.project_id=? AND o.scope=?`
+	query := observationColumns + ` FROM observations o WHERE o.project_id=? AND o.scope=? AND NOT EXISTS(SELECT 1 FROM sync_tombstones t WHERE t.record_kind='observation' AND t.record_id=o.id)`
 	args := []any{request.Project, request.Scope}
 	query, args = addStrings(query, args, "o.state", stateValues)
 	query += ` ORDER BY o.updated_at DESC, o.id ASC LIMIT ?`
@@ -812,7 +819,7 @@ func (s *Store) Get(ctx context.Context, id, project string, scope Scope) (Obser
 	if id == "" || project == "" || scope != ScopeProject && scope != ScopePersonal {
 		return Observation{}, fmt.Errorf("%w: invalid get input", ErrInvalid)
 	}
-	item, found, err := loadOne(s.db.QueryRowContext(ctx, observationSelect+` WHERE o.id=? AND o.project_id=? AND o.scope=?`, id, project, scope))
+	item, found, err := loadOne(s.db.QueryRowContext(ctx, observationSelect+` WHERE o.id=? AND o.project_id=? AND o.scope=? AND NOT EXISTS(SELECT 1 FROM sync_tombstones t WHERE t.record_kind='observation' AND t.record_id=o.id)`, id, project, scope))
 	if err != nil {
 		return Observation{}, err
 	}
@@ -820,6 +827,20 @@ func (s *Store) Get(ctx context.Context, id, project string, scope Scope) (Obser
 		return Observation{}, fmt.Errorf("%w: observation not found", ErrNotFound)
 	}
 	return item, nil
+}
+
+func rejectTombstoned(ctx context.Context, tx *sql.Tx, id string) error {
+	if id == "" {
+		return nil
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_tombstones WHERE record_kind='observation' AND record_id=?`, id).Scan(&n); err != nil {
+		return writeError(ctx, err)
+	}
+	if n != 0 {
+		return fmt.Errorf("%w: observation tombstoned", ErrConflict)
+	}
+	return nil
 }
 func validateObservation(item Observation) error {
 	if item.Project == "" || item.Scope != ScopeProject && item.Scope != ScopePersonal || strings.TrimSpace(item.Type) == "" || strings.TrimSpace(item.Content) == "" || item.Provenance.Producer == "" || item.State != StateActive && item.State != StateNeedsReview && item.State != StateArchived {
@@ -846,6 +867,9 @@ func validateReferences(ctx context.Context, tx *sql.Tx, item Observation) error
 		}
 		if project != item.Project || scope != item.Scope {
 			return fmt.Errorf("%w: reference crosses boundary", ErrConflict)
+		}
+		if err := rejectTombstoned(ctx, tx, id); err != nil {
+			return err
 		}
 	}
 	return nil
