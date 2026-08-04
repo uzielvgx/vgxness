@@ -212,7 +212,7 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 	}
 	var previous int64
 	for _, change := range response.Changes {
-		if change.Sequence <= previous || previous > 0 && change.Sequence != previous+1 || change.CanonicalVersion < 1 || response.Watermark > 0 && change.Sequence > response.Watermark || syncservice.ValidateMutation(change.Mutation) != nil {
+		if change.Sequence <= previous || previous > 0 && change.Sequence != previous+1 || change.CanonicalVersion < 1 || response.Watermark > 0 && change.Sequence > response.Watermark || syncservice.ValidateMutation(change.Mutation) != nil || syncservice.VerifyChangeHash(change) != nil {
 			return PullResponse{}, ErrInvalidRequest
 		}
 		previous = change.Sequence

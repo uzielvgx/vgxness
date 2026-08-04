@@ -1068,6 +1068,16 @@ func TestRepositoryPullRetainsResolveIDsAndLifecyclePayloads(t *testing.T) {
 		if err := syncservice.ValidateMutation(change.Mutation); err != nil {
 			t.Fatalf("change %d = %v", change.Sequence, err)
 		}
+		if err := syncservice.VerifyChangeHash(change); err != nil {
+			t.Fatalf("change %d hash = %v", change.Sequence, err)
+		}
+	}
+	repeated, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 20)
+	mustNoError(t, err)
+	for index := range page.Changes {
+		if page.Changes[index].ChangeHash != repeated.Changes[index].ChangeHash {
+			t.Fatalf("change %d hash changed", index+1)
+		}
 	}
 	if got := page.Changes[6].Mutation.Resolution.ConflictIDs; !reflect.DeepEqual(got, []string{ids[1].String(), ids[0].String()}) || !reflect.DeepEqual(page.Changes[7].Mutation.Resolution.ConflictIDs, []string{ids[0].String(), ids[1].String()}) || page.Changes[8].Mutation.Observation.Lifecycle != syncservice.LifecycleArchived || page.Changes[9].Mutation.Tombstone.DeletedAt.IsZero() {
 		t.Fatalf("pulled lifecycle/resolve payload = %+v", page.Changes)

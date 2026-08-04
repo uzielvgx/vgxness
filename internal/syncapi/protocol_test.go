@@ -1,10 +1,10 @@
 package syncapi
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/vgxness/vgxness/internal/syncservice"
 	"math"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -108,8 +108,76 @@ func TestValidatePullResponseWatermarkAndBounds(t *testing.T) {
 	}
 }
 
+func TestPullChangeHashContractAndDecoder(t *testing.T) {
+	change := pullProjectChangeValue(1)
+	hash, err := syncservice.CanonicalChangeHash(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash != "11d715b99da25ca73ef871a74b0543901f57937632ca7ea47eee5ec4157bac08" {
+		t.Fatalf("canonical hash = %q", hash)
+	}
+	change.ChangeHash = hash
+	if err := syncservice.VerifyChangeHash(change); err != nil {
+		t.Fatal(err)
+	}
+	sequenceChanged := change
+	sequenceChanged.Sequence++
+	versionChanged := change
+	versionChanged.CanonicalVersion++
+	mutationChanged := change
+	project := *change.Mutation.Project
+	project.ID = "other"
+	mutationChanged.Mutation.Project = &project
+	for _, changed := range []syncservice.Change{sequenceChanged, versionChanged, mutationChanged} {
+		if err := syncservice.VerifyChangeHash(changed); err == nil {
+			t.Fatalf("accepted changed value: %+v", changed)
+		}
+	}
+	encoded, err := json.Marshal(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := func(changeJSON string) []byte {
+		return []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[` + changeJSON + `]}`)
+	}
+	if _, err := DecodePullResponse(response(string(encoded))); err != nil {
+		t.Fatalf("valid response: %v", err)
+	}
+	for _, changeJSON := range []string{
+		strings.Replace(string(encoded), `,"change_hash":"`+hash+`"`, "", 1),
+		strings.Replace(string(encoded), hash, strings.ToUpper(hash), 1),
+		strings.Replace(string(encoded), hash, hash[:63], 1),
+		strings.Replace(string(encoded), hash, strings.Repeat("g", 64), 1),
+		strings.Replace(string(encoded), hash, strings.Repeat("0", 64), 1),
+	} {
+		if _, err := DecodePullResponse(response(changeJSON)); err == nil {
+			t.Fatalf("accepted invalid hash: %s", changeJSON)
+		}
+	}
+	unknown := strings.TrimSuffix(string(encoded), "}") + `,"future_change":true}`
+	unknown = strings.Replace(string(response(unknown)), `"changes"`, `"future_root":true,"changes"`, 1)
+	if _, err := DecodePullResponse([]byte(unknown)); err != nil {
+		t.Fatalf("unknown additive fields: %v", err)
+	}
+}
+
 func pullProjectChange(sequence int) string {
-	return `{"sequence":` + strconv.Itoa(sequence) + `,"canonical_version":1,"mutation":{"mutation_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","record_id":"project","record_kind":"project","kind":"create","base_version":0,"project":{"id":"project"}}}`
+	change := pullProjectChangeValue(int64(sequence))
+	hash, err := syncservice.CanonicalChangeHash(change)
+	if err != nil {
+		panic(err)
+	}
+	change.ChangeHash = hash
+	encoded, err := json.Marshal(change)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+func pullProjectChangeValue(sequence int64) syncservice.Change {
+	return syncservice.Change{Sequence: sequence, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91", RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}}
 }
 
 func TestPushResponseIsRequestBoundOrderedAndTerminal(t *testing.T) {
