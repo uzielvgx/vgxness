@@ -7,11 +7,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
 var ErrUnauthenticated = errors.New("syncapi unauthenticated")
@@ -33,6 +36,12 @@ type Authenticator interface {
 	Authenticate(context.Context, string) (Identity, error)
 }
 
+// SyncBackend applies authenticated mutations and returns owner-scoped history.
+type SyncBackend interface {
+	Push(context.Context, uuid.UUID, []syncservice.Mutation) ([]syncservice.Result, error)
+	Pull(context.Context, uuid.UUID, syncservice.Cursor, int) (syncservice.PullPage, error)
+}
+
 // CapabilitiesResponse is the v1 capabilities representation.
 type CapabilitiesResponse struct {
 	ProtocolVersion int      `json:"protocol_version"`
@@ -51,6 +60,7 @@ type capabilitiesFunc func(context.Context) CapabilitiesResponse
 
 type handler struct {
 	authenticator Authenticator
+	backend       SyncBackend
 	capabilities  capabilitiesFunc
 	limits        *requestLimits
 	observer      FailureObserver
@@ -67,17 +77,26 @@ func NewServerHandler(authenticator Authenticator, observer FailureObserver) htt
 	return newHandlerWithLimits(authenticator, nil, observer)
 }
 
+// NewSyncServerHandler returns a v1 sync handler backed by the supplied service.
+func NewSyncServerHandler(authenticator Authenticator, backend SyncBackend, observer FailureObserver) http.Handler {
+	return newHandlerWithBackend(authenticator, nil, backend, observer)
+}
+
 func newHandler(authenticator Authenticator, capabilities capabilitiesFunc) http.Handler {
 	return newHandlerWithLimits(authenticator, capabilities, nil)
 }
 
 func newHandlerWithLimits(authenticator Authenticator, capabilities capabilitiesFunc, observer FailureObserver) http.Handler {
+	return newHandlerWithBackend(authenticator, capabilities, nil, observer)
+}
+
+func newHandlerWithBackend(authenticator Authenticator, capabilities capabilitiesFunc, backend SyncBackend, observer FailureObserver) http.Handler {
 	if capabilities == nil {
 		capabilities = func(context.Context) CapabilitiesResponse {
 			return CapabilitiesResponse{ProtocolVersion: ProtocolVersion, Capabilities: []string{"capabilities"}}
 		}
 	}
-	return &handler{authenticator: authenticator, capabilities: capabilities, limits: newRequestLimits(), observer: observer}
+	return &handler{authenticator: authenticator, backend: backend, capabilities: capabilities, limits: newRequestLimits(), observer: observer}
 }
 
 func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -89,12 +108,17 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
 	request = request.WithContext(ctx)
-	if request.URL.Path != "/v1/sync/capabilities" {
+	if request.URL.Path != "/v1/sync/capabilities" && request.URL.Path != "/v1/sync/push" && request.URL.Path != "/v1/sync/pull" {
 		writeError(writer, http.StatusNotFound, ErrorInvalidInput, false, handler.observer)
 		return
 	}
-	if request.Method != http.MethodGet {
-		writer.Header().Set("Allow", http.MethodGet)
+	validMethod := request.URL.Path == "/v1/sync/capabilities" && request.Method == http.MethodGet || request.URL.Path == "/v1/sync/push" && request.Method == http.MethodPost || request.URL.Path == "/v1/sync/pull" && request.Method == http.MethodGet
+	if !validMethod {
+		if request.URL.Path == "/v1/sync/push" {
+			writer.Header().Set("Allow", http.MethodPost)
+		} else {
+			writer.Header().Set("Allow", http.MethodGet)
+		}
 		writeError(writer, http.StatusMethodNotAllowed, ErrorInvalidInput, false, handler.observer)
 		return
 	}
@@ -117,13 +141,169 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusNotAcceptable, ErrorUnsupportedVersion, false, handler.observer)
 		return
 	}
-	if request.Body != nil && requestHasBody(request.Body) {
-		writeError(writer, http.StatusBadRequest, ErrorInvalidInput, false, handler.observer)
+	ctx = context.WithValue(request.Context(), identityContextKey{}, identity)
+	switch request.URL.Path {
+	case "/v1/sync/capabilities":
+		if request.Body != nil && requestHasBody(request.Body) {
+			writeError(writer, http.StatusBadRequest, ErrorInvalidInput, false, handler.observer)
+			return
+		}
+		writeJSON(writer, http.StatusOK, handler.capabilities(ctx), false, handler.observer)
+	case "/v1/sync/push":
+		handler.servePush(writer, request.WithContext(ctx), identity)
+	case "/v1/sync/pull":
+		if request.Body != nil && requestHasBody(request.Body) {
+			writeError(writer, http.StatusBadRequest, ErrorInvalidInput, false, handler.observer)
+			return
+		}
+		handler.servePull(writer, request.WithContext(ctx), identity)
+	}
+}
+
+func (handler *handler) servePush(writer http.ResponseWriter, request *http.Request, identity Identity) {
+	if len(request.Header.Values("Content-Type")) != 1 || request.Header.Get("Content-Type") != MediaType {
+		writeError(writer, http.StatusUnsupportedMediaType, ErrorUnsupportedVersion, false, handler.observer)
 		return
 	}
-
-	response := handler.capabilities(request.WithContext(context.WithValue(request.Context(), identityContextKey{}, identity)).Context())
+	if handler.backend == nil {
+		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+		return
+	}
+	defer request.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(request.Body, MaxBodyBytes+1))
+	if err != nil || len(body) > MaxBodyBytes {
+		writeError(writer, http.StatusBadRequest, ErrorLimitExceeded, false, handler.observer)
+		return
+	}
+	push, err := DecodePushRequest(body)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, CodeFor(err), false, handler.observer)
+		return
+	}
+	results, err := handler.backend.Push(request.Context(), identity.DeviceID, push.Items)
+	response := PushResponse{ProtocolVersion: ProtocolVersion, Results: results}
+	if errors.Is(err, ErrUnauthenticated) {
+		writeError(writer, http.StatusUnauthorized, ErrorUnauthorized, true, handler.observer)
+		return
+	}
+	if err != nil || ValidatePushResponse(push, response) != nil {
+		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+		return
+	}
 	writeJSON(writer, http.StatusOK, response, false, handler.observer)
+}
+
+func (handler *handler) servePull(writer http.ResponseWriter, request *http.Request, identity Identity) {
+	if handler.backend == nil {
+		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+		return
+	}
+	pull, err := pullQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, CodeFor(err), false, handler.observer)
+		return
+	}
+	page, err := handler.backend.Pull(request.Context(), identity.DeviceID, pull.Cursor, pull.Limit)
+	if errors.Is(err, ErrUnauthenticated) {
+		writeError(writer, http.StatusUnauthorized, ErrorUnauthorized, true, handler.observer)
+		return
+	}
+	if err != nil || validatePullPage(pull, page) != nil {
+		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+		return
+	}
+	response := PullResponse{ProtocolVersion: ProtocolVersion, HistoryID: page.Cursor.HistoryID, Position: page.Cursor.Position, Watermark: page.Cursor.Watermark, HasMore: page.HasMore, Changes: page.Changes}
+	body, responseErr := json.Marshal(response)
+	if responseErr != nil || len(body)+1 > MaxPullResponseBytes {
+		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+		return
+	}
+	if _, responseErr = DecodePullResponse(body); responseErr != nil {
+		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+		return
+	}
+	writeJSON(writer, http.StatusOK, response, false, handler.observer)
+}
+
+func pullQuery(request *http.Request) (PullRequest, error) {
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil {
+		return PullRequest{}, ErrInvalidRequest
+	}
+	for key, values := range query {
+		if key != "history_id" && key != "after" && key != "limit" && key != "watermark" || len(values) != 1 {
+			return PullRequest{}, ErrInvalidRequest
+		}
+	}
+	history, ok := query["history_id"]
+	if !ok || len(history) != 1 {
+		return PullRequest{}, ErrInvalidRequest
+	}
+	historyID, err := uuid.Parse(history[0])
+	if err != nil || historyID == uuid.Nil || historyID.String() != history[0] {
+		return PullRequest{}, syncservice.ErrInvalidCursor
+	}
+	after, ok := query["after"]
+	if !ok || len(after) != 1 {
+		return PullRequest{}, ErrInvalidRequest
+	}
+	position, err := canonicalInt(after[0], 0)
+	if err != nil {
+		return PullRequest{}, syncservice.ErrInvalidCursor
+	}
+	requestValue := PullRequest{ProtocolVersion: ProtocolVersion, Cursor: syncservice.Cursor{HistoryID: historyID.String(), Position: position}}
+	if values, ok := query["watermark"]; ok {
+		watermark, err := canonicalInt(values[0], 0)
+		if err != nil {
+			return PullRequest{}, syncservice.ErrInvalidCursor
+		}
+		requestValue.Cursor.Watermark = watermark
+	}
+	if values, ok := query["limit"]; ok {
+		limit, err := canonicalInt(values[0], 1)
+		if err != nil {
+			return PullRequest{}, ErrInvalidRequest
+		}
+		requestValue.Limit = int(limit)
+	}
+	if err := ValidatePullRequest(&requestValue); err != nil {
+		return PullRequest{}, err
+	}
+	return requestValue, nil
+}
+
+func validatePullPage(request PullRequest, page syncservice.PullPage) error {
+	if page.Cursor.HistoryID != request.Cursor.HistoryID || page.Cursor.Position < request.Cursor.Position || len(page.Changes) > request.Limit || request.Cursor.Watermark != 0 && page.Cursor.Watermark != request.Cursor.Watermark {
+		return ErrInvalidRequest
+	}
+	if page.Cursor.Watermark == 0 && (len(page.Changes) != 0 || page.Cursor.Position != 0 || page.HasMore) {
+		return ErrInvalidRequest
+	}
+	if len(page.Changes) == 0 {
+		if page.Cursor.Position != request.Cursor.Position || page.HasMore {
+			return ErrInvalidRequest
+		}
+		return nil
+	}
+	expected := request.Cursor.Position + 1
+	for _, change := range page.Changes {
+		if change.Sequence != expected {
+			return ErrInvalidRequest
+		}
+		expected++
+	}
+	if page.Cursor.Position != page.Changes[len(page.Changes)-1].Sequence {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func canonicalInt(value string, minimum int64) (int64, error) {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed < minimum || strconv.FormatInt(parsed, 10) != value {
+		return 0, ErrInvalidRequest
+	}
+	return parsed, nil
 }
 
 func (handler *handler) authenticate(request *http.Request) (Identity, int) {

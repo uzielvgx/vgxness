@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncpg"
+	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
 type fakeDevices struct {
@@ -345,9 +347,27 @@ func (writer *failingHTTPWriter) Header() http.Header       { return writer.head
 func (writer *failingHTTPWriter) Write([]byte) (int, error) { return 0, errors.New("response content") }
 func (writer *failingHTTPWriter) WriteHeader(int)           {}
 
+type serverTestAuthenticator struct{ identity syncapi.Identity }
+
+func (auth serverTestAuthenticator) Authenticate(context.Context, string) (syncapi.Identity, error) {
+	return auth.identity, nil
+}
+
+type serverTestBackend struct{ pushes int }
+
+func (backend *serverTestBackend) Push(_ context.Context, _ uuid.UUID, items []syncservice.Mutation) ([]syncservice.Result, error) {
+	backend.pushes++
+	sequence := int64(1)
+	return []syncservice.Result{{MutationID: items[0].MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &sequence, Version: 1}}, nil
+}
+
+func (backend *serverTestBackend) Pull(context.Context, uuid.UUID, syncservice.Cursor, int) (syncservice.PullPage, error) {
+	return syncservice.PullPage{}, nil
+}
+
 func TestServerConfigurationAndContentFreeObserver(t *testing.T) {
 	var stderr strings.Builder
-	server := newServer(nil, &stderr)
+	server := newServer(nil, nil, &stderr)
 	if server.ReadHeaderTimeout != 5*time.Second || server.ReadTimeout != 15*time.Second || server.WriteTimeout != 30*time.Second || server.IdleTimeout != 60*time.Second || server.MaxHeaderBytes != 16<<10 {
 		t.Fatal("server timeouts or header limit changed")
 	}
@@ -355,6 +375,31 @@ func TestServerConfigurationAndContentFreeObserver(t *testing.T) {
 	server.Handler.ServeHTTP(&failingHTTPWriter{header: make(http.Header)}, request)
 	if stderr.String() != "serve response write failed\n" || strings.Contains(stderr.String(), "response content") {
 		t.Fatal("observer leaked response content")
+	}
+}
+
+func TestServeWiresConfiguredRepositoryAsAuthenticatorAndSyncBackend(t *testing.T) {
+	identity := syncapi.Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	backend := &serverTestBackend{}
+	server := newServer(serverTestAuthenticator{identity: identity}, backend, io.Discard)
+	body, err := json.Marshal(syncapi.PushRequest{ProtocolVersion: syncapi.ProtocolVersion, Items: []syncservice.Mutation{{MutationID: uuid.NewString(), RecordID: "server-project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "server-project"}}}})
+	if err != nil {
+		t.Fatal("encode request")
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/sync/push", strings.NewReader(string(body)))
+	request.Header.Set("Authorization", "Bearer vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	request.Header.Set("Accept", syncapi.MediaType)
+	request.Header.Set("Content-Type", syncapi.MediaType)
+	recorder := httptest.NewRecorder()
+	server.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || backend.pushes != 1 {
+		t.Fatalf("status/pushes = %d/%d, want 200/1", recorder.Code, backend.pushes)
+	}
+}
+
+func TestRepositoryBackendMapsUnauthenticated(t *testing.T) {
+	if !errors.Is(repositoryBackendError(syncpg.ErrUnauthenticated), syncapi.ErrUnauthenticated) {
+		t.Fatal("repository unauthenticated error was not mapped")
 	}
 }
 
@@ -424,10 +469,67 @@ func TestServeRealListenerLifecycle(t *testing.T) {
 	if got := <-seenListen; got != "tcp "+defaultListenAddress {
 		t.Fatalf("listen arguments = %q", got)
 	}
+	mutationID := uuid.NewString()
+	mutation := syncservice.Mutation{MutationID: mutationID, RecordID: "serve-project-" + mutationID, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "serve-project-" + mutationID}}
+	body, err := json.Marshal(syncapi.PushRequest{ProtocolVersion: syncapi.ProtocolVersion, Items: []syncservice.Mutation{mutation}})
+	if err != nil {
+		t.Fatal("encode push")
+	}
+	push, err := http.NewRequest(http.MethodPost, "http://"+listener.Addr().String()+"/v1/sync/push", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal("push request failed")
+	}
+	push.Header.Set("Authorization", "Bearer "+credential.Bearer)
+	push.Header.Set("Accept", syncapi.MediaType)
+	push.Header.Set("Content-Type", syncapi.MediaType)
+	response, err := client.Do(push)
+	if err != nil || response.StatusCode != http.StatusOK {
+		if response != nil {
+			response.Body.Close()
+		}
+		t.Fatal("authenticated push failed")
+	}
+	response.Body.Close()
+	state, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatal("state connection failed")
+	}
+	var historyID uuid.UUID
+	err = state.QueryRow(context.Background(), "SELECT history_id FROM owner_sync_state WHERE owner_id=$1", owner).Scan(&historyID)
+	state.Close(context.Background())
+	if err != nil {
+		t.Fatal("history query failed")
+	}
+	pull, err := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/v1/sync/pull?history_id="+historyID.String()+"&after=0", nil)
+	if err != nil {
+		t.Fatal("pull request failed")
+	}
+	pull.Header.Set("Authorization", "Bearer "+credential.Bearer)
+	pull.Header.Set("Accept", syncapi.MediaType)
+	response, err = client.Do(pull)
+	if err != nil || response.StatusCode != http.StatusOK {
+		if response != nil {
+			response.Body.Close()
+		}
+		t.Fatal("authenticated pull failed")
+	}
+	pullBody, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	pullPage, decodeErr := syncapi.DecodePullResponse(pullBody)
+	if readErr != nil || decodeErr != nil || len(pullPage.Changes) == 0 {
+		t.Fatal("pulled change was invalid")
+	}
+	found := false
+	for _, change := range pullPage.Changes {
+		found = found || change.Mutation.MutationID == mutation.MutationID
+	}
+	if !found {
+		t.Fatal("pushed mutation was not pulled")
+	}
 	if err := repository.RevokeDevice(context.Background(), credential.ID); err != nil {
 		t.Fatal("revoke failed")
 	}
-	response, err := client.Do(request)
+	response, err = client.Do(request)
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		if response != nil {
 			response.Body.Close()
