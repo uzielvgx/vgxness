@@ -315,13 +315,104 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections')`).Scan(&probe); err != nil || probe != 11 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox')`).Scan(&probe); err != nil || probe != 13 {
 		return 0, fmt.Errorf("%w: required schema unavailable", ErrCorrupt)
+	}
+	if !s.syncSchemaHealthy(ctx) {
+		return 0, fmt.Errorf("%w: sync schema unavailable", ErrCorrupt)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observations_fts WHERE observations_fts MATCH 'healthchecknomatch'`).Scan(&probe); err != nil {
 		return 0, fmt.Errorf("%w: FTS5 unavailable", ErrCorrupt)
 	}
 	return version, nil
+}
+
+func (s *Store) syncSchemaHealthy(ctx context.Context) bool {
+	profileSQL, ok := s.schemaSQL(ctx, "table", "sync_profiles")
+	if !ok || !s.schemaColumns(ctx, "sync_profiles", "singleton", "enabled", "endpoint", "device_id", "credential_ref", "created_at", "updated_at") || !schemaHas(profileSQL,
+		"singleton integer primary key check (singleton = 1)",
+		"enabled integer not null check (enabled in (0, 1))",
+		"endpoint text not null check (length(endpoint) between 1 and 2048)",
+		"device_id text not null check (length(device_id) = 36)",
+		"credential_ref text not null check (length(credential_ref) between 10 and 512)",
+		"created_at integer not null check (created_at > 0)",
+		"updated_at integer not null check (updated_at >= created_at)") {
+		return false
+	}
+	outboxSQL, ok := s.schemaSQL(ctx, "table", "sync_outbox")
+	if !ok || !s.schemaColumns(ctx, "sync_outbox", "id", "mutation_id", "record_kind", "record_id", "mutation_kind", "base_version", "payload_version", "payload", "state", "attempts", "next_attempt_at", "last_error_code", "created_at", "updated_at") || !schemaHas(outboxSQL,
+		"id integer primary key",
+		"mutation_id text not null unique check (length(mutation_id) = 36)",
+		"record_kind text not null check (record_kind in ('project', 'session', 'observation'))",
+		"record_id text not null check (length(cast(record_id as blob)) between 1 and 1024)",
+		"mutation_kind text not null check (mutation_kind in ('create', 'update', 'archive', 'tombstone', 'resolve'))",
+		"base_version integer not null check (base_version >= 0)",
+		"payload_version integer not null check (payload_version = 1)",
+		"payload blob not null check (length(payload) between 1 and 1048576)",
+		"state text not null check (state in ('pending', 'retry'))",
+		"attempts integer not null default 0 check (attempts >= 0)",
+		"next_attempt_at integer not null check (next_attempt_at > 0)",
+		"last_error_code text not null default '' check (length(last_error_code) <= 64)",
+		"created_at integer not null check (created_at > 0)",
+		"updated_at integer not null check (updated_at >= created_at)") {
+		return false
+	}
+	indexSQL, ok := s.schemaSQL(ctx, "index", "sync_outbox_due_idx")
+	return ok && strings.TrimSpace(strings.ToLower(indexSQL)) == "create index sync_outbox_due_idx on sync_outbox(next_attempt_at, created_at, id)" && s.schemaIndexColumns(ctx, "sync_outbox_due_idx", "next_attempt_at", "created_at", "id")
+}
+
+func schemaHas(schema string, fragments ...string) bool {
+	schema = strings.ToLower(schema)
+	for _, fragment := range fragments {
+		if !strings.Contains(schema, fragment) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) schemaSQL(ctx context.Context, kind, name string) (string, bool) {
+	var value string
+	if s.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_schema WHERE type=? AND name=?`, kind, name).Scan(&value) != nil {
+		return "", false
+	}
+	return value, value != ""
+}
+
+func (s *Store) schemaColumns(ctx context.Context, name string, want ...string) bool {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, name)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for _, expected := range want {
+		if !rows.Next() {
+			return false
+		}
+		var actual string
+		if rows.Scan(&actual) != nil || actual != expected {
+			return false
+		}
+	}
+	return !rows.Next() && rows.Err() == nil
+}
+
+func (s *Store) schemaIndexColumns(ctx context.Context, name string, want ...string) bool {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM pragma_index_info(?) ORDER BY seqno`, name)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for _, expected := range want {
+		if !rows.Next() {
+			return false
+		}
+		var actual string
+		if rows.Scan(&actual) != nil || actual != expected {
+			return false
+		}
+	}
+	return !rows.Next() && rows.Err() == nil
 }
 
 // ResolveProject maps one canonical workspace to one durable project identity.
