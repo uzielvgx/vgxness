@@ -73,6 +73,31 @@ func TestVerifyRecoveryValidHistory(t *testing.T) {
 	}
 }
 
+func TestVerifyRecoveryConflictHistoryRequiresCanonicalLinkage(t *testing.T) {
+	ctx, conn := verifyConn(t)
+	addVerifyOwner(t, ctx, conn, 2)
+	if _, err := conn.Exec(ctx, "INSERT INTO devices(id,owner_id,display_name,credential_hash,credential_prefix) VALUES ($1,$2,'device',decode(repeat('00',32),'hex'),'p')", verifyDevice, verifyOwner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "INSERT INTO mutations(owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version) VALUES ($1,$2,$3,decode('00','hex'),'update','project',1,'conflict',1,3)", verifyOwner, verifyDevice, verifyFirst); err != nil {
+		t.Fatal(err)
+	}
+	var versionID int64
+	if err := conn.QueryRow(ctx, "INSERT INTO record_versions(owner_id,record_kind,record_id,record_version,source_device_id,source_mutation_id,base_version,disposition,snapshot) VALUES ($1,'project','project',2,$2,$3,1,'conflict','{}') RETURNING id", verifyOwner, verifyDevice, verifyFirst).Scan(&versionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "INSERT INTO changes(owner_id,seq,mutation_device_id,mutation_id,change_kind,record_kind,record_id,canonical_version,version_id) VALUES ($1,1,$2,$3,'conflict','project','project',3,$4)", verifyOwner, verifyDevice, verifyFirst, versionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyRecovery(ctx, conn); err != nil {
+		t.Fatalf("VerifyRecovery() valid conflict history: %v", err)
+	}
+	if _, err := conn.Exec(ctx, "UPDATE changes SET canonical_version=2"); err != nil {
+		t.Fatal(err)
+	}
+	requireRecoveryError(t, VerifyRecovery(ctx, conn))
+}
+
 func TestVerifyRecoveryRejectsInvalidRecoveryState(t *testing.T) {
 	for name, prepare := range map[string]func(*testing.T, context.Context, *pgx.Conn){
 		"missing state": func(t *testing.T, ctx context.Context, conn *pgx.Conn) {

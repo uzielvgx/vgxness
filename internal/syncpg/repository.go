@@ -142,9 +142,7 @@ func (r *Repository) OwnerState(ctx context.Context) (OwnerSyncState, error) {
 	return state, nil
 }
 
-// Push applies each mutation in its own transaction. It never accepts a
-// lifecycle, conflict, or resolution semantic that this repository does not
-// implement yet.
+// Push applies each mutation in its own transaction.
 func (r *Repository) Push(ctx context.Context, deviceID uuid.UUID, mutations []syncservice.Mutation) ([]syncservice.Result, error) {
 	results := make([]syncservice.Result, 0, len(mutations))
 	for _, mutation := range mutations {
@@ -208,13 +206,17 @@ func (r *Repository) pushOne(ctx context.Context, deviceID uuid.UUID, mutation s
 		if len(storedHash) != sha256.Size || string(storedHash) != string(hash[:]) {
 			return reject("mutation_id_hash_mismatch")
 		}
-		if disposition != string(syncservice.DispositionAccepted) || sequence < 1 {
+		if (disposition != string(syncservice.DispositionAccepted) && disposition != string(syncservice.DispositionConflict)) || sequence < 1 {
 			return reject("invalid_replay")
 		}
 		if err := commitRepository(ctx, tx); err != nil {
 			return syncservice.Result{}, err
 		}
-		return syncservice.Result{MutationID: mutation.MutationID, Disposition: syncservice.DispositionPreviouslyAccepted, Sequence: &sequence, Version: version, Code: code}, nil
+		resultDisposition := syncservice.DispositionPreviouslyAccepted
+		if disposition == string(syncservice.DispositionConflict) {
+			resultDisposition = syncservice.DispositionConflict
+		}
+		return syncservice.Result{MutationID: mutation.MutationID, Disposition: resultDisposition, Sequence: &sequence, Version: version, Code: code}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return syncservice.Result{}, repositoryError(ctx)
@@ -226,24 +228,52 @@ func (r *Repository) pushOne(ctx context.Context, deviceID uuid.UUID, mutation s
 	if mutation.Kind == syncservice.MutationCreate && (mutation.BaseVersion != 0 || exists) {
 		return reject("invalid_base")
 	}
-	if mutation.Kind == syncservice.MutationUpdate && (!exists || current != mutation.BaseVersion) {
-		return reject("stale_base")
-	}
-	if mutation.Kind == syncservice.MutationUpdate && mutation.BaseVersion == math.MaxInt64 {
+	if mutation.Kind != syncservice.MutationCreate && (!exists || mutation.BaseVersion == math.MaxInt64) {
 		return reject("invalid_base")
 	}
-	if err := r.validatePrerequisites(ctx, tx, table, mutation); err != nil {
+	if exists && mutation.RecordKind == syncservice.RecordKindObservation && mutation.Kind != syncservice.MutationTombstone && current == mutation.BaseVersion && r.tombstonedObservation(ctx, tx, table, mutation.RecordID) {
+		return reject("invalid_base")
+	}
+	payloadMutation := mutation
+	if mutation.Kind == syncservice.MutationResolve {
+		conflictIDs, ok := normalizeConflictIDs(mutation.Resolution.ConflictIDs)
+		if !ok {
+			return reject("invalid_prerequisite")
+		}
+		resolution := *mutation.Resolution
+		resolution.ConflictIDs = conflictIDs
+		payloadMutation.Resolution = &resolution
+		payloadMutation.Observation = mutation.Resolution.Observation
+	}
+	if err := r.validatePrerequisites(ctx, tx, table, payloadMutation); err != nil {
 		return reject("invalid_prerequisite")
 	}
-	if err := r.lockTopic(ctx, tx, table, mutation); err != nil {
-		if errors.Is(err, errTopicCollision) {
-			return reject("topic_collision")
+	topicCollision := false
+	if err := r.lockTopic(ctx, tx, table, payloadMutation); err != nil {
+		if !errors.Is(err, errTopicCollision) {
+			return syncservice.Result{}, repositoryError(ctx)
 		}
+		topicCollision = true
+	}
+	conflict := mutation.RecordKind == syncservice.RecordKindObservation &&
+		((mutation.Kind == syncservice.MutationUpdate && current != mutation.BaseVersion) || topicCollision)
+	if conflict {
+		return r.writeConflict(ctx, tx, table, deviceID, mutationID, hash, payloadMutation, current, exists, next)
+	}
+	if mutation.Kind != syncservice.MutationCreate && current != mutation.BaseVersion {
+		return reject("stale_base")
+	}
+	if mutation.Kind == syncservice.MutationResolve {
+		if !r.activeObservation(ctx, tx, table, mutation.RecordID) || !r.unresolvedConflicts(ctx, tx, table, mutation.RecordID, payloadMutation.Resolution.ConflictIDs) {
+			return reject("invalid_prerequisite")
+		}
+	}
+	if mutation.Kind == syncservice.MutationTombstone && mutation.RecordKind != syncservice.RecordKindObservation {
 		return syncservice.Result{}, repositoryError(ctx)
 	}
 	version = mutation.BaseVersion + 1
 	var state []byte
-	if state, err = canonicalPayload(mutation); err != nil {
+	if state, err = canonicalPayload(payloadMutation); err != nil {
 		return syncservice.Result{}, repositoryError(ctx)
 	}
 	if _, err = tx.Exec(ctx, "INSERT INTO "+table("mutations")+" (owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version) VALUES ($1,$2,$3,$4,$5,$6,$7,'accepted',$8,$9)", r.ownerID, deviceID, mutationID, hash[:], mutation.Kind, mutation.RecordID, mutation.BaseVersion, next, version); err != nil {
@@ -253,11 +283,26 @@ func (r *Repository) pushOne(ctx context.Context, deviceID uuid.UUID, mutation s
 	if err = tx.QueryRow(ctx, "INSERT INTO "+table("record_versions")+" (owner_id,record_kind,record_id,record_version,source_device_id,source_mutation_id,base_version,disposition,snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,'accepted',$8) RETURNING id", r.ownerID, mutation.RecordKind, mutation.RecordID, version, deviceID, mutationID, mutation.BaseVersion, state).Scan(&versionID); err != nil {
 		return syncservice.Result{}, repositoryError(ctx)
 	}
-	if err = r.writeCanonical(ctx, tx, table, mutation, version, state); err != nil {
+	if mutation.Kind == syncservice.MutationTombstone {
+		err = r.writeTombstone(ctx, tx, table, mutation.RecordID, version)
+	} else {
+		err = r.writeCanonical(ctx, tx, table, payloadMutation, version, state)
+	}
+	if err != nil {
 		return syncservice.Result{}, repositoryError(ctx)
 	}
 	if _, err = tx.Exec(ctx, "INSERT INTO "+table("changes")+" (owner_id,seq,mutation_device_id,mutation_id,change_kind,record_kind,record_id,canonical_version,version_id) VALUES ($1,$2,$3,$4,'accepted',$5,$6,$7,$8)", r.ownerID, next, deviceID, mutationID, mutation.RecordKind, mutation.RecordID, version, versionID); err != nil {
 		return syncservice.Result{}, repositoryError(ctx)
+	}
+	if mutation.Kind == syncservice.MutationTombstone {
+		if _, err = tx.Exec(ctx, "INSERT INTO "+table("tombstones")+" (owner_id,record_kind,record_id,version_id,mutation_device_id,mutation_id,deleted_at) VALUES ($1,'observation',$2,$3,$4,$5,$6)", r.ownerID, mutation.RecordID, versionID, deviceID, mutationID, mutation.Tombstone.DeletedAt); err != nil {
+			return syncservice.Result{}, repositoryError(ctx)
+		}
+	}
+	if mutation.Kind == syncservice.MutationResolve {
+		if _, err = tx.Exec(ctx, "UPDATE "+table("observation_conflicts")+" SET status='resolved',resolved_seq=$3 WHERE owner_id=$1 AND observation_id=$2 AND status='unresolved' AND conflict_id::text=ANY($4)", r.ownerID, mutation.RecordID, next, payloadMutation.Resolution.ConflictIDs); err != nil {
+			return syncservice.Result{}, repositoryError(ctx)
+		}
 	}
 	if _, err = tx.Exec(ctx, "UPDATE "+table("owner_sync_state")+" SET next_seq=$2 WHERE owner_id=$1 AND next_seq=$3", r.ownerID, next+1, next); err != nil {
 		return syncservice.Result{}, repositoryError(ctx)
@@ -295,7 +340,21 @@ func (r *Repository) pushTransaction(ctx context.Context) (pgx.Tx, string, error
 }
 
 func acceptedMutation(m syncservice.Mutation) bool {
-	return (m.Kind == syncservice.MutationCreate || m.Kind == syncservice.MutationUpdate) && (m.RecordKind != syncservice.RecordKindObservation || m.Observation.Lifecycle == syncservice.LifecycleActive && m.Observation.Review == syncservice.ReviewClear)
+	if m.RecordKind != syncservice.RecordKindObservation {
+		return m.Kind == syncservice.MutationCreate || m.Kind == syncservice.MutationUpdate
+	}
+	switch m.Kind {
+	case syncservice.MutationCreate, syncservice.MutationUpdate:
+		return m.Observation.Lifecycle == syncservice.LifecycleActive && m.Observation.Review == syncservice.ReviewClear
+	case syncservice.MutationArchive:
+		return m.Observation.Lifecycle == syncservice.LifecycleArchived && m.Observation.Review == syncservice.ReviewClear
+	case syncservice.MutationTombstone:
+		return true
+	case syncservice.MutationResolve:
+		return m.Resolution.Observation.Lifecycle == syncservice.LifecycleActive && m.Resolution.Observation.Review == syncservice.ReviewClear
+	default:
+		return false
+	}
 }
 
 func canonicalMutationHash(m syncservice.Mutation) ([sha256.Size]byte, error) {
@@ -309,8 +368,101 @@ func canonicalPayload(m syncservice.Mutation) ([]byte, error) {
 	case syncservice.RecordKindSession:
 		return json.Marshal(m.Session)
 	default:
+		if m.Tombstone != nil {
+			return json.Marshal(m.Tombstone)
+		}
 		return json.Marshal(m.Observation)
 	}
+}
+
+func (r *Repository) writeConflict(ctx context.Context, tx pgx.Tx, table func(string) string, device, mutationID uuid.UUID, hash [sha256.Size]byte, m syncservice.Mutation, current int64, exists bool, seq int64) (syncservice.Result, error) {
+	version := m.BaseVersion + 1
+	canonical := current
+	if !exists {
+		canonical = version
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO "+table("mutations")+" (owner_id,device_id,mutation_id,request_hash,kind,record_id,base_version,disposition,canonical_seq,canonical_version) VALUES ($1,$2,$3,$4,$5,$6,$7,'conflict',$8,$9)", r.ownerID, device, mutationID, hash[:], m.Kind, m.RecordID, m.BaseVersion, seq, canonical); err != nil {
+		return syncservice.Result{}, repositoryError(ctx)
+	}
+	state, err := canonicalPayload(m)
+	if err != nil {
+		return syncservice.Result{}, repositoryError(ctx)
+	}
+	if !exists {
+		o := m.Observation
+		provenance, err := json.Marshal(o.Provenance)
+		if err != nil {
+			return syncservice.Result{}, repositoryError(ctx)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO "+table("observations")+" (owner_id,id,project_id,session_id,scope,type,title,content,topic_key,provenance,lifecycle,review_state,created_at,updated_at,review_after,version) VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,NULLIF($9,''),$10,'archived','needs_review',$11,$12,$13,$14)", r.ownerID, o.ID, o.ProjectID, o.SessionID, o.Scope, o.Type, o.Title, o.Content, o.TopicKey, provenance, o.CreatedAt, o.UpdatedAt, o.ReviewAfter, version); err != nil {
+			return syncservice.Result{}, repositoryError(ctx)
+		}
+		for _, reference := range o.References {
+			if _, err = tx.Exec(ctx, "INSERT INTO "+table("observation_references")+" (owner_id,observation_id,target_observation_id) VALUES ($1,$2,$3)", r.ownerID, o.ID, reference); err != nil {
+				return syncservice.Result{}, repositoryError(ctx)
+			}
+		}
+	} else if _, err = tx.Exec(ctx, "UPDATE "+table("observations")+" SET review_state='needs_review' WHERE owner_id=$1 AND id=$2 AND lifecycle<>'tombstoned'", r.ownerID, m.RecordID); err != nil {
+		return syncservice.Result{}, repositoryError(ctx)
+	}
+	var versionID int64
+	if err = tx.QueryRow(ctx, "INSERT INTO "+table("record_versions")+" (owner_id,record_kind,record_id,record_version,source_device_id,source_mutation_id,base_version,disposition,snapshot) VALUES ($1,'observation',$2,$3,$4,$5,$6,'conflict',$7) RETURNING id", r.ownerID, m.RecordID, version, device, mutationID, m.BaseVersion, state).Scan(&versionID); err != nil {
+		return syncservice.Result{}, repositoryError(ctx)
+	}
+	if _, err = tx.Exec(ctx, "INSERT INTO "+table("changes")+" (owner_id,seq,mutation_device_id,mutation_id,change_kind,record_kind,record_id,canonical_version,version_id) VALUES ($1,$2,$3,$4,'conflict','observation',$5,$6,$7)", r.ownerID, seq, device, mutationID, m.RecordID, canonical, versionID); err != nil {
+		return syncservice.Result{}, repositoryError(ctx)
+	}
+	conflictID, err := uuid.NewRandom()
+	if err != nil || conflictID == uuid.Nil {
+		return syncservice.Result{}, repositoryError(ctx)
+	}
+	if _, err = tx.Exec(ctx, "INSERT INTO "+table("observation_conflicts")+" (owner_id,conflict_id,observation_id,canonical_version,competing_version_id,status,created_seq) VALUES ($1,$2,$3,$4,$5,'unresolved',$6)", r.ownerID, conflictID, m.RecordID, canonical, versionID, seq); err != nil {
+		return syncservice.Result{}, repositoryError(ctx)
+	}
+	if _, err = tx.Exec(ctx, "UPDATE "+table("owner_sync_state")+" SET next_seq=$2 WHERE owner_id=$1 AND next_seq=$3", r.ownerID, seq+1, seq); err != nil {
+		return syncservice.Result{}, repositoryError(ctx)
+	}
+	if err = commitRepository(ctx, tx); err != nil {
+		return syncservice.Result{}, err
+	}
+	return syncservice.Result{MutationID: m.MutationID, Disposition: syncservice.DispositionConflict, Sequence: &seq, Version: canonical}, nil
+}
+
+func (r *Repository) activeObservation(ctx context.Context, tx pgx.Tx, table func(string) string, id string) bool {
+	var lifecycle string
+	return tx.QueryRow(ctx, "SELECT lifecycle FROM "+table("observations")+" WHERE owner_id=$1 AND id=$2", r.ownerID, id).Scan(&lifecycle) == nil && lifecycle == string(syncservice.LifecycleActive)
+}
+
+func (r *Repository) tombstonedObservation(ctx context.Context, tx pgx.Tx, table func(string) string, id string) bool {
+	var lifecycle string
+	return tx.QueryRow(ctx, "SELECT lifecycle FROM "+table("observations")+" WHERE owner_id=$1 AND id=$2", r.ownerID, id).Scan(&lifecycle) == nil && lifecycle == string(syncservice.LifecycleTombstoned)
+}
+
+func (r *Repository) unresolvedConflicts(ctx context.Context, tx pgx.Tx, table func(string) string, id string, ids []string) bool {
+	var count int
+	err := tx.QueryRow(ctx, "SELECT count(*) FROM (SELECT conflict_id FROM "+table("observation_conflicts")+" WHERE owner_id=$1 AND observation_id=$2 AND status='unresolved' AND conflict_id::text=ANY($3) FOR UPDATE) conflicts", r.ownerID, id, ids).Scan(&count)
+	return err == nil && count == len(ids)
+}
+
+func normalizeConflictIDs(ids []string) ([]string, bool) {
+	normalized := make([]string, len(ids))
+	for index, id := range ids {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return nil, false
+		}
+		normalized[index] = parsed.String()
+	}
+	return normalized, true
+}
+
+func (r *Repository) writeTombstone(ctx context.Context, tx pgx.Tx, table func(string) string, id string, version int64) error {
+	_, err := tx.Exec(ctx, "UPDATE "+table("observations")+" SET content='',topic_key=NULL,lifecycle='tombstoned',review_state='clear',version=$3 WHERE owner_id=$1 AND id=$2", r.ownerID, id, version)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, "DELETE FROM "+table("observation_references")+" WHERE owner_id=$1 AND observation_id=$2", r.ownerID, id)
+	return err
 }
 
 func (r *Repository) lockTarget(ctx context.Context, tx pgx.Tx, table func(string) string, m syncservice.Mutation) (int64, bool, error) {
@@ -421,7 +573,11 @@ func (r *Repository) writeCanonical(ctx context.Context, tx pgx.Tx, table func(s
 		if m.Kind == syncservice.MutationCreate {
 			_, err = tx.Exec(ctx, "INSERT INTO "+table("observations")+" (owner_id,id,project_id,session_id,scope,type,title,content,topic_key,provenance,lifecycle,review_state,created_at,updated_at,review_after,version) VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,NULLIF($9,''),$10,'active','clear',$11,$12,$13,$14)", r.ownerID, o.ID, o.ProjectID, o.SessionID, o.Scope, o.Type, o.Title, o.Content, o.TopicKey, provenance, o.CreatedAt, o.UpdatedAt, o.ReviewAfter, version)
 		} else {
-			_, err = tx.Exec(ctx, "UPDATE "+table("observations")+" SET project_id=$3,session_id=NULLIF($4,''),scope=$5,type=$6,title=$7,content=$8,topic_key=NULLIF($9,''),provenance=$10,lifecycle='active',review_state='clear',created_at=$11,updated_at=$12,review_after=$13,version=$14 WHERE owner_id=$1 AND id=$2", r.ownerID, o.ID, o.ProjectID, o.SessionID, o.Scope, o.Type, o.Title, o.Content, o.TopicKey, provenance, o.CreatedAt, o.UpdatedAt, o.ReviewAfter, version)
+			lifecycle := "active"
+			if m.Kind == syncservice.MutationArchive {
+				lifecycle = "archived"
+			}
+			_, err = tx.Exec(ctx, "UPDATE "+table("observations")+" SET project_id=$3,session_id=NULLIF($4,''),scope=$5,type=$6,title=$7,content=$8,topic_key=NULLIF($9,''),provenance=$10,lifecycle=$11,review_state='clear',created_at=$12,updated_at=$13,review_after=$14,version=$15 WHERE owner_id=$1 AND id=$2", r.ownerID, o.ID, o.ProjectID, o.SessionID, o.Scope, o.Type, o.Title, o.Content, o.TopicKey, provenance, lifecycle, o.CreatedAt, o.UpdatedAt, o.ReviewAfter, version)
 		}
 		if err != nil {
 			return err

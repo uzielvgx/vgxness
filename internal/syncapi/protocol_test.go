@@ -112,6 +112,20 @@ func TestPushResponseIsRequestBoundOrderedAndTerminal(t *testing.T) {
 	if err := ValidatePushResponse(duplicateRequest, duplicateResponse); err != nil {
 		t.Fatal(err)
 	}
+	conflict := PushResponse{ProtocolVersion: 1, Results: []syncservice.Result{{MutationID: "a", Disposition: syncservice.DispositionConflict, Sequence: resultSequence(1), Version: 9}}}
+	if err := ValidatePushResponse(PushRequest{ProtocolVersion: 1, Items: []syncservice.Mutation{{MutationID: "a"}}}, conflict); err != nil {
+		t.Fatalf("valid terminal conflict: %v", err)
+	}
+	for _, result := range []syncservice.Result{
+		{MutationID: "a", Disposition: syncservice.DispositionConflict, Sequence: resultSequence(1)},
+		{MutationID: "a", Disposition: syncservice.DispositionConflict, Version: 1},
+		{MutationID: "a", Disposition: syncservice.DispositionConflict, Sequence: resultSequence(1), Version: 1, Code: "stale_base"},
+		{MutationID: "a", Disposition: syncservice.DispositionConflict, Sequence: resultSequence(1), Version: 1, Retryable: true},
+	} {
+		if err := ValidatePushResponse(PushRequest{ProtocolVersion: 1, Items: []syncservice.Mutation{{MutationID: "a"}}}, PushResponse{ProtocolVersion: 1, Results: []syncservice.Result{result}}); err == nil {
+			t.Fatalf("accepted malformed conflict: %+v", result)
+		}
+	}
 }
 
 func resultSequence(value int64) *int64 { return &value }
