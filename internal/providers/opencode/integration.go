@@ -25,6 +25,9 @@ import (
 //go:embed templates/manager.md
 var canonicalManagerPrompt string
 
+//go:embed templates/manager.v39.md
+var previousManagerPromptV39 string
+
 //go:embed templates/skills/vgxness-autonomous-stacked-pr/SKILL.md
 var autonomousStackedPRSkill string
 
