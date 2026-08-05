@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -515,10 +516,14 @@ func (s *Store) RenewSyncOutboxClaim(ctx context.Context, mutationID, claimToken
 
 // MarkSyncOutboxRetry makes a currently claimed entry eligible for a later retry.
 func (s *Store) MarkSyncOutboxRetry(ctx context.Context, mutationID, claimToken string, next time.Time, code string) error {
+	return s.markSyncOutboxRetry(ctx, mutationID, claimToken, next, code, s.now().UTC().Round(0))
+}
+
+func (s *Store) markSyncOutboxRetry(ctx context.Context, mutationID, claimToken string, next time.Time, code string, now time.Time) error {
 	if err := cancelled(ctx); err != nil {
 		return err
 	}
-	now := s.now().UTC().Round(0)
+	now = now.UTC().Round(0)
 	nowNanos, ok := syncUnixNano(now)
 	nextNanos, nextOK := syncUnixNano(next.UTC().Round(0))
 	if !ok || !nextOK || next.Before(now) || !canonicalUUIDPattern.MatchString(mutationID) || !canonicalUUIDPattern.MatchString(claimToken) || !syncErrorCodePattern.MatchString(code) {
@@ -547,6 +552,290 @@ func (s *Store) MarkSyncOutboxRetry(ctx context.Context, mutationID, claimToken 
 		return writeError(ctx, err)
 	}
 	return nil
+}
+
+// ApplySyncPushResult completes only the currently leased mutation. Terminal
+// results, the local version change, and the receipt are one transaction.
+func (s *Store) ApplySyncPushResult(ctx context.Context, mutationID, claimToken string, result syncservice.Result) error {
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	if !canonicalUUIDPattern.MatchString(mutationID) || !canonicalUUIDPattern.MatchString(claimToken) || result.MutationID != mutationID || !validSyncResult(result) {
+		return fmt.Errorf("%w: invalid sync push result", ErrInvalid)
+	}
+	if result.Retryable {
+		now := s.now().UTC().Round(0)
+		if err := s.validateRetryClaim(ctx, mutationID, claimToken, now); err != nil {
+			return err
+		}
+		return s.markSyncOutboxRetry(ctx, mutationID, claimToken, now, result.Code, now)
+	}
+	now := s.now().UTC().Round(0)
+	nanos, ok := syncUnixNano(now)
+	if !ok {
+		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	entry, found, err := syncOutboxForResult(ctx, tx, mutationID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return syncReceiptMatches(ctx, tx, result, nil)
+	}
+	if err = claimMatches(ctx, tx, mutationID, claimToken, nanos); err != nil {
+		return err
+	}
+	if err = applyResultVersion(ctx, tx, entry.Mutation, result); err != nil {
+		return err
+	}
+	hash, err := syncMutationHash(entry.Mutation)
+	if err != nil {
+		return fmt.Errorf("%w: sync mutation hash", ErrCorrupt)
+	}
+	if err = insertSyncReceipt(ctx, tx, entry.Mutation, result, hash, nanos); err != nil {
+		return err
+	}
+	if result.Disposition == syncservice.DispositionAccepted || result.Disposition == syncservice.DispositionPreviouslyAccepted {
+		if err = s.rebaseFollowingSyncOutbox(ctx, tx, entry.Mutation, result.Version); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM sync_outbox WHERE mutation_id=?`, mutationID); err != nil {
+		return writeError(ctx, err)
+	}
+	return commit(ctx, tx)
+}
+
+func (s *Store) validateRetryClaim(ctx context.Context, mutationID, claimToken string, now time.Time) error {
+	nowNanos, ok := syncUnixNano(now.UTC().Round(0))
+	if !ok {
+		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	_, found, err := syncOutboxForResult(ctx, tx, mutationID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
+	}
+	return claimMatches(ctx, tx, mutationID, claimToken, nowNanos)
+}
+
+func validSyncResult(result syncservice.Result) bool {
+	if result.Retryable {
+		return result.Disposition == syncservice.DispositionRejected && result.Sequence == nil && result.Version == 0 && syncErrorCodePattern.MatchString(result.Code)
+	}
+	switch result.Disposition {
+	case syncservice.DispositionAccepted, syncservice.DispositionPreviouslyAccepted, syncservice.DispositionConflict:
+		return result.Sequence != nil && *result.Sequence > 0 && result.Version > 0 && result.Code == ""
+	case syncservice.DispositionRejected:
+		return result.Sequence == nil && result.Version == 0 && syncErrorCodePattern.MatchString(result.Code)
+	default:
+		return false
+	}
+}
+
+func syncOutboxForResult(ctx context.Context, tx *sql.Tx, mutationID string) (SyncOutboxEntry, bool, error) {
+	var kind, recordID, mutationKind, state, code string
+	var base, payloadVersion, attempts, next, created, updated int64
+	var payload []byte
+	err := tx.QueryRowContext(ctx, `SELECT record_kind,record_id,mutation_kind,base_version,payload_version,payload,state,attempts,last_error_code,next_attempt_at,created_at,updated_at FROM sync_outbox WHERE mutation_id=?`, mutationID).Scan(&kind, &recordID, &mutationKind, &base, &payloadVersion, &payload, &state, &attempts, &code, &next, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SyncOutboxEntry{}, false, nil
+	}
+	if err != nil {
+		return SyncOutboxEntry{}, false, writeError(ctx, err)
+	}
+	entry, err := decodeSyncOutboxEntry(mutationID, kind, recordID, mutationKind, base, payloadVersion, payload, state, attempts, code, next, created, updated)
+	return entry, true, err
+}
+
+func claimMatches(ctx context.Context, tx *sql.Tx, mutationID, claimToken string, now int64) error {
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox_claims WHERE mutation_id=? AND claim_token=? AND lease_until>? AND claimed_at<=?`, mutationID, claimToken, now, now).Scan(&count); err != nil {
+		return writeError(ctx, err)
+	}
+	if count != 1 {
+		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
+	}
+	return nil
+}
+
+func applyResultVersion(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation, result syncservice.Result) error {
+	if result.Disposition == syncservice.DispositionRejected {
+		return nil
+	}
+	if result.Disposition == syncservice.DispositionConflict {
+		if mutation.RecordKind != syncservice.RecordKindObservation || result.Version < mutation.BaseVersion {
+			return fmt.Errorf("%w: invalid sync conflict result", ErrInvalid)
+		}
+	} else if result.Version != mutation.BaseVersion+1 {
+		return fmt.Errorf("%w: invalid sync accepted result", ErrInvalid)
+	}
+	selectVersion := map[syncservice.RecordKind]string{
+		syncservice.RecordKindProject:     `SELECT sync_version FROM projects WHERE id=?`,
+		syncservice.RecordKindSession:     `SELECT sync_version FROM sessions WHERE id=?`,
+		syncservice.RecordKindObservation: `SELECT sync_version FROM observations WHERE id=?`,
+	}[mutation.RecordKind]
+	current, err := syncVersion(ctx, tx, selectVersion, mutation.RecordID)
+	if err != nil {
+		return err
+	}
+	if current == result.Version && result.Disposition == syncservice.DispositionConflict {
+		return nil
+	}
+	if current != mutation.BaseVersion {
+		return fmt.Errorf("%w: sync result version", ErrConflict)
+	}
+	query := map[syncservice.RecordKind]string{
+		syncservice.RecordKindProject:     `UPDATE projects SET sync_version=? WHERE id=? AND sync_version=?`,
+		syncservice.RecordKindSession:     `UPDATE sessions SET sync_version=? WHERE id=? AND sync_version=?`,
+		syncservice.RecordKindObservation: `UPDATE observations SET sync_version=? WHERE id=? AND sync_version=?`,
+	}[mutation.RecordKind]
+	updated, err := tx.ExecContext(ctx, query, result.Version, mutation.RecordID, mutation.BaseVersion)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	n, err := updated.RowsAffected()
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	if n != 1 {
+		return fmt.Errorf("%w: sync result version", ErrConflict)
+	}
+	return nil
+}
+
+func syncMutationHash(m syncservice.Mutation) ([]byte, error) {
+	payload, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(payload)
+	return sum[:], nil
+}
+
+func insertSyncReceipt(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation, result syncservice.Result, hash []byte, now int64) error {
+	var sequence any
+	if result.Sequence != nil {
+		sequence = *result.Sequence
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at) VALUES(?,?,0,?,?,?,?,?,?,?,?,?)`, mutation.MutationID, result.Disposition, result.Code, sequence, result.Version, mutation.RecordKind, mutation.RecordID, mutation.Kind, mutation.BaseVersion, hash, now)
+	if err != nil {
+		return conflictOrWrite(ctx, err)
+	}
+	return nil
+}
+
+func syncReceiptMatches(ctx context.Context, tx *sql.Tx, result syncservice.Result, change *syncservice.Change) error {
+	var disposition, code, kind, recordID, mutationKind string
+	var retryable, canonical, base int64
+	var sequence sql.NullInt64
+	var hash []byte
+	err := tx.QueryRowContext(ctx, `SELECT disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash FROM sync_push_results WHERE mutation_id=?`, result.MutationID).Scan(&disposition, &retryable, &code, &sequence, &canonical, &kind, &recordID, &mutationKind, &base, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
+	}
+	if err != nil || retryable != 0 || disposition != string(result.Disposition) || code != result.Code || canonical != result.Version || len(hash) != sha256.Size || (result.Sequence == nil) != !sequence.Valid || result.Sequence != nil && sequence.Int64 != *result.Sequence {
+		return fmt.Errorf("%w: sync push receipt", ErrConflict)
+	}
+	if change == nil {
+		return nil
+	}
+	mutationHash, hashErr := syncMutationHash(change.Mutation)
+	if hashErr != nil || sequence.Int64 != change.Sequence || canonical != change.CanonicalVersion || kind != string(change.Mutation.RecordKind) || recordID != change.Mutation.RecordID || mutationKind != string(change.Mutation.Kind) || base != change.Mutation.BaseVersion || !bytes.Equal(hash, mutationHash) {
+		return fmt.Errorf("%w: sync pull receipt", ErrConflict)
+	}
+	if disposition == string(syncservice.DispositionConflict) && change.ChangeDisposition != syncservice.ChangeDispositionConflict || (disposition == string(syncservice.DispositionAccepted) || disposition == string(syncservice.DispositionPreviouslyAccepted)) && change.ChangeDisposition != syncservice.ChangeDispositionAccepted && change.ChangeDisposition != "" {
+		return fmt.Errorf("%w: sync pull disposition", ErrConflict)
+	}
+	return nil
+}
+
+func ownPulledReceipt(ctx context.Context, tx *sql.Tx, change syncservice.Change) (bool, error) {
+	var disposition, code string
+	var retryable, canonical int64
+	var sequence sql.NullInt64
+	err := tx.QueryRowContext(ctx, `SELECT disposition,retryable,code,sequence,canonical_version FROM sync_push_results WHERE mutation_id=?`, change.Mutation.MutationID).Scan(&disposition, &retryable, &code, &sequence, &canonical)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil || retryable != 0 || !sequence.Valid {
+		return false, fmt.Errorf("%w: invalid sync push receipt", ErrCorrupt)
+	}
+	result := syncservice.Result{MutationID: change.Mutation.MutationID, Disposition: syncservice.Disposition(disposition), Code: code, Version: canonical, Sequence: &sequence.Int64}
+	if err = syncReceiptMatches(ctx, tx, result, &change); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) rebaseFollowingSyncOutbox(ctx context.Context, tx *sql.Tx, completed syncservice.Mutation, version int64) error {
+	var claimed int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox o JOIN sync_outbox_claims c ON c.mutation_id=o.mutation_id WHERE o.record_kind=? AND o.record_id=? AND (o.created_at>(SELECT created_at FROM sync_outbox WHERE mutation_id=?) OR o.created_at=(SELECT created_at FROM sync_outbox WHERE mutation_id=?) AND o.id>(SELECT id FROM sync_outbox WHERE mutation_id=?))`, completed.RecordKind, completed.RecordID, completed.MutationID, completed.MutationID, completed.MutationID).Scan(&claimed); err != nil {
+		return writeError(ctx, err)
+	}
+	if claimed != 0 {
+		return fmt.Errorf("%w: later sync work is claimed", ErrConflict)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,state,attempts,last_error_code,next_attempt_at,created_at,updated_at FROM sync_outbox WHERE record_kind=? AND record_id=? AND (created_at>(SELECT created_at FROM sync_outbox WHERE mutation_id=?) OR created_at=(SELECT created_at FROM sync_outbox WHERE mutation_id=?) AND id>(SELECT id FROM sync_outbox WHERE mutation_id=?)) ORDER BY created_at DESC,id DESC`, completed.RecordKind, completed.RecordID, completed.MutationID, completed.MutationID, completed.MutationID)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer rows.Close()
+	var later []SyncOutboxEntry
+	for rows.Next() {
+		var id, kind, recordID, mutationKind, state, code string
+		var base, payloadVersion, attempts, next, created, updated int64
+		var payload []byte
+		if err = rows.Scan(&id, &kind, &recordID, &mutationKind, &base, &payloadVersion, &payload, &state, &attempts, &code, &next, &created, &updated); err != nil {
+			return writeError(ctx, err)
+		}
+		entry, decodeErr := decodeSyncOutboxEntry(id, kind, recordID, mutationKind, base, payloadVersion, payload, state, attempts, code, next, created, updated)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		later = append(later, entry)
+	}
+	if err = rows.Err(); err != nil {
+		return writeError(ctx, err)
+	}
+	if len(later) == 0 {
+		return nil
+	}
+	latest := later[0].Mutation
+	latest.BaseVersion = version
+	if latest.Kind == syncservice.MutationCreate {
+		if latest.RecordKind == syncservice.RecordKindObservation && latest.Observation != nil && latest.Observation.Lifecycle == syncservice.LifecycleArchived {
+			latest.Kind = syncservice.MutationArchive
+		} else {
+			latest.Kind = syncservice.MutationUpdate
+		}
+	}
+	if syncservice.ValidateMutation(latest) != nil {
+		return fmt.Errorf("%w: rebased sync mutation", ErrConflict)
+	}
+	payload, err := json.Marshal(latest)
+	if err != nil || len(payload) > maxSyncPayloadBytes {
+		return fmt.Errorf("%w: rebased sync payload", ErrConflict)
+	}
+	for _, entry := range later[1:] {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM sync_outbox WHERE mutation_id=?`, entry.Mutation.MutationID); err != nil {
+			return writeError(ctx, err)
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE sync_outbox SET mutation_kind=?,base_version=?,payload=? WHERE mutation_id=?`, latest.Kind, latest.BaseVersion, payload, latest.MutationID)
+	return writeApplyError(ctx, err)
 }
 
 // enqueueSyncOutbox is intentionally transaction-bound for a future local-write integration.
@@ -579,6 +868,13 @@ func (s *Store) insertSyncOutbox(ctx context.Context, tx *sql.Tx, mutation syncs
 	nanos, ok := syncUnixNano(now)
 	if !ok {
 		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	var completed int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_push_results WHERE mutation_id=?`, mutation.MutationID).Scan(&completed); err != nil {
+		return writeError(ctx, err)
+	}
+	if completed != 0 {
+		return fmt.Errorf("%w: sync mutation identity", ErrConflict)
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO sync_outbox(mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,state,attempts,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,1,?,'pending',0,?,?,?) ON CONFLICT(mutation_id) DO NOTHING`, mutation.MutationID, mutation.RecordKind, mutation.RecordID, mutation.Kind, mutation.BaseVersion, payload, nanos, nanos, nanos)
 	if err != nil {
@@ -784,19 +1080,26 @@ func (s *Store) ApplyPulledPage(ctx context.Context, page syncservice.PullPage, 
 		if change.Sequence != position+1 {
 			return fmt.Errorf("%w: noncontiguous pulled change", ErrConflict)
 		}
+		own, ownErr := ownPulledReceipt(ctx, tx, change)
+		if ownErr != nil {
+			s.syncInbox.known = false
+			return ownErr
+		}
 		var pending int
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox WHERE record_kind=? AND record_id=? AND state IN ('pending','retry')`, change.Mutation.RecordKind, change.Mutation.RecordID).Scan(&pending); err != nil {
 			s.syncInbox.known = false
 			return writeError(ctx, err)
 		}
-		if pending != 0 {
+		if pending != 0 && !own {
 			return fmt.Errorf("%w: local sync work is pending", ErrConflict)
 		}
-		if err = s.applyPulledMutation(ctx, tx, page.Cursor.HistoryID, change); err != nil {
-			if !errors.Is(err, ErrConflict) && !errors.Is(err, ErrInvalid) && !errors.Is(err, ErrNotFound) {
-				s.syncInbox.known = false
+		if !own || change.ChangeDisposition == syncservice.ChangeDispositionConflict {
+			if err = s.applyPulledMutation(ctx, tx, page.Cursor.HistoryID, change); err != nil {
+				if !errors.Is(err, ErrConflict) && !errors.Is(err, ErrInvalid) && !errors.Is(err, ErrNotFound) {
+					s.syncInbox.known = false
+				}
+				return err
 			}
-			return err
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO sync_inbox(history_id,seq,change_hash,applied_at) VALUES(?,?,?,?)`, page.Cursor.HistoryID, change.Sequence, hash, now); err != nil {
 			s.syncInbox.known = false
