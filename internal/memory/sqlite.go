@@ -333,7 +333,7 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap')`).Scan(&probe); err != nil || probe != 18 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results')`).Scan(&probe); err != nil || probe != 19 {
 		return 0, fmt.Errorf("%w: required schema unavailable", ErrCorrupt)
 	}
 	if !s.syncSchemaHealthy(ctx) {
@@ -385,7 +385,13 @@ func (s *Store) syncSchemaHealthy(ctx context.Context) bool {
 	if !ok || strings.TrimSpace(strings.ToLower(indexSQL)) != "create index sync_outbox_due_idx on sync_outbox(next_attempt_at, created_at, id)" || !s.schemaIndexColumns(ctx, "sync_outbox_due_idx", "next_attempt_at", "created_at", "id") {
 		return false
 	}
-	return s.syncV8SchemaHealthy(ctx)
+	return s.syncV8SchemaHealthy(ctx) && s.syncV9SchemaHealthy(ctx)
+}
+
+func (s *Store) syncV9SchemaHealthy(ctx context.Context) bool {
+	schema, ok := s.schemaSQL(ctx, "table", "sync_push_results")
+	expected := strings.Split(schemaV9, ";")[0]
+	return ok && normalizeSchemaSQL(schema) == normalizeSchemaSQL(expected) && s.schemaColumns(ctx, "sync_push_results", "mutation_id", "disposition", "retryable", "code", "sequence", "canonical_version", "record_kind", "record_id", "mutation_kind", "base_version", "mutation_hash", "completed_at")
 }
 
 func (s *Store) syncV8SchemaHealthy(ctx context.Context) bool {
