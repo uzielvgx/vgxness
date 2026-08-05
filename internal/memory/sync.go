@@ -59,6 +59,30 @@ type SyncOutboxEntry struct {
 	UpdatedAt     time.Time
 }
 
+// SyncOutboxDiagnostic is safe to use for local queue inspection. It never
+// contains a mutation payload and therefore cannot be used to send work.
+type SyncOutboxDiagnostic struct {
+	MutationID    string
+	RecordKind    syncservice.RecordKind
+	RecordID      string
+	State         SyncOutboxState
+	Attempts      int64
+	LastErrorCode string
+	NextAttemptAt time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// SyncOutboxClaim is the sole exported path that returns a sendable mutation.
+type SyncOutboxClaim struct {
+	SyncOutboxEntry
+	ClaimToken      string
+	FirstClaimToken string
+	FirstClaimedAt  time.Time
+	ClaimedAt       time.Time
+	LeaseUntil      time.Time
+}
+
 // BootstrapCheckpoint is the durable, caller-owned progress marker for a pull.
 type BootstrapCheckpoint struct {
 	HistoryID string `json:"history_id"`
@@ -338,8 +362,9 @@ func (s *Store) GetSyncProfile(ctx context.Context) (SyncProfile, bool, error) {
 	return profile, true, nil
 }
 
-// DueSyncOutbox returns at most sixteen due entries in durable insertion order.
-func (s *Store) DueSyncOutbox(ctx context.Context, due time.Time) ([]SyncOutboxEntry, error) {
+// DueSyncOutbox returns at most sixteen diagnostic entries in durable insertion
+// order. It intentionally does not expose mutation payloads.
+func (s *Store) DueSyncOutbox(ctx context.Context, due time.Time) ([]SyncOutboxDiagnostic, error) {
 	if err := cancelled(ctx); err != nil {
 		return nil, err
 	}
@@ -351,8 +376,6 @@ func (s *Store) DueSyncOutbox(ctx context.Context, due time.Time) ([]SyncOutboxE
 		CASE WHEN typeof(mutation_id)='text' AND length(CAST(mutation_id AS BLOB))=36 THEN mutation_id ELSE NULL END,
 		CASE WHEN record_kind IN ('project','session','observation') THEN record_kind ELSE NULL END,
 		CASE WHEN typeof(record_id)='text' AND length(CAST(record_id AS BLOB)) BETWEEN 1 AND 1024 THEN record_id ELSE NULL END,
-		CASE WHEN mutation_kind IN ('create','update','archive','tombstone','resolve') THEN mutation_kind ELSE NULL END,
-		base_version,payload_version,CASE WHEN length(CAST(payload AS BLOB)) BETWEEN 1 AND 1048576 THEN payload ELSE NULL END,
 		CASE WHEN state IN ('pending','retry') THEN state ELSE NULL END,
 		attempts,CASE WHEN typeof(last_error_code)='text' AND length(CAST(last_error_code AS BLOB))<=64 THEN last_error_code ELSE NULL END,next_attempt_at,created_at,updated_at
 		FROM sync_outbox WHERE next_attempt_at<=? ORDER BY created_at,id LIMIT 16`, dueNanos)
@@ -360,20 +383,19 @@ func (s *Store) DueSyncOutbox(ctx context.Context, due time.Time) ([]SyncOutboxE
 		return nil, writeError(ctx, err)
 	}
 	defer rows.Close()
-	entries := make([]SyncOutboxEntry, 0, maxDueSyncOutbox)
+	entries := make([]SyncOutboxDiagnostic, 0, maxDueSyncOutbox)
 	for rows.Next() {
-		var id, recordKind, recordID, kind, state, lastErrorCode sql.NullString
-		var baseVersion, payloadVersion, attempts, nextAttempt, created, updated int64
-		var payload []byte
-		if err := rows.Scan(&id, &recordKind, &recordID, &kind, &baseVersion, &payloadVersion, &payload, &state, &attempts, &lastErrorCode, &nextAttempt, &created, &updated); err != nil {
+		var id, recordKind, recordID, state, lastErrorCode sql.NullString
+		var attempts, nextAttempt, created, updated int64
+		if err := rows.Scan(&id, &recordKind, &recordID, &state, &attempts, &lastErrorCode, &nextAttempt, &created, &updated); err != nil {
 			return nil, writeError(ctx, err)
 		}
-		if !id.Valid || !recordKind.Valid || !recordID.Valid || !kind.Valid || payload == nil || !state.Valid || !lastErrorCode.Valid {
+		if !id.Valid || !canonicalUUIDPattern.MatchString(id.String) || !recordKind.Valid || !recordID.Valid || !state.Valid || !lastErrorCode.Valid || attempts < 0 {
 			return nil, fmt.Errorf("%w: invalid sync outbox entry", ErrCorrupt)
 		}
-		entry, err := decodeSyncOutboxEntry(id.String, recordKind.String, recordID.String, kind.String, baseVersion, payloadVersion, payload, state.String, attempts, lastErrorCode.String, nextAttempt, created, updated)
-		if err != nil {
-			return nil, err
+		entry := SyncOutboxDiagnostic{MutationID: id.String, RecordKind: syncservice.RecordKind(recordKind.String), RecordID: recordID.String, State: SyncOutboxState(state.String), Attempts: attempts, LastErrorCode: lastErrorCode.String, NextAttemptAt: time.Unix(0, nextAttempt).UTC(), CreatedAt: time.Unix(0, created).UTC(), UpdatedAt: time.Unix(0, updated).UTC()}
+		if (entry.State != SyncOutboxPending || entry.Attempts != 0 || entry.LastErrorCode != "") && (entry.State != SyncOutboxRetry || entry.Attempts == 0 || !syncErrorCodePattern.MatchString(entry.LastErrorCode)) || !validStoredSyncTime(nextAttempt, entry.NextAttemptAt) || !validStoredSyncTime(created, entry.CreatedAt) || !validStoredSyncTime(updated, entry.UpdatedAt) || entry.UpdatedAt.Before(entry.CreatedAt) {
+			return nil, fmt.Errorf("%w: invalid sync outbox entry", ErrCorrupt)
 		}
 		entries = append(entries, entry)
 	}
@@ -383,20 +405,131 @@ func (s *Store) DueSyncOutbox(ctx context.Context, due time.Time) ([]SyncOutboxE
 	return entries, nil
 }
 
-// MarkSyncOutboxRetry makes one entry eligible for a later retry.
-func (s *Store) MarkSyncOutboxRetry(ctx context.Context, mutationID string, next time.Time, code string) error {
+// ClaimDueSyncOutbox atomically leases eligible oldest mutations per record.
+func (s *Store) ClaimDueSyncOutbox(ctx context.Context, lease time.Duration, limit int) ([]SyncOutboxClaim, error) {
+	if err := cancelled(ctx); err != nil {
+		return nil, err
+	}
+	now := s.now().UTC().Round(0)
+	nowNanos, ok := syncUnixNano(now)
+	if !ok || lease < time.Second || lease > 24*time.Hour || limit < 1 || limit > maxDueSyncOutbox {
+		return nil, fmt.Errorf("%w: invalid sync claim", ErrInvalid)
+	}
+	untilNanos, ok := syncUnixNano(now.Add(lease).UTC().Round(0))
+	if !ok || untilNanos < nowNanos {
+		return nil, fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return nil, writeError(ctx, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	rows, err := conn.QueryContext(ctx, `SELECT o.mutation_id,o.record_kind,o.record_id,o.mutation_kind,o.base_version,o.payload_version,o.payload,o.state,o.attempts,o.last_error_code,o.next_attempt_at,o.created_at,o.updated_at
+		FROM sync_outbox o LEFT JOIN sync_outbox_claims c ON c.mutation_id=o.mutation_id
+		WHERE o.next_attempt_at<=? AND (c.mutation_id IS NULL OR c.lease_until<=?)
+		AND NOT EXISTS (SELECT 1 FROM sync_outbox p WHERE p.record_kind=o.record_kind AND p.record_id=o.record_id AND (p.created_at<o.created_at OR p.created_at=o.created_at AND p.id<o.id))
+		AND NOT EXISTS (SELECT 1 FROM sync_conflicts f WHERE f.status='unresolved' AND f.record_kind=o.record_kind AND f.record_id=o.record_id)
+		AND o.base_version=CASE o.record_kind WHEN 'project' THEN COALESCE((SELECT sync_version FROM projects WHERE id=o.record_id),-1) WHEN 'session' THEN COALESCE((SELECT sync_version FROM sessions WHERE id=o.record_id),-1) WHEN 'observation' THEN COALESCE((SELECT sync_version FROM observations WHERE id=o.record_id),-1) ELSE -1 END
+		ORDER BY o.created_at,o.id LIMIT ?`, nowNanos, nowNanos, limit)
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	defer rows.Close()
+	claims := make([]SyncOutboxClaim, 0, limit)
+	for rows.Next() {
+		var id, recordKind, recordID, kind, state, code string
+		var base, payloadVersion, attempts, next, created, updated int64
+		var payload []byte
+		if err := rows.Scan(&id, &recordKind, &recordID, &kind, &base, &payloadVersion, &payload, &state, &attempts, &code, &next, &created, &updated); err != nil {
+			return nil, writeError(ctx, err)
+		}
+		entry, err := decodeSyncOutboxEntry(id, recordKind, recordID, kind, base, payloadVersion, payload, state, attempts, code, next, created, updated)
+		if err != nil {
+			return nil, err
+		}
+		token, err := newSyncUUID()
+		if err != nil {
+			return nil, writeError(ctx, err)
+		}
+		var firstToken, currentToken string
+		var firstClaimed, claimed, leaseUntil int64
+		err = conn.QueryRowContext(ctx, `INSERT INTO sync_outbox_claims(mutation_id,first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until) VALUES(?,?,?,?,?,?) ON CONFLICT(mutation_id) DO UPDATE SET claim_token=excluded.claim_token,claimed_at=excluded.claimed_at,lease_until=excluded.lease_until WHERE sync_outbox_claims.lease_until<=? RETURNING first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until`, id, token, token, nowNanos, nowNanos, untilNanos, nowNanos).Scan(&firstToken, &currentToken, &firstClaimed, &claimed, &leaseUntil)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, writeError(ctx, err)
+		}
+		claim := SyncOutboxClaim{SyncOutboxEntry: entry, FirstClaimToken: firstToken, ClaimToken: currentToken, FirstClaimedAt: time.Unix(0, firstClaimed).UTC(), ClaimedAt: time.Unix(0, claimed).UTC(), LeaseUntil: time.Unix(0, leaseUntil).UTC()}
+		if !canonicalUUIDPattern.MatchString(firstToken) || !canonicalUUIDPattern.MatchString(currentToken) || !validStoredSyncTime(firstClaimed, claim.FirstClaimedAt) || !validStoredSyncTime(claimed, claim.ClaimedAt) || !validStoredSyncTime(leaseUntil, claim.LeaseUntil) || claim.ClaimedAt.Before(claim.FirstClaimedAt) || claim.LeaseUntil.Before(claim.ClaimedAt) {
+			return nil, fmt.Errorf("%w: invalid sync claim", ErrCorrupt)
+		}
+		claims = append(claims, claim)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, writeError(ctx, err)
+	}
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return nil, writeError(ctx, err)
+	}
+	committed = true
+	return claims, nil
+}
+
+// RenewSyncOutboxClaim extends a current, unexpired lease without changing proof.
+func (s *Store) RenewSyncOutboxClaim(ctx context.Context, mutationID, claimToken string, lease time.Duration) error {
 	if err := cancelled(ctx); err != nil {
 		return err
 	}
-	nextNanos, ok := syncUnixNano(next.UTC().Round(0))
-	if !ok || !canonicalUUIDPattern.MatchString(mutationID) || !syncErrorCodePattern.MatchString(code) {
-		return fmt.Errorf("%w: invalid sync retry", ErrInvalid)
+	now := s.now().UTC().Round(0)
+	nowNanos, ok := syncUnixNano(now)
+	if !ok || !canonicalUUIDPattern.MatchString(mutationID) || !canonicalUUIDPattern.MatchString(claimToken) || lease < time.Second || lease > 24*time.Hour {
+		return fmt.Errorf("%w: invalid sync claim", ErrInvalid)
 	}
-	now, ok := syncUnixNano(s.now().UTC().Round(0))
-	if !ok {
+	until, ok := syncUnixNano(now.Add(lease).UTC().Round(0))
+	if !ok || until < nowNanos {
 		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE sync_outbox SET state='retry',attempts=attempts+1,next_attempt_at=?,last_error_code=?,updated_at=? WHERE mutation_id=?`, nextNanos, code, now, mutationID)
+	result, err := s.db.ExecContext(ctx, `UPDATE sync_outbox_claims SET lease_until=? WHERE mutation_id=? AND claim_token=? AND lease_until>? AND lease_until<?`, until, mutationID, claimToken, nowNanos, until)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
+	}
+	return nil
+}
+
+// MarkSyncOutboxRetry makes a currently claimed entry eligible for a later retry.
+func (s *Store) MarkSyncOutboxRetry(ctx context.Context, mutationID, claimToken string, next time.Time, code string) error {
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	now := s.now().UTC().Round(0)
+	nowNanos, ok := syncUnixNano(now)
+	nextNanos, nextOK := syncUnixNano(next.UTC().Round(0))
+	if !ok || !nextOK || next.Before(now) || !canonicalUUIDPattern.MatchString(mutationID) || !canonicalUUIDPattern.MatchString(claimToken) || !syncErrorCodePattern.MatchString(code) {
+		return fmt.Errorf("%w: invalid sync retry", ErrInvalid)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE sync_outbox SET state='retry',attempts=attempts+1,next_attempt_at=?,last_error_code=?,updated_at=? WHERE mutation_id=? AND EXISTS (SELECT 1 FROM sync_outbox_claims WHERE mutation_id=? AND claim_token=? AND lease_until>? AND claimed_at<=?)`, nextNanos, code, nowNanos, mutationID, mutationID, claimToken, nowNanos, nowNanos)
 	if err != nil {
 		return writeError(ctx, err)
 	}
@@ -405,7 +538,13 @@ func (s *Store) MarkSyncOutboxRetry(ctx context.Context, mutationID string, next
 		return writeError(ctx, err)
 	}
 	if updated != 1 {
-		return fmt.Errorf("%w: sync outbox entry", ErrNotFound)
+		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE sync_outbox_claims SET lease_until=? WHERE mutation_id=? AND claim_token=?`, nowNanos, mutationID, claimToken); err != nil {
+		return writeError(ctx, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return writeError(ctx, err)
 	}
 	return nil
 }

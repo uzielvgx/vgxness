@@ -293,11 +293,11 @@ func TestSyncOutboxStableIdentityAndOrdering(t *testing.T) {
 	returned := enqueueMutation(t, store, generated)
 	testutil.Require(t, canonicalUUIDPattern.MatchString(returned.MutationID), "generated ID=%q", returned.MutationID)
 	entries, err := store.DueSyncOutbox(context.Background(), fixedTime)
-	testutil.Require(t, err == nil && len(entries) == 2 && entries[0].Mutation.MutationID == first.MutationID && entries[0].Mutation.RecordID == "project-a" && entries[1].Mutation.MutationID == returned.MutationID, "entries=%+v err=%v", entries, err)
+	testutil.Require(t, err == nil && len(entries) == 2 && entries[0].MutationID == first.MutationID && entries[0].RecordID == "project-a" && entries[1].MutationID == returned.MutationID, "entries=%+v err=%v", entries, err)
 	legacy := syncMutation("550e8400-e29b-41d4-a716-446655440006", strings.Repeat("a", 513))
 	enqueueMutation(t, store, legacy)
 	entries, err = store.DueSyncOutbox(context.Background(), fixedTime)
-	testutil.Require(t, err == nil && len(entries) == 3 && entries[2].Mutation.RecordID == legacy.RecordID, "legacy entries=%+v err=%v", entries, err)
+	testutil.Require(t, err == nil && len(entries) == 3 && entries[2].RecordID == legacy.RecordID, "legacy entries=%+v err=%v", entries, err)
 }
 
 func TestSyncOutboxRetryStateTransitions(t *testing.T) {
@@ -305,11 +305,160 @@ func TestSyncOutboxRetryStateTransitions(t *testing.T) {
 	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440003", "project")
 	enqueueMutation(t, store, mutation)
 	next := fixedTime.Add(time.Minute)
-	testutil.NoError(t, store.MarkSyncOutboxRetry(context.Background(), mutation.MutationID, next, "temporary"))
+	_, err := store.db.Exec(`UPDATE sync_outbox SET state='retry',attempts=1,next_attempt_at=?,last_error_code='temporary' WHERE mutation_id=?`, next.UnixNano(), mutation.MutationID)
+	testutil.NoError(t, err)
 	entries, err := store.DueSyncOutbox(context.Background(), fixedTime)
 	testutil.Require(t, err == nil && len(entries) == 0, "premature entries=%+v err=%v", entries, err)
 	entries, err = store.DueSyncOutbox(context.Background(), next)
-	testutil.Require(t, err == nil && len(entries) == 1 && entries[0].Attempts == 1 && entries[0].State == SyncOutboxRetry && entries[0].LastErrorCode == "temporary" && entries[0].Mutation.MutationID == mutation.MutationID, "entries=%+v err=%v", entries, err)
+	testutil.Require(t, err == nil && len(entries) == 1 && entries[0].Attempts == 1 && entries[0].State == SyncOutboxRetry && entries[0].LastErrorCode == "temporary" && entries[0].MutationID == mutation.MutationID, "entries=%+v err=%v", entries, err)
+}
+
+func TestClaimDueSyncOutboxLeasesOldestAndRotatesExpiredToken(t *testing.T) {
+	store := openTestStore(t)
+	now := fixedTime
+	store.now = func() time.Time { return now }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+		return err
+	}())
+	first := syncMutation("550e8400-e29b-41d4-a716-446655440026", "project")
+	second := syncMutation("550e8400-e29b-41d4-a716-446655440027", "project")
+	enqueueMutation(t, store, first)
+	enqueueMutation(t, store, second)
+	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.MutationID == first.MutationID && canonicalUUIDPattern.MatchString(claims[0].ClaimToken), "claims=%+v err=%v", claims, err)
+	again, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	testutil.Require(t, err == nil && len(again) == 0, "active lease=%+v err=%v", again, err)
+	now = fixedTime.Add(time.Minute)
+	rotated, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	firstPayload, _ := json.Marshal(claims[0].Mutation)
+	rotatedPayload, _ := json.Marshal(rotated[0].Mutation)
+	testutil.Require(t, err == nil && len(rotated) == 1 && string(rotatedPayload) == string(firstPayload) && rotated[0].ClaimToken != claims[0].ClaimToken && rotated[0].FirstClaimToken == claims[0].ClaimToken && rotated[0].FirstClaimedAt.Equal(fixedTime), "rotated=%+v err=%v", rotated, err)
+}
+
+func TestClaimDueSyncOutboxCannotBePreemptedByCallerClock(t *testing.T) {
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+		return err
+	}())
+	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440025", "project")
+	enqueueMutation(t, store, mutation)
+	claimed, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.Require(t, err == nil && len(claimed) == 1, "claimed=%+v err=%v", claimed, err)
+	preempted, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.Require(t, err == nil && len(preempted) == 0, "caller advanced lease=%+v err=%v", preempted, err)
+}
+
+func TestSyncOutboxClaimRenewRetryAndBoundsFailClosed(t *testing.T) {
+	store := openTestStore(t)
+	now := fixedTime
+	store.now = func() time.Time { return now }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+		return err
+	}())
+	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440028", "project")
+	enqueueMutation(t, store, mutation)
+	for _, request := range []struct {
+		lease time.Duration
+		limit int
+	}{{0, 1}, {25 * time.Hour, 1}, {time.Minute, 0}, {time.Minute, 17}} {
+		_, err := store.ClaimDueSyncOutbox(context.Background(), request.lease, request.limit)
+		testutil.Require(t, errors.Is(err, ErrInvalid), "request=%+v err=%v", request, err)
+	}
+	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
+	claim := claims[0]
+	now = fixedTime.Add(30 * time.Second)
+	testutil.NoError(t, store.RenewSyncOutboxClaim(context.Background(), mutation.MutationID, claim.ClaimToken, 2*time.Minute))
+	var firstToken, token string
+	var firstAt, claimedAt, leaseUntil int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until FROM sync_outbox_claims WHERE mutation_id=?`, mutation.MutationID).Scan(&firstToken, &token, &firstAt, &claimedAt, &leaseUntil))
+	testutil.Require(t, firstToken == claim.FirstClaimToken && token == claim.ClaimToken && firstAt == claim.FirstClaimedAt.UnixNano() && claimedAt == claim.ClaimedAt.UnixNano() && leaseUntil == fixedTime.Add(2*time.Minute+30*time.Second).UnixNano(), "claim proof=%q/%q %d/%d/%d", firstToken, token, firstAt, claimedAt, leaseUntil)
+	now = fixedTime.Add(time.Minute)
+	testutil.Require(t, errors.Is(store.RenewSyncOutboxClaim(context.Background(), mutation.MutationID, "550e8400-e29b-41d4-a716-446655440029", time.Minute), ErrNotFound), "stale renew accepted")
+	testutil.Require(t, errors.Is(store.MarkSyncOutboxRetry(context.Background(), mutation.MutationID, "550e8400-e29b-41d4-a716-446655440029", fixedTime.Add(2*time.Minute), "temporary"), ErrNotFound), "stale retry accepted")
+	testutil.NoError(t, store.MarkSyncOutboxRetry(context.Background(), mutation.MutationID, claim.ClaimToken, fixedTime.Add(2*time.Minute), "temporary"))
+	now = fixedTime.Add(2 * time.Minute)
+	testutil.Require(t, errors.Is(store.RenewSyncOutboxClaim(context.Background(), mutation.MutationID, claim.ClaimToken, time.Minute), ErrNotFound), "expired claim renewed")
+	testutil.Require(t, errors.Is(store.MarkSyncOutboxRetry(context.Background(), mutation.MutationID, claim.ClaimToken, fixedTime.Add(3*time.Minute), "temporary"), ErrNotFound), "expired claim retried")
+	testutil.Require(t, errors.Is(store.MarkSyncOutboxRetry(context.Background(), mutation.MutationID, claim.ClaimToken, fixedTime.Add(time.Minute), "temporary"), ErrInvalid), "past retry accepted")
+	entries, err := store.DueSyncOutbox(context.Background(), fixedTime.Add(2*time.Minute))
+	testutil.Require(t, err == nil && len(entries) == 1 && entries[0].State == SyncOutboxRetry && entries[0].Attempts == 1 && entries[0].LastErrorCode == "temporary", "entries=%+v err=%v", entries, err)
+	var ended int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT lease_until FROM sync_outbox_claims WHERE mutation_id=?`, mutation.MutationID).Scan(&ended))
+	testutil.Require(t, ended == fixedTime.Add(time.Minute).UnixNano(), "lease=%d", ended)
+}
+
+func TestClaimDueSyncOutboxFuturePredecessorAndConcurrentHandles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	first, second := openPath(t, path), openPath(t, path)
+	defer first.Close()
+	defer second.Close()
+	first.now = func() time.Time { return fixedTime }
+	second.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := first.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+		return err
+	}())
+	older := syncMutation("550e8400-e29b-41d4-a716-446655440036", "project")
+	newer := syncMutation("550e8400-e29b-41d4-a716-446655440037", "project")
+	enqueueMutation(t, first, older)
+	enqueueMutation(t, first, newer)
+	testutil.NoError(t, func() error {
+		_, err := first.db.Exec(`UPDATE sync_outbox SET next_attempt_at=? WHERE mutation_id=?`, fixedTime.Add(time.Minute).UnixNano(), older.MutationID)
+		return err
+	}())
+	claims, err := first.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	testutil.Require(t, err == nil && len(claims) == 0, "future predecessor claims=%+v err=%v", claims, err)
+	testutil.NoError(t, func() error {
+		_, err := first.db.Exec(`UPDATE sync_outbox SET next_attempt_at=? WHERE mutation_id=?`, fixedTime.UnixNano(), older.MutationID)
+		return err
+	}())
+	start := make(chan struct{})
+	results := make(chan []SyncOutboxClaim, 2)
+	errs := make(chan error, 2)
+	for _, store := range []*Store{first, second} {
+		go func(store *Store) {
+			<-start
+			got, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+			results <- got
+			errs <- err
+		}(store)
+	}
+	close(start)
+	total := 0
+	for range 2 {
+		got, err := <-results, <-errs
+		testutil.NoError(t, err)
+		total += len(got)
+	}
+	testutil.Require(t, total == 1, "concurrent claims=%d", total)
+}
+
+func TestClaimDueSyncOutboxSkipsConflictAndInconsistentBaseVersion(t *testing.T) {
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+		return err
+	}())
+	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440038", "project")
+	enqueueMutation(t, store, mutation)
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`UPDATE projects SET sync_version=1 WHERE id='project'`)
+		return err
+	}())
+	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 0, "inconsistent base claims=%+v err=%v", claims, err)
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`UPDATE projects SET sync_version=0 WHERE id='project'; INSERT INTO sync_conflicts(conflict_id,history_id,created_seq,record_kind,record_id,canonical_version,competing_version_id,status,resolved_seq,payload_version,snapshot,created_at,updated_at) VALUES('550e8400-e29b-41d4-a716-446655440039','550e8400-e29b-41d4-a716-446655440040',1,'project','project',1,'550e8400-e29b-41d4-a716-446655440041','unresolved',NULL,1,X'7B7D',?,?)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+		return err
+	}())
+	claims, err = store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 0, "conflicted claims=%+v err=%v", claims, err)
 }
 
 func TestSyncOutboxRejectsInvalidOrExcludedPayload(t *testing.T) {
@@ -379,7 +528,7 @@ func TestSyncSchemaAndEnabledCorruptionFailsClosed(t *testing.T) {
 	})
 }
 
-func TestSyncOutboxCorruptPayloadFailsClosed(t *testing.T) {
+func TestDueSyncOutboxDiagnosticDoesNotReadPayload(t *testing.T) {
 	for name, payload := range map[string]string{"empty": "X''", "oversized": "zeroblob(1048577)"} {
 		t.Run(name, func(t *testing.T) {
 			store := openTestStore(t)
@@ -388,7 +537,7 @@ func TestSyncOutboxCorruptPayloadFailsClosed(t *testing.T) {
 			_, err := store.db.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE sync_outbox SET payload=`+payload+` WHERE mutation_id=?; PRAGMA ignore_check_constraints=OFF`, mutation.MutationID)
 			testutil.NoError(t, err)
 			entries, err := store.DueSyncOutbox(context.Background(), fixedTime)
-			testutil.Require(t, errors.Is(err, ErrCorrupt) && len(entries) == 0, "payload corruption entries=%+v err=%v", entries, err)
+			testutil.Require(t, err == nil && len(entries) == 1 && entries[0].MutationID == mutation.MutationID, "diagnostic entries=%+v err=%v", entries, err)
 		})
 	}
 }
@@ -418,8 +567,6 @@ func TestDueSyncOutboxCorruptScalarsFailClosed(t *testing.T) {
 		{"mutation_id", "X''"},
 		{"record_kind", "'invalid'"},
 		{"record_id", "zeroblob(1025)"},
-		{"mutation_kind", "'invalid'"},
-		{"payload", "X''"},
 		{"state", "'invalid'"},
 		{"last_error_code", "printf('%065d',0)"},
 	} {
@@ -435,14 +582,14 @@ func TestDueSyncOutboxCorruptScalarsFailClosed(t *testing.T) {
 	}
 }
 
-func TestDueSyncOutboxTextPayloadByteOverflowFailsClosed(t *testing.T) {
+func TestDueSyncOutboxDiagnosticAcceptsOpaquePayload(t *testing.T) {
 	store := openTestStore(t)
 	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440012", "project")
 	enqueueMutation(t, store, mutation)
 	_, err := store.db.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE sync_outbox SET payload=printf('%1048576s','') || char(0) || 'x' WHERE mutation_id=?; PRAGMA ignore_check_constraints=OFF`, mutation.MutationID)
 	testutil.NoError(t, err)
 	entries, err := store.DueSyncOutbox(context.Background(), fixedTime)
-	testutil.Require(t, errors.Is(err, ErrCorrupt) && len(entries) == 0, "entries=%+v err=%v", entries, err)
+	testutil.Require(t, err == nil && len(entries) == 1 && entries[0].MutationID == mutation.MutationID, "entries=%+v err=%v", entries, err)
 }
 
 func TestDueSyncOutboxNULSuffixScalarsFailClosed(t *testing.T) {
@@ -482,7 +629,7 @@ func TestSyncLocalWriteDisabledProfile(t *testing.T) {
 	profile.Enabled = true
 	_, err = store.ConfigureSyncProfile(context.Background(), profile)
 	after, afterErr := store.DueSyncOutbox(context.Background(), fixedTime)
-	testutil.Require(t, err == nil && afterErr == nil && len(before) == len(after) && before[0].Mutation.MutationID == after[0].Mutation.MutationID && before[1].Mutation.MutationID == after[1].Mutation.MutationID, "before=%+v after=%+v errors=%v/%v", before, after, err, afterErr)
+	testutil.Require(t, err == nil && afterErr == nil && len(before) == len(after) && before[0].MutationID == after[0].MutationID && before[1].MutationID == after[1].MutationID, "before=%+v after=%+v errors=%v/%v", before, after, err, afterErr)
 	t.Run("no profile", func(t *testing.T) {
 		store := openTestStore(t)
 		mustSave(t, store, observation("none", "project", "local only"))
@@ -592,8 +739,7 @@ func TestSyncLocalWriteTopicUpsertSnapshot(t *testing.T) {
 	testutil.Require(t, err == nil && got.ID == first.ID, "upsert=%+v err=%v", got, err)
 	entries, err := store.DueSyncOutbox(context.Background(), fixedTime)
 	testutil.Require(t, err == nil && len(entries) == 3, "entries=%+v err=%v", entries, err)
-	mutation := entries[2].Mutation
-	testutil.Require(t, mutation.RecordKind == syncservice.RecordKindObservation && mutation.Kind == syncservice.MutationCreate && mutation.BaseVersion == 0 && mutation.Observation != nil && mutation.Observation.Content == "latest" && mutation.Observation.Title == "Latest", "mutation=%+v", mutation)
+	testutil.Require(t, entries[2].RecordKind == syncservice.RecordKindObservation && entries[2].RecordID == first.ID, "entry=%+v", entries[2])
 }
 
 func TestForgetSyncVersionZeroIsArchivedCreate(t *testing.T) {
@@ -604,8 +750,7 @@ func TestForgetSyncVersionZeroIsArchivedCreate(t *testing.T) {
 	testutil.NoError(t, err)
 	entries, err := store.DueSyncOutbox(context.Background(), fixedTime)
 	testutil.Require(t, err == nil && len(entries) == 3, "entries=%+v err=%v", entries, err)
-	mutation := entries[2].Mutation
-	testutil.Require(t, mutation.Kind == syncservice.MutationCreate && mutation.BaseVersion == 0 && mutation.Tombstone == nil && mutation.Observation != nil && mutation.Observation.Lifecycle == syncservice.LifecycleArchived, "mutation=%+v", mutation)
+	testutil.Require(t, entries[2].RecordKind == syncservice.RecordKindObservation && entries[2].RecordID == item.ID, "entry=%+v", entries[2])
 }
 
 func TestSyncLocalWriteAtomicity(t *testing.T) {
@@ -628,7 +773,7 @@ func TestSyncLocalWriteBasesAndOrder(t *testing.T) {
 	entries, err := store.DueSyncOutbox(context.Background(), fixedTime)
 	testutil.Require(t, err == nil && len(entries) == 3, "entries=%+v err=%v", entries, err)
 	for i, want := range []syncservice.RecordKind{syncservice.RecordKindProject, syncservice.RecordKindSession, syncservice.RecordKindObservation} {
-		testutil.Require(t, entries[i].Mutation.RecordKind == want && entries[i].Mutation.Kind == syncservice.MutationCreate && entries[i].Mutation.BaseVersion == 0, "entry[%d]=%+v", i, entries[i])
+		testutil.Require(t, entries[i].RecordKind == want, "entry[%d]=%+v", i, entries[i])
 	}
 	_, err = store.db.Exec(`UPDATE projects SET sync_version=4 WHERE id='project'; UPDATE sessions SET sync_version=5 WHERE id='session' AND project_id='project'; UPDATE observations SET sync_version=6 WHERE id='ordered'`)
 	testutil.NoError(t, err)
@@ -638,8 +783,7 @@ func TestSyncLocalWriteBasesAndOrder(t *testing.T) {
 	item = updated
 	entries, err = store.DueSyncOutbox(context.Background(), fixedTime)
 	testutil.Require(t, err == nil && len(entries) == 4, "entries=%+v err=%v", entries, err)
-	got := entries[3].Mutation
-	testutil.Require(t, got.RecordKind == syncservice.RecordKindObservation && got.Kind == syncservice.MutationUpdate && got.BaseVersion == 6, "mutation=%+v", got)
+	testutil.Require(t, entries[3].RecordKind == syncservice.RecordKindObservation && entries[3].RecordID == item.ID, "entry=%+v", entries[3])
 	var project, session, observationVersion int64
 	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id='project'`).Scan(&project))
 	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM sessions WHERE id='session' AND project_id='project'`).Scan(&session))
@@ -657,8 +801,7 @@ func TestForgetSyncArchiveAtomicity(t *testing.T) {
 	testutil.Require(t, err == nil && forgotten.State == StateArchived, "forgotten=%+v err=%v", forgotten, err)
 	entries, err := store.DueSyncOutbox(context.Background(), fixedTime)
 	testutil.Require(t, err == nil && len(entries) == 3, "entries=%+v err=%v", entries, err)
-	got := entries[2].Mutation
-	testutil.Require(t, got.Kind == syncservice.MutationArchive && got.BaseVersion == 2 && got.Tombstone == nil && got.Observation != nil && got.Observation.Lifecycle == syncservice.LifecycleArchived, "archive mutation=%+v", got)
+	testutil.Require(t, entries[2].RecordKind == syncservice.RecordKindObservation && entries[2].RecordID == item.ID, "entry=%+v", entries[2])
 }
 
 func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
@@ -798,7 +941,8 @@ func TestApplyPulledChangeRejectsInvalidOrderingAndLocalWork(t *testing.T) {
 	enqueueMutation(t, store, syncMutation("550e8400-e29b-41d4-a716-446655440113", "project"))
 	err := store.ApplyPulledChange(ctx, history, project)
 	testutil.Require(t, errors.Is(err, ErrConflict), "pending outbox error=%v", err)
-	testutil.NoError(t, store.MarkSyncOutboxRetry(ctx, "550e8400-e29b-41d4-a716-446655440113", fixedTime, "temporary"))
+	_, err = store.db.Exec(`UPDATE sync_outbox SET state='retry',attempts=1,last_error_code='temporary' WHERE mutation_id=?`, "550e8400-e29b-41d4-a716-446655440113")
+	testutil.NoError(t, err)
 	err = store.ApplyPulledChange(ctx, history, project)
 	testutil.Require(t, errors.Is(err, ErrConflict), "retry outbox error=%v", err)
 	var cursor, records int
