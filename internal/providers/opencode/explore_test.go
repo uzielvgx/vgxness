@@ -139,8 +139,8 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessorV3, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if artifactSHA256(predecessorV3.manifest) != "fc7982e23699495532cf7db4f4f20474db709872d03837b47c62296c514681a0" {
-		t.Fatalf("v41 SDD manifest=%s", artifactSHA256(predecessorV3.manifest))
+	if digest := artifactSHA256(predecessorV3.manifest); digest != "0beb7973e3b6de036ee58ab960c64f5cd0a2fcb8bc0a3de560bd9f45608fe365" {
+		t.Fatalf("current SDD manifest=%s", digest)
 	}
 	for _, profile := range []struct {
 		name    string
@@ -155,8 +155,8 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	}
 	predecessor, err := previousSDDModelPlanBundleV2(current)
 	testutil.NoError(t, err)
-	if artifactSHA256(predecessor.manifest) != "6759ce6da3d8269addeb4bdc533f4268243c39f626e79eb4ee738ce8a1e7bf54" {
-		t.Fatalf("prior SDD manifest=%s", artifactSHA256(predecessor.manifest))
+	if digest := artifactSHA256(predecessor.manifest); digest != "de2752c15d13b85b0589fb8e996b29ecb9f49af3295d1902a7e5c2d5f0ee775b" {
+		t.Fatalf("legacy SDD manifest=%s", digest)
 	}
 	for name, digest := range map[string]string{sddResearchName: "7bcd1f18790e34c48c3c684cbc5c409d0b9163422e89b49a3f389cc026b53906", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
 		if artifactSHA256(predecessor.agents[name]) != digest {
@@ -167,8 +167,8 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	combined, err := previousSDDModelPlanBundleV2(priorExplore)
 	testutil.NoError(t, err)
-	if artifactSHA256(combined.manifest) != "acfb39dd6403ee3f4d3d3daf2a0dae0f06ba190883092b74fd80bc10b161e42b" {
-		t.Fatalf("combined manifest=%s", artifactSHA256(combined.manifest))
+	if digest := artifactSHA256(combined.manifest); digest != "96b2c23b4ea6456cb229f841cfabc7b2cd580e1f8bd37aaa78b3802f4f9eb39b" {
+		t.Fatalf("combined SDD manifest=%s", digest)
 	}
 }
 
@@ -215,15 +215,17 @@ func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 	service, options := NewIntegration(), integration.Options{ConfigDir: config}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	managerV40, err := previousManagerModelPlanBundle(current)
+	managerV41, err := previousManagerModelPlanBundleV41(current)
 	testutil.NoError(t, err)
-	managerV39, err := previousManagerModelPlanBundle(managerV40)
+	managerV40, err := previousManagerModelPlanBundleV40(managerV41)
+	testutil.NoError(t, err)
+	managerV39, err := previousManagerModelPlanBundleV39(managerV40)
 	testutil.NoError(t, err)
 	for _, tc := range []struct {
 		name   string
 		bundle modelPlanBundle
 	}{
-		{"v40", managerV40}, {"v39", managerV39},
+		{"v41", managerV41}, {"v40", managerV40}, {"v39", managerV39},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeCompleteV1ExploreBundle(t, config, tc.bundle)
@@ -231,12 +233,13 @@ func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 			installed, installErr := service.Install(context.Background(), options)
 			status, statusErr := service.Status(context.Background(), options)
 			idempotent, idempotentErr := service.Install(context.Background(), options)
+			readback, readErr := os.ReadFile(installed.Path)
 			testutil.Require(t,
 				previewErr == nil && preview.State == integration.StatePartial &&
 					installErr == nil && installed.State == integration.StateInstalled &&
 					statusErr == nil && status.State == integration.StateInstalled &&
-					idempotentErr == nil && !idempotent.Changed,
-				"preview=%+v install=%v status=%+v idempotent=%+v", preview, installErr, status, idempotent,
+					idempotentErr == nil && !idempotent.Changed && readErr == nil && bytes.Equal(readback, current.agents[managerAgentName]),
+				"preview=%+v install=%v status=%+v idempotent=%+v read=%v", preview, installErr, status, idempotent, readErr,
 			)
 		})
 	}
@@ -256,7 +259,7 @@ func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testi
 	testutil.NoError(t, err)
 	candidates, err := predecessorBundles(current)
 	testutil.NoError(t, err)
-	if len(candidates) != 18 {
+	if len(candidates) != 24 {
 		t.Fatalf("predecessor combinations=%d", len(candidates))
 	}
 	seen := make(map[string]struct{}, len(candidates))

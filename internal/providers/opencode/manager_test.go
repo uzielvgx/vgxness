@@ -23,7 +23,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 41",
+		"artifact: opencode-agent/vgxness-manager; version: 42",
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
 		"managed global portable catalog",
@@ -61,9 +61,9 @@ func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
+	t.Logf("manager prompt bytes=%d newlines=%d", len(prompt), strings.Count(prompt, "\n"))
 
-	// The v40 baseline is 16,370 bytes and 117 lines after model binding.
-	// V41 keeps 1,370 bytes and 12 lines of headroom while shrinking only SDD.
+	// V42 preserves the fixed generated-prompt budget.
 	const maxManagerPromptBytes = 15_000
 	const maxManagerPromptLines = 105
 	if bytes := len(prompt); bytes > maxManagerPromptBytes {
@@ -74,6 +74,11 @@ func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 	}
 	for _, required := range []string{
 		"sole orchestration and SDD lifecycle authority",
+		"Briefly disclose material assumptions.",
+		"A task override applies only to the current request and never changes the project default.",
+		"Treat an answer as a session decision and do not ask it again.",
+		"A question never grants permission or overrides a denial.",
+		"When a consequential ambiguity remains unresolved, choose a safe reversible default when available or remain blocked; never continue through unsafe, irreversible, unauthorized, or consequential ambiguity.",
 		"automatically load `stacked-pr`",
 		"pre-write gate required by that skill",
 		"detailed operational delivery policy lives only in that loaded skill",
@@ -93,9 +98,11 @@ func TestManagerV39PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	v40, err := previousManagerModelPlanBundle(current)
+	v41, err := previousManagerModelPlanBundleV41(current)
 	testutil.NoError(t, err)
-	predecessor, err := previousManagerV39ModelPlanBundle(v40)
+	v40, err := previousManagerModelPlanBundleV40(v41)
+	testutil.NoError(t, err)
+	predecessor, err := previousManagerModelPlanBundleV39(v40)
 	testutil.NoError(t, err)
 	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 39")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
 		t.Fatal("manager predecessor was not exactly bound from the v39 template")
@@ -108,10 +115,25 @@ func TestManagerV40PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	predecessor, err := previousManagerModelPlanBundle(current)
+	v41, err := previousManagerModelPlanBundleV41(current)
+	testutil.NoError(t, err)
+	predecessor, err := previousManagerModelPlanBundleV40(v41)
 	testutil.NoError(t, err)
 	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 40")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
 		t.Fatal("manager predecessor was not exactly bound from the v40 template")
+	}
+}
+
+func TestManagerV41PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T) {
+	if digest := artifactSHA256([]byte(previousManagerPromptV41)); digest != "28568b2ec532c4eded63fe62531f3601ef80f2e83077cc912e3017bcf3311358" {
+		t.Fatalf("manager v41 template digest=%s", digest)
+	}
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	predecessor, err := previousManagerModelPlanBundleV41(current)
+	testutil.NoError(t, err)
+	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 41")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
+		t.Fatal("manager predecessor was not exactly bound from the v41 template")
 	}
 }
 
@@ -144,32 +166,17 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 	}
 }
 
-func TestManagerV41PreservesV40OutsideSDDLifecycle(t *testing.T) {
-	v40, err := os.ReadFile("templates/manager.v40.md")
-	testutil.NoError(t, err)
-	v41, err := os.ReadFile("templates/manager.md")
-	testutil.NoError(t, err)
-	const sdd = "# SDD lifecycle\n"
-	const native = "# Native autonomous delivery\n"
-	v40Start, v40End, ok := strings.Cut(string(v40), sdd)
-	if !ok {
-		t.Fatal("v40 SDD lifecycle heading missing")
-	}
-	v40SDD, v40Suffix, ok := strings.Cut(v40End, native)
-	if !ok || v40SDD == "" {
-		t.Fatal("v40 native delivery heading missing")
-	}
-	v41Prefix, v41End, ok := strings.Cut(string(v41), sdd)
-	if !ok {
-		t.Fatal("v41 SDD lifecycle heading missing")
-	}
-	_, v41Suffix, ok := strings.Cut(v41End, native)
-	if !ok {
-		t.Fatal("v41 native delivery heading missing")
-	}
-	v41Prefix = strings.Replace(v41Prefix, "version: 41", "version: 40", 1)
-	if v41Prefix != v40Start || v41Suffix != v40Suffix {
-		t.Fatal("v41 changed v40 content outside the SDD lifecycle block")
+func TestManagerPredecessorTemplatesRetainAcceptedDigests(t *testing.T) {
+	for path, expected := range map[string]string{
+		"templates/manager.v39.md": "0e99ea9e8ecb8e51d80663543956e47cbc041177c6065535a39bf2cbf9767552",
+		"templates/manager.v40.md": "e13863fd3abe4354d2319d1ee2ae0105c7bc1844842a0765b697dd11f93a3cf2",
+		"templates/manager.v41.md": "28568b2ec532c4eded63fe62531f3601ef80f2e83077cc912e3017bcf3311358",
+	} {
+		content, err := os.ReadFile(path)
+		testutil.NoError(t, err)
+		if actual := artifactSHA256(content); actual != expected {
+			t.Errorf("%s digest=%s", path, actual)
+		}
 	}
 }
 

@@ -31,6 +31,9 @@ var previousManagerPromptV39 string
 //go:embed templates/manager.v40.md
 var previousManagerPromptV40 string
 
+//go:embed templates/manager.v41.md
+var previousManagerPromptV41 string
+
 //go:embed templates/skills/vgxness-autonomous-stacked-pr/SKILL.md
 var autonomousStackedPRSkill string
 
