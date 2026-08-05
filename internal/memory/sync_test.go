@@ -405,6 +405,325 @@ func TestOwnPulledReceiptsAdvanceWithoutOverwriteAndMaterializeConflict(t *testi
 	})
 }
 
+func TestBootstrapOwnConflictMaterializesAndBlocksLaterWorkUntilResolved(t *testing.T) {
+	ctx := context.Background()
+	history := "550e8400-e29b-41d4-a716-446655440081"
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,1)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+		return err
+	}())
+	first := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
+	first.MutationID = "550e8400-e29b-41d4-a716-446655440082"
+	later := first
+	later.MutationID = "550e8400-e29b-41d4-a716-446655440083"
+	later.Observation.Content = "later"
+	enqueueMutation(t, store, first)
+	enqueueMutation(t, store, later)
+	claim, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claim) == 1, "claim=%+v err=%v", claim, err)
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`UPDATE observations SET sync_version=2 WHERE id='record'`)
+		return err
+	}())
+	sequence := int64(1)
+	testutil.NoError(t, store.ApplySyncPushResult(ctx, first.MutationID, claim[0].ClaimToken, syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionConflict, Sequence: &sequence, Version: 2}))
+	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 0, "pre-bootstrap claims=%+v err=%v", claims, err)
+	conflict := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440084", first)
+	discovery := syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
+	remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{conflict}}}}
+	testutil.Require(t, errors.Is(store.BootstrapSync(ctx, remote), ErrConflict) && remote.discovers == 0, "ordinary bootstrap calls=%d", remote.discovers)
+	testutil.NoError(t, store.BootstrapOwnConflict(ctx, remote, first.MutationID))
+	var conflicts, inbox, cursor, outbox int
+	var base int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&conflicts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT base_version FROM sync_outbox WHERE mutation_id=?`, later.MutationID).Scan(&base))
+	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 0, "unresolved claims=%+v err=%v", claims, err)
+	testutil.Require(t, conflicts == 1 && inbox == 1 && cursor == 1 && outbox == 1 && base == 2, "rows=%d/%d/%d/%d base=%d", conflicts, inbox, cursor, outbox, base)
+	winner := pulledObservationMutation("record", syncservice.MutationResolve, 2, syncservice.LifecycleActive, "winner", nil)
+	winner.Observation, winner.Resolution = nil, &syncservice.Resolution{ConflictIDs: []string{conflict.ConflictID}, Observation: pulledObservationMutation("record", syncservice.MutationUpdate, 2, syncservice.LifecycleActive, "winner", nil).Observation}
+	testutil.NoError(t, store.ApplyPulledChange(ctx, history, specialChange(t, 2, 3, syncservice.ChangeDispositionAccepted, "", winner)))
+	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.MutationID == later.MutationID, "resolved claims=%+v err=%v", claims, err)
+}
+
+func TestRebasePendingConflictOutboxConvertsArchivedCreateToArchive(t *testing.T) {
+	store := openTestStore(t)
+	archived := pulledObservationMutation("record", syncservice.MutationCreate, 0, syncservice.LifecycleArchived, "later", nil)
+	archived.MutationID = "550e8400-e29b-41d4-a716-446655440087"
+	enqueueMutation(t, store, archived)
+	tx, err := store.db.BeginTx(context.Background(), nil)
+	testutil.NoError(t, err)
+	defer tx.Rollback()
+	testutil.NoError(t, store.rebasePendingConflictOutbox(context.Background(), tx, archived, 2))
+	testutil.NoError(t, tx.Commit())
+	var kind string
+	var payload []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT mutation_kind,payload FROM sync_outbox WHERE mutation_id=?`, archived.MutationID).Scan(&kind, &payload))
+	var rebased syncservice.Mutation
+	testutil.NoError(t, json.Unmarshal(payload, &rebased))
+	testutil.Require(t, kind == string(syncservice.MutationArchive) && rebased.Kind == syncservice.MutationArchive && rebased.BaseVersion == 2, "rebased=%q/%+v", kind, rebased)
+}
+
+func insertConflictReceipt(t *testing.T, store *Store, mutation syncservice.Mutation, sequence, version int64, hash []byte) {
+	t.Helper()
+	if hash == nil {
+		var err error
+		hash, err = syncMutationHash(mutation)
+		testutil.NoError(t, err)
+	}
+	_, err := store.db.Exec(`INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at) VALUES(?,'conflict',0,'',?,?,?,?,?,?,?,?)`, mutation.MutationID, sequence, version, mutation.RecordKind, mutation.RecordID, mutation.Kind, mutation.BaseVersion, hash, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+}
+
+func TestBootstrapOwnConflictFailsClosedOnReceiptMismatchOrAbsentTarget(t *testing.T) {
+	ctx := context.Background()
+	history := "550e8400-e29b-41d4-a716-446655440088"
+	for name, mutate := range map[string]func(*syncservice.Change, *Store){
+		"forged hash": func(_ *syncservice.Change, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_push_results SET mutation_hash=zeroblob(32)`)
+			testutil.NoError(t, err)
+		},
+		"wrong sequence": func(_ *syncservice.Change, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_push_results SET sequence=2`)
+			testutil.NoError(t, err)
+		},
+		"wrong record": func(_ *syncservice.Change, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_push_results SET record_id='other'`)
+			testutil.NoError(t, err)
+		},
+		"wrong version": func(_ *syncservice.Change, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_push_results SET canonical_version=3`)
+			testutil.NoError(t, err)
+		},
+		"wrong disposition": func(_ *syncservice.Change, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_push_results SET disposition='accepted'`)
+			testutil.NoError(t, err)
+		},
+		"target absent": func(change *syncservice.Change, _ *Store) {
+			change.Mutation.MutationID = "550e8400-e29b-41d4-a716-446655440089"
+			change.ChangeHash, _ = syncservice.CanonicalChangeHash(*change)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := openTestStore(t)
+			store.now = func() time.Time { return fixedTime }
+			testutil.NoError(t, func() error {
+				_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+				return err
+			}())
+			mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
+			mutation.MutationID = "550e8400-e29b-41d4-a716-446655440090"
+			insertConflictReceipt(t, store, mutation, 1, 2, nil)
+			change := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440091", mutation)
+			mutate(&change, store)
+			remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{change}}}}
+			err := store.BootstrapOwnConflict(ctx, remote, mutation.MutationID)
+			var inbox, cursor, conflicts int
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
+			testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0 && conflicts == 0, "err=%v rows=%d/%d/%d", err, inbox, cursor, conflicts)
+		})
+	}
+}
+
+func TestBootstrapOwnConflictRejectsUnrelatedPendingBeforeTargetWithoutWrites(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	target := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
+	target.MutationID = "550e8400-e29b-41d4-a716-446655440092"
+	insertConflictReceipt(t, store, target, 2, 2, nil)
+	pending := syncMutation("550e8400-e29b-41d4-a716-446655440093", "other")
+	enqueueMutation(t, store, pending)
+	first := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440094", "other"))
+	conflict := specialChange(t, 2, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440095", target)
+	history := "550e8400-e29b-41d4-a716-446655440096"
+	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{first, conflict}}}}
+	err := store.BootstrapOwnConflict(ctx, remote, target.MutationID)
+	var inbox, cursor, conflicts, outbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0 && conflicts == 0 && outbox == 1, "err=%v rows=%d/%d/%d/%d", err, inbox, cursor, conflicts, outbox)
+}
+
+func TestBootstrapOwnConflictApplyFailureRollsBackConflictCursorAndRebase(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2); CREATE TRIGGER fail_conflict BEFORE INSERT ON sync_conflicts BEGIN SELECT RAISE(ABORT, 'test'); END`, fixedTime.UnixNano(), fixedTime.UnixNano())
+		return err
+	}())
+	first := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
+	first.MutationID = "550e8400-e29b-41d4-a716-446655440097"
+	later := first
+	later.MutationID = "550e8400-e29b-41d4-a716-446655440098"
+	enqueueMutation(t, store, later)
+	insertConflictReceipt(t, store, first, 1, 2, nil)
+	conflict := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440099", first)
+	history := "550e8400-e29b-41d4-a716-446655440100"
+	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{conflict}}}}
+	err := store.BootstrapOwnConflict(ctx, remote, first.MutationID)
+	var inbox, cursor, conflicts int
+	var base int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT base_version FROM sync_outbox WHERE mutation_id=?`, later.MutationID).Scan(&base))
+	testutil.Require(t, errors.Is(err, ErrCorrupt) && inbox == 0 && cursor == 0 && conflicts == 0 && base == 1, "err=%v rows=%d/%d/%d base=%d", err, inbox, cursor, conflicts, base)
+}
+
+func TestBootstrapOwnConflictCancellationBeforeApplyLeavesNoDurableState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := openTestStore(t)
+	mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
+	mutation.MutationID = "550e8400-e29b-41d4-a716-446655440101"
+	insertConflictReceipt(t, store, mutation, 1, 2, nil)
+	change := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440102", mutation)
+	history := "550e8400-e29b-41d4-a716-446655440103"
+	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{change}}}, pullProbe: func() error { cancel(); return nil }}
+	err := store.BootstrapOwnConflict(ctx, remote, mutation.MutationID)
+	var inbox, cursor, conflicts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
+	testutil.Require(t, errors.Is(err, context.Canceled) && inbox == 0 && cursor == 0 && conflicts == 0, "err=%v rows=%d/%d/%d", err, inbox, cursor, conflicts)
+}
+
+func TestBootstrapOwnConflictResumesAndUpsertsExistingCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	history := "550e8400-e29b-41d4-a716-446655440104"
+	project := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440105", "project"))
+	first := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, HasMore: true, Changes: []syncservice.Change{project}}
+	testutil.NoError(t, store.ApplyPulledPage(ctx, first, &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 2, Phase: "projects"}))
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+		return err
+	}())
+	mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
+	mutation.MutationID = "550e8400-e29b-41d4-a716-446655440106"
+	insertConflictReceipt(t, store, mutation, 2, 2, nil)
+	conflict := specialChange(t, 2, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440107", mutation)
+	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{conflict}}}}
+	testutil.NoError(t, store.BootstrapOwnConflict(ctx, remote, mutation.MutationID))
+	var phase string
+	var checkpoint BootstrapCheckpoint
+	var payload []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
+	testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+	testutil.Require(t, phase == "complete" && checkpoint.Position == 2 && checkpoint.Watermark == 2 && remote.cursors[0] == (syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}), "phase=%q checkpoint=%+v cursor=%+v", phase, checkpoint, remote.cursors)
+}
+
+func TestBootstrapOwnConflictRejectsMissingAndNonConflictReceiptsBeforeNetwork(t *testing.T) {
+	ctx := context.Background()
+	discovery := syncservice.Discovery{ProtocolVersion: 1, HistoryID: "550e8400-e29b-41d4-a716-446655440085", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
+	for name, setup := range map[string]func(*Store){
+		"missing": func(*Store) {},
+		"non-conflict": func(store *Store) {
+			_, err := store.db.Exec(`INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at) VALUES(?,'accepted',0,'',1,1,'project','record','create',0,zeroblob(32),?)`, "550e8400-e29b-41d4-a716-446655440086", fixedTime.UnixNano())
+			testutil.NoError(t, err)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := openTestStore(t)
+			setup(store)
+			remote := &bootstrapFake{discovery: discovery}
+			err := store.BootstrapOwnConflict(ctx, remote, "550e8400-e29b-41d4-a716-446655440086")
+			testutil.Require(t, errors.Is(err, ErrNotFound) || errors.Is(err, ErrConflict), "err=%v", err)
+			testutil.Require(t, remote.discovers == 0 && remote.pulls == 0, "network calls=%d/%d", remote.discovers, remote.pulls)
+		})
+	}
+}
+
+func TestBootstrapOwnConflictRejectsEmptyEOFAtTargetWithoutWrites(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
+	mutation.MutationID = "550e8400-e29b-41d4-a716-446655440108"
+	insertConflictReceipt(t, store, mutation, 1, 2, nil)
+	history := "550e8400-e29b-41d4-a716-446655440109"
+	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}}}}
+	err := store.BootstrapOwnConflict(ctx, remote, mutation.MutationID)
+	var inbox, cursor, checkpoint, conflicts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_bootstrap`).Scan(&checkpoint))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
+	testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0 && checkpoint == 0 && conflicts == 0, "err=%v rows=%d/%d/%d/%d", err, inbox, cursor, checkpoint, conflicts)
+}
+
+func TestBootstrapOwnConflictCheckpointsPrefixBeforeTargetAndResumes(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+		return err
+	}())
+	history := "550e8400-e29b-41d4-a716-446655440110"
+	target := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
+	target.MutationID = "550e8400-e29b-41d4-a716-446655440111"
+	insertConflictReceipt(t, store, target, 2, 2, nil)
+	prefix := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440112", "prefix-project"))
+	conflict := specialChange(t, 2, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440113", target)
+	discovery := syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
+	interrupted := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, HasMore: true, Changes: []syncservice.Change{prefix}}}, errAt: 2}
+	testutil.Require(t, interrupted != nil && store.BootstrapOwnConflict(ctx, interrupted, target.MutationID) != nil, "bootstrap unexpectedly completed")
+	var checkpoint BootstrapCheckpoint
+	var phase string
+	var payload []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
+	testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+	testutil.Require(t, phase == "observations" && checkpoint.Position == 1 && checkpoint.Watermark == 2, "checkpoint=%q/%+v", phase, checkpoint)
+	resume := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{conflict}}}}
+	testutil.NoError(t, store.BootstrapOwnConflict(ctx, resume, target.MutationID))
+	var inbox, cursor, conflicts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&conflicts))
+	testutil.Require(t, resume.cursors[0] == (syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}) && inbox == 2 && cursor == 2 && conflicts == 1, "cursor=%+v rows=%d/%d/%d", resume.cursors, inbox, cursor, conflicts)
+}
+
+func TestRebasePendingConflictOutboxHonorsClaimLease(t *testing.T) {
+	ctx := context.Background()
+	for name, leaseOffset := range map[string]time.Duration{"expired claim rebases": -time.Second, "active claim blocks": time.Minute} {
+		t.Run(name, func(t *testing.T) {
+			store := openTestStore(t)
+			store.now = func() time.Time { return fixedTime }
+			mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "later", nil)
+			mutation.MutationID = "550e8400-e29b-41d4-a716-446655440114"
+			enqueueMutation(t, store, mutation)
+			_, err := store.db.Exec(`INSERT INTO sync_outbox_claims(mutation_id,first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until) VALUES(?,?,?,?,?,?)`, mutation.MutationID, "550e8400-e29b-41d4-a716-446655440115", "550e8400-e29b-41d4-a716-446655440116", fixedTime.Add(-2*time.Minute).UnixNano(), fixedTime.Add(-time.Minute).UnixNano(), fixedTime.Add(leaseOffset).UnixNano())
+			testutil.NoError(t, err)
+			tx, err := store.db.BeginTx(ctx, nil)
+			testutil.NoError(t, err)
+			err = store.rebasePendingConflictOutbox(ctx, tx, mutation, 2)
+			if leaseOffset < 0 {
+				testutil.NoError(t, err)
+				testutil.NoError(t, tx.Commit())
+				var base int64
+				testutil.NoError(t, store.db.QueryRow(`SELECT base_version FROM sync_outbox WHERE mutation_id=?`, mutation.MutationID).Scan(&base))
+				testutil.Require(t, base == 2, "base=%d", base)
+				return
+			}
+			defer tx.Rollback()
+			testutil.Require(t, errors.Is(err, ErrConflict), "err=%v", err)
+		})
+	}
+}
+
 func TestSyncProfileRejectsRawCredentials(t *testing.T) {
 	store := openTestStore(t)
 	_, err := store.ConfigureSyncProfile(context.Background(), SyncProfile{Enabled: true, Endpoint: "https://sync.example.test", DeviceID: "550e8400-e29b-41d4-a716-446655440000", CredentialRef: "bearer secret"})

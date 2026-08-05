@@ -170,6 +170,279 @@ func (s *Store) BootstrapSync(ctx context.Context, remote BootstrapRemote) error
 	return fmt.Errorf("%w: bootstrap pull limit", ErrConflict)
 }
 
+// BootstrapOwnConflict materializes one receipt-authenticated local conflict
+// without weakening BootstrapSync's global pending-work guard. It stops at the
+// exact conflict receipt; later history remains for ordinary bootstrap.
+func (s *Store) BootstrapOwnConflict(ctx context.Context, remote BootstrapRemote, mutationID string) error {
+	if s == nil || remote == nil || ctx == nil || !canonicalUUIDPattern.MatchString(mutationID) {
+		return fmt.Errorf("%w: own conflict bootstrap", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	sequence, err := s.ownConflictReceiptSequence(ctx, mutationID)
+	if err != nil {
+		return err
+	}
+	discovery, err := remote.Discover(ctx)
+	if err != nil {
+		return err
+	}
+	if syncservice.ValidateDiscovery(discovery) != nil {
+		return fmt.Errorf("%w: invalid bootstrap discovery", ErrInvalid)
+	}
+	for pulls := 0; pulls < maxBootstrapPulls; pulls++ {
+		cursor, err := s.ownConflictCursor(ctx, discovery.HistoryID)
+		if err != nil {
+			return err
+		}
+		if cursor.Position >= sequence {
+			return fmt.Errorf("%w: own conflict history", ErrConflict)
+		}
+		page, err := remote.Pull(ctx, cursor, syncapi.DefaultPullLimit)
+		if err != nil {
+			return err
+		}
+		if err = validateBootstrapPage(page, cursor); err != nil {
+			return err
+		}
+		if len(page.Changes) == 0 {
+			return fmt.Errorf("%w: own conflict history", ErrConflict)
+		}
+		if page.Cursor.Position < sequence {
+			checkpoint := &BootstrapCheckpoint{HistoryID: discovery.HistoryID, Position: page.Cursor.Position, Watermark: page.Cursor.Watermark, Phase: "observations"}
+			if err = s.applyPulledPage(ctx, page, checkpoint, true); err != nil {
+				return err
+			}
+			continue
+		}
+		index := int(sequence - page.Changes[0].Sequence)
+		if index < 0 || index >= len(page.Changes) || page.Changes[index].Mutation.MutationID != mutationID {
+			return fmt.Errorf("%w: own conflict history", ErrConflict)
+		}
+		if index > 0 {
+			before := page
+			before.Changes = append([]syncservice.Change(nil), page.Changes[:index]...)
+			before.Cursor.Position = before.Changes[len(before.Changes)-1].Sequence
+			before.HasMore = true
+			checkpoint := &BootstrapCheckpoint{HistoryID: discovery.HistoryID, Position: before.Cursor.Position, Watermark: before.Cursor.Watermark, Phase: "observations"}
+			if err = s.applyPulledPage(ctx, before, checkpoint, true); err != nil {
+				return err
+			}
+		}
+		prefix := page
+		prefix.Changes = []syncservice.Change{page.Changes[index]}
+		prefix.Cursor.Position = sequence
+		prefix.Cursor.Watermark = page.Cursor.Watermark
+		prefix.HasMore = sequence < page.Cursor.Watermark
+		return s.applyOwnConflictPage(ctx, prefix, mutationID)
+	}
+	return fmt.Errorf("%w: bootstrap pull limit", ErrConflict)
+}
+
+func (s *Store) ownConflictReceiptSequence(ctx context.Context, mutationID string) (int64, error) {
+	var disposition string
+	var retryable, sequence int64
+	err := s.db.QueryRowContext(ctx, `SELECT disposition,retryable,sequence FROM sync_push_results WHERE mutation_id=?`, mutationID).Scan(&disposition, &retryable, &sequence)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w: own conflict receipt", ErrNotFound)
+	}
+	if err != nil {
+		return 0, writeError(ctx, err)
+	}
+	if disposition != string(syncservice.DispositionConflict) || retryable != 0 || sequence < 1 {
+		return 0, fmt.Errorf("%w: own conflict receipt", ErrConflict)
+	}
+	return sequence, nil
+}
+
+func (s *Store) ownConflictCursor(ctx context.Context, historyID string) (syncservice.Cursor, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.closed || s.db == nil {
+		return syncservice.Cursor{}, fmt.Errorf("%w: store closed", ErrCorrupt)
+	}
+	if s.readOnly {
+		return syncservice.Cursor{}, fmt.Errorf("%w: store is read-only", ErrConflict)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return syncservice.Cursor{}, writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	state, err := readBootstrapState(ctx, tx)
+	if err != nil {
+		return syncservice.Cursor{}, err
+	}
+	if state.cursor != nil && state.cursor.HistoryID != historyID {
+		return syncservice.Cursor{}, fmt.Errorf("%w: own conflict bootstrap state", ErrConflict)
+	}
+	if state.checkpoint != nil {
+		complete, stateErr := state.forHistory(historyID)
+		if stateErr != nil || complete {
+			return syncservice.Cursor{}, fmt.Errorf("%w: own conflict bootstrap state", ErrConflict)
+		}
+	}
+	if err = commit(ctx, tx); err != nil {
+		return syncservice.Cursor{}, err
+	}
+	cursor := syncservice.Cursor{HistoryID: historyID}
+	if state.cursor != nil {
+		cursor.Position = state.cursor.Position
+	}
+	if state.checkpoint != nil {
+		cursor.Watermark = state.checkpoint.Watermark
+	}
+	return cursor, nil
+}
+
+func (s *Store) applyOwnConflictPage(ctx context.Context, page syncservice.PullPage, mutationID string) error {
+	if err := cancelled(ctx); err != nil || validatePulledPage(page, nil) != nil {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: invalid own conflict page", ErrInvalid)
+	}
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.syncInbox.known = false
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	epoch, err := syncDataVersion(ctx, tx)
+	if err != nil {
+		s.syncInbox.known = false
+		return err
+	}
+	first := page.Changes[0]
+	hash, _ := hex.DecodeString(first.ChangeHash)
+	position, _, err := pulledCursor(ctx, tx, page.Cursor.HistoryID, first.Sequence, hash)
+	if err != nil || first.Sequence != position+1 || len(page.Changes) != 1 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: own conflict page gap", ErrConflict)
+	}
+	if first.Mutation.MutationID != mutationID || first.ChangeDisposition != syncservice.ChangeDispositionConflict {
+		return fmt.Errorf("%w: own conflict receipt", ErrConflict)
+	}
+	own, err := ownPulledReceipt(ctx, tx, first)
+	if err != nil || !own {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: own conflict receipt", ErrConflict)
+	}
+	if err = s.rebasePendingConflictOutbox(ctx, tx, first.Mutation, first.CanonicalVersion); err != nil {
+		return err
+	}
+	if err = s.applyPulledConflict(ctx, tx, page.Cursor.HistoryID, first); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sync_inbox(history_id,seq,change_hash,applied_at) VALUES(?,?,?,?)`, page.Cursor.HistoryID, first.Sequence, hash, now); err != nil {
+		s.syncInbox.known = false
+		return writeError(ctx, err)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sync_cursor(singleton,history_id,position,updated_at) VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET history_id=excluded.history_id,position=excluded.position,updated_at=excluded.updated_at`, page.Cursor.HistoryID, first.Sequence, now); err != nil {
+		return writeError(ctx, err)
+	}
+	phase := "observations"
+	if first.Sequence == page.Cursor.Watermark {
+		phase = "complete"
+	}
+	next := BootstrapCheckpoint{HistoryID: page.Cursor.HistoryID, Position: first.Sequence, Watermark: page.Cursor.Watermark, Phase: phase}
+	if err = verifyBootstrapCheckpoint(ctx, tx, next, page.Cursor.HistoryID, position); err != nil {
+		var existing int
+		if queryErr := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_bootstrap`).Scan(&existing); queryErr != nil || existing != 0 {
+			return err
+		}
+	}
+	checkpoint, marshalErr := json.Marshal(next)
+	if marshalErr != nil || len(checkpoint) == 0 || len(checkpoint) > maxSyncPayloadBytes {
+		return fmt.Errorf("%w: invalid bootstrap checkpoint", ErrInvalid)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sync_bootstrap(singleton,phase,payload_version,checkpoint,created_at,updated_at) VALUES(1,?,1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET phase=excluded.phase,checkpoint=excluded.checkpoint,updated_at=excluded.updated_at`, phase, checkpoint, now, now); err != nil {
+		return writeError(ctx, err)
+	}
+	if err = commit(ctx, tx); err != nil {
+		return err
+	}
+	s.syncInbox = syncInboxCache{known: true, dataVersion: epoch, historyID: page.Cursor.HistoryID, position: first.Sequence}
+	return nil
+}
+
+func (s *Store) rebasePendingConflictOutbox(ctx context.Context, tx *sql.Tx, completed syncservice.Mutation, version int64) error {
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	var claimed int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox o JOIN sync_outbox_claims c ON c.mutation_id=o.mutation_id WHERE o.record_kind=? AND o.record_id=? AND c.lease_until>? AND c.claimed_at<=?`, completed.RecordKind, completed.RecordID, now, now).Scan(&claimed); err != nil {
+		return writeError(ctx, err)
+	}
+	if claimed != 0 {
+		return fmt.Errorf("%w: later sync work is claimed", ErrConflict)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,state,attempts,last_error_code,next_attempt_at,created_at,updated_at FROM sync_outbox WHERE record_kind=? AND record_id=? ORDER BY created_at DESC,id DESC`, completed.RecordKind, completed.RecordID)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer rows.Close()
+	var later []SyncOutboxEntry
+	for rows.Next() {
+		var id, kind, recordID, mutationKind, state, code string
+		var base, payloadVersion, attempts, next, created, updated int64
+		var payload []byte
+		if err = rows.Scan(&id, &kind, &recordID, &mutationKind, &base, &payloadVersion, &payload, &state, &attempts, &code, &next, &created, &updated); err != nil {
+			return writeError(ctx, err)
+		}
+		entry, decodeErr := decodeSyncOutboxEntry(id, kind, recordID, mutationKind, base, payloadVersion, payload, state, attempts, code, next, created, updated)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		later = append(later, entry)
+	}
+	if err = rows.Err(); err != nil {
+		return writeError(ctx, err)
+	}
+	if len(later) == 0 {
+		return nil
+	}
+	return rebaseSyncOutboxEntries(ctx, tx, later, version)
+}
+
+func rebaseSyncOutboxEntries(ctx context.Context, tx *sql.Tx, later []SyncOutboxEntry, version int64) error {
+	latest := later[0].Mutation
+	latest.BaseVersion = version
+	if latest.Kind == syncservice.MutationCreate {
+		if latest.RecordKind == syncservice.RecordKindObservation && latest.Observation != nil && latest.Observation.Lifecycle == syncservice.LifecycleArchived {
+			latest.Kind = syncservice.MutationArchive
+		} else {
+			latest.Kind = syncservice.MutationUpdate
+		}
+	}
+	if syncservice.ValidateMutation(latest) != nil {
+		return fmt.Errorf("%w: rebased sync mutation", ErrConflict)
+	}
+	payload, err := json.Marshal(latest)
+	if err != nil || len(payload) > maxSyncPayloadBytes {
+		return fmt.Errorf("%w: rebased sync payload", ErrConflict)
+	}
+	for _, entry := range later[1:] {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM sync_outbox WHERE mutation_id=?`, entry.Mutation.MutationID); err != nil {
+			return writeError(ctx, err)
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE sync_outbox SET mutation_kind=?,base_version=?,payload=? WHERE mutation_id=?`, latest.Kind, latest.BaseVersion, payload, latest.MutationID)
+	return writeApplyError(ctx, err)
+}
+
 func (s *Store) bootstrapState(ctx context.Context) (bootstrapState, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
@@ -813,29 +1086,7 @@ func (s *Store) rebaseFollowingSyncOutbox(ctx context.Context, tx *sql.Tx, compl
 	if len(later) == 0 {
 		return nil
 	}
-	latest := later[0].Mutation
-	latest.BaseVersion = version
-	if latest.Kind == syncservice.MutationCreate {
-		if latest.RecordKind == syncservice.RecordKindObservation && latest.Observation != nil && latest.Observation.Lifecycle == syncservice.LifecycleArchived {
-			latest.Kind = syncservice.MutationArchive
-		} else {
-			latest.Kind = syncservice.MutationUpdate
-		}
-	}
-	if syncservice.ValidateMutation(latest) != nil {
-		return fmt.Errorf("%w: rebased sync mutation", ErrConflict)
-	}
-	payload, err := json.Marshal(latest)
-	if err != nil || len(payload) > maxSyncPayloadBytes {
-		return fmt.Errorf("%w: rebased sync payload", ErrConflict)
-	}
-	for _, entry := range later[1:] {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM sync_outbox WHERE mutation_id=?`, entry.Mutation.MutationID); err != nil {
-			return writeError(ctx, err)
-		}
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE sync_outbox SET mutation_kind=?,base_version=?,payload=? WHERE mutation_id=?`, latest.Kind, latest.BaseVersion, payload, latest.MutationID)
-	return writeApplyError(ctx, err)
+	return rebaseSyncOutboxEntries(ctx, tx, later, version)
 }
 
 // enqueueSyncOutbox is intentionally transaction-bound for a future local-write integration.
@@ -1006,6 +1257,10 @@ func (s *Store) ApplyPulledChange(ctx context.Context, historyID string, change 
 // ApplyPulledPage validates a page before opening SQLite, then commits its
 // materialization, inbox entries, cursor, and optional checkpoint together.
 func (s *Store) ApplyPulledPage(ctx context.Context, page syncservice.PullPage, checkpoint *BootstrapCheckpoint) error {
+	return s.applyPulledPage(ctx, page, checkpoint, false)
+}
+
+func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, checkpoint *BootstrapCheckpoint, allowPendingBootstrap bool) error {
 	if err := cancelled(ctx); err != nil || validatePulledPage(page, checkpoint) != nil {
 		if err != nil {
 			return err
@@ -1029,7 +1284,7 @@ func (s *Store) ApplyPulledPage(ctx context.Context, page syncservice.PullPage, 
 		s.syncInbox.known = false
 		return err
 	}
-	if checkpoint != nil {
+	if checkpoint != nil && !allowPendingBootstrap {
 		var pending int
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox WHERE state IN ('pending','retry')`).Scan(&pending); err != nil {
 			s.syncInbox.known = false
@@ -1090,7 +1345,7 @@ func (s *Store) ApplyPulledPage(ctx context.Context, page syncservice.PullPage, 
 			s.syncInbox.known = false
 			return writeError(ctx, err)
 		}
-		if pending != 0 && !own {
+		if pending != 0 && !own && change.Mutation.Kind != syncservice.MutationResolve {
 			return fmt.Errorf("%w: local sync work is pending", ErrConflict)
 		}
 		if !own || change.ChangeDisposition == syncservice.ChangeDispositionConflict {
@@ -1527,7 +1782,7 @@ func (s *Store) applyPulledResolve(ctx context.Context, tx *sql.Tx, historyID st
 	if err != nil || n != int64(len(m.Resolution.ConflictIDs)) {
 		return fmt.Errorf("%w: resolve conflicts", ErrConflict)
 	}
-	return nil
+	return s.rebasePendingConflictOutbox(ctx, tx, m, change.CanonicalVersion)
 }
 
 func applyPulledIdentity(ctx context.Context, tx *sql.Tx, selectVersion, insert, update, id string, canonical, base int64, kind syncservice.MutationKind) error {
