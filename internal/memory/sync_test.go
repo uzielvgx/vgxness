@@ -264,6 +264,39 @@ func TestApplySyncPushResultCompletesClaimAndRebasesLatest(t *testing.T) {
 	testutil.NoError(t, store.ApplySyncPushResult(context.Background(), first.MutationID, claims[0].ClaimToken, result))
 }
 
+func TestPendingOwnConflictReceiptsAreBoundedAndSkipMaterialized(t *testing.T) {
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,1)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	first := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
+	first.MutationID = "550e8400-e29b-41d4-a716-4466554400a1"
+	later := first
+	later.MutationID = "550e8400-e29b-41d4-a716-4466554400a2"
+	enqueueMutation(t, store, first)
+	enqueueMutation(t, store, later)
+	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`UPDATE observations SET sync_version=2 WHERE id='record'`)
+	testutil.NoError(t, err)
+	sequence := int64(1)
+	testutil.NoError(t, store.ApplySyncPushResult(context.Background(), first.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionConflict, Sequence: &sequence, Version: 2}))
+	ids, err := store.PendingOwnConflictReceipts(context.Background())
+	testutil.Require(t, err == nil && len(ids) == 1 && ids[0] == first.MutationID, "ids=%v err=%v", ids, err)
+	_, err = store.db.Exec(`INSERT INTO sync_conflicts(conflict_id,history_id,created_seq,record_kind,record_id,canonical_version,competing_version_id,status,resolved_seq,payload_version,snapshot,created_at,updated_at) VALUES('550e8400-e29b-41d4-a716-4466554400a3','550e8400-e29b-41d4-a716-4466554400a4',1,'observation','record',2,?,'unresolved',NULL,1,X'7B7D',?,?)`, first.MutationID, fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	ids, err = store.PendingOwnConflictReceipts(context.Background())
+	testutil.Require(t, err == nil && len(ids) == 0, "materialized ids=%v err=%v", ids, err)
+	_, err = store.db.Exec(`UPDATE sync_conflicts SET status='resolved',resolved_seq=2`)
+	testutil.NoError(t, err)
+	ids, err = store.PendingOwnConflictReceipts(context.Background())
+	testutil.Require(t, err == nil && len(ids) == 0, "resolved ids=%v err=%v", ids, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = store.PendingOwnConflictReceipts(ctx)
+	testutil.Require(t, errors.Is(err, context.Canceled), "cancellation err=%v", err)
+}
+
 func TestApplySyncPushResultRetriesWithAdvancingClock(t *testing.T) {
 	store := openTestStore(t)
 	store.now = func() time.Time { return fixedTime }

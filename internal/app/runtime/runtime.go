@@ -4,21 +4,38 @@ package runtime
 import (
 	"context"
 	"errors"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/secrets"
+	"github.com/vgxness/vgxness/internal/syncclient"
+	"github.com/vgxness/vgxness/internal/syncservice"
 )
+
+const (
+	foregroundSyncBatches = 16
+	foregroundSyncLease   = time.Minute
+	foregroundSyncTimeout = 15 * time.Second
+)
+
+var canonicalBearer = regexp.MustCompile(`^vgx1\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.([A-Za-z0-9_-]{1,128})$`)
 
 // Memory adapts memory services to the CLI and TUI runtime contracts.
 type Memory struct {
-	producer string
-	readOnly bool
+	producer   string
+	readOnly   bool
+	transport  http.RoundTripper
+	credential func(string) (string, error)
 }
 
 // NewMemory creates a memory runtime with the supplied producer and access mode.
 func NewMemory(producer string, readOnly bool) Memory {
-	return Memory{producer: producer, readOnly: readOnly}
+	return Memory{producer: producer, readOnly: readOnly, transport: http.DefaultTransport, credential: secrets.System().Get}
 }
 
 func (runtime Memory) Remember(ctx context.Context, opts config.Options, request memory.Remember) (memory.Entry, error) {
@@ -53,6 +70,305 @@ func (runtime Memory) ResolveProject(ctx context.Context, opts config.Options, w
 		return store.ResolveProject(ctx, workspace)
 	}
 	return withWritableStore(ctx, opts, func(store *memory.Store) (string, error) { return store.ResolveProject(ctx, workspace) })
+}
+
+// Sync performs a bounded, foreground synchronization without exposing credentials.
+func (runtime Memory) Sync(ctx context.Context, opts config.Options) (memory.SyncResult, error) {
+	result := memory.SyncResult{Status: memory.SyncStatusUnavailable}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if opts.ProjectLocal || runtime.readOnly {
+		return result, nil
+	}
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return result, err
+	}
+	defer store.Close()
+	profile, found, err := store.GetSyncProfile(ctx)
+	if err != nil {
+		return result, err
+	}
+	if !found {
+		return memory.SyncResult{Status: memory.SyncStatusAbsent}, nil
+	}
+	if !profile.Enabled {
+		return memory.SyncResult{Status: memory.SyncStatusDisabled}, nil
+	}
+	getCredential := runtime.credential
+	if getCredential == nil {
+		getCredential = secrets.System().Get
+	}
+	credential, err := getCredential(profile.CredentialRef)
+	if err != nil {
+		if errors.Is(err, secrets.ErrMissing) {
+			return memory.SyncResult{Status: memory.SyncStatusCredentialMissing}, nil
+		}
+		if errors.Is(err, secrets.ErrUnavailable) {
+			return memory.SyncResult{Status: memory.SyncStatusCredentialUnavailable}, nil
+		}
+		return result, nil
+	}
+	if !validBearer(credential, profile.DeviceID) {
+		return memory.SyncResult{Status: memory.SyncStatusInvalid}, nil
+	}
+	transport := runtime.transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client, err := syncclient.New(profile.Endpoint, transport)
+	if err != nil {
+		return memory.SyncResult{Status: memory.SyncStatusInvalid}, nil
+	}
+	remote := syncRemote{client: client, credential: credential}
+	return runForegroundSync(ctx, store, remote)
+}
+
+func validBearer(value, deviceID string) bool {
+	match := canonicalBearer.FindStringSubmatch(value)
+	if match == nil || match[1] != strings.ToLower(deviceID) {
+		return false
+	}
+	return true
+}
+
+type syncRemote struct {
+	client     *syncclient.Client
+	credential string
+}
+
+func (remote syncRemote) Discover(ctx context.Context) (syncservice.Discovery, error) {
+	return remote.client.Discover(ctx, remote.credential)
+}
+
+func (remote syncRemote) Pull(ctx context.Context, cursor syncservice.Cursor, limit int) (syncservice.PullPage, error) {
+	page, err := remote.client.Pull(ctx, remote.credential, cursor, limit)
+	return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: page.HistoryID, Position: page.Position, Watermark: page.Watermark}, HasMore: page.HasMore, Changes: page.Changes}, err
+}
+
+func (remote syncRemote) Push(ctx context.Context, mutations []syncservice.Mutation) ([]syncservice.Result, error) {
+	return remote.client.Push(ctx, remote.credential, mutations)
+}
+
+func (remote syncRemote) Capabilities(ctx context.Context) error {
+	_, err := remote.client.Capabilities(ctx, remote.credential)
+	return err
+}
+
+type foregroundRemote interface {
+	memory.BootstrapRemote
+	Capabilities(context.Context) error
+	Push(context.Context, []syncservice.Mutation) ([]syncservice.Result, error)
+}
+
+type foregroundStore interface {
+	ClaimDueSyncOutbox(context.Context, time.Duration, int) ([]memory.SyncOutboxClaim, error)
+	ApplySyncPushResult(context.Context, string, string, syncservice.Result) error
+	MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error
+	BootstrapSync(context.Context, memory.BootstrapRemote) error
+	BootstrapOwnConflict(context.Context, memory.BootstrapRemote, string) error
+	PendingOwnConflictReceipts(context.Context) ([]string, error)
+	SyncQueueSummary(context.Context) (memory.SyncQueueSummary, error)
+}
+
+func runForegroundSync(ctx context.Context, store foregroundStore, remote foregroundRemote) (memory.SyncResult, error) {
+	result := memory.SyncResult{Status: memory.SyncStatusSynced}
+	capabilityCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+	err := remote.Capabilities(capabilityCtx)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, ctx.Err()
+		}
+		result.Status = syncStatusForError(err)
+		return result, nil
+	}
+	ids, err := store.PendingOwnConflictReceipts(ctx)
+	if err != nil {
+		return result, err
+	}
+	for _, id := range ids {
+		conflictCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+		err = store.BootstrapOwnConflict(conflictCtx, remote, id)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				result.Status = memory.SyncStatusPartial
+				return result, ctx.Err()
+			}
+			result.Status = memory.SyncStatusPartial
+			return result, nil
+		}
+		result.Conflicts++
+	}
+	if len(ids) != 0 {
+		result.Status = memory.SyncStatusConflict
+		return result, nil
+	}
+	for batch := 0; batch < foregroundSyncBatches; batch++ {
+		if err := ctx.Err(); err != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, err
+		}
+		claims, err := store.ClaimDueSyncOutbox(ctx, foregroundSyncLease, 16)
+		if err != nil { result.Status = memory.SyncStatusPartial; return result, err }
+		if len(claims) == 0 {
+			if queue, queueErr := store.SyncQueueSummary(ctx); queueErr != nil {
+				return result, queueErr
+			} else if queue.Conflict {
+				result.Status = memory.SyncStatusConflict
+				return result, nil
+			} else if queue.Work {
+				result.Status = memory.SyncStatusPartial
+				return result, nil
+			}
+			bootstrapCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+			err = store.BootstrapSync(bootstrapCtx, remote)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					result.Status = memory.SyncStatusPartial
+					return result, ctx.Err()
+				}
+				result.Status = syncStatusForError(err)
+				return result, nil
+			}
+			return result, nil
+		}
+		result.Batches++
+		mutations := make([]syncservice.Mutation, len(claims))
+		for index := range claims {
+			mutations[index] = claims[index].Mutation
+		}
+		pushCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+		results, pushErr := remote.Push(pushCtx, mutations)
+		cancel()
+		if pushErr != nil {
+			if ctx.Err() != nil {
+				result.Status = memory.SyncStatusPartial
+				return result, ctx.Err()
+			}
+			if errors.Is(pushErr, syncclient.ErrUnauthorized) {
+				result.Status = memory.SyncStatusUnauthorized
+				return result, nil
+			}
+			if markClaimsRetry(ctx, store, claims, &result) {
+				result.Status = memory.SyncStatusUnreachable
+			} else {
+				result.Status = memory.SyncStatusPartial
+			}
+			return result, nil
+		}
+		if len(results) != len(claims) {
+			markClaimsRetry(ctx, store, claims, &result)
+			result.Status = memory.SyncStatusPartial
+			return result, nil
+		}
+		blocking := false
+		for index, pushResult := range results {
+			claim := claims[index]
+			if pushResult.MutationID != claim.Mutation.MutationID {
+				markClaimsRetry(ctx, store, claims[index:], &result)
+				result.Status = memory.SyncStatusPartial
+				return result, nil
+			}
+			if err := store.ApplySyncPushResult(ctx, claim.Mutation.MutationID, claim.ClaimToken, pushResult); err != nil {
+				if ctx.Err() != nil {
+					result.Status = memory.SyncStatusPartial
+					return result, ctx.Err()
+				}
+				markClaimsRetry(ctx, store, claims[index:], &result)
+				result.Status = memory.SyncStatusPartial
+				return result, nil
+			}
+			switch pushResult.Disposition {
+			case syncservice.DispositionAccepted:
+				result.Pushed++
+			case syncservice.DispositionPreviouslyAccepted:
+				result.Pushed++
+				result.PreviouslyAccepted++
+			case syncservice.DispositionRejected:
+				if pushResult.Retryable {
+					result.Retried++
+					result.Status = memory.SyncStatusPartial
+				} else {
+					result.Rejected++
+					result.Status = memory.SyncStatusRejected
+				}
+				blocking = true
+			case syncservice.DispositionConflict:
+				result.Conflicts++
+				result.Status = memory.SyncStatusConflict
+				conflictCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+				err := store.BootstrapOwnConflict(conflictCtx, remote, claim.Mutation.MutationID)
+				cancel()
+				if err != nil {
+					if ctx.Err() != nil {
+						result.Status = memory.SyncStatusPartial
+						return result, ctx.Err()
+					}
+					result.Status = memory.SyncStatusPartial
+				}
+				blocking = true
+			}
+		}
+		if blocking {
+			return result, nil
+		}
+	}
+	queue, err := store.SyncQueueSummary(ctx)
+	if err != nil {
+		return result, err
+	}
+	if queue.Conflict {
+		result.Status = memory.SyncStatusConflict
+		return result, nil
+	}
+	if queue.Work {
+		result.Status = memory.SyncStatusPartial
+		return result, nil
+	}
+	bootstrapCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+	err = store.BootstrapSync(bootstrapCtx, remote)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, ctx.Err()
+		}
+		result.Status = syncStatusForError(err)
+	}
+	return result, nil
+}
+
+func markClaimsRetry(ctx context.Context, store foregroundStore, claims []memory.SyncOutboxClaim, result *memory.SyncResult) bool {
+	allMarked := true
+	for _, claim := range claims {
+		if err := store.MarkSyncOutboxRetry(ctx, claim.Mutation.MutationID, claim.ClaimToken, time.Now().UTC().Add(time.Second), "transport"); err == nil {
+			result.Retried++
+		} else {
+			allMarked = false
+		}
+	}
+	return allMarked
+}
+
+func syncStatusForError(err error) memory.SyncStatus {
+	if errors.Is(err, syncclient.ErrUnauthorized) {
+		return memory.SyncStatusUnauthorized
+	}
+	if errors.Is(err, syncclient.ErrUnavailable) {
+		return memory.SyncStatusUnreachable
+	}
+	if errors.Is(err, syncclient.ErrRemote) || errors.Is(err, syncclient.ErrDiscoveryUnsupported) {
+		return memory.SyncStatusIncompatible
+	}
+	if errors.Is(err, memory.ErrConflict) {
+		return memory.SyncStatusConflict
+	}
+	return memory.SyncStatusUnavailable
 }
 
 func (runtime Memory) producerName() string {
