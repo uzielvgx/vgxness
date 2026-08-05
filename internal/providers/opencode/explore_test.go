@@ -105,19 +105,19 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessor, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if artifactSHA256(predecessor.manifest) != "6fcf5b993be247dd627bac48e5e038bd00a865c1010f3f819acc634d7e7388d3" {
+	if artifactSHA256(predecessor.manifest) != "6759ce6da3d8269addeb4bdc533f4268243c39f626e79eb4ee738ce8a1e7bf54" {
 		t.Fatalf("prior SDD manifest=%s", artifactSHA256(predecessor.manifest))
 	}
 	for name, digest := range map[string]string{sddResearchName: "7bcd1f18790e34c48c3c684cbc5c409d0b9163422e89b49a3f389cc026b53906", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
 		if artifactSHA256(predecessor.agents[name]) != digest {
-			t.Fatalf("prior SDD %s digest", name)
+			t.Fatalf("prior SDD %s digest=%s", name, artifactSHA256(predecessor.agents[name]))
 		}
 	}
 	priorExplore, err := previousExploreModelPlanBundle(current)
 	testutil.NoError(t, err)
 	combined, err := previousSDDModelPlanBundle(priorExplore)
 	testutil.NoError(t, err)
-	if artifactSHA256(combined.manifest) != "347cfde308eb45c249b6e5a8af19c2f10bf1c8fecc5f9cc6217c0debd5d5ffcf" {
+	if artifactSHA256(combined.manifest) != "acfb39dd6403ee3f4d3d3daf2a0dae0f06ba190883092b74fd80bc10b161e42b" {
 		t.Fatalf("combined manifest=%s", artifactSHA256(combined.manifest))
 	}
 }
@@ -157,28 +157,20 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 	}
 }
 
-func TestIntegrationUpgradesExactManagerV39PredecessorCombinations(t *testing.T) {
+func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "opencode")
 	service, options := NewIntegration(), integration.Options{ConfigDir: config}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	managerV39, err := previousManagerModelPlanBundle(current)
+	managerV40, err := previousManagerModelPlanBundle(current)
 	testutil.NoError(t, err)
-	exploreV39, err := previousExploreModelPlanBundle(managerV39)
+	managerV39, err := previousManagerModelPlanBundle(managerV40)
 	testutil.NoError(t, err)
-	sddV39, err := previousSDDModelPlanBundle(managerV39)
-	testutil.NoError(t, err)
-	allV39, err := previousSDDModelPlanBundle(exploreV39)
-	testutil.NoError(t, err)
-
 	for _, tc := range []struct {
 		name   string
 		bundle modelPlanBundle
 	}{
-		{"manager", managerV39},
-		{"manager and explore", exploreV39},
-		{"manager and SDD", sddV39},
-		{"manager, explore, and SDD", allV39},
+		{"v40", managerV40}, {"v39", managerV39},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeCompleteV1ExploreBundle(t, config, tc.bundle)
@@ -209,20 +201,9 @@ func TestModelPlanBundleForManifestRejectsUnknownManagerPredecessor(t *testing.T
 func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	candidates := []modelPlanBundle{current}
-	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
-		previousManagerModelPlanBundle,
-		previousExploreModelPlanBundle,
-		previousSDDModelPlanBundle,
-	} {
-		prior := append([]modelPlanBundle(nil), candidates...)
-		for _, candidate := range prior {
-			bundle, predecessorErr := predecessor(candidate)
-			testutil.NoError(t, predecessorErr)
-			candidates = append(candidates, bundle)
-		}
-	}
-	if len(candidates) != 8 {
+	candidates, err := predecessorBundles(current)
+	testutil.NoError(t, err)
+	if len(candidates) != 12 {
 		t.Fatalf("predecessor combinations=%d", len(candidates))
 	}
 	for _, candidate := range candidates {

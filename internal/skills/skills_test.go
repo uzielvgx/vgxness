@@ -64,9 +64,9 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 	}
 }
 
-func TestBundledCatalogHasSeventeenCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
+func TestBundledCatalogHasEighteenCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
 	catalog, err := bundledCatalog()
-	if err != nil || len(catalog.definitions) != 17 {
+	if err != nil || len(catalog.definitions) != 18 {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 	definition := catalog.definitions[0]
@@ -120,6 +120,22 @@ func TestBundledCatalogHasSeventeenCanonicalSkillsAndOneLegacyMigration(t *testi
 	}
 	if definition = catalog.definitions[16]; definition.name != "end-to-end-testing" || definition.source != "end-to-end-testing" || len(definition.legacy) != 0 {
 		t.Fatalf("definition=%+v", definition)
+	}
+	if definition = catalog.definitions[17]; definition.name != "sdd-lifecycle" || definition.source != "sdd-lifecycle" || len(definition.legacy) != 0 {
+		t.Fatalf("definition=%+v", definition)
+	}
+}
+
+func TestBundledSDDLifecycleDefinesNarrowActivationAndFailClosedContract(t *testing.T) {
+	catalog, err := bundledCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill := string(catalog.definitions[17].files["SKILL.md"])
+	for _, required := range []string{"name: sdd-lifecycle", "<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->", "Use ONLY after", "explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete", "Automatic", "Interactive", "stateVersion", "idempotency", "memory", "OpenSpec", "hybrid", "symlink", "fail closed"} {
+		if !bytes.Contains([]byte(skill), []byte(required)) {
+			t.Errorf("sdd-lifecycle missing %q", required)
+		}
 	}
 }
 
@@ -320,10 +336,10 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != StateInstalled || !result.Changed || result.FileCount != 41 {
+	if result.State != StateInstalled || !result.Changed || result.FileCount != 42 {
 		t.Fatalf("result=%+v", result)
 	}
-	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs", "user-documentation", "api-documentation", "quality-test-documentation", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "end-to-end-testing"} {
+	for _, name := range []string{"skills-creator", "stacked-pr", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs", "user-documentation", "api-documentation", "quality-test-documentation", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "end-to-end-testing", "sdd-lifecycle"} {
 		if _, err := os.Lstat(filepath.Join(destination, name, "SKILL.md")); err != nil {
 			t.Fatalf("canonical %s activation file: %v", name, err)
 		}

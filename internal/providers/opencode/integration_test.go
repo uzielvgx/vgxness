@@ -683,7 +683,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 40"), []byte("version: 39"), 1)
+	older := bytes.Replace(current, []byte("version: 41"), []byte("version: 40"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -772,7 +772,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 40",
+		"artifact: opencode-agent/vgxness-manager; version: 41",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",
@@ -787,9 +787,6 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"Exact source, Git diff, and observed command output remain candidate evidence",
 		"VGXNESS memory is context only",
 		"vgxness_memory_recent",
-		"vgxness_sdd_set_interaction_mode",
-		"vgxness-sdd-apply",
-		"The manager alone creates changes",
 		"Never ask the user to run commands",
 		"Do not commit or push without an explicit current-task request",
 		"Match the language and register of the user's direct conversation",
@@ -835,8 +832,6 @@ func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
 		"durable project default",
 		"Automatic mode",
 		"Interactive mode",
-		"Automatic SDD",
-		"Interactive SDD",
 		"question tool",
 		"consequential decision",
 		"Inspect available evidence before asking",
@@ -867,20 +862,7 @@ func TestManagerPromptDefinesExecutableSDDLifecycle(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
-	for _, required := range []string{
-		"At the start of an accepted SDD change", "Automatic SDD", "Interactive SDD",
-		"vgxness_sdd_set_interaction_mode", "accepted current-phase revision",
-		"explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete",
-		"Automatic SDD advances each validated gate", "Interactive SDD pauses after each candidate artifact is validated",
-		"at most four concurrent Task calls", "independent read-only subwork", "single-authority and sequential",
-		"read-only and phase-bound", "performs transitions sequentially",
-		"memory backend", "OpenSpec backend", "hybrid backend", "externalLocation",
-		"OpenSpec writes", "repository-relative path", "read it back", "reject symlinks or path drift",
-		"overwrite the projection from memory", "inspect differences", "new candidate memory revision",
-		"changeId", "artifact", "accepted input artifact IDs", "evidence scope", "return contract", "stable idempotency key",
-		"Managed general performs workspace writes", "Verifier executes final validation",
-		"latest returned stateVersion", "reload state and reconcile", "never retry a write blindly",
-	} {
+	for _, required := range []string{"Use SDD only after the user explicitly requests or accepts it.", "sole detailed lifecycle policy", "SHA-256 digests", "latest stateVersion", "managed general alone writes", "verifier validates"} {
 		if !strings.Contains(prompt, required) {
 			t.Errorf("manager prompt is missing executable SDD contract %q", required)
 		}
