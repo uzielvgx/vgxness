@@ -31,7 +31,7 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 8, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 9, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
@@ -54,7 +54,7 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 8, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 9, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var count int
@@ -67,11 +67,12 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 
 func TestSyncV8SchemaAndIndexesFailClosed(t *testing.T) {
 	for name, mutation := range map[string]string{
-		"inbox table":     `DROP TABLE sync_inbox; CREATE TABLE sync_inbox(history_id TEXT, seq INTEGER)`,
-		"cursor table":    `DROP TABLE sync_cursor; CREATE TABLE sync_cursor(singleton INTEGER PRIMARY KEY, history_id TEXT, position INTEGER, updated_at INTEGER)`,
-		"tombstone index": `DROP INDEX sync_tombstones_record_idx; CREATE INDEX sync_tombstones_record_idx ON sync_tombstones(record_id, record_kind, canonical_version)`,
-		"conflict index":  `DROP INDEX sync_conflicts_unresolved_idx; CREATE INDEX sync_conflicts_unresolved_idx ON sync_conflicts(status, record_id, record_kind, created_seq)`,
-		"bootstrap table": `DROP TABLE sync_bootstrap; CREATE TABLE sync_bootstrap(singleton INTEGER PRIMARY KEY, phase TEXT, payload_version INTEGER, checkpoint BLOB, created_at INTEGER, updated_at INTEGER)`,
+		"inbox table":       `DROP TABLE sync_inbox; CREATE TABLE sync_inbox(history_id TEXT, seq INTEGER)`,
+		"cursor table":      `DROP TABLE sync_cursor; CREATE TABLE sync_cursor(singleton INTEGER PRIMARY KEY, history_id TEXT, position INTEGER, updated_at INTEGER)`,
+		"tombstone index":   `DROP INDEX sync_tombstones_record_idx; CREATE INDEX sync_tombstones_record_idx ON sync_tombstones(record_id, record_kind, canonical_version)`,
+		"conflict index":    `DROP INDEX sync_conflicts_unresolved_idx; CREATE INDEX sync_conflicts_unresolved_idx ON sync_conflicts(status, record_id, record_kind, created_seq)`,
+		"bootstrap table":   `DROP TABLE sync_bootstrap; CREATE TABLE sync_bootstrap(singleton INTEGER PRIMARY KEY, phase TEXT, payload_version INTEGER, checkpoint BLOB, created_at INTEGER, updated_at INTEGER)`,
+		"push result table": `DROP TABLE sync_push_results; CREATE TABLE sync_push_results(mutation_id TEXT PRIMARY KEY, sequence INTEGER)`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := openTestStore(t)
@@ -107,6 +108,22 @@ func TestSyncV8Constraints(t *testing.T) {
 		_, err = store.Health(context.Background())
 		testutil.Require(t, errors.Is(err, ErrCorrupt), "health error=%v", err)
 	})
+}
+
+func TestSyncPushReceiptSequenceIsUniqueWhenPresent(t *testing.T) {
+	store := openTestStore(t)
+	insert := `INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at)
+		VALUES(?,?,0,'',?,1,'project',?,'create',0,zeroblob(32),1)`
+	_, err := store.db.Exec(insert, "550e8400-e29b-41d4-a716-446655440060", "accepted", 1, "project-a")
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(insert, "550e8400-e29b-41d4-a716-446655440061", "accepted", 1, "project-b")
+	testutil.Require(t, err != nil, "duplicate sequence accepted")
+	rejected := `INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at)
+		VALUES(?,'rejected',0,'invalid_input',NULL,0,'project',?,'create',0,zeroblob(32),1)`
+	_, err = store.db.Exec(rejected, "550e8400-e29b-41d4-a716-446655440062", "project-c")
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(rejected, "550e8400-e29b-41d4-a716-446655440063", "project-d")
+	testutil.NoError(t, err)
 }
 
 func TestSyncProfileRejectsRawCredentials(t *testing.T) {
@@ -566,7 +583,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 8 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 9 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {
