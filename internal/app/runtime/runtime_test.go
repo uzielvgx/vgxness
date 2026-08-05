@@ -196,6 +196,24 @@ func TestRunForegroundSyncConflictOrderingAndCancellation(t *testing.T) {
 	}
 }
 
+func TestRunForegroundSyncPullsResolutionsBeforeBlockedReturn(t *testing.T) {
+	store := &orderedStore{claims: [][]memory.SyncOutboxClaim{nil}, queue: memory.SyncQueueSummary{Conflict: true}, resolutionErr: memory.ErrConflict}
+	result, err := runForegroundSync(context.Background(), store, &testForegroundRemote{})
+	if err != nil || result.Status != memory.SyncStatusConflict || fmt.Sprint(store.events) != "[claim resolutions]" {
+		t.Fatalf("result=%+v err=%v events=%v", result, err, store.events)
+	}
+}
+
+func TestRunForegroundSyncPushesAfterResolutionPull(t *testing.T) {
+	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440097"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440098"}
+	store := &orderedStore{claims: [][]memory.SyncOutboxClaim{nil, {claim}, nil}, queues: []memory.SyncQueueSummary{{Conflict: true}, {}}}
+	remote := &testForegroundRemote{disposition: syncservice.DispositionAccepted}
+	result, err := runForegroundSync(context.Background(), store, remote)
+	if err != nil || result.Status != memory.SyncStatusSynced || remote.pushes != 1 || fmt.Sprint(store.events) != "[claim resolutions claim apply claim bootstrap]" {
+		t.Fatalf("result=%+v err=%v events=%v remote=%+v", result, err, store.events, remote)
+	}
+}
+
 func batchStore(t *testing.T, count int) *memory.Store {
 	t.Helper()
 	store := newForegroundStore(t)
@@ -218,6 +236,9 @@ type orderedStore struct {
 	ownID            string
 	ids              []string
 	ownErr, claimErr error
+	queue            memory.SyncQueueSummary
+	queues           []memory.SyncQueueSummary
+	resolutionErr    error
 }
 
 func (store *orderedStore) ClaimDueSyncOutbox(context.Context, time.Duration, int) ([]memory.SyncOutboxClaim, error) {
@@ -241,6 +262,10 @@ func (store *orderedStore) BootstrapSync(context.Context, memory.BootstrapRemote
 	store.events = append(store.events, "bootstrap")
 	return nil
 }
+func (store *orderedStore) PullConflictResolutions(context.Context, memory.BootstrapRemote) error {
+	store.events = append(store.events, "resolutions")
+	return store.resolutionErr
+}
 func (store *orderedStore) BootstrapOwnConflict(_ context.Context, _ memory.BootstrapRemote, mutationID string) error {
 	store.events = append(store.events, "own")
 	store.ownID = mutationID
@@ -250,7 +275,12 @@ func (store *orderedStore) PendingOwnConflictReceipts(context.Context) ([]string
 	return store.ids, nil
 }
 func (store *orderedStore) SyncQueueSummary(context.Context) (memory.SyncQueueSummary, error) {
-	return memory.SyncQueueSummary{}, nil
+	if len(store.queues) != 0 {
+		queue := store.queues[0]
+		store.queues = store.queues[1:]
+		return queue, nil
+	}
+	return store.queue, nil
 }
 
 func newForegroundStore(t *testing.T) *memory.Store {
