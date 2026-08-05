@@ -140,20 +140,9 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
-	candidates := []modelPlanBundle{current}
-	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
-		previousManagerModelPlanBundle,
-		previousExploreModelPlanBundle,
-		previousSDDModelPlanBundle,
-	} {
-		previous := append([]modelPlanBundle(nil), candidates...)
-		for _, candidate := range previous {
-			bundle, predecessorErr := predecessor(candidate)
-			if predecessorErr != nil {
-				return modelPlanBundle{}, integration.ErrDrift
-			}
-			candidates = append(candidates, bundle)
-		}
+	candidates, err := predecessorBundles(current)
+	if err != nil {
+		return modelPlanBundle{}, integration.ErrDrift
 	}
 	for _, candidate := range candidates {
 		if bytes.Equal(candidate.manifest, data) {
@@ -163,17 +152,62 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 	return modelPlanBundle{}, integration.ErrDrift
 }
 
+func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
+	managerV40, err := previousManagerModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
+	managerV39, err := previousManagerV39ModelPlanBundle(managerV40)
+	if err != nil {
+		return nil, err
+	}
+	withExplore := make([]modelPlanBundle, 0, 6)
+	for _, manager := range []modelPlanBundle{current, managerV40, managerV39} {
+		withExplore = append(withExplore, manager)
+		explore, err := previousExploreModelPlanBundle(manager)
+		if err != nil {
+			return nil, err
+		}
+		withExplore = append(withExplore, explore)
+	}
+	candidates := make([]modelPlanBundle, 0, 12)
+	for _, candidate := range withExplore {
+		candidates = append(candidates, candidate)
+		sddBundle, err := previousSDDModelPlanBundle(candidate)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, sddBundle)
+	}
+	return candidates, nil
+}
+
 func previousManagerModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	manager, err := bindManagerTemplate(previousManagerPromptV40, "artifact: opencode-agent/vgxness-manager; version: 40", current.resolved.Roles[sdd.RoleManager])
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents := cloneAgents(current.agents)
+	agents[managerAgentName] = manager
+	return encodeModelPlanBundle(current.config, current.resolved, agents)
+}
+
+func previousManagerV39ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	manager, err := bindManagerTemplate(previousManagerPromptV39, "artifact: opencode-agent/vgxness-manager; version: 39", current.resolved.Roles[sdd.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	agents := make(map[string][]byte, len(current.agents))
-	for name, content := range current.agents {
-		agents[name] = content
-	}
+	agents := cloneAgents(current.agents)
 	agents[managerAgentName] = manager
 	return encodeModelPlanBundle(current.config, current.resolved, agents)
+}
+
+func cloneAgents(current map[string][]byte) map[string][]byte {
+	agents := make(map[string][]byte, len(current))
+	for name, content := range current {
+		agents[name] = content
+	}
+	return agents
 }
 
 func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
@@ -267,7 +301,7 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
-	return bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 40", assignment)
+	return bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 41", assignment)
 }
 
 func bindManagerTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {

@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -22,7 +23,13 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 40",
+		"artifact: opencode-agent/vgxness-manager; version: 41",
+		"Load `sdd-lifecycle` before creating an accepted SDD change.",
+		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
+		"managed global portable catalog",
+		"<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->",
+		"same-name/project-local skill collides",
+		"Never fall back inline or accept a local skill with the same name.",
 		"automatically load `stacked-pr`", "detailed operational delivery policy lives only in that loaded skill",
 		"Before delegating any workspace write", "pre-write gate required by that skill",
 		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
@@ -55,11 +62,10 @@ func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 
-	// The extracted Manager baseline is 16,370 bytes and 117 lines after model binding.
-	// Leave 130 bytes and three lines of headroom for concise contract edits, while
-	// preventing a return of the removed always-loaded delivery procedure.
-	const maxManagerPromptBytes = 16_500
-	const maxManagerPromptLines = 120
+	// The v40 baseline is 16,370 bytes and 117 lines after model binding.
+	// V41 keeps 1,370 bytes and 12 lines of headroom while shrinking only SDD.
+	const maxManagerPromptBytes = 15_000
+	const maxManagerPromptLines = 105
 	if bytes := len(prompt); bytes > maxManagerPromptBytes {
 		t.Errorf("manager prompt bytes=%d, budget=%d", bytes, maxManagerPromptBytes)
 	}
@@ -87,10 +93,25 @@ func TestManagerV39PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	predecessor, err := previousManagerModelPlanBundle(current)
+	v40, err := previousManagerModelPlanBundle(current)
+	testutil.NoError(t, err)
+	predecessor, err := previousManagerV39ModelPlanBundle(v40)
 	testutil.NoError(t, err)
 	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 39")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
 		t.Fatal("manager predecessor was not exactly bound from the v39 template")
+	}
+}
+
+func TestManagerV40PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T) {
+	if digest := artifactSHA256([]byte(previousManagerPromptV40)); digest != "e13863fd3abe4354d2319d1ee2ae0105c7bc1844842a0765b697dd11f93a3cf2" {
+		t.Fatalf("manager v40 template digest=%s", digest)
+	}
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	predecessor, err := previousManagerModelPlanBundle(current)
+	testutil.NoError(t, err)
+	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 40")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
+		t.Fatal("manager predecessor was not exactly bound from the v40 template")
 	}
 }
 
@@ -120,6 +141,35 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 		if strings.Contains(prompt, superseded) {
 			t.Errorf("manager prompt retains superseded direct repository-work contract %q", superseded)
 		}
+	}
+}
+
+func TestManagerV41PreservesV40OutsideSDDLifecycle(t *testing.T) {
+	v40, err := os.ReadFile("templates/manager.v40.md")
+	testutil.NoError(t, err)
+	v41, err := os.ReadFile("templates/manager.md")
+	testutil.NoError(t, err)
+	const sdd = "# SDD lifecycle\n"
+	const native = "# Native autonomous delivery\n"
+	v40Start, v40End, ok := strings.Cut(string(v40), sdd)
+	if !ok {
+		t.Fatal("v40 SDD lifecycle heading missing")
+	}
+	v40SDD, v40Suffix, ok := strings.Cut(v40End, native)
+	if !ok || v40SDD == "" {
+		t.Fatal("v40 native delivery heading missing")
+	}
+	v41Prefix, v41End, ok := strings.Cut(string(v41), sdd)
+	if !ok {
+		t.Fatal("v41 SDD lifecycle heading missing")
+	}
+	_, v41Suffix, ok := strings.Cut(v41End, native)
+	if !ok {
+		t.Fatal("v41 native delivery heading missing")
+	}
+	v41Prefix = strings.Replace(v41Prefix, "version: 41", "version: 40", 1)
+	if v41Prefix != v40Start || v41Suffix != v40Suffix {
+		t.Fatal("v41 changed v40 content outside the SDD lifecycle block")
 	}
 }
 
