@@ -109,6 +109,24 @@ func DecodeDiscoveryResponse(body []byte) (DiscoveryResponse, error) {
 	return response, nil
 }
 
+// DecodePushResponse decodes a strict, bounded push response.
+func DecodePushResponse(body []byte) (PushResponse, error) {
+	var response PushResponse
+	if err := decodeStrict(body, &response); err != nil {
+		return PushResponse{}, err
+	}
+	return response, nil
+}
+
+// DecodeCapabilitiesResponse decodes a strict, bounded capabilities response.
+func DecodeCapabilitiesResponse(body []byte) (CapabilitiesResponse, error) {
+	var response CapabilitiesResponse
+	if err := decodeStrict(body, &response); err != nil {
+		return CapabilitiesResponse{}, err
+	}
+	return response, nil
+}
+
 func ValidatePushRequest(request PushRequest) error {
 	if request.ProtocolVersion != ProtocolVersion {
 		return ErrUnsupportedVersion
@@ -254,15 +272,18 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 // DecodeStrictPullResponse rejects duplicate and unknown fields for untrusted clients.
 func DecodeStrictPullResponse(body []byte) (PullResponse, error) {
 	var envelope struct {
-		ProtocolVersion int               `json:"protocol_version"`
-		HistoryID       string            `json:"history_id"`
-		Position        int64             `json:"position"`
-		Watermark       int64             `json:"watermark,omitempty"`
-		HasMore         bool              `json:"has_more"`
+		ProtocolVersion *int              `json:"protocol_version"`
+		HistoryID       *string           `json:"history_id"`
+		Position        *int64            `json:"position"`
+		Watermark       *int64            `json:"watermark,omitempty"`
+		HasMore         *bool             `json:"has_more"`
 		Changes         []json.RawMessage `json:"changes,omitempty"`
 	}
-	if err := decodeStrict(body, &envelope); err != nil {
+	if err := decodeStrictLimit(body, MaxPullResponseBytes, &envelope); err != nil {
 		return PullResponse{}, err
+	}
+	if envelope.ProtocolVersion == nil || envelope.HistoryID == nil || envelope.Position == nil || envelope.HasMore == nil {
+		return PullResponse{}, ErrInvalidRequest
 	}
 	return DecodePullResponse(body)
 }
@@ -280,7 +301,11 @@ func decodePullChange(body []byte, change *syncservice.Change) error {
 }
 
 func decodeStrict(body []byte, value any) error {
-	if len(body) > MaxBodyBytes || jsonDepth(body) > MaxJSONDepth {
+	return decodeStrictLimit(body, MaxBodyBytes, value)
+}
+
+func decodeStrictLimit(body []byte, limit int, value any) error {
+	if len(body) > limit || jsonDepth(body) > MaxJSONDepth {
 		return ErrLimitExceeded
 	}
 	if len(body) == 0 || !utf8.Valid(body) {

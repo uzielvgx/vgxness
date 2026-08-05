@@ -22,9 +22,20 @@ type closingReader struct {
 
 func (r *closingReader) Close() error { r.closed = true; return nil }
 
+type interruptedReader struct{ remaining int }
+
+func (r *interruptedReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	r.remaining--
+	p[0] = '{'
+	return 1, nil
+}
+
 type testDoer func(*http.Request) (*http.Response, error)
 
-func (do testDoer) Do(request *http.Request) (*http.Response, error) { return do(request) }
+func (do testDoer) RoundTrip(request *http.Request) (*http.Response, error) { return do(request) }
 
 func TestDiscoverUsesExactAuthenticatedGET(t *testing.T) {
 	const credential = "secret-credential"
@@ -62,7 +73,7 @@ func TestClientDoesNotFollowCredentialBearingRedirects(t *testing.T) {
 		http.Redirect(writer, request, target.URL, http.StatusFound)
 	}))
 	defer origin.Close()
-	client, err := New(origin.URL, origin.Client())
+	client, err := New(origin.URL, origin.Client().Transport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +147,7 @@ func TestClientRejectsUnsafeResponsesWithoutSecrets(t *testing.T) {
 				return response, nil
 			}))
 			_, err := client.Discover(context.Background(), credential)
-			if !errors.Is(err, test.want) || strings.Contains(err.Error(), credential) || strings.Contains(err.Error(), secret) || (reader != nil && !reader.closed) {
+			if !errors.Is(err, test.want) || strings.Contains(err.Error(), credential) || strings.Contains(err.Error(), secret) || (reader != nil && !test.transport && !reader.closed) {
 				t.Fatalf("err=%v closed=%v", err, reader != nil && reader.closed)
 			}
 		})
@@ -154,5 +165,159 @@ func TestClientRejectsInvalidEndpointAndCredential(t *testing.T) {
 		if _, err := client.Discover(context.Background(), credential); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("credential %q: %v", credential, err)
 		}
+	}
+}
+
+func TestPushUsesBoundedAuthenticatedPOSTAndRejectsMismatchedResults(t *testing.T) {
+	credential := "secret-credential"
+	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
+	client, _ := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/sync/push" || request.Header.Get("Authorization") != "Bearer "+credential || request.Header.Get("Content-Type") != mediaType || request.Header.Get("Accept") != mediaType {
+			t.Fatalf("request=%s headers=%v", request.URL, request.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(`{"protocol_version":1,"results":[{"mutation_id":"other","disposition":"rejected","code":"invalid_input"}]}`))}, nil
+	}))
+	_, err := client.Push(context.Background(), credential, []syncservice.Mutation{mutation})
+	if !errors.Is(err, ErrRemote) || strings.Contains(err.Error(), credential) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestPushRetriesServiceUnavailableBeforeSuccessResponseValidation(t *testing.T) {
+	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
+	calls := 0
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: io.NopCloser(strings.NewReader("unavailable"))}, nil
+		}
+		body := `{"protocol_version":1,"protocol_version":1,"results":[{"mutation_id":"` + mutation.MutationID + `","disposition":"rejected","code":"invalid_input"}]}`
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	_, err := client.Push(context.Background(), "secret-credential", []syncservice.Mutation{mutation})
+	if !errors.Is(err, ErrRemote) || calls != 2 {
+		t.Fatalf("error=%v calls=%d", err, calls)
+	}
+}
+
+func TestPushRetriesInterruptedOKResponseBodyAndClosesBothBodies(t *testing.T) {
+	const credential = "secret-credential"
+	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
+	var readers []*closingReader
+	calls := 0
+	client, _ := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Header.Get("Authorization") != "Bearer "+credential {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		if calls == 1 {
+			reader := &closingReader{Reader: &interruptedReader{remaining: 8}}
+			readers = append(readers, reader)
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: reader}, nil
+		}
+		reader := &closingReader{Reader: strings.NewReader(`{"protocol_version":1,"results":[{"mutation_id":"` + mutation.MutationID + `","disposition":"rejected","code":"invalid_input"}]}`)}
+		readers = append(readers, reader)
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: reader}, nil
+	}))
+	results, err := client.Push(context.Background(), credential, []syncservice.Mutation{mutation})
+	if err != nil || calls != 2 || len(results) != 1 || len(readers) != 2 {
+		t.Fatalf("results=%+v err=%v calls=%d bodies=%d", results, err, calls, len(readers))
+	}
+	if !readers[0].closed || !readers[1].closed {
+		t.Fatalf("response bodies closed=%v,%v", readers[0].closed, readers[1].closed)
+	}
+}
+
+func TestPushReturnsUnavailableAfterSecondInterruptedOKResponseBody(t *testing.T) {
+	const credential = "secret-credential"
+	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
+	var readers []*closingReader
+	calls := 0
+	client, _ := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Header.Get("Authorization") != "Bearer "+credential {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		reader := &closingReader{Reader: &interruptedReader{remaining: 8}}
+		readers = append(readers, reader)
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: reader}, nil
+	}))
+	_, err := client.Push(context.Background(), credential, []syncservice.Mutation{mutation})
+	if !errors.Is(err, ErrUnavailable) || calls != 2 || len(readers) != 2 || strings.Contains(err.Error(), credential) {
+		t.Fatalf("err=%v calls=%d bodies=%d", err, calls, len(readers))
+	}
+	if !readers[0].closed || !readers[1].closed {
+		t.Fatalf("response bodies closed=%v,%v", readers[0].closed, readers[1].closed)
+	}
+}
+
+func TestPushDoesNotRetryUnauthorized(t *testing.T) {
+	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
+	calls := 0
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusUnauthorized, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("unauthorized"))}, nil
+	}))
+	_, err := client.Push(context.Background(), "secret-credential", []syncservice.Mutation{mutation})
+	if !errors.Is(err, ErrUnauthorized) || calls != 1 {
+		t.Fatalf("error=%v calls=%d", err, calls)
+	}
+}
+
+func TestPushPreservesCancellationWithoutRetry(t *testing.T) {
+	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, context.Canceled
+	}))
+	_, err := client.Push(ctx, "secret-credential", []syncservice.Mutation{mutation})
+	if !errors.Is(err, context.Canceled) || calls != 0 {
+		t.Fatalf("error=%v calls=%d", err, calls)
+	}
+}
+
+func TestGetPreservesCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, context.Canceled
+	}))
+	if _, err := client.Discover(ctx, "secret-credential"); !errors.Is(err, context.Canceled) || calls != 0 {
+		t.Fatalf("error=%v calls=%d", err, calls)
+	}
+}
+
+func TestCapabilitiesRejectsInvalidUTF8(t *testing.T) {
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader("{\"protocol_version\":1,\"capabilities\":[\"\xff\"]}"))}, nil
+	}))
+	if _, err := client.Capabilities(context.Background(), "secret-credential"); !errors.Is(err, ErrRemote) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestPullAcceptsResponseUpToPullLimit(t *testing.T) {
+	history := uuid.NewString()
+	body := `{"protocol_version":1,"history_id":"` + history + `","position":0,"has_more":false}` + strings.Repeat(" ", syncapi.MaxBodyBytes)
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	if _, err := client.Pull(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, 1); err != nil {
+		t.Fatalf("pull response under limit rejected: %v", err)
+	}
+}
+
+func TestGetRejectsNilDecoderWithoutPanic(t *testing.T) {
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		t.Fatal("request sent with nil decoder")
+		return nil, nil
+	}))
+	if err := client.get(context.Background(), "/v1/sync/capabilities", nil, "secret-credential", syncapi.MaxBodyBytes, nil); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("error=%v", err)
 	}
 }

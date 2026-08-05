@@ -2,7 +2,9 @@
 package syncclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -24,36 +26,27 @@ var (
 	ErrDiscoveryUnsupported = errors.New("sync client discovery unsupported")
 )
 
-// HTTPDoer implementations other than *http.Client must not follow redirects or
-// disclose credential-bearing requests.
-type HTTPDoer interface {
-	Do(*http.Request) (*http.Response, error)
-}
-
 type Client struct {
-	endpoint *url.URL
-	doer     HTTPDoer
+	endpoint   *url.URL
+	httpClient *http.Client
 }
 
-func New(endpoint string, doer HTTPDoer) (*Client, error) {
+// New creates a client that never follows credential-bearing redirects.
+func New(endpoint string, transport http.RoundTripper) (*Client, error) {
 	u, err := url.Parse(endpoint)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" || (u.Path != "" && u.Path != "/") || doer == nil {
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" || (u.Path != "" && u.Path != "/") || transport == nil {
 		return nil, ErrInvalidEndpoint
 	}
-	if client, ok := doer.(*http.Client); ok {
-		if client == nil {
-			return nil, ErrInvalidEndpoint
-		}
-		clone := *client
-		clone.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-		doer = &clone
-	}
-	return &Client{endpoint: u, doer: doer}, nil
+	return &Client{endpoint: u, httpClient: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 func (client *Client) Discover(ctx context.Context, credential string) (syncservice.Discovery, error) {
 	var value syncservice.Discovery
-	if err := client.get(ctx, "/v1/sync/discovery", nil, credential, syncapi.MaxBodyBytes, &value); err != nil {
+	if err := client.get(ctx, "/v1/sync/discovery", nil, credential, syncapi.MaxBodyBytes, func(body []byte) error {
+		decoded, err := syncapi.DecodeDiscoveryResponse(body)
+		value = decoded
+		return err
+	}); err != nil {
 		return value, err
 	}
 	if err := syncservice.ValidateDiscovery(value); err != nil {
@@ -73,7 +66,11 @@ func (client *Client) Pull(ctx context.Context, credential string, cursor syncse
 		q.Set("watermark", strconv.FormatInt(cursor.Watermark, 10))
 	}
 	var value syncapi.PullResponse
-	if err := client.get(ctx, "/v1/sync/pull", q, credential, syncapi.MaxPullResponseBytes, &value); err != nil {
+	if err := client.get(ctx, "/v1/sync/pull", q, credential, syncapi.MaxPullResponseBytes, func(body []byte) error {
+		decoded, err := syncapi.DecodeStrictPullResponse(body)
+		value = decoded
+		return err
+	}); err != nil {
 		return value, err
 	}
 	if !pullMatches(syncapi.PullRequest{ProtocolVersion: syncapi.ProtocolVersion, Cursor: cursor, Limit: limit}, value) {
@@ -82,8 +79,114 @@ func (client *Client) Pull(ctx context.Context, credential string, cursor syncse
 	return value, nil
 }
 
-func (client *Client) get(ctx context.Context, path string, query url.Values, credential string, limit int64, out any) error {
-	if !validCredential(credential) {
+// Capabilities discovers the remote protocol before sending mutations.
+func (client *Client) Capabilities(ctx context.Context, credential string) (syncapi.CapabilitiesResponse, error) {
+	var value syncapi.CapabilitiesResponse
+	if err := client.get(ctx, "/v1/sync/capabilities", nil, credential, syncapi.MaxBodyBytes, func(body []byte) error {
+		decoded, err := syncapi.DecodeCapabilitiesResponse(body)
+		value = decoded
+		return err
+	}); err != nil {
+		return value, err
+	}
+	if value.ProtocolVersion != syncapi.ProtocolVersion || len(value.Capabilities) == 0 || len(value.Capabilities) > 64 {
+		return syncapi.CapabilitiesResponse{}, ErrRemote
+	}
+	seen := make(map[string]struct{}, len(value.Capabilities))
+	for _, capability := range value.Capabilities {
+		if capability == "" || len(capability) > 64 {
+			return syncapi.CapabilitiesResponse{}, ErrRemote
+		}
+		if _, exists := seen[capability]; exists {
+			return syncapi.CapabilitiesResponse{}, ErrRemote
+		}
+		seen[capability] = struct{}{}
+	}
+	return value, nil
+}
+
+// Push sends no more than one protocol batch and retries only one transient failure.
+func (client *Client) Push(ctx context.Context, credential string, items []syncservice.Mutation) ([]syncservice.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	request := syncapi.PushRequest{ProtocolVersion: syncapi.ProtocolVersion, Items: items}
+	if !validCredential(credential) || syncapi.ValidatePushRequest(request) != nil {
+		return nil, ErrInvalidInput
+	}
+	body, err := json.Marshal(request)
+	if err != nil || len(body) > syncapi.MaxBodyBytes {
+		return nil, ErrInvalidInput
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		results, retry, err := client.pushOnce(ctx, credential, request, body)
+		if err == nil || !retry || attempt == 1 {
+			return results, err
+		}
+	}
+	return nil, ErrRemote
+}
+
+func (client *Client) pushOnce(ctx context.Context, credential string, push syncapi.PushRequest, body []byte) ([]syncservice.Result, bool, error) {
+	u := *client.endpoint
+	u.Path = "/v1/sync/push"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, false, ErrInvalidEndpoint
+	}
+	request.Header.Set("Accept", mediaType)
+	request.Header.Set("Content-Type", mediaType)
+	request.Header.Set("Authorization", "Bearer "+credential)
+	response, doErr := client.httpClient.Do(request)
+	if response != nil && response.Body != nil {
+		defer response.Body.Close()
+	}
+	if err := contextError(ctx, doErr); err != nil {
+		return nil, false, err
+	}
+	if doErr != nil {
+		return nil, true, ErrUnavailable
+	}
+	if response == nil {
+		return nil, false, ErrRemote
+	}
+	switch response.StatusCode {
+	case http.StatusOK:
+	case http.StatusUnauthorized:
+		return nil, false, ErrUnauthorized
+	case http.StatusServiceUnavailable:
+		return nil, true, ErrUnavailable
+	default:
+		return nil, false, ErrRemote
+	}
+	if response.Body == nil {
+		return nil, false, ErrRemote
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, syncapi.MaxBodyBytes+1))
+	if contextErr := contextError(ctx, err); contextErr != nil {
+		return nil, false, contextErr
+	}
+	if err != nil {
+		return nil, true, ErrUnavailable
+	}
+	if len(data) > syncapi.MaxBodyBytes || len(response.Header.Values("Content-Type")) != 1 || response.Header.Get("Content-Type") != mediaType {
+		return nil, false, ErrRemote
+	}
+	reply, err := syncapi.DecodePushResponse(data)
+	if err != nil || syncapi.ValidatePushResponse(push, reply) != nil {
+		return nil, false, ErrRemote
+	}
+	return reply.Results, false, nil
+}
+
+func (client *Client) get(ctx context.Context, path string, query url.Values, credential string, limit int64, decode func([]byte) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !validCredential(credential) || decode == nil {
 		return ErrInvalidInput
 	}
 	u := *client.endpoint
@@ -95,15 +198,14 @@ func (client *Client) get(ctx context.Context, path string, query url.Values, cr
 	}
 	request.Header.Set("Accept", mediaType)
 	request.Header.Set("Authorization", "Bearer "+credential)
-	response, doErr := client.doer.Do(request)
+	response, doErr := client.httpClient.Do(request)
 	if response != nil && response.Body != nil {
 		defer response.Body.Close()
 	}
-	if doErr != nil || response == nil || response.Body == nil {
-		return ErrRemote
+	if err := contextError(ctx, doErr); err != nil {
+		return err
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	if err != nil || int64(len(body)) > limit || len(response.Header.Values("Content-Type")) != 1 || response.Header.Get("Content-Type") != mediaType {
+	if doErr != nil || response == nil {
 		return ErrRemote
 	}
 	if response.StatusCode == http.StatusNotFound && path == "/v1/sync/discovery" {
@@ -118,19 +220,29 @@ func (client *Client) get(ctx context.Context, path string, query url.Values, cr
 	if response.StatusCode != http.StatusOK {
 		return ErrRemote
 	}
-	if path == "/v1/sync/discovery" {
-		value, err := syncapi.DecodeDiscoveryResponse(body)
-		if err != nil {
-			return ErrRemote
-		}
-		*(out.(*syncservice.Discovery)) = value
-		return nil
-	}
-	value, err := syncapi.DecodeStrictPullResponse(body)
-	if err != nil {
+	if response.Body == nil {
 		return ErrRemote
 	}
-	*(out.(*syncapi.PullResponse)) = value
+	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if contextErr := contextError(ctx, err); contextErr != nil {
+		return contextErr
+	}
+	if err != nil || int64(len(body)) > limit || len(response.Header.Values("Content-Type")) != 1 || response.Header.Get("Content-Type") != mediaType || decode(body) != nil {
+		return ErrRemote
+	}
+	return nil
+}
+
+func contextError(ctx context.Context, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
 	return nil
 }
 
