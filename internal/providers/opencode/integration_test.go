@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -702,9 +703,9 @@ func TestIntegration_RejectsForeignMalformedMismatchedAndNewerArtifacts(t *testi
 	testutil.NoError(t, err)
 	cases := map[string][]byte{
 		"foreign":       []byte("user-owned plugin\n"),
-		"malformed":     bytes.Replace(currentPlugin, []byte("version: 5"), []byte("version: old"), 1),
+		"malformed":     bytes.Replace(currentPlugin, []byte("version: 7"), []byte("version: old"), 1),
 		"name mismatch": bytes.Replace(currentPlugin, []byte("artifact: opencode-plugin/vgxness-memory"), []byte("artifact: opencode-plugin/other"), 1),
-		"newer":         bytes.Replace(currentPlugin, []byte("version: 5"), []byte("version: 6"), 1),
+		"newer":         bytes.Replace(currentPlugin, []byte("version: 7"), []byte("version: 8"), 1),
 	}
 	for name, candidate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -910,7 +911,7 @@ func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 5",
+		"artifact: opencode-plugin/vgxness-memory; version: 7",
 		"vgxness_memory_recent", "vgxness_memory_search", "vgxness_memory_get", "vgxness_memory_save", "vgxness_memory_forget",
 		`["memory", operation, "--stdin", "--json", "--workspace", workspace]`,
 		"shell: false", "MAX_INPUT_BYTES", "MAX_OUTPUT_BYTES", "TIMEOUT_MS",
@@ -1105,15 +1106,184 @@ func TestMemoryPluginDefinesSafeOpenCodeHookContracts(t *testing.T) {
 	}
 }
 
+func TestMemoryPluginDefinesOptInFailOpenSyncHooks(t *testing.T) {
+	service := NewIntegration()
+	content, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	for _, required := range []string{
+		"artifact: opencode-plugin/vgxness-memory; version: 7",
+		`const SYNC_ON_SESSION_START = process.env.VGXNESS_SYNC_ON_SESSION_START === "1"`,
+		`const SYNC_ON_SESSION_END = process.env.VGXNESS_SYNC_ON_SESSION_END === "1"`,
+		`const SYNC_START_TIMEOUT_MS = 2_000`,
+		`const SYNC_END_TIMEOUT_MS = 5_000`,
+		`["memory", "sync", "--json"]`,
+		`child.stdout.resume()`, `child.stderr.resume()`,
+		`child.on("error", () => finish(new Error("VGXNESS sync process is unavailable")))`,
+		`if (code !== 0) return finish(new Error("VGXNESS sync request failed"))`,
+		`const runSessionSync = (sessionID, timeoutMs) => {`,
+		`void invokeSync(timeoutMs, controller.signal, directory).catch(() => {}).finally(() => {`,
+		`lifecycleSyncPendingTimeout = Math.max(lifecycleSyncPendingTimeout, timeoutMs)`,
+		`if (!disposed && pendingTimeout > 0) runSessionSync("", pendingTimeout)`,
+		`if (SYNC_ON_SESSION_START) runSessionSync(sessionID, SYNC_START_TIMEOUT_MS)`,
+		`if (shouldSyncEnd) runSessionSync(sessionID, SYNC_END_TIMEOUT_MS)`,
+		`if (event?.type === "session.deleted" && sessionID) {`,
+		`return Promise.resolve()`,
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("opt-in sync hook missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		`process.env.VGXNESS_SYNC_ON_SESSION_START !== "1"`,
+		`process.env.VGXNESS_SYNC_ON_SESSION_END !== "1"`,
+		`console.log`, `console.error`, `new Error(stderr)`,
+		`sync.started`, `sync.completed`, `sync.retry`,
+		`await invokeSync`,
+	} {
+		if strings.Contains(plugin, forbidden) {
+			t.Errorf("opt-in sync hook has unsafe behavior %q", forbidden)
+		}
+	}
+}
+
+func TestMemoryPluginRunsOptInSyncHooksFailOpen(t *testing.T) {
+	for _, scenario := range []string{"disabled", "enabled", "child", "error", "nonzero", "timeout", "burst", "dispose"} {
+		t.Run(scenario, func(t *testing.T) {
+			runMemoryPluginHookScenario(t, scenario)
+		})
+	}
+}
+
+func runMemoryPluginHookScenario(t *testing.T, scenario string) {
+	t.Helper()
+	node, lookErr := exec.LookPath("node")
+	if lookErr != nil {
+		t.Skip("node is unavailable; generated OpenCode plugin runtime test skipped")
+	}
+	content, err := memoryPluginContent(NewIntegration().executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__vgxnessTest`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__vgxnessTest`, 1)
+	plugin = strings.Replace(plugin, `import { tool } from "@opencode-ai/plugin"`, `const { tool } = globalThis.__vgxnessTest`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryPlugin`, `const VGXNESSMemoryPlugin`, 1)
+	script := `
+const scenario = process.env.TEST_SCENARIO
+const secret = process.env.TEST_SECRET
+const logs = []
+const timers = []
+const spawns = []
+globalThis.console = { log: (...args) => logs.push(args), error: (...args) => logs.push(args) }
+globalThis.setTimeout = (callback, timeout) => {
+  const timer = { callback, timeout, cleared: false }
+  timers.push(timer)
+  return timer
+}
+globalThis.clearTimeout = (timer) => { timer.cleared = true }
+function stream() { return { resumed: false, resume() { this.resumed = true }, setEncoding() {}, on() {} } }
+class Child {
+  constructor() { this.handlers = new Map(); this.stdout = stream(); this.stderr = stream(); this.killed = false }
+  on(name, handler) { const handlers = this.handlers.get(name) ?? []; handlers.push(handler); this.handlers.set(name, handlers); return this }
+  emit(name, ...args) { for (const handler of this.handlers.get(name) ?? []) handler(...args) }
+  kill() { this.killed = true }
+}
+const schema = new Proxy({}, { get: () => () => ({ optional() { return this }, describe() { return this } }) })
+const fakeTool = (value) => value
+fakeTool.schema = schema
+globalThis.__vgxnessTest = {
+  spawn: (file, args, options) => { const child = new Child(); spawns.push({ file, args, options, child }); return child },
+  isAbsolute: (value) => String(value).startsWith("/"),
+  tool: fakeTool,
+}
+const assert = (condition, message) => { if (!condition) throw new Error(message) }
+const settle = async () => { for (let i = 0; i < 4; i++) await Promise.resolve() }
+` + plugin + `
+const instance = await VGXNESSMemoryPlugin({ directory: "/workspace" })
+const event = async (input) => {
+  const result = await instance.event(input)
+  assert(result === undefined, "event result changed")
+}
+const topLevel = { event: { type: "session.created", properties: { info: { id: "top" } } } }
+const ended = { event: { type: "session.deleted", properties: { info: { id: "top" } } } }
+if (scenario === "disabled") {
+  await event(topLevel); await event(ended); await settle()
+  assert(spawns.length === 0, "disabled hook spawned")
+} else if (scenario === "enabled") {
+  await event(topLevel); assert(spawns.length === 1, "start hook did not spawn once")
+  assert(spawns[0].args.join(" ") === "memory sync --json", "start sync command changed")
+  assert(spawns[0].child.stdout.resumed && spawns[0].child.stderr.resumed, "start output was not drained")
+  spawns[0].child.emit("close", 0); await settle()
+  await event(ended); assert(spawns.length === 2, "end hook did not spawn once")
+  assert(spawns[1].args.join(" ") === "memory sync --json", "end sync command changed")
+  spawns[1].child.emit("close", 0); await settle()
+} else if (scenario === "child") {
+  await event({ event: { type: "session.created", properties: { info: { id: "child", parentID: "top" } } } })
+  await event({ event: { type: "session.deleted", properties: { info: { id: "child" } } } })
+  await settle(); assert(spawns.length === 0, "child session spawned")
+} else if (scenario === "burst") {
+  await event({ event: { type: "session.created", properties: { info: { id: "first" } } } })
+  await event({ event: { type: "session.created", properties: { info: { id: "second" } } } })
+  await event({ event: { type: "session.deleted", properties: { info: { id: "second" } } } })
+  await event({ event: { type: "session.created", properties: { info: { id: "third" } } } })
+  assert(spawns.length === 1, "burst started concurrent children")
+  spawns[0].child.emit("close", 0); await settle()
+  assert(spawns.length === 2, "burst did not launch one coalesced sync")
+  assert(timers[1].timeout === 5000, "coalesced end timeout was weakened")
+  spawns[1].child.emit("close", 0); await settle()
+  assert(spawns.length === 2, "burst launched more than one follow-up")
+} else if (scenario === "dispose") {
+  await event({ event: { type: "session.created", properties: { info: { id: "first" } } } })
+  await event({ event: { type: "session.created", properties: { info: { id: "second" } } } })
+  assert(spawns.length === 1, "dispose setup started concurrent children")
+  await instance.dispose(); await settle()
+  assert(spawns[0].child.killed, "dispose did not cancel active sync")
+  assert(spawns.length === 1, "dispose restarted pending sync")
+} else {
+  await event(topLevel); assert(spawns.length === 1, "failure case did not spawn")
+  const child = spawns[0].child
+  assert(child.stdout.resumed && child.stderr.resumed, "failure output was not drained")
+  assert(!JSON.stringify(spawns[0].options).includes(secret), "secret entered child diagnostics")
+  if (scenario === "error") child.emit("error", new Error(secret))
+  else if (scenario === "nonzero") child.emit("close", 1)
+  else if (scenario === "timeout") { assert(timers.length === 1 && timers[0].timeout === 2000, "start timeout changed"); timers[0].callback(); assert(child.killed, "timeout did not stop child") }
+  else throw new Error("unknown scenario")
+  await settle(); assert(logs.length === 0, "sync failure produced diagnostics")
+}
+`
+	path := filepath.Join(t.TempDir(), "plugin-hook-test.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	command := exec.Command(node, path)
+	environment := make([]string, 0, len(os.Environ())+4)
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, "VGXNESS_SYNC_ON_SESSION_START=") && !strings.HasPrefix(value, "VGXNESS_SYNC_ON_SESSION_END=") {
+			environment = append(environment, value)
+		}
+	}
+	if scenario != "disabled" {
+		environment = append(environment, "VGXNESS_SYNC_ON_SESSION_START=1", "VGXNESS_SYNC_ON_SESSION_END=1")
+	}
+	command.Env = append(environment, "TEST_SCENARIO="+scenario, "TEST_SECRET=test-secret-must-not-surface")
+	if output, commandErr := command.CombinedOutput(); commandErr != nil {
+		t.Fatalf("scenario %s: node hook harness failed: %v: %s", scenario, commandErr, output)
+	}
+}
+
 func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 	service := NewIntegration()
 	currentPlugin, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
-	pluginV3 := previousMemoryPluginV3(currentPlugin)
+	pluginV6 := previousMemoryPluginV6(currentPlugin)
+	pluginV5 := previousMemoryPluginV5(pluginV6)
+	if !bytes.Contains(pluginV5, []byte("\n  dispose: async () => {\n")) || bytes.Contains(pluginV5, []byte("\n   dispose: async () => {\n")) {
+		t.Fatal("v5 predecessor changed dispose indentation")
+	}
+	pluginV4 := previousMemoryPluginV4(pluginV5)
+	pluginV3 := previousMemoryPluginV3(pluginV4)
 	pluginV2 := previousMemoryPluginV2(pluginV3)
 	pluginV1 := previousMemoryPluginV1(pluginV2)
-	if !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
-		t.Fatalf("plugin v3/v2/v1 predecessors were not recognized")
+	if !isPreviousMemoryPlugin(pluginV6) || !isPreviousMemoryPlugin(pluginV5) || !isPreviousMemoryPlugin(pluginV4) || !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
+		t.Fatalf("plugin v6/v5/v4/v3/v2/v1 predecessors were not recognized")
 	}
 	modified := append(append([]byte(nil), pluginV2...), []byte("\nmodified\n")...)
 	if isPreviousMemoryPlugin(modified) {

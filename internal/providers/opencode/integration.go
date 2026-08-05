@@ -1380,11 +1380,15 @@ func memoryPluginContent(executable string) ([]byte, error) {
 import { isAbsolute } from "node:path"
 import { tool } from "@opencode-ai/plugin"
 
-// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 5
+// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 7
 const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 const MAX_INPUT_BYTES = 64 * 1024
 const MAX_OUTPUT_BYTES = ` + fmt.Sprintf("%d", maxMemoryOutputBytes) + `
 const TIMEOUT_MS = 10_000
+const SYNC_ON_SESSION_START = process.env.VGXNESS_SYNC_ON_SESSION_START === "1"
+const SYNC_ON_SESSION_END = process.env.VGXNESS_SYNC_ON_SESSION_END === "1"
+const SYNC_START_TIMEOUT_MS = 2_000
+const SYNC_END_TIMEOUT_MS = 5_000
 const MAX_CONTEXT_BYTES = 12 * 1024
 const MAX_SESSIONS = 128
 const MAX_CHILD_SESSIONS = 256
@@ -1472,6 +1476,52 @@ async function invokeMemory(operation, payload, context) {
       }
     })
     child.stdin.end(input)
+  })
+}
+
+async function invokeSync(timeoutMs, abort, workspace) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(
+      VGXNESS_EXECUTABLE,
+      ["memory", "sync", "--json"],
+      {
+        cwd: workspace,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          HOME: process.env.HOME,
+          USERPROFILE: process.env.USERPROFILE,
+          TMPDIR: process.env.TMPDIR,
+          SystemRoot: process.env.SystemRoot,
+        },
+      },
+    )
+    let settled = false
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      abort?.removeEventListener?.("abort", cancel)
+      if (error) reject(error)
+      else resolve()
+    }
+    const cancel = () => {
+      child.kill("SIGKILL")
+      finish(new Error("VGXNESS sync request was cancelled"))
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL")
+      finish(new Error("VGXNESS sync request timed out"))
+    }, timeoutMs)
+    abort?.addEventListener?.("abort", cancel, { once: true })
+    if (abort?.aborted) return cancel()
+    child.stdout.resume()
+    child.stderr.resume()
+    child.on("error", () => finish(new Error("VGXNESS sync process is unavailable")))
+    child.on("close", (code) => {
+      if (code !== 0) return finish(new Error("VGXNESS sync request failed"))
+      finish()
+    })
   })
 }
 
@@ -1642,6 +1692,26 @@ export const VGXNESSMemoryPlugin = async ({ directory }) => {
     while (childSessions.size > MAX_CHILD_SESSIONS) cleanupSession(childSessions.values().next().value)
   }
 
+  let lifecycleSyncActive = false
+  let lifecycleSyncPendingTimeout = 0
+  const runSessionSync = (sessionID, timeoutMs) => {
+    if (disposed) return
+    if (lifecycleSyncActive) {
+      lifecycleSyncPendingTimeout = Math.max(lifecycleSyncPendingTimeout, timeoutMs)
+      return
+    }
+    lifecycleSyncActive = true
+    const controller = new AbortController()
+    controllers.set(controller, sessionID)
+    void invokeSync(timeoutMs, controller.signal, directory).catch(() => {}).finally(() => {
+      controllers.delete(controller)
+      lifecycleSyncActive = false
+      const pendingTimeout = lifecycleSyncPendingTimeout
+      lifecycleSyncPendingTimeout = 0
+      if (!disposed && pendingTimeout > 0) runSessionSync("", pendingTimeout)
+    })
+  }
+
   const purgeToolStarts = () => {
     const oldest = Date.now() - TOOL_TTL_MS
     for (const [key, record] of toolStarts) {
@@ -1703,9 +1773,12 @@ export const VGXNESSMemoryPlugin = async ({ directory }) => {
           rememberChildSession(sessionID)
         } else if (!sessions.has(sessionID)) {
           rememberSession(sessionID, { topLevel: true, manager: false, seenUser: false, pending: false, loaded: false, contextBlock: "", tools: [] })
+          if (SYNC_ON_SESSION_START) runSessionSync(sessionID, SYNC_START_TIMEOUT_MS)
         }
       } else if (event?.type === "session.deleted" && sessionID) {
+        const shouldSyncEnd = SYNC_ON_SESSION_END && sessions.get(sessionID)?.topLevel && !childSessions.has(sessionID)
         cleanupSession(sessionID)
+        if (shouldSyncEnd) runSessionSync(sessionID, SYNC_END_TIMEOUT_MS)
       }
     } catch {}
     return Promise.resolve()
@@ -1775,6 +1848,7 @@ export const VGXNESSMemoryPlugin = async ({ directory }) => {
   dispose: async () => {
     try {
       disposed = true
+      lifecycleSyncPendingTimeout = 0
       for (const controller of controllers.keys()) controller.abort()
       controllers.clear()
       toolStarts.clear()
@@ -2338,7 +2412,81 @@ func readRegularFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+func previousMemoryPluginV6(current []byte) []byte {
+	text := string(current)
+	if strings.Count(text, "artifact: opencode-plugin/vgxness-memory; version: 7") != 1 {
+		return nil
+	}
+	text = strings.Replace(text, "artifact: opencode-plugin/vgxness-memory; version: 7", "artifact: opencode-plugin/vgxness-memory; version: 6", 1)
+	start := strings.Index(text, "\n  let lifecycleSyncActive = false\n  let lifecycleSyncPendingTimeout = 0\n  const runSessionSync = (sessionID, timeoutMs) => {")
+	end := strings.Index(text, "\n  const purgeToolStarts = () => {")
+	if start < 0 || end <= start {
+		return nil
+	}
+	previous := `
+  const runSessionSync = (sessionID, timeoutMs) => {
+    const controller = new AbortController()
+    controllers.set(controller, sessionID)
+    void invokeSync(timeoutMs, controller.signal, directory).catch(() => {}).finally(() => controllers.delete(controller))
+  }
+`
+	text = text[:start] + previous + text[end:]
+	const disposeState = "      disposed = true\n      lifecycleSyncPendingTimeout = 0\n"
+	if strings.Count(text, disposeState) != 1 {
+		return nil
+	}
+	text = strings.Replace(text, disposeState, "      disposed = true\n", 1)
+	return []byte(text)
+}
+
+func previousMemoryPluginV5(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 7")) {
+		current = previousMemoryPluginV6(current)
+	}
+	text := string(current)
+	if strings.Count(text, "artifact: opencode-plugin/vgxness-memory; version: 6") != 1 {
+		return nil
+	}
+	text = strings.Replace(text, "artifact: opencode-plugin/vgxness-memory; version: 6", "artifact: opencode-plugin/vgxness-memory; version: 5", 1)
+	const v6Constants = `const TIMEOUT_MS = 10_000
+const SYNC_ON_SESSION_START = process.env.VGXNESS_SYNC_ON_SESSION_START === "1"
+const SYNC_ON_SESSION_END = process.env.VGXNESS_SYNC_ON_SESSION_END === "1"
+const SYNC_START_TIMEOUT_MS = 2_000
+const SYNC_END_TIMEOUT_MS = 5_000
+`
+	if strings.Count(text, v6Constants) != 1 {
+		return nil
+	}
+	text = strings.Replace(text, v6Constants, "const TIMEOUT_MS = 10_000\n", 1)
+	start := strings.Index(text, "\nasync function invokeSync(timeoutMs, abort, workspace) {")
+	end := strings.Index(text, "\nfunction sddText(value, limit, name) {")
+	if start < 0 || end <= start {
+		return nil
+	}
+	text = text[:start] + text[end:]
+	start = strings.Index(text, "\n  const runSessionSync = (sessionID, timeoutMs) => {")
+	if start < 0 {
+		return nil
+	}
+	end = strings.Index(text[start:], "\n  const purgeToolStarts = () => {")
+	if end < 0 {
+		return nil
+	}
+	end += start
+	text = text[:start] + text[end:]
+	text = strings.Replace(text, "\n          if (SYNC_ON_SESSION_START) runSessionSync(sessionID, SYNC_START_TIMEOUT_MS)", "", 1)
+	text = strings.Replace(text, "\n        const shouldSyncEnd = SYNC_ON_SESSION_END && sessions.get(sessionID)?.topLevel && !childSessions.has(sessionID)", "", 1)
+	text = strings.Replace(text, "\n        if (shouldSyncEnd) runSessionSync(sessionID, SYNC_END_TIMEOUT_MS)", "", 1)
+	return []byte(text)
+}
+
 func previousMemoryPluginV4(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 7")) {
+		current = previousMemoryPluginV6(current)
+	}
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 6")) {
+		current = previousMemoryPluginV5(current)
+	}
 	previousV5 := derivePredecessor(current, []textReplacement{
 		{old: `
 function sddFailureCategory(value) {
@@ -2409,6 +2557,12 @@ function sddFailureCategory(value) {
 }
 
 func previousMemoryPluginV3(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 7")) {
+		current = previousMemoryPluginV6(current)
+	}
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 6")) {
+		current = previousMemoryPluginV5(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 5")) {
 		current = previousMemoryPluginV4(current)
 	}
@@ -2437,6 +2591,12 @@ func previousMemoryPluginV3(current []byte) []byte {
 }
 
 func previousMemoryPluginV2(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 7")) {
+		current = previousMemoryPluginV6(current)
+	}
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 6")) {
+		current = previousMemoryPluginV5(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 5")) {
 		current = previousMemoryPluginV4(current)
 	}
@@ -2525,11 +2685,13 @@ func isPreviousMemoryPlugin(candidate []byte) bool {
 	if err != nil {
 		return false
 	}
-	v4 := previousMemoryPluginV4(generated)
+	v6 := previousMemoryPluginV6(generated)
+	v5 := previousMemoryPluginV5(v6)
+	v4 := previousMemoryPluginV4(v5)
 	v3 := previousMemoryPluginV3(v4)
 	v2 := previousMemoryPluginV2(v3)
 	v1 := previousMemoryPluginV1(v2)
-	return bytes.Equal(candidate, v4) || bytes.Equal(candidate, v3) || bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
+	return bytes.Equal(candidate, v6) || bytes.Equal(candidate, v5) || bytes.Equal(candidate, v4) || bytes.Equal(candidate, v3) || bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
 }
 
 func memoryPluginExecutable(content []byte) (string, bool) {
