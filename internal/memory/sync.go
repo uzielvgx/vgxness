@@ -43,6 +43,104 @@ type SyncProfile struct {
 	UpdatedAt     time.Time
 }
 
+// SyncStatus is a token-free summary of one bounded foreground synchronization.
+type SyncStatus string
+
+const (
+	SyncStatusAbsent                SyncStatus = "absent"
+	SyncStatusDisabled              SyncStatus = "disabled"
+	SyncStatusUnavailable           SyncStatus = "unavailable"
+	SyncStatusUnreachable           SyncStatus = "unreachable"
+	SyncStatusCredentialMissing     SyncStatus = "credential_missing"
+	SyncStatusCredentialUnavailable SyncStatus = "credential_unavailable"
+	SyncStatusIncompatible          SyncStatus = "incompatible"
+	SyncStatusInvalid               SyncStatus = "invalid"
+	SyncStatusUnauthorized          SyncStatus = "unauthorized"
+	SyncStatusPartial               SyncStatus = "partial"
+	SyncStatusRejected              SyncStatus = "rejected"
+	SyncStatusConflict              SyncStatus = "conflict"
+	SyncStatusSynced                SyncStatus = "synced"
+)
+
+// SyncResult contains only durable outcome counts; it never carries a credential.
+type SyncResult struct {
+	Status             SyncStatus `json:"status"`
+	Pushed             int        `json:"pushed"`
+	PreviouslyAccepted int        `json:"previouslyAccepted"`
+	Rejected           int        `json:"rejected"`
+	Retried            int        `json:"retried"`
+	Conflicts          int        `json:"conflicts"`
+	Batches            int        `json:"batches"`
+}
+
+// SyncQueueSummary reports whether durable local work blocks ordinary bootstrap.
+type SyncQueueSummary struct {
+	Work     bool
+	Conflict bool
+}
+
+func (s *Store) SyncQueueSummary(ctx context.Context) (SyncQueueSummary, error) {
+	if s == nil || ctx == nil {
+		return SyncQueueSummary{}, fmt.Errorf("%w: sync queue", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return SyncQueueSummary{}, err
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.closed || s.db == nil {
+		return SyncQueueSummary{}, fmt.Errorf("%w: store closed", ErrCorrupt)
+	}
+	if s.readOnly {
+		return SyncQueueSummary{}, fmt.Errorf("%w: store is read-only", ErrConflict)
+	}
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return SyncQueueSummary{}, fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	var work, conflict int
+	err := s.db.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM sync_outbox) OR EXISTS(SELECT 1 FROM sync_outbox_claims WHERE lease_until>?),
+		EXISTS(SELECT 1 FROM sync_conflicts WHERE status='unresolved')`, now).Scan(&work, &conflict)
+	if err != nil {
+		return SyncQueueSummary{}, writeError(ctx, err)
+	}
+	return SyncQueueSummary{Work: work != 0, Conflict: conflict != 0}, nil
+}
+
+// PendingOwnConflictReceipts returns bounded, unmaterialized own conflicts that
+// still have later local work for the same record.
+func (s *Store) PendingOwnConflictReceipts(ctx context.Context) ([]string, error) {
+	if s == nil || ctx == nil {
+		return nil, fmt.Errorf("%w: own conflict recovery", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return nil, err
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.closed || s.db == nil || s.readOnly {
+		return nil, fmt.Errorf("%w: own conflict recovery", ErrConflict)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT r.mutation_id FROM sync_push_results r WHERE r.disposition='conflict' AND r.retryable=0 AND r.sequence>0 AND EXISTS (SELECT 1 FROM sync_outbox o WHERE o.record_kind=r.record_kind AND o.record_id=r.record_id) AND NOT EXISTS (SELECT 1 FROM sync_conflicts f WHERE f.competing_version_id=r.mutation_id) ORDER BY r.sequence,r.mutation_id LIMIT 16`)
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil || !canonicalUUIDPattern.MatchString(id) {
+			return nil, fmt.Errorf("%w: own conflict receipt", ErrCorrupt)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, writeError(ctx, err)
+	}
+	return ids, nil
+}
+
 type SyncOutboxState string
 
 const (
