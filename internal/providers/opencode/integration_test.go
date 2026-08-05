@@ -1016,7 +1016,7 @@ func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
 		profile := string(bundle.agents[name])
 		for _, required := range []string{
-			"version: 3", "changeId", "artifact", "acceptedInputs", "evidenceScope", "returnContract",
+			"version: 4", "changeId", "artifact", "acceptedInputs", "evidenceScope", "returnContract",
 			`"status":"complete|blocked"`, `"candidateContent"`, `"evidence"`, `"openQuestions"`,
 		} {
 			if !strings.Contains(profile, required) {

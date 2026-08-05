@@ -60,6 +60,40 @@ permission:
 	}
 }
 
+func TestSDDResearchBootstrapContractKeepsDownstreamPredecessorsBound(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+
+	research := string(bundle.agents[sddResearchName])
+	for _, contract := range []string{
+		`"artifact":"explore","acceptedInputs":[]`,
+		"acceptedInputs:[] is permitted only for the first-phase research/explore bootstrap",
+		"Reject non-empty or fabricated bootstrap inputs",
+		"artifact: opencode-agent/vgxness-sdd-research; version: 4",
+	} {
+		if !strings.Contains(research, contract) {
+			t.Errorf("research bootstrap contract missing %q", contract)
+		}
+	}
+
+	for role, name := range map[sdd.Role]string{
+		sdd.RoleProposal: sddProposalName,
+		sdd.RoleSpec:     sddSpecName,
+		sdd.RoleDesign:   sddDesignName,
+		sdd.RoleTasks:    sddTasksName,
+	} {
+		prompt := string(bundle.agents[name])
+		for _, contract := range []string{
+			fmt.Sprintf(`"artifact":"%s","acceptedInputs":[{"artifactId":"exact ID","revisionId":"exact ID","digest":"sha256"}]`, role),
+			"accepted input revision IDs and SHA-256 digests",
+		} {
+			if !strings.Contains(prompt, contract) {
+				t.Errorf("%s downstream contract missing %q", role, contract)
+			}
+		}
+	}
+}
+
 func previousExploreAgent(t *testing.T, current []byte) []byte {
 	t.Helper()
 	predecessor := string(current)
@@ -103,7 +137,12 @@ func writeCompleteV1ExploreBundle(t *testing.T, configDirectory string, bundle m
 func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	predecessor, err := previousSDDModelPlanBundle(current)
+	predecessorV3, err := previousSDDModelPlanBundle(current)
+	testutil.NoError(t, err)
+	if research := string(predecessorV3.agents[sddResearchName]); !strings.Contains(research, `artifact: opencode-agent/vgxness-sdd-research; version: 3`) || !strings.Contains(research, `"artifact":"research"`) {
+		t.Fatalf("v3 research predecessor does not match its exact prompt identity")
+	}
+	predecessor, err := previousSDDModelPlanBundleV2(current)
 	testutil.NoError(t, err)
 	if artifactSHA256(predecessor.manifest) != "6759ce6da3d8269addeb4bdc533f4268243c39f626e79eb4ee738ce8a1e7bf54" {
 		t.Fatalf("prior SDD manifest=%s", artifactSHA256(predecessor.manifest))
@@ -115,7 +154,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	}
 	priorExplore, err := previousExploreModelPlanBundle(current)
 	testutil.NoError(t, err)
-	combined, err := previousSDDModelPlanBundle(priorExplore)
+	combined, err := previousSDDModelPlanBundleV2(priorExplore)
 	testutil.NoError(t, err)
 	if artifactSHA256(combined.manifest) != "acfb39dd6403ee3f4d3d3daf2a0dae0f06ba190883092b74fd80bc10b161e42b" {
 		t.Fatalf("combined manifest=%s", artifactSHA256(combined.manifest))
@@ -128,6 +167,8 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	prior, err := previousSDDModelPlanBundle(current)
+	testutil.NoError(t, err)
+	legacy, err := previousSDDModelPlanBundleV2(current)
 	testutil.NoError(t, err)
 	combinedBase, err := previousExploreModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -143,6 +184,7 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 				testutil.NoError(t, os.WriteFile(filepath.Join(config, "agents", name), current.agents[name], 0o600))
 			}
 		}},
+		{"legacy SDD", legacy, func() {}},
 		{"combined", combined, func() {}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -203,7 +245,7 @@ func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testi
 	testutil.NoError(t, err)
 	candidates, err := predecessorBundles(current)
 	testutil.NoError(t, err)
-	if len(candidates) != 12 {
+	if len(candidates) != 18 {
 		t.Fatalf("predecessor combinations=%d", len(candidates))
 	}
 	for _, candidate := range candidates {
