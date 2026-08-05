@@ -21,7 +21,7 @@ const (
 	sddDesignName                                           = "vgxness-sdd-design.md"
 	sddTasksName                                            = "vgxness-sdd-tasks.md"
 	sddApplyName                                            = "vgxness-sdd-apply.md"
-	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 3, 2
+	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 4, 3
 	sddApplyTargetVersion, sddApplyPredecessorVersion       = 4, 3
 )
 
@@ -170,7 +170,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		}
 		withExplore = append(withExplore, explore)
 	}
-	candidates := make([]modelPlanBundle, 0, 12)
+	candidates := make([]modelPlanBundle, 0, 18)
 	for _, candidate := range withExplore {
 		candidates = append(candidates, candidate)
 		sddBundle, err := previousSDDModelPlanBundle(candidate)
@@ -178,6 +178,11 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 			return nil, err
 		}
 		candidates = append(candidates, sddBundle)
+		legacySDDBundle, err := previousSDDModelPlanBundleV2(candidate)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, legacySDDBundle)
 	}
 	return candidates, nil
 }
@@ -227,6 +232,25 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		}
 	}
 	return encodeModelPlanBundle(current.config, current.resolved, agents)
+}
+
+func previousSDDModelPlanBundleV2(current modelPlanBundle) (modelPlanBundle, error) {
+	predecessor, err := previousSDDModelPlanBundle(current)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	for _, profile := range []struct {
+		name string
+		role sdd.Role
+	}{
+		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec}, {sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
+	} {
+		predecessor.agents[profile.name] = legacySDDAgentPredecessor(profile.role, predecessor.agents[profile.name])
+		if len(predecessor.agents[profile.name]) == 0 {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+	}
+	return encodeModelPlanBundle(predecessor.config, predecessor.resolved, predecessor.agents)
 }
 
 func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
@@ -442,16 +466,48 @@ func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 	if role == sdd.RoleApply {
 		target, prior = sddApplyTargetVersion, sddApplyPredecessorVersion
 	}
-	replacements := []textReplacement{{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, target), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, prior)}, {old: sddSkillLoadingContract, new: ""}}
+	replacements := []textReplacement{{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, target), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, prior)}}
 	if role == sdd.RoleApply {
-		replacements = append(replacements, textReplacement{old: ", exact relevant native skill names, allowed paths", new: ", allowed paths"})
-	} else {
-		replacements = append(replacements, textReplacement{old: `,"skills":["exact relevant native skill name"]`, new: ""})
+		replacements = append(replacements, textReplacement{old: sddSkillLoadingContract, new: ""}, textReplacement{old: ", exact relevant native skill names, allowed paths", new: ", allowed paths"})
+		return derivePredecessor(current, replacements)
+	}
+	if role == sdd.RoleResearch {
+		replacements = append(replacements, textReplacement{old: researchBootstrapPhaseAgentContract(), new: legacyPhaseAgentContract(role)})
 	}
 	return derivePredecessor(current, replacements)
 }
 
+func legacySDDAgentPredecessor(role sdd.Role, current []byte) []byte {
+	if role == sdd.RoleApply {
+		return current
+	}
+	return derivePredecessor(current, []textReplacement{
+		{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddReadOnlyPredecessorVersion), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddReadOnlyPredecessorVersion-1)},
+		{old: sddSkillLoadingContract, new: ""},
+		{old: `,"skills":["exact relevant native skill name"]`, new: ""},
+	})
+}
+
 func phaseAgentContract(role sdd.Role) string {
+	if role == sdd.RoleResearch {
+		return researchBootstrapPhaseAgentContract()
+	}
+	return legacyPhaseAgentContract(role)
+}
+
+func researchBootstrapPhaseAgentContract() string {
+	return `
+
+Mission schema: {"changeId":"exact ID","artifact":"explore","acceptedInputs":[],"skills":["exact relevant native skill name"],"evidenceScope":["bounded path or question"],"constraints":["constraint"],"returnContract":"phase-candidate-v1"}. acceptedInputs:[] is permitted only for the first-phase research/explore bootstrap. Reject non-empty or fabricated bootstrap inputs, and reject a mission with missing, stale, contradictory, or broader inputs.
+
+Phase objective: Establish repository evidence, constraints, affected surfaces, unknowns, and decisions needed before proposing a change.
+
+Return exactly one compact JSON object and no Markdown:
+{"status":"complete|blocked","candidateContent":"complete artifact candidate or empty when blocked","evidence":["path:line or exact observation"],"openQuestions":["unresolved consequential question"],"blockers":["blocking fact"]}
+`
+}
+
+func legacyPhaseAgentContract(role sdd.Role) string {
 	objective := map[sdd.Role]string{
 		sdd.RoleResearch: "Establish repository evidence, constraints, affected surfaces, unknowns, and decisions needed before proposing a change.",
 		sdd.RoleProposal: "Define the problem, intended outcomes, scope, non-goals, risks, and measurable success criteria.",
