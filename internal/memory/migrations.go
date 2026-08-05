@@ -36,6 +36,9 @@ var schemaV8 string
 //go:embed migrations/009_sync_push_results.sql
 var schemaV9 string
 
+//go:embed migrations/010_sync_outbox_claims.sql
+var schemaV10 string
+
 type migration struct {
 	version int
 	sql     string
@@ -51,6 +54,7 @@ var migrations = []migration{
 	{version: 7, sql: schemaV7},
 	{version: 8, sql: schemaV8},
 	{version: 9, sql: schemaV9},
+	{version: 10, sql: schemaV10},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {

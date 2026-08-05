@@ -31,11 +31,117 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 9, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 10, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
 	}
+}
+
+func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(schemaV1 + schemaV2 + schemaV3 + schemaV4 + schemaV5 + schemaV6 + schemaV7 + schemaV8 + schemaV9 + `
+		PRAGMA user_version=9;
+		INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at)
+		VALUES('existing','project','project','learning','durable memory','test','active',1,1);
+		INSERT INTO sync_outbox(mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,state,attempts,next_attempt_at,last_error_code,created_at,updated_at)
+		VALUES('550e8400-e29b-41d4-a716-446655440020','project','project','create',0,1,'{}','pending',0,1,'',1,1);`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+
+	store := openPath(t, path)
+	defer store.Close()
+	version, err := store.Health(context.Background())
+	testutil.Require(t, err == nil && version == 10, "health=%d err=%v", version, err)
+	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
+	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
+	var outbox, claims int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox_claims`).Scan(&claims))
+	testutil.Require(t, outbox == 1 && claims == 0, "outbox=%d claims=%d", outbox, claims)
+}
+
+func TestSyncOutboxClaimsConstraintsCascadeAndHealth(t *testing.T) {
+	insertOutbox := func(t *testing.T, store *Store, mutationID string) {
+		t.Helper()
+		_, err := store.db.Exec(`INSERT INTO sync_outbox(mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,state,attempts,next_attempt_at,last_error_code,created_at,updated_at)
+			VALUES(?,'project','project','create',0,1,'{}','pending',0,1,'',1,1)`, mutationID)
+		testutil.NoError(t, err)
+	}
+	insertClaim := func(t *testing.T, store *Store, mutationID, firstToken, token string, firstClaimedAt, claimedAt, leaseUntil any) error {
+		t.Helper()
+		_, err := store.db.Exec(`INSERT INTO sync_outbox_claims(mutation_id,first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until) VALUES(?,?,?,?,?,?)`, mutationID, firstToken, token, firstClaimedAt, claimedAt, leaseUntil)
+		return err
+	}
+
+	t.Run("rejects malformed tokens and times", func(t *testing.T) {
+		for name, mutate := range map[string]func(*[]any){
+			"uppercase first token":    func(values *[]any) { (*values)[1] = "550E8400-E29B-41D4-A716-446655440031" },
+			"malformed claim token":    func(values *[]any) { (*values)[2] = "not-a-uuid" },
+			"zero first claimed at":    func(values *[]any) { (*values)[3] = 0 },
+			"text claimed at":          func(values *[]any) { (*values)[4] = "not-a-time" },
+			"lease before claim":       func(values *[]any) { (*values)[5] = 1 },
+			"claim before first claim": func(values *[]any) { (*values)[4] = 1 },
+		} {
+			t.Run(name, func(t *testing.T) {
+				store := openTestStore(t)
+				mutationID := "550e8400-e29b-41d4-a716-446655440030"
+				insertOutbox(t, store, mutationID)
+				values := []any{mutationID, "550e8400-e29b-41d4-a716-446655440031", "550e8400-e29b-41d4-a716-446655440032", 2, 3, 4}
+				mutate(&values)
+				err := insertClaim(t, store, values[0].(string), values[1].(string), values[2].(string), values[3], values[4], values[5])
+				testutil.Require(t, err != nil, "invalid claim accepted")
+			})
+		}
+	})
+	t.Run("missing outbox is rejected", func(t *testing.T) {
+		store := openTestStore(t)
+		err := insertClaim(t, store, "550e8400-e29b-41d4-a716-446655440039", "550e8400-e29b-41d4-a716-446655440031", "550e8400-e29b-41d4-a716-446655440032", 1, 2, 3)
+		testutil.Require(t, err != nil, "claim without outbox accepted")
+	})
+	t.Run("null mutation ID is rejected", func(t *testing.T) {
+		store := openTestStore(t)
+		_, err := store.db.Exec(`INSERT INTO sync_outbox_claims(mutation_id,first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until)
+			VALUES(NULL,'550e8400-e29b-41d4-a716-446655440031','550e8400-e29b-41d4-a716-446655440032',1,2,3)`)
+		testutil.Require(t, err != nil, "null mutation ID accepted")
+	})
+	t.Run("outbox delete cascades", func(t *testing.T) {
+		store := openTestStore(t)
+		mutationID := "550e8400-e29b-41d4-a716-446655440040"
+		insertOutbox(t, store, mutationID)
+		testutil.NoError(t, insertClaim(t, store, mutationID, "550e8400-e29b-41d4-a716-446655440041", "550e8400-e29b-41d4-a716-446655440042", 1, 2, 3))
+		_, err := store.db.Exec(`DELETE FROM sync_outbox WHERE mutation_id=?`, mutationID)
+		testutil.NoError(t, err)
+		var claims int
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox_claims WHERE mutation_id=?`, mutationID).Scan(&claims))
+		testutil.Require(t, claims == 0, "claims=%d", claims)
+	})
+	for name, mutation := range map[string]string{
+		"weakened table":            `DROP TABLE sync_outbox_claims; CREATE TABLE sync_outbox_claims(mutation_id TEXT PRIMARY KEY)`,
+		"weakened index":            `DROP INDEX sync_outbox_claims_lease_idx; CREATE INDEX sync_outbox_claims_lease_idx ON sync_outbox_claims(mutation_id, lease_until)`,
+		"case-altered type literal": `DROP TABLE sync_outbox_claims; ` + strings.Replace(strings.Split(schemaV10, ";")[0], "'text'", "'TEXT'", 1) + `;` + strings.Split(schemaV10, ";")[1] + `;`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := openTestStore(t)
+			_, err := store.db.Exec(mutation)
+			testutil.NoError(t, err)
+			_, err = store.Health(context.Background())
+			testutil.Require(t, errors.Is(err, ErrCorrupt), "health error=%v", err)
+		})
+	}
+}
+
+func TestSyncOutboxClaimsMigrationFreshSchema(t *testing.T) {
+	store := openTestStore(t)
+	version, err := store.Health(context.Background())
+	testutil.Require(t, err == nil && version == 10, "health=%d err=%v", version, err)
+	testutil.Require(t, len(migrations) == 10 && migrations[9].version == 10, "migrations=%+v", migrations)
+	var table, index string
+	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='table' AND name='sync_outbox_claims'`).Scan(&table))
+	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='index' AND name='sync_outbox_claims_lease_idx'`).Scan(&index))
+	testutil.Require(t, normalizeV10TableSQL(table) == normalizeV10TableSQL(strings.Split(schemaV10, ";")[0]) && strings.TrimSpace(strings.ToLower(index)) == "create index sync_outbox_claims_lease_idx on sync_outbox_claims(lease_until, mutation_id)", "table=%q index=%q", table, index)
 }
 
 func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T) {
@@ -54,7 +160,7 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 9, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 10, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var count int
@@ -583,7 +689,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 9 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 10 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {

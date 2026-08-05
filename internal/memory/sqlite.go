@@ -333,7 +333,7 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results')`).Scan(&probe); err != nil || probe != 19 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims')`).Scan(&probe); err != nil || probe != 20 {
 		return 0, fmt.Errorf("%w: required schema unavailable", ErrCorrupt)
 	}
 	if !s.syncSchemaHealthy(ctx) {
@@ -385,7 +385,20 @@ func (s *Store) syncSchemaHealthy(ctx context.Context) bool {
 	if !ok || strings.TrimSpace(strings.ToLower(indexSQL)) != "create index sync_outbox_due_idx on sync_outbox(next_attempt_at, created_at, id)" || !s.schemaIndexColumns(ctx, "sync_outbox_due_idx", "next_attempt_at", "created_at", "id") {
 		return false
 	}
-	return s.syncV8SchemaHealthy(ctx) && s.syncV9SchemaHealthy(ctx)
+	return s.syncV8SchemaHealthy(ctx) && s.syncV9SchemaHealthy(ctx) && s.syncV10SchemaHealthy(ctx)
+}
+
+func (s *Store) syncV10SchemaHealthy(ctx context.Context) bool {
+	tableSQL, ok := s.schemaSQL(ctx, "table", "sync_outbox_claims")
+	if !ok || normalizeV10TableSQL(tableSQL) != normalizeV10TableSQL(strings.Split(schemaV10, ";")[0]) || !s.schemaColumns(ctx, "sync_outbox_claims", "mutation_id", "first_claim_token", "claim_token", "first_claimed_at", "claimed_at", "lease_until") {
+		return false
+	}
+	indexSQL, ok := s.schemaSQL(ctx, "index", "sync_outbox_claims_lease_idx")
+	return ok && strings.TrimSpace(strings.ToLower(indexSQL)) == "create index sync_outbox_claims_lease_idx on sync_outbox_claims(lease_until, mutation_id)" && s.schemaIndexColumns(ctx, "sync_outbox_claims_lease_idx", "lease_until", "mutation_id")
+}
+
+func normalizeV10TableSQL(sql string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(sql)), " ")
 }
 
 func (s *Store) syncV9SchemaHealthy(ctx context.Context) bool {
