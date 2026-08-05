@@ -34,6 +34,63 @@ func TestDecodeDiscoveryResponseIsStrict(t *testing.T) {
 		}
 	}
 }
+
+func TestStrictResponseDecodersEnforceSharedBoundary(t *testing.T) {
+	capabilities := []byte(`{"protocol_version":1,"capabilities":["bootstrap_discovery"]}`)
+	if _, err := DecodeCapabilitiesResponse(capabilities); err != nil {
+		t.Fatalf("valid capabilities: %v", err)
+	}
+	for _, body := range [][]byte{
+		[]byte(`{"protocol_version":1,"protocol_version":1,"capabilities":["bootstrap_discovery"]}`),
+		[]byte(`{"protocol_version":1,"capabilities":["bootstrap_discovery"],"extra":true}`),
+		append(append([]byte{}, capabilities...), []byte(`{}`)...),
+		[]byte(strings.Repeat("[", MaxJSONDepth+1) + strings.Repeat("]", MaxJSONDepth+1)),
+		[]byte{0xff},
+	} {
+		if _, err := DecodeCapabilitiesResponse(body); err == nil {
+			t.Fatalf("accepted invalid capabilities: %q", body)
+		}
+	}
+
+	pull := []byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","position":0,"has_more":false}`)
+	if _, err := DecodeStrictPullResponse(append(pull, []byte(strings.Repeat(" ", MaxBodyBytes))...)); err != nil {
+		t.Fatalf("valid pull response under pull limit: %v", err)
+	}
+	for _, body := range [][]byte{
+		[]byte(`{"protocol_version":1,"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","position":0,"has_more":false}`),
+		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","position":0,"has_more":false,"extra":true}`),
+		append(append([]byte{}, pull...), []byte(`{}`)...),
+		[]byte(strings.Repeat("[", MaxJSONDepth+1) + strings.Repeat("]", MaxJSONDepth+1)),
+		[]byte{0xff},
+		append(pull, []byte(strings.Repeat(" ", MaxPullResponseBytes))...),
+	} {
+		if _, err := DecodeStrictPullResponse(body); err == nil {
+			t.Fatalf("accepted invalid strict pull response: %q", body)
+		}
+	}
+}
+
+func TestDecodeStrictPullResponseRequiresScalarFields(t *testing.T) {
+	for _, body := range [][]byte{
+		[]byte(`{"history_id":"123e4567-e89b-12d3-a456-426614174000","position":0,"has_more":false}`),
+		[]byte(`{"protocol_version":1,"position":0,"has_more":false}`),
+		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","has_more":false}`),
+		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","position":0}`),
+	} {
+		if _, err := DecodeStrictPullResponse(body); err == nil {
+			t.Fatalf("accepted pull response missing required scalar: %s", body)
+		}
+	}
+}
+
+func TestDecodeStrictPullResponseRejectsNestedDuplicateChangeFields(t *testing.T) {
+	change := strings.Replace(pullProjectChange(1), `"sequence":1`, `"sequence":1,"sequence":1`, 1)
+	body := []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"watermark":1,"has_more":false,"changes":[` + change + `]}`)
+	if _, err := DecodeStrictPullResponse(body); err == nil {
+		t.Fatalf("accepted nested duplicate change field: %s", body)
+	}
+}
+
 func TestSafeErrorMappingAndResponseSize(t *testing.T) {
 	for e, c := range map[error]ErrorCode{syncservice.ErrInvalidMutation: ErrorInvalidInput, syncservice.ErrLimitExceeded: ErrorLimitExceeded, syncservice.ErrUnsupportedSemantic: ErrorUnsupportedSemantic, ErrUnsupportedVersion: ErrorUnsupportedVersion} {
 		if CodeFor(e) != c {
