@@ -15,12 +15,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
 const (
 	maxSyncPayloadBytes = 1 << 20
 	maxDueSyncOutbox    = 16
+	maxBootstrapPulls   = 1024
 )
 
 var (
@@ -63,6 +65,224 @@ type BootstrapCheckpoint struct {
 	Position  int64  `json:"position"`
 	Watermark int64  `json:"watermark"`
 	Phase     string `json:"-"`
+}
+
+// BootstrapRemote owns any credentials needed for its authenticated calls.
+// Store never persists or retains the remote implementation.
+type BootstrapRemote interface {
+	Discover(context.Context) (syncservice.Discovery, error)
+	Pull(context.Context, syncservice.Cursor, int) (syncservice.PullPage, error)
+}
+
+type bootstrapState struct {
+	cursor     *syncservice.Cursor
+	checkpoint *BootstrapCheckpoint
+}
+
+// BootstrapSync atomically materializes the discovered remote history in
+// bounded pages. Every remote call happens after a short durable recheck.
+func (s *Store) BootstrapSync(ctx context.Context, remote BootstrapRemote) error {
+	if s == nil || remote == nil || ctx == nil {
+		return fmt.Errorf("%w: bootstrap remote", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	if _, err := s.bootstrapState(ctx); err != nil {
+		return err
+	}
+	discovery, err := remote.Discover(ctx)
+	if err != nil {
+		return err
+	}
+	if syncservice.ValidateDiscovery(discovery) != nil {
+		return fmt.Errorf("%w: invalid bootstrap discovery", ErrInvalid)
+	}
+	for pulls := 0; pulls < maxBootstrapPulls; pulls++ {
+		state, err := s.bootstrapState(ctx)
+		if err != nil {
+			return err
+		}
+		complete, err := state.forHistory(discovery.HistoryID)
+		if err != nil {
+			return err
+		}
+		if complete {
+			return nil
+		}
+		cursor := syncservice.Cursor{HistoryID: discovery.HistoryID}
+		if state.checkpoint != nil {
+			cursor.Position = state.checkpoint.Position
+			cursor.Watermark = state.checkpoint.Watermark
+		}
+		page, err := remote.Pull(ctx, cursor, syncapi.DefaultPullLimit)
+		if err != nil {
+			return err
+		}
+		if err := validateBootstrapPage(page, cursor); err != nil {
+			return err
+		}
+		phase := "observations"
+		if page.Cursor.Position == page.Cursor.Watermark {
+			phase = "complete"
+		}
+		checkpoint := &BootstrapCheckpoint{HistoryID: discovery.HistoryID, Position: page.Cursor.Position, Watermark: page.Cursor.Watermark, Phase: phase}
+		if err := s.ApplyPulledPage(ctx, page, checkpoint); err != nil {
+			if errors.Is(err, ErrCorrupt) {
+				if state, rereadErr := s.bootstrapState(ctx); rereadErr == nil {
+					if complete, matchErr := state.forHistory(discovery.HistoryID); matchErr == nil && complete {
+						return nil
+					}
+					return fmt.Errorf("%w: concurrent bootstrap", ErrConflict)
+				}
+			}
+			return err
+		}
+		if phase == "complete" {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: bootstrap pull limit", ErrConflict)
+}
+
+func (s *Store) bootstrapState(ctx context.Context) (bootstrapState, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.closed || s.db == nil {
+		return bootstrapState{}, fmt.Errorf("%w: store closed", ErrCorrupt)
+	}
+	if s.readOnly {
+		return bootstrapState{}, fmt.Errorf("%w: store is read-only", ErrConflict)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return bootstrapState{}, writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	var pending int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox WHERE state IN ('pending','retry')`).Scan(&pending); err != nil {
+		return bootstrapState{}, writeError(ctx, err)
+	}
+	if pending != 0 {
+		return bootstrapState{}, fmt.Errorf("%w: local sync work is pending", ErrConflict)
+	}
+	state, err := readBootstrapState(ctx, tx)
+	if err != nil {
+		return bootstrapState{}, err
+	}
+	if err = state.validateLocal(); err != nil {
+		return bootstrapState{}, err
+	}
+	if err = commit(ctx, tx); err != nil {
+		return bootstrapState{}, err
+	}
+	return state, nil
+}
+
+func readBootstrapState(ctx context.Context, tx *sql.Tx) (bootstrapState, error) {
+	var state bootstrapState
+	var history, historyType, positionType, updatedType string
+	var position, updated int64
+	err := tx.QueryRowContext(ctx, `SELECT history_id,position,updated_at,typeof(history_id),typeof(position),typeof(updated_at) FROM sync_cursor WHERE singleton=1`).Scan(&history, &position, &updated, &historyType, &positionType, &updatedType)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return state, writeError(ctx, err)
+	}
+	if err == nil {
+		if historyType != "text" || positionType != "integer" || updatedType != "integer" || !canonicalUUIDPattern.MatchString(history) || position < 1 || !validStoredSyncTime(updated, time.Unix(0, updated)) {
+			return state, fmt.Errorf("%w: invalid bootstrap cursor", ErrCorrupt)
+		}
+		if err = pulledInboxConsistent(ctx, tx, history, position); err != nil {
+			return state, err
+		}
+		state.cursor = &syncservice.Cursor{HistoryID: history, Position: position}
+	} else if err = pulledInboxEmpty(ctx, tx); err != nil {
+		return state, err
+	}
+	var phase, phaseType, versionType, payloadType string
+	var version int64
+	var payload []byte
+	err = tx.QueryRowContext(ctx, `SELECT phase,payload_version,checkpoint,typeof(phase),typeof(payload_version),typeof(checkpoint) FROM sync_bootstrap WHERE singleton=1`).Scan(&phase, &version, &payload, &phaseType, &versionType, &payloadType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return state, nil
+	}
+	if err != nil {
+		return state, writeError(ctx, err)
+	}
+	if phaseType != "text" || versionType != "integer" || payloadType != "blob" || version != 1 || checkpointPhaseRank(phase) == 0 || len(payload) == 0 || len(payload) > maxSyncPayloadBytes {
+		return state, fmt.Errorf("%w: invalid bootstrap checkpoint", ErrCorrupt)
+	}
+	var checkpoint BootstrapCheckpoint
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var extra any
+	if decoder.Decode(&checkpoint) != nil || decoder.Decode(&extra) != io.EOF || checkpoint.Phase != "" || !canonicalUUIDPattern.MatchString(checkpoint.HistoryID) || checkpoint.Position < 0 || checkpoint.Watermark < checkpoint.Position {
+		return state, fmt.Errorf("%w: invalid bootstrap checkpoint", ErrCorrupt)
+	}
+	checkpoint.Phase = phase
+	state.checkpoint = &checkpoint
+	return state, nil
+}
+
+func (s bootstrapState) forHistory(history string) (bool, error) {
+	if s.cursor != nil && s.cursor.HistoryID != history {
+		return false, fmt.Errorf("%w: bootstrap history", ErrConflict)
+	}
+	if s.checkpoint == nil {
+		if s.cursor != nil {
+			return false, fmt.Errorf("%w: cursor without bootstrap checkpoint", ErrConflict)
+		}
+		return false, nil
+	}
+	checkpoint := s.checkpoint
+	if checkpoint.HistoryID != history {
+		return false, fmt.Errorf("%w: bootstrap history", ErrConflict)
+	}
+	if checkpoint.Phase == "complete" {
+		if checkpoint.Position != checkpoint.Watermark || checkpoint.Position == 0 && s.cursor != nil || checkpoint.Position > 0 && (s.cursor == nil || s.cursor.Position != checkpoint.Position) {
+			return false, fmt.Errorf("%w: invalid complete bootstrap", ErrConflict)
+		}
+		return true, nil
+	}
+	if checkpoint.Position < 1 || checkpoint.Watermark < checkpoint.Position || s.cursor == nil || s.cursor.Position != checkpoint.Position {
+		return false, fmt.Errorf("%w: bootstrap checkpoint mismatch", ErrConflict)
+	}
+	return false, nil
+}
+
+func (s bootstrapState) validateLocal() error {
+	if s.checkpoint == nil {
+		if s.cursor != nil {
+			return fmt.Errorf("%w: cursor without bootstrap checkpoint", ErrConflict)
+		}
+		return nil
+	}
+	checkpoint := s.checkpoint
+	if checkpoint.Phase == "complete" {
+		if checkpoint.Position != checkpoint.Watermark || checkpoint.Position == 0 && s.cursor != nil || checkpoint.Position > 0 && (s.cursor == nil || s.cursor.HistoryID != checkpoint.HistoryID || s.cursor.Position != checkpoint.Position) {
+			return fmt.Errorf("%w: invalid complete bootstrap", ErrConflict)
+		}
+		return nil
+	}
+	if checkpoint.Position < 1 || s.cursor == nil || s.cursor.HistoryID != checkpoint.HistoryID || s.cursor.Position != checkpoint.Position {
+		return fmt.Errorf("%w: bootstrap checkpoint mismatch", ErrConflict)
+	}
+	return nil
+}
+
+func validateBootstrapPage(page syncservice.PullPage, cursor syncservice.Cursor) error {
+	if validatePulledPage(page, nil) != nil || len(page.Changes) > syncapi.MaxPullLimit || page.Cursor.HistoryID != cursor.HistoryID || cursor.Watermark != 0 && page.Cursor.Watermark != cursor.Watermark {
+		return fmt.Errorf("%w: invalid bootstrap page", ErrInvalid)
+	}
+	if len(page.Changes) == 0 {
+		if page.Cursor.Position != cursor.Position || page.Cursor.Position != page.Cursor.Watermark {
+			return fmt.Errorf("%w: bootstrap did not progress", ErrConflict)
+		}
+		return nil
+	}
+	if cursor.Position == int64(^uint64(0)>>1) || page.Changes[0].Sequence != cursor.Position+1 || page.Cursor.Position <= cursor.Position {
+		return fmt.Errorf("%w: bootstrap page gap", ErrConflict)
+	}
+	return nil
 }
 
 func (s *Store) ConfigureSyncProfile(ctx context.Context, profile SyncProfile) (SyncProfile, error) {
@@ -374,6 +594,16 @@ func (s *Store) ApplyPulledPage(ctx context.Context, page syncservice.PullPage, 
 		s.syncInbox.known = false
 		return err
 	}
+	if checkpoint != nil {
+		var pending int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox WHERE state IN ('pending','retry')`).Scan(&pending); err != nil {
+			s.syncInbox.known = false
+			return writeError(ctx, err)
+		}
+		if pending != 0 {
+			return fmt.Errorf("%w: local sync work is pending", ErrConflict)
+		}
+	}
 	position := page.Cursor.Position
 	if len(page.Changes) == 0 {
 		if err = pulledEmptyCursor(ctx, tx, page.Cursor.HistoryID, position); err != nil {
@@ -473,7 +703,7 @@ func validatePulledPage(page syncservice.PullPage, checkpoint *BootstrapCheckpoi
 			return ErrInvalid
 		}
 	}
-	if checkpoint != nil && (!canonicalUUIDPattern.MatchString(checkpoint.HistoryID) || checkpoint.HistoryID != page.Cursor.HistoryID || checkpoint.Position != page.Cursor.Position || checkpoint.Watermark != page.Cursor.Watermark || checkpointPhaseRank(checkpoint.Phase) == 0) {
+	if checkpoint != nil && (!canonicalUUIDPattern.MatchString(checkpoint.HistoryID) || checkpoint.HistoryID != page.Cursor.HistoryID || checkpoint.Position != page.Cursor.Position || checkpoint.Watermark != page.Cursor.Watermark || checkpointPhaseRank(checkpoint.Phase) == 0 || checkpoint.Phase == "complete" && checkpoint.Position != checkpoint.Watermark) {
 		return ErrInvalid
 	}
 	return nil

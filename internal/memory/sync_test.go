@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncservice"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
@@ -1189,11 +1191,13 @@ func TestPulledPageCheckpointPhaseOrderAndCompleteTerminality(t *testing.T) {
 	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("sessions")))
 	testutil.Require(t, errors.Is(store.ApplyPulledPage(ctx, page, checkpoint("projects")), ErrConflict), "checkpoint phase regressed")
 	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("observations")))
-	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("complete")))
-	testutil.NoError(t, store.ApplyPulledPage(ctx, page, checkpoint("complete")))
-	testutil.Require(t, errors.Is(store.ApplyPulledPage(ctx, page, checkpoint("observations")), ErrConflict), "complete downgrade accepted")
-	advance := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-446655440233", "next"))}}
-	testutil.Require(t, errors.Is(store.ApplyPulledPage(ctx, advance, &BootstrapCheckpoint{HistoryID: history, Position: 2, Watermark: 2, Phase: "complete"}), ErrConflict), "complete advance accepted")
+	eof := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-446655440233", "next"))}}
+	complete := &BootstrapCheckpoint{HistoryID: history, Position: 2, Watermark: 2, Phase: "complete"}
+	testutil.NoError(t, store.ApplyPulledPage(ctx, eof, complete))
+	testutil.NoError(t, store.ApplyPulledPage(ctx, eof, complete))
+	testutil.Require(t, errors.Is(store.ApplyPulledPage(ctx, eof, &BootstrapCheckpoint{HistoryID: history, Position: 2, Watermark: 2, Phase: "observations"}), ErrConflict), "complete downgrade accepted")
+	advance := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 3, Watermark: 3}, Changes: []syncservice.Change{pulledChange(t, 3, 1, syncMutation("550e8400-e29b-41d4-a716-446655440234", "third"))}}
+	testutil.Require(t, errors.Is(store.ApplyPulledPage(ctx, advance, &BootstrapCheckpoint{HistoryID: history, Position: 3, Watermark: 3, Phase: "complete"}), ErrConflict), "complete advance accepted")
 }
 
 func TestApplyPulledPageCloseInvalidatesPrimedCache(t *testing.T) {
@@ -1212,6 +1216,226 @@ func TestApplyPulledPageCorruptionInvalidatesCache(t *testing.T) {
 	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-446655440224", Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440225", "project"))}}
 	err = store.ApplyPulledPage(context.Background(), page, nil)
 	testutil.Require(t, errors.Is(err, ErrCorrupt) && !store.syncInbox.known, "err=%v cache=%+v", err, store.syncInbox)
+}
+
+type bootstrapFake struct {
+	discovery syncservice.Discovery
+	pages     []syncservice.PullPage
+	errAt     int
+	probe     func() error
+	pullProbe func() error
+	discovers int
+	pulls     int
+	cursors   []syncservice.Cursor
+	limits    []int
+}
+
+func (r *bootstrapFake) Discover(context.Context) (syncservice.Discovery, error) {
+	r.discovers++
+	if r.probe != nil {
+		if err := r.probe(); err != nil {
+			return syncservice.Discovery{}, err
+		}
+	}
+	return r.discovery, nil
+}
+
+func (r *bootstrapFake) Pull(_ context.Context, cursor syncservice.Cursor, limit int) (syncservice.PullPage, error) {
+	r.pulls++
+	r.cursors = append(r.cursors, cursor)
+	r.limits = append(r.limits, limit)
+	if r.pullProbe != nil {
+		if err := r.pullProbe(); err != nil {
+			return syncservice.PullPage{}, err
+		}
+	}
+	if r.probe != nil {
+		if err := r.probe(); err != nil {
+			return syncservice.PullPage{}, err
+		}
+	}
+	if limit < 1 || limit > syncapi.MaxPullLimit || r.errAt == r.pulls || r.pulls > len(r.pages) {
+		return syncservice.PullPage{}, errors.New("interrupted")
+	}
+	page := r.pages[r.pulls-1]
+	_ = cursor
+	return page, nil
+}
+
+func TestBootstrapSync(t *testing.T) {
+	ctx := context.Background()
+	history := "550e8400-e29b-41d4-a716-446655440240"
+	discovery := syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
+	page := func(sequence, watermark int64, id string) syncservice.PullPage {
+		return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: sequence, Watermark: watermark}, HasMore: sequence < watermark, Changes: []syncservice.Change{pulledChange(t, sequence, 1, syncMutation("550e8400-e29b-41d4-a716-44665544024"+id, "project-"+id))}}
+	}
+	t.Run("empty zero completes and releases local access", func(t *testing.T) {
+		store := openTestStore(t)
+		remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history}}}, probe: func() error {
+			_, err := store.ConfigureSyncProfile(ctx, SyncProfile{Endpoint: "https://sync.example.test", DeviceID: "550e8400-e29b-41d4-a716-446655440000", CredentialRef: "secret://keychain/sync"})
+			return err
+		}}
+		testutil.NoError(t, store.BootstrapSync(ctx, remote))
+		var phase string
+		var cursor int
+		testutil.NoError(t, store.db.QueryRow(`SELECT phase FROM sync_bootstrap`).Scan(&phase))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+		testutil.Require(t, phase == "complete" && cursor == 0 && remote.discovers == 1 && remote.pulls == 1 && remote.cursors[0] == (syncservice.Cursor{HistoryID: history}) && remote.limits[0] == syncapi.DefaultPullLimit, "phase=%q cursor=%d calls=%d/%d pull=%+v/%d", phase, cursor, remote.discovers, remote.pulls, remote.cursors, remote.limits)
+	})
+	t.Run("freezes pages, resumes after interruption, and completes", func(t *testing.T) {
+		store := openTestStore(t)
+		first, second := page(1, 2, "1"), page(2, 2, "2")
+		remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{first, second}, errAt: 2}
+		testutil.Require(t, store.BootstrapSync(ctx, remote) != nil, "interruption succeeded")
+		resume := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{second}}
+		testutil.NoError(t, store.BootstrapSync(ctx, resume))
+		var checkpoint BootstrapCheckpoint
+		var phase string
+		var payload []byte
+		testutil.NoError(t, store.db.QueryRow(`SELECT checkpoint FROM sync_bootstrap`).Scan(&payload))
+		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+		testutil.NoError(t, store.db.QueryRow(`SELECT phase FROM sync_bootstrap`).Scan(&phase))
+		testutil.Require(t, checkpoint.Position == 2 && checkpoint.Watermark == 2 && phase == "complete" && len(remote.cursors) == 2 && remote.cursors[0] == (syncservice.Cursor{HistoryID: history}) && remote.cursors[1] == (syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}) && resume.pulls == 1 && resume.cursors[0] == (syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}), "checkpoint=%+v/%q pulls=%+v/%+v", checkpoint, phase, remote.cursors, resume.cursors)
+	})
+	t.Run("complete is idempotent and mismatches fail closed", func(t *testing.T) {
+		store := openTestStore(t)
+		remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history}}}}
+		testutil.NoError(t, store.BootstrapSync(ctx, remote))
+		testutil.NoError(t, store.BootstrapSync(ctx, remote))
+		wrong := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: "550e8400-e29b-41d4-a716-446655440241", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}}
+		err := store.BootstrapSync(ctx, wrong)
+		testutil.Require(t, remote.pulls == 1 && errors.Is(err, ErrConflict) && wrong.pulls == 0, "calls=%d/%d err=%v", remote.pulls, wrong.pulls, err)
+	})
+	t.Run("outbox and closed stores fail before discovery", func(t *testing.T) {
+		store := openTestStore(t)
+		enqueueMutation(t, store, syncMutation("550e8400-e29b-41d4-a716-446655440242", "pending"))
+		remote := &bootstrapFake{discovery: discovery}
+		testutil.Require(t, errors.Is(store.BootstrapSync(ctx, remote), ErrConflict) && remote.discovers == 0, "outbox calls=%d", remote.discovers)
+		closed := openTestStore(t)
+		testutil.NoError(t, closed.Close())
+		testutil.Require(t, closed.BootstrapSync(ctx, remote) != nil && remote.discovers == 0, "closed calls=%d", remote.discovers)
+	})
+	t.Run("read-only store fails before discovery", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "memory.db")
+		writable := openPath(t, path)
+		testutil.NoError(t, writable.Close())
+		readOnly, err := OpenRead(ctx, path)
+		testutil.NoError(t, err)
+		defer readOnly.Close()
+		remote := &bootstrapFake{discovery: discovery}
+		testutil.Require(t, errors.Is(readOnly.BootstrapSync(ctx, remote), ErrConflict) && remote.discovers == 0 && remote.pulls == 0, "calls=%d/%d", remote.discovers, remote.pulls)
+	})
+	t.Run("more than one request limit completes", func(t *testing.T) {
+		store := openTestStore(t)
+		pages := make([]syncservice.PullPage, 0, syncapi.MaxPullLimit+1)
+		for sequence := int64(1); sequence <= int64(syncapi.MaxPullLimit+1); sequence++ {
+			mutation := syncMutation(fmt.Sprintf("550e8400-e29b-41d4-a716-%012d", 300+sequence), fmt.Sprintf("project-%d", sequence))
+			pages = append(pages, syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: sequence, Watermark: int64(syncapi.MaxPullLimit + 1)}, HasMore: sequence < int64(syncapi.MaxPullLimit+1), Changes: []syncservice.Change{pulledChange(t, sequence, 1, mutation)}})
+		}
+		remote := &bootstrapFake{discovery: discovery, pages: pages}
+		testutil.NoError(t, store.BootstrapSync(ctx, remote))
+		var position int
+		var phase string
+		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&position))
+		testutil.NoError(t, store.db.QueryRow(`SELECT phase FROM sync_bootstrap`).Scan(&phase))
+		testutil.Require(t, remote.pulls == len(pages) && position == len(pages) && phase == "complete", "pulls=%d position=%d phase=%q", remote.pulls, position, phase)
+	})
+	t.Run("outbox injected after pull rolls back the page", func(t *testing.T) {
+		store := openTestStore(t)
+		remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{page(1, 1, "6")}, pullProbe: func() error {
+			enqueueMutation(t, store, syncMutation("550e8400-e29b-41d4-a716-446655440246", "raced"))
+			return nil
+		}}
+		err := store.BootstrapSync(ctx, remote)
+		var inbox, cursor, checkpoint int
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_bootstrap`).Scan(&checkpoint))
+		testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0 && checkpoint == 0, "err=%v rows=%d/%d/%d", err, inbox, cursor, checkpoint)
+	})
+	t.Run("cursor without checkpoint and corrupt checkpoint fail before discovery", func(t *testing.T) {
+		store := openTestStore(t)
+		testutil.NoError(t, store.ApplyPulledChange(ctx, history, pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440247", "project"))))
+		remote := &bootstrapFake{discovery: discovery}
+		testutil.Require(t, errors.Is(store.BootstrapSync(ctx, remote), ErrConflict) && remote.discovers == 0, "cursor calls=%d", remote.discovers)
+		store = openTestStore(t)
+		testutil.NoError(t, store.ApplyPulledPage(ctx, page(1, 1, "8"), &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 1, Phase: "complete"}))
+		_, err := store.db.Exec(`UPDATE sync_bootstrap SET checkpoint=X'7B7D'`)
+		testutil.NoError(t, err)
+		remote = &bootstrapFake{discovery: discovery}
+		testutil.Require(t, errors.Is(store.BootstrapSync(ctx, remote), ErrCorrupt) && remote.discovers == 0, "corrupt calls=%d", remote.discovers)
+	})
+	t.Run("two handles converge without a fork", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "memory.db")
+		first, second := openPath(t, path), openPath(t, path)
+		defer first.Close()
+		defer second.Close()
+		page := page(1, 1, "9")
+		errs := make(chan error, 2)
+		go func() {
+			errs <- first.BootstrapSync(ctx, &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{page}})
+		}()
+		go func() {
+			errs <- second.BootstrapSync(ctx, &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{page}})
+		}()
+		for range 2 {
+			err := <-errs
+			testutil.Require(t, err == nil || errors.Is(err, ErrConflict), "two-handle error=%v", err)
+		}
+		var inbox, cursor int
+		testutil.NoError(t, first.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+		testutil.NoError(t, first.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
+		testutil.Require(t, inbox == 1 && cursor == 1, "inbox=%d cursor=%d", inbox, cursor)
+	})
+	for name, mutate := range map[string]func(*syncservice.PullPage){
+		"changed watermark": func(p *syncservice.PullPage) { p.Cursor.Watermark = 3; p.HasMore = true },
+		"changed history":   func(p *syncservice.PullPage) { p.Cursor.HistoryID = "550e8400-e29b-41d4-a716-446655440243" },
+		"nonprogress":       func(p *syncservice.PullPage) { p.Changes = nil; p.Cursor.Position = 1; p.HasMore = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := openTestStore(t)
+			first := page(1, 2, "4")
+			testutil.NoError(t, store.ApplyPulledPage(ctx, first, &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 2, Phase: "observations"}))
+			bad := page(2, 2, "5")
+			mutate(&bad)
+			err := store.BootstrapSync(ctx, &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{bad}})
+			var position int64
+			var phase string
+			var payload []byte
+			testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&position))
+			testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
+			var checkpoint BootstrapCheckpoint
+			testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+			testutil.Require(t, (errors.Is(err, ErrInvalid) || errors.Is(err, ErrConflict)) && position == 1 && phase == "observations" && checkpoint.Position == 1 && checkpoint.Watermark == 2, "err=%v cursor=%d checkpoint=%q/%+v", err, position, phase, checkpoint)
+		})
+	}
+}
+
+func TestApplyPulledPageCannotRetrofitBootstrapCheckpoint(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440248"
+	first := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440249", "project"))
+	testutil.NoError(t, store.ApplyPulledChange(context.Background(), history, first))
+	second := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-446655440250", "second"))}}
+	err := store.ApplyPulledPage(context.Background(), second, &BootstrapCheckpoint{HistoryID: history, Position: 2, Watermark: 2, Phase: "complete"})
+	var cursor, projects, checkpoints int
+	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_bootstrap`).Scan(&checkpoints))
+	testutil.Require(t, errors.Is(err, ErrConflict) && cursor == 1 && projects == 1 && checkpoints == 0, "err=%v cursor=%d projects=%d checkpoints=%d", err, cursor, projects, checkpoints)
+}
+
+func TestApplyPulledPageRejectsEarlyCompleteCheckpointBeforeWrites(t *testing.T) {
+	store := openTestStore(t)
+	history := "550e8400-e29b-41d4-a716-446655440251"
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, HasMore: true, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440252", "project"))}}
+	err := store.ApplyPulledPage(context.Background(), page, &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 2, Phase: "complete"})
+	var projects, inbox, cursor, checkpoints int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_bootstrap`).Scan(&checkpoints))
+	testutil.Require(t, errors.Is(err, ErrInvalid) && projects == 0 && inbox == 0 && cursor == 0 && checkpoints == 0, "err=%v rows=%d/%d/%d/%d", err, projects, inbox, cursor, checkpoints)
 }
 
 func specialChange(t *testing.T, sequence, version int64, disposition syncservice.ChangeDisposition, conflictID string, mutation syncservice.Mutation) syncservice.Change {

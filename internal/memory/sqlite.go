@@ -26,6 +26,7 @@ type Store struct {
 	checkpoint func() (busy, log, checkpointed int, err error)
 	close      func() error
 	syncMu     sync.Mutex
+	closed     bool
 	syncInbox  syncInboxCache
 }
 
@@ -261,6 +262,10 @@ func (s *Store) Close() error {
 	}
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	s.syncInbox = syncInboxCache{}
 	var checkpointErr error
 	if !s.readOnly {
