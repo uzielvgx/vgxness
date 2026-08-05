@@ -224,7 +224,7 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		name string
 		role sdd.Role
 	}{
-		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec}, {sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
+		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec}, {sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks},
 	} {
 		agents[profile.name] = previousSDDAgentPredecessor(profile.role, agents[profile.name])
 		if len(agents[profile.name]) == 0 {
@@ -479,7 +479,11 @@ func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 
 func legacySDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 	if role == sdd.RoleApply {
-		return current
+		return derivePredecessor(current, []textReplacement{
+			{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyTargetVersion), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion)},
+			{old: sddSkillLoadingContract, new: ""},
+			{old: ", exact relevant native skill names, allowed paths", new: ", allowed paths"},
+		})
 	}
 	return derivePredecessor(current, []textReplacement{
 		{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddReadOnlyPredecessorVersion), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddReadOnlyPredecessorVersion-1)},
