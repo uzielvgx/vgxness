@@ -140,19 +140,40 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
-	predecessor, err := previousExploreModelPlanBundle(current)
-	if err == nil && bytes.Equal(predecessor.manifest, data) {
-		return predecessor, nil
+	candidates := []modelPlanBundle{current}
+	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
+		previousManagerModelPlanBundle,
+		previousExploreModelPlanBundle,
+		previousSDDModelPlanBundle,
+	} {
+		previous := append([]modelPlanBundle(nil), candidates...)
+		for _, candidate := range previous {
+			bundle, predecessorErr := predecessor(candidate)
+			if predecessorErr != nil {
+				return modelPlanBundle{}, integration.ErrDrift
+			}
+			candidates = append(candidates, bundle)
+		}
 	}
-	sddPredecessor, err := previousSDDModelPlanBundle(current)
-	if err == nil && bytes.Equal(sddPredecessor.manifest, data) {
-		return sddPredecessor, nil
+	for _, candidate := range candidates {
+		if bytes.Equal(candidate.manifest, data) {
+			return candidate, nil
+		}
 	}
-	predecessor, err = previousSDDModelPlanBundle(predecessor)
-	if err != nil || !bytes.Equal(predecessor.manifest, data) {
-		return modelPlanBundle{}, integration.ErrDrift
+	return modelPlanBundle{}, integration.ErrDrift
+}
+
+func previousManagerModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	manager, err := bindManagerTemplate(previousManagerPromptV39, "artifact: opencode-agent/vgxness-manager; version: 39", current.resolved.Roles[sdd.RoleManager])
+	if err != nil {
+		return modelPlanBundle{}, err
 	}
-	return predecessor, nil
+	agents := make(map[string][]byte, len(current.agents))
+	for name, content := range current.agents {
+		agents[name] = content
+	}
+	agents[managerAgentName] = manager
+	return encodeModelPlanBundle(current.config, current.resolved, agents)
 }
 
 func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
@@ -246,7 +267,7 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
-	return bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 39", assignment)
+	return bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 40", assignment)
 }
 
 func bindManagerTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
