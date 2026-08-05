@@ -139,8 +139,19 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessorV3, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if research := string(predecessorV3.agents[sddResearchName]); !strings.Contains(research, `artifact: opencode-agent/vgxness-sdd-research; version: 3`) || !strings.Contains(research, `"artifact":"research"`) {
-		t.Fatalf("v3 research predecessor does not match its exact prompt identity")
+	if artifactSHA256(predecessorV3.manifest) != "fc7982e23699495532cf7db4f4f20474db709872d03837b47c62296c514681a0" {
+		t.Fatalf("v41 SDD manifest=%s", artifactSHA256(predecessorV3.manifest))
+	}
+	for _, profile := range []struct {
+		name    string
+		role    sdd.Role
+		version int
+	}{
+		{sddResearchName, sdd.RoleResearch, 3}, {sddProposalName, sdd.RoleProposal, 3}, {sddSpecName, sdd.RoleSpec, 3}, {sddDesignName, sdd.RoleDesign, 3}, {sddTasksName, sdd.RoleTasks, 3}, {sddApplyName, sdd.RoleApply, 4},
+	} {
+		if !strings.Contains(string(predecessorV3.agents[profile.name]), fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", profile.role, profile.version)) {
+			t.Fatalf("v41 %s does not have version %d", profile.name, profile.version)
+		}
 	}
 	predecessor, err := previousSDDModelPlanBundleV2(current)
 	testutil.NoError(t, err)
@@ -248,7 +259,13 @@ func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testi
 	if len(candidates) != 18 {
 		t.Fatalf("predecessor combinations=%d", len(candidates))
 	}
+	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
+		digest := artifactSHA256(candidate.manifest)
+		if _, ok := seen[digest]; ok {
+			t.Fatalf("duplicate predecessor manifest=%s", digest)
+		}
+		seen[digest] = struct{}{}
 		resolved, resolveErr := modelPlanBundleForManifest(candidate.manifest, candidate.config)
 		if resolveErr != nil || !bytes.Equal(resolved.manifest, candidate.manifest) {
 			t.Fatalf("manifest=%s resolved=%s err=%v", artifactSHA256(candidate.manifest), artifactSHA256(resolved.manifest), resolveErr)
