@@ -481,9 +481,128 @@ func TestBootstrapOwnConflictMaterializesAndBlocksLaterWorkUntilResolved(t *test
 	testutil.Require(t, conflicts == 1 && inbox == 1 && cursor == 1 && outbox == 1 && base == 2, "rows=%d/%d/%d/%d base=%d", conflicts, inbox, cursor, outbox, base)
 	winner := pulledObservationMutation("record", syncservice.MutationResolve, 2, syncservice.LifecycleActive, "winner", nil)
 	winner.Observation, winner.Resolution = nil, &syncservice.Resolution{ConflictIDs: []string{conflict.ConflictID}, Observation: pulledObservationMutation("record", syncservice.MutationUpdate, 2, syncservice.LifecycleActive, "winner", nil).Observation}
-	testutil.NoError(t, store.ApplyPulledChange(ctx, history, specialChange(t, 2, 3, syncservice.ChangeDispositionAccepted, "", winner)))
+	resolution := specialChange(t, 2, 3, syncservice.ChangeDispositionAccepted, "", winner)
+	testutil.NoError(t, store.PullConflictResolutions(ctx, &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{resolution}}}}))
+	var phase string
+	var payload []byte
+	var checkpoint BootstrapCheckpoint
+	testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
+	testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+	testutil.Require(t, phase == "complete" && checkpoint.Position == 2 && checkpoint.Watermark == 2, "checkpoint=%q/%+v", phase, checkpoint)
 	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.MutationID == later.MutationID, "resolved claims=%+v err=%v", claims, err)
+}
+
+func TestPullConflictResolutionsPrefixAndFailureSafety(t *testing.T) {
+	setup := func(t *testing.T) (*Store, string, string, syncservice.Mutation) {
+		t.Helper()
+		store := openTestStore(t)
+		store.now = func() time.Time { return fixedTime }
+		history, conflictID := "550e8400-e29b-41d4-a716-4466554400b1", "550e8400-e29b-41d4-a716-4466554400b2"
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+		testutil.NoError(t, err)
+		_, err = store.db.Exec(`INSERT INTO sync_conflicts(conflict_id,history_id,created_seq,record_kind,record_id,canonical_version,competing_version_id,status,resolved_seq,payload_version,snapshot,created_at,updated_at) VALUES(?,?,1,'observation','record',2,'550e8400-e29b-41d4-a716-4466554400b3','unresolved',NULL,1,X'7B7D',?,?)`, conflictID, history, fixedTime.UnixNano(), fixedTime.UnixNano())
+		testutil.NoError(t, err)
+		winner := pulledObservationMutation("record", syncservice.MutationResolve, 2, syncservice.LifecycleActive, "winner", nil)
+		winner.Observation, winner.Resolution = nil, &syncservice.Resolution{ConflictIDs: []string{conflictID}, Observation: pulledObservationMutation("record", syncservice.MutationUpdate, 2, syncservice.LifecycleActive, "winner", nil).Observation}
+		return store, history, conflictID, winner
+	}
+	page := func(history string, position, watermark int64, changes ...syncservice.Change) syncservice.PullPage {
+		return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: position, Watermark: watermark}, HasMore: position < watermark, Changes: changes}
+	}
+	t.Run("safe prefix resumes without skipping", func(t *testing.T) {
+		store, history, conflictID, winner := setup(t)
+		block := syncMutation("550e8400-e29b-41d4-a716-4466554400b4", "blocked")
+		enqueueMutation(t, store, block)
+		prefix := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-4466554400b5", "prefix"))
+		blocked := pulledChange(t, 2, 1, block)
+		remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{page(history, 2, 3, prefix, blocked)}}
+		err := store.PullConflictResolutions(context.Background(), remote)
+		var cursor, inbox, unresolved, outbox int
+		var phase string
+		var checkpoint BootstrapCheckpoint
+		var payload []byte
+		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&unresolved))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE mutation_id=?`, block.MutationID).Scan(&outbox))
+		testutil.NoError(t, store.db.QueryRow(`SELECT checkpoint FROM sync_bootstrap`).Scan(&payload))
+		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+		testutil.Require(t, errors.Is(err, ErrConflict) && cursor == 1 && inbox == 1 && unresolved == 1 && outbox == 1 && checkpoint.Position == 1 && checkpoint.Watermark == 3, "err=%v rows=%d/%d/%d/%d checkpoint=%+v", err, cursor, inbox, unresolved, outbox, checkpoint)
+		regression := pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-4466554400bc", "regression"))
+		err = store.PullConflictResolutions(context.Background(), &bootstrapFake{discovery: remote.discovery, pages: []syncservice.PullPage{page(history, 2, 2, regression)}})
+		testutil.Require(t, errors.Is(err, ErrConflict), "watermark regression error=%v", err)
+		var projects int
+		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
+		testutil.NoError(t, store.db.QueryRow(`SELECT checkpoint FROM sync_bootstrap`).Scan(&payload))
+		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+		testutil.Require(t, cursor == 1 && inbox == 1 && projects == 2 && checkpoint.Position == 1 && checkpoint.Watermark == 3, "regression cursor=%d inbox=%d projects=%d checkpoint=%+v", cursor, inbox, projects, checkpoint)
+		testutil.NoError(t, func() error {
+			_, err := store.db.Exec(`DELETE FROM sync_outbox WHERE mutation_id=?`, block.MutationID)
+			return err
+		}())
+		resolve := specialChange(t, 3, 3, syncservice.ChangeDispositionAccepted, "", winner)
+		remote = &bootstrapFake{discovery: remote.discovery, pages: []syncservice.PullPage{page(history, 3, 4, blocked, resolve)}}
+		testutil.NoError(t, store.PullConflictResolutions(context.Background(), remote))
+		testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
+		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+		testutil.Require(t, remote.cursors[0].HistoryID == history && remote.cursors[0].Position == 1 && phase == "observations" && checkpoint.Position == 3 && checkpoint.Watermark == 4 && conflictID != "", "cursor=%+v checkpoint=%q/%+v", remote.cursors, phase, checkpoint)
+	})
+	t.Run("complete checkpoint advances to observations prefix", func(t *testing.T) {
+		store, history, _, _ := setup(t)
+		initial := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-4466554400b9", "initial"))
+		testutil.NoError(t, store.ApplyPulledPage(context.Background(), page(history, 1, 1, initial), &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 1, Phase: "complete"}))
+		block := syncMutation("550e8400-e29b-41d4-a716-4466554400ba", "blocked")
+		enqueueMutation(t, store, block)
+		prefix := pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-4466554400bb", "prefix"))
+		err := store.PullConflictResolutions(context.Background(), &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{page(history, 3, 3, prefix, pulledChange(t, 3, 1, block))}})
+		var cursor int64
+		var phase string
+		var payload []byte
+		var checkpoint BootstrapCheckpoint
+		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
+		testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
+		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
+		testutil.Require(t, errors.Is(err, ErrConflict) && cursor == 2 && phase == "observations" && checkpoint.Position == 2 && checkpoint.Watermark == 3, "err=%v cursor=%d checkpoint=%q/%+v", err, cursor, phase, checkpoint)
+	})
+	for name, prepare := range map[string]func(*Store, syncservice.Mutation) (syncservice.PullPage, context.Context){
+		"blocker before resolution": func(store *Store, winner syncservice.Mutation) (syncservice.PullPage, context.Context) {
+			block := syncMutation("550e8400-e29b-41d4-a716-4466554400b6", "blocked")
+			enqueueMutation(t, store, block)
+			return page("550e8400-e29b-41d4-a716-4466554400b1", 2, 2, pulledChange(t, 1, 1, block), specialChange(t, 2, 3, syncservice.ChangeDispositionAccepted, "", winner)), context.Background()
+		},
+		"invalid resolution rolls back": func(store *Store, winner syncservice.Mutation) (syncservice.PullPage, context.Context) {
+			later := pulledObservationMutation("record", syncservice.MutationUpdate, 2, syncservice.LifecycleActive, "later", nil)
+			later.MutationID = "550e8400-e29b-41d4-a716-4466554400b8"
+			enqueueMutation(t, store, later)
+			winner.Resolution.ConflictIDs = []string{"550e8400-e29b-41d4-a716-4466554400b7"}
+			return page("550e8400-e29b-41d4-a716-4466554400b1", 1, 1, specialChange(t, 1, 3, syncservice.ChangeDispositionAccepted, "", winner)), context.Background()
+		},
+		"cancellation rolls back": func(_ *Store, winner syncservice.Mutation) (syncservice.PullPage, context.Context) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return page("550e8400-e29b-41d4-a716-4466554400b1", 1, 1, specialChange(t, 1, 3, syncservice.ChangeDispositionAccepted, "", winner)), ctx
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, history, _, winner := setup(t)
+			pulled, ctx := prepare(store, winner)
+			err := store.PullConflictResolutions(ctx, &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{pulled}})
+			var conflicts, inbox, cursor, checkpoint int
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&conflicts))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_bootstrap`).Scan(&checkpoint))
+			testutil.Require(t, (errors.Is(err, ErrConflict) || errors.Is(err, context.Canceled)) && conflicts == 1 && inbox == 0 && cursor == 0 && checkpoint == 0, "err=%v rows=%d/%d/%d/%d", err, conflicts, inbox, cursor, checkpoint)
+			if name == "invalid resolution rolls back" {
+				var base int64
+				testutil.NoError(t, store.db.QueryRow(`SELECT base_version FROM sync_outbox WHERE mutation_id='550e8400-e29b-41d4-a716-4466554400b8'`).Scan(&base))
+				testutil.Require(t, base == 2, "rebased outbox base=%d", base)
+			}
+		})
+	}
 }
 
 func TestRebasePendingConflictOutboxConvertsArchivedCreateToArchive(t *testing.T) {

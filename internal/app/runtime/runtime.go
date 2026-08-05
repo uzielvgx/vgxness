@@ -165,6 +165,7 @@ type foregroundStore interface {
 	MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error
 	BootstrapSync(context.Context, memory.BootstrapRemote) error
 	BootstrapOwnConflict(context.Context, memory.BootstrapRemote, string) error
+	PullConflictResolutions(context.Context, memory.BootstrapRemote) error
 	PendingOwnConflictReceipts(context.Context) ([]string, error)
 	SyncQueueSummary(context.Context) (memory.SyncQueueSummary, error)
 }
@@ -218,8 +219,22 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 			if queue, queueErr := store.SyncQueueSummary(ctx); queueErr != nil {
 				return result, queueErr
 			} else if queue.Conflict {
-				result.Status = memory.SyncStatusConflict
-				return result, nil
+				resolutionCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+				err = store.PullConflictResolutions(resolutionCtx, remote)
+				cancel()
+				if err != nil {
+					if ctx.Err() != nil {
+						result.Status = memory.SyncStatusPartial
+						return result, ctx.Err()
+					}
+					if errors.Is(err, memory.ErrConflict) {
+						result.Status = memory.SyncStatusConflict
+					} else {
+						result.Status = memory.SyncStatusPartial
+					}
+					return result, nil
+				}
+				continue
 			} else if queue.Work {
 				result.Status = memory.SyncStatusPartial
 				return result, nil

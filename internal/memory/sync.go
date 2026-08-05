@@ -190,6 +190,20 @@ type BootstrapCheckpoint struct {
 	Phase     string `json:"-"`
 }
 
+type pulledPageMode uint8
+
+const (
+	pulledPageDefault pulledPageMode = iota
+	pulledPageOwnConflict
+	pulledPageResolution
+)
+
+func (mode pulledPageMode) allowsPendingBootstrap() bool { return mode != pulledPageDefault }
+func (mode pulledPageMode) stopsAtPending() bool         { return mode == pulledPageResolution }
+func (mode pulledPageMode) allowsResolutionAdvance() bool {
+	return mode == pulledPageResolution
+}
+
 // BootstrapRemote owns any credentials needed for its authenticated calls.
 // Store never persists or retains the remote implementation.
 type BootstrapRemote interface {
@@ -309,7 +323,7 @@ func (s *Store) BootstrapOwnConflict(ctx context.Context, remote BootstrapRemote
 		}
 		if page.Cursor.Position < sequence {
 			checkpoint := &BootstrapCheckpoint{HistoryID: discovery.HistoryID, Position: page.Cursor.Position, Watermark: page.Cursor.Watermark, Phase: "observations"}
-			if err = s.applyPulledPage(ctx, page, checkpoint, true); err != nil {
+			if err = s.applyPulledPage(ctx, page, checkpoint, pulledPageOwnConflict); err != nil {
 				return err
 			}
 			continue
@@ -324,7 +338,7 @@ func (s *Store) BootstrapOwnConflict(ctx context.Context, remote BootstrapRemote
 			before.Cursor.Position = before.Changes[len(before.Changes)-1].Sequence
 			before.HasMore = true
 			checkpoint := &BootstrapCheckpoint{HistoryID: discovery.HistoryID, Position: before.Cursor.Position, Watermark: before.Cursor.Watermark, Phase: "observations"}
-			if err = s.applyPulledPage(ctx, before, checkpoint, true); err != nil {
+			if err = s.applyPulledPage(ctx, before, checkpoint, pulledPageOwnConflict); err != nil {
 				return err
 			}
 		}
@@ -336,6 +350,88 @@ func (s *Store) BootstrapOwnConflict(ctx context.Context, remote BootstrapRemote
 		return s.applyOwnConflictPage(ctx, prefix, mutationID)
 	}
 	return fmt.Errorf("%w: bootstrap pull limit", ErrConflict)
+}
+
+// PullConflictResolutions applies one bounded remote page while local work is
+// pending. Only its safe contiguous prefix is committed.
+func (s *Store) PullConflictResolutions(ctx context.Context, remote BootstrapRemote) error {
+	if s == nil || remote == nil || ctx == nil {
+		return fmt.Errorf("%w: conflict resolution pull", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	discovery, err := remote.Discover(ctx)
+	if err != nil {
+		return err
+	}
+	if syncservice.ValidateDiscovery(discovery) != nil {
+		return fmt.Errorf("%w: invalid resolution discovery", ErrInvalid)
+	}
+	cursor, err := s.conflictResolutionCursor(ctx, discovery.HistoryID)
+	if err != nil {
+		return err
+	}
+	page, err := remote.Pull(ctx, cursor, syncapi.DefaultPullLimit)
+	if err != nil {
+		return err
+	}
+	if err = validateBootstrapPage(page, cursor); err != nil {
+		return err
+	}
+	if len(page.Changes) == 0 {
+		return fmt.Errorf("%w: conflict resolution history", ErrConflict)
+	}
+	hasResolution := false
+	for _, change := range page.Changes {
+		hasResolution = hasResolution || change.Mutation.Kind == syncservice.MutationResolve
+	}
+	checkpoint := &BootstrapCheckpoint{HistoryID: page.Cursor.HistoryID, Position: page.Cursor.Position, Watermark: page.Cursor.Watermark, Phase: "observations"}
+	if page.Cursor.Position == page.Cursor.Watermark {
+		checkpoint.Phase = "complete"
+	}
+	if err = s.applyPulledPage(ctx, page, checkpoint, pulledPageResolution); err != nil {
+		return err
+	}
+	if !hasResolution {
+		return fmt.Errorf("%w: conflict resolution absent", ErrConflict)
+	}
+	return nil
+}
+
+func (s *Store) conflictResolutionCursor(ctx context.Context, historyID string) (syncservice.Cursor, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.closed || s.db == nil || s.readOnly {
+		return syncservice.Cursor{}, fmt.Errorf("%w: conflict resolution pull", ErrConflict)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return syncservice.Cursor{}, writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	state, err := readBootstrapState(ctx, tx)
+	if err != nil {
+		return syncservice.Cursor{}, err
+	}
+	if err = state.validateLocal(); err != nil || state.cursor != nil && state.cursor.HistoryID != historyID {
+		return syncservice.Cursor{}, fmt.Errorf("%w: conflict resolution history", ErrConflict)
+	}
+	var unresolved int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&unresolved); err != nil {
+		return syncservice.Cursor{}, writeError(ctx, err)
+	}
+	if unresolved == 0 {
+		return syncservice.Cursor{}, fmt.Errorf("%w: unresolved conflicts", ErrNotFound)
+	}
+	if err = commit(ctx, tx); err != nil {
+		return syncservice.Cursor{}, err
+	}
+	cursor := syncservice.Cursor{HistoryID: historyID}
+	if state.cursor != nil {
+		cursor.Position = state.cursor.Position
+	}
+	return cursor, nil
 }
 
 func (s *Store) ownConflictReceiptSequence(ctx context.Context, mutationID string) (int64, error) {
@@ -455,7 +551,7 @@ func (s *Store) applyOwnConflictPage(ctx context.Context, page syncservice.PullP
 		phase = "complete"
 	}
 	next := BootstrapCheckpoint{HistoryID: page.Cursor.HistoryID, Position: first.Sequence, Watermark: page.Cursor.Watermark, Phase: phase}
-	if err = verifyBootstrapCheckpoint(ctx, tx, next, page.Cursor.HistoryID, position); err != nil {
+	if err = verifyBootstrapCheckpoint(ctx, tx, next, page.Cursor.HistoryID, position, false); err != nil {
 		var existing int
 		if queryErr := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_bootstrap`).Scan(&existing); queryErr != nil || existing != 0 {
 			return err
@@ -1355,10 +1451,11 @@ func (s *Store) ApplyPulledChange(ctx context.Context, historyID string, change 
 // ApplyPulledPage validates a page before opening SQLite, then commits its
 // materialization, inbox entries, cursor, and optional checkpoint together.
 func (s *Store) ApplyPulledPage(ctx context.Context, page syncservice.PullPage, checkpoint *BootstrapCheckpoint) error {
-	return s.applyPulledPage(ctx, page, checkpoint, false)
+	return s.applyPulledPage(ctx, page, checkpoint, pulledPageDefault)
 }
 
-func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, checkpoint *BootstrapCheckpoint, allowPendingBootstrap bool) error {
+func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, checkpoint *BootstrapCheckpoint, mode pulledPageMode) error {
+	allowPendingBootstrap, stopAtPending := mode.allowsPendingBootstrap(), mode.stopsAtPending()
 	if err := cancelled(ctx); err != nil || validatePulledPage(page, checkpoint) != nil {
 		if err != nil {
 			return err
@@ -1415,11 +1512,13 @@ func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, 
 		}
 	}
 	if checkpoint != nil {
-		if err = verifyBootstrapCheckpoint(ctx, tx, *checkpoint, page.Cursor.HistoryID, position); err != nil {
+		if err = verifyBootstrapCheckpoint(ctx, tx, *checkpoint, page.Cursor.HistoryID, position, mode.allowsResolutionAdvance()); err != nil {
 			s.syncInbox.known = false
 			return err
 		}
 	}
+	priorPosition := position
+	applied, blocked := false, false
 	for _, change := range page.Changes {
 		hash, _ := hex.DecodeString(change.ChangeHash)
 		if change.Sequence <= position {
@@ -1433,6 +1532,10 @@ func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, 
 		if change.Sequence != position+1 {
 			return fmt.Errorf("%w: noncontiguous pulled change", ErrConflict)
 		}
+		if stopAtPending && change.ChangeDisposition == syncservice.ChangeDispositionConflict {
+			blocked = true
+			break
+		}
 		own, ownErr := ownPulledReceipt(ctx, tx, change)
 		if ownErr != nil {
 			s.syncInbox.known = false
@@ -1444,6 +1547,10 @@ func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, 
 			return writeError(ctx, err)
 		}
 		if pending != 0 && !own && change.Mutation.Kind != syncservice.MutationResolve {
+			if stopAtPending {
+				blocked = true
+				break
+			}
 			return fmt.Errorf("%w: local sync work is pending", ErrConflict)
 		}
 		if !own || change.ChangeDisposition == syncservice.ChangeDispositionConflict {
@@ -1459,18 +1566,31 @@ func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, 
 			return writeError(ctx, err)
 		}
 		position = change.Sequence
+		applied = true
 	}
-	if len(page.Changes) != 0 {
+	if applied {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO sync_cursor(singleton,history_id,position,updated_at) VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET history_id=excluded.history_id,position=excluded.position,updated_at=excluded.updated_at`, page.Cursor.HistoryID, position, now); err != nil {
 			return writeError(ctx, err)
 		}
 	}
-	if checkpoint != nil {
-		payload, marshalErr := json.Marshal(checkpoint)
+	if checkpoint != nil && (!stopAtPending || applied) {
+		next := *checkpoint
+		if stopAtPending {
+			next.Position = position
+			if position == next.Watermark {
+				next.Phase = "complete"
+			} else {
+				next.Phase = "observations"
+			}
+			if err = verifyBootstrapCheckpoint(ctx, tx, next, page.Cursor.HistoryID, priorPosition, mode.allowsResolutionAdvance()); err != nil {
+				return err
+			}
+		}
+		payload, marshalErr := json.Marshal(next)
 		if marshalErr != nil || len(payload) == 0 || len(payload) > maxSyncPayloadBytes {
 			return fmt.Errorf("%w: invalid bootstrap checkpoint", ErrInvalid)
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO sync_bootstrap(singleton,phase,payload_version,checkpoint,created_at,updated_at) VALUES(1,?,1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET phase=excluded.phase,checkpoint=excluded.checkpoint,updated_at=excluded.updated_at`, checkpoint.Phase, payload, now, now); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO sync_bootstrap(singleton,phase,payload_version,checkpoint,created_at,updated_at) VALUES(1,?,1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET phase=excluded.phase,checkpoint=excluded.checkpoint,updated_at=excluded.updated_at`, next.Phase, payload, now, now); err != nil {
 			return writeError(ctx, err)
 		}
 	}
@@ -1478,6 +1598,9 @@ func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, 
 		return err
 	}
 	s.syncInbox = syncInboxCache{known: true, dataVersion: epoch, historyID: page.Cursor.HistoryID, position: position}
+	if blocked {
+		return fmt.Errorf("%w: local sync work is pending", ErrConflict)
+	}
 	return nil
 }
 
@@ -1540,7 +1663,7 @@ func validPulledChange(change syncservice.Change) bool {
 	return change.ChangeDisposition == syncservice.ChangeDispositionAccepted && change.ConflictID == "" && (change.Mutation.Kind == syncservice.MutationTombstone || change.Mutation.Kind == syncservice.MutationResolve)
 }
 
-func verifyBootstrapCheckpoint(ctx context.Context, tx *sql.Tx, next BootstrapCheckpoint, historyID string, position int64) error {
+func verifyBootstrapCheckpoint(ctx context.Context, tx *sql.Tx, next BootstrapCheckpoint, historyID string, position int64, allowResolutionAdvance bool) error {
 	var phase, phaseType, versionType, payloadType string
 	var version int64
 	var payload []byte
@@ -1561,7 +1684,11 @@ func verifyBootstrapCheckpoint(ctx context.Context, tx *sql.Tx, next BootstrapCh
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var extra any
-	if decoder.Decode(&prior) != nil || decoder.Decode(&extra) != io.EOF || prior.Phase != "" || prior.HistoryID != historyID || prior.Position != position || prior.Watermark != next.Watermark || (phase == "complete" && (next.Phase != "complete" || next.Position != position)) || (phase != "complete" && checkpointPhaseRank(next.Phase) < checkpointPhaseRank(phase)) {
+	if decoder.Decode(&prior) != nil || decoder.Decode(&extra) != io.EOF || prior.Phase != "" {
+		return fmt.Errorf("%w: bootstrap checkpoint mismatch", ErrConflict)
+	}
+	resolutionAdvance := allowResolutionAdvance && (phase == "observations" || phase == "complete") && next.Position > position && next.Position <= next.Watermark && next.Watermark >= prior.Watermark && (next.Position == next.Watermark && next.Phase == "complete" || next.Position < next.Watermark && next.Phase == "observations")
+	if prior.HistoryID != historyID || prior.Position != position || (allowResolutionAdvance && !resolutionAdvance) || (prior.Watermark != next.Watermark && !resolutionAdvance) || (phase == "complete" && !resolutionAdvance && (next.Phase != "complete" || next.Position != position)) || (phase != "complete" && checkpointPhaseRank(next.Phase) < checkpointPhaseRank(phase)) {
 		return fmt.Errorf("%w: bootstrap checkpoint mismatch", ErrConflict)
 	}
 	return nil
