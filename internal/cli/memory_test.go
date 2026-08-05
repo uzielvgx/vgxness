@@ -22,6 +22,7 @@ type fakeMemoryRuntime struct {
 	project string
 	err     error
 	calls   int
+	sync    memory.SyncResult
 }
 
 func (f *fakeMemoryRuntime) Remember(context.Context, config.Options, memory.Remember) (memory.Entry, error) {
@@ -53,6 +54,11 @@ func (f *fakeMemoryRuntime) Recent(_ context.Context, _ config.Options, request 
 	f.calls++
 	f.recent = request
 	return f.items, f.err
+}
+
+func (f *fakeMemoryRuntime) Sync(context.Context, config.Options) (memory.SyncResult, error) {
+	f.calls++
+	return f.sync, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
@@ -153,9 +159,23 @@ func TestMemoryCLI_ClassifiedErrorsAndExitCodes(t *testing.T) {
 }
 
 func TestMemoryCLI_UnsupportedOperationsNeverOpenOrMutateStorage(t *testing.T) {
-	for _, verb := range []string{"list", "review", "delete", "relations", "sync"} {
+	for _, verb := range []string{"list", "review", "delete", "relations"} {
 		runtime := &fakeMemoryRuntime{}
 		code, out, _ := runMemoryTest([]string{"memory", verb, "--stdin"}, `{}`, runtime)
 		testutil.Require(t, code == 2 && runtime.calls == 0 && out == "", "%s exit=%d calls=%d", verb, code, runtime.calls)
 	}
+}
+
+func TestMemoryCLI_SyncUsesNoInputAndRendersTokenFreeResult(t *testing.T) {
+	runtime := &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusPartial, Pushed: 2, Retried: 1, Batches: 1}}
+	code, out, stderr := runMemoryTest([]string{"memory", "sync"}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && out == "status=partial\npushed=2\npreviously_accepted=0\nrejected=0\nretried=1\nconflicts=0\nbatches=1\n" && !strings.Contains(out, "vgx1."), "sync output: code=%d calls=%d out=%q stderr=%q", code, runtime.calls, out, stderr)
+
+	runtime = &fakeMemoryRuntime{err: context.Canceled}
+	code, out, _ = runMemoryTest([]string{"memory", "sync"}, "", runtime)
+	testutil.Require(t, code == 130 && out == "" && runtime.calls == 1, "sync cancellation: code=%d calls=%d out=%q", code, runtime.calls, out)
+
+	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusSynced, Pushed: 1}}
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"status":"synced"`) && strings.Contains(out, `"pushed":1`) && !strings.Contains(out, "vgx1."), "sync json: code=%d out=%q stderr=%q", code, out, stderr)
 }

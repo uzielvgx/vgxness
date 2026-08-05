@@ -22,6 +22,7 @@ type MemoryRuntime interface {
 	Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error)
 	Forget(context.Context, config.Options, memory.Forget) (memory.Entry, error)
 	ResolveProject(context.Context, config.Options, string) (string, error)
+	Sync(context.Context, config.Options) (memory.SyncResult, error)
 }
 
 type memoryInput struct {
@@ -40,11 +41,36 @@ type memoryInput struct {
 }
 
 func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
-	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget") || runtime == nil {
+	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync") || runtime == nil {
 		fmt.Fprintln(stderr, "invalid: unsupported memory operation")
 		return 2
 	}
 	verb := args[0]
+	if verb == "sync" {
+		flags := flag.NewFlagSet(verb, flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		var opts config.Options
+		var jsonOutput bool
+		flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+		flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
+		flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+		result, err := runtime.Sync(ctx, opts)
+		if err != nil {
+			return memoryFailure(stderr, err)
+		}
+		if jsonOutput {
+			_ = json.NewEncoder(stdout).Encode(struct {
+				SchemaVersion int               `json:"schemaVersion"`
+				Result        memory.SyncResult `json:"result"`
+			}{SchemaVersion: 1, Result: result})
+		} else {
+			fmt.Fprintf(stdout, "status=%s\npushed=%d\npreviously_accepted=%d\nrejected=%d\nretried=%d\nconflicts=%d\nbatches=%d\n", result.Status, result.Pushed, result.PreviouslyAccepted, result.Rejected, result.Retried, result.Conflicts, result.Batches)
+		}
+		return 0
+	}
 	flags := flag.NewFlagSet(verb, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var inputPath, project, scope, workspace string
