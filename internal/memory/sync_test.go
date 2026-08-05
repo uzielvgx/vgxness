@@ -232,6 +232,179 @@ func TestSyncPushReceiptSequenceIsUniqueWhenPresent(t *testing.T) {
 	testutil.NoError(t, err)
 }
 
+func TestApplySyncPushResultCompletesClaimAndRebasesLatest(t *testing.T) {
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+		return err
+	}())
+	first := syncMutation("550e8400-e29b-41d4-a716-446655440070", "project")
+	latest := syncMutation("550e8400-e29b-41d4-a716-446655440071", "project")
+	enqueueMutation(t, store, first)
+	enqueueMutation(t, store, latest)
+	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
+	seq := int64(1)
+	result := syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &seq, Version: 1}
+	testutil.Require(t, errors.Is(store.ApplySyncPushResult(context.Background(), first.MutationID, "550e8400-e29b-41d4-a716-446655440072", result), ErrNotFound), "stale completion accepted")
+	testutil.NoError(t, store.ApplySyncPushResult(context.Background(), first.MutationID, claims[0].ClaimToken, result))
+	var version, outbox, claimsLeft, receipts int
+	var kind string
+	var base int64
+	var payload []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id='project'`).Scan(&version))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox_claims`).Scan(&claimsLeft))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_push_results WHERE mutation_id=? AND sequence=1`, first.MutationID).Scan(&receipts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT mutation_kind,base_version,payload FROM sync_outbox WHERE mutation_id=?`, latest.MutationID).Scan(&kind, &base, &payload))
+	var rebased syncservice.Mutation
+	testutil.NoError(t, json.Unmarshal(payload, &rebased))
+	testutil.Require(t, version == 1 && outbox == 1 && claimsLeft == 0 && receipts == 1 && kind == string(syncservice.MutationUpdate) && base == 1 && rebased.Kind == syncservice.MutationUpdate && rebased.BaseVersion == 1, "version=%d rows=%d/%d/%d rebase=%q/%d/%+v", version, outbox, claimsLeft, receipts, kind, base, rebased)
+	testutil.NoError(t, store.ApplySyncPushResult(context.Background(), first.MutationID, claims[0].ClaimToken, result))
+}
+
+func TestApplySyncPushResultRetriesWithAdvancingClock(t *testing.T) {
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+		return err
+	}())
+	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440081", "project")
+	enqueueMutation(t, store, mutation)
+	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
+
+	now := fixedTime
+	store.now = func() time.Time {
+		now = now.Add(time.Nanosecond)
+		return now
+	}
+	result := syncservice.Result{MutationID: mutation.MutationID, Disposition: syncservice.DispositionRejected, Retryable: true, Code: "temporary"}
+	testutil.NoError(t, store.ApplySyncPushResult(context.Background(), mutation.MutationID, claims[0].ClaimToken, result))
+
+	var state, code string
+	var attempts, nextAttempt, leaseUntil int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT state,attempts,last_error_code,next_attempt_at FROM sync_outbox WHERE mutation_id=?`, mutation.MutationID).Scan(&state, &attempts, &code, &nextAttempt))
+	testutil.NoError(t, store.db.QueryRow(`SELECT lease_until FROM sync_outbox_claims WHERE mutation_id=?`, mutation.MutationID).Scan(&leaseUntil))
+	expected := fixedTime.Add(time.Nanosecond).UnixNano()
+	testutil.Require(t, state == string(SyncOutboxRetry) && attempts == 1 && code == "temporary" && nextAttempt == expected && leaseUntil == expected, "retry=%q/%d/%q next=%d lease=%d", state, attempts, code, nextAttempt, leaseUntil)
+}
+
+func TestApplySyncPushResultRebasesArchivedCreateAsArchive(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	enableSync(t, store)
+	item := mustSave(t, store, observation("archive-before-push", "project", "archive me"))
+	_, err := store.Forget(ctx, item.ID, item.Project, item.Scope)
+	testutil.NoError(t, err)
+
+	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordKind == syncservice.RecordKindProject, "project claim=%+v err=%v", claims, err)
+	projectSequence := int64(1)
+	testutil.NoError(t, store.ApplySyncPushResult(ctx, claims[0].Mutation.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: claims[0].Mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &projectSequence, Version: 1}))
+
+	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordKind == syncservice.RecordKindObservation && claims[0].Mutation.RecordID == item.ID && claims[0].Mutation.Kind == syncservice.MutationCreate, "observation claim=%+v err=%v", claims, err)
+	observationSequence := int64(2)
+	testutil.NoError(t, store.ApplySyncPushResult(ctx, claims[0].Mutation.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: claims[0].Mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &observationSequence, Version: 1}))
+
+	var syncVersion, outbox, receipts int
+	var kind string
+	var base int64
+	var payload []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM observations WHERE id=?`, item.ID).Scan(&syncVersion))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE record_kind='observation' AND record_id=?`, item.ID).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_push_results WHERE mutation_id=?`, claims[0].Mutation.MutationID).Scan(&receipts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT mutation_kind,base_version,payload FROM sync_outbox WHERE record_kind='observation' AND record_id=?`, item.ID).Scan(&kind, &base, &payload))
+	var rebased syncservice.Mutation
+	testutil.NoError(t, json.Unmarshal(payload, &rebased))
+	testutil.Require(t, syncVersion == 1 && receipts == 1 && outbox == 1 && kind == string(syncservice.MutationArchive) && base == 1 && rebased.Kind == syncservice.MutationArchive && rebased.BaseVersion == 1 && syncservice.ValidateMutation(rebased) == nil, "version=%d receipts=%d outbox=%d rebase=%q/%d/%+v", syncVersion, receipts, outbox, kind, base, rebased)
+}
+
+func TestApplySyncPushResultReceiptCollisionsAndEnqueueIDCollision(t *testing.T) {
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+		return err
+	}())
+	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440073", "project")
+	enqueueMutation(t, store, mutation)
+	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
+	hash, err := syncMutationHash(mutation)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at) VALUES(?,'accepted',0,'',1,1,'project','other','create',0,?,?)`, "550e8400-e29b-41d4-a716-446655440074", hash, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	seq := int64(1)
+	err = store.ApplySyncPushResult(context.Background(), mutation.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &seq, Version: 1})
+	var outbox, version int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id='project'`).Scan(&version))
+	testutil.Require(t, errors.Is(err, ErrConflict) && outbox == 1 && version == 0, "err=%v outbox=%d version=%d", err, outbox, version)
+	testutil.Require(t, errors.Is(enqueueMutationError(t, store, syncMutation("550e8400-e29b-41d4-a716-446655440074", "other")), ErrConflict), "receipt mutation ID reused")
+}
+
+func TestOwnPulledReceiptsAdvanceWithoutOverwriteAndMaterializeConflict(t *testing.T) {
+	ctx := context.Background()
+	history := "550e8400-e29b-41d4-a716-446655440075"
+	t.Run("accepted v1 and v2 are metadata only", func(t *testing.T) {
+		store := openTestStore(t)
+		store.now = func() time.Time { return fixedTime }
+		testutil.NoError(t, func() error {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,1)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+			return err
+		}())
+		first := syncMutation("550e8400-e29b-41d4-a716-446655440076", "project")
+		enqueueMutation(t, store, first)
+		claim, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+		testutil.Require(t, err == nil && len(claim) == 1, "claim=%+v err=%v", claim, err)
+		seq := int64(1)
+		testutil.NoError(t, store.ApplySyncPushResult(ctx, first.MutationID, claim[0].ClaimToken, syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &seq, Version: 1}))
+		testutil.NoError(t, store.ApplyPulledChange(ctx, history, pulledChange(t, 1, 1, first)))
+		tombstone := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440077", RecordID: "record", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: fixedTime}}
+		enqueueMutation(t, store, tombstone)
+		claim, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+		testutil.Require(t, err == nil && len(claim) == 1, "claim=%+v err=%v", claim, err)
+		seq = 2
+		testutil.NoError(t, store.ApplySyncPushResult(ctx, tombstone.MutationID, claim[0].ClaimToken, syncservice.Result{MutationID: tombstone.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &seq, Version: 2}))
+		testutil.NoError(t, store.ApplyPulledChange(ctx, history, specialChange(t, 2, 2, syncservice.ChangeDispositionAccepted, "", tombstone)))
+		var state string
+		testutil.NoError(t, store.db.QueryRow(`SELECT state FROM observations WHERE id='record'`).Scan(&state))
+		testutil.Require(t, state == string(StateActive), "own tombstone overwrote local state=%q", state)
+	})
+	t.Run("conflict bypasses pending guard but preserves later work", func(t *testing.T) {
+		store := openTestStore(t)
+		store.now = func() time.Time { return fixedTime }
+		testutil.NoError(t, func() error {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,1)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+			return err
+		}())
+		first := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
+		first.MutationID = "550e8400-e29b-41d4-a716-446655440078"
+		later := first
+		later.MutationID = "550e8400-e29b-41d4-a716-446655440079"
+		enqueueMutation(t, store, first)
+		enqueueMutation(t, store, later)
+		claim, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+		testutil.Require(t, err == nil && len(claim) == 1, "claim=%+v err=%v", claim, err)
+		_, err = store.db.Exec(`UPDATE observations SET sync_version=2 WHERE id='record'`)
+		testutil.NoError(t, err)
+		seq := int64(1)
+		testutil.NoError(t, store.ApplySyncPushResult(ctx, first.MutationID, claim[0].ClaimToken, syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionConflict, Sequence: &seq, Version: 2}))
+		change := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440080", first)
+		testutil.NoError(t, store.ApplyPulledChange(ctx, history, change))
+		var state string
+		var pending int
+		testutil.NoError(t, store.db.QueryRow(`SELECT state FROM observations WHERE id='record'`).Scan(&state))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE mutation_id=?`, later.MutationID).Scan(&pending))
+		testutil.Require(t, state == string(StateNeedsReview) && pending == 1, "state=%q pending=%d", state, pending)
+	})
+}
+
 func TestSyncProfileRejectsRawCredentials(t *testing.T) {
 	store := openTestStore(t)
 	_, err := store.ConfigureSyncProfile(context.Background(), SyncProfile{Enabled: true, Endpoint: "https://sync.example.test", DeviceID: "550e8400-e29b-41d4-a716-446655440000", CredentialRef: "bearer secret"})
