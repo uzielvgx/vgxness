@@ -20,6 +20,14 @@ import (
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
+const (
+	lifecycleRequestFallback    = 10 * time.Second
+	lifecycleResponseBodyLimit  = 4 << 10
+	lifecycleResponseTruncated  = "… (truncated)"
+	lifecycleResponseReadError  = "response body unavailable"
+	lifecycleResponseLimitError = "response body too large"
+)
+
 type fakeDevices struct {
 	credential syncpg.DeviceCredential
 	issueErr   error
@@ -51,6 +59,21 @@ func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 type errorWriter struct{}
 
 func (errorWriter) Write([]byte) (int, error) { return 0, errors.New("write") }
+
+type partialErrorReader struct {
+	data []byte
+	err  error
+}
+
+func (reader partialErrorReader) Read(buffer []byte) (int, error) {
+	return copy(buffer, reader.data), reader.err
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
 
 func TestRunIssueWritesOnlyBearerAndNewline(t *testing.T) {
 	repo := &fakeDevices{credential: syncpg.DeviceCredential{ID: uuid.MustParse("11111111-1111-1111-1111-111111111111"), Bearer: "bearer"}}
@@ -411,6 +434,106 @@ func TestRepositoryBackendMapsUnauthenticated(t *testing.T) {
 	}
 }
 
+func TestLifecycleRequestReturnsRawSuccessfulBody(t *testing.T) {
+	const bearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	want := []byte(strings.Repeat("x", lifecycleResponseBodyLimit+1) + bearer)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write(want)
+	}))
+	defer server.Close()
+	request, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal("new request")
+	}
+	request.Header.Set("Authorization", "Bearer "+bearer)
+	if got := lifecycleRequest(t, server.Client(), request, "raw response", http.StatusOK, lifecycleRequestDeadline(t), int64(len(want))); string(got) != string(want) {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestRedactLifecycleResponseBody(t *testing.T) {
+	const bearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	got := redactLifecycleResponseBody("error: Bearer "+bearer, "Bearer "+bearer)
+	if strings.Contains(got, bearer) || !strings.Contains(got, "[redacted]") {
+		t.Fatalf("redacted body = %q", got)
+	}
+}
+
+func TestLifecycleDiagnosticBodyRedactsStraddlingSensitiveValues(t *testing.T) {
+	const bearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	authorization := "Bearer " + bearer
+	for _, sensitive := range []string{authorization, bearer} {
+		t.Run(sensitive[:6], func(t *testing.T) {
+			body := strings.Repeat("x", lifecycleResponseBodyLimit-3) + sensitive + strings.Repeat("z", 16)
+			got, err := lifecycleDiagnosticBody(strings.NewReader(body), authorization)
+			if err != nil {
+				t.Fatal("read diagnostic")
+			}
+			for prefixLength := 1; prefixLength <= len(sensitive); prefixLength++ {
+				if strings.Contains(got, sensitive[:prefixLength]) {
+					t.Fatalf("diagnostic leaked sensitive prefix %q", sensitive[:prefixLength])
+				}
+			}
+			if len(got) > lifecycleResponseBodyLimit+len(lifecycleResponseTruncated) || !strings.HasSuffix(got, lifecycleResponseTruncated) {
+				t.Fatalf("diagnostic was not bounded and truncated: %d bytes", len(got))
+			}
+		})
+	}
+}
+
+func TestLifecycleDiagnosticBodyReadErrorDoesNotExposePartialBody(t *testing.T) {
+	const bearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	readErr := errors.New("response read failed")
+	diagnostic, err := lifecycleDiagnosticBody(partialErrorReader{data: []byte(bearer[:8]), err: readErr}, "Bearer "+bearer)
+	if !errors.Is(err, readErr) {
+		t.Fatalf("read error = %v", err)
+	}
+	if strings.Contains(diagnostic, bearer[:8]) || diagnostic != "response body unavailable" {
+		t.Fatalf("diagnostic leaked partial body: %q", diagnostic)
+	}
+}
+
+func TestLifecycleDiagnosticTextMarksExpansionTruncation(t *testing.T) {
+	got := lifecycleDiagnosticText([]byte(strings.Repeat("a", lifecycleResponseBodyLimit-1)+"x"), "x")
+	if !strings.HasSuffix(got, lifecycleResponseTruncated) {
+		t.Fatalf("expanded diagnostic was not marked truncated: %d bytes", len(got))
+	}
+}
+
+func TestLifecycleResponseBodyUsesExplicitLimit(t *testing.T) {
+	body, overflow, err := lifecycleResponseBody(strings.NewReader("abc"), 2)
+	if err != nil || !overflow || string(body) != "abc" {
+		t.Fatalf("body/overflow/error = %q/%t/%v", body, overflow, err)
+	}
+}
+
+func TestLifecycleErrorTextRedactsTransportError(t *testing.T) {
+	const bearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("transport failed for " + bearer)
+	})}
+	request, err := http.NewRequest(http.MethodGet, "https://example.invalid", nil)
+	if err != nil {
+		t.Fatal("new request")
+	}
+	_, err = client.Do(request)
+	got := lifecycleErrorText(err, "Bearer "+bearer)
+	if strings.Contains(got, bearer) || !strings.Contains(got, "transport failed") {
+		t.Fatalf("sanitized error = %q", got)
+	}
+}
+
+func TestLifecycleRequestContextPreservesCanceledParent(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+	ctx, cancel := lifecycleRequestContext(t, parent, lifecycleRequestDeadline(t))
+	defer cancel()
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("context error = %v", ctx.Err())
+	}
+}
+
 func TestServeRealListenerLifecycle(t *testing.T) {
 	dsn := os.Getenv("VGXNESS_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -458,19 +581,13 @@ func TestServeRealListenerLifecycle(t *testing.T) {
 	}
 	request.Header.Set("Authorization", "Bearer "+credential.Bearer)
 	request.Header.Set("Accept", syncapi.MediaType)
-	client := &http.Client{Timeout: 100 * time.Millisecond}
-	deadline := time.Now().Add(3 * time.Second)
+	client := &http.Client{}
+	startupDeadline := time.Now().Add(3 * time.Second)
 	for {
-		response, requestErr := client.Do(request)
-		if requestErr == nil {
-			response.Body.Close()
-			if response.StatusCode != http.StatusOK {
-				t.Fatalf("status = %d", response.StatusCode)
-			}
+		if requestErr := lifecycleReadinessRequest(t, client, request, http.StatusOK, startupDeadline, syncapi.MaxBodyBytes); requestErr == nil {
 			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("listener did not start")
+		} else if !time.Now().Before(startupDeadline) {
+			failLifecycleRequest(t, "listener readiness", http.StatusOK, 0, "", requestErr, request.Header.Get("Authorization"))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -490,14 +607,7 @@ func TestServeRealListenerLifecycle(t *testing.T) {
 	push.Header.Set("Authorization", "Bearer "+credential.Bearer)
 	push.Header.Set("Accept", syncapi.MediaType)
 	push.Header.Set("Content-Type", syncapi.MediaType)
-	response, err := client.Do(push)
-	if err != nil || response.StatusCode != http.StatusOK {
-		if response != nil {
-			response.Body.Close()
-		}
-		t.Fatal("authenticated push failed")
-	}
-	response.Body.Close()
+	lifecycleRequest(t, client, push, "authenticated push", http.StatusOK, lifecycleRequestDeadline(t), syncapi.MaxBodyBytes)
 	state, err := pgx.Connect(context.Background(), dsn)
 	if err != nil {
 		t.Fatal("state connection failed")
@@ -514,17 +624,9 @@ func TestServeRealListenerLifecycle(t *testing.T) {
 	}
 	pull.Header.Set("Authorization", "Bearer "+credential.Bearer)
 	pull.Header.Set("Accept", syncapi.MediaType)
-	response, err = client.Do(pull)
-	if err != nil || response.StatusCode != http.StatusOK {
-		if response != nil {
-			response.Body.Close()
-		}
-		t.Fatal("authenticated pull failed")
-	}
-	pullBody, readErr := io.ReadAll(response.Body)
-	response.Body.Close()
+	pullBody := lifecycleRequest(t, client, pull, "authenticated pull", http.StatusOK, lifecycleRequestDeadline(t), syncapi.MaxPullResponseBytes)
 	pullPage, decodeErr := syncapi.DecodePullResponse(pullBody)
-	if readErr != nil || decodeErr != nil || len(pullPage.Changes) == 0 {
+	if decodeErr != nil || len(pullPage.Changes) == 0 {
 		t.Fatal("pulled change was invalid")
 	}
 	found := false
@@ -537,17 +639,154 @@ func TestServeRealListenerLifecycle(t *testing.T) {
 	if err := repository.RevokeDevice(context.Background(), credential.ID); err != nil {
 		t.Fatal("revoke failed")
 	}
-	response, err = client.Do(request)
-	if err != nil || response.StatusCode != http.StatusUnauthorized {
-		if response != nil {
-			response.Body.Close()
-		}
-		t.Fatal("revoked device was not denied")
-	}
-	response.Body.Close()
+	lifecycleRequest(t, client, request, "revoked device denial", http.StatusUnauthorized, lifecycleRequestDeadline(t), syncapi.MaxBodyBytes)
 	cancel()
 	if code := <-done; code != 0 {
 		t.Fatalf("exit code = %d", code)
+	}
+}
+
+func lifecycleRequestDeadline(t *testing.T) time.Time {
+	t.Helper()
+	deadline := time.Now().Add(lifecycleRequestFallback)
+	if testDeadline, ok := t.Deadline(); ok && testDeadline.Before(deadline) {
+		return testDeadline
+	}
+	return deadline
+}
+
+func lifecycleRequest(t *testing.T, client *http.Client, request *http.Request, operation string, wantStatus int, deadline time.Time, responseLimit int64) []byte {
+	t.Helper()
+	ctx, cancel := lifecycleRequestContext(t, request.Context(), deadline)
+	defer cancel()
+	response, err := client.Do(request.Clone(ctx))
+	if response == nil {
+		failLifecycleRequest(t, operation, wantStatus, 0, "", err, request.Header.Get("Authorization"))
+	}
+	if response.Body == nil {
+		failLifecycleRequest(t, operation, wantStatus, response.StatusCode, "", err, request.Header.Get("Authorization"))
+	}
+	defer response.Body.Close()
+	if err != nil || response.StatusCode != wantStatus {
+		body, readErr := lifecycleDiagnosticBody(response.Body, request.Header.Get("Authorization"))
+		if err == nil {
+			err = readErr
+		}
+		failLifecycleRequest(t, operation, wantStatus, response.StatusCode, body, err, request.Header.Get("Authorization"))
+	}
+	body, overflow, err := lifecycleResponseBody(response.Body, responseLimit)
+	if err != nil {
+		failLifecycleRequest(t, operation, wantStatus, response.StatusCode, lifecycleResponseReadError, err, request.Header.Get("Authorization"))
+	}
+	if overflow {
+		failLifecycleRequest(t, operation, wantStatus, response.StatusCode, lifecycleResponseLimitError, errors.New(lifecycleResponseLimitError), request.Header.Get("Authorization"))
+	}
+	return body
+}
+
+func lifecycleReadinessRequest(t *testing.T, client *http.Client, request *http.Request, wantStatus int, deadline time.Time, responseLimit int64) error {
+	t.Helper()
+	ctx, cancel := lifecycleRequestContext(t, request.Context(), deadline)
+	defer cancel()
+	response, err := client.Do(request.Clone(ctx))
+	if response == nil {
+		if err == nil {
+			failLifecycleRequest(t, "listener readiness", wantStatus, 0, "", errors.New("nil response"), request.Header.Get("Authorization"))
+		}
+		return err
+	}
+	if response.Body == nil {
+		failLifecycleRequest(t, "listener readiness", wantStatus, response.StatusCode, "", err, request.Header.Get("Authorization"))
+	}
+	defer response.Body.Close()
+	if err != nil || response.StatusCode != wantStatus {
+		body, readErr := lifecycleDiagnosticBody(response.Body, request.Header.Get("Authorization"))
+		if err == nil {
+			err = readErr
+		}
+		failLifecycleRequest(t, "listener readiness", wantStatus, response.StatusCode, body, err, request.Header.Get("Authorization"))
+	}
+	_, overflow, readErr := lifecycleResponseBody(response.Body, responseLimit)
+	if readErr != nil {
+		failLifecycleRequest(t, "listener readiness", wantStatus, response.StatusCode, lifecycleResponseReadError, readErr, request.Header.Get("Authorization"))
+	}
+	if overflow {
+		failLifecycleRequest(t, "listener readiness", wantStatus, response.StatusCode, lifecycleResponseLimitError, errors.New(lifecycleResponseLimitError), request.Header.Get("Authorization"))
+	}
+	return nil
+}
+
+func lifecycleRequestContext(t *testing.T, parent context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	t.Helper()
+	if testDeadline := lifecycleRequestDeadline(t); testDeadline.Before(deadline) {
+		deadline = testDeadline
+	}
+	return context.WithDeadline(parent, deadline)
+}
+
+func lifecycleResponseBody(reader io.Reader, limit int64) ([]byte, bool, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	return body, int64(len(body)) > limit, err
+}
+
+func lifecycleDiagnosticBody(reader io.Reader, authorization string) (string, error) {
+	overlap := 0
+	for _, value := range lifecycleSensitiveValues(authorization) {
+		if len(value) > overlap {
+			overlap = len(value)
+		}
+	}
+	body, err := io.ReadAll(io.LimitReader(reader, int64(lifecycleResponseBodyLimit+overlap+1)))
+	if err != nil {
+		return lifecycleResponseReadError, err
+	}
+	return lifecycleDiagnosticText(body, authorization), err
+}
+
+func lifecycleDiagnosticText(body []byte, authorization string) string {
+	truncated := len(body) > lifecycleResponseBodyLimit
+	diagnostic := redactLifecycleResponseBody(string(body), authorization)
+	if len(diagnostic) > lifecycleResponseBodyLimit {
+		truncated = true
+		diagnostic = diagnostic[:lifecycleResponseBodyLimit]
+	}
+	if truncated {
+		return diagnostic + lifecycleResponseTruncated
+	}
+	return diagnostic
+}
+
+func redactLifecycleResponseBody(body, authorization string) string {
+	for _, value := range lifecycleSensitiveValues(authorization) {
+		body = strings.ReplaceAll(body, value, "[redacted]")
+	}
+	return body
+}
+
+func lifecycleSensitiveValues(authorization string) []string {
+	if authorization == "" {
+		return nil
+	}
+	values := []string{authorization}
+	if strings.HasPrefix(authorization, "Bearer ") {
+		if bearer := strings.TrimPrefix(authorization, "Bearer "); bearer != "" {
+			values = append(values, bearer)
+		}
+	}
+	return values
+}
+
+func lifecycleErrorText(err error, authorization string) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return redactLifecycleResponseBody(err.Error(), authorization)
+}
+
+func failLifecycleRequest(t *testing.T, operation string, want, status int, body string, err error, authorization string) {
+	t.Helper()
+	if err != nil || status != want {
+		t.Fatalf("%s failed: err=%s status=%d body=%q", operation, lifecycleErrorText(err, authorization), status, body)
 	}
 }
 
