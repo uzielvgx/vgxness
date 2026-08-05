@@ -105,7 +105,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessor, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if artifactSHA256(predecessor.manifest) != "95d8e93138c080fff9182e9755d03b298852a5c14a4c57b36d7c4c9546fd34ea" {
+	if artifactSHA256(predecessor.manifest) != "6fcf5b993be247dd627bac48e5e038bd00a865c1010f3f819acc634d7e7388d3" {
 		t.Fatalf("prior SDD manifest=%s", artifactSHA256(predecessor.manifest))
 	}
 	for name, digest := range map[string]string{sddResearchName: "7bcd1f18790e34c48c3c684cbc5c409d0b9163422e89b49a3f389cc026b53906", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
@@ -117,7 +117,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	combined, err := previousSDDModelPlanBundle(priorExplore)
 	testutil.NoError(t, err)
-	if artifactSHA256(combined.manifest) != "f22813df4a31abd480558111661692ef08525a9e82668e867bf17187a03176e0" {
+	if artifactSHA256(combined.manifest) != "347cfde308eb45c249b6e5a8af19c2f10bf1c8fecc5f9cc6217c0debd5d5ffcf" {
 		t.Fatalf("combined manifest=%s", artifactSHA256(combined.manifest))
 	}
 }
@@ -154,6 +154,82 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 			idempotent, idempotentErr := service.Install(context.Background(), options)
 			testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled && status.RetainedPredecessorCount > 0 && status.RetainedPredecessorPath != "" && idempotentErr == nil && !idempotent.Changed, "preview=%+v install=%v status=%+v idempotent=%+v", preview, installErr, status, idempotent)
 		})
+	}
+}
+
+func TestIntegrationUpgradesExactManagerV39PredecessorCombinations(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "opencode")
+	service, options := NewIntegration(), integration.Options{ConfigDir: config}
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	managerV39, err := previousManagerModelPlanBundle(current)
+	testutil.NoError(t, err)
+	exploreV39, err := previousExploreModelPlanBundle(managerV39)
+	testutil.NoError(t, err)
+	sddV39, err := previousSDDModelPlanBundle(managerV39)
+	testutil.NoError(t, err)
+	allV39, err := previousSDDModelPlanBundle(exploreV39)
+	testutil.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		bundle modelPlanBundle
+	}{
+		{"manager", managerV39},
+		{"manager and explore", exploreV39},
+		{"manager and SDD", sddV39},
+		{"manager, explore, and SDD", allV39},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeCompleteV1ExploreBundle(t, config, tc.bundle)
+			preview, previewErr := service.Preview(context.Background(), options)
+			installed, installErr := service.Install(context.Background(), options)
+			status, statusErr := service.Status(context.Background(), options)
+			idempotent, idempotentErr := service.Install(context.Background(), options)
+			testutil.Require(t,
+				previewErr == nil && preview.State == integration.StatePartial &&
+					installErr == nil && installed.State == integration.StateInstalled &&
+					statusErr == nil && status.State == integration.StateInstalled &&
+					idempotentErr == nil && !idempotent.Changed,
+				"preview=%+v install=%v status=%+v idempotent=%+v", preview, installErr, status, idempotent,
+			)
+		})
+	}
+}
+
+func TestModelPlanBundleForManifestRejectsUnknownManagerPredecessor(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	unknown := append(append([]byte(nil), current.manifest...), ' ')
+	if _, err := modelPlanBundleForManifest(unknown, current.config); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("unknown manifest error=%v, want ErrDrift", err)
+	}
+}
+
+func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	candidates := []modelPlanBundle{current}
+	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
+		previousManagerModelPlanBundle,
+		previousExploreModelPlanBundle,
+		previousSDDModelPlanBundle,
+	} {
+		prior := append([]modelPlanBundle(nil), candidates...)
+		for _, candidate := range prior {
+			bundle, predecessorErr := predecessor(candidate)
+			testutil.NoError(t, predecessorErr)
+			candidates = append(candidates, bundle)
+		}
+	}
+	if len(candidates) != 8 {
+		t.Fatalf("predecessor combinations=%d", len(candidates))
+	}
+	for _, candidate := range candidates {
+		resolved, resolveErr := modelPlanBundleForManifest(candidate.manifest, candidate.config)
+		if resolveErr != nil || !bytes.Equal(resolved.manifest, candidate.manifest) {
+			t.Fatalf("manifest=%s resolved=%s err=%v", artifactSHA256(candidate.manifest), artifactSHA256(resolved.manifest), resolveErr)
+		}
 	}
 }
 

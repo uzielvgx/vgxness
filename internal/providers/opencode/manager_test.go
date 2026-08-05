@@ -22,26 +22,22 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 39",
-		"automatically load `stacked-pr`", "routine autonomous delivery",
-		"Before delegating any workspace write", "clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate",
+		"artifact: opencode-agent/vgxness-manager; version: 40",
+		"automatically load `stacked-pr`", "detailed operational delivery policy lives only in that loaded skill",
+		"Before delegating any workspace write", "pre-write gate required by that skill",
 		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
 		"sole Git and GitHub actor", "delegated implementation worker",
-		"current-task merge authorization", "original inspected base branch",
-		"gh pr merge <number> --repo <repository> --merge --match-head-commit <expected-head-oid>",
-		"verified GitHub `owner/repo` identity", "validated full commit OID",
-		"expected base-tip OID", "before checks and again immediately before merge",
-		"fast-forward", "no cleanup",
-		"creating an additional checkout or worktree", "Switching the existing checkout back to the original base",
-		"Existing remote branches and PRs are read-only resumption",
-		"The only exception is the skill's bounded interrupted-local-slice recovery gate",
-		"dirty worktrees outside that exact bounded interrupted-local-slice recovery gate",
+		"Stop on ambiguity or a failed skill gate", "Do not commit or push without an explicit current-task request",
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("canonical current manager missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"git push <remote> --delete <head>", "automatically load `vgxness-autonomous-stacked-pr`"} {
+	for _, forbidden := range []string{
+		"git push <remote> --delete <head>", "automatically load `vgxness-autonomous-stacked-pr`",
+		"--force-with-lease=refs/heads/<head>:", "gh pr merge <number> --repo <repository>",
+		"expected base-tip OID", "Before each merge, read back",
+	} {
 		if strings.Contains(manager, forbidden) {
 			t.Errorf("canonical current manager retains forbidden cleanup %q", forbidden)
 		}
@@ -51,6 +47,50 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	if bytes.Contains(bundle.manifest, []byte(autonomousStackedPRSkillName)) || bytes.Contains(bundle.manifest, []byte("skills/")) {
 		t.Fatal("managed skill was added to model-plan manifest")
+	}
+}
+
+func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	prompt := string(bundle.agents[managerAgentName])
+
+	// The extracted Manager baseline is 16,370 bytes and 117 lines after model binding.
+	// Leave 130 bytes and three lines of headroom for concise contract edits, while
+	// preventing a return of the removed always-loaded delivery procedure.
+	const maxManagerPromptBytes = 16_500
+	const maxManagerPromptLines = 120
+	if bytes := len(prompt); bytes > maxManagerPromptBytes {
+		t.Errorf("manager prompt bytes=%d, budget=%d", bytes, maxManagerPromptBytes)
+	}
+	if lines := strings.Count(prompt, "\n"); lines > maxManagerPromptLines {
+		t.Errorf("manager prompt lines=%d, budget=%d", lines, maxManagerPromptLines)
+	}
+	for _, required := range []string{
+		"sole orchestration and SDD lifecycle authority",
+		"automatically load `stacked-pr`",
+		"pre-write gate required by that skill",
+		"detailed operational delivery policy lives only in that loaded skill",
+		"The manager is the sole Git and GitHub actor.",
+		"IMPLEMENTED: intended workspace changes complete and developmental checks observed; not independently verified.",
+		"Stop on ambiguity or a failed skill gate; do not invent a fallback delivery procedure.",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Errorf("manager prompt is missing delivery invariant %q", required)
+		}
+	}
+}
+
+func TestManagerV39PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T) {
+	if digest := artifactSHA256([]byte(previousManagerPromptV39)); digest != "0e99ea9e8ecb8e51d80663543956e47cbc041177c6065535a39bf2cbf9767552" {
+		t.Fatalf("manager v39 template digest=%s", digest)
+	}
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	predecessor, err := previousManagerModelPlanBundle(current)
+	testutil.NoError(t, err)
+	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 39")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
+		t.Fatal("manager predecessor was not exactly bound from the v39 template")
 	}
 }
 
@@ -83,121 +123,21 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 	}
 }
 
-func TestAutonomousStackedPRSkillHasExactIdentityAndNativePolicy(t *testing.T) {
+func TestRetiredAutonomousStackedPRSkillKeepsHistoricalIdentity(t *testing.T) {
 	skill := autonomousStackedPRSkill
 	if !strings.HasPrefix(skill, expectedAutonomousStackedPRFrontmatter+"\n\n") {
 		t.Fatalf("skill frontmatter differs from accepted identity:\n%s", skill)
 	}
-	for _, required := range []string{
-		"artifact: opencode-skill/vgxness-autonomous-stacked-pr; version: 3",
-		"Before any source write", "clean porcelain including untracked", "base/upstream/remote/repository/ref proof",
-		"initial estimate and slice plan", "fresh branch before source writes",
-		"After each bounded write transaction", "actual numeric size", "stop and replan before further writes",
-		"explicit current-task user reauthorization", "deterministic expected branch name",
-		"no upstream, live remote head, or PR", "no staged changes", "complete worktree-inclusive digest including untracked",
-		"repeated focused checks, independent verification and selected review", "NEW PR",
-		"Existing remote branches and PRs are read-only resumption", "never receive retroactive merge or cleanup authority",
-		"400 effective changed lines", "more than 800 effective changed lines",
-		"explicit task override", "durable project memory default",
-		"git diff --numstat", "48 characters", "vgxness/<delivery-id>/slice-<ordinal>",
-		"use `task` if empty", "estimate guides only the initial plan", "actual measurement supersedes the estimate",
-		"actual total is more than 800 effective changed lines",
-		"one clean checkout", "linear immediate-parent topology", "same original inspected base branch",
-		"merge commits preserve predecessor commits", "narrow after earlier slices land",
-		"no merge", "no cleanup", "current-task merge authorization",
-		"read-only resumption", "local-only", "no commit", "no push", "no PR",
-		"Initial branch creation uses the announced estimate", "re-plan before staging, commit, push, or PR creation",
-		"fresh branch", "normal commit", "first push", "non-draft pull request",
-		`git switch -c <head> <verified-start-commit>`,
-		`git push --set-upstream --force-with-lease=refs/heads/<head>: <verified-remote> refs/heads/<head>:refs/heads/<head>`,
-		`gh pr create --head <head> --base <base> --title "<title>" --body "<body>"`,
-		`gh pr merge <number> --repo <repository> --merge --match-head-commit <expected-head-oid>`,
-		"verified GitHub `owner/repo` identity", "validated full commit OID",
-		"expected base-tip OID", "before checks and again immediately before merge",
-		`gh pr checks <number> --repo <repository> --watch --fail-fast`,
-		"positive decimal PR number", "expected head OID", "successful required checks",
-		"predecessor merged state", "immediately before merge", "expected head/base/merge commit identity",
-		"fast-forward from the verified remote-tracking base", "git branch -d", "remote delivery branches are left intact",
-		"creating an additional checkout or worktree", "Switching the existing checkout back to the original base",
-		`<type>(<scope>): <summary> [slice <ordinal>/<total>]`,
-		`<summary> [<ordinal>/<total>]`,
-		`Stack: <delivery-id>, Slice: <ordinal>/<total>, Base: <base>, Head: <head>, Depends-On: <previous-PR-URL-or-none>`,
-		"safe single argument", "OpenCode command globs do not prove argv semantics",
-	} {
-		if !strings.Contains(skill, required) {
-			t.Errorf("stacked-PR skill missing %q", required)
-		}
-	}
-	for _, forbidden := range []string{
-		"worktree add", "worktree remove", "--amend", "gh pr edit", "git push <remote> --delete <head>",
-		"persistent delivery state", "opencode.json", "custom Git tool", "custom GitHub tool",
-		"before the first Git mutation",
-		`Stack: <delivery-id>; Slice: <ordinal>/<total>; Base: <base>; Head: <head>; Depends-On: <previous-PR-URL-or-none>`,
-	} {
-		if strings.Contains(skill, forbidden) {
-			t.Errorf("stacked-PR skill contains unsupported operation %q", forbidden)
-		}
-	}
-	const createOnlyLease = "git push --set-upstream --force-with-lease=refs/heads/<head>: <verified-remote> refs/heads/<head>:refs/heads/<head>"
-	if !strings.Contains(skill, createOnlyLease) {
-		t.Errorf("stacked-PR skill missing exact create-only lease push %q", createOnlyLease)
-	}
-	for remaining := skill; ; {
-		index := strings.Index(remaining, "--force")
-		if index < 0 {
-			break
-		}
-		remaining = remaining[index:]
-		if !strings.HasPrefix(remaining, "--force-with-lease=refs/heads/<head>:") {
-			t.Error("stacked-PR skill contains a generic or ambiguous force form")
-			break
-		}
-		remaining = remaining[len("--force"):]
-	}
-	for _, forbidden := range []string{
-		"git push --set-upstream <verified-remote> <head>",
-		"--force-with-lease=refs/heads/<head>:<expected-oid>",
-	} {
-		if strings.Contains(skill, forbidden) {
-			t.Errorf("stacked-PR skill contains unsafe first-publication behavior %q", forbidden)
-		}
+	if !strings.Contains(skill, "artifact: opencode-skill/vgxness-autonomous-stacked-pr; version: 3") {
+		t.Fatal("retired skill lost its historical marker")
 	}
 }
 
-func TestAutonomousStackedPRSkillOrdersGatesAndConstrainsRecovery(t *testing.T) {
-	skill := autonomousStackedPRSkill
-	preWrite := "Before any source write, complete the clean checkout/repository identity/intended-path/sizing/slice/fresh-branch gate"
-	branch := "Only then create that fresh branch before source writes."
-	postImplementation := "After implementation, and before staging, commit, push, PR, or merge delivery mutations, require candidate identity, successful developmental checks, independent verification, and review outcome."
-	for _, required := range []string{preWrite, branch, postImplementation} {
-		if !strings.Contains(skill, required) {
-			t.Errorf("stacked-PR skill missing gate phrase %q", required)
-		}
-	}
-	if strings.Index(skill, preWrite) > strings.Index(skill, branch) || strings.Index(skill, branch) > strings.Index(skill, postImplementation) {
-		t.Error("stacked-PR skill does not order pre-write, branch creation, and post-implementation gates")
-	}
-	for _, required := range []string{
-		"current HEAD and the deterministic local `refs/heads/<head>` must each equal the exact verified base or immediate-predecessor full OID",
-		"before any recovery write or delivery mutation",
-		"Existing remote branches and PRs remain read-only",
-	} {
-		if !strings.Contains(skill, required) {
-			t.Errorf("stacked-PR skill missing recovery constraint %q", required)
-		}
-	}
-}
-
-func TestManagerMapsDeliveryMilestonesAndFirstPublicationPolicy(t *testing.T) {
+func TestManagerMapsDeliveryMilestones(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
-	const createOnlyLease = "git push --set-upstream --force-with-lease=refs/heads/<head>: <verified-remote> refs/heads/<head>:refs/heads/<head>"
 	for _, required := range []string{
-		createOnlyLease,
-		"all first remote publication, including clean and recovery paths",
-		"must fail if the remote ref exists and must never overwrite or update an existing ref",
-		"before any recovery write or delivery mutation, it requires current HEAD and the deterministic local branch ref to equal the exact verified base or immediate-predecessor full OID",
 		"IMPLEMENTED: intended workspace changes complete and developmental checks observed; not independently verified.",
 		"VERIFIED: exact frozen candidate passed independent verifier and required review.",
 		"DELIVERED: exact commit was published and a new current-task PR was created and read back.",
@@ -209,7 +149,7 @@ func TestManagerMapsDeliveryMilestonesAndFirstPublicationPolicy(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"normal one-line commit, first push with `--set-upstream`",
+		"normal one-line commit, first push with `--set-upstream`", "--force-with-lease=refs/heads/<head>:",
 	} {
 		if strings.Contains(manager, forbidden) {
 			t.Errorf("canonical current manager retains unsafe publication behavior %q", forbidden)

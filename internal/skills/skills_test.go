@@ -123,6 +123,29 @@ func TestBundledCatalogHasSeventeenCanonicalSkillsAndOneLegacyMigration(t *testi
 	}
 }
 
+func TestBundledStackedPRDefinesCanonicalDeliveryGates(t *testing.T) {
+	catalog, err := bundledCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := catalog.definitions[1]
+	skill := string(definition.files["SKILL.md"])
+	if definition.name != "stacked-pr" || definition.source != "stacked-pr" {
+		t.Fatalf("definition=%+v", definition)
+	}
+	for _, required := range []string{
+		"name: stacked-pr",
+		"Before any source write",
+		"local-only", "no commit", "no push", "no PR", "no merge", "no cleanup",
+		"--force-with-lease=refs/heads/<head>: <verified-remote>",
+		"gh pr merge <number> --repo <repository> --merge --match-head-commit <expected-head-oid>",
+	} {
+		if !bytes.Contains([]byte(skill), []byte(required)) {
+			t.Errorf("canonical stacked-pr skill missing %q", required)
+		}
+	}
+}
+
 func TestUninstallBeforeBackupFailureCleansEmptySession(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "skills")
 	if _, err := New().Install(context.Background(), Options{Dir: destination}); err != nil {
