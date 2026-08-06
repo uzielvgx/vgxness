@@ -25,6 +25,9 @@ import (
 //go:embed templates/manager.md
 var canonicalManagerPrompt string
 
+//go:embed templates/manager.v42.md
+var previousManagerPromptV42 string
+
 //go:embed templates/manager.v39.md
 var previousManagerPromptV39 string
 
@@ -930,6 +933,13 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		return inspection{}, fmt.Errorf("inspect OpenCode integration directory: %w", containerErr)
 	}
 	_, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
+	managerPrior := [][]byte(nil)
+	if !installedPlanOK {
+		managerPrior, err = managerPredecessors(plan)
+		if err != nil {
+			return inspection{}, err
+		}
+	}
 	regeneration := func(path string) [][]byte {
 		if installedPlanOK && len(installedPlanBytes[path]) != 0 {
 			return [][]byte{installedPlanBytes[path]}
@@ -937,7 +947,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		return nil
 	}
 	state := inspection{result: result, artifacts: []artifact{
-		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", regenerations: regeneration(managerPath)},
+		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: managerPrior, regenerations: regeneration(managerPath)},
 		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{previousExplorePredecessor(plan.agents[exploreAgentName])}, regenerations: regeneration(explorePath)},
 		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", regenerations: regeneration(generalPath)},
 		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", regenerations: regeneration(verifierPath)},

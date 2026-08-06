@@ -683,7 +683,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 42"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 43"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -744,6 +744,50 @@ func TestUpgradeArtifactRollbackRestoresOnlyUnchangedReplacement(t *testing.T) {
 	testutil.Require(t, err == nil && bytes.Equal(preserved, modified) && errors.Is(rollbackErr, integration.ErrRecovery), "rollback overwrote changed replacement or hid recovery failure: %q read=%v rollback=%v", preserved, err, rollbackErr)
 }
 
+func TestIntegrationRecoversExactManagerPredecessorWithoutManifest(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	v42, err := previousManagerModelPlanBundleV42(current)
+	testutil.NoError(t, err)
+	v41, err := previousManagerModelPlanBundleV41(v42)
+	testutil.NoError(t, err)
+	v40, err := previousManagerModelPlanBundleV40(v41)
+	testutil.NoError(t, err)
+	v39, err := previousManagerModelPlanBundleV39(v40)
+	testutil.NoError(t, err)
+	for _, tc := range []struct {
+		name        string
+		manager     []byte
+		recoverable bool
+	}{
+		{"v42", v42.agents[managerAgentName], true},
+		{"v41", v41.agents[managerAgentName], true},
+		{"v40", v40.agents[managerAgentName], true},
+		{"v39", v39.agents[managerAgentName], true},
+		{"modified", append(append([]byte(nil), v42.agents[managerAgentName]...), "\nmodified\n"...), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
+			testutil.NoError(t, os.MkdirAll(filepath.Dir(managerPath), 0o700))
+			testutil.NoError(t, os.WriteFile(managerPath, tc.manager, 0o600))
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			preview, previewErr := service.Preview(context.Background(), options)
+			if !tc.recoverable {
+				_, installErr := service.Install(context.Background(), options)
+				after, readErr := os.ReadFile(managerPath)
+				testutil.Require(t, previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, tc.manager), "preview=%+v install=%v read=%v", preview, installErr, readErr)
+				return
+			}
+			installed, installErr := service.Install(context.Background(), options)
+			status, statusErr := service.Status(context.Background(), options)
+			after, readErr := os.ReadFile(managerPath)
+			testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled && readErr == nil && bytes.Equal(after, current.agents[managerAgentName]), "preview=%+v install=%v status=%+v read=%v", preview, installErr, status, readErr)
+		})
+	}
+}
+
 func TestIntegration_RefusesForeignMemoryPluginAndDoesNotInspectLegacyAgents(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	pluginPath := filepath.Join(configDirectory, "plugins", "vgxness.ts")
@@ -772,7 +816,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 42",
+		"artifact: opencode-agent/vgxness-manager; version: 43",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",
