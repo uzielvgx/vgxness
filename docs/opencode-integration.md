@@ -6,7 +6,7 @@ Current delivery policy is manager v41 and global `stacked-pr` v3. Before branch
 
 Delivery labels are evidence-only: IMPLEMENTED requires completed workspace changes and observed developmental checks, but not independent verification; VERIFIED requires the exact frozen candidate to pass independent verification and review; DELIVERED requires the exact commit to be published and a new current-task PR created and read back; MERGED requires that PR merge and base containment/readback; INSTALLED additionally requires installation and handshake readback. No later state is inferred.
 
-VGXNESS installs 19 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v41, managed `general` and verifier profiles, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v8, one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. The separate global 42-file, 18-skill catalog owns `skills-creator`, `stacked-pr`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, and `sdd-lifecycle`; none is an OpenCode artifact, model-plan entry, or uninstall target.
+VGXNESS installs 19 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v41, managed `general` and verifier profiles, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v9, one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. The separate global 42-file, 18-skill catalog owns `skills-creator`, `stacked-pr`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, and `sdd-lifecycle`; none is an OpenCode artifact, model-plan entry, or uninstall target.
 
 The plugin exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
 
@@ -66,7 +66,7 @@ The same schema-v5 database contains separate structured SDD tables. Immediately
 
 The manager and plugin:
 
-- automatically recall recent active project memories once on the first top-level manager turn, append them as bounded untrusted reference data, and preserve that context across later model calls and compaction;
+- automatically recall up to five recent active project memories once on the first top-level manager turn as a <=4 KiB untrusted index (ID, title, type, optional topic key, <=128-character UTF-8-safe preview, and bounded references), never full content; preserve it across later model calls and compaction;
 - fall back to the explicit `vgxness_memory_recent` tool only when the automatic bounded context block is absent or unavailable;
 - searches memory with any-term matching when prior project decisions, fixes, discoveries, or conventions may matter;
 - reads full content only after a relevant search result;
@@ -79,7 +79,7 @@ Reviewers may search and read memory as non-authoritative context. They cannot s
 
 The plugin launches the exact managed VGXNESS executable with an argument vector and `shell=false`, passes bounded JSON through stdin, limits output and runtime, supports cancellation, and inherits only the minimal home/temp environment required to locate owned storage. It does not forward credentials.
 
-The generated plugin also uses OpenCode's `event`, `chat.message`, `experimental.chat.system.transform`, `experimental.session.compacting`, `tool.execute.before`, `tool.execute.after`, and `dispose` hooks. Session state is closure-owned and bounded. Tool observation retains only tool/session/call correlation, timing, and successful completion; it never captures arguments, output, titles, metadata, prompts, or errors and never mutates tool inputs or outputs. Hook and memory failures are fail-open for chat, compaction, and tool execution.
+The generated plugin also uses OpenCode's `event`, `chat.message`, `experimental.chat.system.transform`, `experimental.session.compacting`, `tool.execute.before`, `tool.execute.after`, and `dispose` hooks. Session state is closure-owned and bounded. Compaction retains at most 16 newest valid completed-tool metadata records within 2 KiB, evicting deterministically; it never captures arguments, output, titles, metadata, prompts, or errors and never mutates tool inputs or outputs. The cached memory block is deduplicated only when its exact complete cached block is proven in host context; otherwise it is safely reinjected. Hook and memory failures are fail-open for chat, compaction, and tool execution.
 
 These OpenCode callbacks are not arbitrary shell hooks or Git hooks. VGXNESS intentionally installs neither; see [Safe hooks](hooks.md) for event semantics, exclusions, and delivery guarantees.
 
@@ -143,7 +143,7 @@ Manager, managed `general`, and verifier use a single global `allow` permission 
 
 ## Health contract
 
-The integration is installed only when manager v41, all other 14 agents, storage plugin v8, the model-plan manifest, default-agent selection, and restoration metadata match their provider identities exactly. Setup health combines:
+The integration is installed only when manager v41, all other 14 agents, storage plugin v9, the model-plan manifest, default-agent selection, and restoration metadata match their provider identities exactly. Setup health combines:
 
 1. the permanent VGXNESS launcher is installed and verified;
 2. all 19 OpenCode-managed artifacts are installed without drift: 15 agents, plugin, model-plan manifest, default-agent selection, and restoration metadata;
