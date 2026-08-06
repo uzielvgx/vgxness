@@ -683,7 +683,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 43"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 44"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -788,6 +788,69 @@ func TestIntegrationRecoversExactManagerPredecessorWithoutManifest(t *testing.T)
 	}
 }
 
+func TestIntegrationRecoversCompleteV43BundleWithoutManifest(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
+		if !isManagedPredecessor(v43.agents[name], current.agents[name], [][]byte{v43.agents[name]}, nil) {
+			ci, cv, cok := managedArtifactMarker(current.agents[name])
+			pi, pv, pok := managedArtifactMarker(v43.agents[name])
+			t.Fatalf("%s v43 predecessor is not recognizable current=%s/%d/%v prior=%s/%d/%v", name, ci, cv, cok, pi, pv, pok)
+		}
+		path := filepath.Join(configDirectory, "agents", name)
+		testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		testutil.NoError(t, os.WriteFile(path, v43.agents[name], 0o600))
+	}
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	preview, previewErr := service.Preview(context.Background(), options)
+	installed, installErr := service.Install(context.Background(), options)
+	testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled, "preview=%+v previewErr=%v installed=%+v installErr=%v", preview, previewErr, installed, installErr)
+}
+
+func TestIntegrationRejectsModifiedV2ProfileWithoutManifest(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
+		content := v43.agents[name]
+		if name == reviewRiskName {
+			content = append(append([]byte(nil), content...), "\nmodified\n"...)
+		}
+		path := filepath.Join(configDirectory, "agents", name)
+		testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		testutil.NoError(t, os.WriteFile(path, content, 0o600))
+	}
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	status, statusErr := service.Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	path := filepath.Join(configDirectory, "agents", reviewRiskName)
+	after, readErr := os.ReadFile(path)
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.HasSuffix(after, []byte("\nmodified\n")), "status=%+v statusErr=%v install=%v read=%v", status, statusErr, installErr, readErr)
+}
+
+func TestCurrentReviewerAndRefuterUseChildReturnEnvelopeV1(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		prompt := string(bundle.agents[name])
+		for _, field := range []string{`"schemaVersion"`, `"candidate":{"digest"`, `"changedPaths"`, `"summary"`, `"evidence":[{"kind"`, `"locator"`, `"candidateDigest"`, `"observedResult"`, `"availability"`, `"unknowns"`, `"assumptions"`, `"blockers"`} {
+			if !strings.Contains(prompt, field) {
+				t.Errorf("%s missing envelope field %s", name, field)
+			}
+		}
+	}
+	if strings.Contains(reviewRefuterPrompt, `{"candidateIdentity":"<sha256>","results"`) {
+		t.Error("refuter retains legacy-only return example")
+	}
+}
+
 func TestIntegration_RefusesForeignMemoryPluginAndDoesNotInspectLegacyAgents(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	pluginPath := filepath.Join(configDirectory, "plugins", "vgxness.ts")
@@ -816,7 +879,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 43",
+		"artifact: opencode-agent/vgxness-manager; version: 44",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",

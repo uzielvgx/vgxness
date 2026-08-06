@@ -139,7 +139,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessorV3, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(predecessorV3.manifest); digest != "fc31bed29b9d1d8f06a7029ece5a9fa5d523307858a40dc18eebd8920c111fb2" {
+	if digest := artifactSHA256(predecessorV3.manifest); digest != "b65c61c6486435693bc6938a7f13f50cc7ec384bdc6179d351213aff5c9d5ace" {
 		t.Fatalf("current SDD manifest=%s", digest)
 	}
 	for _, profile := range []struct {
@@ -155,7 +155,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	}
 	predecessor, err := previousSDDModelPlanBundleV2(current)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(predecessor.manifest); digest != "e9ff399203021f8b0a2defc59f9e50c4d7a54c389411352fa6f8b0a85e11bb05" {
+	if digest := artifactSHA256(predecessor.manifest); digest != "c030e0d6e2d746d88ebe80bc4b1288951f2ad97a3691de4438134e3b123b8e81" {
 		t.Fatalf("legacy SDD manifest=%s", digest)
 	}
 	for name, digest := range map[string]string{sddResearchName: "7bcd1f18790e34c48c3c684cbc5c409d0b9163422e89b49a3f389cc026b53906", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
@@ -167,7 +167,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	combined, err := previousSDDModelPlanBundleV2(priorExplore)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(combined.manifest); digest != "e866231ed8eacb45e5cd36d577c76324d9743617cf22a2b199fb55a96cafa88c" {
+	if digest := artifactSHA256(combined.manifest); digest != "304af3c0e4257dc61dd4bb140f7f74a8619ef4a5a61fcf6f396f188f09aa03fe" {
 		t.Fatalf("combined SDD manifest=%s", digest)
 	}
 }
@@ -215,7 +215,11 @@ func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 	service, options := NewIntegration(), integration.Options{ConfigDir: config}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	managerV41, err := previousManagerModelPlanBundleV41(current)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	managerV42, err := previousManagerModelPlanBundleV42(v43)
+	testutil.NoError(t, err)
+	managerV41, err := previousManagerModelPlanBundleV41(managerV42)
 	testutil.NoError(t, err)
 	managerV40, err := previousManagerModelPlanBundleV40(managerV41)
 	testutil.NoError(t, err)
@@ -259,7 +263,7 @@ func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testi
 	testutil.NoError(t, err)
 	candidates, err := predecessorBundles(current)
 	testutil.NoError(t, err)
-	if len(candidates) != 30 {
+	if len(candidates) != 36 {
 		t.Fatalf("predecessor combinations=%d", len(candidates))
 	}
 	seen := make(map[string]struct{}, len(candidates))
