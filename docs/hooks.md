@@ -1,6 +1,6 @@
 # Safe hooks
 
-VGXNESS ships one hook surface: typed callbacks in the generated OpenCode storage plugin v5. It does not ship arbitrary shell hooks, Git hooks, or an internal Go event dispatcher.
+VGXNESS ships one hook surface: typed callbacks in the generated OpenCode storage plugin v8. It does not ship arbitrary shell hooks, Git hooks, or an internal Go event dispatcher.
 
 ## OpenCode callbacks
 
@@ -14,6 +14,14 @@ VGXNESS ships one hook surface: typed callbacks in the generated OpenCode storag
 Memory never becomes instructions or candidate proof. Closing tags are escaped, collections are capped, stale tool starts are purged, child sessions are excluded, and hook failures cannot abort chat, compaction, or tool execution.
 
 Hook correlation grants no mutation authority. Every SDD mutation independently verifies the tracked top-level `vgxness-manager` session and rejects child, reviewer, phase-agent, missing, or mismatched context. The plugin stores and transforms bounded data; it never executes, routes, edits, delegates, or advances a change by itself.
+
+## Local manager observability
+
+`VGXNESS_MANAGER_OBSERVABILITY=1` enables a separate, process-local diagnostic record only after an explicit top-level `session.created` lifecycle event identifies `vgxness-manager`. Chat's legacy synthesized memory state never establishes observability eligibility. It is off by default; unset, any value other than exactly `"1"`, ineligible callbacks, session deletion, and disposal synchronously retain no observability state and do not adapt or allocate observability input. Child, reviewer, SDD phase-agent, non-manager, malformed, and uncorrelatable inputs are excluded before allocation.
+
+Records have schema version 1, opaque local UUIDs, per-workflow sequence, an allow-listed callback/kind, non-negative monotonic observed offset, and `unavailable` availability. They never claim a terminal outcome, duration, completeness, quality, latency, or security result. Retention is bounded to 128 workflows, 32 records per workflow, 256 records globally, and 128 pending correlations; global pressure evicts the true oldest record. Pending tool pairs retain validated tool identity only ephemerally and require exact session/call/tool equality before one-time consumption; no tool identity enters a record. Their ten-minute lifetime uses monotonic `globalThis.performance.now()` samples: missing, invalid, or backward clocks fail open without allocation.
+
+The records are private to the running plugin: no file, database, memory store, export, console/log, network, subprocess, tool payload, model context, prompt, compaction, credential, Git/PR, or SDD route receives them. Instrumentation failures are discarded locally and cannot alter host callback behavior. Restarting OpenCode starts an empty local process scope. Generated-plugin tests are not installed-host proof; separately authorized, version-bound installed-host validation of delivery, ordering, correlation, exclusions, opt-in, and semantics is required before any capability can be marked `direct`.
 
 ## Exclusions
 

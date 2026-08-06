@@ -703,9 +703,9 @@ func TestIntegration_RejectsForeignMalformedMismatchedAndNewerArtifacts(t *testi
 	testutil.NoError(t, err)
 	cases := map[string][]byte{
 		"foreign":       []byte("user-owned plugin\n"),
-		"malformed":     bytes.Replace(currentPlugin, []byte("version: 7"), []byte("version: old"), 1),
+		"malformed":     bytes.Replace(currentPlugin, []byte("version: 8"), []byte("version: old"), 1),
 		"name mismatch": bytes.Replace(currentPlugin, []byte("artifact: opencode-plugin/vgxness-memory"), []byte("artifact: opencode-plugin/other"), 1),
-		"newer":         bytes.Replace(currentPlugin, []byte("version: 7"), []byte("version: 8"), 1),
+		"newer":         bytes.Replace(currentPlugin, []byte("version: 8"), []byte("version: 9"), 1),
 	}
 	for name, candidate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -893,7 +893,7 @@ func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 7",
+		"artifact: opencode-plugin/vgxness-memory; version: 8",
 		"vgxness_memory_recent", "vgxness_memory_search", "vgxness_memory_get", "vgxness_memory_save", "vgxness_memory_forget",
 		`["memory", operation, "--stdin", "--json", "--workspace", workspace]`,
 		"shell: false", "MAX_INPUT_BYTES", "MAX_OUTPUT_BYTES", "TIMEOUT_MS",
@@ -913,6 +913,74 @@ func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
 	} {
 		if strings.Contains(plugin, forbidden) {
 			t.Errorf("memory plugin retains non-memory capability %q", forbidden)
+		}
+	}
+}
+
+func TestMemoryPluginDefinesDefaultOffLocalManagerObservability(t *testing.T) {
+	content, err := memoryPluginContent(NewIntegration().executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	for _, required := range []string{
+		"artifact: opencode-plugin/vgxness-memory; version: 8",
+		`process.env.VGXNESS_MANAGER_OBSERVABILITY === "1"`,
+		"MAX_OBSERVABILITY_WORKFLOWS = 128",
+		"MAX_OBSERVABILITY_RECORDS_PER_WORKFLOW = 32",
+		"MAX_OBSERVABILITY_RECORDS = 256",
+		"MAX_OBSERVABILITY_PENDING = 128",
+		"OBSERVABILITY_PENDING_TTL_MS = 10 * 60_000",
+		"schemaVersion: 1",
+		`availability: "unavailable"`,
+		"crypto.randomUUID()",
+		"clearObservability()",
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("manager observability plugin missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"observability.export", "console.log(observability", "fetch(", "writeFile", "readFile", "JSON.stringify(input)"} {
+		if strings.Contains(plugin, forbidden) {
+			t.Errorf("manager observability plugin has forbidden route %q", forbidden)
+		}
+	}
+}
+
+func TestMemoryPluginDefinesClosedObservabilityAdapter(t *testing.T) {
+	content, err := memoryPluginContent(NewIntegration().executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	for _, required := range []string{
+		"const OBSERVABILITY_CAPABILITIES = Object.freeze",
+		"const adaptObservabilityInput = (callback, input) =>",
+		`callback === "chat.message"`,
+		"const observabilityEligible = (sessionID) =>",
+		"globalThis.performance?.now?.()",
+		"OBSERVABILITY_PENDING_TTL_MS",
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("closed observability contract missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"export const VGXNESSObservability", "__vgxnessObservabilityTest", "console.error", "fetch(", "spawn(\"observability\"", "input.metadata", "input.args", "output.output"} {
+		if strings.Contains(plugin, forbidden) {
+			t.Errorf("closed observability contract leaked %q", forbidden)
+		}
+	}
+}
+
+func TestMemoryPluginDefinesUnavailableToolPairObservability(t *testing.T) {
+	content, err := memoryPluginContent(NewIntegration().executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	for _, required := range []string{
+		`"tool.pair": Object.freeze({ sourceCallback: "tool.execute.after", availability: "unavailable" })`,
+		`callback === "tool.execute.before" || callback === "tool.execute.after"`,
+		"tool: adapted.tool",
+		"pending.tool !== adapted.tool",
+		"state.pending.delete(key)",
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("tool pair observability missing %q", required)
 		}
 	}
 }
@@ -1094,7 +1162,7 @@ func TestMemoryPluginDefinesOptInFailOpenSyncHooks(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 7",
+		"artifact: opencode-plugin/vgxness-memory; version: 8",
 		`const SYNC_ON_SESSION_START = process.env.VGXNESS_SYNC_ON_SESSION_START === "1"`,
 		`const SYNC_ON_SESSION_END = process.env.VGXNESS_SYNC_ON_SESSION_END === "1"`,
 		`const SYNC_START_TIMEOUT_MS = 2_000`,
@@ -1162,6 +1230,7 @@ globalThis.setTimeout = (callback, timeout) => {
   timers.push(timer)
   return timer
 }
+
 globalThis.clearTimeout = (timer) => { timer.cleared = true }
 function stream() { return { resumed: false, resume() { this.resumed = true }, setEncoding() {}, on() {} } }
 class Child {
@@ -1251,12 +1320,114 @@ if (scenario === "disabled") {
 	}
 }
 
+/*
+	func TestMemoryPluginRunsLocalObservabilityFailOpenAndBounded(t *testing.T) {
+		node, err := exec.LookPath("node")
+		if err != nil {
+			t.Skip("node is unavailable")
+		}
+		content, err := memoryPluginContent(NewIntegration().executable)
+		testutil.NoError(t, err)
+		plugin := string(content)
+		if strings.Contains(plugin, "__vgxnessObserveTest") {
+			t.Fatal("production snapshot seam leaked")
+		}
+		plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__vgxnessTest`, 1)
+		plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__vgxnessTest`, 1)
+		plugin = strings.Replace(plugin, `import { tool } from "@opencode-ai/plugin"`, `const { tool } = globalThis.__vgxnessTest`, 1)
+		plugin = strings.Replace(plugin, `export const VGXNESSMemoryPlugin`, `const VGXNESSMemoryPlugin`, 1)
+		plugin = strings.Replace(plugin, `  // vgxness observability v8 end`, `  Object.assign(globalThis.__vgxnessObserveTest, { snapshot: () => { const s = observability; return s ? {w:s.workflows.size,p:s.pending.size,c:Array.from(s.workflows.values()).map(x=>x.records.length),r:Array.from(s.workflows.values()).flatMap(x=>x.records.map(y=>y.record))} : {w:0,p:0,c:[],r:[]} } })
+	  // vgxness observability v8 end`, 1)
+		plugin = strings.ReplaceAll(plugin, "globalThis.performance?.now?.()", "globalThis.__vgxnessObserveTest.now()")
+		plugin = strings.ReplaceAll(plugin, "crypto.randomUUID()", "globalThis.__vgxnessObserveTest.uuid()")
+		plugin = strings.ReplaceAll(plugin, "workflow.records.push(", "push(workflow.records, ")
+		script := `let now=0,n=0; const a=(x,m)=>{if(!x)throw Error(m)};globalThis.__vgxnessObserveTest={now:()=>now,uuid:()=>"00000000-0000-4000-8000-"+String(++n).padStart(12,"0")};const s=new Proxy({}, {get:()=>()=>({optional(){return this},describe(){return this}})});const fakeTool=x=>x;fakeTool.schema=s;globalThis.__vgxnessTest={spawn:()=>{throw Error("spawn")},isAbsolute:()=>true,tool:fakeTool};` + plugin + `
+
+const e=id=>({event:{type:"session.created",properties:{info:{id}}}}),m=id=>({sessionID:id,agent:"vgxness-manager"}),q=(id,c)=>({sessionID:id,callID:c,tool:"tool-sentinel"});const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/i;process.env.VGXNESS_MANAGER_OBSERVABILITY="1";let i=await VGXNESSMemoryPlugin({directory:"/"});await i.event({event:{type:"session.created",properties:{info:{id:"child",parentID:"root"}}}});await i["chat.message"](m("child"));await i["chat.message"]({sessionID:"general",agent:"general"});await i["tool.execute.before"]({});a(__vgxnessObserveTest.snapshot().r.length===0&&__vgxnessObserveTest.snapshot().p===0,"exclusion");await i.event(e("session-sentinel"));await i["chat.message"](m("session-sentinel"));for(let k=0;k<130;k++)await i["tool.execute.before"](q("session-sentinel","p"+k));let z=__vgxnessObserveTest.snapshot(),before=z.r.length;await i["tool.execute.after"](q("session-sentinel","p0"));a(__vgxnessObserveTest.snapshot().r.length===before,"oldest");await i["tool.execute.after"](q("session-sentinel","p129"));a(__vgxnessObserveTest.snapshot().r.length===before+1,"retained");await i["tool.execute.after"](q("session-sentinel","p129"));a(__vgxnessObserveTest.snapshot().r.length===before+1,"duplicate");await i["tool.execute.before"](q("session-sentinel","d"));await i["tool.execute.before"](q("session-sentinel","d"));await i["tool.execute.after"](q("session-sentinel","d"));a(__vgxnessObserveTest.snapshot().r.length===before+2,"dupe before");for(let k=0;k<40;k++){await i["tool.execute.before"](q("session-sentinel","f"+k));await i["tool.execute.after"](q("session-sentinel","f"+k))}for(let k=0;k<130;k++){let id="workflow-"+k;await i.event(e(id));await i["chat.message"](m(id));await i["tool.execute.before"](q(id,"call-"+k));await i["tool.execute.after"](q(id,"call-"+k))}z=__vgxnessObserveTest.snapshot();a(z.w<=128&&z.r.length<=256&&z.c.every(x=>x<=32),"bounds");let groups={};for(const r of z.r){a(uuid.test(r.workflowID)&&uuid.test(r.eventID)&&(!r.correlationID||uuid.test(r.correlationID))&&r.availability==="unavailable"&&!JSON.stringify(r).match(/session-sentinel|call-|tool-sentinel|secret|error|path/),"privacy");(groups[r.workflowID]??=[]).push(r)}for(const g of Object.values(groups))for(let k=1;k<g.length;k++)a(g[k].sequence>g[k-1].sequence&&g[k].observedOffsetMs>=g[k-1].observedOffsetMs&&g[k].observedOffsetMs>=0,"ordering");`
+
+	script = `
+
+let now=0,n=0; const a=(x,m)=>{if(!x)throw Error(m)}
+const state=globalThis.__vgxnessObserveTest={now:()=>now,uuid:()=>"00000000-0000-4000-8000-"+String(++n).padStart(12,"0"),push:(r,v)=>r.push(v)}
+const push=(r,v)=>state.push(r,v); const schema=new Proxy({}, {get:()=>()=>({optional(){return this},describe(){return this}})}); const fakeTool=x=>x; fakeTool.schema=schema; globalThis.__vgxnessTest={spawn:()=>{throw Error("spawn")},isAbsolute:()=>true,tool:fakeTool}
+` + plugin + `
+const e=id=>({event:{type:"session.created",properties:{info:{id}}}}),m=id=>({sessionID:id,agent:"vgxness-manager"}),q=(id,c)=>({sessionID:id,callID:c,tool:"tool-sentinel"}),snap=()=>state.snapshot(),uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/i
+const fresh=async id=>{process.env.VGXNESS_MANAGER_OBSERVABILITY="1";let x=await VGXNESSMemoryPlugin({directory:"/"});await x.event(e(id));await x["chat.message"](m(id));return x}
+let i=await fresh("x");for(let k=0;k<130;k++)await i["tool.execute.before"](q("x","p"+k));let b=snap().r.length;await i["tool.execute.after"](q("x","p0"));a(snap().r.length===b,"oldest");await i["tool.execute.after"](q("x","p129"));a(snap().r.length===b+1,"retained");await i["tool.execute.after"](q("x","p129"));a(snap().r.length===b+1,"duplicate");for(let k=0;k<40;k++){await i["tool.execute.before"](q("x","f"+k));await i["tool.execute.after"](q("x","f"+k))}let z=snap();a(z.c.every(c=>c<=32),"per");
+for(let k=0;k<130;k++){let id="w"+k;let x=await fresh(id);await x["tool.execute.before"](q(id,"c"+k));await x["tool.execute.after"](q(id,"c"+k))}z=snap();a(z.w<=128&&z.r.length<=256,"global");let g={};for(const r of z.r){a(uuid.test(r.workflowID)&&uuid.test(r.eventID)&&(!r.correlationID||uuid.test(r.correlationID))&&!JSON.stringify(r).match(/tool-sentinel|secret|error|path|call-|session/),"privacy");(g[r.workflowID]??=[]).push(r)}for(const v of Object.values(g))for(let k=1;k<v.length;k++)a(v[k].sequence>v[k-1].sequence&&v[k].observedOffsetMs>=v[k-1].observedOffsetMs,"order");
+i=await fresh("delete");await i["tool.execute.before"](q("delete","p"));await i.event({event:{type:"session.deleted",properties:{info:{id:"delete"}}}});a(snap().r.length===0&&snap().p===0,"delete");i=await fresh("off");await i["tool.execute.before"](q("off","p"));process.env.VGXNESS_MANAGER_OBSERVABILITY="0";await i["chat.message"](m("off"));a(snap().r.length===0&&snap().p===0,"off");i=await fresh("dispose");await i["tool.execute.before"](q("dispose","p"));await i.dispose();await i.dispose();a(snap().r.length===0&&snap().p===0,"dispose");
+for(const bad of [()=>{throw Error("uuid")},()=>"bad"]){state.uuid=bad;i=await fresh("bad");a(snap().r.length===0&&snap().p===0,"uuid fail")}state.uuid=()=>"00000000-0000-4000-8000-"+String(++n).padStart(12,"0");state.now=()=>{throw Error("clock")};i=await fresh("clock");a(snap().r.length===0&&snap().p===0,"clock fail");state.now=()=>now;state.push=()=>{throw Error("push")};i=await fresh("push");await i["tool.execute.before"](q("push","p"));await i["tool.execute.after"](q("push","p"));a(snap().r.length===0,"push fail");`
+
+	script += `
+
+state.push=(r,v)=>r.push(v); state.now=()=>now; process.env.VGXNESS_MANAGER_OBSERVABILITY="1";
+let synthetic=await VGXNESSMemoryPlugin({directory:"/"}); await synthetic["chat.message"](m("synthetic")); a(snap().r.length===0&&snap().p===0,"synthetic lifecycle");
+let eligible=await VGXNESSMemoryPlugin({directory:"/"}); await eligible.event(e("exact")); await eligible["chat.message"](m("exact")); await eligible["tool.execute.before"]({sessionID:"exact",callID:"same",tool:"first"}); await eligible["tool.execute.after"]({sessionID:"exact",callID:"same",tool:"second"}); a(snap().p===1&&snap().r.length===1,"tool mismatch"); await eligible["tool.execute.after"]({sessionID:"exact",callID:"same",tool:"first"}); a(snap().p===0&&snap().r.length===2,"tool exact");
+`
+
+		path := filepath.Join(t.TempDir(), "obs.mjs")
+		testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+		if out, err := exec.Command(node, path).CombinedOutput(); err != nil {
+			t.Fatalf("observability harness: %v: %s", err, out)
+		}
+	}
+*/
+func TestMemoryPluginRuntimeObservabilityInvariants(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	content, err := memoryPluginContent(NewIntegration().executable)
+	testutil.NoError(t, err)
+	plugin := string(content)
+	for _, forbidden := range []string{"__vgxnessObserveTest", "VGXNESSObservability", "observabilitySnapshot"} {
+		if strings.Contains(plugin, forbidden) {
+			t.Fatalf("production seam %q", forbidden)
+		}
+	}
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { tool } from "@opencode-ai/plugin"`, `const { tool } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryPlugin`, `const VGXNESSMemoryPlugin`, 1)
+	plugin = strings.Replace(plugin, `  // vgxness observability v8 end`, `  Object.assign(globalThis.__obs,{snap:()=>{const s=observability;return s?{w:s.workflows.size,p:s.pending.size,c:[...s.workflows.values()].map(x=>x.records.length),r:[...s.workflows.values()].flatMap(x=>x.records.map(y=>y.record))}:{w:0,p:0,c:[],r:[]}}})
+  // vgxness observability v8 end`, 1)
+	plugin = strings.ReplaceAll(plugin, "globalThis.performance?.now?.()", "globalThis.__obs.now()")
+	plugin = strings.ReplaceAll(plugin, "crypto.randomUUID()", "globalThis.__obs.uuid()")
+	plugin = strings.ReplaceAll(plugin, "workflow.records.push(", "push(workflow.records, ")
+	script := `let now=0,n=0;const a=(x,m)=>{if(!x)throw Error(m)},obs=globalThis.__obs={now:()=>now,uuid:()=>"00000000-0000-4000-8000-"+String(++n).padStart(12,"0"),push:(r,v)=>r.push(v)};const push=(r,v)=>obs.push(r,v),s=new Proxy({}, {get:()=>()=>({optional(){return this},describe(){return this}})}),fakeTool=x=>x;fakeTool.schema=s;globalThis.__test={spawn:()=>{throw Error("spawn")},isAbsolute:()=>true,tool:fakeTool};` + plugin + `
+const e=id=>({event:{type:"session.created",properties:{info:{id}}}}),m=id=>({sessionID:id,agent:"vgxness-manager"}),q=(id,c)=>({sessionID:id,callID:c,tool:"tool-sentinel"}),S=()=>obs.snap(),u=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/i;
+const open=async(id,on=true)=>{process.env.VGXNESS_MANAGER_OBSERVABILITY=on?"1":"";let x=await VGXNESSMemoryPlugin({directory:"/"});await x.event(e(id));return x};let x=await open("off",false);await x["chat.message"](m("off"));a(S().r.length===0&&S().p===0,"off");x=await open("root");await x.event({event:{type:"session.created",properties:{info:{id:"child",parentID:"root"}}}});await x["chat.message"](m("child"));await x["chat.message"]({sessionID:"non",agent:"general"});await x["tool.execute.before"]({});await x["tool.execute.after"](q("root","none"));a(S().r.length===0&&S().p===0,"exclude");await x["chat.message"](m("root"));for(let k=0;k<130;k++)await x["tool.execute.before"](q("root","p"+k));let b=S().r.length;await x["tool.execute.after"](q("root","p0"));a(S().r.length===b,"old");await x["tool.execute.after"](q("root","p129"));a(S().r.length===b+1,"last");await x["tool.execute.after"](q("root","p129"));a(S().r.length===b+1,"dup after");await x["tool.execute.before"](q("root","d"));await x["tool.execute.before"](q("root","d"));await x["tool.execute.after"](q("root","d"));a(S().r.length===b+2,"dup before");for(let k=0;k<40;k++){await x["tool.execute.before"](q("root","f"+k));await x["tool.execute.after"](q("root","f"+k))}a(S().c.every(c=>c<=32),"per");for(let k=0;k<130;k++){let id="raw-session-"+k;await x.event(e(id));await x["chat.message"](m(id));await x["tool.execute.before"](q(id,"raw-call-"+k));await x["tool.execute.after"](q(id,"raw-call-"+k))}let z=S();a(z.w<=128&&z.r.length<=256,"global");let g={};for(const r of z.r){a(u.test(r.workflowID)&&u.test(r.eventID)&&(!r.correlationID||u.test(r.correlationID))&&!JSON.stringify(r).match(/raw-session|raw-call|tool-sentinel|secret|error|path/),"privacy");(g[r.workflowID]??=[]).push(r)}for(const v of Object.values(g))for(let k=1;k<v.length;k++)a(v[k].sequence>v[k-1].sequence&&v[k].observedOffsetMs>=v[k-1].observedOffsetMs&&v[k].observedOffsetMs>=0,"order");for(const mode of ["delete","off","dispose"]){let y=await open(mode);await y["chat.message"](m(mode));await y["tool.execute.before"](q(mode,"p"));if(mode==="delete")await y.event({event:{type:"session.deleted",properties:{info:{id:mode}}}});if(mode==="off"){process.env.VGXNESS_MANAGER_OBSERVABILITY="0";await y["chat.message"](m(mode))}if(mode==="dispose"){await y.dispose();await y.dispose()}a(S().r.length===0&&S().p===0,mode)}for(const bad of [()=>{throw Error("u")},()=>"bad"]){obs.uuid=bad;let y=await open("bad");await y["chat.message"](m("bad"));a(S().r.length===0&&S().p===0,"uuid")}obs.uuid=()=>"00000000-0000-4000-8000-"+String(++n).padStart(12,"0");obs.now=()=>{throw Error("clock")};let y=await open("clock");await y["chat.message"](m("clock"));a(S().r.length===0&&S().p===0,"clock");obs.now=()=>now;obs.push=()=>{throw Error("push")};y=await open("push");await y["chat.message"](m("push"));await y["tool.execute.before"](q("push","p"));await y["tool.execute.after"](q("push","p"));a(S().r.length===0&&S().p===0,"push");`
+	script += `
+obs.push=(r,v)=>r.push(v); obs.now=()=>now; process.env.VGXNESS_MANAGER_OBSERVABILITY="1";
+let synthetic=await VGXNESSMemoryPlugin({directory:"/"}); await synthetic["chat.message"](m("synthetic")); a(S().r.length===0&&S().p===0,"synthetic lifecycle");
+let eligible=await open("exact"); await eligible["chat.message"](m("exact")); await eligible["tool.execute.before"]({sessionID:"exact",callID:"same",tool:"first"}); await eligible["tool.execute.after"]({sessionID:"exact",callID:"same",tool:"second"}); a(S().p===1&&S().r.length===1,"tool mismatch"); await eligible["tool.execute.after"]({sessionID:"exact",callID:"same",tool:"first"}); a(S().p===0&&S().r.length===2,"tool exact");
+for(const sample of [undefined,"bad",NaN,Infinity,-1]){obs.now=()=>sample;let y=await open("clock-"+String(sample));await y["chat.message"](m("clock-"+String(sample)));a(S().r.length===0&&S().p===0,"invalid clock")}obs.now=()=>now;let ttl=await open("ttl");await ttl["chat.message"](m("ttl"));await ttl["tool.execute.before"]({sessionID:"ttl",callID:"expired",tool:"tool"});now+=600000;await ttl["tool.execute.after"]({sessionID:"ttl",callID:"expired",tool:"tool"});a(S().p===0&&S().r.length===1,"monotonic ttl");
+let backward=await open("backward");await backward["chat.message"](m("backward"));obs.now=()=>now-1;await backward["tool.execute.before"]({sessionID:"backward",callID:"back",tool:"tool"});a(S().p===0&&S().r.length===1,"backward clock");obs.now=()=>now;
+`
+	path := filepath.Join(t.TempDir(), "runtime.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	if output, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("runtime: %v: %s", err, output)
+	}
+}
+
 func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 	service := NewIntegration()
 	currentPlugin, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
-	pluginV6 := previousMemoryPluginV6(currentPlugin)
+	resolved, err := filepath.EvalSymlinks(service.executable)
+	testutil.NoError(t, err)
+	if !bytes.Equal(currentPlugin, renderMemoryPlugin(resolved)) {
+		t.Fatal("validated production plugin bytes differ from pure renderer")
+	}
+	canonical := renderMemoryPlugin("/vgxness-test-bin")
+	canonicalV7 := previousMemoryPluginV7(canonical)
+	pluginV7 := previousMemoryPluginV7(currentPlugin)
+	pluginV6 := previousMemoryPluginV6(pluginV7)
 	pluginV5 := previousMemoryPluginV5(pluginV6)
+	if got, want := artifactSHA256(canonicalV7), "9401fdc28924a7ba73285106734d9d19a851c70490b4a86cec186ae0622a70fd"; got != want {
+		t.Fatalf("canonical v7 digest = %s, want %s", got, want)
+	}
 	if !bytes.Contains(pluginV5, []byte("\n  dispose: async () => {\n")) || bytes.Contains(pluginV5, []byte("\n   dispose: async () => {\n")) {
 		t.Fatal("v5 predecessor changed dispose indentation")
 	}
@@ -1264,8 +1435,11 @@ func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 	pluginV3 := previousMemoryPluginV3(pluginV4)
 	pluginV2 := previousMemoryPluginV2(pluginV3)
 	pluginV1 := previousMemoryPluginV1(pluginV2)
-	if !isPreviousMemoryPlugin(pluginV6) || !isPreviousMemoryPlugin(pluginV5) || !isPreviousMemoryPlugin(pluginV4) || !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
-		t.Fatalf("plugin v6/v5/v4/v3/v2/v1 predecessors were not recognized")
+	if !isPreviousMemoryPlugin(pluginV7) || !isPreviousMemoryPlugin(pluginV6) || !isPreviousMemoryPlugin(pluginV5) || !isPreviousMemoryPlugin(pluginV4) || !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
+		t.Fatalf("plugin v7/v6/v5/v4/v3/v2/v1 predecessors were not recognized")
+	}
+	if isPreviousMemoryPlugin(append(append([]byte(nil), pluginV7...), '\n')) {
+		t.Fatal("whitespace-modified v7 predecessor was recognized")
 	}
 	modified := append(append([]byte(nil), pluginV2...), []byte("\nmodified\n")...)
 	if isPreviousMemoryPlugin(modified) {
