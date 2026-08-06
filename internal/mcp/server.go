@@ -57,6 +57,15 @@ func New(ctx context.Context, workspace string, opts config.Options) (*Server, e
 	return newWithReader(ctx, workspace, runtimeReader{runtime: runtime.NewMemory("mcp", true), opts: opts})
 }
 
+// RunStdio creates a server bound to workspace and serves it over process standard I/O.
+func RunStdio(ctx context.Context, workspace string, opts config.Options) error {
+	server, err := New(ctx, workspace, opts)
+	if err != nil {
+		return err
+	}
+	return server.Run(ctx, &sdk.StdioTransport{})
+}
+
 func newWithReader(ctx context.Context, workspace string, reader memoryReader) (*Server, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

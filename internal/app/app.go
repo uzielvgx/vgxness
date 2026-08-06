@@ -26,17 +26,29 @@ import (
 )
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return run(ctx, args, stdin, stdout, stderr, tui.Run)
+	return runWithMCP(ctx, args, stdin, stdout, stderr, tui.Run, cli.RunMCP)
 }
 
 type tuiLauncher func(context.Context, io.Reader, io.Writer, io.Writer, tui.Backend, tui.Options) int
+type mcpLauncher func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher) int {
+	return runWithMCP(ctx, args, stdin, stdout, stderr, launchTUI, cli.RunMCP)
+}
+
+func runWithMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher, launchMCP mcpLauncher) int {
 	if len(args) > 0 && args[0] == "version" {
 		return cli.RunVersion(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "skills" {
 		return cli.RunSkills(ctx, args[1:], stdout, stderr, skills.New())
+	}
+	if len(args) > 0 && args[0] == "mcp" {
+		if launchMCP == nil {
+			fmt.Fprintln(stderr, "operational: MCP launcher is unavailable")
+			return 1
+		}
+		return launchMCP(ctx, args[1:], stdin, stdout, stderr, mustWorkspace())
 	}
 	if len(args) > 0 && args[0] == "tui" && len(args) != 1 {
 		fmt.Fprintln(stderr, "usage: vgxness tui")
