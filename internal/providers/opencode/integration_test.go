@@ -683,7 +683,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 45"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 46"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -747,6 +747,8 @@ func TestUpgradeArtifactRollbackRestoresOnlyUnchangedReplacement(t *testing.T) {
 func TestIntegrationRecoversExactManagerPredecessorWithoutManifest(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	v45, err := previousV45ModelPlanBundle(current)
+	testutil.NoError(t, err)
 	v42, err := previousManagerModelPlanBundleV42(current)
 	testutil.NoError(t, err)
 	v41, err := previousManagerModelPlanBundleV41(v42)
@@ -760,6 +762,7 @@ func TestIntegrationRecoversExactManagerPredecessorWithoutManifest(t *testing.T)
 		manager     []byte
 		recoverable bool
 	}{
+		{"v45", v45.agents[managerAgentName], true},
 		{"v42", v42.agents[managerAgentName], true},
 		{"v41", v41.agents[managerAgentName], true},
 		{"v40", v40.agents[managerAgentName], true},
@@ -786,6 +789,24 @@ func TestIntegrationRecoversExactManagerPredecessorWithoutManifest(t *testing.T)
 			testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled && readErr == nil && bytes.Equal(after, current.agents[managerAgentName]), "preview=%+v install=%v status=%+v read=%v", preview, installErr, status, readErr)
 		})
 	}
+}
+
+func TestIntegrationRecoversCompleteV45BundleWithoutManifest(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	v45, err := previousV45ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
+		path := filepath.Join(configDirectory, "agents", name)
+		testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		testutil.NoError(t, os.WriteFile(path, v45.agents[name], 0o600))
+	}
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	preview, previewErr := service.Preview(context.Background(), options)
+	installed, installErr := service.Install(context.Background(), options)
+	testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled, "preview=%+v install=%+v", preview, installed)
 }
 
 func TestIntegrationRecoversCompleteV43BundleWithoutManifest(t *testing.T) {
@@ -897,7 +918,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 45",
+		"artifact: opencode-agent/vgxness-manager; version: 46",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",
