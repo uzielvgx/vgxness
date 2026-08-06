@@ -10,7 +10,7 @@ The wizard explains and verifies the complete OpenCode setup before changing any
 6. Read back all managed identities and perform the live OpenCode handshake.
 7. Report recovery guidance if any step fails.
 
-The resulting 19 OpenCode artifacts are 15 agents, storage plugin v5, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v41, managed `general`, verifier, `explore`, five reviewers, and six SDD profiles. Official setup publishes the global 42-file, 18-skill catalog; unknown or modified retirement bytes block. OpenCode uninstall does not own global skills.
+The resulting 19 OpenCode artifacts are 15 agents, storage plugin v9, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v44; managed `general`, verifier, and five reviewers v3; `explore`; and six SDD profiles. Official setup publishes the global 42-file, 18-skill catalog; unknown or modified retirement bytes block. OpenCode uninstall does not own global skills.
 
 ## Commands
 

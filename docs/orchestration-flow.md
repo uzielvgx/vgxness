@@ -1,6 +1,6 @@
 # VGXNESS native manager flow
 
-The active product has one execution path: the installed OpenCode-native manager. OpenCode supplies workspace tools and Task workers. VGXNESS supplies exact managed profiles, storage, model bindings, setup, and lifecycle contracts.
+The active product has one execution path: the installed OpenCode-native manager v44. OpenCode supplies workspace tools and Task workers. VGXNESS supplies exact managed profiles (`general`, verifier, and reviewers v3), storage plugin v9, model bindings, setup, and lifecycle contracts. The compact protocol carries only bounded candidate evidence; automatic memory recall is at most five entries in <=4 KiB and compaction retains at most 16 completed-tool metadata records within 2 KiB.
 
 ## Route selection
 

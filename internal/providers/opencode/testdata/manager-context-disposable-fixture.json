@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "manager-context-disposable-v1",
+  "description": "Fresh harmless local fixture for public manager-context development cases.",
+  "files": [
+    {
+      "path": "acceptance.txt",
+      "contents": "criterion=evidenced\n"
+    },
+    {
+      "path": "structural-boundary.txt",
+      "contents": "boundary=local-fixture\n"
+    },
+    {
+      "path": "edit-target.txt",
+      "contents": "state=before\n"
+    }
+  ]
+}

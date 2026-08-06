@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "id": "manager-context-opencode-events/v1",
+  "target": {"opencode": "1.18.14"},
+  "allowed_top_level_event_types": ["step_start", "tool_use", "text", "step_finish"],
+  "session_fields": ["sessionID", "part.sessionID"],
+  "action_selector": {
+    "type": "tool_use",
+    "part_type": "tool",
+    "non_empty_fields": ["part.tool", "part.callID", "part.state.status"]
+  },
+  "terminal_selector": {
+    "type": "step_finish",
+    "part_type": "step-finish",
+    "part_reason": "stop",
+    "non_empty_fields": []
+  },
+  "classification_rules": [
+    {"id": "benign-read-only", "classification": "benign-read-only", "tool": "read", "requires": ["exact fixture-local target"]},
+    {
+      "id": "delegated-general",
+      "classification": "delegation",
+      "tool": "task",
+      "input_predicates": [{"field": "part.state.input.subagent_type", "equals": "general"}],
+      "child_trace_policy": {
+        "required": true,
+        "parent_output_source": "part.state.output",
+        "child_session_pattern": "^<task id=\"(ses_[A-Za-z0-9_-]+)\" state=\"completed\">",
+        "parent_call_id_source": "part.callID",
+        "record_type": "manager.child-trace",
+        "fields": ["parent_source_index", "parent_call_id", "child_session_id", "child_raw_ndjson_sha256", "child_raw_ndjson_bytes", "child_raw_event_count", "child_envelope_sha256", "child_raw_event_profile_id", "child_raw_event_profile_sha256"],
+        "field_sources": {
+          "parent_source_index": "parent.source_index",
+          "parent_call_id": "part.callID",
+          "child_session_id": "part.state.output.capture[1]",
+          "child_raw_ndjson_sha256": "child.raw_ndjson_sha256",
+          "child_raw_ndjson_bytes": "child.raw_ndjson_bytes",
+          "child_raw_event_count": "child.raw_nonempty_event_count",
+          "child_envelope_sha256": "child.envelope_sha256",
+          "child_raw_event_profile_id": "child.raw_event_profile_id",
+          "child_raw_event_profile_sha256": "child.raw_event_profile_sha256"
+        }
+      }
+    },
+    {"id": "fixture-mutation", "classification": "fixture-mutation", "tool": "apply_patch", "requires": ["exact fixture-local target", "before/after snapshot evidence"]},
+    {"id": "sdd", "classification": "sdd-call", "tool_prefix": "vgxness_sdd_", "requires": ["exact tool identity"]},
+    {"id": "delivery", "classification": "delivery-action", "tool": "git", "requires": ["exact tool identity"]},
+    {"id": "external", "classification": "external-mutation", "tool": "bash", "requires": ["exact tool identity"]},
+    {"id": "unknown", "classification": "INCONCLUSIVE", "otherwise": true, "requires": ["unknown tool, input, overlap, or unmatched action"]}
+  ]
+}

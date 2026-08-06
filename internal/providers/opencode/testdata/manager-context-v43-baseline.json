@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "target": {
+    "manager_version": 43,
+    "commit": "ad948764d2b529474e7f6edf96513ac5d234442d",
+    "opencode": "1.18.14"
+  },
+  "partitions": {
+    "development": {
+      "count": 4,
+      "digest": "2476c2fdc59dfe301c807c87c71c7f1f4a195e8902ff309084e8c296ee0d3bf6"
+    },
+    "protected_holdout": {
+      "count": 4,
+      "digest": "3d7a4d78b0b070a256cac25d61fbce1bd0c375d6cc0e1ef90b348fc2db02a803"
+    }
+  },
+  "aggregate": {
+    "fresh_sessions": {
+      "development": 4,
+      "protected_holdout": 4,
+      "retries": 0,
+      "environment_failures": 0
+    },
+    "deterministic_pass": {
+      "development": "3/4",
+      "holdout": "2/4"
+    },
+    "output_bytes": { "p50": 295, "p95": 1639 },
+    "json_event_bytes": { "p50": 3889, "p95": 7982 },
+    "tool_calls": { "p50": 1, "p95": 3 },
+    "delegations": { "p50": 1, "p95": 1 },
+    "emitted_cost": "0",
+    "context_bytes": "unknown",
+    "safety": {
+      "fixture_scope_violations": 0,
+      "sdd_calls": 0,
+      "delivery_attempts": 0
+    }
+  },
+  "report_digest": "09f9344b105411b85f1f6a6d5b6775e163225d8eb1f95eee9951f2e9abb04d1d",
+  "trace_metrics_digest": "77262da88f9921b69cebb454e515f095328f94754330b453b94ac58dda2dd1e7",
+  "limitations": [
+    "No model run is part of this asset change; post-v44 evaluation occurs only after final merged installation.",
+    "The authorized pre-change run was initially blocked solely by unrelated or unconfirmed untracked presentation artifacts; the user restored a clean workspace before implementation.",
+    "Context-byte measurement was unavailable from the host and remains unknown.",
+    "Development cases were recreated from the four disclosed intent categories and are not identical to the hashed pre-change development dataset.",
+    "Protected holdout custody is aggregate-only in this repository."
+  ]
+}

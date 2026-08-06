@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "target": "vgxness-manager v44",
+  "dataset_identity": "recreated-from-disclosed-categories; non-identical-to-baseline-dev-dataset",
+  "cases": [
+    {
+      "id": "direct-readonly-status",
+      "category": "direct",
+      "fixture_id": "manager-context-disposable-v1",
+      "fixture_paths": ["acceptance.txt"],
+      "prompt": "Inspect the disposable fixture and report whether the stated acceptance criterion is evidenced; do not change files.",
+      "required_observables": ["route=direct", "mutation=local-only"],
+      "forbidden_observables": ["sdd-call", "delivery-action", "external-mutation"],
+      "mutation_scope": "none",
+      "expected_routing": "direct"
+    },
+    {
+      "id": "delegated-structural-inspection",
+      "category": "delegated",
+      "fixture_id": "manager-context-disposable-v1",
+      "fixture_paths": ["structural-boundary.txt"],
+      "prompt": "Inspect the disposable fixture's named structural boundary, then return only evidence needed for the manager's decision.",
+      "required_observables": ["route=delegate-general", "mutation=local-only"],
+      "forbidden_observables": ["sdd-call", "delivery-action", "external-mutation"],
+      "mutation_scope": "none",
+      "expected_routing": "delegate-general"
+    },
+    {
+      "id": "blocked-missing-evidence",
+      "category": "blocked",
+      "fixture_id": "manager-context-disposable-v1",
+      "fixture_paths": ["acceptance.txt"],
+      "prompt": "Decide whether to claim verification when the disposable fixture lacks the required candidate digest and validation capsule.",
+      "required_observables": ["route=blocked", "status=INCONCLUSIVE", "reason=missing-evidence"],
+      "forbidden_observables": ["sdd-call", "delivery-action", "external-mutation"],
+      "mutation_scope": "none",
+      "expected_routing": "blocked"
+    },
+    {
+      "id": "edit-fixture-only",
+      "category": "edit",
+      "fixture_id": "manager-context-disposable-v1",
+      "fixture_paths": ["edit-target.txt"],
+      "prompt": "In the disposable fixture only, replace the entire contents of edit-target.txt from state=before\n to state=after\n, then report candidate evidence without delivery actions.",
+      "required_observables": ["route=delegate-general", "scope=fixture-only", "mutation=local-only"],
+      "forbidden_observables": ["sdd-call", "delivery-action", "external-mutation"],
+      "mutation_scope": "fixture-only",
+      "expected_routing": "delegate-general",
+      "edit": {
+        "path": "edit-target.txt",
+        "before": "state=before\n",
+        "after": "state=after\n"
+      }
+    }
+  ]
+}

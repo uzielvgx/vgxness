@@ -172,12 +172,12 @@ func TestFoundationProductContract(t *testing.T) {
 func assertOpenCodeDocumentationContract(t *testing.T) {
 	t.Helper()
 	documents := map[string][]string{
-		"../../README.md":                     {"19 managed artifacts", "42-file", "18-skill", "`vgxness-manager` v41", "sdd-lifecycle", "OpenCode uninstall never removes"},
-		"../../docs/opencode-integration.md":  {"19 managed artifacts", "42-file", "18-skill", "v41", "sdd-lifecycle", "uninstall target"},
-		"../../docs/product-blueprint.md":     {"19 provider artifacts", "42 files", "18 skills", "v41", "sdd-lifecycle", "OpenCode uninstall never owns"},
-		"../../docs/product-blueprint.es.md":  {"19 artefactos", "42 archivos", "18 skills", "v41", "sdd-lifecycle", "desinstalación de OpenCode"},
-		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "42-file", "18-skill", "v41", "sdd-lifecycle", "does not remove global skills"},
-		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "42-file", "18-skill", "v41", "sdd-lifecycle", "v1/v2/v3", "OpenCode uninstall does not own"},
+		"../../README.md":                     {"19 managed artifacts", "42-file", "18-skill", "`vgxness-manager` v44", "plugin v9", "sdd-lifecycle", "OpenCode uninstall never removes"},
+		"../../docs/opencode-integration.md":  {"19 managed artifacts", "42-file", "18-skill", "v44", "plugin v9", "sdd-lifecycle", "uninstall target"},
+		"../../docs/product-blueprint.md":     {"19 provider artifacts", "42 files", "18 skills", "v44", "plugin v9", "sdd-lifecycle", "OpenCode uninstall never owns"},
+		"../../docs/product-blueprint.es.md":  {"19 artefactos", "42 archivos", "18 skills", "v44", "plugin v9", "sdd-lifecycle", "desinstalación de OpenCode"},
+		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "42-file", "18-skill", "v44", "plugin v9", "sdd-lifecycle", "does not remove global skills"},
+		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "42-file", "18-skill", "v44", "plugin v9", "sdd-lifecycle", "v1/v2/v3", "OpenCode uninstall does not own"},
 	}
 	for path, claims := range documents {
 		content := readRepositoryFile(t, path)
