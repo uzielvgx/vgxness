@@ -23,7 +23,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 43",
+		"artifact: opencode-agent/vgxness-manager; version: 44",
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
 		"managed global portable catalog",
@@ -55,6 +55,90 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	if bytes.Contains(bundle.manifest, []byte(autonomousStackedPRSkillName)) || bytes.Contains(bundle.manifest, []byte("skills/")) {
 		t.Fatal("managed skill was added to model-plan manifest")
 	}
+}
+
+func TestV44UsesCompactProtocolAndReconstructsCompleteV43Bundle(t *testing.T) {
+
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	for _, required := range []string{"version: 44", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
+		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
+			t.Errorf("manager missing compact protocol %q", required)
+		}
+	}
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	if len(predecessorBundlesMust(t, current)) != 36 {
+		t.Fatal("unexpected predecessor bundle count")
+	}
+	for _, name := range compactProtocolAgentNames {
+		if !bytes.Contains(v43.agents[name], []byte("version: 2")) || bytes.Equal(v43.agents[name], current.agents[name]) {
+			t.Errorf("%s was not reconstructed from the exact v2 profile", name)
+		}
+	}
+	for name, marker := range map[string]string{
+		generalAgentName: "artifact: opencode-agent/general; version: 2", verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 2",
+		reviewRiskName: "artifact: opencode-agent/vgxness-review-risk; version: 2", reviewReadabilityName: "artifact: opencode-agent/vgxness-review-readability; version: 2",
+		reviewReliabilityName: "artifact: opencode-agent/vgxness-review-reliability; version: 2", reviewResilienceName: "artifact: opencode-agent/vgxness-review-resilience; version: 2", reviewRefuterName: "artifact: opencode-agent/vgxness-review-refuter; version: 2",
+	} {
+		if !bytes.Contains(v43.agents[name], []byte(marker)) {
+			t.Errorf("%s missing exact v2 marker %q", name, marker)
+		}
+	}
+	if _, err := modelPlanBundleForManifest(v43.manifest, current.config); err != nil {
+		t.Fatalf("v43 manifest not recognized: %v", err)
+	}
+}
+
+func TestV43ProfileSnapshotsHaveFixedDigestsAndExactBoundShape(t *testing.T) {
+	if got := artifactSHA256([]byte(previousManagerPromptV43)); got != "edc4a9a651cc9d91db04d7036407e1c18d1c15eeccbbd548b6c5412d5f23d7eb" {
+		t.Fatalf("manager v43 snapshot digest=%s", got)
+	}
+	for _, tc := range []struct {
+		name, digest string
+		base         string
+		role         sdd.Role
+	}{
+		{"general", "17575c70cb52c372cd4e4bb469ee2e20f8b94bc32a3091df8120900f736e7a41", previousGeneralPromptV2, sdd.RoleImplementation},
+		{"verifier", "c42af55db5a0da34d31f02367e303f14d77ea6a6cd36b56bf19559e293136b7f", previousVerifierPromptV2, sdd.RoleVerification},
+		{"risk", "3499480ccd1c3d22e6aeae180898175bfedd50cd10c14703300b0648318e8ef7", previousReviewRiskPromptV2, sdd.RoleRisk},
+		{"readability", "81cd2ed7d7487f74e561c43e14c02033a380553c5a05cb28f65c2b2d304a18bf", previousReviewReadabilityPromptV2, sdd.RoleReadability},
+		{"reliability", "69d3293a7eaeccc02d27b38053d1fad54c5d316aec4fe5d0816f9d3719e51d5b", previousReviewReliabilityPromptV2, sdd.RoleReliability},
+		{"resilience", "36b431d4bb055a1cbc83d93a637c2a136cc4e256383c1933d0934666c3158e40", previousReviewResiliencePromptV2, sdd.RoleResilience},
+		{"refuter", "da8cb44eea50019ee84b439054254a98ab2077022e3998c5ac50db3a78c5c81f", previousReviewRefuterPromptV2, sdd.RoleRefuter},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := artifactSHA256([]byte(tc.base)); got != tc.digest {
+				t.Fatalf("snapshot digest=%s", got)
+			}
+			if _, _, ok := managedArtifactMarker([]byte(tc.base)); !ok {
+				t.Fatal("snapshot marker is malformed")
+			}
+		})
+	}
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	for _, name := range compactProtocolAgentNames {
+		if !isManagedPredecessor(v43.agents[name], current.agents[name], [][]byte{v43.agents[name]}, nil) {
+			t.Fatalf("%s v43 stream is not an exact predecessor", name)
+		}
+	}
+}
+
+func predecessorBundlesMust(t *testing.T, current modelPlanBundle) []modelPlanBundle {
+	t.Helper()
+	bundles, err := predecessorBundles(current)
+	testutil.NoError(t, err)
+	return bundles
+}
+
+func previousManagerV42Must(t *testing.T, current modelPlanBundle) modelPlanBundle {
+	t.Helper()
+	bundle, err := previousManagerModelPlanBundleV42(current)
+	testutil.NoError(t, err)
+	return bundle
 }
 
 func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
@@ -99,7 +183,9 @@ func TestManagerV39PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	v41, err := previousManagerModelPlanBundleV41(current)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	v41, err := previousManagerModelPlanBundleV41(previousManagerV42Must(t, v43))
 	testutil.NoError(t, err)
 	v40, err := previousManagerModelPlanBundleV40(v41)
 	testutil.NoError(t, err)
@@ -116,7 +202,9 @@ func TestManagerV40PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	v41, err := previousManagerModelPlanBundleV41(current)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	v41, err := previousManagerModelPlanBundleV41(previousManagerV42Must(t, v43))
 	testutil.NoError(t, err)
 	predecessor, err := previousManagerModelPlanBundleV40(v41)
 	testutil.NoError(t, err)
@@ -131,7 +219,9 @@ func TestManagerV41PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	predecessor, err := previousManagerModelPlanBundleV41(current)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	predecessor, err := previousManagerModelPlanBundleV41(previousManagerV42Must(t, v43))
 	testutil.NoError(t, err)
 	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 41")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
 		t.Fatal("manager predecessor was not exactly bound from the v41 template")
@@ -144,7 +234,9 @@ func TestManagerV42PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	predecessor, err := previousManagerModelPlanBundleV42(current)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	predecessor, err := previousManagerModelPlanBundleV42(v43)
 	testutil.NoError(t, err)
 	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 42")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
 		t.Fatal("manager predecessor was not exactly bound from the v42 template")

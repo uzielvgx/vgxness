@@ -153,7 +153,11 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
-	managerV42, err := previousManagerModelPlanBundleV42(current)
+	v43, err := previousV43ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
+	managerV42, err := previousManagerModelPlanBundleV42(v43)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +173,8 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	withExplore := make([]modelPlanBundle, 0, 10)
-	for _, manager := range []modelPlanBundle{current, managerV42, managerV41, managerV40, managerV39} {
+	withExplore := make([]modelPlanBundle, 0, 12)
+	for _, manager := range []modelPlanBundle{current, v43, managerV42, managerV41, managerV40, managerV39} {
 		withExplore = append(withExplore, manager)
 		explore, err := previousExploreModelPlanBundle(manager)
 		if err != nil {
@@ -178,7 +182,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		}
 		withExplore = append(withExplore, explore)
 	}
-	candidates := make([]modelPlanBundle, 0, 24)
+	candidates := make([]modelPlanBundle, 0, 36)
 	for _, candidate := range withExplore {
 		candidates = append(candidates, candidate)
 		sddBundle, err := previousSDDModelPlanBundle(candidate)
@@ -196,7 +200,11 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
-	v42, err := previousManagerModelPlanBundleV42(current)
+	v43, err := previousV43ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
+	v42, err := previousManagerModelPlanBundleV42(v43)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +220,11 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return [][]byte{v42.agents[managerAgentName], v41.agents[managerAgentName], v40.agents[managerAgentName], v39.agents[managerAgentName]}, nil
+	return [][]byte{v43.agents[managerAgentName], v42.agents[managerAgentName], v41.agents[managerAgentName], v40.agents[managerAgentName], v39.agents[managerAgentName]}, nil
+}
+
+func previousV43ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	return fullModelPlanBundle(current.config, current.resolved, previousManagerPromptV43, "artifact: opencode-agent/vgxness-manager; version: 43", previousGeneralPromptV2, "artifact: opencode-agent/general; version: 2", previousVerifierPromptV2, "artifact: opencode-agent/vgxness-verifier; version: 2", previousReviewPromptsV2())
 }
 
 func previousManagerModelPlanBundleV42(current modelPlanBundle) (modelPlanBundle, error) {
@@ -315,10 +327,21 @@ func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, e
 }
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
-	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, "artifact: opencode-agent/general; version: 2", canonicalVerifierPrompt, "artifact: opencode-agent/vgxness-verifier; version: 2")
+	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, "artifact: opencode-agent/general; version: 3", canonicalVerifierPrompt, "artifact: opencode-agent/vgxness-verifier; version: 3", currentReviewPrompts())
 }
 
-func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string) (map[string][]byte, error) {
+func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
+	managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+		return bindManagerTemplate(managerBase, managerMarker, assignment)
+	}
+	agents, err := fullModelBoundAgents(resolved, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, reviews)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	return encodeModelPlanBundle(config, resolved, agents)
+}
+
+func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews map[string]string) (map[string][]byte, error) {
 	assignments := map[string]sdd.Role{
 		managerAgentName: sdd.RoleManager,
 		exploreAgentName: sdd.RoleResearch,
@@ -348,11 +371,6 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 		return nil, err
 	}
 	agents[verifierAgentName] = verifier
-	baseReviews := map[string]string{
-		reviewRiskName: reviewRiskPrompt, reviewReadabilityName: reviewReadabilityPrompt,
-		reviewReliabilityName: reviewReliabilityPrompt, reviewResilienceName: reviewResiliencePrompt,
-		reviewRefuterName: reviewRefuterPrompt,
-	}
 	for name, base := range baseReviews {
 		content, bindErr := bindAgent(base, assignments[name], plan.Roles[assignments[name]])
 		if bindErr != nil {
@@ -373,8 +391,17 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
-	return bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 43", assignment)
+	return bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 44", assignment)
 }
+
+func currentReviewPrompts() map[string]string {
+	return map[string]string{reviewRiskName: reviewRiskPrompt, reviewReadabilityName: reviewReadabilityPrompt, reviewReliabilityName: reviewReliabilityPrompt, reviewResilienceName: reviewResiliencePrompt, reviewRefuterName: reviewRefuterPrompt}
+}
+func previousReviewPromptsV2() map[string]string {
+	return map[string]string{reviewRiskName: previousReviewRiskPromptV2, reviewReadabilityName: previousReviewReadabilityPromptV2, reviewReliabilityName: previousReviewReliabilityPromptV2, reviewResilienceName: previousReviewResiliencePromptV2, reviewRefuterName: previousReviewRefuterPromptV2}
+}
+
+var compactProtocolAgentNames = []string{generalAgentName, verifierAgentName, reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName}
 
 func bindManagerTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	value := base
@@ -416,7 +443,7 @@ func previousExplorePredecessor(current []byte) []byte {
 
 func bindAgent(base string, role sdd.Role, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	value := base
-	marker := fmt.Sprintf("artifact: opencode-agent/vgxness-review-%s; version: 2", role)
+	marker := fmt.Sprintf("artifact: opencode-agent/vgxness-review-%s; version:", role)
 	if strings.Count(value, "hidden: true\n") != 1 || strings.Count(value, marker) != 1 {
 		return nil, integration.ErrInvalid
 	}

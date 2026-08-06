@@ -25,6 +25,9 @@ import (
 //go:embed templates/manager.md
 var canonicalManagerPrompt string
 
+//go:embed templates/manager.v43.md
+var previousManagerPromptV43 string
+
 //go:embed templates/manager.v42.md
 var previousManagerPromptV42 string
 
@@ -49,8 +52,29 @@ var previousAutonomousStackedPRSkillV2 string
 //go:embed templates/general.md
 var canonicalGeneralPrompt string
 
+//go:embed templates/general.v2.md
+var previousGeneralPromptV2 string
+
 //go:embed templates/verifier.md
 var canonicalVerifierPrompt string
+
+//go:embed templates/verifier.v2.md
+var previousVerifierPromptV2 string
+
+//go:embed templates/review-risk.v2.md
+var previousReviewRiskPromptV2 string
+
+//go:embed templates/review-readability.v2.md
+var previousReviewReadabilityPromptV2 string
+
+//go:embed templates/review-reliability.v2.md
+var previousReviewReliabilityPromptV2 string
+
+//go:embed templates/review-resilience.v2.md
+var previousReviewResiliencePromptV2 string
+
+//go:embed templates/review-refuter.v2.md
+var previousReviewRefuterPromptV2 string
 
 //go:embed templates/explore.md
 var explorePrompt string
@@ -90,15 +114,15 @@ Accept only one parent mission containing:
 - verificationEvidence: tests and read-only checks already run
 - frozenLedger and correctionDelta only in scoped-validation mode
 
-Reject a mission that omits or contradicts candidate identity, scope, or acceptance criteria. Load every supplied skill name through the native skill tool before reviewing. Use vgxness_memory_search and vgxness_memory_get only when prior project decisions are material to the supplied acceptance criteria; memory is context, never proof of the frozen candidate. When .codegraph exists and the question concerns code structure, flow, dependencies, or blast radius, use at most one bounded codegraph_explore query before fallback reads. CodeGraph cannot prove the candidate diff by itself; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Inspect only files needed to assess the supplied diff scope. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push. Treat the candidate as immutable.
+Accept Mission Instance v1 and Candidate Capsule v1 only within their 8 KiB/4 KiB limits; reject malformed, stale, oversized, or missing-digest capsules as INCONCLUSIVE. Reject a mission that omits or contradicts candidate identity, scope, or acceptance criteria. Load every supplied skill name through the native skill tool before reviewing. Use vgxness_memory_search and vgxness_memory_get only when prior project decisions are material to the supplied acceptance criteria; memory is context, never proof of the frozen candidate. When .codegraph exists and the question concerns code structure, flow, dependencies, or blast radius, use at most one bounded codegraph_explore query before fallback reads. CodeGraph cannot prove the candidate diff by itself; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Inspect only files needed to assess the supplied diff scope. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push. Treat the candidate as immutable.
 
 In initial mode, perform one complete sweep through your assigned lens. In scoped-validation mode, inspect only the frozen severe-finding ledger and correction delta. Scoped validation may approve or escalate an unresolved severe finding, but it must not add unrelated findings or propose another correction cycle.
 
 Report only concrete user-impacting defects supported by path:line evidence. BLOCKER and CRITICAL require concrete proof. Mark evidenceClass deterministic only for directly reproducible proof such as a failing test, violated invariant, or exact unsafe path; otherwise mark it inferential. WARNING and SUGGESTION are informational and never block.
 
-Return exactly one compact JSON object and no Markdown:
+Return exactly one compact Child Return Envelope v1 JSON object (<=16 KiB; <=32 evidence items, <=16 findings, <=64 paths, <=512 bytes per summary or excerpt) and no Markdown. Include candidate, summary, evidence receipts, findings, unknowns, assumptions, and blockers. Treat malformed, oversized, stale, or missing-digest capsules as INCONCLUSIVE.
 
-{"mode":"initial|scoped-validation","lens":"risk|readability|reliability|resilience","candidateIdentity":"<sha256>","findings":[{"id":"<stable lens ID>","location":"path:line","severity":"BLOCKER|CRITICAL|WARNING|SUGGESTION","claim":"observable defect","evidenceClass":"deterministic|inferential","proofRefs":["concrete evidence"]}],"verdict":"clean|findings|approve|escalate","evidence":["what was inspected"]}
+{"schemaVersion":1,"mode":"initial|scoped-validation","lens":"risk|readability|reliability|resilience","candidate":{"digest":"sha256","changedPaths":["path"]},"summary":"<=512 bytes","evidence":[{"kind":"source","locator":"path:line","candidateDigest":"sha256","observedResult":"observed","digest":"sha256","excerpt":"<=512 bytes","availability":"reopenable"}],"findings":[{"id":"<stable lens ID>","location":"path:line","severity":"BLOCKER|CRITICAL|WARNING|SUGGESTION","claim":"observable defect","evidenceClass":"deterministic|inferential","proofRefs":["evidence"]}],"verdict":"clean|findings|approve|escalate","unknowns":[],"assumptions":[],"blockers":[]}
 `
 	reviewRiskPrompt = `---
 description: Native read-only Risk reviewer for a frozen candidate
@@ -117,7 +141,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-risk; version: 2 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-risk; version: 3 -->
 
 You are the Risk lens for VGXNESS Native Manager. Inspect security boundaries, authorization, permissions, secrets, data exposure or loss, injection, unsafe process or shell use, dependency trust, and privilege escalation. Use stable finding IDs prefixed RISK-.
 ` + nativeReviewSharedContract
@@ -138,7 +162,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-readability; version: 2 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-readability; version: 3 -->
 
 You are the Readability lens for VGXNESS Native Manager. Inspect whether intention is clear, naming matches behavior, duplication or accidental complexity obscures contracts, dead code remains, and maintenance hazards can produce future defects. Do not report subjective style preferences without concrete maintenance impact. Use stable finding IDs prefixed READ-.
 ` + nativeReviewSharedContract
@@ -159,7 +183,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-reliability; version: 2 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-reliability; version: 3 -->
 
 You are the Reliability lens for VGXNESS Native Manager. Inspect behavioral contracts, correctness, regression coverage, edge cases, determinism, state transitions, concurrency, and outcomes that differ from the acceptance criteria. Use stable finding IDs prefixed REL-.
 ` + nativeReviewSharedContract
@@ -180,7 +204,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-resilience; version: 2 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-resilience; version: 3 -->
 
 You are the Resilience lens for VGXNESS Native Manager. Inspect failure paths, partial completion, fallback, retry safety, cancellation, observability, rollback, recovery, load behavior, and operational degradation. Use stable finding IDs prefixed RES-.
 ` + nativeReviewSharedContract
@@ -201,7 +225,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-refuter; version: 2 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-refuter; version: 3 -->
 
 You are the severe-finding refuter for VGXNESS Native Manager. Accept only one parent mission containing the frozen candidate identity, exact changed paths, diff scope, acceptance criteria, verification evidence, and one batch of inferential BLOCKER or CRITICAL findings with their stable IDs and proof references.
 
@@ -209,9 +233,9 @@ Independently attempt to disprove each supplied claim against the frozen candida
 
 Load every supplied native skill name through the skill tool. Use vgxness_memory_search and vgxness_memory_get only when prior project decisions are material to refuting a supplied finding; memory is context, never candidate proof. When .codegraph exists and structural evidence is material to a supplied finding, use at most one bounded codegraph_explore query; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push.
 
-Return exactly one compact JSON object and no Markdown:
+Return exactly one compact Child Return Envelope v1 JSON object (<=16 KiB; <=32 evidence items, <=16 results, <=64 paths, <=512 bytes per summary or excerpt) and no Markdown. Include schemaVersion, candidate digest and changedPaths, summary, Evidence Receipt v1 entries, results only for supplied severe inferential IDs, unknowns, assumptions, and blockers. A malformed, oversized, stale, or missing-digest Candidate Capsule v1 is INCONCLUSIVE, never approval.
 
-{"candidateIdentity":"<sha256>","results":[{"findingId":"<stable ID>","outcome":"corroborated|refuted|inconclusive","proofRefs":["concrete evidence"]}]}
+{"schemaVersion":1,"role":"refuter","candidate":{"digest":"sha256","changedPaths":["path"]},"summary":"<=512 bytes","evidence":[{"kind":"source","locator":"path:line","candidateDigest":"sha256","observedResult":"observed","digest":"sha256","excerpt":"<=512 bytes","availability":"reopenable"}],"results":[{"findingId":"<supplied stable ID>","outcome":"corroborated|refuted|inconclusive","proofRefs":["evidence"]}],"unknowns":[],"assumptions":[],"blockers":[]}
 `
 )
 
@@ -933,11 +957,19 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		return inspection{}, fmt.Errorf("inspect OpenCode integration directory: %w", containerErr)
 	}
 	_, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
-	managerPrior := [][]byte(nil)
+	predecessors := map[string][][]byte{}
 	if !installedPlanOK {
-		managerPrior, err = managerPredecessors(plan)
-		if err != nil {
-			return inspection{}, err
+		managerPrior, predecessorErr := managerPredecessors(plan)
+		if predecessorErr != nil {
+			return inspection{}, predecessorErr
+		}
+		predecessors[managerAgentName] = managerPrior
+		v43, predecessorErr := previousV43ModelPlanBundle(plan)
+		if predecessorErr != nil {
+			return inspection{}, predecessorErr
+		}
+		for _, name := range compactProtocolAgentNames {
+			predecessors[name] = [][]byte{v43.agents[name]}
 		}
 	}
 	regeneration := func(path string) [][]byte {
@@ -947,15 +979,15 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		return nil
 	}
 	state := inspection{result: result, artifacts: []artifact{
-		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: managerPrior, regenerations: regeneration(managerPath)},
+		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: predecessors[managerAgentName], regenerations: regeneration(managerPath)},
 		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{previousExplorePredecessor(plan.agents[exploreAgentName])}, regenerations: regeneration(explorePath)},
-		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", regenerations: regeneration(generalPath)},
-		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", regenerations: regeneration(verifierPath)},
-		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", regenerations: regeneration(reviewRiskPath)},
-		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", regenerations: regeneration(reviewReadabilityPath)},
-		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", regenerations: regeneration(reviewReliabilityPath)},
-		{path: reviewResiliencePath, content: plan.agents[reviewResilienceName], backup: "vgxness-review-resilience", regenerations: regeneration(reviewResiliencePath)},
-		{path: reviewRefuterPath, content: plan.agents[reviewRefuterName], backup: "vgxness-review-refuter", regenerations: regeneration(reviewRefuterPath)},
+		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: predecessors[generalAgentName], regenerations: regeneration(generalPath)},
+		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: predecessors[verifierAgentName], regenerations: regeneration(verifierPath)},
+		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: predecessors[reviewRiskName], regenerations: regeneration(reviewRiskPath)},
+		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: predecessors[reviewReadabilityName], regenerations: regeneration(reviewReadabilityPath)},
+		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", predecessors: predecessors[reviewReliabilityName], regenerations: regeneration(reviewReliabilityPath)},
+		{path: reviewResiliencePath, content: plan.agents[reviewResilienceName], backup: "vgxness-review-resilience", predecessors: predecessors[reviewResilienceName], regenerations: regeneration(reviewResiliencePath)},
+		{path: reviewRefuterPath, content: plan.agents[reviewRefuterName], backup: "vgxness-review-refuter", predecessors: predecessors[reviewRefuterName], regenerations: regeneration(reviewRefuterPath)},
 		{path: filepath.Join(configDirectory, "agents", sddResearchName), content: plan.agents[sddResearchName], backup: "vgxness-sdd-research", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleResearch, plan.agents[sddResearchName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddResearchName))},
 		{path: filepath.Join(configDirectory, "agents", sddProposalName), content: plan.agents[sddProposalName], backup: "vgxness-sdd-proposal", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleProposal, plan.agents[sddProposalName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddProposalName))},
 		{path: filepath.Join(configDirectory, "agents", sddSpecName), content: plan.agents[sddSpecName], backup: "vgxness-sdd-spec", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleSpec, plan.agents[sddSpecName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddSpecName))},
