@@ -6,7 +6,7 @@ Current delivery policy is manager v41 and global `stacked-pr` v3. Before branch
 
 Delivery labels are evidence-only: IMPLEMENTED requires completed workspace changes and observed developmental checks, but not independent verification; VERIFIED requires the exact frozen candidate to pass independent verification and review; DELIVERED requires the exact commit to be published and a new current-task PR created and read back; MERGED requires that PR merge and base containment/readback; INSTALLED additionally requires installation and handshake readback. No later state is inferred.
 
-VGXNESS installs 19 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v41, managed `general` and verifier profiles, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v5, one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. The separate global 42-file, 18-skill catalog owns `skills-creator`, `stacked-pr`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, and `sdd-lifecycle`; none is an OpenCode artifact, model-plan entry, or uninstall target.
+VGXNESS installs 19 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v41, managed `general` and verifier profiles, a read-only `explore` override, five hidden read-only review profiles, and six hidden read-only SDD profiles), the bounded storage plugin v8, one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. The separate global 42-file, 18-skill catalog owns `skills-creator`, `stacked-pr`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, and `sdd-lifecycle`; none is an OpenCode artifact, model-plan entry, or uninstall target.
 
 The plugin exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
 
@@ -83,6 +83,12 @@ The generated plugin also uses OpenCode's `event`, `chat.message`, `experimental
 
 These OpenCode callbacks are not arbitrary shell hooks or Git hooks. VGXNESS intentionally installs neither; see [Safe hooks](hooks.md) for event semantics, exclusions, and delivery guarantees.
 
+### Optional local Manager observability
+
+Set `VGXNESS_MANAGER_OBSERVABILITY=1` before OpenCode starts to opt in for the current local plugin process and workspace. It is disabled by default and is not persisted, exported, logged, sent, or injected into memory, prompts, model context, compaction, tools, SDD, files, databases, or network requests. Eligibility requires an explicit top-level `session.created` lifecycle event followed by confirmed `vgxness-manager` identity; chat's legacy synthesized memory state cannot qualify. Default-off or ineligible callbacks neither adapt nor allocate observability input. Child, reviewer, phase-agent, non-manager, malformed, missing, and uncorrelatable inputs are discarded. Session deletion, opt-out, and disposal synchronously clear local records and correlations.
+
+Initial capabilities remain `unavailable`: records have opaque local IDs and sequencing only, not terminal outcomes, durations, or claims about workflow quality, completeness, latency, or security. Bounds are 128 workflows, 32 records per workflow, 256 records globally, and 128 pending correlations; global pressure evicts the true oldest record. Pending tool identity is ephemeral and completion requires exact session/call/tool equality, consuming once only on a match. The ten-minute pending lifetime uses monotonic `globalThis.performance.now()`; missing, throwing, invalid, negative, or backward samples fail open without correlation or allocation. Hook instrumentation fails open and leaves host-visible behavior unchanged. Restarting OpenCode clears this process-local scope. Generated-plugin checks prove only generated-source behavior; separately authorized installed-host validation for the exact host/plugin version is required before any capability becomes `direct`.
+
 Engram is not part of this integration.
 
 ## Structured SDD storage and OpenSpec projection
@@ -137,7 +143,7 @@ Manager, managed `general`, and verifier use a single global `allow` permission 
 
 ## Health contract
 
-The integration is installed only when manager v41, all other 14 agents, storage plugin v5, the model-plan manifest, default-agent selection, and restoration metadata match their provider identities exactly. Setup health combines:
+The integration is installed only when manager v41, all other 14 agents, storage plugin v8, the model-plan manifest, default-agent selection, and restoration metadata match their provider identities exactly. Setup health combines:
 
 1. the permanent VGXNESS launcher is installed and verified;
 2. all 19 OpenCode-managed artifacts are installed without drift: 15 agents, plugin, model-plan manifest, default-agent selection, and restoration metadata;
