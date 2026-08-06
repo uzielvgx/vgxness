@@ -12,7 +12,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
 | `internal/memory` | SQLite/FTS5 schema v5, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
-| `internal/providers/opencode` | Manager v41, 14 other model-bound agents, plugin v5, model-plan manifest, exact v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 42-file, 18-skill catalog includes `sdd-lifecycle`, loaded only after explicit SDD acceptance. |
+| `internal/providers/opencode` | Manager v44, 14 other model-bound agents (including `general`, verifier, and reviewers v3), plugin v9, model-plan manifest, exact v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 42-file, 18-skill catalog includes `sdd-lifecycle`, loaded only after explicit SDD acceptance. |
 | `internal/integration`, `internal/setup`, `internal/skills` | Managed OpenCode lifecycle, independent global portable-skill lifecycle, and seven-step CLI/TUI setup workflow. |
 | `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
 | `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |
@@ -43,12 +43,12 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 The OpenCode projection contains 19 exact managed artifacts:
 
-- manager v41 with global tool permission and a pre-write delivery gate;
-- managed `general` and verifier profiles with global tool permission and distinct implementation/verification roles;
+- manager v44 with global tool permission and a pre-write delivery gate;
+- managed `general`, verifier, and reviewer profiles v3 with global tool permission and distinct implementation/verification roles;
 - one CodeGraph-first, deny-by-default read-only `explore` override;
 - five hidden read-only reviewers;
 - six hidden read-only SDD profiles;
-- storage plugin v5;
+- storage plugin v9;
 - one model-plan manifest;
 - one `opencode.json` default-agent selection using a semantic merge that preserves unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged;
 - one bounded `<config-dir>/vgxness/default-agent.json` restoration record of whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup;
