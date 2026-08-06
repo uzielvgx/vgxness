@@ -683,7 +683,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 44"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 45"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -811,6 +811,24 @@ func TestIntegrationRecoversCompleteV43BundleWithoutManifest(t *testing.T) {
 	testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled, "preview=%+v previewErr=%v installed=%+v installErr=%v", preview, previewErr, installed, installErr)
 }
 
+func TestIntegrationRecoversCompleteV44BundleWithoutManifest(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	v44, err := previousV44ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
+		path := filepath.Join(configDirectory, "agents", name)
+		testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		testutil.NoError(t, os.WriteFile(path, v44.agents[name], 0o600))
+	}
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	preview, previewErr := service.Preview(context.Background(), options)
+	installed, installErr := service.Install(context.Background(), options)
+	testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled, "preview=%+v previewErr=%v installed=%+v installErr=%v", preview, previewErr, installed, installErr)
+}
+
 func TestIntegrationRejectsModifiedV2ProfileWithoutManifest(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
@@ -879,7 +897,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 44",
+		"artifact: opencode-agent/vgxness-manager; version: 45",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",

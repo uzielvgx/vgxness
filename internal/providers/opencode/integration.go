@@ -25,6 +25,9 @@ import (
 //go:embed templates/manager.md
 var canonicalManagerPrompt string
 
+//go:embed templates/manager.v44.md
+var previousManagerPromptV44 string
+
 //go:embed templates/manager.v43.md
 var previousManagerPromptV43 string
 
@@ -51,6 +54,9 @@ var previousAutonomousStackedPRSkillV2 string
 
 //go:embed templates/general.md
 var canonicalGeneralPrompt string
+
+//go:embed templates/general.v3.md
+var previousGeneralPromptV3 string
 
 //go:embed templates/general.v2.md
 var previousGeneralPromptV2 string
@@ -964,12 +970,16 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 			return inspection{}, predecessorErr
 		}
 		predecessors[managerAgentName] = managerPrior
-		v43, predecessorErr := previousV43ModelPlanBundle(plan)
+		v44, predecessorErr := previousV44ModelPlanBundle(plan)
+		if predecessorErr != nil {
+			return inspection{}, predecessorErr
+		}
+		v43, predecessorErr := previousV43ModelPlanBundle(v44)
 		if predecessorErr != nil {
 			return inspection{}, predecessorErr
 		}
 		for _, name := range compactProtocolAgentNames {
-			predecessors[name] = [][]byte{v43.agents[name]}
+			predecessors[name] = [][]byte{v44.agents[name], v43.agents[name]}
 		}
 	}
 	regeneration := func(path string) [][]byte {

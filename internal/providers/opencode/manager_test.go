@@ -23,7 +23,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 44",
+		"artifact: opencode-agent/vgxness-manager; version: 45",
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
 		"managed global portable catalog",
@@ -57,20 +57,26 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 }
 
-func TestV44UsesCompactProtocolAndReconstructsCompleteV43Bundle(t *testing.T) {
+func TestV45UsesCompactProtocolAndReconstructsCompleteV44Bundle(t *testing.T) {
 
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	for _, required := range []string{"version: 44", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
+	for _, required := range []string{"version: 45", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
 		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
 			t.Errorf("manager missing compact protocol %q", required)
 		}
 	}
-	v43, err := previousV43ModelPlanBundle(current)
+	v44, err := previousV44ModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if len(predecessorBundlesMust(t, current)) != 36 {
+	if len(predecessorBundlesMust(t, current)) != 42 {
 		t.Fatal("unexpected predecessor bundle count")
 	}
+	if !bytes.Contains(v44.agents[managerAgentName], []byte("artifact: opencode-agent/vgxness-manager; version: 44")) ||
+		!bytes.Contains(v44.agents[generalAgentName], []byte("artifact: opencode-agent/general; version: 3")) {
+		t.Fatal("v44 bundle did not use exact predecessor profiles")
+	}
+	v43, err := previousV43ModelPlanBundle(v44)
+	testutil.NoError(t, err)
 	for _, name := range compactProtocolAgentNames {
 		if !bytes.Contains(v43.agents[name], []byte("version: 2")) || bytes.Equal(v43.agents[name], current.agents[name]) {
 			t.Errorf("%s was not reconstructed from the exact v2 profile", name)
@@ -90,7 +96,13 @@ func TestV44UsesCompactProtocolAndReconstructsCompleteV43Bundle(t *testing.T) {
 	}
 }
 
-func TestV43ProfileSnapshotsHaveFixedDigestsAndExactBoundShape(t *testing.T) {
+func TestCurrentAndPredecessorProfileSnapshotsHaveFixedDigestsAndExactBoundShape(t *testing.T) {
+	if got := artifactSHA256([]byte(previousManagerPromptV44)); got != "f97a49b2107ee8c257295e42c09540704074f032d8549ffca1604896ccac3965" {
+		t.Fatalf("manager v44 snapshot digest=%s", got)
+	}
+	if got := artifactSHA256([]byte(previousGeneralPromptV3)); got != "616b7e5ff36848f505b87b94cc07caa0634c711db13914c30dc195c62bd467f1" {
+		t.Fatalf("general v3 snapshot digest=%s", got)
+	}
 	if got := artifactSHA256([]byte(previousManagerPromptV43)); got != "edc4a9a651cc9d91db04d7036407e1c18d1c15eeccbbd548b6c5412d5f23d7eb" {
 		t.Fatalf("manager v43 snapshot digest=%s", got)
 	}
@@ -118,7 +130,9 @@ func TestV43ProfileSnapshotsHaveFixedDigestsAndExactBoundShape(t *testing.T) {
 	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	v43, err := previousV43ModelPlanBundle(current)
+	v44, err := previousV44ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	v43, err := previousV43ModelPlanBundle(v44)
 	testutil.NoError(t, err)
 	for _, name := range compactProtocolAgentNames {
 		if !isManagedPredecessor(v43.agents[name], current.agents[name], [][]byte{v43.agents[name]}, nil) {
@@ -147,7 +161,7 @@ func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 	prompt := string(bundle.agents[managerAgentName])
 	t.Logf("manager prompt bytes=%d newlines=%d", len(prompt), strings.Count(prompt, "\n"))
 
-	// V43 preserves the fixed generated-prompt budget.
+	// Current v45 preserves the fixed generated-prompt budget.
 	const maxManagerPromptBytes = 15_000
 	const maxManagerPromptLines = 105
 	if bytes := len(prompt); bytes > maxManagerPromptBytes {
@@ -157,7 +171,7 @@ func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 		t.Errorf("manager prompt lines=%d, budget=%d", lines, maxManagerPromptLines)
 	}
 	for _, required := range []string{
-		"Apply validation and lifecycle ceremony proportionally to risk and scope; small authorized repository changes remain delegated to managed general and do not imply SDD or delivery.",
+		"Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery.",
 		"sole orchestration and SDD lifecycle authority",
 		"Briefly disclose material assumptions.",
 		"A task override applies only to the current request and never changes the project default.",
@@ -253,23 +267,23 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"Work directly only for conversation and non-repository explanations, decisions, orchestration, lifecycle/Git authority, and compact synthesis.",
-		"Default repository questions and diagnosis-only work to Explore.",
-		"Use managed general as the delegated implementation worker for clear authorized implementation; it owns necessary diagnosis, edits, and developmental checks, and the manager does not launch Explore first by default.",
-		"Reserve Explore -> General for genuine ambiguity or diagnosis requiring separation.",
+		"Handle direct, bounded, non-repository/read-only informational questions yourself.",
+		"Delegate repository questions and diagnosis-only work to Explore.",
+		"Use managed general as the delegated implementation worker for clear authorized implementation, including necessary diagnosis, edits, and developmental checks.",
+		"Reserve Explore -> General for genuine ambiguity needing separation.",
 		"Avoid repeating child source exploration. Direct source inspection is exceptional for contradictory or missing evidence, candidate-identity mismatch, or severe findings; exact diff, path, status, and command evidence inspection remains mandatory.",
 		"Route structural CodeGraph work to the delegated worker and use one bounded codegraph_explore query before broad reads or search where applicable.",
 		"If CodeGraph is unavailable, missing, or stale, the delegated worker continues with native reads and search without blocking; it reads any specifically reported stale files directly.",
-		"conclusions, decisive references or changed paths, exact commands and results, assumptions, and blockers",
+		"assumptions/blockers only when present",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Errorf("manager prompt is missing delegation-first contract %q", required)
 		}
 	}
 	for _, superseded := range []string{
-		"Work directly when the task fits the manager context, delegate when separation protects focus or independent evidence, validate candidate identity, and report outcomes.",
-		"Work directly for explanation, bounded repository inspection, planning, decisions, and implementation that fit the manager context.",
-		"Use Explore only for diagnosis-only work, structural discovery, or real ambiguity that needs bounded read-only investigation.",
+		"Work directly only for conversation and non-repository explanations, decisions, orchestration, lifecycle/Git authority, and compact synthesis.",
+		"Default repository questions and diagnosis-only work to Explore.",
+		"Return exactly one compact Child Return Envelope v1 JSON object",
 	} {
 		if strings.Contains(prompt, superseded) {
 			t.Errorf("manager prompt retains superseded direct repository-work contract %q", superseded)
@@ -277,8 +291,27 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 	}
 }
 
+func TestGeneralV4RequiresConciseDecisiveReturns(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	general := string(bundle.agents[generalAgentName])
+	for _, required := range []string{
+		"artifact: opencode-agent/general; version: 4",
+		"concise conclusions, decisive changed paths/references, and exact commands/results",
+		"assumptions or blockers only when present",
+		"candidate identity, authorization, acceptance, and INCONCLUSIVE evidence",
+		"label fact, inference, and unknown where relevant",
+	} {
+		if !strings.Contains(general, required) {
+			t.Errorf("general v4 missing compact return contract %q", required)
+		}
+	}
+}
+
 func TestManagerPredecessorTemplatesRetainAcceptedDigests(t *testing.T) {
 	for path, expected := range map[string]string{
+		"templates/manager.v44.md": "f97a49b2107ee8c257295e42c09540704074f032d8549ffca1604896ccac3965",
+		"templates/general.v3.md":  "616b7e5ff36848f505b87b94cc07caa0634c711db13914c30dc195c62bd467f1",
 		"templates/manager.v42.md": "24ca61ef6f7642660a8ff32325c8d32df4b962a0b47df830d08a239e15f54bd3",
 		"templates/manager.v39.md": "0e99ea9e8ecb8e51d80663543956e47cbc041177c6065535a39bf2cbf9767552",
 		"templates/manager.v40.md": "e13863fd3abe4354d2319d1ee2ae0105c7bc1844842a0765b697dd11f93a3cf2",
