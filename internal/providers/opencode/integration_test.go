@@ -157,6 +157,103 @@ func TestIntegration_DefaultAgentConfigPreservesOpenCodeJSONAndJSONC(t *testing.
 	)
 }
 
+func TestIntegration_PersistentMCPIsNeverMutated(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	before := []byte(`{"share":"disabled","mcp":{"other":{"type":"local","command":["other"],"enabled":true}}}`)
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	testutil.NoError(t, os.WriteFile(configPath, before, 0o600))
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+
+	installed, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	afterInstall, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	var config map[string]any
+	testutil.NoError(t, json.Unmarshal(afterInstall, &config))
+	mcp := config["mcp"].(map[string]any)
+	testutil.Require(t, installed.RestartRequired && len(mcp) == 1 && mcp["other"] != nil, "install mutated persistent MCP config: %q", afterInstall)
+
+	removed, err := service.Uninstall(context.Background(), options)
+	testutil.NoError(t, err)
+	afterUninstall, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	config = nil
+	testutil.NoError(t, json.Unmarshal(afterUninstall, &config))
+	mcp = config["mcp"].(map[string]any)
+	testutil.Require(t, removed.RestartRequired && len(mcp) == 1 && mcp["other"] != nil && config["default_agent"] == nil, "uninstall mutated persistent MCP config: %q", afterUninstall)
+}
+
+func TestMemoryPlugin_ConfigHookInjectsMCPWithoutOverwriting(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	plugin := string(renderMemoryPlugin("/vgxness-test-bin"))
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { createHash } from "node:crypto"`, `const { createHash } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { tool } from "@opencode-ai/plugin"`, `const { tool } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryPlugin`, `const VGXNESSMemoryPlugin`, 1)
+	script := `const schema=new Proxy({}, {get:()=>()=>({optional(){return this},describe(){return this}})}),fakeTool=x=>x;fakeTool.schema=schema;globalThis.__test={spawn(){throw new Error("unexpected spawn")},createHash(){return {update(){return this},digest(){return ""}}},isAbsolute(){return true},tool:fakeTool};
+` + plugin + `
+const same={type:"local",command:["/vgxness-test-bin","mcp"],enabled:true},foreign={type:"local",command:["foreign"],enabled:true};
+const run=async config=>{const instance=await VGXNESSMemoryPlugin({directory:"/workspace"});instance.config(config);return config};
+const absent=await run({}),exact=await run({mcp:{vgxness:{...same}}}),foreignResult=await run({mcp:{vgxness:foreign}});
+const equal=(left,right)=>JSON.stringify(left)===JSON.stringify(right);
+if(!equal(absent.mcp.vgxness,same)||!equal(exact.mcp.vgxness,same)||foreignResult.mcp.vgxness!==foreign)throw new Error("config hook ownership");
+`
+	path := filepath.Join(t.TempDir(), "plugin.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	if output, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("config hook harness failed: %v: %s", err, output)
+	}
+}
+
+func TestIntegration_ManagedMCPConflictsAndDetectsDrift(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	foreign := []byte(`{"mcp":{"vgxness":{"type":"local","command":["foreign"],"enabled":true}}}`)
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	testutil.NoError(t, os.WriteFile(configPath, foreign, 0o600))
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	status, statusErr := service.Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(configPath)
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, foreign), "foreign MCP changed: status=%+v install=%v config=%q", status, installErr, after)
+
+	testutil.NoError(t, os.Remove(configPath))
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"$schema":"https://opencode.ai/config.json","default_agent":"vgxness-manager","mcp":{"vgxness":{"type":"local","command":["changed","mcp"],"enabled":true}}}`), 0o600))
+	status, err = service.Status(context.Background(), options)
+	testutil.Require(t, err == nil && status.State == integration.StateDrifted, "modified managed MCP was not drift: %+v", status)
+}
+
+func TestIntegration_PreexistingExactMCPIsNeverRemoved(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+	preexisting := []byte(`{"mcp":{"vgxness":{"type":"local","command":[` + string(mustJSONForTest(t, service.executable)) + `,"mcp"],"enabled":true}}}`)
+	testutil.NoError(t, os.WriteFile(configPath, preexisting, 0o600))
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	_, err = service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	_, err = service.Uninstall(context.Background(), options)
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	var config map[string]any
+	testutil.NoError(t, json.Unmarshal(after, &config))
+	_, retained := config["mcp"].(map[string]any)["vgxness"]
+	testutil.Require(t, retained, "uninstall removed preexisting managed-shaped MCP: %q", after)
+}
+
 func TestIntegration_PreservesForeignOpenCodeJSONC(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
@@ -217,7 +314,7 @@ func TestIntegration_UninstallRetriesAfterFreshDefaultAgentConfigRemoval(t *test
 
 	removed, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
 	_, stateErr := os.Stat(filepath.Join(configDirectory, "vgxness", defaultAgentStateName))
-	testutil.Require(t, err == nil && removed.State == integration.StateAbsent && os.IsNotExist(stateErr), "fresh uninstall retry failed: result=%+v err=%v stateErr=%v", removed, err, stateErr)
+	testutil.Require(t, err == nil && removed.State == integration.StateAbsent && os.IsNotExist(stateErr), "fresh default-agent uninstall retry failed: result=%+v err=%v stateErr=%v", removed, err, stateErr)
 }
 
 func TestIntegration_UninstallPreservesFieldsAddedToFreshDefaultAgentConfig(t *testing.T) {
@@ -226,7 +323,7 @@ func TestIntegration_UninstallPreservesFieldsAddedToFreshDefaultAgentConfig(t *t
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
-	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"$schema":"https://opencode.ai/config.json","default_agent":"vgxness-manager","user_option":true}`), 0o600))
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"$schema":"https://opencode.ai/config.json","default_agent":"vgxness-manager","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`}}`), 0o600))
 	_, err = service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	after, err := os.ReadFile(configPath)
@@ -247,8 +344,8 @@ func TestIntegration_PreservesCurrentUnrelatedOpenCodeConfigEdits(t *testing.T) 
 	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	metadata, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", defaultAgentStateName))
-	testutil.Require(t, err == nil && !bytes.Contains(metadata, []byte("secret-sentinel")), "metadata retained unrelated config: %q", metadata)
-	updated := []byte(`{"share":"disabled","token":"secret-sentinel","user_option":{"enabled":true},"default_agent":"vgxness-manager"}`)
+	testutil.Require(t, err == nil && !bytes.Contains(metadata, []byte("secret-sentinel")) && !bytes.Contains(metadata, []byte("mcp_vgxness")), "metadata retained unrelated config or MCP ownership: %q", metadata)
+	updated := []byte(`{"share":"disabled","token":"secret-sentinel","user_option":{"enabled":true},"default_agent":"vgxness-manager","mcp":{"vgxness":` + managedMCPForTest(t, service) + `}}`)
 	testutil.NoError(t, os.WriteFile(configPath, updated, 0o600))
 
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
@@ -273,7 +370,7 @@ func TestIntegration_UninstallPreservesUserChangedDefaultAgent(t *testing.T) {
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
-	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","user_option":true}`), 0o600))
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`}}`), 0o600))
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	testutil.Require(t, status.State == integration.StatePartial, "user default change remained healthy: %+v", status)
@@ -294,7 +391,7 @@ func TestIntegration_ReinstallRepairsDefaultAgentAndPreservesCurrentConfig(t *te
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
-	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","share":"disabled","user_option":true}`), 0o600))
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","share":"disabled","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`}}`), 0o600))
 	reinstalled, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	after, err := os.ReadFile(configPath)
@@ -509,6 +606,13 @@ func skipShortIntegration(t *testing.T) {
 	}
 }
 
+func managedMCPForTest(t *testing.T, service *Integration) string {
+	t.Helper()
+	entry, err := managedMCPConfig(service.executable)
+	testutil.NoError(t, err)
+	return string(entry)
+}
+
 func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
 	current := []byte(autonomousStackedPRSkill)
 	cases := map[string][]byte{
@@ -703,9 +807,9 @@ func TestIntegration_RejectsForeignMalformedMismatchedAndNewerArtifacts(t *testi
 	testutil.NoError(t, err)
 	cases := map[string][]byte{
 		"foreign":       []byte("user-owned plugin\n"),
-		"malformed":     bytes.Replace(currentPlugin, []byte("version: 9"), []byte("version: old"), 1),
+		"malformed":     bytes.Replace(currentPlugin, []byte("version: 10"), []byte("version: old"), 1),
 		"name mismatch": bytes.Replace(currentPlugin, []byte("artifact: opencode-plugin/vgxness-memory"), []byte("artifact: opencode-plugin/other"), 1),
-		"newer":         bytes.Replace(currentPlugin, []byte("version: 9"), []byte("version: 10"), 1),
+		"newer":         bytes.Replace(currentPlugin, []byte("version: 10"), []byte("version: 11"), 1),
 	}
 	for name, candidate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1039,7 +1143,7 @@ func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 9",
+		"artifact: opencode-plugin/vgxness-memory; version: 10",
 		"vgxness_memory_recent", "vgxness_memory_search", "vgxness_memory_get", "vgxness_memory_save", "vgxness_memory_forget",
 		`["memory", operation, "--stdin", "--json", "--workspace", workspace]`,
 		"shell: false", "MAX_INPUT_BYTES", "MAX_OUTPUT_BYTES", "TIMEOUT_MS",
@@ -1068,7 +1172,7 @@ func TestMemoryPluginDefinesDefaultOffLocalManagerObservability(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 9",
+		"artifact: opencode-plugin/vgxness-memory; version: 10",
 		`process.env.VGXNESS_MANAGER_OBSERVABILITY === "1"`,
 		"MAX_OBSERVABILITY_WORKFLOWS = 128",
 		"MAX_OBSERVABILITY_RECORDS_PER_WORKFLOW = 32",
@@ -1305,7 +1409,7 @@ func TestMemoryPluginDefinesSafeOpenCodeHookContracts(t *testing.T) {
 func TestMemoryPluginCompactsRecentMemoryToBoundedIndex(t *testing.T) {
 	plugin := string(renderMemoryPlugin("/vgxness-test-bin"))
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 9",
+		"artifact: opencode-plugin/vgxness-memory; version: 10",
 		"const MAX_CONTEXT_BYTES = 4 * 1024",
 		"const MAX_RECENT_MEMORIES = 5",
 		"const MAX_MEMORY_PREVIEW_CHARACTERS = 128",
@@ -1380,7 +1484,7 @@ func TestMemoryPluginDefinesOptInFailOpenSyncHooks(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 9",
+		"artifact: opencode-plugin/vgxness-memory; version: 10",
 		`const SYNC_ON_SESSION_START = process.env.VGXNESS_SYNC_ON_SESSION_START === "1"`,
 		`const SYNC_ON_SESSION_END = process.env.VGXNESS_SYNC_ON_SESSION_END === "1"`,
 		`const SYNC_START_TIMEOUT_MS = 2_000`,
@@ -1642,8 +1746,10 @@ func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 		t.Fatal("validated production plugin bytes differ from pure renderer")
 	}
 	canonical := renderMemoryPlugin("/vgxness-test-bin")
-	canonicalV8 := previousMemoryPluginV8(canonical)
-	pluginV8 := previousMemoryPluginV8(currentPlugin)
+	canonicalV9 := previousMemoryPluginV9(canonical)
+	pluginV9 := previousMemoryPluginV9(currentPlugin)
+	canonicalV8 := previousMemoryPluginV8(canonicalV9)
+	pluginV8 := previousMemoryPluginV8(pluginV9)
 	canonicalV7 := previousMemoryPluginV7(canonicalV8)
 	pluginV7 := previousMemoryPluginV7(pluginV8)
 	pluginV6 := previousMemoryPluginV6(pluginV7)
@@ -1658,8 +1764,8 @@ func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 	pluginV3 := previousMemoryPluginV3(pluginV4)
 	pluginV2 := previousMemoryPluginV2(pluginV3)
 	pluginV1 := previousMemoryPluginV1(pluginV2)
-	if !isPreviousMemoryPlugin(pluginV8) || !isPreviousMemoryPlugin(pluginV7) || !isPreviousMemoryPlugin(pluginV6) || !isPreviousMemoryPlugin(pluginV5) || !isPreviousMemoryPlugin(pluginV4) || !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
-		t.Fatalf("plugin v8/v7/v6/v5/v4/v3/v2/v1 predecessors were not recognized")
+	if !isPreviousMemoryPlugin(pluginV9) || !isPreviousMemoryPlugin(pluginV8) || !isPreviousMemoryPlugin(pluginV7) || !isPreviousMemoryPlugin(pluginV6) || !isPreviousMemoryPlugin(pluginV5) || !isPreviousMemoryPlugin(pluginV4) || !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
+		t.Fatalf("plugin v9/v8/v7/v6/v5/v4/v3/v2/v1 predecessors were not recognized")
 	}
 	if isPreviousMemoryPlugin(append(append([]byte(nil), pluginV8...), '\n')) {
 		t.Fatal("whitespace-modified v8 predecessor was recognized")

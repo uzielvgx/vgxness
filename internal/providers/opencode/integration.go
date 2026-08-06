@@ -964,6 +964,12 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		DefaultAgent: defaultAgentName, DefaultAgentPath: defaultAgentPath,
 		DirectoryDurability: directoryDurability(),
 	}
+	if foreign, err := foreignPersistentMCP(defaultAgentConfig, service.executable); err != nil {
+		return inspection{}, err
+	} else if foreign {
+		result.State = integration.StateDrifted
+		return inspection{result: result}, nil
+	}
 	exists, drifted, containerErr := inspectDirectory(configDirectory)
 	if containerErr != nil {
 		return inspection{}, fmt.Errorf("inspect OpenCode integration directory: %w", containerErr)
@@ -1192,6 +1198,60 @@ func validDefaultAgentState(state defaultAgentState) bool {
 		return len(state.DefaultAgent) == 0
 	}
 	return len(state.DefaultAgent) > 0 && len(state.DefaultAgent) <= maxDefaultAgentBytes && json.Valid(state.DefaultAgent)
+}
+
+func managedMCPConfig(executable string) (json.RawMessage, error) {
+	if strings.TrimSpace(executable) == "" {
+		return nil, fmt.Errorf("%w: managed executable", integration.ErrInvalid)
+	}
+	entry := struct {
+		Type    string   `json:"type"`
+		Command []string `json:"command"`
+		Enabled bool     `json:"enabled"`
+	}{Type: "local", Command: []string{executable, "mcp"}, Enabled: true}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenCode MCP configuration: %w", err)
+	}
+	return data, nil
+}
+
+func openCodeMCP(values map[string]json.RawMessage) (json.RawMessage, bool, error) {
+	raw, ok := values["mcp"]
+	if !ok {
+		return nil, false, nil
+	}
+	servers := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(raw, &servers); err != nil || servers == nil {
+		return nil, false, fmt.Errorf("%w: opencode.json mcp must contain an object", integration.ErrInvalid)
+	}
+	entry, exists := servers["vgxness"]
+	return entry, exists, nil
+}
+
+func sameJSONValue(left, right []byte) bool {
+	var leftValue, rightValue any
+	leftErr := json.Unmarshal(left, &leftValue)
+	rightErr := json.Unmarshal(right, &rightValue)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	leftBytes, leftErr := json.Marshal(leftValue)
+	rightBytes, rightErr := json.Marshal(rightValue)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftBytes, rightBytes)
+}
+
+func foreignPersistentMCP(config []byte, executable string) (bool, error) {
+	values, _, err := readOpenCodeConfigFromBytes(config)
+	if err != nil {
+		return false, err
+	}
+	entry, exists, err := openCodeMCP(values)
+	if err != nil || !exists {
+		return false, err
+	}
+	managed, err := managedMCPConfig(executable)
+	return err == nil && !sameJSONValue(entry, managed), err
 }
 
 func withDefaultAgent(values map[string]json.RawMessage, exists bool) ([]byte, error) {
@@ -1460,7 +1520,7 @@ import { createHash } from "node:crypto"
 import { isAbsolute } from "node:path"
 import { tool } from "@opencode-ai/plugin"
 
-// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 9
+// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 10
 const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 const MAX_INPUT_BYTES = 64 * 1024
 const MAX_OUTPUT_BYTES = ` + fmt.Sprintf("%d", maxMemoryOutputBytes) + `
@@ -2033,6 +2093,12 @@ export const VGXNESSMemoryPlugin = async ({ directory }) => {
   const validToolRecord = (record) => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,239}$/.test(record?.tool ?? "") && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,239}$/.test(record?.callID ?? "") && Number.isFinite(record?.durationMs) && record.durationMs >= 0
 
   return {
+  config: (config) => {
+    const mcp = config.mcp ?? (config.mcp = {})
+    if (!Object.prototype.hasOwnProperty.call(mcp, "vgxness")) {
+      mcp.vgxness = { type: "local", command: [VGXNESS_EXECUTABLE, "mcp"], enabled: true }
+    }
+  },
   event: (input) => {
     try {
       reconcileObservability()
@@ -2698,10 +2764,29 @@ func readRegularFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+// previousMemoryPluginV9 reconstructs the immutable v9 bytes exactly. It is
+// deliberately whitespace-sensitive: only the exact generated v10 structure is
+// accepted as an upgrade predecessor.
+func previousMemoryPluginV9(current []byte) []byte {
+	return derivePredecessor(current, []textReplacement{
+		{old: "artifact: opencode-plugin/vgxness-memory; version: 10", new: "artifact: opencode-plugin/vgxness-memory; version: 9"},
+		{old: `  config: (config) => {
+    const mcp = config.mcp ?? (config.mcp = {})
+    if (!Object.prototype.hasOwnProperty.call(mcp, "vgxness")) {
+      mcp.vgxness = { type: "local", command: [VGXNESS_EXECUTABLE, "mcp"], enabled: true }
+    }
+  },
+`, new: ""},
+	})
+}
+
 // previousMemoryPluginV8 reconstructs the immutable v8 bytes exactly. It is
 // deliberately whitespace-sensitive: only the exact generated v9 structure is
 // accepted as an upgrade predecessor.
 func previousMemoryPluginV8(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
+		current = previousMemoryPluginV9(current)
+	}
 	return derivePredecessor(current, []textReplacement{
 		{old: `import { createHash } from "node:crypto"
 `, new: ""},
@@ -2827,6 +2912,9 @@ function recentMemoryBlock(raw) {
 // deliberately whitespace-sensitive: only the exact generated v8 structure is
 // accepted as an upgrade predecessor.
 func previousMemoryPluginV7(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
+		current = previousMemoryPluginV9(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 9")) {
 		current = previousMemoryPluginV8(current)
 	}
@@ -2887,6 +2975,9 @@ const MAX_OBSERVABILITY_OFFSET_MS = Number.MAX_SAFE_INTEGER
 }
 
 func previousMemoryPluginV6(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
+		current = previousMemoryPluginV9(current)
+	}
 	text := string(current)
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 9")) {
 		current = previousMemoryPluginV8(current)
@@ -2922,6 +3013,9 @@ func previousMemoryPluginV6(current []byte) []byte {
 }
 
 func previousMemoryPluginV5(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
+		current = previousMemoryPluginV9(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 9")) {
 		current = previousMemoryPluginV8(current)
 	}
@@ -3051,6 +3145,9 @@ function sddFailureCategory(value) {
 }
 
 func previousMemoryPluginV3(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
+		current = previousMemoryPluginV9(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 9")) {
 		current = previousMemoryPluginV8(current)
 	}
@@ -3091,6 +3188,9 @@ func previousMemoryPluginV3(current []byte) []byte {
 }
 
 func previousMemoryPluginV2(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
+		current = previousMemoryPluginV9(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 9")) {
 		current = previousMemoryPluginV8(current)
 	}
@@ -3191,7 +3291,8 @@ func isPreviousMemoryPlugin(candidate []byte) bool {
 	if err != nil {
 		return false
 	}
-	v8 := previousMemoryPluginV8(generated)
+	v9 := previousMemoryPluginV9(generated)
+	v8 := previousMemoryPluginV8(v9)
 	v7 := previousMemoryPluginV7(v8)
 	v6 := previousMemoryPluginV6(v7)
 	v5 := previousMemoryPluginV5(v6)
@@ -3199,7 +3300,7 @@ func isPreviousMemoryPlugin(candidate []byte) bool {
 	v3 := previousMemoryPluginV3(v4)
 	v2 := previousMemoryPluginV2(v3)
 	v1 := previousMemoryPluginV1(v2)
-	return bytes.Equal(candidate, v8) || bytes.Equal(candidate, v7) || bytes.Equal(candidate, v6) || bytes.Equal(candidate, v5) || bytes.Equal(candidate, v4) || bytes.Equal(candidate, v3) || bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
+	return bytes.Equal(candidate, v9) || bytes.Equal(candidate, v8) || bytes.Equal(candidate, v7) || bytes.Equal(candidate, v6) || bytes.Equal(candidate, v5) || bytes.Equal(candidate, v4) || bytes.Equal(candidate, v3) || bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
 }
 
 func memoryPluginExecutable(content []byte) (string, bool) {
