@@ -23,7 +23,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 45",
+		"artifact: opencode-agent/vgxness-manager; version: 46",
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
 		"managed global portable catalog",
@@ -57,24 +57,27 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 }
 
-func TestV45UsesCompactProtocolAndReconstructsCompleteV44Bundle(t *testing.T) {
+func TestV46UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	for _, required := range []string{"version: 45", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
+	for _, required := range []string{"version: 46", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
 		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
 			t.Errorf("manager missing compact protocol %q", required)
 		}
 	}
-	v44, err := previousV44ModelPlanBundle(current)
+	v45, err := previousV45ModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if len(predecessorBundlesMust(t, current)) != 42 {
-		t.Fatal("unexpected predecessor bundle count")
+	predecessorCount := (len(managerPredecessorsMust(t, current)) + 1) * 2 * 3
+	if got := len(predecessorBundlesMust(t, current)); got != predecessorCount {
+		t.Fatalf("predecessor bundles=%d, want derived %d", got, predecessorCount)
 	}
-	if !bytes.Contains(v44.agents[managerAgentName], []byte("artifact: opencode-agent/vgxness-manager; version: 44")) ||
-		!bytes.Contains(v44.agents[generalAgentName], []byte("artifact: opencode-agent/general; version: 3")) {
-		t.Fatal("v44 bundle did not use exact predecessor profiles")
+	if !bytes.Contains(v45.agents[managerAgentName], []byte("artifact: opencode-agent/vgxness-manager; version: 45")) ||
+		!bytes.Contains(v45.agents[generalAgentName], []byte("artifact: opencode-agent/general; version: 4")) {
+		t.Fatal("v45 bundle did not use exact predecessor profiles")
 	}
+	v44, err := previousV44ModelPlanBundle(v45)
+	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(v44)
 	testutil.NoError(t, err)
 	for _, name := range compactProtocolAgentNames {
@@ -97,6 +100,12 @@ func TestV45UsesCompactProtocolAndReconstructsCompleteV44Bundle(t *testing.T) {
 }
 
 func TestCurrentAndPredecessorProfileSnapshotsHaveFixedDigestsAndExactBoundShape(t *testing.T) {
+	if got := artifactSHA256([]byte(previousManagerPromptV45)); got != "533e71583ebcb656d500bc3c944e6e077848c778977ec8ef8c7cdc9429e62b97" {
+		t.Fatalf("manager v45 snapshot digest=%s", got)
+	}
+	if got := artifactSHA256([]byte(previousGeneralPromptV4)); got != "18d62d947e0755d63d3fa69bed7e3c4ac37ac84d249dfcbfe78c1917a4f7a91f" {
+		t.Fatalf("general v4 snapshot digest=%s", got)
+	}
 	if got := artifactSHA256([]byte(previousManagerPromptV44)); got != "f97a49b2107ee8c257295e42c09540704074f032d8549ffca1604896ccac3965" {
 		t.Fatalf("manager v44 snapshot digest=%s", got)
 	}
@@ -148,6 +157,13 @@ func predecessorBundlesMust(t *testing.T, current modelPlanBundle) []modelPlanBu
 	return bundles
 }
 
+func managerPredecessorsMust(t *testing.T, current modelPlanBundle) [][]byte {
+	t.Helper()
+	predecessors, err := managerPredecessors(current)
+	testutil.NoError(t, err)
+	return predecessors
+}
+
 func previousManagerV42Must(t *testing.T, current modelPlanBundle) modelPlanBundle {
 	t.Helper()
 	bundle, err := previousManagerModelPlanBundleV42(current)
@@ -161,7 +177,7 @@ func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 	prompt := string(bundle.agents[managerAgentName])
 	t.Logf("manager prompt bytes=%d newlines=%d", len(prompt), strings.Count(prompt, "\n"))
 
-	// Current v45 preserves the fixed generated-prompt budget.
+	// Current v46 preserves the fixed generated-prompt budget.
 	const maxManagerPromptBytes = 15_000
 	const maxManagerPromptLines = 105
 	if bytes := len(prompt); bytes > maxManagerPromptBytes {
@@ -291,25 +307,26 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 	}
 }
 
-func TestGeneralV4RequiresConciseDecisiveReturns(t *testing.T) {
+func TestGeneralV5RequiresConciseDecisiveReturns(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/general; version: 4",
-		"concise conclusions, decisive changed paths/references, and exact commands/results",
-		"assumptions or blockers only when present",
-		"candidate identity, authorization, acceptance, and INCONCLUSIVE evidence",
-		"label fact, inference, and unknown where relevant",
+		"artifact: opencode-agent/general; version: 5",
+		"Ordinary implementation returns are entire compact Child Return Envelope v1 JSON objects serialized as UTF-8 and target <=512 bytes with status, changed paths, exact checks/results, and blockers only when present.",
+		"Candidate identity, authorization, acceptance, and INCONCLUSIVE evidence are mandatory only",
+		"The <=16 KiB envelope applies only to full-assurance frozen, risky, verification, or SDD missions.",
 	} {
 		if !strings.Contains(general, required) {
-			t.Errorf("general v4 missing compact return contract %q", required)
+			t.Errorf("general v5 missing compact return contract %q", required)
 		}
 	}
 }
 
 func TestManagerPredecessorTemplatesRetainAcceptedDigests(t *testing.T) {
 	for path, expected := range map[string]string{
+		"templates/manager.v45.md": "533e71583ebcb656d500bc3c944e6e077848c778977ec8ef8c7cdc9429e62b97",
+		"templates/general.v4.md":  "18d62d947e0755d63d3fa69bed7e3c4ac37ac84d249dfcbfe78c1917a4f7a91f",
 		"templates/manager.v44.md": "f97a49b2107ee8c257295e42c09540704074f032d8549ffca1604896ccac3965",
 		"templates/general.v3.md":  "616b7e5ff36848f505b87b94cc07caa0634c711db13914c30dc195c62bd467f1",
 		"templates/manager.v42.md": "24ca61ef6f7642660a8ff32325c8d32df4b962a0b47df830d08a239e15f54bd3",
@@ -373,6 +390,42 @@ func TestPrimaryAgentsAllowEveryCapability(t *testing.T) {
 		}
 		if strings.Contains(frontmatter, ": deny") || strings.Contains(frontmatter, ": ask") {
 			t.Errorf("%s retains a permission that contradicts global allow", name)
+		}
+	}
+}
+
+func TestV46RoutesDirectSingleReadAndKeepsFullAssuranceExceptions(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manager := string(bundle.agents[managerAgentName])
+	for _, required := range []string{
+		"artifact: opencode-agent/vgxness-manager; version: 46",
+		"Directly answer a repository read-only informational request only when the user names an exact local file or asks for the standard root README, one read suffices, and no search, graph traversal, cross-file inference, architecture/flow analysis, or diagnosis is needed.",
+		"Otherwise use Explore; implementations remain delegated to managed general.",
+		"For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`.",
+		"Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs.",
+		"A second task call for the same goal requires an explicit blocker, new evidence, correction, or independent assurance; resume the same child where applicable and send only the delta.",
+	} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("manager v46 missing %q", required)
+		}
+	}
+}
+
+func TestGeneralV5UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	general := string(bundle.agents[generalAgentName])
+	for _, required := range []string{
+		"artifact: opencode-agent/general; version: 5",
+		"Ordinary bounded missions are entire compact JSON objects serialized as UTF-8 and target <=512 bytes",
+		"Ordinary implementation returns are entire compact Child Return Envelope v1 JSON objects serialized as UTF-8 and target <=512 bytes with status, changed paths, exact checks/results, and blockers only when present.",
+		"Candidate identity, authorization, acceptance, and INCONCLUSIVE evidence are mandatory only when supplied or required by a frozen, risky, verification, or SDD mission.",
+		"The <=16 KiB envelope applies only to full-assurance frozen, risky, verification, or SDD missions.",
+		"Malformed, stale, oversized, or missing required evidence remains BLOCKED.",
+	} {
+		if !strings.Contains(general, required) {
+			t.Errorf("general v5 missing %q", required)
 		}
 	}
 }

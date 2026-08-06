@@ -153,6 +153,10 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
+	v45, err := previousV45ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
 	v44, err := previousV44ModelPlanBundle(current)
 	if err != nil {
 		return nil, err
@@ -177,8 +181,8 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	withExplore := make([]modelPlanBundle, 0, 14)
-	for _, manager := range []modelPlanBundle{current, v44, v43, managerV42, managerV41, managerV40, managerV39} {
+	withExplore := make([]modelPlanBundle, 0, 16)
+	for _, manager := range []modelPlanBundle{current, v45, v44, v43, managerV42, managerV41, managerV40, managerV39} {
 		withExplore = append(withExplore, manager)
 		explore, err := previousExploreModelPlanBundle(manager)
 		if err != nil {
@@ -186,7 +190,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		}
 		withExplore = append(withExplore, explore)
 	}
-	candidates := make([]modelPlanBundle, 0, 42)
+	candidates := make([]modelPlanBundle, 0, 48)
 	for _, candidate := range withExplore {
 		candidates = append(candidates, candidate)
 		sddBundle, err := previousSDDModelPlanBundle(candidate)
@@ -204,6 +208,10 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
+	v45, err := previousV45ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
 	v44, err := previousV44ModelPlanBundle(current)
 	if err != nil {
 		return nil, err
@@ -228,7 +236,11 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return [][]byte{v44.agents[managerAgentName], v43.agents[managerAgentName], v42.agents[managerAgentName], v41.agents[managerAgentName], v40.agents[managerAgentName], v39.agents[managerAgentName]}, nil
+	return [][]byte{v45.agents[managerAgentName], v44.agents[managerAgentName], v43.agents[managerAgentName], v42.agents[managerAgentName], v41.agents[managerAgentName], v40.agents[managerAgentName], v39.agents[managerAgentName]}, nil
+}
+
+func previousV45ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	return fullModelPlanBundle(current.config, current.resolved, previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", canonicalVerifierPrompt, "artifact: opencode-agent/vgxness-verifier; version: 3", currentReviewPrompts())
 }
 
 func previousV44ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
@@ -339,7 +351,7 @@ func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, e
 }
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
-	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, "artifact: opencode-agent/general; version: 4", canonicalVerifierPrompt, "artifact: opencode-agent/vgxness-verifier; version: 3", currentReviewPrompts())
+	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, "artifact: opencode-agent/general; version: 5", canonicalVerifierPrompt, "artifact: opencode-agent/vgxness-verifier; version: 3", currentReviewPrompts())
 }
 
 func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
@@ -403,7 +415,7 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
-	return bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 45", assignment)
+	return bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 46", assignment)
 }
 
 func currentReviewPrompts() map[string]string {
