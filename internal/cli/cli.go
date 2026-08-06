@@ -12,6 +12,7 @@ import (
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/mcp"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
@@ -21,6 +22,35 @@ import (
 type Inspector interface {
 	Status(context.Context, config.Options) (inspection.Result, error)
 	Doctor(context.Context, config.Options) (inspection.Result, error)
+}
+
+type mcpLauncher func(context.Context, string, config.Options) error
+
+// RunMCP serves the read-only MCP protocol over the supplied standard streams.
+func RunMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, workspace string) int {
+	return runMCP(ctx, args, stdin, stdout, stderr, workspace, mcp.RunStdio)
+}
+
+func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, workspace string, launch mcpLauncher) int {
+	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var opts config.Options
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "use project-local storage")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || launch == nil {
+		fmt.Fprintln(stderr, "usage: vgxness mcp [--storage-root <path>] [--project-local]")
+		return 2
+	}
+	opts.ProjectDir = workspace
+	if err := launch(ctx, workspace, opts); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			fmt.Fprintln(stderr, "cancelled: operation cancelled")
+			return 130
+		}
+		fmt.Fprintln(stderr, "operational: MCP server unavailable")
+		return 1
+	}
+	return 0
 }
 
 func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, sdds SDDRuntime) int {

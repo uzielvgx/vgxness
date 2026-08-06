@@ -154,6 +154,23 @@ func TestRunRejectsTUIArgumentsWithoutLaunching(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesMCPWithoutInitializingTUI(t *testing.T) {
+	tuiCalls, mcpCalls := 0, 0
+	launcher := func(context.Context, io.Reader, io.Writer, io.Writer, tui.Backend, tui.Options) int {
+		tuiCalls++
+		return 0
+	}
+	launchMCP := func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int {
+		mcpCalls++
+		return 29
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithMCP(context.Background(), []string{"mcp"}, bytes.NewReader(nil), &stdout, &stderr, launcher, launchMCP)
+	if code != 29 || mcpCalls != 1 || tuiCalls != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d mcpCalls=%d tuiCalls=%d stdout=%q stderr=%q", code, mcpCalls, tuiCalls, stdout.String(), stderr.String())
+	}
+}
+
 func TestTUIBackendSearchAndDetailStayProjectScoped(t *testing.T) {
 	runtime := &recordingTUIMemoryRuntime{}
 	backend := tuiBackend{memory: runtime}
