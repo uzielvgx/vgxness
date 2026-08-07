@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"testing"
@@ -34,12 +35,59 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	if len(tools.Tools) != 2 || tools.Tools[0].Name != "memory_recent" || tools.Tools[1].Name != "memory_search" {
 		t.Fatalf("listed tools = %+v", tools.Tools)
 	}
-	result, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "memory_search", Arguments: map[string]any{"query": "alpha"}})
+	result, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "memory_search", Arguments: map[string]any{"query": "alpha and beta"}})
 	if err != nil {
 		t.Fatalf("CallTool() error = %v", err)
 	}
 	if result.IsError || backend.recall.Project != "project-1" {
 		t.Fatalf("CallTool() result = %+v, request = %+v", result, backend.recall)
+	}
+	if !backend.recall.MatchAny || backend.recall.Query != "alpha and beta" {
+		t.Fatalf("memory_search request = %+v", backend.recall)
+	}
+}
+
+func TestFullServerProtocolListResultsUseObjectEnvelopes(t *testing.T) {
+	backend := &fakeReader{project: "project-1"}
+	sdds := &fakeSDDReader{change: sdd.Change{ID: "change-1", Project: "project-1"}, revision: sdd.Revision{ID: "revision-1", ChangeID: "change-1"}}
+	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		args map[string]any
+		key  string
+	}{
+		{"sdd_list", nil, "changes"},
+		{"sdd_list_revisions", map[string]any{"changeId": "change-1"}, "revisions"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, callErr := session.CallTool(ctx, &sdk.CallToolParams{Name: test.name, Arguments: test.args})
+			if callErr != nil || result.IsError {
+				t.Fatalf("CallTool() result=%+v err=%v", result, callErr)
+			}
+			encoded, marshalErr := json.Marshal(result.StructuredContent)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			var envelope map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &envelope); err != nil || len(envelope) != 1 || envelope[test.key] == nil {
+				t.Fatalf("structured content=%s err=%v", encoded, err)
+			}
+			var values []json.RawMessage
+			if err := json.Unmarshal(envelope[test.key], &values); err != nil {
+				t.Fatalf("structured content field %q=%s is not an array: %v", test.key, envelope[test.key], err)
+			}
+		})
 	}
 }
 
@@ -332,6 +380,17 @@ func TestServerSearchValidationAndCancellation(t *testing.T) {
 	}
 }
 
+func TestServerSearchMapsInvalidRecallToInvalidInput(t *testing.T) {
+	backend := &fakeReader{project: "project-1", recallErr: memory.ErrInvalid}
+	server, err := newWithReader(context.Background(), "/workspace", backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.search(context.Background(), searchInput{Query: "legacy and migration"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("search error = %v, want invalid input", err)
+	}
+}
+
 func TestNewRejectsAbsentStorageWithoutCreatingIt(t *testing.T) {
 	workspace := t.TempDir()
 	storage := t.TempDir()
@@ -365,6 +424,7 @@ type fakeReader struct {
 	recent    memory.Recent
 	recall    memory.Recall
 	recentErr error
+	recallErr error
 	entry     memory.Entry
 	remember  memory.Remember
 	lookup    memory.Lookup
@@ -470,7 +530,7 @@ func (reader *fakeReader) Recent(_ context.Context, request memory.Recent) ([]me
 
 func (reader *fakeReader) Recall(_ context.Context, request memory.Recall) ([]memory.Entry, error) {
 	reader.recall = request
-	return nil, nil
+	return nil, reader.recallErr
 }
 
 func (reader *fakeReader) Get(_ context.Context, request memory.Lookup) (memory.Entry, error) {

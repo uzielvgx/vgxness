@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vgxness/vgxness/internal/config"
 	_ "modernc.org/sqlite"
 )
 
@@ -524,6 +525,7 @@ func (s *Store) ResolveProject(ctx context.Context, workspace string) (string, e
 	if absolute, err = filepath.EvalSymlinks(absolute); err != nil {
 		return "", fmt.Errorf("%w: invalid workspace", ErrInvalid)
 	}
+	absolute = config.CanonicalizeExistingPathCase(absolute)
 	if absolute == string(filepath.Separator) || filepath.Base(absolute) == "." || filepath.Base(absolute) == string(filepath.Separator) {
 		return "", fmt.Errorf("%w: invalid workspace", ErrInvalid)
 	}

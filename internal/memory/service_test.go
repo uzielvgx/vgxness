@@ -77,11 +77,42 @@ func TestMemoryService_GetMissingHidesForeignMetadata(t *testing.T) {
 }
 
 func TestMemoryService_SearchRejectsUnsafeFTSBeforeStore(t *testing.T) {
-	for _, query := range []string{"", `"broken`, "a OR b", "topic:*", "a-b"} {
+	for _, query := range []string{"", `"broken`, "topic:*"} {
 		store := &fakeMemoryStore{}
 		_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: query, Project: "p", Scope: ScopeProject})
 		testutil.Require(t, errors.Is(err, ErrInvalid) && store.calls == 0, "query %q reached store: %v", query, err)
 	}
+}
+
+func TestMemoryService_SearchQuotesOperatorsAndConservativeTerms(t *testing.T) {
+	for _, test := range []struct {
+		name, query, want string
+		matchAny          bool
+	}{
+		{"all", "alpha and beta", `"alpha" "and" "beta"`, false},
+		{"any", "alpha OR beta", `"alpha" OR "OR" OR "beta"`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeMemoryStore{}
+			_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: test.query, Project: "p", Scope: ScopeProject, MatchAny: test.matchAny})
+			testutil.Require(t, err == nil && store.search.Query == test.want, "query=%q want=%q err=%v", store.search.Query, test.want, err)
+		})
+	}
+}
+
+func TestMemoryService_SearchKeepsConservativeCharacterPolicy(t *testing.T) {
+	for _, query := range []string{"alpha-beta", "v1.2"} {
+		store := &fakeMemoryStore{}
+		_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: query, Project: "p", Scope: ScopeProject})
+		testutil.Require(t, errors.Is(err, ErrInvalid) && store.calls == 0, "query %q reached store: %v", query, err)
+	}
+}
+
+func TestMemoryService_RecallFindsQuotedAndTermInStore(t *testing.T) {
+	store := openTestStore(t)
+	mustSave(t, store, observation("legacy", "p", "legacy migration decision"))
+	entries, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: "legacy and migration", Project: "p", Scope: ScopeProject, MatchAny: true})
+	testutil.Require(t, err == nil && len(entries) == 1 && entries[0].ID == "legacy", "entries=%+v err=%v", entries, err)
 }
 
 func TestMemoryService_SearchPreviewBudgetsAreDeterministic(t *testing.T) {
