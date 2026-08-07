@@ -294,13 +294,14 @@ type defaultAgentState struct {
 type inspection struct {
 	result    integration.Result
 	artifacts []artifact
-	retired   *retiredArtifact
+	retired   []retiredArtifact
 }
 
 type retiredArtifact struct {
-	path    string
-	content []byte
-	backup  string
+	path      string
+	content   []byte
+	backup    string
+	recognize func([]byte) bool
 }
 
 type installedArtifact struct {
@@ -487,6 +488,7 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 	anchors := make([]reinstallAnchor, 0, len(state.artifacts))
 	staged := make([]installedArtifact, 0, len(state.artifacts))
 	published := make([]installedArtifact, 0, len(state.artifacts))
+	retired := state.retired
 	var pendingEvidence reinstallPendingEvidence
 	rollback := true
 	defer func() {
@@ -506,6 +508,9 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 					cleanupErr = errors.Join(cleanupErr, recoveryFailure("remove reinstall predecessor anchor", err))
 				}
 			}
+			for _, item := range retired {
+				cleanupRetiredArtifact(item)
+			}
 			if cleanupErr == nil && pendingEvidence.info != nil {
 				cleanupErr = clearReinstallPending(root, pendingEvidence)
 			}
@@ -513,6 +518,11 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 			return
 		}
 		var recoveryErr error
+		for index := len(retired) - 1; index >= 0; index-- {
+			if retired[index].backup != "" {
+				recoveryErr = errors.Join(recoveryErr, restoreRetiredArtifact(retired[index]))
+			}
+		}
 		for index := len(published) - 1; index >= 0; index-- {
 			recoveryErr = errors.Join(recoveryErr, rollbackInstalledArtifact(published[index]))
 		}
@@ -636,6 +646,16 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 			return integration.Result{}, err
 		}
 	}
+	for index := range retired {
+		if err := retireArtifact(&retired[index]); err != nil {
+			return integration.Result{}, err
+		}
+		if service.afterRetirement != nil {
+			if err := service.afterRetirement(); err != nil {
+				return integration.Result{}, err
+			}
+		}
+	}
 	verified, err := service.inspect(ctx, options)
 	if err != nil || verified.result.State != integration.StateInstalled {
 		return integration.Result{}, fmt.Errorf("read back OpenCode reinstall artifacts: %w", integration.ErrDrift)
@@ -693,15 +713,17 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 	rollback := true
 	defer func() {
 		if rollback {
-			if retired != nil && retired.backup != "" {
-				returnErr = errors.Join(returnErr, restoreRetiredArtifact(*retired))
+			for index := len(retired) - 1; index >= 0; index-- {
+				if retired[index].backup != "" {
+					returnErr = errors.Join(returnErr, restoreRetiredArtifact(retired[index]))
+				}
 			}
 			for index := len(created) - 1; index >= 0; index-- {
 				returnErr = errors.Join(returnErr, rollbackInstalledArtifact(created[index]))
 			}
 		} else {
-			if retired != nil {
-				cleanupRetiredArtifact(*retired)
+			for _, item := range retired {
+				cleanupRetiredArtifact(item)
 			}
 			for _, item := range created {
 				returnErr = errors.Join(returnErr, cleanupInstalledArtifact(item))
@@ -724,8 +746,8 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 		}
 		created = append(created, installed)
 	}
-	if retired != nil {
-		if err := retireArtifact(retired); err != nil {
+	for index := range retired {
+		if err := retireArtifact(&retired[index]); err != nil {
 			return integration.Result{}, err
 		}
 		if service.afterRetirement != nil {
@@ -739,7 +761,7 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 		return integration.Result{}, fmt.Errorf("read back OpenCode integration artifacts: %w", integration.ErrDrift)
 	}
 	rollback = false
-	verified.result.Changed = len(created) != 0 || retired != nil
+	verified.result.Changed = len(created) != 0 || len(retired) != 0
 	verified.result.RestartRequired = verified.result.Changed
 	return verified.result, nil
 }
@@ -761,6 +783,7 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	if err := ctx.Err(); err != nil {
 		return integration.Result{}, err
 	}
+	configDirectory := filepath.Dir(filepath.Dir(state.result.Path))
 	backupDirectory := filepath.Join(filepath.Dir(filepath.Dir(state.result.Path)), ".vgxness-backups")
 	if err := prepareDirectory(backupDirectory); err != nil {
 		return integration.Result{}, fmt.Errorf("prepare OpenCode integration backup: %w", err)
@@ -788,16 +811,32 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 		}
 	}
 	backups := make([]backedUpArtifact, 0, len(state.artifacts))
+	retired := state.retired
 	var defaultChange defaultAgentUninstall
 	rollback := true
 	defer func() {
 		if rollback {
+			for index := len(retired) - 1; index >= 0; index-- {
+				if retired[index].backup != "" {
+					returnErr = errors.Join(returnErr, restoreRetiredArtifact(retired[index]))
+				}
+			}
 			for index := len(backups) - 1; index >= 0; index-- {
 				returnErr = errors.Join(returnErr, restoreWithoutOverwrite(backups[index].backup, backups[index].target))
 			}
 			returnErr = errors.Join(returnErr, defaultChange.rollback())
 		}
 	}()
+	for index := range retired {
+		if err := retireArtifact(&retired[index]); err != nil {
+			return integration.Result{}, err
+		}
+		if service.afterRetirement != nil {
+			if err := service.afterRetirement(); err != nil {
+				return integration.Result{}, err
+			}
+		}
+	}
 	removeManaged := func(item artifact) error {
 		if !item.exact && !item.upgrade {
 			return nil
@@ -852,10 +891,28 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 			return integration.Result{}, err
 		}
 	}
+	remaining, readbackErr := inspectRetiredArtifacts(
+		retiredArtifact{path: filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md"), recognize: isRetiredSkill},
+		retiredArtifact{path: filepath.Join(configDirectory, "plugins", memoryPluginName), recognize: isPreviousMemoryPlugin},
+	)
+	if readbackErr != nil || len(remaining) != 0 {
+		return integration.Result{}, fmt.Errorf("read back OpenCode uninstall artifacts: %w", integration.ErrDrift)
+	}
+	for _, item := range state.artifacts {
+		if item.defaultAgent != nil || item.defaultState {
+			continue
+		}
+		if _, err := os.Lstat(item.path); !errors.Is(err, os.ErrNotExist) {
+			return integration.Result{}, fmt.Errorf("read back OpenCode uninstall artifacts: %w", integration.ErrDrift)
+		}
+	}
 	rollback = false
+	for _, item := range retired {
+		cleanupRetiredArtifact(item)
+	}
 	defaultChange.cleanup()
 	state.result.State = integration.StateAbsent
-	state.result.Changed = len(backups) != 0 || defaultChange.replacement != nil || defaultChange.removal != nil
+	state.result.Changed = len(backups) != 0 || len(retired) != 0 || defaultChange.replacement != nil || defaultChange.removal != nil
 	state.result.RestartRequired = state.result.Changed
 	for _, item := range backups {
 		if item.target == state.result.Path {
@@ -943,7 +1000,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	reviewReliabilityPath := filepath.Join(configDirectory, "agents", reviewReliabilityName)
 	reviewResiliencePath := filepath.Join(configDirectory, "agents", reviewResilienceName)
 	reviewRefuterPath := filepath.Join(configDirectory, "agents", reviewRefuterName)
-	toolPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+	legacyPluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
 	defaultAgentPath := filepath.Join(configDirectory, defaultAgentConfigName)
@@ -959,13 +1016,8 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	if err != nil {
 		return inspection{}, err
 	}
-	toolContent, err := memoryPluginContent(service.executable)
-	if err != nil {
-		return inspection{}, err
-	}
 	result := integration.Result{
 		Provider: "opencode", State: integration.StateAbsent, Path: managerPath, ArtifactSHA256: artifactSHA256(plan.agents[managerAgentName]),
-		ToolPath: toolPath, ToolSHA256: artifactSHA256(toolContent),
 		ModelPlan: plan.config.ActivePlan, ModelProvider: plan.resolved.Provider,
 		ModelEfficient: plan.config.Efficient, ModelBalanced: plan.config.Balanced, ModelFrontier: plan.config.Frontier,
 		ManifestPath: manifestPath, ManifestSHA256: artifactSHA256(plan.manifest),
@@ -976,7 +1028,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		result.State = integration.StateDrifted
 		return inspection{result: result}, nil
 	}
-	if foreign, err := foreignPersistentMCP(defaultAgentConfig, service.executable); err != nil {
+	if foreign, err := foreignPersistentMCP(defaultAgentConfig, service.executable, defaultAgentState.MCPOwned); err != nil {
 		return inspection{}, err
 	} else if foreign {
 		result.State = integration.StateDrifted
@@ -1032,7 +1084,6 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: filepath.Join(configDirectory, "agents", sddDesignName), content: plan.agents[sddDesignName], backup: "vgxness-sdd-design", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleDesign, plan.agents[sddDesignName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddDesignName))},
 		{path: filepath.Join(configDirectory, "agents", sddTasksName), content: plan.agents[sddTasksName], backup: "vgxness-sdd-tasks", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleTasks, plan.agents[sddTasksName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddTasksName))},
 		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleApply, plan.agents[sddApplyName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
-		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
 		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState},
 		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
@@ -1049,7 +1100,10 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		state.result.State = integration.StateDrifted
 		return state, nil
 	}
-	retired, retirementErr := inspectRetiredSkill(skillPath)
+	retired, retirementErr := inspectRetiredArtifacts(
+		retiredArtifact{path: skillPath, recognize: isRetiredSkill},
+		retiredArtifact{path: legacyPluginPath, recognize: isPreviousMemoryPlugin},
+	)
 	if retirementErr != nil {
 		state.result.State = integration.StateDrifted
 		return state, nil
@@ -1107,8 +1161,13 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 			}
 			if item.defaultAgent != nil {
 				if defaultAgentIsManaged(current) {
-					item.exact = true
-					exact++
+					if managedReadOnlyMCP(current, service.executable) {
+						item.upgrade = true
+						item.prior = append([]byte(nil), current...)
+					} else {
+						item.exact = true
+						exact++
+					}
 					continue
 				}
 				item.upgrade = true
@@ -1144,26 +1203,38 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	default:
 		state.result.State = integration.StatePartial
 	}
-	if state.retired != nil && state.result.State == integration.StateInstalled {
+	if len(state.retired) != 0 && state.result.State == integration.StateInstalled {
 		state.result.State = integration.StatePartial
 	}
 	return state, nil
 }
 
-func inspectRetiredSkill(path string) (*retiredArtifact, error) {
-	content, err := readRegularFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
+func isRetiredSkill(content []byte) bool {
 	for _, known := range [][]byte{[]byte(autonomousStackedPRSkill), []byte(previousAutonomousStackedPRSkill), []byte(previousAutonomousStackedPRSkillV2)} {
 		if bytes.Equal(content, known) {
-			return &retiredArtifact{path: path, content: content}, nil
+			return true
 		}
 	}
-	return nil, integration.ErrDrift
+	return false
+}
+
+func inspectRetiredArtifacts(candidates ...retiredArtifact) ([]retiredArtifact, error) {
+	retired := make([]retiredArtifact, 0, len(candidates))
+	for _, candidate := range candidates {
+		content, err := readRegularFile(candidate.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if candidate.recognize == nil || !candidate.recognize(content) {
+			return nil, integration.ErrDrift
+		}
+		candidate.content = content
+		retired = append(retired, candidate)
+	}
+	return retired, nil
 }
 
 func defaultAgentArtifacts(configPath, statePath, executable string) ([]byte, []byte, defaultAgentState, []byte, bool, error) {
@@ -1261,7 +1332,7 @@ func managedMCPConfig(executable string) (json.RawMessage, error) {
 		Type    string   `json:"type"`
 		Command []string `json:"command"`
 		Enabled bool     `json:"enabled"`
-	}{Type: "local", Command: []string{executable, "mcp"}, Enabled: true}
+	}{Type: "local", Command: []string{executable, "mcp", "--full"}, Enabled: true}
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return nil, fmt.Errorf("encode OpenCode MCP configuration: %w", err)
@@ -1324,7 +1395,7 @@ func sameJSONValue(left, right []byte) bool {
 	return leftErr == nil && rightErr == nil && bytes.Equal(leftBytes, rightBytes)
 }
 
-func foreignPersistentMCP(config []byte, executable string) (bool, error) {
+func foreignPersistentMCP(config []byte, executable string, owned bool) (bool, error) {
 	values, _, err := readOpenCodeConfigFromBytes(config)
 	if err != nil {
 		return false, err
@@ -1334,7 +1405,10 @@ func foreignPersistentMCP(config []byte, executable string) (bool, error) {
 		return false, err
 	}
 	managed, err := managedMCPConfig(executable)
-	return err == nil && !sameJSONValue(entry, managed), err
+	if err != nil || sameJSONValue(entry, managed) {
+		return false, err
+	}
+	return !owned || !sameJSONValue(entry, managedReadOnlyMCPConfig(executable)), nil
 }
 
 func withManagedOpenCodeConfig(values map[string]json.RawMessage, exists bool, state *defaultAgentState, executable string) ([]byte, error) {
@@ -1354,7 +1428,7 @@ func withManagedOpenCodeConfig(values map[string]json.RawMessage, exists bool, s
 	if err != nil {
 		return nil, err
 	}
-	if err := applyManagedMCP(values, state, managed); err != nil {
+	if err := applyManagedMCP(values, state, managed, executable); err != nil {
 		return nil, err
 	}
 	if err := applyManagedPermission(values, state); err != nil {
@@ -1367,14 +1441,26 @@ func withManagedOpenCodeConfig(values map[string]json.RawMessage, exists bool, s
 	return append(encoded, '\n'), nil
 }
 
-func applyManagedMCP(values map[string]json.RawMessage, state *defaultAgentState, managed json.RawMessage) error {
+func applyManagedMCP(values map[string]json.RawMessage, state *defaultAgentState, managed json.RawMessage, executable string) error {
 	entry, present, err := openCodeMCP(values)
 	if err != nil {
 		return err
 	}
 	if state.MCPOwned {
-		if !present || !sameJSONValue(entry, managed) {
+		if !present || (!sameJSONValue(entry, managed) && !sameJSONValue(entry, managedReadOnlyMCPConfig(executable))) {
 			return integration.ErrDrift
+		}
+		if !sameJSONValue(entry, managed) {
+			servers := map[string]json.RawMessage{}
+			if err := json.Unmarshal(values["mcp"], &servers); err != nil {
+				return integration.ErrDrift
+			}
+			servers["vgxness"] = managed
+			raw, err := json.Marshal(servers)
+			if err != nil {
+				return err
+			}
+			values["mcp"] = raw
 		}
 		return nil
 	}
@@ -1399,6 +1485,15 @@ func applyManagedMCP(values map[string]json.RawMessage, state *defaultAgentState
 	values["mcp"] = raw
 	state.MCPOwned = true
 	return nil
+}
+
+func managedReadOnlyMCPConfig(executable string) json.RawMessage {
+	data, _ := json.Marshal(struct {
+		Type    string   `json:"type"`
+		Command []string `json:"command"`
+		Enabled bool     `json:"enabled"`
+	}{"local", []string{executable, "mcp"}, true})
+	return data
 }
 
 func applyManagedPermission(values map[string]json.RawMessage, state *defaultAgentState) error {
@@ -1447,6 +1542,15 @@ func defaultAgentIsManaged(config []byte) bool {
 	return bytes.Equal(values["default_agent"], []byte(`"vgxness-manager"`))
 }
 
+func managedReadOnlyMCP(config []byte, executable string) bool {
+	values, _, err := readOpenCodeConfigFromBytes(config)
+	if err != nil {
+		return false
+	}
+	entry, present, err := openCodeMCP(values)
+	return err == nil && present && sameJSONValue(entry, managedReadOnlyMCPConfig(executable))
+}
+
 func withoutDefaultAgent(config []byte, state defaultAgentState, executable string) ([]byte, bool, bool, error) {
 	values, _, err := readOpenCodeConfigFromBytes(config)
 	if err != nil {
@@ -1490,7 +1594,7 @@ func withoutManagedMCP(values map[string]json.RawMessage, state defaultAgentStat
 		if err != nil {
 			return err
 		}
-		if !present || !sameJSONValue(entry, managed) {
+		if !present || (!sameJSONValue(entry, managed) && !sameJSONValue(entry, managedReadOnlyMCPConfig(executable))) {
 			return integration.ErrDrift
 		}
 		servers := map[string]json.RawMessage{}
@@ -2770,18 +2874,18 @@ func retireArtifact(item *retiredArtifact) error {
 	directory := filepath.Dir(item.path)
 	backup, err := vacantTemporaryPath(directory, ".vgxness-retired-*.tmp")
 	if err != nil {
-		return fmt.Errorf("prepare retired OpenCode skill rollback: %w", err)
+		return fmt.Errorf("prepare retired OpenCode artifact rollback: %w", err)
 	}
 	if err := os.Link(item.path, backup); err != nil {
-		return fmt.Errorf("%w: protect retired OpenCode skill", integration.ErrConflict)
+		return fmt.Errorf("%w: protect retired OpenCode artifact", integration.ErrConflict)
 	}
 	current, err := readRegularFile(backup)
 	if err != nil || !bytes.Equal(current, item.content) || !sameFile(item.path, backup) {
 		_ = os.Remove(backup)
-		return fmt.Errorf("%w: retired OpenCode skill changed before removal", integration.ErrConflict)
+		return fmt.Errorf("%w: retired OpenCode artifact changed before removal", integration.ErrConflict)
 	}
 	if err := removeSameFileDurably(item.path, backup); err != nil {
-		return errors.Join(fmt.Errorf("retire OpenCode skill: %w", err), recoveryFailure("restore retired OpenCode skill", restoreWithoutOverwrite(backup, item.path)))
+		return errors.Join(fmt.Errorf("retire OpenCode artifact: %w", err), recoveryFailure("restore retired OpenCode artifact", restoreWithoutOverwrite(backup, item.path)))
 	}
 	item.backup = backup
 	return nil
@@ -2789,7 +2893,7 @@ func retireArtifact(item *retiredArtifact) error {
 
 func restoreRetiredArtifact(item retiredArtifact) error {
 	if err := restoreWithoutOverwrite(item.backup, item.path); err != nil {
-		return recoveryFailure("restore retired OpenCode skill", err)
+		return recoveryFailure("restore retired OpenCode artifact", err)
 	}
 	return nil
 }
@@ -3538,6 +3642,9 @@ func isPreviousMemoryPlugin(candidate []byte) bool {
 	generated, err := memoryPluginContent(executable)
 	if err != nil {
 		return false
+	}
+	if bytes.Equal(candidate, generated) {
+		return true
 	}
 	v9 := previousMemoryPluginV9(generated)
 	v8 := previousMemoryPluginV8(v9)

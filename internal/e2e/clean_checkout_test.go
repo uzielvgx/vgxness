@@ -85,20 +85,14 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"vgxness-sdd-apply.md",
 	}
 	managedProfiles := append(reviewerPaths(configDirectory, reviewers), reviewerPaths(configDirectory, sddProfiles)...)
-	for _, path := range append([]string{launcher, manager, general, verifier, memoryPlugin, defaultAgentConfig}, managedProfiles...) {
+	for _, path := range append([]string{launcher, manager, general, verifier, defaultAgentConfig}, managedProfiles...) {
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.Mode().IsRegular() {
 			t.Fatalf("expected installed regular file %s: %v", path, statErr)
 		}
 	}
-	pluginData, err := os.ReadFile(memoryPlugin)
-	if err != nil ||
-		!bytes.Contains(pluginData, []byte("opencode-plugin/vgxness-memory")) ||
-		!bytes.Contains(pluginData, []byte("vgxness_memory_search")) ||
-		!bytes.Contains(pluginData, []byte("vgxness_sdd_set_interaction_mode")) ||
-		bytes.Contains(pluginData, []byte("vgxness_orchestrate")) ||
-		bytes.Contains(pluginData, []byte("vgxness_native_edit")) {
-		t.Fatalf("setup did not install the bounded storage-only plugin: %v", err)
+	if _, err := os.Stat(memoryPlugin); !os.IsNotExist(err) {
+		t.Fatalf("setup retained retired OpenCode plugin: %v", err)
 	}
 	managerData, err := os.ReadFile(manager)
 	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 46")) || !bytes.Contains(managerData, []byte("Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery.")) || !bytes.Contains(managerData, []byte("automatically load `stacked-pr`")) || bytes.Contains(managerData, []byte("automatically load `vgxness-autonomous-stacked-pr`")) || !bytes.Contains(managerData, []byte("Before delegating any workspace write")) || !bytes.Contains(managerData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(managerData, []byte("Load `sdd-lifecycle` before creating an accepted SDD change")) || !bytes.Contains(managerData, []byte("managed global portable catalog")) || !bytes.Contains(managerData, []byte("same-name/project-local skill collides")) {
@@ -110,7 +104,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatalf("setup did not install managed writer/verifier contracts: general=%v verifier=%v", generalErr, verifierErr)
 	}
 	defaultAgentData, defaultAgentErr := os.ReadFile(defaultAgentConfig)
-	if defaultAgentErr != nil || !bytes.Contains(defaultAgentData, []byte(`"default_agent": "vgxness-manager"`)) {
+	if defaultAgentErr != nil || !bytes.Contains(defaultAgentData, []byte(`"default_agent": "vgxness-manager"`)) || !bytes.Contains(defaultAgentData, []byte(`"--full"`)) {
 		t.Fatalf("setup did not select vgxness-manager by default: %v", defaultAgentErr)
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {
