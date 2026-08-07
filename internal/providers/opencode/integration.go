@@ -278,9 +278,17 @@ type artifact struct {
 }
 
 type defaultAgentState struct {
+	SchemaVersion       int             `json:"schema_version,omitempty"`
 	ConfigExisted       bool            `json:"config_existed"`
 	DefaultAgentExisted bool            `json:"default_agent_existed"`
 	DefaultAgent        json.RawMessage `json:"default_agent,omitempty"`
+	MCPExisted          bool            `json:"mcp_existed,omitempty"`
+	MCP                 json.RawMessage `json:"mcp,omitempty"`
+	MCPOwned            bool            `json:"mcp_owned,omitempty"`
+	PermissionExisted   bool            `json:"permission_existed,omitempty"`
+	Permission          json.RawMessage `json:"permission,omitempty"`
+	PermissionOwned     bool            `json:"permission_owned,omitempty"`
+	Drifted             bool            `json:"-"`
 }
 
 type inspection struct {
@@ -828,7 +836,7 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 			continue
 		}
 		if item.defaultAgent != nil {
-			change, err := uninstallDefaultAgent(ctx, item)
+			change, err := uninstallDefaultAgent(ctx, item, service.executable)
 			if err != nil {
 				return integration.Result{}, err
 			}
@@ -860,7 +868,7 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	return state.result, nil
 }
 
-func uninstallDefaultAgent(ctx context.Context, item artifact) (defaultAgentUninstall, error) {
+func uninstallDefaultAgent(ctx context.Context, item artifact, executable string) (defaultAgentUninstall, error) {
 	if item.defaultAgent == nil {
 		return defaultAgentUninstall{}, integration.ErrInvalid
 	}
@@ -871,7 +879,7 @@ func uninstallDefaultAgent(ctx context.Context, item artifact) (defaultAgentUnin
 	if err != nil {
 		return defaultAgentUninstall{}, fmt.Errorf("inspect OpenCode default-agent configuration: %w", err)
 	}
-	replacement, changed, remove, err := withoutDefaultAgent(current, *item.defaultAgent)
+	replacement, changed, remove, err := withoutDefaultAgent(current, *item.defaultAgent, executable)
 	if err != nil {
 		return defaultAgentUninstall{}, err
 	}
@@ -940,7 +948,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
 	defaultAgentPath := filepath.Join(configDirectory, defaultAgentConfigName)
 	defaultAgentStatePath := filepath.Join(configDirectory, "vgxness", defaultAgentStateName)
-	defaultAgentConfig, defaultAgentStateContent, defaultAgentState, defaultAgentSnapshot, defaultAgentSnapshotPresent, err := defaultAgentArtifacts(defaultAgentPath, defaultAgentStatePath)
+	defaultAgentConfig, defaultAgentStateContent, defaultAgentState, defaultAgentSnapshot, defaultAgentSnapshotPresent, err := defaultAgentArtifacts(defaultAgentPath, defaultAgentStatePath, service.executable)
 	if err != nil {
 		return inspection{}, err
 	}
@@ -963,6 +971,10 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		ManifestPath: manifestPath, ManifestSHA256: artifactSHA256(plan.manifest),
 		DefaultAgent: defaultAgentName, DefaultAgentPath: defaultAgentPath,
 		DirectoryDurability: directoryDurability(),
+	}
+	if defaultAgentState.Drifted {
+		result.State = integration.StateDrifted
+		return inspection{result: result}, nil
 	}
 	if foreign, err := foreignPersistentMCP(defaultAgentConfig, service.executable); err != nil {
 		return inspection{}, err
@@ -1007,8 +1019,8 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: predecessors[managerAgentName], regenerations: regeneration(managerPath)},
 		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{previousExplorePredecessor(plan.agents[exploreAgentName])}, regenerations: regeneration(explorePath)},
-		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: predecessors[generalAgentName], regenerations: regeneration(generalPath)},
-		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: predecessors[verifierAgentName], regenerations: regeneration(verifierPath)},
+		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: append(predecessors[generalAgentName], previousGeneralPredecessor(plan.agents[generalAgentName])), regenerations: regeneration(generalPath)},
+		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: append(predecessors[verifierAgentName], previousVerifierPredecessor(plan.agents[verifierAgentName])), regenerations: regeneration(verifierPath)},
 		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: predecessors[reviewRiskName], regenerations: regeneration(reviewRiskPath)},
 		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: predecessors[reviewReadabilityName], regenerations: regeneration(reviewReadabilityPath)},
 		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", predecessors: predecessors[reviewReliabilityName], regenerations: regeneration(reviewReliabilityPath)},
@@ -1022,7 +1034,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleApply, plan.agents[sddApplyName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
 		{path: toolPath, content: toolContent, backup: "vgxness-memory-plugin", recognize: isPreviousMemoryPlugin},
 		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
-		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true},
+		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState},
 		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
 	}}
 	for index := range state.artifacts {
@@ -1088,6 +1100,11 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		item.exact = bytes.Equal(current, item.content)
 		if !item.exact {
+			if item.defaultState && isLegacyDefaultAgentState(current) {
+				item.upgrade = true
+				item.prior = append([]byte(nil), current...)
+				continue
+			}
 			if item.defaultAgent != nil {
 				if defaultAgentIsManaged(current) {
 					item.exact = true
@@ -1149,7 +1166,7 @@ func inspectRetiredSkill(path string) (*retiredArtifact, error) {
 	return nil, integration.ErrDrift
 }
 
-func defaultAgentArtifacts(configPath, statePath string) ([]byte, []byte, defaultAgentState, []byte, bool, error) {
+func defaultAgentArtifacts(configPath, statePath, executable string) ([]byte, []byte, defaultAgentState, []byte, bool, error) {
 	config, exists, snapshot, err := readOpenCodeConfig(configPath)
 	if err != nil {
 		return nil, nil, defaultAgentState{}, nil, false, err
@@ -1166,10 +1183,24 @@ func defaultAgentArtifacts(configPath, statePath string) ([]byte, []byte, defaul
 	} else {
 		state.ConfigExisted = exists
 		state.DefaultAgent, state.DefaultAgentExisted = config["default_agent"]
+		state.SchemaVersion = 1
+		if err := captureManagedConfigSnapshot(config, &state); err != nil {
+			return nil, nil, defaultAgentState{}, nil, false, err
+		}
 	}
-	content, err := withDefaultAgent(config, exists)
+	if state.SchemaVersion == 0 {
+		state.SchemaVersion = 1
+		if err := captureManagedConfigSnapshot(config, &state); err != nil {
+			return nil, nil, defaultAgentState{}, nil, false, err
+		}
+	}
+	content, err := withManagedOpenCodeConfig(config, exists, &state, executable)
 	if err != nil {
-		return nil, nil, defaultAgentState{}, nil, false, err
+		if !errors.Is(err, integration.ErrDrift) {
+			return nil, nil, defaultAgentState{}, nil, false, err
+		}
+		state.Drifted = true
+		content = snapshot
 	}
 	stateData, err = json.Marshal(state)
 	if err != nil {
@@ -1194,10 +1225,32 @@ func readOpenCodeConfig(path string) (map[string]json.RawMessage, bool, []byte, 
 }
 
 func validDefaultAgentState(state defaultAgentState) bool {
-	if !state.DefaultAgentExisted {
-		return len(state.DefaultAgent) == 0
+	if state.SchemaVersion != 0 && state.SchemaVersion != 1 {
+		return false
 	}
-	return len(state.DefaultAgent) > 0 && len(state.DefaultAgent) <= maxDefaultAgentBytes && json.Valid(state.DefaultAgent)
+	if state.SchemaVersion == 0 && (state.MCPExisted || len(state.MCP) != 0 || state.MCPOwned || state.PermissionExisted || len(state.Permission) != 0 || state.PermissionOwned) {
+		return false
+	}
+	if !state.DefaultAgentExisted {
+		if len(state.DefaultAgent) != 0 {
+			return false
+		}
+	}
+	if state.DefaultAgentExisted && (len(state.DefaultAgent) == 0 || len(state.DefaultAgent) > maxDefaultAgentBytes || !json.Valid(state.DefaultAgent)) {
+		return false
+	}
+	if state.MCPExisted != (len(state.MCP) != 0) || state.MCPOwned && state.MCPExisted || state.MCPExisted && !json.Valid(state.MCP) {
+		return false
+	}
+	if state.PermissionExisted != (len(state.Permission) != 0) || state.PermissionOwned && state.PermissionExisted || state.PermissionExisted && !json.Valid(state.Permission) {
+		return false
+	}
+	return true
+}
+
+func isLegacyDefaultAgentState(data []byte) bool {
+	var state defaultAgentState
+	return json.Unmarshal(data, &state) == nil && state.SchemaVersion == 0 && validDefaultAgentState(state)
 }
 
 func managedMCPConfig(executable string) (json.RawMessage, error) {
@@ -1229,6 +1282,36 @@ func openCodeMCP(values map[string]json.RawMessage) (json.RawMessage, bool, erro
 	return entry, exists, nil
 }
 
+func openCodePermission(values map[string]json.RawMessage) (json.RawMessage, bool, error) {
+	raw, ok := values["permission"]
+	if !ok {
+		return nil, false, nil
+	}
+	rules := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(raw, &rules); err != nil || rules == nil {
+		return nil, false, fmt.Errorf("%w: opencode.json permission must contain an object", integration.ErrConflict)
+	}
+	rule, exists := rules["vgxness_*"]
+	return rule, exists, nil
+}
+
+func captureManagedConfigSnapshot(values map[string]json.RawMessage, state *defaultAgentState) error {
+	if state == nil {
+		return integration.ErrInvalid
+	}
+	if mcp, present, err := openCodeMCP(values); err != nil {
+		return err
+	} else if present {
+		state.MCP, state.MCPExisted = append([]byte(nil), mcp...), true
+	}
+	if rule, present, err := openCodePermission(values); err != nil {
+		return err
+	} else if present {
+		state.Permission, state.PermissionExisted = append([]byte(nil), rule...), true
+	}
+	return nil
+}
+
 func sameJSONValue(left, right []byte) bool {
 	var leftValue, rightValue any
 	leftErr := json.Unmarshal(left, &leftValue)
@@ -1254,18 +1337,106 @@ func foreignPersistentMCP(config []byte, executable string) (bool, error) {
 	return err == nil && !sameJSONValue(entry, managed), err
 }
 
-func withDefaultAgent(values map[string]json.RawMessage, exists bool) ([]byte, error) {
+func withManagedOpenCodeConfig(values map[string]json.RawMessage, exists bool, state *defaultAgentState, executable string) ([]byte, error) {
+	if state == nil {
+		return nil, integration.ErrInvalid
+	}
 	if !exists {
+		if !state.ConfigExisted {
+			state.MCPOwned, state.PermissionOwned = false, false
+		}
 		schema, _ := json.Marshal("https://opencode.ai/config.json")
 		values["$schema"] = schema
 	}
 	defaultAgent, _ := json.Marshal(defaultAgentName)
 	values["default_agent"] = defaultAgent
+	managed, err := managedMCPConfig(executable)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyManagedMCP(values, state, managed); err != nil {
+		return nil, err
+	}
+	if err := applyManagedPermission(values, state); err != nil {
+		return nil, err
+	}
 	encoded, err := json.MarshalIndent(values, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode OpenCode configuration: %w", err)
 	}
 	return append(encoded, '\n'), nil
+}
+
+func applyManagedMCP(values map[string]json.RawMessage, state *defaultAgentState, managed json.RawMessage) error {
+	entry, present, err := openCodeMCP(values)
+	if err != nil {
+		return err
+	}
+	if state.MCPOwned {
+		if !present || !sameJSONValue(entry, managed) {
+			return integration.ErrDrift
+		}
+		return nil
+	}
+	if state.MCPExisted {
+		if !present || !sameJSONValue(entry, state.MCP) {
+			return integration.ErrDrift
+		}
+		return nil
+	}
+	if present {
+		return integration.ErrConflict
+	}
+	servers := map[string]json.RawMessage{}
+	if raw, ok := values["mcp"]; ok && json.Unmarshal(raw, &servers) != nil {
+		return integration.ErrInvalid
+	}
+	servers["vgxness"] = managed
+	raw, err := json.Marshal(servers)
+	if err != nil {
+		return err
+	}
+	values["mcp"] = raw
+	state.MCPOwned = true
+	return nil
+}
+
+func applyManagedPermission(values map[string]json.RawMessage, state *defaultAgentState) error {
+	rule, present, err := openCodePermission(values)
+	if err != nil {
+		return err
+	}
+	managed := json.RawMessage(`"deny"`)
+	if state.PermissionOwned {
+		if !present || !sameJSONValue(rule, managed) {
+			return integration.ErrDrift
+		}
+		return nil
+	}
+	if state.PermissionExisted {
+		if !present || !sameJSONValue(rule, state.Permission) {
+			return integration.ErrDrift
+		}
+		if !sameJSONValue(rule, managed) {
+			return integration.ErrConflict
+		}
+		return nil
+	}
+	if present {
+		return integration.ErrConflict
+	}
+	rules := map[string]json.RawMessage{}
+	if raw, ok := values["permission"]; ok && json.Unmarshal(raw, &rules) != nil {
+		return integration.ErrConflict
+	}
+	rules["vgxness_*"] = managed
+	raw, err := json.Marshal(rules)
+	if err != nil {
+		return err
+	}
+	values["permission"] = raw
+	state.PermissionOwned = true
+	return nil
 }
 
 func defaultAgentIsManaged(config []byte) bool {
@@ -1276,13 +1447,23 @@ func defaultAgentIsManaged(config []byte) bool {
 	return bytes.Equal(values["default_agent"], []byte(`"vgxness-manager"`))
 }
 
-func withoutDefaultAgent(config []byte, state defaultAgentState) ([]byte, bool, bool, error) {
+func withoutDefaultAgent(config []byte, state defaultAgentState, executable string) ([]byte, bool, bool, error) {
 	values, _, err := readOpenCodeConfigFromBytes(config)
 	if err != nil {
 		return nil, false, false, err
 	}
+	if err := withoutManagedMCP(values, state, executable); err != nil {
+		return nil, false, false, err
+	}
+	if err := withoutManagedPermission(values, state); err != nil {
+		return nil, false, false, err
+	}
 	if !defaultAgentIsManaged(config) {
-		return nil, false, false, nil
+		encoded, err := json.MarshalIndent(values, "", "  ")
+		if err != nil {
+			return nil, false, false, fmt.Errorf("encode OpenCode configuration: %w", err)
+		}
+		return append(encoded, '\n'), true, false, nil
 	}
 	if state.DefaultAgentExisted {
 		values["default_agent"] = state.DefaultAgent
@@ -1297,6 +1478,73 @@ func withoutDefaultAgent(config []byte, state defaultAgentState) ([]byte, bool, 
 		return nil, false, false, fmt.Errorf("encode OpenCode configuration: %w", err)
 	}
 	return append(encoded, '\n'), true, false, nil
+}
+
+func withoutManagedMCP(values map[string]json.RawMessage, state defaultAgentState, executable string) error {
+	entry, present, err := openCodeMCP(values)
+	if err != nil {
+		return err
+	}
+	if state.MCPOwned {
+		managed, err := managedMCPConfig(executable)
+		if err != nil {
+			return err
+		}
+		if !present || !sameJSONValue(entry, managed) {
+			return integration.ErrDrift
+		}
+		servers := map[string]json.RawMessage{}
+		if err := json.Unmarshal(values["mcp"], &servers); err != nil {
+			return integration.ErrDrift
+		}
+		delete(servers, "vgxness")
+		if len(servers) == 0 {
+			delete(values, "mcp")
+			return nil
+		}
+		raw, err := json.Marshal(servers)
+		if err != nil {
+			return err
+		}
+		values["mcp"] = raw
+		return nil
+	}
+	if state.MCPExisted && (!present || !sameJSONValue(entry, state.MCP)) {
+		return integration.ErrDrift
+	}
+	return nil
+}
+
+func withoutManagedPermission(values map[string]json.RawMessage, state defaultAgentState) error {
+	rule, present, err := openCodePermission(values)
+	if err != nil {
+		return err
+	}
+	managed := json.RawMessage(`"deny"`)
+	if state.PermissionOwned {
+		if !present || !sameJSONValue(rule, managed) {
+			return integration.ErrDrift
+		}
+		rules := map[string]json.RawMessage{}
+		if err := json.Unmarshal(values["permission"], &rules); err != nil {
+			return integration.ErrDrift
+		}
+		delete(rules, "vgxness_*")
+		if len(rules) == 0 {
+			delete(values, "permission")
+			return nil
+		}
+		raw, err := json.Marshal(rules)
+		if err != nil {
+			return err
+		}
+		values["permission"] = raw
+		return nil
+	}
+	if state.PermissionExisted && (!present || !sameJSONValue(rule, state.Permission)) {
+		return integration.ErrDrift
+	}
+	return nil
 }
 
 func readOpenCodeConfigFromBytes(data []byte) (map[string]json.RawMessage, bool, error) {

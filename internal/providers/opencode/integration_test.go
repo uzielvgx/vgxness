@@ -149,6 +149,8 @@ func TestIntegration_DefaultAgentConfigPreservesOpenCodeJSONAndJSONC(t *testing.
 	var want map[string]any
 	testutil.NoError(t, json.Unmarshal(config, &want))
 	want["default_agent"] = defaultAgentName
+	want["mcp"] = map[string]any{"codegraph": map[string]any{"enabled": true}, "vgxness": map[string]any{"type": "local", "command": []any{service.executable, "mcp"}, "enabled": true}}
+	want["permission"] = map[string]any{"vgxness_*": "deny"}
 	testutil.Require(t,
 		reflect.DeepEqual(got, want) &&
 			bytes.Equal(afterJSONC, jsonc) &&
@@ -157,7 +159,7 @@ func TestIntegration_DefaultAgentConfigPreservesOpenCodeJSONAndJSONC(t *testing.
 	)
 }
 
-func TestIntegration_PersistentMCPIsNeverMutated(t *testing.T) {
+func TestIntegration_AddsManagedMCPWithoutMutatingUnrelatedMCP(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
 	before := []byte(`{"share":"disabled","mcp":{"other":{"type":"local","command":["other"],"enabled":true}}}`)
@@ -173,7 +175,7 @@ func TestIntegration_PersistentMCPIsNeverMutated(t *testing.T) {
 	var config map[string]any
 	testutil.NoError(t, json.Unmarshal(afterInstall, &config))
 	mcp := config["mcp"].(map[string]any)
-	testutil.Require(t, installed.RestartRequired && len(mcp) == 1 && mcp["other"] != nil, "install mutated persistent MCP config: %q", afterInstall)
+	testutil.Require(t, installed.RestartRequired && len(mcp) == 2 && mcp["other"] != nil && mcp["vgxness"] != nil, "install did not add managed MCP config: %q", afterInstall)
 
 	removed, err := service.Uninstall(context.Background(), options)
 	testutil.NoError(t, err)
@@ -229,7 +231,10 @@ func TestIntegration_ManagedMCPConflictsAndDetectsDrift(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"$schema":"https://opencode.ai/config.json","default_agent":"vgxness-manager","mcp":{"vgxness":{"type":"local","command":["changed","mcp"],"enabled":true}}}`), 0o600))
 	status, err = service.Status(context.Background(), options)
-	testutil.Require(t, err == nil && status.State == integration.StateDrifted, "modified managed MCP was not drift: %+v", status)
+	testutil.Require(t, err == nil && status.State == integration.StateDrifted, "modified managed MCP was not drift: status=%+v err=%v", status, err)
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"$schema":"https://opencode.ai/config.json","default_agent":"vgxness-manager","mcp":{"vgxness":`+managedMCPForTest(t, service)+`},"permission":{"vgxness_*":"allow"}}`), 0o600))
+	status, err = service.Status(context.Background(), options)
+	testutil.Require(t, err == nil && status.State == integration.StateDrifted, "modified managed permission was not drift: status=%+v err=%v", status, err)
 }
 
 func TestIntegration_PreexistingExactMCPIsNeverRemoved(t *testing.T) {
@@ -323,7 +328,7 @@ func TestIntegration_UninstallPreservesFieldsAddedToFreshDefaultAgentConfig(t *t
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
-	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"$schema":"https://opencode.ai/config.json","default_agent":"vgxness-manager","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`}}`), 0o600))
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"$schema":"https://opencode.ai/config.json","default_agent":"vgxness-manager","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`},"permission":{"vgxness_*":"deny"}}`), 0o600))
 	_, err = service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	after, err := os.ReadFile(configPath)
@@ -344,8 +349,8 @@ func TestIntegration_PreservesCurrentUnrelatedOpenCodeConfigEdits(t *testing.T) 
 	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	metadata, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", defaultAgentStateName))
-	testutil.Require(t, err == nil && !bytes.Contains(metadata, []byte("secret-sentinel")) && !bytes.Contains(metadata, []byte("mcp_vgxness")), "metadata retained unrelated config or MCP ownership: %q", metadata)
-	updated := []byte(`{"share":"disabled","token":"secret-sentinel","user_option":{"enabled":true},"default_agent":"vgxness-manager","mcp":{"vgxness":` + managedMCPForTest(t, service) + `}}`)
+	testutil.Require(t, err == nil && !bytes.Contains(metadata, []byte("secret-sentinel")), "metadata retained unrelated config: %q", metadata)
+	updated := []byte(`{"share":"disabled","token":"secret-sentinel","user_option":{"enabled":true},"default_agent":"vgxness-manager","mcp":{"vgxness":` + managedMCPForTest(t, service) + `},"permission":{"vgxness_*":"deny"}}`)
 	testutil.NoError(t, os.WriteFile(configPath, updated, 0o600))
 
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
@@ -370,7 +375,7 @@ func TestIntegration_UninstallPreservesUserChangedDefaultAgent(t *testing.T) {
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
-	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`}}`), 0o600))
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`},"permission":{"vgxness_*":"deny"}}`), 0o600))
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	testutil.Require(t, status.State == integration.StatePartial, "user default change remained healthy: %+v", status)
@@ -380,7 +385,7 @@ func TestIntegration_UninstallPreservesUserChangedDefaultAgent(t *testing.T) {
 	testutil.NoError(t, err)
 	var got map[string]any
 	testutil.NoError(t, json.Unmarshal(after, &got))
-	testutil.Require(t, got["default_agent"] == "plan" && got["user_option"] == true, "uninstall overwrote the user's default: %q", after)
+	testutil.Require(t, got["default_agent"] == "plan" && got["user_option"] == true && got["mcp"] == nil && got["permission"] == nil, "uninstall left managed config residue or overwrote the user: %q", after)
 }
 
 func TestIntegration_ReinstallRepairsDefaultAgentAndPreservesCurrentConfig(t *testing.T) {
@@ -391,7 +396,7 @@ func TestIntegration_ReinstallRepairsDefaultAgentAndPreservesCurrentConfig(t *te
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
-	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","share":"disabled","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`}}`), 0o600))
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"plan","share":"disabled","user_option":true,"mcp":{"vgxness":`+managedMCPForTest(t, service)+`},"permission":{"vgxness_*":"deny"}}`), 0o600))
 	reinstalled, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: configDirectory})
 	testutil.NoError(t, err)
 	after, err := os.ReadFile(configPath)
@@ -611,6 +616,123 @@ func managedMCPForTest(t *testing.T, service *Integration) string {
 	entry, err := managedMCPConfig(service.executable)
 	testutil.NoError(t, err)
 	return string(entry)
+}
+
+func TestIntegrationPersistsReadOnlyMCPAndPermissionGuard(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(configDirectory, "opencode.json"))
+	testutil.NoError(t, err)
+	var config map[string]json.RawMessage
+	testutil.NoError(t, json.Unmarshal(data, &config))
+	mcp, exists, err := openCodeMCP(config)
+	testutil.Require(t, err == nil && exists && sameJSONValue(mcp, []byte(managedMCPForTest(t, service))), "mcp=%s exists=%v err=%v", mcp, exists, err)
+	var permission map[string]json.RawMessage
+	testutil.NoError(t, json.Unmarshal(config["permission"], &permission))
+	testutil.Require(t, string(permission["vgxness_*"]) == `"deny"`, "permission=%s", config["permission"])
+}
+
+func TestIntegrationManagedConfigOwnershipLifecycle(t *testing.T) {
+	t.Run("preserves unrelated fields through reinstall and uninstall", func(t *testing.T) {
+		configDirectory := filepath.Join(t.TempDir(), "opencode")
+		testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+		configPath := filepath.Join(configDirectory, "opencode.json")
+		testutil.NoError(t, os.WriteFile(configPath, []byte(`{"unrelated":{"keep":true},"permission":{"other":"allow"}}`), 0o600))
+		service := NewIntegration()
+		options := integration.Options{ConfigDir: configDirectory}
+		_, err := service.Install(context.Background(), options)
+		testutil.NoError(t, err)
+		_, err = service.Reinstall(context.Background(), options)
+		testutil.NoError(t, err)
+		_, err = service.Uninstall(context.Background(), options)
+		testutil.NoError(t, err)
+		data, err := os.ReadFile(configPath)
+		testutil.NoError(t, err)
+		var config map[string]json.RawMessage
+		testutil.NoError(t, json.Unmarshal(data, &config))
+		var permission map[string]json.RawMessage
+		testutil.NoError(t, json.Unmarshal(config["permission"], &permission))
+		var unrelated map[string]bool
+		testutil.NoError(t, json.Unmarshal(config["unrelated"], &unrelated))
+		testutil.Require(t, unrelated["keep"] && string(permission["other"]) == `"allow"` && permission["vgxness_*"] == nil, "config=%s", data)
+	})
+	t.Run("preexisting exact MCP is retained", func(t *testing.T) {
+		configDirectory := filepath.Join(t.TempDir(), "opencode")
+		service := NewIntegration()
+		options := integration.Options{ConfigDir: configDirectory}
+		testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+		testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "opencode.json"), []byte(`{"mcp":{"vgxness":`+managedMCPForTest(t, service)+`},"permission":{"vgxness_*":"deny"}}`), 0o600))
+		_, err := service.Install(context.Background(), options)
+		testutil.NoError(t, err)
+		_, err = service.Uninstall(context.Background(), options)
+		testutil.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(configDirectory, "opencode.json"))
+		testutil.NoError(t, err)
+		var config map[string]json.RawMessage
+		testutil.NoError(t, json.Unmarshal(data, &config))
+		entry, exists, err := openCodeMCP(config)
+		var permission map[string]json.RawMessage
+		testutil.NoError(t, json.Unmarshal(config["permission"], &permission))
+		testutil.Require(t, err == nil && exists && sameJSONValue(entry, []byte(managedMCPForTest(t, service))) && string(permission["vgxness_*"]) == `"deny"`, "config=%s", data)
+	})
+	for name, config := range map[string]string{
+		"foreign MCP":       `{"mcp":{"vgxness":{"type":"local","command":["other","mcp"],"enabled":true}}}`,
+		"permission scalar": `{"permission":"allow"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			testutil.NoError(t, os.MkdirAll(configDirectory, 0o700))
+			path := filepath.Join(configDirectory, "opencode.json")
+			testutil.NoError(t, os.WriteFile(path, []byte(config), 0o600))
+			_, err := NewIntegration().Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+			data, readErr := os.ReadFile(path)
+			testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && string(data) == config, "err=%v data=%s", err, data)
+		})
+	}
+	t.Run("modified owned MCP drifts", func(t *testing.T) {
+		configDirectory := filepath.Join(t.TempDir(), "opencode")
+		service := NewIntegration()
+		options := integration.Options{ConfigDir: configDirectory}
+		_, err := service.Install(context.Background(), options)
+		testutil.NoError(t, err)
+		path := filepath.Join(configDirectory, "opencode.json")
+		data, err := os.ReadFile(path)
+		testutil.NoError(t, err)
+		var config map[string]json.RawMessage
+		testutil.NoError(t, json.Unmarshal(data, &config))
+		config["mcp"] = json.RawMessage(`{"vgxness":{"type":"local","command":["other","mcp"],"enabled":true}}`)
+		data, err = json.Marshal(config)
+		testutil.NoError(t, err)
+		testutil.NoError(t, os.WriteFile(path, data, 0o600))
+		_, err = service.Uninstall(context.Background(), options)
+		testutil.Require(t, errors.Is(err, integration.ErrDrift), "err=%v", err)
+	})
+}
+
+func TestIntegrationMigratesLegacyManagedConfigStateToV1(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	statePath := filepath.Join(configDirectory, "vgxness", defaultAgentStateName)
+	data, err := os.ReadFile(statePath)
+	testutil.NoError(t, err)
+	var state map[string]json.RawMessage
+	testutil.NoError(t, json.Unmarshal(data, &state))
+	for _, field := range []string{"schema_version", "mcp_existed", "mcp", "mcp_owned", "permission_existed", "permission", "permission_owned"} {
+		delete(state, field)
+	}
+	data, err = json.Marshal(state)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(statePath, data, 0o600))
+	_, err = service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	data, err = os.ReadFile(statePath)
+	testutil.NoError(t, err)
+	testutil.Require(t, bytes.Contains(data, []byte(`"schema_version":1`)), "legacy state was not projected to v1: %s", data)
 }
 
 func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
@@ -1067,6 +1189,28 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		if strings.Contains(prompt, forbidden) {
 			t.Errorf("manager prompt retains deprecated mechanic %q", forbidden)
 		}
+	}
+}
+
+func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	denies := []string{"vgxness_memory_save", "vgxness_memory_forget", "vgxness_sdd_create", "vgxness_sdd_set_interaction_mode", "vgxness_sdd_save_revision", "vgxness_sdd_accept_revision", "vgxness_sdd_transition", "vgxness_sdd_record_projection"}
+	for _, name := range []string{generalAgentName, verifierAgentName} {
+		prompt := string(bundle.agents[name])
+		for _, tool := range denies {
+			if !strings.Contains(prompt, tool+": deny") {
+				t.Errorf("%s permits durable mutation %q", name, tool)
+			}
+		}
+	}
+	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 6") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 4"), "current broad-profile markers were not bumped")
+	legacy, err := previousSDDModelPlanBundle(bundle)
+	testutil.NoError(t, err)
+	testutil.Require(t, strings.Contains(string(legacy.agents[generalAgentName]), "artifact: opencode-agent/general; version: 5") && !strings.Contains(string(legacy.agents[generalAgentName]), "vgxness_sdd_record_projection: deny") && strings.Contains(string(legacy.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 3") && !strings.Contains(string(legacy.agents[verifierAgentName]), "vgxness_sdd_record_projection: deny"), "historical broad profiles were mutated")
+	manager := string(bundle.agents[managerAgentName])
+	if !strings.Contains(manager, `"*": allow`) {
+		t.Fatal("manager no longer has managed authority")
 	}
 }
 

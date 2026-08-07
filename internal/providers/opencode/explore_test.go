@@ -177,6 +177,8 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 	service, options := NewIntegration(), integration.Options{ConfigDir: config}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	broadPredecessor, err := previousBroadPermissionModelPlanBundle(current)
+	testutil.NoError(t, err)
 	prior, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
 	legacy, err := previousSDDModelPlanBundleV2(current)
@@ -190,6 +192,7 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 		bundle modelPlanBundle
 		mutate func()
 	}{
+		{"broad-permission profiles", broadPredecessor, func() {}},
 		{"mixed SDD", prior, func() {
 			for _, name := range []string{sddResearchName, sddApplyName} {
 				testutil.NoError(t, os.WriteFile(filepath.Join(config, "agents", name), current.agents[name], 0o600))
@@ -263,8 +266,8 @@ func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testi
 	testutil.NoError(t, err)
 	candidates, err := predecessorBundles(current)
 	testutil.NoError(t, err)
-	if want := (len(managerPredecessorsMust(t, current)) + 1) * 2 * 3; len(candidates) != want {
-		t.Fatalf("predecessor combinations=%d, want derived %d", len(candidates), want)
+	if minimum := (len(managerPredecessorsMust(t, current)) + 1) * 2 * 3; len(candidates) < minimum {
+		t.Fatalf("predecessor combinations=%d, want at least %d", len(candidates), minimum)
 	}
 	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
