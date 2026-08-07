@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 var ErrInvalid = errors.New("invalid")
@@ -151,7 +152,7 @@ func isSystemPathSymlink(path string) bool {
 }
 
 func canonicalizeSystemPath(path string) (string, error) {
-	clean := filepath.Clean(path)
+	clean := CanonicalizeExistingPathCase(path)
 	ancestor := clean
 	for {
 		if _, err := os.Lstat(ancestor); err == nil {
@@ -174,6 +175,40 @@ func canonicalizeSystemPath(path string) (string, error) {
 		return "", fmt.Errorf("resolve storage path: %w", err)
 	}
 	return filepath.Join(canonical, relative), nil
+}
+
+// CanonicalizeExistingPathCase preserves the spelling recorded by a
+// case-insensitive filesystem. It only adjusts paths that the filesystem
+// already resolves, so distinct directories on case-sensitive filesystems
+// remain distinct.
+func CanonicalizeExistingPathCase(path string) string {
+	clean := filepath.Clean(path)
+	if _, err := os.Stat(clean); err != nil {
+		return clean
+	}
+	root := filepath.VolumeName(clean) + string(filepath.Separator)
+	current := root
+	for _, component := range strings.Split(strings.TrimPrefix(clean, root), string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return clean
+		}
+		actual := component
+		for _, entry := range entries {
+			if entry.Name() == component {
+				actual = entry.Name()
+				break
+			}
+			if strings.EqualFold(entry.Name(), component) {
+				actual = entry.Name()
+			}
+		}
+		current = filepath.Join(current, actual)
+	}
+	return current
 }
 
 func firstMissing(path string) string {
@@ -206,6 +241,7 @@ func resolve(opts Options) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve project: %w", err)
 	}
+	project = CanonicalizeExistingPathCase(project)
 	if opts.ProjectLocal {
 		root := filepath.Join(project, ".vgxness")
 		if info, err := os.Lstat(root); err == nil && info.Mode()&os.ModeSymlink != 0 {

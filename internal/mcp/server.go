@@ -1,4 +1,5 @@
-// Package mcp exposes the read-only Model Context Protocol surface.
+// Package mcp provides capability-gated MCP tools: read-only by default, with
+// explicit --full memory and SDD mutation capabilities.
 package mcp
 
 import (
@@ -380,6 +381,14 @@ type result struct {
 	Entries []entry `json:"entries"`
 }
 
+type sddChangesResult struct {
+	Changes []sdd.Change `json:"changes"`
+}
+
+type sddRevisionsResult struct {
+	Revisions []sdd.Revision `json:"revisions"`
+}
+
 type entry struct {
 	ID         string    `json:"id"`
 	Title      string    `json:"title"`
@@ -629,7 +638,7 @@ func (server *Server) search(ctx context.Context, input searchInput) (result, er
 	if strings.TrimSpace(input.Query) == "" || input.Limit < 0 || input.Limit > maxLimit {
 		return result{}, ErrInvalidInput
 	}
-	entries, err := server.reader.Recall(ctx, memory.Recall{Query: input.Query, Project: server.project, Scope: memory.ScopeProject, Limit: input.Limit})
+	entries, err := server.reader.Recall(ctx, memory.Recall{Query: input.Query, Project: server.project, Scope: memory.ScopeProject, Limit: input.Limit, MatchAny: true})
 	return shapeResult(ctx, entries, err)
 }
 
@@ -637,6 +646,9 @@ func shapeResult(ctx context.Context, entries []memory.Entry, err error) (result
 	if err != nil {
 		if ctx.Err() != nil {
 			return result{}, ctx.Err()
+		}
+		if errors.Is(err, memory.ErrInvalid) {
+			return result{}, ErrInvalidInput
 		}
 		return result{}, ErrUnavailable
 	}
@@ -703,9 +715,9 @@ func (server *Server) callSDDCreate(ctx context.Context, _ *sdk.CallToolRequest,
 	output, err := server.sddCreate(ctx, input)
 	return sddResponse(err, output)
 }
-func (server *Server) callSDDList(ctx context.Context, _ *sdk.CallToolRequest, input sddListInput) (*sdk.CallToolResult, []sdd.Change, error) {
+func (server *Server) callSDDList(ctx context.Context, _ *sdk.CallToolRequest, input sddListInput) (*sdk.CallToolResult, sddChangesResult, error) {
 	output, err := server.sddList(ctx, input)
-	return sddListResponse(err, output)
+	return sddListResponse(err, sddChangesResult{Changes: output})
 }
 func (server *Server) callSDDGet(ctx context.Context, _ *sdk.CallToolRequest, input sddGetInput) (*sdk.CallToolResult, sdd.Change, error) {
 	output, err := server.sddGet(ctx, input)
@@ -727,9 +739,9 @@ func (server *Server) callSDDGetRevision(ctx context.Context, _ *sdk.CallToolReq
 	output, err := server.sddGetRevision(ctx, input)
 	return sddToolResponse(err, output)
 }
-func (server *Server) callSDDListRevisions(ctx context.Context, _ *sdk.CallToolRequest, input sddListRevisionsInput) (*sdk.CallToolResult, []sdd.Revision, error) {
+func (server *Server) callSDDListRevisions(ctx context.Context, _ *sdk.CallToolRequest, input sddListRevisionsInput) (*sdk.CallToolResult, sddRevisionsResult, error) {
 	output, err := server.sddListRevisions(ctx, input)
-	return sddToolResponse(err, output)
+	return sddToolResponse(err, sddRevisionsResult{Revisions: output})
 }
 func (server *Server) callSDDAcceptRevision(ctx context.Context, _ *sdk.CallToolRequest, input sddAcceptRevisionInput) (*sdk.CallToolResult, sdd.Revision, error) {
 	output, err := server.sddAcceptRevision(ctx, input)
@@ -790,11 +802,11 @@ func sddResponse(err error, output sdd.Change) (*sdk.CallToolResult, sdd.Change,
 	}
 	return sddErrorResponse(err), sdd.Change{}, nil
 }
-func sddListResponse(err error, output []sdd.Change) (*sdk.CallToolResult, []sdd.Change, error) {
+func sddListResponse(err error, output sddChangesResult) (*sdk.CallToolResult, sddChangesResult, error) {
 	if err == nil {
-		return toolText(fmt.Sprintf("Returned %d SDD changes.", len(output)), false), output, nil
+		return toolText(fmt.Sprintf("Returned %d SDD changes.", len(output.Changes)), false), output, nil
 	}
-	return sddErrorResponse(err), nil, nil
+	return sddErrorResponse(err), sddChangesResult{}, nil
 }
 func sddToolResponse[T any](err error, output T) (*sdk.CallToolResult, T, error) {
 	if err == nil {

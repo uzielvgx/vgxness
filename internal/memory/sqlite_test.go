@@ -137,6 +137,24 @@ func TestResolveProject_ReadOnlyResolvesWithoutCreatingBindings(t *testing.T) {
 	testutil.Require(t, projectsAfter == projectsBefore && rootsAfter == rootsBefore, "read-only resolution mutated storage: projects=%d/%d roots=%d/%d", projectsBefore, projectsAfter, rootsBefore, rootsAfter)
 }
 
+func TestResolveProject_UsesExistingWorkspaceCaseOnCaseInsensitiveFilesystem(t *testing.T) {
+	store := openTestStore(t)
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "Development")
+	testutil.NoError(t, os.Mkdir(workspace, 0o700))
+	misspelled := filepath.Join(parent, "development")
+	if _, err := os.Stat(misspelled); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+	storedProject, err := store.ResolveProject(context.Background(), workspace)
+	testutil.NoError(t, err)
+	mustSave(t, store, observation("stored", storedProject, "stored project memory"))
+	resolvedProject, err := store.ResolveProject(context.Background(), misspelled)
+	testutil.Require(t, err == nil && resolvedProject == storedProject, "resolved project=%q want=%q err=%v", resolvedProject, storedProject, err)
+	found, err := store.Search(context.Background(), Search{Query: "stored", Project: resolvedProject, Scope: ScopeProject})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "stored", "stored project missing: %+v %v", found, err)
+}
+
 func TestImportLegacy_MergesProjectsIdempotentlyWithoutMutatingSource(t *testing.T) {
 	legacyPath := filepath.Join(t.TempDir(), "legacy.db")
 	legacy, err := sql.Open("sqlite", legacyPath)

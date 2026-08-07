@@ -211,10 +211,6 @@ func safeQuery(value string, matchAny bool) (string, bool) {
 		return "", false
 	}
 	for i, term := range terms {
-		upper := strings.ToUpper(term)
-		if upper == "AND" || upper == "OR" || upper == "NOT" || upper == "NEAR" {
-			return "", false
-		}
 		for _, r := range term {
 			if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' {
 				return "", false

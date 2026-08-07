@@ -32,6 +32,22 @@ func TestPrepare_DefaultUsesUnifiedDatabaseAndProjectOperationalRoot(t *testing.
 	testutil.Require(t, paths.LegacyDatabase == filepath.Join(paths.Root, "memory.db"), "legacy path missing: %+v", paths)
 }
 
+func TestPrepare_DefaultUsesExistingWorkspaceCaseOnCaseInsensitiveFilesystem(t *testing.T) {
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "Development")
+	testutil.NoError(t, os.Mkdir(workspace, 0o700))
+	misspelled := filepath.Join(parent, "development")
+	if _, err := os.Stat(misspelled); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+	home := t.TempDir()
+	stored, err := Prepare(context.Background(), Options{HomeDir: home, ProjectDir: workspace})
+	testutil.NoError(t, err)
+	resolved, err := Prepare(context.Background(), Options{HomeDir: home, ProjectDir: misspelled})
+	testutil.NoError(t, err)
+	testutil.Require(t, resolved.Root == stored.Root, "case spelling changed root: %q != %q", resolved.Root, stored.Root)
+}
+
 func TestOpen_InvalidRootLeavesNoPartialState(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "blocked")
 	testutil.NoError(t, os.WriteFile(blocked, []byte("file"), 0o600))
