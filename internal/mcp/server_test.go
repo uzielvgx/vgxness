@@ -8,6 +8,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
@@ -67,7 +68,7 @@ func TestFullServerExposesMemoryParityTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newFullWithReader() error = %v", err)
 	}
-	want := []string{"memory_recent", "memory_search", "memory_get", "memory_save", "memory_forget"}
+	want := []string{"memory_recent", "memory_search", "memory_get", "memory_save", "memory_forget", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition"}
 	if got := server.toolNames(); !sameStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)
 	}
@@ -93,13 +94,25 @@ func TestFullServerAdvertisesExactMutationSchemas(t *testing.T) {
 	}
 	for _, tool := range tools.Tools {
 		if tool.Name == "memory_get" || tool.Name == "memory_forget" {
-			assertSchemaProperties(t, tool.InputSchema, map[string]bool{"id": true})
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"id": {required: true, kind: "string"}})
 		}
 		if tool.Name == "memory_forget" && tool.Annotations.IdempotentHint {
 			t.Fatal("memory_forget advertised as idempotent")
 		}
 		if tool.Name == "memory_save" {
-			assertSchemaProperties(t, tool.InputSchema, map[string]bool{"title": true, "content": true, "type": false, "topic": false})
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"title": {true, "string"}, "content": {true, "string"}, "type": {false, "string"}, "topic": {false, "string"}})
+		}
+		switch tool.Name {
+		case "sdd_create":
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"idempotencyKey": {true, "string"}, "title": {true, "string"}, "backend": {true, "string"}, "interactionMode": {true, "string"}, "plan": {true, "string"}})
+		case "sdd_list":
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"status": {false, "string"}, "limit": {false, "number"}})
+		case "sdd_get":
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"id": {true, "string"}})
+		case "sdd_set_interaction_mode":
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"changeId": {true, "string"}, "interactionMode": {true, "string"}, "expectedStateVersion": {true, "number"}})
+		case "sdd_transition":
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"changeId": {true, "string"}, "targetPhase": {false, "string"}, "cancel": {false, "boolean"}, "expectedStateVersion": {true, "number"}})
 		}
 	}
 }
@@ -141,6 +154,81 @@ func TestFullServerMemoryErrorsAndCancellation(t *testing.T) {
 	if _, err := server.save(ctx, saveInput{Title: "T", Content: "C"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled save error = %v", err)
 	}
+}
+
+func TestFullServerSDDLifecycleBindsProjectAndMapsErrors(t *testing.T) {
+	backend := &fakeReader{project: "project-1"}
+	sdds := &fakeSDDReader{change: sdd.Change{ID: "change-1", Project: "project-1", StateVersion: 1}}
+	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := sddCreateInput{IdempotencyKey: "key-1", Title: "Title", Backend: sdd.BackendMemory, InteractionMode: sdd.InteractionAutomatic, Plan: sdd.PlanLow}
+	if _, err := server.sddCreate(context.Background(), create); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.sddList(context.Background(), sddListInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.sddGet(context.Background(), sddGetInput{ID: "change-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.sddSetInteractionMode(context.Background(), sddModeInput{ChangeID: "change-1", InteractionMode: sdd.InteractionInteractive, ExpectedStateVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.sddTransition(context.Background(), sddTransitionInput{ChangeID: "change-1", TargetPhase: sdd.PhaseProposal, ExpectedStateVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if sdds.create.Project != "project-1" || sdds.list.Project != "project-1" || sdds.get.Project != "project-1" || sdds.mode.Project != "project-1" || sdds.transition.Project != "project-1" {
+		t.Fatalf("requests not project scoped: %+v", sdds)
+	}
+	sdds.modeErr = sdd.ErrStaleState
+	if _, err := server.sddSetInteractionMode(context.Background(), sddModeInput{ChangeID: "change-1", InteractionMode: sdd.InteractionAutomatic, ExpectedStateVersion: 1}); !errors.Is(err, ErrStale) {
+		t.Fatalf("stale error = %v", err)
+	}
+	sdds.transitionErr = sdd.ErrConflict
+	if _, err := server.sddTransition(context.Background(), sddTransitionInput{ChangeID: "change-1", Cancel: true, ExpectedStateVersion: 1}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflict error = %v", err)
+	}
+	if _, err := server.sddCreate(context.Background(), sddCreateInput{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid create error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := server.sddGet(ctx, sddGetInput{ID: "change-1"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled get error = %v", err)
+	}
+}
+
+func TestSDDNumericInputsRejectFractionsAndUnsafeVersions(t *testing.T) {
+	for _, value := range []float64{1.5, 9007199254740992} {
+		if _, err := sddVersion(value); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("sddVersion(%v) error = %v, want invalid", value, err)
+		}
+	}
+	if _, err := sddLimit(1.5); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("sddLimit(1.5) error = %v, want invalid", err)
+	}
+	if got, err := sddVersion(9007199254740991); err != nil || got != 9007199254740991 {
+		t.Fatalf("sddVersion(safe max) = %d, %v", got, err)
+	}
+}
+
+func TestSDDToolErrorsDistinguishCancelledNotFoundAndUnavailable(t *testing.T) {
+	backend := &fakeReader{project: "project-1"}
+	sdds := &fakeSDDReader{getErr: sdd.ErrChangeCancelled}
+	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSDDToolText(t, server, context.Background(), "SDD change is cancelled")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assertSDDToolText(t, server, ctx, "request cancelled")
+	sdds.getErr = sdd.ErrNotFound
+	assertSDDToolText(t, server, context.Background(), "SDD record not found")
+	sdds.getErr = errors.New("storage path leak")
+	assertSDDToolText(t, server, context.Background(), "SDD service unavailable")
 }
 
 func TestServerSearchValidationAndCancellation(t *testing.T) {
@@ -207,6 +295,49 @@ type fakeReader struct {
 	getErr    error
 }
 
+type fakeSDDReader struct {
+	change                         sdd.Change
+	create                         sdd.CreateChangeRequest
+	list                           sdd.ListChangesRequest
+	get                            sdd.GetChangeRequest
+	mode                           sdd.UpdateInteractionModeRequest
+	transition                     sdd.TransitionChangeRequest
+	getErr, modeErr, transitionErr error
+}
+
+func (reader *fakeSDDReader) CreateChange(_ context.Context, request sdd.CreateChangeRequest) (sdd.Change, error) {
+	reader.create = request
+	return reader.change, nil
+}
+func (reader *fakeSDDReader) ListChanges(_ context.Context, request sdd.ListChangesRequest) ([]sdd.Change, error) {
+	reader.list = request
+	return []sdd.Change{reader.change}, nil
+}
+func (reader *fakeSDDReader) GetChange(_ context.Context, request sdd.GetChangeRequest) (sdd.Change, error) {
+	reader.get = request
+	return reader.change, reader.getErr
+}
+
+func assertSDDToolText(t *testing.T, server *Server, ctx context.Context, want string) {
+	t.Helper()
+	result, _, err := server.callSDDGet(ctx, nil, sddGetInput{ID: "change-1"})
+	if err != nil || !result.IsError {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	text, ok := result.Content[0].(*sdk.TextContent)
+	if !ok || text.Text != want {
+		t.Fatalf("text=%#v want=%q", result.Content, want)
+	}
+}
+func (reader *fakeSDDReader) UpdateInteractionMode(_ context.Context, request sdd.UpdateInteractionModeRequest) (sdd.Change, error) {
+	reader.mode = request
+	return reader.change, reader.modeErr
+}
+func (reader *fakeSDDReader) TransitionChange(_ context.Context, request sdd.TransitionChangeRequest) (sdd.Change, error) {
+	reader.transition = request
+	return reader.change, reader.transitionErr
+}
+
 func (reader *fakeReader) ResolveProject(_ context.Context, workspace string) (string, error) {
 	reader.workspace = workspace
 	return reader.project, nil
@@ -249,7 +380,12 @@ func sameStrings(got, want []string) bool {
 	return true
 }
 
-func assertSchemaProperties(t *testing.T, schema any, expected map[string]bool) {
+type schemaExpectation struct {
+	required bool
+	kind     string
+}
+
+func assertSchemaProperties(t *testing.T, schema any, expected map[string]schemaExpectation) {
 	t.Helper()
 	value, ok := schema.(map[string]any)
 	if !ok {
@@ -259,18 +395,18 @@ func assertSchemaProperties(t *testing.T, schema any, expected map[string]bool) 
 	if !ok || len(properties) != len(expected) {
 		t.Fatalf("schema properties = %#v", value["properties"])
 	}
-	required, ok := value["required"].([]any)
-	if !ok {
+	required, present := value["required"].([]any)
+	if value["required"] != nil && !present {
 		t.Fatalf("schema required = %#v", value["required"])
 	}
-	for name, requiredExpected := range expected {
+	for name, expected := range expected {
 		property, ok := properties[name].(map[string]any)
 		if !ok {
 			t.Errorf("missing schema property %q", name)
 			continue
 		}
-		if property["type"] != "string" {
-			t.Errorf("schema property %q type = %#v, want string", name, property["type"])
+		if property["type"] != expected.kind {
+			t.Errorf("schema property %q type = %#v, want %s", name, property["type"], expected.kind)
 		}
 		found := false
 		for _, field := range required {
@@ -278,8 +414,8 @@ func assertSchemaProperties(t *testing.T, schema any, expected map[string]bool) 
 				found = true
 			}
 		}
-		if found != requiredExpected {
-			t.Errorf("schema property %q required = %v, want %v", name, found, requiredExpected)
+		if found != expected.required {
+			t.Errorf("schema property %q required = %v, want %v", name, found, expected.required)
 		}
 	}
 }
