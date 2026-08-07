@@ -54,6 +54,8 @@ Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna-fast`, `o
 
 Preview and status are read-only. The managed agent catalogue contains manager v46 plus 14 other profiles; `general` is v6, verifier v4, and reviewers v3. Older manager, agent, model-plan, and exact `vgxness.ts` v1-v10 plugin artifacts are historical retirement identities and are preserved byte-for-byte. Exact provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal. Uninstall removes only exact provider artifacts and never removes global skills.
 
+Installation stages each artifact in a private same-filesystem `0700` directory with a `0600` regular file, then publishes by no-overwrite link. Cleanup verifies the creation identity and exact expected bytes, retaining observed replacements, mutations, or extra staging entries as recovery evidence. This protects observable path replacement and content drift. POSIX provides no atomic compare-content-and-unlink operation against any external same-UID process holding a pre-opened writable descriptor, hostile or accidental; that situation is outside this supported boundary.
+
 Changing the plan or a slot regenerates the same managed agent set only when every current byte still matches the installed current manifest. An interrupted switch containing an exact mixture of the verified source and requested target bytes resumes safely; any unrelated byte drift blocks regeneration. The change becomes active only after OpenCode restarts. Manual modification of an agent or manifest blocks regeneration; historical plugin bytes remain retirement evidence.
 
 ## Memory authority

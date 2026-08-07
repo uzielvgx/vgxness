@@ -206,31 +206,31 @@ func pendingInventoryMatches(marker reinstallPendingMarker, layout integration.M
 func clearReinstallPending(root string, expected reinstallPendingEvidence) error {
 	markerPath := filepath.Join(root, reinstallPendingName)
 	if err := matchesReinstallPendingEvidence(markerPath, expected); err != nil {
-		return fmt.Errorf("%w: reinstall pending marker changed before cleanup", integration.ErrRecovery)
+		return fmt.Errorf("%w: reinstall pending marker changed before cleanup at %q", integration.ErrRecovery, markerPath)
 	}
 	quarantineDirectory, err := os.MkdirTemp(root, ".vgxness-reinstall-marker-*")
 	if err != nil {
-		return fmt.Errorf("%w: prepare reinstall marker cleanup: %v", integration.ErrRecovery, err)
+		return fmt.Errorf("%w: prepare reinstall marker cleanup for %q: %v", integration.ErrRecovery, markerPath, err)
 	}
 	quarantine := filepath.Join(quarantineDirectory, "marker")
 	if err := os.Rename(markerPath, quarantine); err != nil {
 		_ = os.Remove(quarantineDirectory)
-		return fmt.Errorf("%w: quarantine reinstall marker: %v", integration.ErrRecovery, err)
+		return fmt.Errorf("%w: quarantine reinstall marker %q: %v", integration.ErrRecovery, markerPath, err)
 	}
 	if err := matchesReinstallPendingEvidence(quarantine, expected); err != nil {
 		restoreErr := restoreQuarantinedFile(quarantine, markerPath)
-		return fmt.Errorf("%w: reinstall marker replaced during cleanup: %v", integration.ErrRecovery, restoreErr)
+		return fmt.Errorf("%w: reinstall marker replaced during cleanup; retained at %q or %q: %v", integration.ErrRecovery, markerPath, quarantine, restoreErr)
 	}
 	if err := os.Remove(quarantine); err != nil {
-		return fmt.Errorf("%w: remove reinstall marker quarantine: %v", integration.ErrRecovery, err)
+		return fmt.Errorf("%w: remove reinstall marker quarantine %q: %v", integration.ErrRecovery, quarantine, err)
 	}
 	if err := os.Remove(quarantineDirectory); err != nil {
-		return fmt.Errorf("%w: remove reinstall marker quarantine directory: %v", integration.ErrRecovery, err)
+		return fmt.Errorf("%w: remove reinstall marker quarantine directory %q: %v", integration.ErrRecovery, quarantineDirectory, err)
 	}
 	if _, err := os.Lstat(markerPath); err == nil {
-		return fmt.Errorf("%w: reinstall pending marker was replaced during cleanup", integration.ErrRecovery)
+		return fmt.Errorf("%w: reinstall pending marker was replaced during cleanup at %q", integration.ErrRecovery, markerPath)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: verify reinstall marker cleanup: %v", integration.ErrRecovery, err)
+		return fmt.Errorf("%w: verify reinstall marker cleanup at %q: %v", integration.ErrRecovery, markerPath, err)
 	}
 	if err := syncDirectory(root); err != nil {
 		return fmt.Errorf("%w: sync reinstall marker cleanup: %v", integration.ErrRecovery, err)
