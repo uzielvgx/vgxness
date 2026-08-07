@@ -81,7 +81,7 @@ func OpenCodeSteps() []Step {
 	return []Step{
 		{Number: 1, Title: "Revisar requisitos y estado actual", Explanation: "Comprobaré el binario candidato, los destinos, el workspace y que OpenCode esté disponible y sea compatible. Esta revisión no escribe archivos ni exige un modelo secundario."},
 		{Number: 2, Title: "Instalar el launcher estable", Explanation: "Guardaré la versión exacta por SHA-256 y activaré el launcher permanente. No editaré PATH ni descargaré software.", Mutates: true},
-		{Number: 3, Title: "Retirar la skill autónoma heredada de OpenCode", Explanation: "Antes de publicar la skill portable, retiraré sólo bytes v1, v2 o v3 reconocidos de vgxness-autonomous-stacked-pr. Bytes modificados o desconocidos bloquean el wizard sin sobrescritura.", Mutates: true},
+		{Number: 3, Title: "Retirar el plugin y la skill heredados de OpenCode", Explanation: "Antes de publicar la skill portable, retiraré sólo bytes v1-v10 reconocidos del plugin heredado vgxness.ts y de la skill heredada vgxness-autonomous-stacked-pr. Bytes modificados o desconocidos bloquean el wizard sin sobrescritura.", Mutates: true},
 		{Number: 4, Title: "Instalar los artefactos del proveedor OpenCode", Explanation: "Instalaré los 15 agentes enlazados al plan de modelos activo: vgxness-manager con workspace de solo lectura y operaciones Git aprobadas por el usuario, sustituciones administradas para Explore y general, un verificador independiente, cinco revisores de solo lectura y seis agentes SDD especializados. El manager conserva la autoridad exclusiva sobre estado y fases; general es el único escritor ordinario de código fuente.", Mutates: true},
 		{Number: 5, Title: "Publicar las skills globales portables", Explanation: "Después del retiro seguro, instalaré o verificaré globalmente el catálogo de 18 skills y 42 archivos: skills-creator, stacked-pr, cross-platform, installer-lifecycle, agent-evaluation, ci-triage, security-boundary, documentation-strategy, product-requirements, software-architecture-docs, user-documentation, api-documentation, quality-test-documentation, operations-runbooks, governance-compliance-docs, release-lifecycle-docs, end-to-end-testing y sdd-lifecycle, en el directorio compartido de skills. Estas skills no pertenecen a OpenCode y su desinstalación no las elimina.", Mutates: true},
 		{Number: 6, Title: "Verificar archivos y conexión", Explanation: "Leeré nuevamente todos los artefactos administrados, sus hashes y el manifiesto, y comprobaré el handshake real con OpenCode desde el workspace seleccionado. Los cambios de plan se cargan al reiniciar OpenCode."},
@@ -277,7 +277,7 @@ func (service *Service) discloseSkills(result *Result, installed skills.Result) 
 }
 
 func (service *Service) discloseIncompleteSkills(result *Result) {
-	message := "La skill heredada del proveedor puede ya estar retirada y la publicación global no está confirmada; inspecciona con `vgxness skills status` y reintenta con `vgxness skills install`. El paquete global de skills puede haber quedado parcial o modificado; inspecciónalo con `vgxness skills status` antes de reintentar."
+	message := "Sólo los bytes v1-v10 reconocidos del plugin heredado vgxness.ts y de la skill heredada vgxness-autonomous-stacked-pr podrían haberse retirado; la publicación global no está confirmada. Inspecciona con `vgxness skills status` y reintenta con `vgxness skills install`. El paquete global de skills puede haber quedado parcial o modificado; inspecciónalo con `vgxness skills status` antes de reintentar."
 	if result.Recovery != "" {
 		message = result.Recovery + " " + message
 	}
@@ -285,7 +285,7 @@ func (service *Service) discloseIncompleteSkills(result *Result) {
 }
 
 func (service *Service) discloseUnconfirmedGlobalSkills(result *Result) {
-	message := "La skill heredada del proveedor puede ya estar retirada y la publicación global no está confirmada; inspecciona con `vgxness skills status` y reintenta con `vgxness skills install`."
+	message := "Sólo los bytes v1-v10 reconocidos del plugin heredado vgxness.ts y de la skill heredada vgxness-autonomous-stacked-pr podrían haberse retirado; la publicación global no está confirmada. Inspecciona con `vgxness skills status` y reintenta con `vgxness skills install`."
 	if result.Recovery != "" {
 		message = result.Recovery + " " + message
 	}
