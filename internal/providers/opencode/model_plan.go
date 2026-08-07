@@ -23,6 +23,10 @@ const (
 	sddApplyName                                            = "vgxness-sdd-apply.md"
 	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 4, 3
 	sddApplyTargetVersion, sddApplyPredecessorVersion       = 4, 3
+	generalCurrentMarker                                    = "artifact: opencode-agent/general; version: 6"
+	generalPreviousMarker                                   = "artifact: opencode-agent/general; version: 5"
+	verifierCurrentMarker                                   = "artifact: opencode-agent/vgxness-verifier; version: 4"
+	verifierPreviousMarker                                  = "artifact: opencode-agent/vgxness-verifier; version: 3"
 )
 
 type modelPlanManifest struct {
@@ -153,6 +157,10 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
+	broadPredecessor, err := previousBroadPermissionModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
 	v45, err := previousV45ModelPlanBundle(current)
 	if err != nil {
 		return nil, err
@@ -182,7 +190,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		return nil, err
 	}
 	withExplore := make([]modelPlanBundle, 0, 16)
-	for _, manager := range []modelPlanBundle{current, v45, v44, v43, managerV42, managerV41, managerV40, managerV39} {
+	for _, manager := range []modelPlanBundle{current, broadPredecessor, v45, v44, v43, managerV42, managerV41, managerV40, managerV39} {
 		withExplore = append(withExplore, manager)
 		explore, err := previousExploreModelPlanBundle(manager)
 		if err != nil {
@@ -204,7 +212,15 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		}
 		candidates = append(candidates, legacySDDBundle)
 	}
-	return candidates, nil
+	unique := make([]modelPlanBundle, 0, len(candidates))
+	seen := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		digest := artifactSHA256(candidate.manifest)
+		if !seen[digest] {
+			unique, seen[digest] = append(unique, candidate), true
+		}
+	}
+	return unique, nil
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
@@ -304,6 +320,18 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	for name, content := range current.agents {
 		agents[name] = content
 	}
+	if strings.Contains(string(agents[generalAgentName]), generalCurrentMarker) {
+		agents[generalAgentName] = previousGeneralPredecessor(agents[generalAgentName])
+		if len(agents[generalAgentName]) == 0 {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+	}
+	if strings.Contains(string(agents[verifierAgentName]), verifierCurrentMarker) {
+		agents[verifierAgentName] = previousVerifierPredecessor(agents[verifierAgentName])
+		if len(agents[verifierAgentName]) == 0 {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+	}
 	for _, profile := range []struct {
 		name string
 		role sdd.Role
@@ -314,6 +342,16 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		if len(agents[profile.name]) == 0 {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
+	}
+	return encodeModelPlanBundle(current.config, current.resolved, agents)
+}
+
+func previousBroadPermissionModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	agents := cloneAgents(current.agents)
+	agents[generalAgentName] = previousGeneralPredecessor(agents[generalAgentName])
+	agents[verifierAgentName] = previousVerifierPredecessor(agents[verifierAgentName])
+	if len(agents[generalAgentName]) == 0 || len(agents[verifierAgentName]) == 0 {
+		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	return encodeModelPlanBundle(current.config, current.resolved, agents)
 }
@@ -351,21 +389,21 @@ func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, e
 }
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
-	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, "artifact: opencode-agent/general; version: 5", canonicalVerifierPrompt, "artifact: opencode-agent/vgxness-verifier; version: 3", currentReviewPrompts())
+	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, generalPreviousMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
 }
 
 func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
 	managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 		return bindManagerTemplate(managerBase, managerMarker, assignment)
 	}
-	agents, err := fullModelBoundAgents(resolved, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, reviews)
+	agents, err := fullModelBoundAgents(resolved, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, reviews, false)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
 	return encodeModelPlanBundle(config, resolved, agents)
 }
 
-func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews map[string]string) (map[string][]byte, error) {
+func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews map[string]string, protectDurableMutations bool) (map[string][]byte, error) {
 	assignments := map[string]sdd.Role{
 		managerAgentName: sdd.RoleManager,
 		exploreAgentName: sdd.RoleResearch,
@@ -385,12 +423,20 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 		return nil, err
 	}
 	agents[exploreAgentName] = explore
-	general, err := bindProfile(generalBase, generalMarker, plan.Roles[sdd.RoleImplementation])
+	generalNext := generalMarker
+	if protectDurableMutations {
+		generalNext = generalCurrentMarker
+	}
+	general, err := bindProfile(generalBase, generalMarker, generalNext, plan.Roles[sdd.RoleImplementation], protectDurableMutations)
 	if err != nil {
 		return nil, err
 	}
 	agents[generalAgentName] = general
-	verifier, err := bindProfile(verifierBase, verifierMarker, plan.Roles[sdd.RoleVerification])
+	verifierNext := verifierMarker
+	if protectDurableMutations {
+		verifierNext = verifierCurrentMarker
+	}
+	verifier, err := bindProfile(verifierBase, verifierMarker, verifierNext, plan.Roles[sdd.RoleVerification], protectDurableMutations)
 	if err != nil {
 		return nil, err
 	}
@@ -437,14 +483,31 @@ func bindManagerTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignm
 	return []byte(value), nil
 }
 
-func bindProfile(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func bindProfile(base, marker, nextMarker string, assignment sdd.OpenCodeRoleAssignment, protectDurableMutations bool) ([]byte, error) {
 	anchor := "mode: subagent\n"
-	if strings.Count(base, anchor) != 1 || strings.Count(base, marker) != 1 {
+	permission := "  \"*\": allow\n"
+	if strings.Count(base, anchor) != 1 || strings.Count(base, marker) != 1 || strings.Count(base, permission) != 1 {
 		return nil, integration.ErrInvalid
 	}
 	value := strings.Replace(base, anchor, fmt.Sprintf("mode: subagent\nmodel: %s\nvariant: %s\n", assignment.Model, assignment.Variant), 1)
+	value = strings.Replace(value, marker, nextMarker, 1)
+	if !protectDurableMutations {
+		return []byte(value), nil
+	}
+	// OpenCode has no trusted MCP caller identity. Host/operator full-mode choice
+	// remains the authority boundary; these managed profiles deny durable writes.
+	value = strings.Replace(value, permission, permission+durableMutationDenies, 1)
 	return []byte(value), nil
 }
+
+func previousGeneralPredecessor(current []byte) []byte {
+	return derivePredecessor(current, []textReplacement{{old: generalCurrentMarker, new: generalPreviousMarker}, {old: durableMutationDenies, new: ""}})
+}
+func previousVerifierPredecessor(current []byte) []byte {
+	return derivePredecessor(current, []textReplacement{{old: verifierCurrentMarker, new: verifierPreviousMarker}, {old: durableMutationDenies, new: ""}})
+}
+
+const durableMutationDenies = "  vgxness_memory_save: deny\n  vgxness_memory_forget: deny\n  vgxness_sdd_create: deny\n  vgxness_sdd_set_interaction_mode: deny\n  vgxness_sdd_save_revision: deny\n  vgxness_sdd_accept_revision: deny\n  vgxness_sdd_transition: deny\n  vgxness_sdd_record_projection: deny\n"
 
 func bindExplore(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	value := explorePrompt

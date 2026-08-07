@@ -68,9 +68,8 @@ func TestV46UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 	}
 	v45, err := previousV45ModelPlanBundle(current)
 	testutil.NoError(t, err)
-	predecessorCount := (len(managerPredecessorsMust(t, current)) + 1) * 2 * 3
-	if got := len(predecessorBundlesMust(t, current)); got != predecessorCount {
-		t.Fatalf("predecessor bundles=%d, want derived %d", got, predecessorCount)
+	if got, minimum := len(predecessorBundlesMust(t, current)), (len(managerPredecessorsMust(t, current))+1)*2*3; got < minimum {
+		t.Fatalf("predecessor bundles=%d, want at least %d", got, minimum)
 	}
 	if !bytes.Contains(v45.agents[managerAgentName], []byte("artifact: opencode-agent/vgxness-manager; version: 45")) ||
 		!bytes.Contains(v45.agents[generalAgentName], []byte("artifact: opencode-agent/general; version: 4")) {
@@ -307,18 +306,18 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 	}
 }
 
-func TestGeneralV5RequiresConciseDecisiveReturns(t *testing.T) {
+func TestGeneralV6RequiresConciseDecisiveReturns(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/general; version: 5",
+		"artifact: opencode-agent/general; version: 6",
 		"Ordinary implementation returns are entire compact Child Return Envelope v1 JSON objects serialized as UTF-8 and target <=512 bytes with status, changed paths, exact checks/results, and blockers only when present.",
 		"Candidate identity, authorization, acceptance, and INCONCLUSIVE evidence are mandatory only",
 		"The <=16 KiB envelope applies only to full-assurance frozen, risky, verification, or SDD missions.",
 	} {
 		if !strings.Contains(general, required) {
-			t.Errorf("general v5 missing compact return contract %q", required)
+			t.Errorf("general v6 missing compact return contract %q", required)
 		}
 	}
 }
@@ -376,7 +375,7 @@ func TestManagerMapsDeliveryMilestones(t *testing.T) {
 	}
 }
 
-func TestPrimaryAgentsAllowEveryCapability(t *testing.T) {
+func TestManagerRetainsAuthorityWhileBroadProfilesDenyDurableMutations(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for _, name := range []string{managerAgentName, generalAgentName, verifierAgentName} {
@@ -388,8 +387,11 @@ func TestPrimaryAgentsAllowEveryCapability(t *testing.T) {
 		if !strings.Contains(frontmatter, "permission:\n  \"*\": allow\n") {
 			t.Errorf("%s does not grant global allow", name)
 		}
-		if strings.Contains(frontmatter, ": deny") || strings.Contains(frontmatter, ": ask") {
-			t.Errorf("%s retains a permission that contradicts global allow", name)
+		if name == managerAgentName && (strings.Contains(frontmatter, ": deny") || strings.Contains(frontmatter, ": ask")) {
+			t.Errorf("%s retains a permission that contradicts manager authority", name)
+		}
+		if name != managerAgentName && !strings.Contains(frontmatter, "vgxness_sdd_record_projection: deny") {
+			t.Errorf("%s does not deny durable VGXNESS mutation", name)
 		}
 	}
 }
@@ -412,12 +414,12 @@ func TestV46RoutesDirectSingleReadAndKeepsFullAssuranceExceptions(t *testing.T) 
 	}
 }
 
-func TestGeneralV5UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
+func TestGeneralV6UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/general; version: 5",
+		"artifact: opencode-agent/general; version: 6",
 		"Ordinary bounded missions are entire compact JSON objects serialized as UTF-8 and target <=512 bytes",
 		"Ordinary implementation returns are entire compact Child Return Envelope v1 JSON objects serialized as UTF-8 and target <=512 bytes with status, changed paths, exact checks/results, and blockers only when present.",
 		"Candidate identity, authorization, acceptance, and INCONCLUSIVE evidence are mandatory only when supplied or required by a frozen, risky, verification, or SDD mission.",
@@ -425,7 +427,7 @@ func TestGeneralV5UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 		"Malformed, stale, oversized, or missing required evidence remains BLOCKED.",
 	} {
 		if !strings.Contains(general, required) {
-			t.Errorf("general v5 missing %q", required)
+			t.Errorf("general v6 missing %q", required)
 		}
 	}
 }

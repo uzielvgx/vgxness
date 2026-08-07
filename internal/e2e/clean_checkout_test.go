@@ -106,7 +106,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	}
 	generalData, generalErr := os.ReadFile(general)
 	verifierData, verifierErr := os.ReadFile(verifier)
-	if generalErr != nil || verifierErr != nil || !bytes.Contains(generalData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(generalData, []byte("delegated implementation worker")) || !bytes.Contains(verifierData, []byte("artifact: opencode-agent/vgxness-verifier; version: 3")) || !bytes.Contains(verifierData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(verifierData, []byte("PASS|FAIL|INCONCLUSIVE")) {
+	if generalErr != nil || verifierErr != nil || !bytes.Contains(generalData, []byte("artifact: opencode-agent/general; version: 6")) || !bytes.Contains(generalData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(generalData, []byte("vgxness_memory_save: deny")) || !bytes.Contains(generalData, []byte("vgxness_sdd_record_projection: deny")) || !bytes.Contains(generalData, []byte("delegated implementation worker")) || !bytes.Contains(verifierData, []byte("artifact: opencode-agent/vgxness-verifier; version: 4")) || !bytes.Contains(verifierData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(verifierData, []byte("vgxness_memory_save: deny")) || !bytes.Contains(verifierData, []byte("vgxness_sdd_record_projection: deny")) || !bytes.Contains(verifierData, []byte("PASS|FAIL|INCONCLUSIVE")) {
 		t.Fatalf("setup did not install managed writer/verifier contracts: general=%v verifier=%v", generalErr, verifierErr)
 	}
 	defaultAgentData, defaultAgentErr := os.ReadFile(defaultAgentConfig)
