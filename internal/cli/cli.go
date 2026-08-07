@@ -24,25 +24,28 @@ type Inspector interface {
 	Doctor(context.Context, config.Options) (inspection.Result, error)
 }
 
-type mcpLauncher func(context.Context, string, config.Options) error
+type mcpLauncher func(context.Context, string, config.Options, bool) error
 
-// RunMCP serves the read-only MCP protocol over the supplied standard streams.
+// RunMCP serves the MCP protocol over the supplied standard streams. Mutations
+// require the explicit --full capability flag.
 func RunMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, workspace string) int {
-	return runMCP(ctx, args, stdin, stdout, stderr, workspace, mcp.RunStdio)
+	return runMCP(ctx, args, stdin, stdout, stderr, workspace, mcp.RunStdioWithMode)
 }
 
 func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, workspace string, launch mcpLauncher) int {
 	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var opts config.Options
+	var full bool
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "use project-local storage")
+	flags.BoolVar(&full, "full", false, "enable explicitly requested local memory mutations")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || launch == nil {
-		fmt.Fprintln(stderr, "usage: vgxness mcp [--storage-root <path>] [--project-local]")
+		fmt.Fprintln(stderr, "usage: vgxness mcp [--storage-root <path>] [--project-local] [--full]")
 		return 2
 	}
 	opts.ProjectDir = workspace
-	if err := launch(ctx, workspace, opts); err != nil {
+	if err := launch(ctx, workspace, opts, full); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			fmt.Fprintln(stderr, "cancelled: operation cancelled")
 			return 130
