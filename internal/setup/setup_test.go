@@ -131,7 +131,7 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 			t.Fatalf("incomplete step %d: %#v", index, step)
 		}
 	}
-	if !strings.Contains(plan.Steps[2].Title, "heredada") || !strings.Contains(plan.Steps[2].Explanation, "v1, v2 o v3") {
+	if !strings.Contains(plan.Steps[2].Title, "plugin y la skill") || !strings.Contains(plan.Steps[2].Explanation, "v1-v10") || !strings.Contains(plan.Steps[2].Explanation, "vgxness.ts") || !strings.Contains(plan.Steps[2].Explanation, "vgxness-autonomous-stacked-pr") {
 		t.Fatalf("step 3 does not identify safe legacy retirement: %#v", plan.Steps[2])
 	}
 	if !strings.Contains(plan.Steps[3].Title, "artefactos del proveedor") || !strings.Contains(plan.Steps[3].Explanation, "15 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[4].Explanation, "18 skills y 42 archivos") || !strings.Contains(plan.Steps[4].Explanation, "end-to-end-testing y sdd-lifecycle") || !strings.Contains(plan.Steps[4].Explanation, "no pertenecen a OpenCode") {
@@ -332,7 +332,7 @@ func TestApplyDisclosesIncompleteSkillsRecovery(t *testing.T) {
 	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
 	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
-	if !errors.Is(err, skills.ErrRecovery) || result.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "revirtió") || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") || !strings.Contains(result.Recovery, "puede haber quedado parcial") || strings.Contains(result.Recovery, "verificado") {
+	if !errors.Is(err, skills.ErrRecovery) || result.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "revirtió") || !strings.Contains(result.Recovery, "v1-v10") || !strings.Contains(result.Recovery, "plugin heredado vgxness.ts") || !strings.Contains(result.Recovery, "skill heredada vgxness-autonomous-stacked-pr") || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") || !strings.Contains(result.Recovery, "puede haber quedado parcial") || strings.Contains(result.Recovery, "verificado") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
@@ -347,7 +347,7 @@ func TestApplyDisclosesUnconfirmedSkillsAfterOrdinaryInstallFailure(t *testing.T
 	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
 	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
-	if err == nil || !strings.Contains(result.Recovery, "launcher administrado se conserva") || !strings.Contains(result.Recovery, "heredada del proveedor") || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") || strings.Contains(result.Recovery, "puede haber quedado parcial") {
+	if err == nil || !strings.Contains(result.Recovery, "launcher administrado se conserva") || !strings.Contains(result.Recovery, "v1-v10") || !strings.Contains(result.Recovery, "plugin heredado vgxness.ts") || !strings.Contains(result.Recovery, "skill heredada vgxness-autonomous-stacked-pr") || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") || strings.Contains(result.Recovery, "puede haber quedado parcial") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
