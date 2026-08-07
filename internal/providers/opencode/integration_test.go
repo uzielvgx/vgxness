@@ -25,7 +25,9 @@ func errorContainsEquivalentPath(err error, want string) bool {
 	if err == nil {
 		return false
 	}
-	for _, candidate := range strings.Split(err.Error(), `"`) {
+	for _, candidate := range append(strings.Split(err.Error(), `"`), strings.Fields(err.Error())...) {
+		candidate = strings.Trim(candidate, " ,;()")
+		candidate = strings.TrimSuffix(candidate, ":")
 		if canonicalTestPath(candidate) == canonicalTestPath(want) {
 			return true
 		}
@@ -55,6 +57,13 @@ func canonicalTestPath(path string) string {
 		path = strings.ToLower(path)
 	}
 	return filepath.Clean(path)
+}
+
+func TestErrorContainsEquivalentPathRejectsBasenameAndSibling(t *testing.T) {
+	root := t.TempDir()
+	want := filepath.Join(root, "one", "artifact")
+	err := fmt.Errorf("open %s: file exists", filepath.Join(root, "two", "artifact"))
+	testutil.Require(t, !errorContainsEquivalentPath(err, want), "matched non-equivalent path: %v", err)
 }
 
 func TestIntegration_PreviewIsNonMutating(t *testing.T) {
@@ -898,7 +907,7 @@ func TestReinstallRollbackPreservesReplacedStagedTemporary(t *testing.T) {
 	_, err = service.Reinstall(context.Background(), options)
 	current, readErr := os.ReadFile(temporary)
 	marker := filepath.Join(configDirectory, reinstallPendingName)
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), marker) && readErr == nil && bytes.Equal(current, foreign), "Reinstall() err=%v temporary=%q read=%v", err, current, readErr)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, marker) && readErr == nil && bytes.Equal(current, foreign), "Reinstall() err=%v temporary=%q read=%v", err, current, readErr)
 }
 
 func TestRemoveTemporaryArtifactPreservesReplacementBeforeQuarantine(t *testing.T) {
@@ -972,14 +981,14 @@ func TestRetainedPredecessorPersistErrorNamesPublishedMarkerAndBackup(t *testing
 	marker := filepath.Join(t.TempDir(), "marker.json")
 	backup := filepath.Join(t.TempDir(), "backup.tmp")
 	err := retainedPredecessorPersistError(marker, backup, errors.New("persist failed after publication"))
-	testutil.Require(t, errors.Is(err, integration.ErrConflict) && strings.Contains(err.Error(), marker) && strings.Contains(err.Error(), backup), "error=%v", err)
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && errorContainsEquivalentPath(err, marker) && errorContainsEquivalentPath(err, backup), "error=%v", err)
 }
 
 func TestRetainedPredecessorEvidenceErrorNamesMarkerAndBackup(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker.json")
 	backup := filepath.Join(t.TempDir(), "backup.tmp")
 	err := retainedPredecessorEvidenceError(marker, backup)
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), marker) && strings.Contains(err.Error(), backup), "error=%v", err)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, marker) && errorContainsEquivalentPath(err, backup), "error=%v", err)
 }
 
 func TestRollbackInstalledArtifactDoesNotClaimRemovedTemporaryIsRetained(t *testing.T) {
@@ -992,7 +1001,7 @@ func TestRollbackInstalledArtifactDoesNotClaimRemovedTemporaryIsRetained(t *test
 	info, err := os.Lstat(temporary)
 	testutil.NoError(t, err)
 	err = rollbackInstalledArtifact(installedArtifact{path: target, temporary: temporary, temporaryInfo: info, content: managed})
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), target) && !strings.Contains(err.Error(), "temporary retained at"), "error=%v", err)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, target) && !strings.Contains(err.Error(), "temporary retained at"), "error=%v", err)
 }
 
 func TestDefaultAgentUninstallCleanupPreservesChangedBackup(t *testing.T) {
@@ -1005,7 +1014,7 @@ func TestDefaultAgentUninstallCleanupPreservesChangedBackup(t *testing.T) {
 	testutil.NoError(t, os.WriteFile(backup, changed, 0o600))
 	err = (defaultAgentUninstall{removal: &backedUpArtifact{backup: backup, info: info, content: managed}}).cleanup()
 	current, readErr := os.ReadFile(backup)
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), backup) && readErr == nil && bytes.Equal(current, changed), "cleanup err=%v current=%q read=%v", err, current, readErr)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, backup) && readErr == nil && bytes.Equal(current, changed), "cleanup err=%v current=%q read=%v", err, current, readErr)
 }
 
 func TestClearReinstallAnchorNamesChangedAnchorPath(t *testing.T) {
@@ -1015,14 +1024,14 @@ func TestClearReinstallAnchorNamesChangedAnchorPath(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.NoError(t, os.WriteFile(path, []byte("changed"), 0o600))
 	err = clearReinstallAnchor(reinstallAnchor{path: path, bytes: []byte("expected"), info: info})
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), path), "error=%v", err)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, path), "error=%v", err)
 }
 
 func TestReinstallAnchorQuarantineErrorNamesRetainedDirectory(t *testing.T) {
 	anchor := filepath.Join(t.TempDir(), "anchor")
 	quarantine := filepath.Join(t.TempDir(), "quarantine")
 	err := reinstallAnchorQuarantineError(anchor, quarantine, errors.New("rename failed"), errors.New("remove failed"))
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), anchor) && strings.Contains(err.Error(), quarantine), "error=%v", err)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, anchor) && errorContainsEquivalentPath(err, quarantine), "error=%v", err)
 }
 
 func TestReinstallAnchorPostCleanupErrorsNameAffectedPaths(t *testing.T) {
@@ -1036,7 +1045,7 @@ func TestReinstallAnchorPostCleanupErrorsNameAffectedPaths(t *testing.T) {
 		reinstallAnchorPostCleanupError("verify cleanup uncertain", anchor, "", "", errors.New("lstat failed")),
 		fmt.Errorf("%w: sync reinstall predecessor anchor parent %q after cleanup of %q: %v", integration.ErrRecovery, directory, anchor, errors.New("sync failed")),
 	} {
-		testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), anchor), "error=%v", err)
+		testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, anchor), "error=%v", err)
 	}
 }
 
@@ -1048,8 +1057,8 @@ func TestReinstallAnchorDiagnosticErrorsPreserveCauses(t *testing.T) {
 	postErr := errors.New("post")
 	quarantine := reinstallAnchorQuarantineError(anchor, directory, renameErr, cleanupErr)
 	post := reinstallAnchorPostCleanupError("verify cleanup uncertain", anchor, "", "", postErr)
-	testutil.Require(t, errors.Is(quarantine, integration.ErrRecovery) && errors.Is(quarantine, renameErr) && errors.Is(quarantine, cleanupErr) && strings.Contains(quarantine.Error(), anchor) && strings.Contains(quarantine.Error(), directory), "quarantine=%v", quarantine)
-	testutil.Require(t, errors.Is(post, integration.ErrRecovery) && errors.Is(post, postErr) && strings.Contains(post.Error(), anchor), "post=%v", post)
+	testutil.Require(t, errors.Is(quarantine, integration.ErrRecovery) && errors.Is(quarantine, renameErr) && errors.Is(quarantine, cleanupErr) && errorContainsEquivalentPath(quarantine, anchor) && errorContainsEquivalentPath(quarantine, directory), "quarantine=%v", quarantine)
+	testutil.Require(t, errors.Is(post, integration.ErrRecovery) && errors.Is(post, postErr) && errorContainsEquivalentPath(post, anchor), "post=%v", post)
 }
 
 func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
