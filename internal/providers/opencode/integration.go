@@ -257,6 +257,7 @@ type Integration struct {
 	reinstallCheckpoint       func(string, string) error
 	afterDefaultAgentSnapshot func()
 	afterReinstallAnchorPath  func(string)
+	afterReinstallStaging     func([]installedArtifact)
 	afterRetirement           func() error
 }
 
@@ -298,22 +299,28 @@ type inspection struct {
 }
 
 type retiredArtifact struct {
-	path      string
-	content   []byte
-	backup    string
-	recognize func([]byte) bool
+	path       string
+	content    []byte
+	backup     string
+	backupInfo os.FileInfo
+	recognize  func([]byte) bool
 }
 
 type installedArtifact struct {
-	path      string
-	temporary string
-	backup    string
-	content   []byte
+	path          string
+	temporary     string
+	temporaryInfo os.FileInfo
+	staging       string
+	stagingInfo   os.FileInfo
+	backup        string
+	content       []byte
 }
 
 type backedUpArtifact struct {
-	target string
-	backup string
+	target  string
+	backup  string
+	info    os.FileInfo
+	content []byte
 }
 
 type defaultAgentUninstall struct {
@@ -495,12 +502,21 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 		if !rollback {
 			var cleanupErr error
 			for _, item := range staged {
-				if !sameFile(item.temporary, item.path) {
-					cleanupErr = errors.Join(cleanupErr, recoveryFailure("verify staged reinstall artifact before cleanup", integration.ErrConflict))
+				temporaryInfo, err := os.Lstat(item.temporary)
+				if errors.Is(err, os.ErrNotExist) {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%w: staged reinstall artifact cleanup uncertain; %q is absent before verification", integration.ErrRecovery, item.temporary))
+				} else if err != nil {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%w: staged reinstall artifact cleanup uncertain at %q: %v", integration.ErrRecovery, item.temporary, err))
+				} else if item.temporaryInfo == nil || !os.SameFile(temporaryInfo, item.temporaryInfo) {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%w: staged reinstall artifact retained at %q", integration.ErrRecovery, item.temporary))
+				} else if !sameFile(item.temporary, item.path) {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%w: staged reinstall artifact retained at %q", integration.ErrRecovery, item.temporary))
 				} else if err := removeSameFileDurably(item.temporary, item.path); err != nil {
-					cleanupErr = errors.Join(cleanupErr, recoveryFailure("remove staged reinstall artifact", err))
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%w: remove staged reinstall artifact at %q: %v", integration.ErrRecovery, item.temporary, err))
 				} else if _, err := os.Lstat(item.temporary); !errors.Is(err, os.ErrNotExist) {
-					cleanupErr = errors.Join(cleanupErr, recoveryFailure("verify staged reinstall artifact cleanup", errors.Join(err, integration.ErrConflict)))
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%w: staged reinstall artifact retained at %q", integration.ErrRecovery, item.temporary))
+				} else if err := removeStagingDirectory(item.staging, item.stagingInfo); err != nil {
+					cleanupErr = errors.Join(cleanupErr, err)
 				}
 			}
 			for _, anchor := range anchors {
@@ -509,10 +525,12 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 				}
 			}
 			for _, item := range retired {
-				cleanupRetiredArtifact(item)
+				cleanupErr = errors.Join(cleanupErr, cleanupRetiredArtifact(item))
 			}
-			if cleanupErr == nil && pendingEvidence.info != nil {
-				cleanupErr = clearReinstallPending(root, pendingEvidence)
+			if pendingEvidence.info != nil {
+				if err := clearReinstallPending(root, pendingEvidence); err != nil {
+					cleanupErr = errors.Join(cleanupErr, err)
+				}
 			}
 			returnErr = errors.Join(returnErr, cleanupErr)
 			return
@@ -541,27 +559,32 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 				}
 				continue
 			}
-			if err := os.Remove(anchor.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := clearReinstallAnchor(anchor); err != nil {
 				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove reinstall rollback anchor", err))
 			}
 		}
 		for _, item := range staged {
-			if err := os.Remove(item.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := cleanupStagingTemporary(item.temporary, item.temporaryInfo, item.staging, item.stagingInfo, item.content); err != nil {
 				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove staged reinstall artifact", err))
 			}
 		}
 		if recoveryErr == nil && pendingEvidence.info != nil {
 			recoveryErr = clearReinstallPending(root, pendingEvidence)
+		} else if recoveryErr != nil && pendingEvidence.info != nil {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: reinstall pending marker retained at %q", integration.ErrRecovery, filepath.Join(root, reinstallPendingName)))
 		}
 		returnErr = errors.Join(returnErr, recoveryErr)
 	}()
 
 	for _, item := range state.artifacts {
-		temporary, err := writeArtifactTemporary(ctx, item)
+		temporary, temporaryInfo, staging, stagingInfo, err := writeArtifactTemporary(ctx, item)
 		if err != nil {
 			return integration.Result{}, err
 		}
-		staged = append(staged, installedArtifact{path: item.path, temporary: temporary, content: item.content})
+		staged = append(staged, installedArtifact{path: item.path, temporary: temporary, temporaryInfo: temporaryInfo, staging: staging, stagingInfo: stagingInfo, content: item.content})
+	}
+	if service.afterReinstallStaging != nil {
+		service.afterReinstallStaging(staged)
 	}
 	pendingEvidence, err = service.writeReinstallPending(ctx, root, expectedLayout)
 	if err != nil {
@@ -723,7 +746,7 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 			}
 		} else {
 			for _, item := range retired {
-				cleanupRetiredArtifact(item)
+				returnErr = errors.Join(returnErr, cleanupRetiredArtifact(item))
 			}
 			for _, item := range created {
 				returnErr = errors.Join(returnErr, cleanupInstalledArtifact(item))
@@ -908,9 +931,9 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	}
 	rollback = false
 	for _, item := range retired {
-		cleanupRetiredArtifact(item)
+		returnErr = errors.Join(returnErr, cleanupRetiredArtifact(item))
 	}
-	defaultChange.cleanup()
+	returnErr = errors.Join(returnErr, defaultChange.cleanup())
 	state.result.State = integration.StateAbsent
 	state.result.Changed = len(backups) != 0 || len(retired) != 0 || defaultChange.replacement != nil || defaultChange.removal != nil
 	state.result.RestartRequired = state.result.Changed
@@ -952,10 +975,13 @@ func uninstallDefaultAgent(ctx context.Context, item artifact, executable string
 			return defaultAgentUninstall{}, err
 		}
 		if err := removeSameFileDurably(item.path, anchor); err != nil {
-			_ = os.Remove(anchor)
 			return defaultAgentUninstall{}, err
 		}
-		return defaultAgentUninstall{removal: &backedUpArtifact{target: item.path, backup: anchor}}, nil
+		info, err := os.Lstat(anchor)
+		if err != nil || !info.Mode().IsRegular() {
+			return defaultAgentUninstall{}, fmt.Errorf("%w: default-agent backup retained at %q", integration.ErrRecovery, anchor)
+		}
+		return defaultAgentUninstall{removal: &backedUpArtifact{target: item.path, backup: anchor, info: info, content: current}}, nil
 	}
 	installed, err := upgradeArtifact(ctx, artifact{path: item.path, content: replacement, prior: current})
 	if err != nil {
@@ -974,13 +1000,15 @@ func (change defaultAgentUninstall) rollback() error {
 	return nil
 }
 
-func (change defaultAgentUninstall) cleanup() {
+func (change defaultAgentUninstall) cleanup() error {
+	var err error
 	if change.replacement != nil {
-		cleanupInstalledArtifact(*change.replacement)
+		err = errors.Join(err, cleanupInstalledArtifact(*change.replacement))
 	}
 	if change.removal != nil {
-		_ = os.Remove(change.removal.backup)
+		err = errors.Join(err, removeTemporaryArtifact(change.removal.backup, change.removal.info, change.removal.content))
 	}
+	return err
 }
 
 func (service *Integration) inspect(ctx context.Context, options integration.Options) (inspection, error) {
@@ -1152,7 +1180,11 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 			state.result.State = integration.StateDrifted
 			return state, nil
 		}
-		item.exact = bytes.Equal(current, item.content)
+		if item.defaultAgent != nil {
+			item.exact = sameJSONValue(current, item.content)
+		} else {
+			item.exact = bytes.Equal(current, item.content)
+		}
 		if !item.exact {
 			if item.defaultState && isLegacyDefaultAgentState(current) {
 				item.upgrade = true
@@ -1160,16 +1192,6 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 				continue
 			}
 			if item.defaultAgent != nil {
-				if defaultAgentIsManaged(current) {
-					if managedReadOnlyMCP(current, service.executable) {
-						item.upgrade = true
-						item.prior = append([]byte(nil), current...)
-					} else {
-						item.exact = true
-						exact++
-					}
-					continue
-				}
 				item.upgrade = true
 				item.prior = append([]byte(nil), current...)
 				continue
@@ -1542,15 +1564,6 @@ func defaultAgentIsManaged(config []byte) bool {
 	return bytes.Equal(values["default_agent"], []byte(`"vgxness-manager"`))
 }
 
-func managedReadOnlyMCP(config []byte, executable string) bool {
-	values, _, err := readOpenCodeConfigFromBytes(config)
-	if err != nil {
-		return false
-	}
-	entry, present, err := openCodeMCP(values)
-	return err == nil && present && sameJSONValue(entry, managedReadOnlyMCPConfig(executable))
-}
-
 func withoutDefaultAgent(config []byte, state defaultAgentState, executable string) ([]byte, bool, bool, error) {
 	values, _, err := readOpenCodeConfigFromBytes(config)
 	if err != nil {
@@ -1660,18 +1673,18 @@ func readOpenCodeConfigFromBytes(data []byte) (map[string]json.RawMessage, bool,
 }
 
 func installArtifact(ctx context.Context, item artifact) (installedArtifact, error) {
-	temporaryPath, err := writeArtifactTemporary(ctx, item)
+	temporaryPath, temporaryInfo, staging, stagingInfo, err := writeArtifactTemporary(ctx, item)
 	if err != nil {
 		return installedArtifact{}, err
 	}
 	if err := os.Link(temporaryPath, item.path); err != nil {
-		_ = os.Remove(temporaryPath)
+		cleanupErr := removeTemporaryArtifact(temporaryPath, temporaryInfo, item.content)
 		if errors.Is(err, os.ErrExist) {
-			return installedArtifact{}, fmt.Errorf("%w: %s", integration.ErrConflict, item.path)
+			return installedArtifact{}, errors.Join(fmt.Errorf("%w: %s", integration.ErrConflict, item.path), cleanupErr)
 		}
-		return installedArtifact{}, fmt.Errorf("install OpenCode integration artifact: %w", err)
+		return installedArtifact{}, errors.Join(fmt.Errorf("install OpenCode integration artifact: %w", err), cleanupErr)
 	}
-	installed := installedArtifact{path: item.path, temporary: temporaryPath, content: item.content}
+	installed := installedArtifact{path: item.path, temporary: temporaryPath, temporaryInfo: temporaryInfo, staging: staging, stagingInfo: stagingInfo, content: item.content}
 	if err := syncDirectory(filepath.Dir(item.path)); err != nil {
 		return installedArtifact{}, errors.Join(fmt.Errorf("sync OpenCode integration directory: %w", err), rollbackInstalledArtifact(installed))
 	}
@@ -1694,15 +1707,15 @@ func upgradeArtifactAtStagedCheckpoint(ctx context.Context, item artifact, befor
 	return upgradeArtifactWithCheckpoints(ctx, item, beforeQuarantine, afterQuarantine, nil)
 }
 
-func upgradeArtifactWithCheckpoints(ctx context.Context, item artifact, beforeQuarantine, afterQuarantine, afterPublish func() error) (installedArtifact, error) {
-	temporary, err := writeArtifactTemporary(ctx, item)
+func upgradeArtifactWithCheckpoints(ctx context.Context, item artifact, beforeQuarantine, afterQuarantine, afterPublish func() error) (_ installedArtifact, returnErr error) {
+	temporary, temporaryInfo, staging, stagingInfo, err := writeArtifactTemporary(ctx, item)
 	if err != nil {
 		return installedArtifact{}, err
 	}
 	keepTemporary := false
 	defer func() {
 		if !keepTemporary {
-			_ = os.Remove(temporary)
+			returnErr = errors.Join(returnErr, cleanupStagingTemporary(temporary, temporaryInfo, staging, stagingInfo, item.content))
 		}
 	}()
 	directory := filepath.Dir(item.path)
@@ -1720,10 +1733,14 @@ func upgradeArtifactWithCheckpoints(ctx context.Context, item artifact, beforeQu
 	if err := os.Link(item.path, backup); err != nil {
 		return installedArtifact{}, fmt.Errorf("protect OpenCode integration predecessor: %w", integration.ErrConflict)
 	}
+	backupInfo, err := os.Lstat(backup)
+	if err != nil || !backupInfo.Mode().IsRegular() {
+		return installedArtifact{}, fmt.Errorf("%w: inspect integration predecessor retained at %q", integration.ErrRecovery, backup)
+	}
 	keepBackup := false
 	defer func() {
 		if !keepBackup {
-			_ = os.Remove(backup)
+			returnErr = errors.Join(returnErr, removeTemporaryArtifact(backup, backupInfo, item.prior))
 		}
 	}()
 	prior, readErr := readRegularFile(backup)
@@ -1736,9 +1753,14 @@ func upgradeArtifactWithCheckpoints(ctx context.Context, item artifact, beforeQu
 	markerPath, markerErr := persistRetainedPredecessor(retainedRoot, item.path, backup, item.prior)
 	if markerPath != "" {
 		keepBackup = true
+		defer func() {
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, retainedPredecessorEvidenceError(markerPath, backup))
+			}
+		}()
 	}
 	if markerErr != nil {
-		return installedArtifact{}, fmt.Errorf("%w: persist OpenCode integration predecessor: %v", integration.ErrConflict, markerErr)
+		return installedArtifact{}, retainedPredecessorPersistError(markerPath, backup, markerErr)
 	}
 	if err := syncDirectory(directory); err != nil {
 		return installedArtifact{}, fmt.Errorf("sync OpenCode integration predecessor: %w", err)
@@ -1792,7 +1814,7 @@ func upgradeArtifactWithCheckpoints(ctx context.Context, item artifact, beforeQu
 		}
 		return installedArtifact{}, errors.Join(fmt.Errorf("replace OpenCode integration artifact: %w", err), recoveryFailure("restore integration predecessor", restoreErr))
 	}
-	installed := installedArtifact{path: item.path, temporary: temporary, backup: backup, content: item.content}
+	installed := installedArtifact{path: item.path, temporary: temporary, temporaryInfo: temporaryInfo, staging: staging, stagingInfo: stagingInfo, backup: backup, content: item.content}
 	keepTemporary, keepBackup = true, true
 	if err := syncDirectory(directory); err != nil {
 		return installedArtifact{}, errors.Join(fmt.Errorf("sync OpenCode integration replacement: %w", err), rollbackInstalledArtifact(installed))
@@ -1809,19 +1831,45 @@ func upgradeArtifactWithCheckpoints(ctx context.Context, item artifact, beforeQu
 	return installed, nil
 }
 
-func writeArtifactTemporary(ctx context.Context, item artifact) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
+func retainedPredecessorEvidenceError(markerPath, backup string) error {
+	return fmt.Errorf("%w: retained predecessor marker at %q and backup at %q", integration.ErrRecovery, markerPath, backup)
+}
+
+func retainedPredecessorPersistError(markerPath, backup string, err error) error {
+	if markerPath != "" {
+		return fmt.Errorf("%w: persist OpenCode integration predecessor; marker retained at %q and backup retained at %q: %v", integration.ErrConflict, markerPath, backup, err)
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(item.path), ".vgxness-*.tmp")
+	return fmt.Errorf("%w: persist OpenCode integration predecessor: %v", integration.ErrConflict, err)
+}
+
+func writeArtifactTemporary(ctx context.Context, item artifact) (string, os.FileInfo, string, os.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return "", nil, "", nil, err
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(item.path), ".vgxness-stage-*")
 	if err != nil {
-		return "", fmt.Errorf("create OpenCode integration artifact: %w", err)
+		return "", nil, "", nil, fmt.Errorf("create OpenCode integration staging: %w", err)
+	}
+	stagingInfo, err := os.Lstat(staging)
+	if err != nil || !stagingInfo.IsDir() || stagingInfo.Mode()&os.ModeSymlink != 0 {
+		return "", nil, "", nil, fmt.Errorf("%w: staging identity unavailable at %q", integration.ErrRecovery, staging)
+	}
+	if err := os.Chmod(staging, 0o700); err != nil {
+		return "", nil, "", nil, errors.Join(err, removeStagingDirectory(staging, stagingInfo))
+	}
+	temporary, err := os.CreateTemp(staging, ".vgxness-*.tmp")
+	if err != nil {
+		return "", nil, "", nil, errors.Join(fmt.Errorf("create OpenCode integration artifact: %w", err), removeStagingDirectory(staging, stagingInfo))
 	}
 	temporaryPath := temporary.Name()
-	closeWithError := func(cause error) (string, error) {
+	temporaryInfo, err := temporary.Stat()
+	if err != nil {
 		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-		return "", cause
+		return "", nil, "", nil, fmt.Errorf("%w: inspect OpenCode integration artifact at %q; staging retained at %q", integration.ErrRecovery, temporaryPath, staging)
+	}
+	closeWithError := func(cause error) (string, os.FileInfo, string, os.FileInfo, error) {
+		_ = temporary.Close()
+		return "", nil, "", nil, errors.Join(cause, cleanupStagingTemporary(temporaryPath, temporaryInfo, staging, stagingInfo, item.content))
 	}
 	if err := temporary.Chmod(0o600); err != nil {
 		return closeWithError(fmt.Errorf("secure OpenCode integration artifact: %w", err))
@@ -1833,14 +1881,16 @@ func writeArtifactTemporary(ctx context.Context, item artifact) (string, error) 
 		return closeWithError(fmt.Errorf("sync OpenCode integration artifact: %w", err))
 	}
 	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
-		return "", fmt.Errorf("close OpenCode integration artifact: %w", err)
+		return "", nil, "", nil, errors.Join(fmt.Errorf("close OpenCode integration artifact: %w", err), cleanupStagingTemporary(temporaryPath, temporaryInfo, staging, stagingInfo, item.content))
 	}
 	if err := ctx.Err(); err != nil {
-		_ = os.Remove(temporaryPath)
-		return "", err
+		return "", nil, "", nil, errors.Join(err, cleanupStagingTemporary(temporaryPath, temporaryInfo, staging, stagingInfo, item.content))
 	}
-	return temporaryPath, nil
+	finalInfo, err := os.Lstat(temporaryPath)
+	if err != nil || !finalInfo.Mode().IsRegular() || !os.SameFile(finalInfo, temporaryInfo) {
+		return "", nil, "", nil, errors.Join(fmt.Errorf("%w: verify OpenCode integration artifact identity", integration.ErrRecovery), cleanupStagingTemporary(temporaryPath, temporaryInfo, staging, stagingInfo, item.content))
+	}
+	return temporaryPath, finalInfo, staging, stagingInfo, nil
 }
 
 func memoryPluginContent(executable string) ([]byte, error) {
@@ -2879,15 +2929,19 @@ func retireArtifact(item *retiredArtifact) error {
 	if err := os.Link(item.path, backup); err != nil {
 		return fmt.Errorf("%w: protect retired OpenCode artifact", integration.ErrConflict)
 	}
+	backupInfo, err := os.Lstat(backup)
+	if err != nil || !backupInfo.Mode().IsRegular() {
+		return fmt.Errorf("%w: inspect retired OpenCode artifact backup retained at %q", integration.ErrRecovery, backup)
+	}
 	current, err := readRegularFile(backup)
 	if err != nil || !bytes.Equal(current, item.content) || !sameFile(item.path, backup) {
-		_ = os.Remove(backup)
-		return fmt.Errorf("%w: retired OpenCode artifact changed before removal", integration.ErrConflict)
+		return errors.Join(fmt.Errorf("%w: retired OpenCode artifact changed before removal", integration.ErrConflict), removeTemporaryArtifact(backup, backupInfo, item.content))
 	}
 	if err := removeSameFileDurably(item.path, backup); err != nil {
 		return errors.Join(fmt.Errorf("retire OpenCode artifact: %w", err), recoveryFailure("restore retired OpenCode artifact", restoreWithoutOverwrite(backup, item.path)))
 	}
 	item.backup = backup
+	item.backupInfo = backupInfo
 	return nil
 }
 
@@ -2898,9 +2952,8 @@ func restoreRetiredArtifact(item retiredArtifact) error {
 	return nil
 }
 
-func cleanupRetiredArtifact(item retiredArtifact) {
-	_ = os.Remove(item.backup)
-	_ = os.Remove(filepath.Dir(item.path))
+func cleanupRetiredArtifact(item retiredArtifact) error {
+	return removeTemporaryArtifact(item.backup, item.backupInfo, item.content)
 }
 
 func recoveryFailure(action string, err error) error {
@@ -2915,40 +2968,114 @@ func rollbackInstalledArtifact(item installedArtifact) error {
 	unchanged := err == nil && bytes.Equal(current, item.content) && sameFile(item.path, item.temporary)
 	var recoveryErr error
 	if !unchanged {
-		recoveryErr = fmt.Errorf("%w: managed artifact changed before install rollback", integration.ErrRecovery)
+		recoveryErr = fmt.Errorf("%w: managed artifact changed before install rollback at %q", integration.ErrRecovery, item.path)
 	}
 	if item.backup == "" {
 		if unchanged {
 			if err := removeSameFileDurably(item.path, item.temporary); err != nil {
-				recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove installed artifact: %v", integration.ErrRecovery, err))
+				recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove installed artifact %q with temporary %q: %v", integration.ErrRecovery, item.path, item.temporary, err))
 			}
 		}
-		if err := os.Remove(item.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
-			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove install rollback anchor: %v", integration.ErrRecovery, err))
+		if err := cleanupStagingTemporary(item.temporary, item.temporaryInfo, item.staging, item.stagingInfo, item.content); err != nil {
+			recoveryErr = errors.Join(recoveryErr, err)
 		}
 		return recoveryErr
 	}
 	if unchanged {
 		if err := removeSameFileDurably(item.path, item.temporary); err != nil {
-			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove integration replacement: %v", integration.ErrRecovery, err))
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove integration replacement %q with temporary %q: %v", integration.ErrRecovery, item.path, item.temporary, err))
 		} else if err := os.Link(item.backup, item.path); err != nil {
-			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: restore integration predecessor: %v", integration.ErrRecovery, err))
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: restore integration predecessor %q from retained backup %q: %v", integration.ErrRecovery, item.path, item.backup, err))
 		} else if err := syncDirectory(filepath.Dir(item.path)); err != nil {
-			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: sync restored integration predecessor: %v", integration.ErrRecovery, err))
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: sync restored integration predecessor at %q from backup %q: %v", integration.ErrRecovery, item.path, item.backup, err))
 		}
 	}
-	if err := os.Remove(item.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
-		recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: remove integration replacement anchor: %v", integration.ErrRecovery, err))
+	if err := cleanupStagingTemporary(item.temporary, item.temporaryInfo, item.staging, item.stagingInfo, item.content); err != nil {
+		recoveryErr = errors.Join(recoveryErr, err)
 	}
 	return recoveryErr
 }
 
 func cleanupInstalledArtifact(item installedArtifact) error {
-	if err := os.Remove(item.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: remove integration replacement temporary: %v", integration.ErrRecovery, err)
+	return cleanupStagingTemporary(item.temporary, item.temporaryInfo, item.staging, item.stagingInfo, item.content)
+}
+
+func cleanupStagingTemporary(path string, info os.FileInfo, staging string, stagingInfo os.FileInfo, content []byte) error {
+	if err := removeTemporaryArtifact(path, info, content); err != nil {
+		return err
 	}
-	if err := syncDirectory(filepath.Dir(item.path)); err != nil {
-		return fmt.Errorf("%w: sync integration replacement cleanup: %v", integration.ErrRecovery, err)
+	return removeStagingDirectory(staging, stagingInfo)
+}
+
+func removeStagingDirectory(path string, expected os.FileInfo) error {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || expected == nil || !info.IsDir() || !os.SameFile(info, expected) {
+		return fmt.Errorf("%w: staging directory changed before cleanup at %q", integration.ErrRecovery, path)
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil || len(entries) != 0 {
+		return fmt.Errorf("%w: staging directory is not empty and retained at %q", integration.ErrRecovery, path)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("%w: remove staging directory %q: %v", integration.ErrRecovery, path, err)
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func removeTemporaryArtifact(path string, expected os.FileInfo, content []byte) error {
+	return removeTemporaryArtifactAtCheckpoint(path, expected, content, nil)
+}
+
+func removeTemporaryArtifactAtCheckpoint(path string, expected os.FileInfo, content []byte, checkpoint func() error) error {
+	current, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || expected == nil || !current.Mode().IsRegular() || !os.SameFile(current, expected) {
+		return fmt.Errorf("%w: temporary artifact changed before cleanup at %q", integration.ErrRecovery, path)
+	}
+	directory := filepath.Dir(path)
+	quarantineDirectory, err := os.MkdirTemp(directory, ".vgxness-remove-*")
+	if err != nil {
+		return fmt.Errorf("%w: prepare temporary artifact cleanup for %q: %v", integration.ErrRecovery, path, err)
+	}
+	quarantine := filepath.Join(quarantineDirectory, "artifact")
+	if checkpoint != nil {
+		if err := checkpoint(); err != nil {
+			_ = os.Remove(quarantineDirectory)
+			return err
+		}
+	}
+	if err := os.Rename(path, quarantine); err != nil {
+		_ = os.Remove(quarantineDirectory)
+		if errors.Is(err, os.ErrNotExist) {
+			return syncDirectory(directory)
+		}
+		return fmt.Errorf("%w: quarantine temporary artifact %q: %v", integration.ErrRecovery, path, err)
+	}
+	quarantined, err := os.Lstat(quarantine)
+	quarantinedContent, readErr := readRegularFile(quarantine)
+	if err != nil || readErr != nil || !quarantined.Mode().IsRegular() || !os.SameFile(quarantined, expected) || !bytes.Equal(quarantinedContent, content) {
+		restoreErr := restoreQuarantinedFile(quarantine, path)
+		return errors.Join(fmt.Errorf("%w: temporary artifact changed during cleanup; retained at %q or %q", integration.ErrRecovery, path, quarantine), recoveryFailure("restore changed temporary artifact at "+quarantine, restoreErr))
+	}
+	if err := os.Remove(quarantine); err != nil {
+		return fmt.Errorf("%w: remove temporary artifact quarantine %q: %v", integration.ErrRecovery, quarantine, err)
+	}
+	if err := os.Remove(quarantineDirectory); err != nil {
+		return fmt.Errorf("%w: remove temporary artifact quarantine directory %q: %v", integration.ErrRecovery, quarantineDirectory, err)
+	}
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("%w: sync temporary artifact cleanup: %v", integration.ErrRecovery, err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: verify temporary artifact cleanup at %q: %v", integration.ErrRecovery, path, err)
 	}
 	return nil
 }
@@ -2956,44 +3083,70 @@ func cleanupInstalledArtifact(item installedArtifact) error {
 func clearReinstallAnchor(anchor reinstallAnchor) error {
 	current, err := os.Lstat(anchor.path)
 	if err != nil || anchor.info == nil || !os.SameFile(current, anchor.info) {
-		return fmt.Errorf("%w: reinstall predecessor anchor changed before cleanup", integration.ErrRecovery)
+		return fmt.Errorf("%w: reinstall predecessor anchor changed before cleanup at %q", integration.ErrRecovery, anchor.path)
 	}
 	directory := filepath.Dir(anchor.path)
 	quarantineDirectory, err := os.MkdirTemp(directory, ".vgxness-reinstall-anchor-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: prepare reinstall predecessor anchor cleanup at %q: %v", integration.ErrRecovery, anchor.path, err)
 	}
 	quarantine := filepath.Join(quarantineDirectory, "anchor")
 	if err := os.Rename(anchor.path, quarantine); err != nil {
-		_ = os.Remove(quarantineDirectory)
-		return err
+		cleanupErr := os.Remove(quarantineDirectory)
+		return reinstallAnchorQuarantineError(anchor.path, quarantineDirectory, err, cleanupErr)
 	}
 	quarantined, err := os.Lstat(quarantine)
 	if err != nil || !os.SameFile(quarantined, anchor.info) {
 		return errors.Join(
-			fmt.Errorf("%w: reinstall predecessor anchor replaced during cleanup", integration.ErrRecovery),
-			recoveryFailure("restore replaced reinstall predecessor anchor", restoreQuarantinedFile(quarantine, anchor.path)),
+			fmt.Errorf("%w: reinstall predecessor anchor replaced during cleanup; retained at %q or %q", integration.ErrRecovery, anchor.path, quarantine),
+			recoveryFailure("restore replaced reinstall predecessor anchor at "+quarantine, restoreQuarantinedFile(quarantine, anchor.path)),
 		)
 	}
 	content, err := readRegularFile(quarantine)
 	if err != nil || !bytes.Equal(content, anchor.bytes) {
 		return errors.Join(
-			fmt.Errorf("%w: reinstall predecessor anchor changed during cleanup", integration.ErrRecovery),
-			recoveryFailure("restore changed reinstall predecessor anchor", restoreQuarantinedFile(quarantine, anchor.path)),
+			fmt.Errorf("%w: reinstall predecessor anchor changed during cleanup; retained at %q or %q", integration.ErrRecovery, anchor.path, quarantine),
+			recoveryFailure("restore changed reinstall predecessor anchor at "+quarantine, restoreQuarantinedFile(quarantine, anchor.path)),
 		)
 	}
 	if err := os.Remove(quarantine); err != nil {
-		return err
+		return reinstallAnchorPostCleanupError("remove quarantined anchor", anchor.path, quarantine, quarantineDirectory, err)
 	}
 	if err := os.Remove(quarantineDirectory); err != nil {
-		return err
+		return reinstallAnchorPostCleanupError("remove quarantine directory", anchor.path, "", quarantineDirectory, err)
 	}
 	if _, err := os.Lstat(anchor.path); err == nil {
-		return fmt.Errorf("%w: reinstall predecessor anchor was replaced during cleanup", integration.ErrRecovery)
+		return reinstallAnchorPostCleanupError("anchor recreated", anchor.path, "", "", nil)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return reinstallAnchorPostCleanupError("verify cleanup uncertain", anchor.path, "", "", err)
 	}
-	return syncDirectory(directory)
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("%w: sync reinstall predecessor anchor parent %q after cleanup of %q: %v", integration.ErrRecovery, directory, anchor.path, err)
+	}
+	return nil
+}
+
+func reinstallAnchorPostCleanupError(action, anchorPath, quarantine, quarantineDirectory string, err error) error {
+	message := fmt.Sprintf("reinstall predecessor anchor %s at %q", action, anchorPath)
+	if quarantine != "" {
+		message += fmt.Sprintf("; quarantine at %q may remain", quarantine)
+	}
+	if quarantineDirectory != "" {
+		message += fmt.Sprintf("; quarantine directory at %q may remain", quarantineDirectory)
+	}
+	if err != nil {
+		message += ": operation failed"
+	}
+	base := fmt.Errorf("%w: %s", integration.ErrRecovery, message)
+	return errors.Join(base, err)
+}
+
+func reinstallAnchorQuarantineError(anchorPath, quarantineDirectory string, renameErr, cleanupErr error) error {
+	base := errors.Join(fmt.Errorf("%w: quarantine reinstall predecessor anchor %q failed", integration.ErrRecovery, anchorPath), renameErr)
+	if cleanupErr == nil || errors.Is(cleanupErr, os.ErrNotExist) {
+		return base
+	}
+	return errors.Join(base, fmt.Errorf("%w: quarantine directory retained at %q", integration.ErrRecovery, quarantineDirectory), cleanupErr)
 }
 
 func vacantTemporaryPath(directory, pattern string) (string, error) {
@@ -3002,11 +3155,15 @@ func vacantTemporaryPath(directory, pattern string) (string, error) {
 		return "", err
 	}
 	path := file.Name()
-	if closeErr := file.Close(); closeErr != nil {
-		_ = os.Remove(path)
-		return "", closeErr
+	info, statErr := file.Stat()
+	if statErr != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return "", fmt.Errorf("%w: inspect vacant temporary path %q", integration.ErrRecovery, path)
 	}
-	if err := os.Remove(path); err != nil {
+	if closeErr := file.Close(); closeErr != nil {
+		return "", errors.Join(closeErr, removeTemporaryArtifact(path, info, nil))
+	}
+	if err := removeTemporaryArtifact(path, info, nil); err != nil {
 		return "", err
 	}
 	return path, nil

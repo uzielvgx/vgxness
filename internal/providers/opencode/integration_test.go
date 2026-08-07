@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,51 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
+
+func errorContainsEquivalentPath(err error, want string) bool {
+	if err == nil {
+		return false
+	}
+	for _, candidate := range append(strings.Split(err.Error(), `"`), strings.Fields(err.Error())...) {
+		candidate = strings.Trim(candidate, " ,;()")
+		candidate = strings.TrimSuffix(candidate, ":")
+		if canonicalTestPath(candidate) == canonicalTestPath(want) {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalTestPath(path string) string {
+	path, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return ""
+	}
+	suffix := []string{}
+	for {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = filepath.Join(append([]string{resolved}, suffix...)...)
+			break
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			break
+		}
+		suffix = append([]string{filepath.Base(path)}, suffix...)
+		path = parent
+	}
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return filepath.Clean(path)
+}
+
+func TestErrorContainsEquivalentPathRejectsBasenameAndSibling(t *testing.T) {
+	root := t.TempDir()
+	want := filepath.Join(root, "one", "artifact")
+	err := fmt.Errorf("open %s: file exists", filepath.Join(root, "two", "artifact"))
+	testutil.Require(t, !errorContainsEquivalentPath(err, want), "matched non-equivalent path: %v", err)
+}
 
 func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 	home := t.TempDir()
@@ -757,6 +803,262 @@ func TestIntegrationMigratesLegacyManagedConfigStateToV1(t *testing.T) {
 	data, err = os.ReadFile(statePath)
 	testutil.NoError(t, err)
 	testutil.Require(t, bytes.Contains(data, []byte(`"schema_version":1`)), "legacy state was not projected to v1: %s", data)
+}
+
+func TestIntegrationMigratesPluginEraDefaultAgentToPersistentMCP(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	statePath := filepath.Join(configDirectory, "vgxness", defaultAgentStateName)
+	pluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+	plugin, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	legacyState, err := json.Marshal(defaultAgentState{
+		ConfigExisted:       true,
+		DefaultAgentExisted: true,
+		DefaultAgent:        json.RawMessage(`"build"`),
+	})
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(pluginPath), 0o700))
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"vgxness-manager"}`), 0o600))
+	testutil.NoError(t, os.WriteFile(statePath, legacyState, 0o600))
+	testutil.NoError(t, os.WriteFile(pluginPath, plugin, 0o600))
+
+	installed, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	config, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	state, err := os.ReadFile(statePath)
+	testutil.NoError(t, err)
+	wantMCP, err := managedMCPConfig(service.executable)
+	testutil.NoError(t, err)
+	var configValues map[string]json.RawMessage
+	testutil.NoError(t, json.Unmarshal(config, &configValues))
+	mcp, mcpPresent, err := openCodeMCP(configValues)
+	testutil.NoError(t, err)
+	permission, permissionPresent, err := openCodePermission(configValues)
+	testutil.NoError(t, err)
+	var migratedState defaultAgentState
+	testutil.NoError(t, json.Unmarshal(state, &migratedState))
+	_, pluginErr := os.Stat(pluginPath)
+	testutil.Require(t,
+		installed.State == integration.StateInstalled && installed.Changed &&
+			mcpPresent && sameJSONValue(mcp, wantMCP) && permissionPresent && sameJSONValue(permission, []byte(`"deny"`)) &&
+			migratedState.SchemaVersion == 1 && migratedState.MCPOwned && migratedState.PermissionOwned &&
+			os.IsNotExist(pluginErr),
+		"plugin-era migration failed: result=%+v config=%s state=%s", installed, config, state,
+	)
+	status, statusErr := service.Status(context.Background(), options)
+	second, installErr := service.Install(context.Background(), options)
+	testutil.Require(t, statusErr == nil && installErr == nil && status.State == integration.StateInstalled && second.State == integration.StateInstalled && !second.Changed, "migration was not idempotent: status=%+v statusErr=%v second=%+v installErr=%v", status, statusErr, second, installErr)
+}
+
+func TestIntegrationMigratesLegacyDefaultAgentWithMissingOwnedPermission(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	statePath := filepath.Join(configDirectory, "vgxness", defaultAgentStateName)
+	legacyState, err := json.Marshal(defaultAgentState{
+		ConfigExisted:       true,
+		DefaultAgentExisted: true,
+		DefaultAgent:        json.RawMessage(`"build"`),
+	})
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+	testutil.NoError(t, os.WriteFile(configPath, []byte(`{"default_agent":"vgxness-manager","mcp":{"vgxness":`+string(managedMCPForTest(t, service))+`}}`), 0o600))
+	testutil.NoError(t, os.WriteFile(statePath, legacyState, 0o600))
+
+	installed, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	config, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	var configValues map[string]json.RawMessage
+	testutil.NoError(t, json.Unmarshal(config, &configValues))
+	permission, permissionPresent, err := openCodePermission(configValues)
+	testutil.NoError(t, err)
+	status, statusErr := service.Status(context.Background(), options)
+	second, installErr := service.Install(context.Background(), options)
+	testutil.Require(t,
+		statusErr == nil && installErr == nil && installed.State == integration.StateInstalled && installed.Changed &&
+			permissionPresent && sameJSONValue(permission, []byte(`"deny"`)) &&
+			status.State == integration.StateInstalled && second.State == integration.StateInstalled && !second.Changed,
+		"partial legacy config migration was not idempotent: installed=%+v status=%+v statusErr=%v second=%+v installErr=%v config=%s", installed, status, statusErr, second, installErr, config,
+	)
+}
+
+func TestReinstallRollbackPreservesReplacedStagedTemporary(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	foreign := []byte("concurrent staged temporary replacement")
+	temporary := ""
+	service.afterReinstallStaging = func(staged []installedArtifact) {
+		testutil.Require(t, len(staged) != 0, "no staged artifacts")
+		temporary = staged[0].temporary
+		testutil.NoError(t, os.Remove(temporary))
+		testutil.NoError(t, os.WriteFile(temporary, foreign, 0o600))
+		testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, reinstallPendingName), []byte("block pending marker"), 0o600))
+	}
+	_, err = service.Reinstall(context.Background(), options)
+	current, readErr := os.ReadFile(temporary)
+	marker := filepath.Join(configDirectory, reinstallPendingName)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, marker) && readErr == nil && bytes.Equal(current, foreign), "Reinstall() err=%v temporary=%q read=%v", err, current, readErr)
+}
+
+func TestRemoveTemporaryArtifactPreservesReplacementBeforeQuarantine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".vgxness-temporary.tmp")
+	testutil.NoError(t, os.WriteFile(path, []byte("managed temporary"), 0o600))
+	expected, err := os.Lstat(path)
+	testutil.NoError(t, err)
+	foreign := []byte("concurrent temporary replacement")
+	err = removeTemporaryArtifactAtCheckpoint(path, expected, []byte("managed temporary"), func() error {
+		testutil.NoError(t, os.Remove(path))
+		return os.WriteFile(path, foreign, 0o600)
+	})
+	current, readErr := os.ReadFile(path)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, path) && readErr == nil && bytes.Equal(current, foreign), "cleanup err=%v current=%q read=%v", err, current, readErr)
+}
+
+func TestRemoveTemporaryArtifactPreservesInPlaceMutationBeforeQuarantine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".vgxness-temporary.tmp")
+	managed := []byte("managed temporary")
+	testutil.NoError(t, os.WriteFile(path, managed, 0o600))
+	expected, err := os.Lstat(path)
+	testutil.NoError(t, err)
+	foreign := []byte("foreign bytes written in place")
+	err = removeTemporaryArtifactAtCheckpoint(path, expected, managed, func() error {
+		return os.WriteFile(path, foreign, 0o600)
+	})
+	current, readErr := os.ReadFile(path)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, path) && readErr == nil && bytes.Equal(current, foreign), "cleanup err=%v current=%q read=%v", err, current, readErr)
+}
+
+func TestArtifactTemporaryUsesPrivateStagingAndRetainsForeignEntries(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("managed staging content")
+	temporary, temporaryInfo, staging, stagingInfo, err := writeArtifactTemporary(context.Background(), artifact{path: filepath.Join(root, "target"), content: content})
+	testutil.NoError(t, err)
+	stageInfo, err := os.Stat(staging)
+	testutil.NoError(t, err)
+	fileInfo, err := os.Stat(temporary)
+	testutil.NoError(t, err)
+	if runtime.GOOS != "windows" {
+		testutil.Require(t, stageInfo.Mode().Perm() == 0o700 && fileInfo.Mode().Perm() == 0o600, "staging modes=%o/%o", stageInfo.Mode().Perm(), fileInfo.Mode().Perm())
+	}
+	item := installedArtifact{temporary: temporary, temporaryInfo: temporaryInfo, staging: staging, stagingInfo: stagingInfo, content: content}
+	testutil.NoError(t, cleanupInstalledArtifact(item))
+	_, stageErr := os.Stat(staging)
+	testutil.Require(t, os.IsNotExist(stageErr), "staging leaked: %v", stageErr)
+
+	temporary, temporaryInfo, staging, stagingInfo, err = writeArtifactTemporary(context.Background(), artifact{path: filepath.Join(root, "target-two"), content: content})
+	testutil.NoError(t, err)
+	foreign := filepath.Join(staging, "foreign")
+	testutil.NoError(t, os.WriteFile(foreign, []byte("foreign"), 0o600))
+	err = cleanupInstalledArtifact(installedArtifact{temporary: temporary, temporaryInfo: temporaryInfo, staging: staging, stagingInfo: stagingInfo, content: content})
+	_, foreignErr := os.Stat(foreign)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, staging) && foreignErr == nil, "cleanup err=%v foreign=%v", err, foreignErr)
+}
+
+func TestCleanupRetiredArtifactPreservesChangedBackup(t *testing.T) {
+	directory := t.TempDir()
+	backup := filepath.Join(directory, ".vgxness-retired.tmp")
+	managed := []byte("managed retired artifact")
+	testutil.NoError(t, os.WriteFile(backup, managed, 0o600))
+	info, err := os.Lstat(backup)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(backup, []byte("changed retired artifact"), 0o600))
+	err = cleanupRetiredArtifact(retiredArtifact{backup: backup, backupInfo: info, content: managed})
+	current, readErr := os.ReadFile(backup)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, backup) && readErr == nil && bytes.Equal(current, []byte("changed retired artifact")), "cleanup err=%v current=%q read=%v", err, current, readErr)
+}
+
+func TestRetainedPredecessorPersistErrorNamesPublishedMarkerAndBackup(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "marker.json")
+	backup := filepath.Join(t.TempDir(), "backup.tmp")
+	err := retainedPredecessorPersistError(marker, backup, errors.New("persist failed after publication"))
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && errorContainsEquivalentPath(err, marker) && errorContainsEquivalentPath(err, backup), "error=%v", err)
+}
+
+func TestRetainedPredecessorEvidenceErrorNamesMarkerAndBackup(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "marker.json")
+	backup := filepath.Join(t.TempDir(), "backup.tmp")
+	err := retainedPredecessorEvidenceError(marker, backup)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, marker) && errorContainsEquivalentPath(err, backup), "error=%v", err)
+}
+
+func TestRollbackInstalledArtifactDoesNotClaimRemovedTemporaryIsRetained(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target")
+	temporary := filepath.Join(directory, "temporary")
+	managed := []byte("managed")
+	testutil.NoError(t, os.WriteFile(target, []byte("changed"), 0o600))
+	testutil.NoError(t, os.WriteFile(temporary, managed, 0o600))
+	info, err := os.Lstat(temporary)
+	testutil.NoError(t, err)
+	err = rollbackInstalledArtifact(installedArtifact{path: target, temporary: temporary, temporaryInfo: info, content: managed})
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, target) && !strings.Contains(err.Error(), "temporary retained at"), "error=%v", err)
+}
+
+func TestDefaultAgentUninstallCleanupPreservesChangedBackup(t *testing.T) {
+	backup := filepath.Join(t.TempDir(), ".vgxness-default-agent.tmp")
+	managed := []byte("managed default-agent backup")
+	testutil.NoError(t, os.WriteFile(backup, managed, 0o600))
+	info, err := os.Lstat(backup)
+	testutil.NoError(t, err)
+	changed := []byte("changed default-agent backup")
+	testutil.NoError(t, os.WriteFile(backup, changed, 0o600))
+	err = (defaultAgentUninstall{removal: &backedUpArtifact{backup: backup, info: info, content: managed}}).cleanup()
+	current, readErr := os.ReadFile(backup)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, backup) && readErr == nil && bytes.Equal(current, changed), "cleanup err=%v current=%q read=%v", err, current, readErr)
+}
+
+func TestClearReinstallAnchorNamesChangedAnchorPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "anchor")
+	testutil.NoError(t, os.WriteFile(path, []byte("expected"), 0o600))
+	info, err := os.Lstat(path)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(path, []byte("changed"), 0o600))
+	err = clearReinstallAnchor(reinstallAnchor{path: path, bytes: []byte("expected"), info: info})
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, path), "error=%v", err)
+}
+
+func TestReinstallAnchorQuarantineErrorNamesRetainedDirectory(t *testing.T) {
+	anchor := filepath.Join(t.TempDir(), "anchor")
+	quarantine := filepath.Join(t.TempDir(), "quarantine")
+	err := reinstallAnchorQuarantineError(anchor, quarantine, errors.New("rename failed"), errors.New("remove failed"))
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, anchor) && errorContainsEquivalentPath(err, quarantine), "error=%v", err)
+}
+
+func TestReinstallAnchorPostCleanupErrorsNameAffectedPaths(t *testing.T) {
+	anchor := filepath.Join(t.TempDir(), "anchor")
+	quarantine := filepath.Join(t.TempDir(), "quarantine", "anchor")
+	directory := filepath.Dir(quarantine)
+	for _, err := range []error{
+		reinstallAnchorPostCleanupError("remove quarantined anchor", anchor, quarantine, directory, errors.New("remove failed")),
+		reinstallAnchorPostCleanupError("remove quarantine directory", anchor, "", directory, errors.New("remove failed")),
+		reinstallAnchorPostCleanupError("anchor recreated", anchor, "", "", nil),
+		reinstallAnchorPostCleanupError("verify cleanup uncertain", anchor, "", "", errors.New("lstat failed")),
+		fmt.Errorf("%w: sync reinstall predecessor anchor parent %q after cleanup of %q: %v", integration.ErrRecovery, directory, anchor, errors.New("sync failed")),
+	} {
+		testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, anchor), "error=%v", err)
+	}
+}
+
+func TestReinstallAnchorDiagnosticErrorsPreserveCauses(t *testing.T) {
+	anchor := filepath.Join(t.TempDir(), "anchor")
+	directory := filepath.Join(t.TempDir(), "quarantine")
+	renameErr := errors.New("rename")
+	cleanupErr := errors.New("cleanup")
+	postErr := errors.New("post")
+	quarantine := reinstallAnchorQuarantineError(anchor, directory, renameErr, cleanupErr)
+	post := reinstallAnchorPostCleanupError("verify cleanup uncertain", anchor, "", "", postErr)
+	testutil.Require(t, errors.Is(quarantine, integration.ErrRecovery) && errors.Is(quarantine, renameErr) && errors.Is(quarantine, cleanupErr) && errorContainsEquivalentPath(quarantine, anchor) && errorContainsEquivalentPath(quarantine, directory), "quarantine=%v", quarantine)
+	testutil.Require(t, errors.Is(post, integration.ErrRecovery) && errors.Is(post, postErr) && errorContainsEquivalentPath(post, anchor), "post=%v", post)
 }
 
 func TestIntegrationRefusesForeignModifiedAndNewerManagedSkill(t *testing.T) {
