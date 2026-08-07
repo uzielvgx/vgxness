@@ -51,14 +51,14 @@ func Render(version string) (Package, error) {
 	plugin, err := json.Marshal(pluginManifest{
 		Name:        "vgxness",
 		Version:     strings.TrimPrefix(version, "v"),
-		Description: "Read-only project memory for VGXNESS.",
+		Description: "VGXNESS project memory and SDD lifecycle MCP.",
 		MCPServers:  "./.mcp.json",
 	})
 	if err != nil {
 		return Package{}, fmt.Errorf("marshal plugin manifest: %w", err)
 	}
 	mcp, err := json.Marshal(map[string]mcpServer{
-		"vgxness": {Command: "vgxness", Args: []string{"mcp"}},
+		"vgxness": {Command: "vgxness", Args: []string{"mcp", "--full"}},
 	})
 	if err != nil {
 		return Package{}, fmt.Errorf("marshal MCP configuration: %w", err)
@@ -108,7 +108,7 @@ func validateContents(artifacts []Artifact) error {
 	if err := decodeStrictJSON(artifacts[0].Bytes, &plugin); err != nil {
 		return fmt.Errorf("decode plugin manifest: %w", err)
 	}
-	if plugin.Name != "vgxness" || plugin.Description != "Read-only project memory for VGXNESS." || plugin.MCPServers != "./.mcp.json" || !releaseVersion.MatchString("v"+plugin.Version) {
+	if plugin.Name != "vgxness" || plugin.Description != "VGXNESS project memory and SDD lifecycle MCP." || plugin.MCPServers != "./.mcp.json" || !releaseVersion.MatchString("v"+plugin.Version) {
 		return errors.New("invalid plugin manifest")
 	}
 	var servers map[string]mcpServer
@@ -116,7 +116,7 @@ func validateContents(artifacts []Artifact) error {
 		return fmt.Errorf("decode MCP configuration: %w", err)
 	}
 	server, ok := servers["vgxness"]
-	if len(servers) != 1 || !ok || server.Command != "vgxness" || len(server.Args) != 1 || server.Args[0] != "mcp" {
+	if len(servers) != 1 || !ok || server.Command != "vgxness" || len(server.Args) != 2 || server.Args[0] != "mcp" || server.Args[1] != "--full" {
 		return errors.New("invalid MCP configuration")
 	}
 	return nil
