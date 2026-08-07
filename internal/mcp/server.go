@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/vgxness/vgxness/internal/app/runtime"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 var (
@@ -19,9 +21,12 @@ var (
 	ErrUnavailable  = errors.New("memory service unavailable")
 	ErrNotFound     = errors.New("memory record not found")
 	ErrConflict     = errors.New("memory record conflict")
+	ErrStale        = errors.New("SDD state version changed")
+	ErrSDDCancelled = errors.New("SDD change is cancelled")
 )
 
 const maxLimit = 50
+const maxJSONInteger = 9_007_199_254_740_991
 
 // Server is an MCP server bound to one canonical workspace.
 type Server struct {
@@ -29,6 +34,15 @@ type Server struct {
 	reader  memoryReader
 	project string
 	full    bool
+	sdd     sddReader
+}
+
+type sddReader interface {
+	CreateChange(context.Context, sdd.CreateChangeRequest) (sdd.Change, error)
+	ListChanges(context.Context, sdd.ListChangesRequest) ([]sdd.Change, error)
+	GetChange(context.Context, sdd.GetChangeRequest) (sdd.Change, error)
+	UpdateInteractionMode(context.Context, sdd.UpdateInteractionModeRequest) (sdd.Change, error)
+	TransitionChange(context.Context, sdd.TransitionChangeRequest) (sdd.Change, error)
 }
 
 type memoryReader interface {
@@ -43,6 +57,45 @@ type memoryReader interface {
 type runtimeReader struct {
 	runtime runtime.Memory
 	opts    config.Options
+}
+
+type runtimeSDDReader struct {
+	runtime runtime.SDD
+	opts    config.Options
+}
+
+func (reader runtimeSDDReader) CreateChange(ctx context.Context, request sdd.CreateChangeRequest) (sdd.Change, error) {
+	return reader.runtime.CreateChange(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) ListChanges(ctx context.Context, request sdd.ListChangesRequest) ([]sdd.Change, error) {
+	return reader.runtime.ListChanges(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) GetChange(ctx context.Context, request sdd.GetChangeRequest) (sdd.Change, error) {
+	return reader.runtime.GetChange(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) UpdateInteractionMode(ctx context.Context, request sdd.UpdateInteractionModeRequest) (sdd.Change, error) {
+	return reader.runtime.UpdateInteractionMode(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) TransitionChange(ctx context.Context, request sdd.TransitionChangeRequest) (sdd.Change, error) {
+	return reader.runtime.TransitionChange(ctx, reader.opts, request)
+}
+
+type unavailableSDDReader struct{}
+
+func (unavailableSDDReader) CreateChange(context.Context, sdd.CreateChangeRequest) (sdd.Change, error) {
+	return sdd.Change{}, ErrUnavailable
+}
+func (unavailableSDDReader) ListChanges(context.Context, sdd.ListChangesRequest) ([]sdd.Change, error) {
+	return nil, ErrUnavailable
+}
+func (unavailableSDDReader) GetChange(context.Context, sdd.GetChangeRequest) (sdd.Change, error) {
+	return sdd.Change{}, ErrUnavailable
+}
+func (unavailableSDDReader) UpdateInteractionMode(context.Context, sdd.UpdateInteractionModeRequest) (sdd.Change, error) {
+	return sdd.Change{}, ErrUnavailable
+}
+func (unavailableSDDReader) TransitionChange(context.Context, sdd.TransitionChangeRequest) (sdd.Change, error) {
+	return sdd.Change{}, ErrUnavailable
 }
 
 func (reader runtimeReader) ResolveProject(ctx context.Context, workspace string) (string, error) {
@@ -78,7 +131,7 @@ func New(ctx context.Context, workspace string, opts config.Options) (*Server, e
 // NewFull creates an explicitly write-capable server. Callers must opt in; no
 // caller identity is inferred from the MCP transport.
 func NewFull(ctx context.Context, workspace string, opts config.Options) (*Server, error) {
-	return newFullWithReader(ctx, workspace, runtimeReader{runtime: runtime.NewMemory("mcp", false), opts: opts})
+	return newFullWithReaders(ctx, workspace, runtimeReader{runtime: runtime.NewMemory("mcp", false), opts: opts}, runtimeSDDReader{runtime: runtime.NewSDD(), opts: opts})
 }
 
 // RunStdio creates a server bound to workspace and serves it over process standard I/O.
@@ -106,7 +159,16 @@ func newWithReader(ctx context.Context, workspace string, reader memoryReader) (
 }
 
 func newFullWithReader(ctx context.Context, workspace string, reader memoryReader) (*Server, error) {
-	return newServerWithReader(ctx, workspace, reader, true)
+	return newFullWithReaders(ctx, workspace, reader, unavailableSDDReader{})
+}
+
+func newFullWithReaders(ctx context.Context, workspace string, reader memoryReader, sddReader sddReader) (*Server, error) {
+	server, err := newServerWithReader(ctx, workspace, reader, true)
+	if err != nil {
+		return nil, err
+	}
+	server.sdd = sddReader
+	return server, nil
 }
 
 func newServerWithReader(ctx context.Context, workspace string, reader memoryReader, full bool) (*Server, error) {
@@ -133,6 +195,11 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations}, server.callGet)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_save", Description: "Write a durable project memory entry. This tool stores data.", Annotations: writeAnnotations}, server.callSave)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_forget", Description: "Archive one exact project memory entry. This tool changes stored data and removes it from normal search.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}}, server.callForget)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_create", Description: "Create one structured SDD change. This stores state only and does not execute a workflow.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}}, server.callSDDCreate)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_list", Description: "List structured SDD changes for the trusted workspace project.", Annotations: annotations}, server.callSDDList)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_get", Description: "Get one structured SDD change by exact ID.", Annotations: annotations}, server.callSDDGet)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_set_interaction_mode", Description: "Change an SDD change interaction mode using optimistic state versioning. This tool changes stored data.", Annotations: writeAnnotations}, server.callSDDSetInteractionMode)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_transition", Description: "Record a legal SDD phase transition or cancellation using optimistic state versioning. This tool changes stored data.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}}, server.callSDDTransition)
 	}
 	return server, nil
 }
@@ -147,7 +214,7 @@ func (server *Server) Run(ctx context.Context, transport sdk.Transport) error {
 
 func (server *Server) toolNames() []string {
 	if server.full {
-		return []string{"memory_recent", "memory_search", "memory_get", "memory_save", "memory_forget"}
+		return []string{"memory_recent", "memory_search", "memory_get", "memory_save", "memory_forget", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition"}
 	}
 	return []string{"memory_recent", "memory_search"}
 }
@@ -170,6 +237,32 @@ type saveInput struct {
 	Content string `json:"content" jsonschema:"required"`
 	Type    string `json:"type,omitempty"`
 	Topic   string `json:"topic,omitempty"`
+}
+
+type sddCreateInput struct {
+	IdempotencyKey  string              `json:"idempotencyKey" jsonschema:"required"`
+	Title           string              `json:"title" jsonschema:"required"`
+	Backend         sdd.Backend         `json:"backend" jsonschema:"required"`
+	InteractionMode sdd.InteractionMode `json:"interactionMode" jsonschema:"required"`
+	Plan            sdd.Plan            `json:"plan" jsonschema:"required"`
+}
+type sddListInput struct {
+	Status sdd.ChangeStatus `json:"status,omitempty"`
+	Limit  float64          `json:"limit,omitempty"`
+}
+type sddGetInput struct {
+	ID string `json:"id" jsonschema:"required"`
+}
+type sddModeInput struct {
+	ChangeID             string              `json:"changeId" jsonschema:"required"`
+	InteractionMode      sdd.InteractionMode `json:"interactionMode" jsonschema:"required"`
+	ExpectedStateVersion float64             `json:"expectedStateVersion" jsonschema:"required"`
+}
+type sddTransitionInput struct {
+	ChangeID             string    `json:"changeId" jsonschema:"required"`
+	TargetPhase          sdd.Phase `json:"targetPhase,omitempty"`
+	Cancel               bool      `json:"cancel,omitempty"`
+	ExpectedStateVersion float64   `json:"expectedStateVersion" jsonschema:"required"`
 }
 
 type result struct {
@@ -219,6 +312,117 @@ func (server *Server) forget(ctx context.Context, input getInput) (entry, error)
 	}
 	item, err := server.reader.Forget(ctx, memory.Forget{ID: input.ID, Project: server.project, Scope: memory.ScopeProject})
 	return shapeEntry(ctx, item, err, true)
+}
+
+func (server *Server) sddCreate(ctx context.Context, input sddCreateInput) (sdd.Change, error) {
+	request := sdd.CreateChangeRequest{Project: server.project, IdempotencyKey: input.IdempotencyKey, Title: input.Title, Backend: input.Backend, InteractionMode: input.InteractionMode, Plan: input.Plan}
+	if request.Validate() != nil {
+		return sdd.Change{}, ErrInvalidInput
+	}
+	return server.sddCall(ctx, func() (sdd.Change, error) {
+		return server.sdd.CreateChange(ctx, request)
+	})
+}
+func (server *Server) sddList(ctx context.Context, input sddListInput) ([]sdd.Change, error) {
+	limit, err := sddLimit(input.Limit)
+	if err != nil {
+		return nil, err
+	}
+	if err := (sdd.ListChangesRequest{Project: server.project, Status: input.Status, Limit: limit}).Validate(); err != nil {
+		return nil, ErrInvalidInput
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if server.sdd == nil {
+		return nil, ErrUnavailable
+	}
+	items, err := server.sdd.ListChanges(ctx, sdd.ListChangesRequest{Project: server.project, Status: input.Status, Limit: limit})
+	return items, shapeSDDError(ctx, err)
+}
+func (server *Server) sddGet(ctx context.Context, input sddGetInput) (sdd.Change, error) {
+	request := sdd.GetChangeRequest{Project: server.project, ID: input.ID}
+	if request.Validate() != nil {
+		return sdd.Change{}, ErrInvalidInput
+	}
+	return server.sddCall(ctx, func() (sdd.Change, error) {
+		return server.sdd.GetChange(ctx, request)
+	})
+}
+func (server *Server) sddSetInteractionMode(ctx context.Context, input sddModeInput) (sdd.Change, error) {
+	version, err := sddVersion(input.ExpectedStateVersion)
+	if err != nil {
+		return sdd.Change{}, err
+	}
+	request := sdd.UpdateInteractionModeRequest{Project: server.project, ChangeID: input.ChangeID, InteractionMode: input.InteractionMode, ExpectedStateVersion: version}
+	if request.Validate() != nil {
+		return sdd.Change{}, ErrInvalidInput
+	}
+	return server.sddCall(ctx, func() (sdd.Change, error) {
+		return server.sdd.UpdateInteractionMode(ctx, request)
+	})
+}
+func (server *Server) sddTransition(ctx context.Context, input sddTransitionInput) (sdd.Change, error) {
+	version, err := sddVersion(input.ExpectedStateVersion)
+	if err != nil {
+		return sdd.Change{}, err
+	}
+	request := sdd.TransitionChangeRequest{Project: server.project, ChangeID: input.ChangeID, TargetPhase: input.TargetPhase, Cancel: input.Cancel, ExpectedStateVersion: version}
+	if request.Validate() != nil {
+		return sdd.Change{}, ErrInvalidInput
+	}
+	return server.sddCall(ctx, func() (sdd.Change, error) {
+		return server.sdd.TransitionChange(ctx, request)
+	})
+}
+func (server *Server) sddCall(ctx context.Context, call func() (sdd.Change, error)) (sdd.Change, error) {
+	if err := ctx.Err(); err != nil {
+		return sdd.Change{}, err
+	}
+	if server.sdd == nil {
+		return sdd.Change{}, ErrUnavailable
+	}
+	item, err := call()
+	return item, shapeSDDError(ctx, err)
+}
+func sddLimit(value float64) (int, error) {
+	if value == 0 {
+		return 20, nil
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < 1 || value > 100 {
+		return 0, ErrInvalidInput
+	}
+	return int(math.Trunc(value)), nil
+}
+func sddVersion(value float64) (int64, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < 1 || value > maxJSONInteger {
+		return 0, ErrInvalidInput
+	}
+	return int64(math.Trunc(value)), nil
+}
+func shapeSDDError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, sdd.ErrInvalid) || errors.Is(err, sdd.ErrIllegalTransition) {
+		return ErrInvalidInput
+	}
+	if errors.Is(err, sdd.ErrNotFound) {
+		return ErrNotFound
+	}
+	if errors.Is(err, sdd.ErrStaleState) {
+		return ErrStale
+	}
+	if errors.Is(err, sdd.ErrConflict) || errors.Is(err, sdd.ErrInputsChanged) || errors.Is(err, sdd.ErrImmutable) {
+		return ErrConflict
+	}
+	if errors.Is(err, sdd.ErrChangeCancelled) {
+		return ErrSDDCancelled
+	}
+	return ErrUnavailable
 }
 
 func (server *Server) recent(ctx context.Context, input recentInput) (result, error) {
@@ -309,6 +513,27 @@ func (server *Server) callForget(ctx context.Context, _ *sdk.CallToolRequest, in
 	return entryResponse(err, output)
 }
 
+func (server *Server) callSDDCreate(ctx context.Context, _ *sdk.CallToolRequest, input sddCreateInput) (*sdk.CallToolResult, sdd.Change, error) {
+	output, err := server.sddCreate(ctx, input)
+	return sddResponse(err, output)
+}
+func (server *Server) callSDDList(ctx context.Context, _ *sdk.CallToolRequest, input sddListInput) (*sdk.CallToolResult, []sdd.Change, error) {
+	output, err := server.sddList(ctx, input)
+	return sddListResponse(err, output)
+}
+func (server *Server) callSDDGet(ctx context.Context, _ *sdk.CallToolRequest, input sddGetInput) (*sdk.CallToolResult, sdd.Change, error) {
+	output, err := server.sddGet(ctx, input)
+	return sddResponse(err, output)
+}
+func (server *Server) callSDDSetInteractionMode(ctx context.Context, _ *sdk.CallToolRequest, input sddModeInput) (*sdk.CallToolResult, sdd.Change, error) {
+	output, err := server.sddSetInteractionMode(ctx, input)
+	return sddResponse(err, output)
+}
+func (server *Server) callSDDTransition(ctx context.Context, _ *sdk.CallToolRequest, input sddTransitionInput) (*sdk.CallToolResult, sdd.Change, error) {
+	output, err := server.sddTransition(ctx, input)
+	return sddResponse(err, output)
+}
+
 func toolResponse(err error, output result) (*sdk.CallToolResult, result, error) {
 	if err == nil {
 		return toolText(fmt.Sprintf("Returned %d memory entries.", len(output.Entries)), false), output, nil
@@ -339,6 +564,40 @@ func entryResponse(err error, output entry) (*sdk.CallToolResult, entry, error) 
 		return toolText("memory record conflict", true), entry{}, nil
 	}
 	return toolText("memory service unavailable", true), entry{}, nil
+}
+
+func sddResponse(err error, output sdd.Change) (*sdk.CallToolResult, sdd.Change, error) {
+	if err == nil {
+		return toolText("SDD change returned.", false), output, nil
+	}
+	return sddErrorResponse(err), sdd.Change{}, nil
+}
+func sddListResponse(err error, output []sdd.Change) (*sdk.CallToolResult, []sdd.Change, error) {
+	if err == nil {
+		return toolText(fmt.Sprintf("Returned %d SDD changes.", len(output)), false), output, nil
+	}
+	return sddErrorResponse(err), nil, nil
+}
+func sddErrorResponse(err error) *sdk.CallToolResult {
+	if errors.Is(err, ErrSDDCancelled) {
+		return toolText("SDD change is cancelled", true)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return toolText("request cancelled", true)
+	}
+	if errors.Is(err, ErrInvalidInput) {
+		return toolText("invalid tool input", true)
+	}
+	if errors.Is(err, ErrNotFound) {
+		return toolText("SDD record not found", true)
+	}
+	if errors.Is(err, ErrStale) {
+		return toolText("SDD state version changed", true)
+	}
+	if errors.Is(err, ErrConflict) {
+		return toolText("SDD state changed", true)
+	}
+	return toolText("SDD service unavailable", true)
 }
 
 func toolText(text string, isError bool) *sdk.CallToolResult {
