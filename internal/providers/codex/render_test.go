@@ -4,32 +4,127 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
-func TestRenderProducesOfficialMCPOnlyPackage(t *testing.T) {
+func TestRenderProducesNativeCodexProjection(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := artifactPaths(pkg.Artifacts), []string{".codex-plugin/plugin.json", ".mcp.json"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("paths = %v, want %v", got, want)
+	wantPaths := []string{
+		"AGENTS.md",
+		"agents/explore.toml",
+		"agents/general.toml",
+		"agents/readability.toml",
+		"agents/refuter.toml",
+		"agents/reliability.toml",
+		"agents/resilience.toml",
+		"agents/risk.toml",
+		"agents/sdd-apply.toml",
+		"agents/sdd-design.toml",
+		"agents/sdd-proposal.toml",
+		"agents/sdd-research.toml",
+		"agents/sdd-spec.toml",
+		"agents/sdd-tasks.toml",
+		"agents/verifier.toml",
 	}
-
-	var plugin map[string]any
-	mustUnmarshal(t, artifact(t, pkg, ".codex-plugin/plugin.json").Bytes, &plugin)
-	if got, want := plugin, map[string]any{
-		"name": "vgxness", "version": "1.2.3", "description": "VGXNESS project memory and SDD lifecycle MCP.", "mcpServers": "./.mcp.json",
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("plugin = %#v, want %#v", got, want)
+	if got := artifactPaths(pkg.Artifacts); !reflect.DeepEqual(got, wantPaths) {
+		t.Fatalf("paths = %v, want %v", got, wantPaths)
 	}
+	if strings.Contains(string(artifact(t, pkg, "AGENTS.md").Bytes), "OpenCode") {
+		t.Fatal("manager instructions name an unavailable OpenCode tool")
+	}
+	for _, item := range pkg.Artifacts {
+		if strings.Contains(item.Path, ".codex-plugin") || item.Path == ".mcp.json" {
+			t.Fatalf("unexpected plugin artifact %q", item.Path)
+		}
+	}
+}
 
-	var mcp map[string]any
-	mustUnmarshal(t, artifact(t, pkg, ".mcp.json").Bytes, &mcp)
-	if got, want := mcp, map[string]any{"vgxness": map[string]any{"command": "vgxness", "args": []any{"mcp", "--full"}}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("mcp = %#v, want %#v", got, want)
+func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedTools := []string{"memory_save", "memory_forget", "sdd_create", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_accept_revision", "sdd_record_projection"}
+	for _, item := range pkg.Artifacts[1:] {
+		content := string(item.Bytes)
+		for _, field := range []string{"name = ", "description = ", "developer_instructions = ", "model = ", "model_reasoning_effort = ", "sandbox_mode = "} {
+			if !strings.Contains(content, field) {
+				t.Errorf("%s lacks %q", item.Path, field)
+			}
+		}
+		if !strings.Contains(content, "[mcp_servers.vgxness]") || !strings.Contains(content, "enabled_tools = [") || strings.Contains(content, "mcp_servers = []") {
+			t.Errorf("%s lacks a Codex MCP server table with an enabled-tools list", item.Path)
+		}
+		if !strings.Contains(content, "[mcp_servers.vgxness]\ncommand = \"vgxness\"\nargs = [\"mcp\", \"--full\"]\nenabled_tools = [") {
+			t.Errorf("%s lacks a self-contained full VGXNESS MCP table", item.Path)
+		}
+		if strings.Contains(content, "OpenCode") || strings.Contains(content, "todowrite") || strings.Contains(content, "codegraph_codegraph_explore") {
+			t.Errorf("%s names an unavailable OpenCode-only tool", item.Path)
+		}
+		for _, tool := range protectedTools {
+			if strings.Contains(content, tool) {
+				t.Errorf("%s exposes protected tool %q", item.Path, tool)
+			}
+		}
+	}
+	for _, path := range []string{"agents/explore.toml", "agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml", "agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml"} {
+		content := string(artifact(t, pkg, path).Bytes)
+		if !strings.Contains(content, "sandbox_mode = \"read-only\"") {
+			t.Errorf("%s is not read-only", path)
+		}
+	}
+	for _, path := range []string{"agents/explore.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml"} {
+		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, `enabled_tools = ["memory_recent", "memory_search", "memory_get"]`) {
+			t.Errorf("%s lacks the exact protected memory-read allowlist", path)
+		}
+	}
+	sddTools := `enabled_tools = ["memory_recent", "memory_search", "memory_get", "sdd_list", "sdd_get", "sdd_get_revision", "sdd_list_revisions", "sdd_render_projection", "sdd_compare_projection", "sdd_projection_status"]`
+	for _, path := range []string{"agents/general.toml", "agents/verifier.toml"} {
+		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, "enabled_tools = []") {
+			t.Errorf("%s must not expose MCP tools", path)
+		}
+	}
+	for _, path := range []string{"agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml", "agents/sdd-apply.toml"} {
+		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, sddTools) {
+			t.Errorf("%s lacks the exact protected SDD-read allowlist", path)
+		}
+	}
+	if content := string(artifact(t, pkg, "agents/general.toml").Bytes); !strings.Contains(content, "sandbox_mode = \"workspace-write\"") || !strings.Contains(content, "must not own the SDD lifecycle") || !strings.Contains(content, "model = \"gpt-5.6\"") {
+		t.Error("general profile does not retain its workspace-only boundary")
+	}
+	if content := string(artifact(t, pkg, "agents/explore.toml").Bytes); !strings.Contains(content, "model = \"gpt-5.6-terra\"") {
+		t.Error("explore profile does not use the supported read-heavy model")
+	}
+	for _, path := range []string{"agents/verifier.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-apply.toml"} {
+		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, "model = \"gpt-5.6\"") {
+			t.Errorf("%s does not use the supported demanding-work model", path)
+		}
+	}
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 2") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+		t.Error("manager instructions do not use native delegation and lifecycle authority")
+	}
+}
+
+func TestPackageValidateRejectsCallerMutationsAndStaleDigests(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pkg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	pkg.Artifacts[0].Bytes[0] = 'X'
+	if err := pkg.Validate(); err == nil {
+		t.Fatal("Validate accepted caller mutation with a stale digest")
+	}
+	pkg.SHA256 = aggregate(pkg.Artifacts)
+	if err := pkg.Validate(); err == nil {
+		t.Fatal("Validate accepted caller mutation after digest recomputation")
 	}
 }
 
@@ -68,55 +163,11 @@ func TestRenderRejectsInvalidVersions(t *testing.T) {
 	}
 }
 
-func TestRenderPreservesPrereleaseVersionWithoutLeadingV(t *testing.T) {
-	pkg, err := Render("v0.1.0-alpha.1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var plugin pluginManifest
-	mustUnmarshal(t, artifact(t, pkg, ".codex-plugin/plugin.json").Bytes, &plugin)
-	if got, want := plugin.Version, "0.1.0-alpha.1"; got != want {
-		t.Fatalf("manifest version = %q, want %q", got, want)
-	}
-}
-
 func TestValidateRelativePathRejectsTraversal(t *testing.T) {
 	for _, path := range []string{"", "/absolute", "../escape", "nested/../../escape", `nested\\escape`, "."} {
 		t.Run(path, func(t *testing.T) {
 			if err := validateRelativePath(path); err == nil {
 				t.Fatalf("validateRelativePath(%q) succeeded", path)
-			}
-		})
-	}
-}
-
-func TestValidatePackageRejectsUnexpectedCapabilities(t *testing.T) {
-	pkg, err := Render("v1.2.3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkg.Artifacts[1].Bytes = []byte(`{"vgxness":{"command":"vgxness","args":["mcp","--full"],"env":{"TOKEN":"x"}}}`)
-	pkg.SHA256 = aggregate(pkg.Artifacts)
-	if err := validatePackage(pkg); err == nil {
-		t.Fatal("validatePackage accepted an unexpected MCP capability")
-	}
-}
-
-func TestValidatePackageRejectsNonFullMCPCommands(t *testing.T) {
-	for name, mcp := range map[string]string{
-		"missing full":   `{"vgxness":{"command":"vgxness","args":["mcp"]}}`,
-		"extra argument": `{"vgxness":{"command":"vgxness","args":["mcp","--full","--extra"]}}`,
-		"wrong command":  `{"vgxness":{"command":"other","args":["mcp","--full"]}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			pkg, err := Render("v1.2.3")
-			if err != nil {
-				t.Fatal(err)
-			}
-			pkg.Artifacts[1].Bytes = []byte(mcp)
-			pkg.SHA256 = aggregate(pkg.Artifacts)
-			if err := validatePackage(pkg); err == nil {
-				t.Fatal("validatePackage accepted an invalid MCP command")
 			}
 		})
 	}
@@ -139,13 +190,6 @@ func artifact(t *testing.T, pkg Package, path string) Artifact {
 	}
 	t.Fatalf("artifact %q not found", path)
 	return Artifact{}
-}
-
-func mustUnmarshal(t *testing.T, data []byte, target any) {
-	t.Helper()
-	if err := json.Unmarshal(data, target); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
 }
 
 func aggregate(artifacts []Artifact) string {
