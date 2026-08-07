@@ -47,11 +47,10 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 		"agents/vgxness-sdd-spec.md",
 		"agents/vgxness-sdd-tasks.md",
 		"agents/vgxness-verifier.md",
-		"plugins/vgxness.ts",
 		"vgxness/default-agent.json",
 		"vgxness/model-plan.json",
 	}
-	if before.Root != configDirectory || len(before.Artifacts) != 18 || len(before.AggregateSHA256) != 64 {
+	if before.Root != configDirectory || len(before.Artifacts) != 17 || len(before.AggregateSHA256) != 64 {
 		t.Fatalf("unexpected layout: %+v", before)
 	}
 	paths := managedPaths(before)
@@ -60,7 +59,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 	}
 
 	installed, err := service.Install(context.Background(), options)
-	if err != nil || installed.ArtifactCount != 19 {
+	if err != nil || installed.ArtifactCount != 18 {
 		t.Fatalf("Install() = %+v, %v", installed, err)
 	}
 	for _, artifact := range before.Artifacts {

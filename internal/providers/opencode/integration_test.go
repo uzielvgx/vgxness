@@ -27,19 +27,24 @@ func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 	testutil.NoError(t, err)
 
 	expected := filepath.Join(home, ".config", "opencode", "agents", managerAgentName)
-	expectedTool := filepath.Join(home, ".config", "opencode", "plugins", memoryPluginName)
 	_, statErr := os.Stat(filepath.Join(home, ".config"))
 	testutil.Require(t,
 		result.Provider == "opencode" &&
 			result.State == integration.StateAbsent &&
 			result.Path == expected &&
-			result.ToolPath == expectedTool &&
-			len(result.ToolSHA256) == 64 &&
+			result.ToolPath == "" &&
+			result.ToolSHA256 == "" && result.ArtifactCount == 18 &&
 			result.Changed &&
 			len(result.ArtifactSHA256) == 64,
 		"unexpected preview: %#v", result,
 	)
 	testutil.Require(t, os.IsNotExist(statErr), "preview mutated filesystem: %v", statErr)
+}
+
+func TestManagedMCPUsesFullMode(t *testing.T) {
+	config, err := managedMCPConfig("/opt/vgxness")
+	testutil.NoError(t, err)
+	testutil.Require(t, bytes.Equal(config, []byte(`{"type":"local","command":["/opt/vgxness","mcp","--full"],"enabled":true}`)), "unexpected MCP config: %s", config)
 }
 
 func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
@@ -53,12 +58,6 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	data, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
 	info, err := os.Stat(installed.Path)
-	testutil.NoError(t, err)
-	toolData, err := os.ReadFile(installed.ToolPath)
-	testutil.NoError(t, err)
-	toolInfo, err := os.Stat(installed.ToolPath)
-	testutil.NoError(t, err)
-	expectedTool, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
@@ -92,10 +91,10 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.Require(t,
 		installed.State == integration.StateInstalled &&
 			installed.Changed &&
-			installed.ToolPath == filepath.Join(configDirectory, "plugins", memoryPluginName) &&
-			installed.ToolSHA256 == artifactSHA256(expectedTool) &&
+			installed.ToolPath == "" &&
+			installed.ToolSHA256 == "" &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
-			installed.ArtifactCount == 19 &&
+			installed.ArtifactCount == 18 &&
 			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired &&
 			installed.DefaultAgent == defaultAgentName &&
@@ -103,11 +102,11 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			string(defaultAgentConfig["$schema"]) == `"https://opencode.ai/config.json"` &&
 			string(defaultAgentConfig["default_agent"]) == `"vgxness-manager"` &&
 			bytes.Equal(data, bundle.agents[managerAgentName]) &&
-			string(toolData) == string(expectedTool),
+			true,
 		"unexpected install: %#v", installed,
 	)
 	if runtime.GOOS != "windows" {
-		testutil.Require(t, info.Mode().Perm() == 0o600 && toolInfo.Mode().Perm() == 0o600 && manifestInfo.Mode().Perm() == 0o600 && defaultAgentInfo.Mode().Perm() == 0o600, "artifact modes=%o/%o/%o/%o", info.Mode().Perm(), toolInfo.Mode().Perm(), manifestInfo.Mode().Perm(), defaultAgentInfo.Mode().Perm())
+		testutil.Require(t, info.Mode().Perm() == 0o600 && manifestInfo.Mode().Perm() == 0o600 && defaultAgentInfo.Mode().Perm() == 0o600, "artifact modes=%o/%o/%o", info.Mode().Perm(), manifestInfo.Mode().Perm(), defaultAgentInfo.Mode().Perm())
 	}
 
 	status, err := service.Status(context.Background(), options)
@@ -116,7 +115,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 		status.State == integration.StateInstalled &&
 			!status.Changed &&
 			status.ArtifactSHA256 == artifactSHA256(bundle.agents[managerAgentName]) &&
-			status.ToolSHA256 == artifactSHA256(expectedTool),
+			status.ToolSHA256 == "",
 		"unexpected status: %#v", status,
 	)
 	second, err := service.Install(context.Background(), options)
@@ -149,7 +148,7 @@ func TestIntegration_DefaultAgentConfigPreservesOpenCodeJSONAndJSONC(t *testing.
 	var want map[string]any
 	testutil.NoError(t, json.Unmarshal(config, &want))
 	want["default_agent"] = defaultAgentName
-	want["mcp"] = map[string]any{"codegraph": map[string]any{"enabled": true}, "vgxness": map[string]any{"type": "local", "command": []any{service.executable, "mcp"}, "enabled": true}}
+	want["mcp"] = map[string]any{"codegraph": map[string]any{"enabled": true}, "vgxness": map[string]any{"type": "local", "command": []any{service.executable, "mcp", "--full"}, "enabled": true}}
 	want["permission"] = map[string]any{"vgxness_*": "deny"}
 	testutil.Require(t,
 		reflect.DeepEqual(got, want) &&
@@ -246,17 +245,42 @@ func TestIntegration_PreexistingExactMCPIsNeverRemoved(t *testing.T) {
 	testutil.NoError(t, os.WriteFile(configPath, preexisting, 0o600))
 	options := integration.Options{ConfigDir: configDirectory}
 	_, err := service.Install(context.Background(), options)
-	testutil.NoError(t, err)
-	_, err = service.Install(context.Background(), options)
-	testutil.NoError(t, err)
-	_, err = service.Uninstall(context.Background(), options)
-	testutil.NoError(t, err)
+	testutil.Require(t, errors.Is(err, integration.ErrConflict), "unowned read-only MCP install=%v", err)
 	after, err := os.ReadFile(configPath)
 	testutil.NoError(t, err)
-	var config map[string]any
-	testutil.NoError(t, json.Unmarshal(after, &config))
-	_, retained := config["mcp"].(map[string]any)["vgxness"]
-	testutil.Require(t, retained, "uninstall removed preexisting managed-shaped MCP: %q", after)
+	testutil.Require(t, bytes.Equal(after, preexisting), "unowned read-only MCP changed: %q", after)
+}
+
+func TestIntegration_UpgradesOwnedReadOnlyMCP(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	path := filepath.Join(configDirectory, defaultAgentConfigName)
+	data, err := os.ReadFile(path)
+	testutil.NoError(t, err)
+	data = bytes.Replace(data, []byte("\"mcp\",\n        \"--full\""), []byte(`"mcp"`), 1)
+	testutil.NoError(t, os.WriteFile(path, data, 0o600))
+	upgraded, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(path)
+	testutil.Require(t, upgraded.Changed && err == nil && bytes.Contains(after, []byte(`"--full"`)), "owned MCP did not upgrade: %s", after)
+}
+
+func TestIntegration_UninstallAcceptsOwnedReadOnlyMCP(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	path := filepath.Join(configDirectory, defaultAgentConfigName)
+	data, err := os.ReadFile(path)
+	testutil.NoError(t, err)
+	data = bytes.Replace(data, []byte("\"mcp\",\n        \"--full\""), []byte(`"mcp"`), 1)
+	testutil.NoError(t, os.WriteFile(path, data, 0o600))
+	removed, err := service.Uninstall(context.Background(), options)
+	testutil.Require(t, err == nil && removed.State == integration.StateAbsent, "read-only MCP uninstall=%+v err=%v", removed, err)
 }
 
 func TestIntegration_PreservesForeignOpenCodeJSONC(t *testing.T) {
@@ -805,6 +829,58 @@ func TestIntegrationRestoresRetiredSkillAfterLaterFailure(t *testing.T) {
 	testutil.Require(t, err != nil && readErr == nil && bytes.Equal(after, legacy), "retirement rollback err=%v read=%v after=%q", err, readErr, after)
 }
 
+func TestIntegration_ReinstallAndUninstallRetireLegacyArtifacts(t *testing.T) {
+	for name, operation := range map[string]func(*Integration, integration.Options) (integration.Result, error){
+		"reinstall": func(s *Integration, o integration.Options) (integration.Result, error) {
+			return s.Reinstall(context.Background(), o)
+		},
+		"uninstall": func(s *Integration, o integration.Options) (integration.Result, error) {
+			return s.Uninstall(context.Background(), o)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			configDirectory := filepath.Join(t.TempDir(), "opencode")
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: configDirectory}
+			_, err := service.Install(context.Background(), options)
+			testutil.NoError(t, err)
+			pluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+			skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
+			plugin, err := memoryPluginContent(service.executable)
+			testutil.NoError(t, err)
+			for path, content := range map[string][]byte{pluginPath: plugin, skillPath: []byte(autonomousStackedPRSkill)} {
+				testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+				testutil.NoError(t, os.WriteFile(path, content, 0o600))
+			}
+			result, err := operation(service, options)
+			_, pluginErr := os.Stat(pluginPath)
+			_, skillErr := os.Stat(skillPath)
+			want := integration.StateInstalled
+			if name == "uninstall" {
+				want = integration.StateAbsent
+			}
+			testutil.Require(t, err == nil && result.State == want && os.IsNotExist(pluginErr) && os.IsNotExist(skillErr), "result=%+v err=%v plugin=%v skill=%v", result, err, pluginErr, skillErr)
+		})
+	}
+}
+
+func TestIntegration_UninstallRejectsRecreatedRetiredArtifact(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	pluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+	plugin, err := memoryPluginContent(service.executable)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(pluginPath), 0o700))
+	testutil.NoError(t, os.WriteFile(pluginPath, plugin, 0o600))
+	service.afterRetirement = func() error { return os.WriteFile(pluginPath, plugin, 0o600) }
+	result, uninstallErr := service.Uninstall(context.Background(), options)
+	_, statErr := os.Stat(pluginPath)
+	testutil.Require(t, result.State != integration.StateAbsent && errors.Is(uninstallErr, integration.ErrDrift) && statErr == nil, "result=%+v err=%v plugin=%v", result, uninstallErr, statErr)
+}
+
 func TestIntegrationPreservesForeignGeneralAndVerifier(t *testing.T) {
 	for _, name := range []string{"general.md", "vgxness-verifier.md"} {
 		t.Run(name, func(t *testing.T) {
@@ -827,7 +903,7 @@ func TestIntegration_UpgradesExactPriorPluginFromDifferentExecutable(t *testing.
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory}
-	installed, err := service.Install(context.Background(), options)
+	_, err := service.Install(context.Background(), options)
 	testutil.NoError(t, err)
 	currentPlugin, err := memoryPluginContent(service.executable)
 	testutil.NoError(t, err)
@@ -847,11 +923,13 @@ func TestIntegration_UpgradesExactPriorPluginFromDifferentExecutable(t *testing.
 				currentPrior = previousMemoryPluginV1(currentPrior)
 			}
 			testutil.Require(t, !bytes.Equal(priorPlugin, currentPrior), "prior plugin did not carry a different executable")
-			testutil.NoError(t, os.WriteFile(installed.ToolPath, priorPlugin, 0o600))
+			pluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+			testutil.NoError(t, os.MkdirAll(filepath.Dir(pluginPath), 0o700))
+			testutil.NoError(t, os.WriteFile(pluginPath, priorPlugin, 0o600))
 			upgraded, installErr := service.Install(context.Background(), options)
 			testutil.Require(t, installErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed, "different-executable upgrade=%#v err=%v", upgraded, installErr)
-			after, readErr := os.ReadFile(installed.ToolPath)
-			testutil.Require(t, readErr == nil && bytes.Equal(after, currentPlugin), "plugin was not upgraded to exact current bytes: %v", readErr)
+			_, readErr := os.ReadFile(pluginPath)
+			testutil.Require(t, os.IsNotExist(readErr), "recognized plugin was not retired: %v", readErr)
 		})
 	}
 }
@@ -871,11 +949,13 @@ func TestIntegration_RejectsModifiedOrMalformedPriorPlugin(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			configDirectory := filepath.Join(t.TempDir(), "opencode")
 			options := integration.Options{ConfigDir: configDirectory}
-			installed, installErr := service.Install(context.Background(), options)
+			_, installErr := service.Install(context.Background(), options)
 			testutil.NoError(t, installErr)
-			testutil.NoError(t, os.WriteFile(installed.ToolPath, candidate, 0o600))
+			pluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+			testutil.NoError(t, os.MkdirAll(filepath.Dir(pluginPath), 0o700))
+			testutil.NoError(t, os.WriteFile(pluginPath, candidate, 0o600))
 			_, installErr = service.Install(context.Background(), options)
-			after, readErr := os.ReadFile(installed.ToolPath)
+			after, readErr := os.ReadFile(pluginPath)
 			testutil.NoError(t, readErr)
 			testutil.Require(t, errors.Is(installErr, integration.ErrConflict) && bytes.Equal(after, candidate), "%s prior artifact changed: err=%v", name, installErr)
 		})
@@ -937,11 +1017,13 @@ func TestIntegration_RejectsForeignMalformedMismatchedAndNewerArtifacts(t *testi
 		t.Run(name, func(t *testing.T) {
 			configDirectory := filepath.Join(t.TempDir(), "opencode")
 			options := integration.Options{ConfigDir: configDirectory}
-			installed, installErr := service.Install(context.Background(), options)
+			_, installErr := service.Install(context.Background(), options)
 			testutil.NoError(t, installErr)
-			testutil.NoError(t, os.WriteFile(installed.ToolPath, candidate, 0o600))
+			pluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+			testutil.NoError(t, os.MkdirAll(filepath.Dir(pluginPath), 0o700))
+			testutil.NoError(t, os.WriteFile(pluginPath, candidate, 0o600))
 			_, installErr = service.Install(context.Background(), options)
-			after, readErr := os.ReadFile(installed.ToolPath)
+			after, readErr := os.ReadFile(pluginPath)
 			testutil.NoError(t, readErr)
 			testutil.Require(t, errors.Is(installErr, integration.ErrConflict) && bytes.Equal(after, candidate), "%s artifact changed: err=%v", name, installErr)
 		})
@@ -2085,12 +2167,7 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 	testutil.NoError(t, err)
 	backup, err := os.ReadFile(removed.BackupPath)
 	testutil.NoError(t, err)
-	toolBackup, err := os.ReadFile(removed.ToolBackupPath)
-	testutil.NoError(t, err)
-	expectedTool, err := memoryPluginContent(service.executable)
-	testutil.NoError(t, err)
 	_, targetErr := os.Stat(installed.Path)
-	_, toolErr := os.Stat(installed.ToolPath)
 	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
 		if _, statErr := os.Stat(filepath.Join(configDirectory, "agents", name)); !os.IsNotExist(statErr) {
 			t.Errorf("managed reviewer %s was not removed: %v", name, statErr)
@@ -2106,10 +2183,9 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 			removed.Changed &&
 			strings.Contains(removed.BackupPath, "20260721T123456") &&
 			bytes.Equal(backup, bundle.agents[managerAgentName]) &&
-			string(toolBackup) == string(expectedTool) &&
-			os.IsNotExist(targetErr) &&
-			os.IsNotExist(toolErr),
-		"unexpected uninstall: %#v target=%v tool=%v", removed, targetErr, toolErr,
+			removed.ToolBackupPath == "" &&
+			os.IsNotExist(targetErr),
+		"unexpected uninstall: %#v target=%v", removed, targetErr,
 	)
 	second, err := service.Uninstall(context.Background(), options)
 	testutil.NoError(t, err)
