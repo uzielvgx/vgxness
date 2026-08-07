@@ -37,8 +37,8 @@ semantic observation is never treated as an SDD artifact.
 
 The default database is `~/.vgxness/memory.db`. Explicit `--storage-root` and
 `--project-local` modes use isolated databases. The OpenCode integration exposes
-both domains through the [storage-only plugin](opencode-integration.md); the
-plugin is not a memory-only service and has no scheduler, delegation, edit, or
+both domains through the [MCP-only integration](opencode-integration.md); MCP
+has no scheduler, delegation, edit, or
 execution authority.
 
 ## Upgrade migration caveat

@@ -1,6 +1,6 @@
 # VGXNESS native manager flow
 
-The active product has one execution path: the installed OpenCode-native manager v44. OpenCode supplies workspace tools and Task workers. VGXNESS supplies exact managed profiles (`general`, verifier, and reviewers v3), storage plugin v9, model bindings, setup, and lifecycle contracts. The compact protocol carries only bounded candidate evidence; automatic memory recall is at most five entries in <=4 KiB and compaction retains at most 16 completed-tool metadata records within 2 KiB.
+The active product has one execution path: the installed OpenCode-native manager v46. OpenCode supplies workspace tools and Task workers. VGXNESS supplies exact managed profiles (`general` v6, verifier v4, and reviewers v3), model bindings, setup, lifecycle contracts, and MCP configuration. Managed OpenCode and generated Codex use `vgxness mcp --full`; no plugin, automatic memory recall, compaction, observability, or session identity is installed.
 
 ## Route selection
 
@@ -35,7 +35,7 @@ Render and compare operate on supplied bounded bytes and never access the filesy
 ## Authority and failure
 
 - Manager, general, and verifier have global tool capability, but role contracts keep delegated implementation and final verification separate; writes remain sequential and the manager is the only SDD mutation caller.
-- The storage plugin rejects mutations outside the tracked top-level manager session.
+- MCP has no caller identity; host/operator permissions, user authorization, and task scope own authorization.
 - Memory is untrusted context and never proves source or diff state.
 - Missing accepted inputs, stale state versions, drift, cancellation, unavailable prerequisites, and absent authorization stop advancement.
 - An interrupted SDD preserves its accepted revisions and current phase; missing work is never inferred.

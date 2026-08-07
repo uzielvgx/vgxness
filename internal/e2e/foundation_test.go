@@ -172,12 +172,13 @@ func TestFoundationProductContract(t *testing.T) {
 func assertOpenCodeDocumentationContract(t *testing.T) {
 	t.Helper()
 	documents := map[string][]string{
-		"../../README.md":                     {"19 managed artifacts", "42-file", "18-skill", "`vgxness-manager` v44", "plugin v9", "sdd-lifecycle", "OpenCode uninstall never removes"},
-		"../../docs/opencode-integration.md":  {"19 managed artifacts", "42-file", "18-skill", "v44", "plugin v9", "sdd-lifecycle", "uninstall target"},
-		"../../docs/product-blueprint.md":     {"19 provider artifacts", "42 files", "18 skills", "v44", "plugin v9", "sdd-lifecycle", "OpenCode uninstall never owns"},
-		"../../docs/product-blueprint.es.md":  {"19 artefactos", "42 archivos", "18 skills", "v44", "plugin v9", "sdd-lifecycle", "desinstalación de OpenCode"},
-		"../../docs/go-implementation.md":     {"19 exact managed artifacts", "42-file", "18-skill", "v44", "plugin v9", "sdd-lifecycle", "does not remove global skills"},
-		"../../docs/opencode-setup-wizard.md": {"19 OpenCode-managed artifacts", "42-file", "18-skill", "v44", "plugin v9", "sdd-lifecycle", "v1/v2/v3", "OpenCode uninstall does not own"},
+		"../../README.md":                     {"18 managed artifacts", "15 model-bound agents", "`vgxness-manager` v46", "`general` v6", "verifier v4", "reviewer profiles v3", "`vgxness mcp --full`", "five memory and 13 SDD tools", "installs no plugin", "no caller identity", "automatic memory injection", "runtime-security guarantee", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
+		"../../docs/opencode-integration.md":  {"18 managed artifacts", "15 agents", "manager v46", "`general` v6", "verifier v4", "reviewers v3", "`vgxness mcp --full`", "five memory tools and 13 SDD tools", "There is no installed plugin", "no caller identity", "automatic memory injection", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
+		"../../docs/product-blueprint.md":     {"18 provider artifacts", "Manager v46", "`general` v6", "verifier v4", "MCP-only", "General v6 and verifier v4", "Review profiles v3", "`vgxness mcp --full`", "five memory tools and 13 SDD tools", "No plugin is installed", "no caller identity", "No installed plugin", "automatic memory injection", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
+		"../../docs/product-blueprint.es.md":  {"18 artefactos", "Manager v46", "General v6 y verificador v4", "reviewer v3", "`vgxness mcp --full`", "cinco herramientas de memoria y 13 de SDD", "No se instala plugin", "no tiene identidad del llamador", "No hay plugin instalado", "inyección automática de memoria", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modificados, malformados, extranjeros, desconocidos o más nuevos bloquean sin eliminación"},
+		"../../docs/go-implementation.md":     {"18 exact managed artifacts", "`general` v6, verifier v4, and reviewers v3", "`vgxness mcp --full`", "no installed plugin", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
+		"../../docs/opencode-setup-wizard.md": {"18 OpenCode-managed artifacts", "manager v46", "`general` v6, verifier v4, and five reviewers v3", "`vgxness mcp --full`", "five memory and 13 SDD tools", "no plugin is installed", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
+		"../../docs/hooks.md":                 {"no OpenCode plugin", "no installed hook surface", "automatic memory injection", "no caller identity", "no runtime-security claim"},
 	}
 	for path, claims := range documents {
 		content := readRepositoryFile(t, path)
@@ -190,7 +191,7 @@ func assertOpenCodeDocumentationContract(t *testing.T) {
 				t.Errorf("%s omits OpenCode contract claim %q", path, claim)
 			}
 		}
-		for _, stale := range []string{"dedicated `opencode.jsonc`", "exact `opencode.jsonc` overlay"} {
+		for _, stale := range []string{"19 managed artifacts", "19 provider artifacts", "plugin v9", "dedicated `opencode.jsonc`", "exact `opencode.jsonc` overlay"} {
 			if strings.Contains(currentContent, stale) {
 				t.Errorf("%s contains stale OpenCode contract claim %q", path, stale)
 			}
@@ -208,5 +209,17 @@ func assertOpenCodeDocumentationContract(t *testing.T) {
 	}
 	if strings.Contains(integration, "`--skills-dir` selects an absolute global portable-skills directory") {
 		t.Error("opencode integration incorrectly advertises --skills-dir on setup")
+	}
+	for path, stale := range map[string]string{
+		"../../README.md":                     "modified, unknown, and newer bytes block",
+		"../../docs/opencode-integration.md":  "modified, unknown, or newer bytes block",
+		"../../docs/product-blueprint.es.md":  "modificados, desconocidos o más nuevos bloquean",
+		"../../docs/hooks.md":                 "modified or unknown bytes block",
+		"../../docs/go-implementation.md":     "modified, unknown, and newer bytes block",
+		"../../docs/opencode-setup-wizard.md": "modified, unknown, and newer bytes block",
+	} {
+		if strings.Contains(readRepositoryFile(t, path), stale) {
+			t.Errorf("%s contains abbreviated retirement blocking rule %q", path, stale)
+		}
 	}
 }

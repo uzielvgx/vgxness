@@ -2,7 +2,7 @@
 
 ## Decision and target
 
-This contract compares the installed `vgxness-manager` v44 and plugin v9 against the aggregate Manager v43 baseline. It defines reproducible evidence for context hygiene; it is not a model result or self-grading claim. The baseline target was commit `ad948764d2b529474e7f6edf96513ac5d234442d` on OpenCode 1.18.14.
+**Historical evaluation record — not current runtime documentation.** This contract compares the historical `vgxness-manager` v44 and plugin v9 against the aggregate Manager v43 baseline. It defines reproducible evidence for context hygiene; it is not a model result or self-grading claim. The baseline target was commit `ad948764d2b529474e7f6edf96513ac5d234442d` on OpenCode 1.18.14. Current runtime is MCP-only and installs no plugin.
 
 The v43 pre-change run used four development and four protected-holdout fresh sessions, with no retries or environment failures. It initially reported blocked solely because of unrelated or unconfirmed untracked presentation artifacts; the user restored a clean workspace before this implementation. That limitation remains part of the record.
 
