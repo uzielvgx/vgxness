@@ -21,14 +21,14 @@ func TestRenderProducesOfficialMCPOnlyPackage(t *testing.T) {
 	var plugin map[string]any
 	mustUnmarshal(t, artifact(t, pkg, ".codex-plugin/plugin.json").Bytes, &plugin)
 	if got, want := plugin, map[string]any{
-		"name": "vgxness", "version": "1.2.3", "description": "Read-only project memory for VGXNESS.", "mcpServers": "./.mcp.json",
+		"name": "vgxness", "version": "1.2.3", "description": "VGXNESS project memory and SDD lifecycle MCP.", "mcpServers": "./.mcp.json",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("plugin = %#v, want %#v", got, want)
 	}
 
 	var mcp map[string]any
 	mustUnmarshal(t, artifact(t, pkg, ".mcp.json").Bytes, &mcp)
-	if got, want := mcp, map[string]any{"vgxness": map[string]any{"command": "vgxness", "args": []any{"mcp"}}}; !reflect.DeepEqual(got, want) {
+	if got, want := mcp, map[string]any{"vgxness": map[string]any{"command": "vgxness", "args": []any{"mcp", "--full"}}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("mcp = %#v, want %#v", got, want)
 	}
 }
@@ -95,10 +95,30 @@ func TestValidatePackageRejectsUnexpectedCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg.Artifacts[1].Bytes = []byte(`{"vgxness":{"command":"vgxness","args":["mcp"],"env":{"TOKEN":"x"}}}`)
+	pkg.Artifacts[1].Bytes = []byte(`{"vgxness":{"command":"vgxness","args":["mcp","--full"],"env":{"TOKEN":"x"}}}`)
 	pkg.SHA256 = aggregate(pkg.Artifacts)
 	if err := validatePackage(pkg); err == nil {
 		t.Fatal("validatePackage accepted an unexpected MCP capability")
+	}
+}
+
+func TestValidatePackageRejectsNonFullMCPCommands(t *testing.T) {
+	for name, mcp := range map[string]string{
+		"missing full":   `{"vgxness":{"command":"vgxness","args":["mcp"]}}`,
+		"extra argument": `{"vgxness":{"command":"vgxness","args":["mcp","--full","--extra"]}}`,
+		"wrong command":  `{"vgxness":{"command":"other","args":["mcp","--full"]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			pkg, err := Render("v1.2.3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg.Artifacts[1].Bytes = []byte(mcp)
+			pkg.SHA256 = aggregate(pkg.Artifacts)
+			if err := validatePackage(pkg); err == nil {
+				t.Fatal("validatePackage accepted an invalid MCP command")
+			}
+		})
 	}
 }
 
