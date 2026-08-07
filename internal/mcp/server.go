@@ -43,6 +43,14 @@ type sddReader interface {
 	GetChange(context.Context, sdd.GetChangeRequest) (sdd.Change, error)
 	UpdateInteractionMode(context.Context, sdd.UpdateInteractionModeRequest) (sdd.Change, error)
 	TransitionChange(context.Context, sdd.TransitionChangeRequest) (sdd.Change, error)
+	SaveRevision(context.Context, sdd.SaveRevisionRequest) (sdd.Revision, error)
+	GetRevision(context.Context, sdd.GetRevisionRequest) (sdd.Revision, error)
+	ListRevisions(context.Context, sdd.ListRevisionsRequest) ([]sdd.Revision, error)
+	AcceptRevision(context.Context, sdd.AcceptRevisionRequest) (sdd.Revision, error)
+	RenderProjection(context.Context, sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error)
+	CompareProjection(context.Context, sdd.CompareProjectionRequest) (sdd.ProjectionComparison, error)
+	RecordProjection(context.Context, sdd.RecordProjectionRequest) (sdd.Projection, error)
+	ProjectionStatus(context.Context, sdd.ProjectionStatusRequest) (sdd.Projection, error)
 }
 
 type memoryReader interface {
@@ -79,6 +87,30 @@ func (reader runtimeSDDReader) UpdateInteractionMode(ctx context.Context, reques
 func (reader runtimeSDDReader) TransitionChange(ctx context.Context, request sdd.TransitionChangeRequest) (sdd.Change, error) {
 	return reader.runtime.TransitionChange(ctx, reader.opts, request)
 }
+func (reader runtimeSDDReader) SaveRevision(ctx context.Context, request sdd.SaveRevisionRequest) (sdd.Revision, error) {
+	return reader.runtime.SaveRevision(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) GetRevision(ctx context.Context, request sdd.GetRevisionRequest) (sdd.Revision, error) {
+	return reader.runtime.GetRevision(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) ListRevisions(ctx context.Context, request sdd.ListRevisionsRequest) ([]sdd.Revision, error) {
+	return reader.runtime.ListRevisions(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) AcceptRevision(ctx context.Context, request sdd.AcceptRevisionRequest) (sdd.Revision, error) {
+	return reader.runtime.AcceptRevision(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) RenderProjection(ctx context.Context, request sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error) {
+	return reader.runtime.RenderProjection(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) CompareProjection(ctx context.Context, request sdd.CompareProjectionRequest) (sdd.ProjectionComparison, error) {
+	return reader.runtime.CompareProjection(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) RecordProjection(ctx context.Context, request sdd.RecordProjectionRequest) (sdd.Projection, error) {
+	return reader.runtime.RecordProjection(ctx, reader.opts, request)
+}
+func (reader runtimeSDDReader) ProjectionStatus(ctx context.Context, request sdd.ProjectionStatusRequest) (sdd.Projection, error) {
+	return reader.runtime.ProjectionStatus(ctx, reader.opts, request)
+}
 
 type unavailableSDDReader struct{}
 
@@ -96,6 +128,30 @@ func (unavailableSDDReader) UpdateInteractionMode(context.Context, sdd.UpdateInt
 }
 func (unavailableSDDReader) TransitionChange(context.Context, sdd.TransitionChangeRequest) (sdd.Change, error) {
 	return sdd.Change{}, ErrUnavailable
+}
+func (unavailableSDDReader) SaveRevision(context.Context, sdd.SaveRevisionRequest) (sdd.Revision, error) {
+	return sdd.Revision{}, ErrUnavailable
+}
+func (unavailableSDDReader) GetRevision(context.Context, sdd.GetRevisionRequest) (sdd.Revision, error) {
+	return sdd.Revision{}, ErrUnavailable
+}
+func (unavailableSDDReader) ListRevisions(context.Context, sdd.ListRevisionsRequest) ([]sdd.Revision, error) {
+	return nil, ErrUnavailable
+}
+func (unavailableSDDReader) AcceptRevision(context.Context, sdd.AcceptRevisionRequest) (sdd.Revision, error) {
+	return sdd.Revision{}, ErrUnavailable
+}
+func (unavailableSDDReader) RenderProjection(context.Context, sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error) {
+	return sdd.ProjectionDocument{}, ErrUnavailable
+}
+func (unavailableSDDReader) CompareProjection(context.Context, sdd.CompareProjectionRequest) (sdd.ProjectionComparison, error) {
+	return sdd.ProjectionComparison{}, ErrUnavailable
+}
+func (unavailableSDDReader) RecordProjection(context.Context, sdd.RecordProjectionRequest) (sdd.Projection, error) {
+	return sdd.Projection{}, ErrUnavailable
+}
+func (unavailableSDDReader) ProjectionStatus(context.Context, sdd.ProjectionStatusRequest) (sdd.Projection, error) {
+	return sdd.Projection{}, ErrUnavailable
 }
 
 func (reader runtimeReader) ResolveProject(ctx context.Context, workspace string) (string, error) {
@@ -200,6 +256,14 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_get", Description: "Get one structured SDD change by exact ID.", Annotations: annotations}, server.callSDDGet)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_set_interaction_mode", Description: "Change an SDD change interaction mode using optimistic state versioning. This tool changes stored data.", Annotations: writeAnnotations}, server.callSDDSetInteractionMode)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_transition", Description: "Record a legal SDD phase transition or cancellation using optimistic state versioning. This tool changes stored data.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}}, server.callSDDTransition)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_save_revision", Description: "Save a candidate SDD artifact revision. This tool changes stored data.", Annotations: writeAnnotations}, server.callSDDSaveRevision)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_get_revision", Description: "Get one SDD artifact revision by exact change and revision IDs.", Annotations: annotations}, server.callSDDGetRevision)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_list_revisions", Description: "List bounded SDD revision summaries without body content.", Annotations: annotations}, server.callSDDListRevisions)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_accept_revision", Description: "Accept one immutable candidate revision using optimistic state versioning. This tool changes stored data.", Annotations: writeAnnotations}, server.callSDDAcceptRevision)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_render_projection", Description: "Render deterministic managed OpenSpec bytes and a repository-relative target path.", Annotations: annotations}, server.callSDDRenderProjection)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_compare_projection", Description: "Compare caller-supplied OpenSpec bytes with accepted memory state. This tool never writes data.", Annotations: annotations}, server.callSDDCompareProjection)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_record_projection", Description: "Record supplied projection evidence. This tool changes stored data without filesystem access.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}}, server.callSDDRecordProjection)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_projection_status", Description: "Read recorded projection status for one SDD artifact.", Annotations: annotations}, server.callSDDProjectionStatus)
 	}
 	return server, nil
 }
@@ -210,13 +274,6 @@ func boolPtr(value bool) *bool { return &value }
 // the transport closes. It never writes diagnostic output to the transport.
 func (server *Server) Run(ctx context.Context, transport sdk.Transport) error {
 	return server.server.Run(ctx, transport)
-}
-
-func (server *Server) toolNames() []string {
-	if server.full {
-		return []string{"memory_recent", "memory_search", "memory_get", "memory_save", "memory_forget", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition"}
-	}
-	return []string{"memory_recent", "memory_search"}
 }
 
 type recentInput struct {
@@ -263,6 +320,60 @@ type sddTransitionInput struct {
 	TargetPhase          sdd.Phase `json:"targetPhase,omitempty"`
 	Cancel               bool      `json:"cancel,omitempty"`
 	ExpectedStateVersion float64   `json:"expectedStateVersion" jsonschema:"required"`
+}
+type sddSaveRevisionInput struct {
+	ChangeID             string                    `json:"changeId" jsonschema:"required"`
+	Artifact             sdd.Phase                 `json:"artifact" jsonschema:"required"`
+	Content              string                    `json:"content" jsonschema:"required"`
+	ExternalLocation     string                    `json:"externalLocation,omitempty"`
+	Digest               sdd.Digest                `json:"digest,omitempty"`
+	Inputs               []sddRevisionBindingInput `json:"inputs,omitempty"`
+	InputDigest          sdd.Digest                `json:"inputDigest,omitempty"`
+	ExpectedStateVersion float64                   `json:"expectedStateVersion" jsonschema:"required"`
+}
+type sddRevisionBindingInput struct {
+	ArtifactID string     `json:"artifactId" jsonschema:"required"`
+	RevisionID string     `json:"revisionId" jsonschema:"required"`
+	Digest     sdd.Digest `json:"digest" jsonschema:"required"`
+}
+type sddGetRevisionInput struct {
+	ChangeID   string `json:"changeId" jsonschema:"required"`
+	RevisionID string `json:"revisionId" jsonschema:"required"`
+}
+type sddListRevisionsInput struct {
+	ChangeID string    `json:"changeId" jsonschema:"required"`
+	Artifact sdd.Phase `json:"artifact,omitempty"`
+	Limit    float64   `json:"limit,omitempty"`
+}
+type sddAcceptRevisionInput struct {
+	ChangeID             string  `json:"changeId" jsonschema:"required"`
+	RevisionID           string  `json:"revisionId" jsonschema:"required"`
+	ExpectedStateVersion float64 `json:"expectedStateVersion" jsonschema:"required"`
+}
+type sddRenderProjectionInput struct {
+	ChangeID   string `json:"changeId" jsonschema:"required"`
+	RevisionID string `json:"revisionId" jsonschema:"required"`
+}
+type sddCompareProjectionInput struct {
+	ChangeID          string `json:"changeId" jsonschema:"required"`
+	RevisionID        string `json:"revisionId" jsonschema:"required"`
+	RelativePath      string `json:"relativePath" jsonschema:"required"`
+	ProjectionContent string `json:"projectionContent,omitempty"`
+	Missing           bool   `json:"missing,omitempty"`
+	Symlink           bool   `json:"symlink,omitempty"`
+}
+type sddRecordProjectionInput struct {
+	ChangeID             string               `json:"changeId" jsonschema:"required"`
+	ArtifactID           string               `json:"artifactId" jsonschema:"required"`
+	RevisionID           string               `json:"revisionId" jsonschema:"required"`
+	Status               sdd.ProjectionStatus `json:"status" jsonschema:"required"`
+	Digest               sdd.Digest           `json:"digest" jsonschema:"required"`
+	Location             string               `json:"location" jsonschema:"required"`
+	ExpectedStateVersion float64              `json:"expectedStateVersion" jsonschema:"required"`
+}
+type sddProjectionStatusInput struct {
+	ChangeID   string `json:"changeId" jsonschema:"required"`
+	ArtifactID string `json:"artifactId" jsonschema:"required"`
 }
 
 type result struct {
@@ -375,6 +486,75 @@ func (server *Server) sddTransition(ctx context.Context, input sddTransitionInpu
 		return server.sdd.TransitionChange(ctx, request)
 	})
 }
+func (server *Server) sddSaveRevision(ctx context.Context, input sddSaveRevisionInput) (sdd.Revision, error) {
+	version, err := sddVersion(input.ExpectedStateVersion)
+	if err != nil || len(input.Content) > 48<<10 || len(input.Inputs) > 32 {
+		return sdd.Revision{}, ErrInvalidInput
+	}
+	inputs := make([]sdd.RevisionBinding, len(input.Inputs))
+	for index, value := range input.Inputs {
+		inputs[index] = sdd.RevisionBinding{ArtifactID: value.ArtifactID, RevisionID: value.RevisionID, Digest: value.Digest}
+	}
+	request := sdd.SaveRevisionRequest{Project: server.project, ChangeID: input.ChangeID, Artifact: input.Artifact, Content: []byte(input.Content), ExternalLocation: input.ExternalLocation, Digest: input.Digest, Inputs: inputs, InputDigest: input.InputDigest, ExpectedStateVersion: version}
+	return sddValue(server, ctx, request.Validate, func() (sdd.Revision, error) { return server.sdd.SaveRevision(ctx, request) })
+}
+func (server *Server) sddGetRevision(ctx context.Context, input sddGetRevisionInput) (sdd.Revision, error) {
+	request := sdd.GetRevisionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID}
+	return sddValue(server, ctx, request.Validate, func() (sdd.Revision, error) { return server.sdd.GetRevision(ctx, request) })
+}
+func (server *Server) sddListRevisions(ctx context.Context, input sddListRevisionsInput) ([]sdd.Revision, error) {
+	limit, err := sddRevisionLimit(input.Limit)
+	if err != nil {
+		return nil, err
+	}
+	request := sdd.ListRevisionsRequest{Project: server.project, ChangeID: input.ChangeID, Artifact: input.Artifact, Limit: limit}
+	return sddValue(server, ctx, request.Validate, func() ([]sdd.Revision, error) { return server.sdd.ListRevisions(ctx, request) })
+}
+func (server *Server) sddAcceptRevision(ctx context.Context, input sddAcceptRevisionInput) (sdd.Revision, error) {
+	version, err := sddVersion(input.ExpectedStateVersion)
+	if err != nil {
+		return sdd.Revision{}, err
+	}
+	request := sdd.AcceptRevisionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID, ExpectedStateVersion: version}
+	return sddValue(server, ctx, request.Validate, func() (sdd.Revision, error) { return server.sdd.AcceptRevision(ctx, request) })
+}
+func (server *Server) sddRenderProjection(ctx context.Context, input sddRenderProjectionInput) (sdd.ProjectionDocument, error) {
+	request := sdd.RenderProjectionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID}
+	return sddValue(server, ctx, request.Validate, func() (sdd.ProjectionDocument, error) { return server.sdd.RenderProjection(ctx, request) })
+}
+func (server *Server) sddCompareProjection(ctx context.Context, input sddCompareProjectionInput) (sdd.ProjectionComparison, error) {
+	if input.Symlink || len(input.ProjectionContent) > 48<<10 || len(input.RelativePath) > 512 {
+		return sdd.ProjectionComparison{}, ErrInvalidInput
+	}
+	request := sdd.CompareProjectionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID, Input: sdd.ProjectionInput{RelativePath: input.RelativePath, Content: []byte(input.ProjectionContent), Missing: input.Missing, Symlink: input.Symlink}}
+	return sddValue(server, ctx, request.Validate, func() (sdd.ProjectionComparison, error) { return server.sdd.CompareProjection(ctx, request) })
+}
+func (server *Server) sddRecordProjection(ctx context.Context, input sddRecordProjectionInput) (sdd.Projection, error) {
+	version, err := sddVersion(input.ExpectedStateVersion)
+	if err != nil {
+		return sdd.Projection{}, err
+	}
+	request := sdd.RecordProjectionRequest{Project: server.project, ChangeID: input.ChangeID, ArtifactID: input.ArtifactID, RevisionID: input.RevisionID, Status: input.Status, Digest: input.Digest, Location: input.Location, ExpectedStateVersion: version}
+	return sddValue(server, ctx, request.Validate, func() (sdd.Projection, error) { return server.sdd.RecordProjection(ctx, request) })
+}
+func (server *Server) sddProjectionStatus(ctx context.Context, input sddProjectionStatusInput) (sdd.Projection, error) {
+	request := sdd.ProjectionStatusRequest{Project: server.project, ChangeID: input.ChangeID, ArtifactID: input.ArtifactID}
+	return sddValue(server, ctx, request.Validate, func() (sdd.Projection, error) { return server.sdd.ProjectionStatus(ctx, request) })
+}
+func sddValue[T any](server *Server, ctx context.Context, validate func() error, call func() (T, error)) (T, error) {
+	var zero T
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	if validate() != nil {
+		return zero, ErrInvalidInput
+	}
+	if server.sdd == nil {
+		return zero, ErrUnavailable
+	}
+	value, err := call()
+	return value, shapeSDDError(ctx, err)
+}
 func (server *Server) sddCall(ctx context.Context, call func() (sdd.Change, error)) (sdd.Change, error) {
 	if err := ctx.Err(); err != nil {
 		return sdd.Change{}, err
@@ -394,6 +574,12 @@ func sddLimit(value float64) (int, error) {
 	}
 	return int(math.Trunc(value)), nil
 }
+func sddRevisionLimit(value float64) (int, error) {
+	if value == 0 {
+		return 50, nil
+	}
+	return sddLimit(value)
+}
 func sddVersion(value float64) (int64, error) {
 	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < 1 || value > maxJSONInteger {
 		return 0, ErrInvalidInput
@@ -407,7 +593,7 @@ func shapeSDDError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if errors.Is(err, sdd.ErrInvalid) || errors.Is(err, sdd.ErrIllegalTransition) {
+	if errors.Is(err, sdd.ErrInvalid) || errors.Is(err, sdd.ErrIllegalTransition) || errors.Is(err, sdd.ErrDigestMismatch) {
 		return ErrInvalidInput
 	}
 	if errors.Is(err, sdd.ErrNotFound) {
@@ -533,6 +719,38 @@ func (server *Server) callSDDTransition(ctx context.Context, _ *sdk.CallToolRequ
 	output, err := server.sddTransition(ctx, input)
 	return sddResponse(err, output)
 }
+func (server *Server) callSDDSaveRevision(ctx context.Context, _ *sdk.CallToolRequest, input sddSaveRevisionInput) (*sdk.CallToolResult, sdd.Revision, error) {
+	output, err := server.sddSaveRevision(ctx, input)
+	return sddToolResponse(err, output)
+}
+func (server *Server) callSDDGetRevision(ctx context.Context, _ *sdk.CallToolRequest, input sddGetRevisionInput) (*sdk.CallToolResult, sdd.Revision, error) {
+	output, err := server.sddGetRevision(ctx, input)
+	return sddToolResponse(err, output)
+}
+func (server *Server) callSDDListRevisions(ctx context.Context, _ *sdk.CallToolRequest, input sddListRevisionsInput) (*sdk.CallToolResult, []sdd.Revision, error) {
+	output, err := server.sddListRevisions(ctx, input)
+	return sddToolResponse(err, output)
+}
+func (server *Server) callSDDAcceptRevision(ctx context.Context, _ *sdk.CallToolRequest, input sddAcceptRevisionInput) (*sdk.CallToolResult, sdd.Revision, error) {
+	output, err := server.sddAcceptRevision(ctx, input)
+	return sddToolResponse(err, output)
+}
+func (server *Server) callSDDRenderProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddRenderProjectionInput) (*sdk.CallToolResult, sdd.ProjectionDocument, error) {
+	output, err := server.sddRenderProjection(ctx, input)
+	return sddToolResponse(err, output)
+}
+func (server *Server) callSDDCompareProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddCompareProjectionInput) (*sdk.CallToolResult, sdd.ProjectionComparison, error) {
+	output, err := server.sddCompareProjection(ctx, input)
+	return sddToolResponse(err, output)
+}
+func (server *Server) callSDDRecordProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddRecordProjectionInput) (*sdk.CallToolResult, sdd.Projection, error) {
+	output, err := server.sddRecordProjection(ctx, input)
+	return sddToolResponse(err, output)
+}
+func (server *Server) callSDDProjectionStatus(ctx context.Context, _ *sdk.CallToolRequest, input sddProjectionStatusInput) (*sdk.CallToolResult, sdd.Projection, error) {
+	output, err := server.sddProjectionStatus(ctx, input)
+	return sddToolResponse(err, output)
+}
 
 func toolResponse(err error, output result) (*sdk.CallToolResult, result, error) {
 	if err == nil {
@@ -577,6 +795,13 @@ func sddListResponse(err error, output []sdd.Change) (*sdk.CallToolResult, []sdd
 		return toolText(fmt.Sprintf("Returned %d SDD changes.", len(output)), false), output, nil
 	}
 	return sddErrorResponse(err), nil, nil
+}
+func sddToolResponse[T any](err error, output T) (*sdk.CallToolResult, T, error) {
+	if err == nil {
+		return toolText("SDD result returned.", false), output, nil
+	}
+	var zero T
+	return sddErrorResponse(err), zero, nil
 }
 func sddErrorResponse(err error) *sdk.CallToolResult {
 	if errors.Is(err, ErrSDDCancelled) {
