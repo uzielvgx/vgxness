@@ -21,6 +21,42 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
+func errorContainsEquivalentPath(err error, want string) bool {
+	if err == nil {
+		return false
+	}
+	for _, candidate := range strings.Split(err.Error(), `"`) {
+		if canonicalTestPath(candidate) == canonicalTestPath(want) {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalTestPath(path string) string {
+	path, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return ""
+	}
+	suffix := []string{}
+	for {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = filepath.Join(append([]string{resolved}, suffix...)...)
+			break
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			break
+		}
+		suffix = append([]string{filepath.Base(path)}, suffix...)
+		path = parent
+	}
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return filepath.Clean(path)
+}
+
 func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 	home := t.TempDir()
 	service := NewIntegration()
@@ -876,7 +912,7 @@ func TestRemoveTemporaryArtifactPreservesReplacementBeforeQuarantine(t *testing.
 		return os.WriteFile(path, foreign, 0o600)
 	})
 	current, readErr := os.ReadFile(path)
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), path) && readErr == nil && bytes.Equal(current, foreign), "cleanup err=%v current=%q read=%v", err, current, readErr)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, path) && readErr == nil && bytes.Equal(current, foreign), "cleanup err=%v current=%q read=%v", err, current, readErr)
 }
 
 func TestRemoveTemporaryArtifactPreservesInPlaceMutationBeforeQuarantine(t *testing.T) {
@@ -890,7 +926,7 @@ func TestRemoveTemporaryArtifactPreservesInPlaceMutationBeforeQuarantine(t *test
 		return os.WriteFile(path, foreign, 0o600)
 	})
 	current, readErr := os.ReadFile(path)
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), path) && readErr == nil && bytes.Equal(current, foreign), "cleanup err=%v current=%q read=%v", err, current, readErr)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, path) && readErr == nil && bytes.Equal(current, foreign), "cleanup err=%v current=%q read=%v", err, current, readErr)
 }
 
 func TestArtifactTemporaryUsesPrivateStagingAndRetainsForeignEntries(t *testing.T) {
@@ -916,7 +952,7 @@ func TestArtifactTemporaryUsesPrivateStagingAndRetainsForeignEntries(t *testing.
 	testutil.NoError(t, os.WriteFile(foreign, []byte("foreign"), 0o600))
 	err = cleanupInstalledArtifact(installedArtifact{temporary: temporary, temporaryInfo: temporaryInfo, staging: staging, stagingInfo: stagingInfo, content: content})
 	_, foreignErr := os.Stat(foreign)
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), staging) && foreignErr == nil, "cleanup err=%v foreign=%v", err, foreignErr)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, staging) && foreignErr == nil, "cleanup err=%v foreign=%v", err, foreignErr)
 }
 
 func TestCleanupRetiredArtifactPreservesChangedBackup(t *testing.T) {
@@ -929,7 +965,7 @@ func TestCleanupRetiredArtifactPreservesChangedBackup(t *testing.T) {
 	testutil.NoError(t, os.WriteFile(backup, []byte("changed retired artifact"), 0o600))
 	err = cleanupRetiredArtifact(retiredArtifact{backup: backup, backupInfo: info, content: managed})
 	current, readErr := os.ReadFile(backup)
-	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && strings.Contains(err.Error(), backup) && readErr == nil && bytes.Equal(current, []byte("changed retired artifact")), "cleanup err=%v current=%q read=%v", err, current, readErr)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery) && errorContainsEquivalentPath(err, backup) && readErr == nil && bytes.Equal(current, []byte("changed retired artifact")), "cleanup err=%v current=%q read=%v", err, current, readErr)
 }
 
 func TestRetainedPredecessorPersistErrorNamesPublishedMarkerAndBackup(t *testing.T) {
