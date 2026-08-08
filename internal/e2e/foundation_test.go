@@ -148,15 +148,25 @@ func TestGoCIWorkflowContract(t *testing.T) {
 			t.Error("coverage upload must always run and publish coverage.out")
 		}
 	})
+	t.Run("darwin smoke uses the current standard runner", func(t *testing.T) {
+		if !strings.Contains(workflow, "  darwin-smoke:\n    runs-on: macos-15") {
+			t.Error("Darwin source smoke must run natively on the standard macos-15 ARM64 runner")
+		}
+		if strings.Contains(workflow, "macos-14") {
+			t.Error("Go CI must not use the deprecated macos-14 runner")
+		}
+	})
 }
 
 func TestReleaseWorkflowContract(t *testing.T) {
 	workflow := readRepositoryFile(t, "../../.github/workflows/release.yml")
 	for _, want := range []string{
 		"uses: ./.github/workflows/go-ci.yml", "ref: ${{ github.sha }}", "  build:\n    runs-on: ubuntu-24.04",
-		"needs: [standard-validation, build, windows-smoke]", "contents: write", "id-token: write", "attestations: write", "sha256sum -c SHA256SUMS",
+		"release_commit: ${{ steps.release_metadata.outputs.commit }}", "release_date: ${{ steps.release_metadata.outputs.date }}", "id: release_metadata",
+		"  darwin-smoke:\n    needs: build\n    runs-on: macos-15", "needs: [standard-validation, build, windows-smoke, darwin-smoke]",
+		"contents: write", "id-token: write", "attestations: write", "sha256sum -c SHA256SUMS",
 		"go-version: 1.26.5",
-		"Verify Linux artifact and self-install", "Verify Windows artifact and self-install", "--verify-tag", "--prerelease",
+		"Verify Linux artifact and self-install", "Verify Windows artifact and self-install", "Verify Darwin artifact and self-install", "--verify-tag", "--prerelease",
 		"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
 		"actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
 		"actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0",
@@ -183,9 +193,34 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(workflow, "go-version: 1.26.3") {
 		t.Error("release workflow must not use stale Go 1.26.3")
 	}
+	darwin := strings.Index(workflow, "  darwin-smoke:\n")
 	publish := strings.Index(workflow, "  publish:\n")
-	if publish < 0 {
-		t.Fatal("release workflow missing publish job")
+	if darwin < 0 || publish <= darwin {
+		t.Fatal("release workflow must define Darwin artifact smoke before publish")
+	}
+	darwinWorkflow := workflow[darwin:publish]
+	for _, want := range []string{
+		"name: release-dist-${{ github.ref_name }}", "path: dist", `if [[ "$machine" != arm64 ]]; then`,
+		`printf 'expected macOS ARM64 runner, got %s\n' "$machine" >&2`, "target=arm64",
+		"RELEASE_COMMIT: ${{ needs.build.outputs.release_commit }}", "RELEASE_DATE: ${{ needs.build.outputs.release_date }}",
+		`archive="vgxness_${version}_darwin_${target}.tar.gz"`,
+		`awk -v archive="$archive" 'NF == 2 && $2 == archive { print }' dist/SHA256SUMS > "$checksum_file"`,
+		`if [[ "$(wc -l < "$checksum_file" | tr -d ' ')" != 1 ]]; then`, `(cd dist && shasum -a 256 -c "$checksum_file")`,
+		`extract="$(mktemp -d)"`, `install="$(mktemp -d)"`, `tar -xzf "dist/$archive" -C "$extract"`,
+		`version_output="$("$binary" version)"`, `grep -Fx "version=$GITHUB_REF_NAME" <<<"$version_output"`,
+		`grep -Fx "commit=$RELEASE_COMMIT" <<<"$version_output"`, `grep -Fx "date=$RELEASE_DATE" <<<"$version_output"`,
+		`grep -Fx "os=darwin" <<<"$version_output"`, `grep -Fx "arch=$target" <<<"$version_output"`,
+		`preview="$("$binary" self preview --bin-dir "$install/bin" --data-dir "$install/data")"`,
+		`install_output="$("$binary" self install --bin-dir "$install/bin" --data-dir "$install/data")"`,
+		`status="$("$install/bin/vgxness" self status --bin-dir "$install/bin" --data-dir "$install/data")"`,
+		`grep -Fx "state=absent" <<<"$preview"`, `grep -Fx "state=installed" <<<"$install_output"`, `grep -Fx "state=installed" <<<"$status"`,
+	} {
+		if !strings.Contains(darwinWorkflow, want) {
+			t.Errorf("Darwin release smoke missing %q", want)
+		}
+	}
+	if regexp.MustCompile(`(?m)\b(?:sleep|retry|retries)\b`).MatchString(darwinWorkflow) {
+		t.Error("Darwin release smoke must not hide failures with sleeps or retries")
 	}
 	publishWorkflow := workflow[publish:]
 	for _, permission := range []string{"      contents: write", "      id-token: write", "      attestations: write"} {
