@@ -31,11 +31,15 @@ The complete repository test suite runs on Linux and Windows in CI. Windows also
 
 ## Release process
 
-1. Update `CHANGELOG.md` and confirm the intended tag is strict `v`-prefixed SemVer.
+1. Prepare a proposed release by updating `CHANGELOG.md` and confirming the intended tag is strict `v`-prefixed SemVer.
 2. Run `make verify`; native Windows installation evidence remains CI-only.
-3. Create and push the tag. Branch pushes do not create releases.
+3. After any required maintainer approval under the repository's external release policy, create and push the tag. Branch pushes do not create releases.
 4. The tag workflow calls the complete standard validation workflow at the exact tagged SHA while independently deriving the exact 40-character commit and its committer RFC3339 date and running `go run ./cmd/vgxness-release` with those values.
-5. Publication remains blocked on standard validation, complete asset construction, checksum verification, and native Linux amd64 and Windows amd64 install paths before publishing the six archives and `SHA256SUMS` with `gh release create --verify-tag`.
+5. Publication remains blocked on standard validation, complete asset construction, checksum verification, and native Linux amd64 and Windows amd64 install paths. The publish job verifies `SHA256SUMS`, attests `dist/*` with GitHub Actions provenance, then publishes the six archives and `SHA256SUMS` with `gh release create --verify-tag`.
+
+If publication fails after GitHub creates a draft release or uploads only part of
+the asset set, a workflow rerun is not self-healing. Reconcile or delete the
+incomplete draft before retrying, and never move or reuse the tag.
 
 For a local rehearsal from the repository root:
 
@@ -76,7 +80,14 @@ $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
 if (-not $expected -or $actual -ne $expected) { throw "SHA-256 verification failed" }
 ```
 
-Release binaries are not code-signed or notarized yet. `SHA256SUMS` and acquisition over GitHub HTTPS are the current integrity layer; verify both the repository/release URL and the checksum before executing a binary.
+Before executing a downloaded archive, verify its GitHub Actions provenance attestation as well as its checksum. For example, from the directory containing the archive:
+
+```sh
+gh attestation verify vgxness_0.1.0-alpha.1_linux_amd64.tar.gz \
+  --repo uzielvgx/vgxness
+```
+
+Release binaries are not code-signed or notarized yet. For artifacts produced by this tag workflow, verify the repository/release URL, GitHub Actions provenance attestation, and `SHA256SUMS` before executing a binary.
 
 ## Install and operate
 

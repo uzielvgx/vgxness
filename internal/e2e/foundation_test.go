@@ -14,7 +14,7 @@ func TestGoCIWorkflowContract(t *testing.T) {
 	t.Run("workflow is auditable", func(t *testing.T) {
 		for _, want := range []string{
 			"workflow_call:", "permissions:\n  contents: read", "pull_request:", "push:", "branches: [main]",
-			"go-version: 1.26.3", "persist-credentials: false", "cancel-in-progress: true",
+			"go-version: 1.26.5", "persist-credentials: false", "cancel-in-progress: true",
 			"ref: ${{ inputs.ref || github.sha }}",
 			"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
 			"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
@@ -26,6 +26,12 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		}
 		if strings.Count(workflow, "branches: [main]") != 2 {
 			t.Error("workflow must target main for pull requests and pushes")
+		}
+		if strings.Contains(workflow, "go-version: 1.26.3") {
+			t.Error("workflow must not use stale Go 1.26.3")
+		}
+		if got, want := strings.Count(workflow, "go-version: 1.26.5"), strings.Count(workflow, "actions/setup-go@"); got != want {
+			t.Errorf("workflow must configure Go 1.26.5 in every setup-go step: got %d, want %d", got, want)
 		}
 		pinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$`)
 		for _, line := range strings.Split(workflow, "\n") {
@@ -148,11 +154,13 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	workflow := readRepositoryFile(t, "../../.github/workflows/release.yml")
 	for _, want := range []string{
 		"uses: ./.github/workflows/go-ci.yml", "ref: ${{ github.sha }}", "  build:\n    runs-on: ubuntu-24.04",
-		"needs: [standard-validation, build, windows-smoke]", "contents: write", "sha256sum -c SHA256SUMS",
+		"needs: [standard-validation, build, windows-smoke]", "contents: write", "id-token: write", "attestations: write", "sha256sum -c SHA256SUMS",
+		"go-version: 1.26.5",
 		"Verify Linux artifact and self-install", "Verify Windows artifact and self-install", "--verify-tag", "--prerelease",
 		"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
 		"actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
 		"actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0",
+		"actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2", "subject-path: dist/*",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Errorf("release workflow missing %q", want)
@@ -171,6 +179,43 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	if strings.Contains(workflow, "  build:\n    needs: standard-validation") {
 		t.Error("release asset construction should overlap standard validation; publication remains the joining gate")
+	}
+	if strings.Contains(workflow, "go-version: 1.26.3") {
+		t.Error("release workflow must not use stale Go 1.26.3")
+	}
+	publish := strings.Index(workflow, "  publish:\n")
+	if publish < 0 {
+		t.Fatal("release workflow missing publish job")
+	}
+	publishWorkflow := workflow[publish:]
+	for _, permission := range []string{"      contents: write", "      id-token: write", "      attestations: write"} {
+		if !strings.Contains(publishWorkflow, permission) {
+			t.Errorf("publish job missing permission %q", permission)
+		}
+	}
+	checksum := strings.Index(publishWorkflow, "sha256sum -c SHA256SUMS")
+	attest := strings.Index(publishWorkflow, "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2")
+	release := strings.Index(publishWorkflow, "gh release create")
+	if checksum < 0 || attest < 0 || release < 0 || !(checksum < attest && attest < release) {
+		t.Error("publish must verify checksums before attesting dist/* and creating the GitHub release")
+	}
+}
+
+func TestDependencyFloors(t *testing.T) {
+	goMod := readRepositoryFile(t, "../../go.mod")
+	goSum := readRepositoryFile(t, "../../go.sum")
+	for _, check := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "go.mod requirement", content: goMod, want: "golang.org/x/text v0.39.0 // indirect"},
+		{name: "go.sum module checksum", content: goSum, want: "golang.org/x/text v0.39.0 "},
+		{name: "go.sum go.mod checksum", content: goSum, want: "golang.org/x/text v0.39.0/go.mod "},
+	} {
+		if !strings.Contains(check.content, check.want) {
+			t.Errorf("dependency floor missing %s %q", check.name, check.want)
+		}
 	}
 }
 

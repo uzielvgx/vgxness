@@ -4,6 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Remediates the Go toolchain and `golang.org/x/text` security dependency floor, and adds proposed tag-release artifact attestations before GitHub release publication.
 - Adds a required, separately aggregated CI vulnerability lane pinned to `golang.org/x/vuln/cmd/govulncheck@v1.6.0` and an opt-in `make vuln` target while keeping the network-dependent scan out of `make verify`.
 - Restricts `vgxness-syncd` HTTP serving to literal loopback addresses, retires the insecure non-loopback development override while retaining an explicit `false` compatibility no-op, and documents the required external TLS boundary for remote synchronization.
 - Installs 18 managed artifacts, including a semantic merge that sets `default_agent="vgxness-manager"` in `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged, and bounded `default-agent.json` restoration metadata records whether `opencode.json` existed and any prior explicit default so uninstall can restore that default or remove a config created by setup.
