@@ -128,7 +128,7 @@ func TestClientRejectsUnsafeResponsesWithoutSecrets(t *testing.T) {
 		nilResponse, nilBody, transport bool
 		want                            error
 	}{
-		{"404", 404, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrDiscoveryUnsupported}, {"401", 401, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnauthorized}, {"503", 503, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnavailable}, {"500", 500, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrRemote}, {"duplicate", 200, http.Header{"Content-Type": []string{mediaType, mediaType}}, secret, false, false, false, ErrRemote}, {"wrong", 200, http.Header{"Content-Type": []string{"text/plain"}}, secret, false, false, false, ErrRemote}, {"duplicate json", 200, http.Header{"Content-Type": []string{mediaType}}, `{"protocol_version":1,"protocol_version":1}`, false, false, false, ErrRemote}, {"unknown", 200, http.Header{"Content-Type": []string{mediaType}}, `{"extra":1}`, false, false, false, ErrRemote}, {"utf8", 200, http.Header{"Content-Type": []string{mediaType}}, string([]byte{0xff}), false, false, false, ErrRemote}, {"nil response", 0, nil, "", true, false, false, ErrRemote}, {"nil body", 200, http.Header{"Content-Type": []string{mediaType}}, "", false, true, false, ErrRemote}, {"transport", 200, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, true, ErrRemote},
+		{"404", 404, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrDiscoveryUnsupported}, {"401", 401, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnauthorized}, {"503", 503, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnavailable}, {"500", 500, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrRemote}, {"duplicate", 200, http.Header{"Content-Type": []string{mediaType, mediaType}}, secret, false, false, false, ErrRemote}, {"wrong", 200, http.Header{"Content-Type": []string{"text/plain"}}, secret, false, false, false, ErrRemote}, {"duplicate json", 200, http.Header{"Content-Type": []string{mediaType}}, `{"protocol_version":1,"protocol_version":1}`, false, false, false, ErrRemote}, {"unknown", 200, http.Header{"Content-Type": []string{mediaType}}, `{"extra":1}`, false, false, false, ErrRemote}, {"utf8", 200, http.Header{"Content-Type": []string{mediaType}}, string([]byte{0xff}), false, false, false, ErrRemote}, {"nil response", 0, nil, "", true, false, false, ErrRemote}, {"nil body", 200, http.Header{"Content-Type": []string{mediaType}}, "", false, true, false, ErrRemote}, {"transport", 200, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, true, ErrUnavailable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var reader *closingReader
@@ -260,6 +260,19 @@ func TestPushDoesNotRetryUnauthorized(t *testing.T) {
 	}))
 	_, err := client.Push(context.Background(), "secret-credential", []syncservice.Mutation{mutation})
 	if !errors.Is(err, ErrUnauthorized) || calls != 1 {
+		t.Fatalf("error=%v calls=%d", err, calls)
+	}
+}
+
+func TestPushDoesNotRetryNilTransportResponse(t *testing.T) {
+	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
+	calls := 0
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, nil
+	}))
+	_, err := client.Push(context.Background(), "secret-credential", []syncservice.Mutation{mutation})
+	if !errors.Is(err, ErrRemote) || calls != 1 {
 		t.Fatalf("error=%v calls=%d", err, calls)
 	}
 }
