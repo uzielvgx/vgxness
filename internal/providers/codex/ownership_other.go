@@ -1,8 +1,8 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package codex
 
 import "os"
 
-func owned(os.FileInfo) bool        { return false }
-func trustedOwner(os.FileInfo) bool { return false }
+func safeAncestor(string, os.FileInfo) bool { return false }
+func ownedDir(string, os.FileInfo) bool     { return false }

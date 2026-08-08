@@ -1,5 +1,3 @@
-//go:build darwin || linux
-
 package codex
 
 import (
@@ -13,7 +11,7 @@ import (
 )
 
 func TestIntegrationInstallAndIdempotence(t *testing.T) {
-	options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	service := NewIntegration()
 	before, err := service.Status(context.Background(), options)
 	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 15)
@@ -23,20 +21,21 @@ func TestIntegrationInstallAndIdempotence(t *testing.T) {
 	require(t, err == nil && !again.Changed && !again.RestartRequired && again.State == integration.StateInstalled)
 }
 func TestIntegrationReinstallsPartialAndPreservesUnrelatedFiles(t *testing.T) {
-	options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	service := NewIntegration()
 	mustInstall(t, service, options)
-	require(t, os.WriteFile(filepath.Join(options.ConfigDir, "unrelated"), []byte("keep"), 0o600) == nil)
+	config := []byte("model = \"safe\"\n[mcp_servers.user]\ncommand = \"user-tool\"\n")
+	require(t, os.WriteFile(filepath.Join(options.ConfigDir, "config.toml"), config, 0o600) == nil)
 	require(t, os.Remove(filepath.Join(options.ConfigDir, "agents", "explore.toml")) == nil)
 	partial, err := service.Status(context.Background(), options)
 	require(t, err == nil && partial.State == integration.StatePartial)
 	result, err := service.Reinstall(context.Background(), options)
 	require(t, err == nil && result.State == integration.StateInstalled && result.Changed)
-	body, err := os.ReadFile(filepath.Join(options.ConfigDir, "unrelated"))
-	require(t, err == nil && string(body) == "keep")
+	body, err := os.ReadFile(filepath.Join(options.ConfigDir, "config.toml"))
+	require(t, err == nil && string(body) == string(config))
 }
 func TestIntegrationBlocksDriftAndPendingEvidence(t *testing.T) {
-	options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	service := NewIntegration()
 	mustInstall(t, service, options)
 	require(t, os.WriteFile(filepath.Join(options.ConfigDir, ".vgxness-pending"), []byte("codex-pending\n"), 0o600) == nil)
@@ -51,26 +50,55 @@ func TestIntegrationBlocksDriftAndPendingEvidence(t *testing.T) {
 	_, err = service.Uninstall(context.Background(), options)
 	require(t, errors.Is(err, integration.ErrDrift))
 }
+
+func TestStatusReportsRecoveryWhenClearPendingFails(t *testing.T) {
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
+	s := NewIntegration()
+	syncs := 0
+	s.open = func(ctx context.Context, o integration.Options, create bool) (*Root, error) {
+		r, err := OpenRoot(ctx, o, create)
+		if err == nil {
+			r.syncHook = func(name string) error {
+				if name == "." {
+					syncs++
+					if syncs == 5 {
+						return errors.New("clear pending")
+					}
+				}
+				return nil
+			}
+		}
+		return r, err
+	}
+	_, err := s.Install(context.Background(), options)
+	require(t, errors.Is(err, integration.ErrRecovery))
+	assertPending(t, options.ConfigDir)
+
+	status, err := s.Status(context.Background(), options)
+	require(t, status.State == integration.StateInstalled && errors.Is(err, integration.ErrRecovery))
+	assertPending(t, options.ConfigDir)
+}
 func TestManagedLayoutExcludesPluginArtifacts(t *testing.T) {
-	layout, err := NewIntegration().ManagedLayout(context.Background(), integration.Options{ConfigDir: t.TempDir() + "/codex"})
+	layout, err := NewIntegration().ManagedLayout(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")})
 	require(t, err == nil && len(layout.Artifacts) == 15)
 	for _, item := range layout.Artifacts {
 		require(t, item.RelativePath != "config.toml" && item.RelativePath != ".mcp.json" && filepath.Ext(item.RelativePath) != ".plugin")
 	}
 }
 func TestUninstallLeavesAbsentAndUnrelated(t *testing.T) {
-	options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	s := NewIntegration()
 	mustInstall(t, s, options)
-	require(t, os.WriteFile(filepath.Join(options.ConfigDir, "unrelated"), []byte("keep"), 0o600) == nil)
+	config := []byte("model = \"safe\"\n[mcp_servers.user]\ncommand = \"user-tool\"\n")
+	require(t, os.WriteFile(filepath.Join(options.ConfigDir, "config.toml"), config, 0o600) == nil)
 	got, err := s.Uninstall(context.Background(), options)
 	require(t, err == nil && got.State == integration.StateAbsent && got.Changed && got.RestartRequired)
-	b, err := os.ReadFile(filepath.Join(options.ConfigDir, "unrelated"))
-	require(t, err == nil && string(b) == "keep")
+	b, err := os.ReadFile(filepath.Join(options.ConfigDir, "config.toml"))
+	require(t, err == nil && string(b) == string(config))
 	assertNoEvidence(t, options.ConfigDir)
 }
 func TestPendingSidecarsBlockOnlyKnownArtifacts(t *testing.T) {
-	options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	s := NewIntegration()
 	mustInstall(t, s, options)
 	for _, suffix := range []string{".vgxness-stage", ".vgxness-remove"} {
@@ -90,11 +118,12 @@ func TestPendingSidecarsBlockOnlyKnownArtifacts(t *testing.T) {
 }
 func TestInstallCancellationAndPostLinkFailureRetainRecoveryEvidence(t *testing.T) {
 	t.Run("cancellation", func(t *testing.T) {
-		options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+		options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		require(t, os.Mkdir(options.ConfigDir, 0o700) == nil)
-		require(t, os.WriteFile(filepath.Join(options.ConfigDir, "unrelated"), []byte("keep"), 0o600) == nil)
+		config := []byte("model = \"safe\"\n[mcp_servers.user]\ncommand = \"user-tool\"\n")
+		require(t, os.WriteFile(filepath.Join(options.ConfigDir, "config.toml"), config, 0o600) == nil)
 		s := NewIntegration()
 		s.checkpoint = func(point, _ string) error {
 			if point == "published" {
@@ -106,15 +135,15 @@ func TestInstallCancellationAndPostLinkFailureRetainRecoveryEvidence(t *testing.
 		require(t, errors.Is(err, context.Canceled) && errors.Is(err, integration.ErrRecovery))
 		_, err = os.Stat(filepath.Join(options.ConfigDir, "AGENTS.md"))
 		require(t, errors.Is(err, os.ErrNotExist))
-		b, err := os.ReadFile(filepath.Join(options.ConfigDir, "unrelated"))
-		require(t, err == nil && string(b) == "keep")
+		b, err := os.ReadFile(filepath.Join(options.ConfigDir, "config.toml"))
+		require(t, err == nil && string(b) == string(config))
 		assertPending(t, options.ConfigDir)
 		recovered, err := s.Reinstall(context.Background(), options)
 		require(t, err == nil && recovered.State == integration.StateInstalled)
 		assertNoEvidence(t, options.ConfigDir)
 	})
 	t.Run("post-link", func(t *testing.T) {
-		options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+		options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 		calls := 0
 		s := NewIntegration()
 		s.open = func(ctx context.Context, o integration.Options, create bool) (*Root, error) {
@@ -138,7 +167,7 @@ func TestInstallCancellationAndPostLinkFailureRetainRecoveryEvidence(t *testing.
 	})
 }
 func TestUninstallCleanupFailureReinstalls(t *testing.T) {
-	options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	s := NewIntegration()
 	mustInstall(t, s, options)
 	s.checkpoint = func(point, _ string) error {
@@ -157,7 +186,7 @@ func TestUninstallCleanupFailureReinstalls(t *testing.T) {
 	assertNoEvidence(t, options.ConfigDir)
 }
 func TestUninstallRejectsReplacedIdentityAndRetainsBackup(t *testing.T) {
-	options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	s := NewIntegration()
 	mustInstall(t, s, options)
 	pkg, err := Render("v0.0.0")
@@ -181,7 +210,7 @@ func TestUninstallRejectsReplacedIdentityAndRetainsBackup(t *testing.T) {
 }
 func TestUninstallFailedRestoreAndSymlinksRemainRecoveryOrDrift(t *testing.T) {
 	t.Run("restore", func(t *testing.T) {
-		options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+		options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 		s := NewIntegration()
 		mustInstall(t, s, options)
 		s.checkpoint = func(point, name string) error {
@@ -198,16 +227,21 @@ func TestUninstallFailedRestoreAndSymlinksRemainRecoveryOrDrift(t *testing.T) {
 		assertPending(t, options.ConfigDir)
 	})
 	t.Run("symlink", func(t *testing.T) {
-		options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+		options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 		s := NewIntegration()
 		mustInstall(t, s, options)
 		require(t, os.Remove(filepath.Join(options.ConfigDir, "agents", "explore.toml")) == nil)
-		require(t, os.Symlink("missing", filepath.Join(options.ConfigDir, "agents", "explore.toml")) == nil)
+		if err := os.Symlink("missing", filepath.Join(options.ConfigDir, "agents", "explore.toml")); err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				t.Skip("symlink privilege unavailable")
+			}
+			t.Fatal(err)
+		}
 		got, err := s.Status(context.Background(), options)
 		require(t, err == nil && got.State == integration.StateDrifted)
 	})
 	t.Run("agents-dir", func(t *testing.T) {
-		options := integration.Options{ConfigDir: t.TempDir() + "/codex"}
+		options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 		s := NewIntegration()
 		mustInstall(t, s, options)
 		pkg, _ := Render("v0.0.0")
@@ -217,13 +251,18 @@ func TestUninstallFailedRestoreAndSymlinksRemainRecoveryOrDrift(t *testing.T) {
 			}
 		}
 		require(t, os.Remove(filepath.Join(options.ConfigDir, "agents")) == nil)
-		require(t, os.Symlink("missing", filepath.Join(options.ConfigDir, "agents")) == nil)
+		if err := os.Symlink("missing", filepath.Join(options.ConfigDir, "agents")); err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				t.Skip("symlink privilege unavailable")
+			}
+			t.Fatal(err)
+		}
 		got, err := s.Status(context.Background(), options)
 		require(t, err == nil && got.State == integration.StateDrifted)
 	})
 }
 func TestReinstallAbsentIsInvalid(t *testing.T) {
-	_, err := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: t.TempDir() + "/codex"})
+	_, err := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")})
 	require(t, errors.Is(err, integration.ErrInvalid))
 }
 func assertPending(t *testing.T, root string) {
