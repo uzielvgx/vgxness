@@ -56,7 +56,7 @@ func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	return 0
 }
 
-func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, integrations integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, sdds SDDRuntime) int {
+func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, opencodeIntegration, codexIntegration integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, sdds SDDRuntime) int {
 	if len(args) > 0 && args[0] == "version" {
 		return RunVersion(args[1:], stdout, stderr)
 	}
@@ -67,7 +67,7 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		return runSDD(ctx, args[1:], stdin, stdout, stderr, sdds)
 	}
 	if len(args) > 0 && args[0] == "integrate" {
-		return runIntegration(ctx, args[1:], stdout, stderr, integrations)
+		return runIntegration(ctx, args[1:], stdout, stderr, opencodeIntegration, codexIntegration)
 	}
 	if len(args) > 0 && args[0] == "self" {
 		return runSelfInstall(ctx, args[1:], stdout, stderr, installer)

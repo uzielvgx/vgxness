@@ -4,15 +4,19 @@ package codex
 
 import (
 	"context"
-	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
 )
 
-func TestOpenRootFailsClosedOnWindows(t *testing.T) {
-	r, err := OpenRoot(context.Background(), integration.Options{ConfigDir: t.TempDir()}, true)
-	if r != nil || !errors.Is(err, integration.ErrInvalid) {
-		t.Fatalf("OpenRoot() = %v, %v, want ErrInvalid", r, err)
+func TestOpenRootUsesCurrentUserDirectoryOnWindows(t *testing.T) {
+	r, err := OpenRoot(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.Mkdir("agents"); err != nil {
+		t.Fatal(err)
 	}
 }

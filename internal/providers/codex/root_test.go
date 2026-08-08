@@ -24,7 +24,7 @@ func (i ancestorInfo) Sys() any          { return &syscall.Stat_t{Uid: i.uid} }
 func (ancestorInfo) IsDir() bool         { return true }
 func TestRootCases(t *testing.T) {
 	foreign := ancestorInfo{mode: 0o755, uid: 1}
-	if safeAncestor(foreign) || safeAncestor(ancestorInfo{mode: 0o777 | os.ModeSticky, uid: 1}) || !safeAncestor(ancestorInfo{mode: 0o755, uid: 0}) {
+	if safeAncestor("", foreign) || safeAncestor("", ancestorInfo{mode: 0o777 | os.ModeSticky, uid: 1}) || !safeAncestor("", ancestorInfo{mode: 0o755, uid: 0}) {
 		t.Fatal("ancestor ownership")
 	}
 	for _, tc := range []struct {
@@ -248,7 +248,7 @@ func TestRootOwnershipAndPostLinkAnchor(t *testing.T) {
 	}
 	defer r.Close()
 	info, err := r.fs.Lstat(".")
-	if err != nil || !owned(info) {
+	if err != nil || !ownedDir(r.Path, info) {
 		t.Fatalf("owner = %v, %v", info, err)
 	}
 	r.syncHook = func(string) error { return errors.New("sync") }

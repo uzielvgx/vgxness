@@ -129,8 +129,32 @@ func (s *Integration) Preview(ctx context.Context, options integration.Options) 
 	return state.result, nil
 }
 func (s *Integration) Status(ctx context.Context, options integration.Options) (integration.Result, error) {
-	state, err := s.inspect(ctx, options)
-	return state.result, err
+	pkg, err := codexPackage()
+	if err != nil {
+		return integration.Result{}, err
+	}
+	path, err := rootPath(options)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	root, err := s.openRoot(ctx, options, false)
+	if errors.Is(err, os.ErrNotExist) {
+		result := resultFor(path, pkg)
+		result.State = integration.StateAbsent
+		return result, nil
+	}
+	if err != nil {
+		return integration.Result{}, err
+	}
+	defer root.Close()
+	state, err := inspectRoot(ctx, root, pkg)
+	if err != nil {
+		return state.result, err
+	}
+	if present, err := pending(root, pkg); err != nil || present {
+		return state.result, errors.Join(integration.ErrRecovery, err)
+	}
+	return state.result, nil
 }
 func (s *Integration) ManagedLayout(ctx context.Context, options integration.Options) (integration.ManagedLayout, error) {
 	if err := ctx.Err(); err != nil {

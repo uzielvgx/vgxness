@@ -19,6 +19,7 @@ The read-only `status` and `doctor` commands report storage root, database, and 
 | [Alpha releases](docs/release.md) | Release artifacts, support matrix, checksum verification, installation, and release rollback boundaries. |
 | [Guided OpenCode Setup](docs/opencode-setup-wizard.md) | Complete explanatory wizard, confirmation boundary, verification, status, and recovery behavior. |
 | [OpenCode Integration](docs/opencode-integration.md) | Persistent manager installation, managed identities, storage tools, and health. |
+| [Codex Integration](docs/codex-integration.md) | Standalone Codex agent lifecycle and user-owned `config.toml` contract. |
 | [Safe Hooks](docs/hooks.md) | No installed hook surface; historical plugin retirement context. |
 
 ## Development

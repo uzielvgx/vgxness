@@ -64,6 +64,15 @@ func (runtime *fakeIntegrationRuntime) Status(_ context.Context, options integra
 func (runtime *fakeIntegrationRuntime) Uninstall(_ context.Context, options integration.Options) (integration.Result, error) {
 	return runtime.call("uninstall", options)
 }
+func (runtime *fakeIntegrationRuntime) Reinstall(_ context.Context, options integration.Options) (integration.Result, error) {
+	return runtime.call("reinstall", options)
+}
+func (*fakeIntegrationRuntime) ManagedLayout(context.Context, integration.Options) (integration.ManagedLayout, error) {
+	return integration.ManagedLayout{}, nil
+}
+func (*fakeIntegrationRuntime) ReinstallPending(context.Context, integration.Options) (bool, error) {
+	return false, nil
+}
 func (runtime *fakeIntegrationRuntime) call(action string, options integration.Options) (integration.Result, error) {
 	runtime.calls++
 	runtime.action = action
@@ -73,8 +82,25 @@ func (runtime *fakeIntegrationRuntime) call(action string, options integration.O
 
 func runIntegrationTest(args []string, runtime integration.Runtime) (int, string, string) {
 	var stdout, stderr bytes.Buffer
-	code := RunProductSDDRuntime(context.Background(), args, strings.NewReader(""), &stdout, &stderr, &fakeInspector{}, nil, runtime, nil, nil, nil)
+	code := RunProductSDDRuntime(context.Background(), args, strings.NewReader(""), &stdout, &stderr, &fakeInspector{}, nil, runtime, runtime, nil, nil, nil)
 	return code, stdout.String(), stderr.String()
+}
+
+func TestIntegrationCLI_RoutesCodexLifecycle(t *testing.T) {
+	for _, action := range []string{"preview", "install", "status", "reinstall", "uninstall"} {
+		t.Run(action, func(t *testing.T) {
+			runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateInstalled}}
+			code, stdout, stderr := runIntegrationTest([]string{"integrate", "codex", action, "--config-dir", "/tmp/codex"}, runtime)
+			testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && runtime.action == action && runtime.options.ConfigDir == "/tmp/codex", "exit=%d calls=%d action=%q options=%#v stderr=%q", code, runtime.calls, runtime.action, runtime.options, stderr)
+			testutil.Require(t, strings.Contains(stdout, "provider=codex\n"), "output=%q", stdout)
+		})
+	}
+}
+
+func TestIntegrationCLI_CodexUsesHomeWhenConfigDirIsOmitted(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent}}
+	code, _, stderr := runIntegrationTest([]string{"integrate", "codex", "preview"}, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && runtime.options.ConfigDir == "" && runtime.options.HomeDir != "", "exit=%d calls=%d options=%#v stderr=%q", code, runtime.calls, runtime.options, stderr)
 }
 
 func TestIntegrationCLI_RoutesEverySupportedAction(t *testing.T) {
@@ -92,8 +118,8 @@ func TestIntegrationCLI_RoutesEverySupportedAction(t *testing.T) {
 func TestIntegrationCLI_RejectsUnsupportedInputWithoutCallingRuntime(t *testing.T) {
 	for _, args := range [][]string{
 		{"integrate"},
-		{"integrate", "codex", "status"},
 		{"integrate", "opencode", "repair"},
+		{"integrate", "opencode", "reinstall"},
 		{"integrate", "opencode", "status", "extra"},
 		{"integrate", "opencode", "status", "--unknown"},
 		{"integrate", "opencode", "preview", "--model-plan", "extreme"},
@@ -101,6 +127,40 @@ func TestIntegrationCLI_RejectsUnsupportedInputWithoutCallingRuntime(t *testing.
 		runtime := &fakeIntegrationRuntime{}
 		code, stdout, _ := runIntegrationTest(args, runtime)
 		testutil.Require(t, code == 2 && stdout == "" && runtime.calls == 0, "args=%v exit=%d calls=%d output=%q", args, code, runtime.calls, stdout)
+	}
+}
+
+func TestIntegrationCLI_InvalidProviderArgumentsShowAccurateUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		contains []string
+		absent   []string
+	}{
+		{
+			name:     "opencode",
+			args:     []string{"integrate", "opencode", "status", "--unknown"},
+			contains: []string{"usage: vgxness integrate opencode <preview|install|status|uninstall>", "--model-plan", "--model-efficient"},
+			absent:   []string{"reinstall"},
+		},
+		{
+			name:     "codex",
+			args:     []string{"integrate", "codex", "status", "--model-plan", "high"},
+			contains: []string{"usage: vgxness integrate codex <preview|install|status|reinstall|uninstall>", "--config-dir PATH"},
+			absent:   []string{"--model", "--model-plan", "--model-efficient"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := &fakeIntegrationRuntime{}
+			code, stdout, stderr := runIntegrationTest(tc.args, runtime)
+			testutil.Require(t, code == 2 && stdout == "" && runtime.calls == 0, "exit=%d calls=%d stdout=%q", code, runtime.calls, stdout)
+			for _, text := range tc.contains {
+				testutil.Require(t, strings.Contains(stderr, text), "stderr missing %q: %q", text, stderr)
+			}
+			for _, text := range tc.absent {
+				testutil.Require(t, !strings.Contains(stderr, text), "stderr unexpectedly contains %q: %q", text, stderr)
+			}
+		})
 	}
 }
 

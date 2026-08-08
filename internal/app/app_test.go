@@ -101,6 +101,26 @@ func TestOpenCodeIntegrationRuntime_InstallStatusAndRecoverableUninstall(t *test
 	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=absent") && strings.Contains(out.String(), "backup="), "uninstall exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
 }
 
+func TestCodexIntegrationRuntime_PreservesConfigToml(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "codex")
+	config := []byte("model = \"user-owned\"\n[mcp_servers.user]\ncommand = \"user-tool\"\n")
+	if err := os.Mkdir(configDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDirectory, "config.toml"), config, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	for _, action := range []string{"install", "status", "reinstall", "uninstall"} {
+		out.Reset()
+		stderr.Reset()
+		code := Run(context.Background(), []string{"integrate", "codex", action, "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
+		testutil.Require(t, code == 0 && stderr.Len() == 0, "%s exit=%d out=%q stderr=%q", action, code, out.String(), stderr.String())
+		got, err := os.ReadFile(filepath.Join(configDirectory, "config.toml"))
+		testutil.Require(t, err == nil && string(got) == string(config), "%s config=%q err=%v", action, got, err)
+	}
+}
+
 func TestVersionUsesLightweightPathWithoutWorkingDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows prevents removing the active working directory")
