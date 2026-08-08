@@ -5,30 +5,47 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/vgxness/vgxness/internal/integration"
 )
 
-func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer, runtime integration.Runtime) int {
-	if len(args) < 2 || args[0] != "opencode" || !integrationAction(args[1]) {
-		fmt.Fprintln(stderr, "usage: vgxness integrate opencode <preview|install|status|uninstall> [--config-dir PATH] [--model-plan low|medium|high] [--model-efficient provider/model] [--model-balanced provider/model] [--model-frontier provider/model]")
+func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer, opencode, codex integration.Runtime) int {
+	if len(args) < 2 || !integrationProvider(args[0]) || !integrationAction(args[0], args[1]) {
+		fmt.Fprintln(stderr, "usage: vgxness integrate <opencode|codex> <action> [--config-dir PATH]")
 		return 2
 	}
+	provider := args[0]
 	action := args[1]
-	flags := flag.NewFlagSet("integrate opencode "+action, flag.ContinueOnError)
+	flags := flag.NewFlagSet("integrate "+provider+" "+action, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var options integration.Options
 	var deprecatedModel string
-	flags.StringVar(&options.ConfigDir, "config-dir", "", "OpenCode global config directory")
-	flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
-	flags.Var((*planFlag)(&options.ModelPlan), "model-plan", "active model plan: low, medium, or high")
-	flags.StringVar(&options.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
-	flags.StringVar(&options.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
-	flags.StringVar(&options.ModelFrontier, "model-frontier", "", "exact provider/model for the frontier slot")
+	flags.StringVar(&options.ConfigDir, "config-dir", "", provider+" config directory")
+	if provider == "opencode" {
+		flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
+		flags.Var((*planFlag)(&options.ModelPlan), "model-plan", "active model plan: low, medium, or high")
+		flags.StringVar(&options.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
+		flags.StringVar(&options.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
+		flags.StringVar(&options.ModelFrontier, "model-frontier", "", "exact provider/model for the frontier slot")
+	}
 	if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "invalid integration arguments")
+		fmt.Fprintln(stderr, integrationUsage(provider))
 		return 2
+	}
+	if provider == "codex" && options.ConfigDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintln(stderr, "operational: resolve home directory")
+			return 1
+		}
+		options.HomeDir = home
+	}
+	runtime := opencode
+	if provider == "codex" {
+		runtime = codex
 	}
 	if runtime == nil {
 		fmt.Fprintln(stderr, "operational: integration runtime is unavailable")
@@ -43,6 +60,13 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 		result, err = runtime.Install(ctx, options)
 	case "status":
 		result, err = runtime.Status(ctx, options)
+	case "reinstall":
+		managed, ok := runtime.(integration.ManagedRuntime)
+		if !ok {
+			fmt.Fprintln(stderr, "operational: integration runtime is unavailable")
+			return 1
+		}
+		result, err = managed.Reinstall(ctx, options)
 	case "uninstall":
 		result, err = runtime.Uninstall(ctx, options)
 	}
@@ -66,6 +90,13 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 	return 0
 }
 
+func integrationUsage(provider string) string {
+	if provider == "opencode" {
+		return "usage: vgxness integrate opencode <preview|install|status|uninstall> [--config-dir PATH] [--model MODEL] [--model-plan low|medium|high] [--model-efficient PROVIDER/MODEL] [--model-balanced PROVIDER/MODEL] [--model-frontier PROVIDER/MODEL]"
+	}
+	return "usage: vgxness integrate codex <preview|install|status|reinstall|uninstall> [--config-dir PATH]"
+}
+
 type planFlag string
 
 func (value *planFlag) String() string { return string(*value) }
@@ -78,10 +109,14 @@ func (value *planFlag) Set(input string) error {
 	return nil
 }
 
-func integrationAction(value string) bool {
+func integrationProvider(value string) bool { return value == "opencode" || value == "codex" }
+
+func integrationAction(provider, value string) bool {
 	switch value {
 	case "preview", "install", "status", "uninstall":
 		return true
+	case "reinstall":
+		return provider == "codex"
 	default:
 		return false
 	}
