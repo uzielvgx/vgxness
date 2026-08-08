@@ -52,7 +52,7 @@ func OpenRoot(ctx context.Context, options integration.Options, create bool) (*R
 	if err != nil {
 		return nil, err
 	}
-	if !ownedDir(info) {
+	if !ownedDir(path, info) {
 		return nil, invalid("root is not private directory")
 	}
 	fs, err := os.OpenRoot(path)
@@ -106,7 +106,7 @@ func rootPath(options integration.Options) (string, error) {
 }
 func ensureRoot(path string) error {
 	if info, err := os.Lstat(path); err == nil {
-		if !ownedDir(info) {
+		if !ownedDir(path, info) {
 			return invalid("root is not private directory")
 		}
 		return nil
@@ -121,14 +121,14 @@ func ensureRoot(path string) error {
 	if err != nil {
 		return err
 	}
-	if !safeAncestor(parentInfo) {
+	if !safeAncestor(parent, parentInfo) {
 		return invalid("unsafe root parent")
 	}
 	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	info, err := os.Lstat(path)
-	if err != nil || !ownedDir(info) {
+	if err != nil || !ownedDir(path, info) {
 		return invalid("created unsafe root")
 	}
 	if err := syncPath(path); err != nil {
@@ -139,7 +139,7 @@ func ensureRoot(path string) error {
 func safeAncestors(path string) error {
 	for p := path; ; p = filepath.Dir(p) {
 		info, err := os.Lstat(p)
-		if err == nil && !safeAncestor(info) {
+		if err == nil && !safeAncestor(p, info) {
 			return invalid("unsafe root ancestor")
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -149,12 +149,6 @@ func safeAncestors(path string) error {
 			return nil
 		}
 	}
-}
-func safeAncestor(info os.FileInfo) bool {
-	return info.IsDir() && info.Mode()&os.ModeSymlink == 0 && trustedOwner(info) && (info.Mode().Perm()&0o022 == 0 || info.Mode()&os.ModeSticky != 0)
-}
-func ownedDir(info os.FileInfo) bool {
-	return safeAncestor(info) && info.Mode().Perm()&0o022 == 0 && owned(info)
 }
 func invalid(s string) error   { return fmt.Errorf("%w: %s", integration.ErrInvalid, s) }
 func conflict(s string) error  { return fmt.Errorf("%w: %s", integration.ErrConflict, s) }
@@ -171,7 +165,7 @@ func (r *Root) Mkdir(name string) error {
 		return err
 	}
 	if info, err := r.fs.Lstat(name); err == nil {
-		if !ownedDir(info) {
+		if !ownedDir(filepath.Join(r.Path, name), info) {
 			return invalid("unsafe subdirectory")
 		}
 		return nil
@@ -181,7 +175,7 @@ func (r *Root) Mkdir(name string) error {
 	if err := r.fs.Mkdir(name, 0o700); err != nil {
 		return err
 	}
-	if info, err := r.fs.Lstat(name); err != nil || !ownedDir(info) {
+	if info, err := r.fs.Lstat(name); err != nil || !ownedDir(filepath.Join(r.Path, name), info) {
 		return invalid("created unsafe subdirectory")
 	}
 	if err := r.sync(name); err != nil {
@@ -196,12 +190,7 @@ func (r *Root) sync(name string) error {
 	if r.syncHook != nil {
 		return r.syncHook(name)
 	}
-	f, err := r.fs.Open(name)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
+	return syncPath(filepath.Join(r.Path, name))
 }
 func (r *Root) Read(name string, limit int) ([]byte, os.FileInfo, error) {
 	if err := r.name(name); err != nil {
@@ -501,12 +490,4 @@ func (r *Root) ClearPending() error {
 		return recovery(err)
 	}
 	return nil
-}
-func syncPath(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
 }

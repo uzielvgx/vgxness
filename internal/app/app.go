@@ -17,6 +17,7 @@ import (
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/opencodebackup"
+	"github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
@@ -56,6 +57,7 @@ func runWithMCP(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	}
 	installer := selfinstall.New(selfinstall.Config{})
 	integrationRuntime := opencode.NewIntegration()
+	codexIntegrationRuntime := codex.NewIntegration()
 	cliMemory := appruntime.NewMemory("cli", false)
 	setupRuntime := setupflow.NewWithRecovery(
 		installer,
@@ -82,7 +84,7 @@ func runWithMCP(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		}
 		return launchTUI(ctx, stdin, stdout, stderr, backend, tui.Options{Workspace: workspace})
 	}
-	return cli.RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, installer, setupRuntime, appruntime.NewSDD())
+	return cli.RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, codexIntegrationRuntime, installer, setupRuntime, appruntime.NewSDD())
 }
 
 func mustWorkspace() string {
