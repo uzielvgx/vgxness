@@ -111,6 +111,20 @@ jobs:
       - name: Build
         run: go build -trimpath ./...
 
+  vulnerability:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.3
+          cache: true
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
   linux-e2e:
     runs-on: ubuntu-24.04
     steps:
@@ -220,7 +234,7 @@ jobs:
   quality:
     name: quality
     if: ${{ always() }}
-    needs: [coverage, race, static, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]
+    needs: [coverage, race, static, vulnerability, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every standard lane
@@ -228,6 +242,7 @@ jobs:
           COVERAGE_RESULT: ${{ needs.coverage.result }}
           RACE_RESULT: ${{ needs.race.result }}
           STATIC_RESULT: ${{ needs.static.result }}
+          VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
           LINUX_E2E_RESULT: ${{ needs.linux-e2e.result }}
           FUZZ_OPENSPEC_RESULT: ${{ needs.fuzz-openspec.result }}
           FUZZ_LAUNCHER_MANIFEST_RESULT: ${{ needs.fuzz-launcher-manifest.result }}
@@ -235,6 +250,21 @@ jobs:
           WINDOWS_INSTALL_RESULT: ${{ needs.windows-install.result }}
           DARWIN_SMOKE_RESULT: ${{ needs.darwin-smoke.result }}
         run: |
-          for result in "$COVERAGE_RESULT" "$RACE_RESULT" "$STATIC_RESULT" "$LINUX_E2E_RESULT" "$FUZZ_OPENSPEC_RESULT" "$FUZZ_LAUNCHER_MANIFEST_RESULT" "$WINDOWS_COMPILE_RESULT" "$WINDOWS_INSTALL_RESULT" "$DARWIN_SMOKE_RESULT"; do
-            test "$result" = success || exit 1
-          done
+          require_success() {
+            lane="$1"
+            result="$2"
+            if [ "$result" != success ]; then
+              printf '%s lane result: %s\n' "$lane" "$result" >&2
+              exit 1
+            fi
+          }
+          require_success coverage "$COVERAGE_RESULT"
+          require_success race "$RACE_RESULT"
+          require_success static "$STATIC_RESULT"
+          require_success vulnerability "$VULNERABILITY_RESULT"
+          require_success linux-e2e "$LINUX_E2E_RESULT"
+          require_success fuzz-openspec "$FUZZ_OPENSPEC_RESULT"
+          require_success fuzz-launcher-manifest "$FUZZ_LAUNCHER_MANIFEST_RESULT"
+          require_success windows-compile "$WINDOWS_COMPILE_RESULT"
+          require_success windows-install "$WINDOWS_INSTALL_RESULT"
+          require_success darwin-smoke "$DARWIN_SMOKE_RESULT"

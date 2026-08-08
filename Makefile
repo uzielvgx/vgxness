@@ -1,4 +1,4 @@
-.PHONY: fast verify
+.PHONY: fast verify vuln
 
 fast:
 	test -z "$$(gofmt -l .)"
@@ -18,3 +18,6 @@ verify:
 	GOOS=windows GOARCH=arm64 go build -trimpath ./...
 	GOOS=windows GOARCH=amd64 go test -count=1 -run '^$$' -exec=/usr/bin/true ./...
 	GOOS=windows GOARCH=amd64 go test -tags=e2e -count=1 -run '^$$' -exec=/usr/bin/true ./internal/e2e
+
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...

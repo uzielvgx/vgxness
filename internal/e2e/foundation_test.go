@@ -36,22 +36,74 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		}
 	})
 	t.Run("standard lanes are independent and aggregated", func(t *testing.T) {
-		lanes := []string{"coverage", "race", "static", "linux-e2e", "fuzz-openspec", "fuzz-launcher-manifest", "windows-compile", "windows-install", "darwin-smoke"}
+		lanes := []string{"coverage", "race", "static", "vulnerability", "linux-e2e", "fuzz-openspec", "fuzz-launcher-manifest", "windows-compile", "windows-install", "darwin-smoke"}
 		for _, lane := range lanes {
 			if !strings.Contains(workflow, "  "+lane+":\n") {
 				t.Errorf("workflow missing standard lane %q", lane)
 			}
 		}
-		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, race, static, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]") {
+		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, race, static, vulnerability, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]") {
 			t.Error("only the standard aggregate gate may depend on validation lanes")
 		}
 		if !strings.Contains(workflow, "  quality:\n    name: quality\n    if: ${{ always() }}") {
 			t.Error("workflow must preserve the always-running quality check required by branch protection")
 		}
-		for _, result := range []string{"needs.coverage.result", "needs.race.result", "needs.static.result", "needs.linux-e2e.result", "needs.fuzz-openspec.result", "needs.fuzz-launcher-manifest.result", "needs.windows-compile.result", "needs.windows-install.result", "needs.darwin-smoke.result"} {
+		for _, result := range []string{"needs.coverage.result", "needs.race.result", "needs.static.result", "needs.vulnerability.result", "needs.linux-e2e.result", "needs.fuzz-openspec.result", "needs.fuzz-launcher-manifest.result", "needs.windows-compile.result", "needs.windows-install.result", "needs.darwin-smoke.result"} {
 			if !strings.Contains(workflow, result) {
 				t.Errorf("aggregate gate does not require %q", result)
 			}
+		}
+	})
+	t.Run("vulnerability scanning is pinned and isolated", func(t *testing.T) {
+		vulnerability := strings.Index(workflow, "  vulnerability:\n")
+		quality := strings.Index(workflow, "  quality:\n")
+		if vulnerability < 0 || quality <= vulnerability {
+			t.Fatal("workflow must define a vulnerability lane before the quality gate")
+		}
+		var laneLines []string
+		for _, line := range strings.Split(workflow[vulnerability:], "\n") {
+			if len(laneLines) > 0 && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") {
+				break
+			}
+			laneLines = append(laneLines, line)
+		}
+		lane := strings.Join(laneLines, "\n")
+		qualityGate := workflow[quality:]
+		for _, want := range []string{
+			"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+			"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+			"run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...",
+		} {
+			if !strings.Contains(lane, want) {
+				t.Errorf("vulnerability lane missing %q", want)
+			}
+		}
+		for _, want := range []string{
+			"VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}",
+			`require_success vulnerability "$VULNERABILITY_RESULT"`,
+			`printf '%s lane result: %s\n' "$lane" "$result"`,
+		} {
+			if !strings.Contains(qualityGate, want) {
+				t.Errorf("quality gate does not consume vulnerability evidence %q", want)
+			}
+		}
+
+		makefile := readRepositoryFile(t, "../../Makefile")
+		const target = "\nvuln:\n\tgo run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./..."
+		if !strings.Contains(makefile, ".PHONY: fast verify vuln") || !strings.Contains(makefile, target) {
+			t.Error("Makefile must expose the exact pinned vulnerability scan as a separate vuln target")
+		}
+		verify := strings.Index(makefile, "\nverify:\n")
+		vuln := strings.Index(makefile, "\nvuln:\n")
+		if verify < 0 || vuln < 0 {
+			t.Fatal("Makefile must retain verify and vuln targets")
+		}
+		verifyRecipe := makefile[verify:]
+		if vuln > verify {
+			verifyRecipe = makefile[verify:vuln]
+		}
+		if strings.Contains(verifyRecipe, "govulncheck") {
+			t.Error("network-dependent vulnerability scanning must remain outside make verify")
 		}
 	})
 	t.Run("all standard evidence is declared", func(t *testing.T) {
