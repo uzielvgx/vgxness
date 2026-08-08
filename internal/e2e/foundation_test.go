@@ -187,6 +187,37 @@ func readRepositoryFile(t *testing.T, path string) string {
 	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }
 
+func TestUnreleasedChangelogManagedArtifactVersions(t *testing.T) {
+	changelog := readRepositoryFile(t, "../../CHANGELOG.md")
+	_, unreleased, ok := strings.Cut(changelog, "## Unreleased\n")
+	if !ok {
+		t.Fatal("CHANGELOG missing Unreleased section")
+	}
+	if nextSection := strings.Index(unreleased, "\n## "); nextSection >= 0 {
+		unreleased = unreleased[:nextSection]
+	}
+	for _, fact := range []struct {
+		pattern string
+		current string
+	}{
+		{`\b[0-9]+ managed artifacts\b`, "18 managed artifacts"},
+		{`\bmanager v[0-9]+\b`, "manager v46"},
+		{"`general` v[0-9]+\\b", "`general` v6"},
+		{`\bverifier v[0-9]+\b`, "verifier v4"},
+		{"`explore` v[0-9]+\\b", "`explore` v2"},
+	} {
+		matches := regexp.MustCompile(fact.pattern).FindAllString(unreleased, -1)
+		if len(matches) == 0 {
+			t.Errorf("Unreleased section missing current managed artifact fact %q", fact.current)
+		}
+		for _, match := range matches {
+			if match != fact.current {
+				t.Errorf("Unreleased section contains managed artifact fact %q, want %q", match, fact.current)
+			}
+		}
+	}
+}
+
 func TestFoundationProductContract(t *testing.T) {
 	readme, err := os.ReadFile("../../README.md")
 	if err != nil {
