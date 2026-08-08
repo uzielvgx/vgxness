@@ -14,13 +14,19 @@ command = "vgxness"
 args = ["mcp", "--full"]
 ```
 
-The locally observed Codex 0.147.0 exposes strict configuration validation. All other versions must first confirm that `codex --help` lists `--strict-config`, then run:
+The locally observed Codex 0.147.0 exposes top-level `--strict-config`, but `codex mcp` rejects that option. Validate the loaded configuration noninteractively with:
 
 ```sh
-codex --strict-config mcp list
+codex --strict-config doctor --summary --no-color --ascii
 ```
 
-Do not assume that option is available or run a bare interactive invocation.
+`doctor` may perform connectivity health checks. List the configured MCP servers separately with:
+
+```sh
+codex mcp list
+```
+
+For other versions, first confirm that `codex --help` lists `--strict-config`. Do not assume that option is available or run a bare interactive invocation.
 
 ## Lifecycle
 
