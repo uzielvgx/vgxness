@@ -304,9 +304,16 @@ func (r *Root) same(a, b string, data []byte, want os.FileInfo) bool {
 	return e == nil && bytes.Equal(got, data)
 }
 func (r *Root) Backup(name string, data []byte) (Backup, error) {
+	return r.BackupExact(name, data, nil)
+}
+
+func (r *Root) BackupExact(name string, data []byte, expected os.FileInfo) (Backup, error) {
 	b, info, err := r.Read(name, len(data)+1)
 	if err != nil {
 		return Backup{}, err
+	}
+	if expected != nil && !os.SameFile(info, expected) {
+		return Backup{}, conflict("backup target replaced")
 	}
 	if !bytes.Equal(b, data) {
 		return Backup{}, drift("backup bytes")
@@ -407,6 +414,43 @@ func (r *Root) RemoveAnchor(a Anchor) error {
 	}
 	return r.sync(filepath.Dir(a.Name))
 }
+func (r *Root) CommitAnchor(a Anchor) error {
+	if !r.same(a.Name, a.Temp, a.Bytes, a.Info) {
+		return recovery(conflict("anchor replaced"))
+	}
+	if err := r.fs.Remove(a.Temp); err != nil {
+		return recovery(err)
+	}
+	if err := r.sync(filepath.Dir(a.Name)); err != nil {
+		return recovery(err)
+	}
+	info, err := r.fs.Lstat(a.Name)
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(info, a.Info) {
+		return recovery(errors.Join(err, conflict("committed target replaced")))
+	}
+	data, _, err := r.Read(a.Name, len(a.Bytes)+1)
+	if err != nil || !bytes.Equal(data, a.Bytes) {
+		return recovery(errors.Join(err, drift("committed target bytes")))
+	}
+	return nil
+}
+
+func (r *Root) RemoveTarget(b Backup) error {
+	if !r.same(b.Name, b.Sidecar, b.Bytes, b.Info) {
+		return recovery(conflict("target replaced"))
+	}
+	if err := r.fs.Remove(b.Name); err != nil {
+		return recovery(err)
+	}
+	if err := r.sync(filepath.Dir(b.Name)); err != nil {
+		return recovery(err)
+	}
+	if _, err := r.fs.Lstat(b.Name); !errors.Is(err, os.ErrNotExist) {
+		return recovery(errors.Join(conflict("target retained"), err))
+	}
+	return nil
+}
+
 func (r *Root) MarkPending() error {
 	f, err := r.fs.OpenFile(pendingName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
