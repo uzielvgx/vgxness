@@ -4,6 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Restricts `vgxness-syncd` HTTP serving to literal loopback addresses, retires the insecure non-loopback development override while retaining an explicit `false` compatibility no-op, and documents the required external TLS boundary for remote synchronization.
 - Installs 20 managed artifacts, including a semantic merge that sets `default_agent="vgxness-manager"` in `opencode.json` while preserving unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged, and bounded `default-agent.json` restoration metadata records whether `opencode.json` existed and any prior explicit default so uninstall can restore that default or remove a config created by setup.
 - Updates manager v37 and autonomous delivery skill v3: a clean pre-write delivery gate precedes implementation, while explicit reauthorization can recover only a verified unpublished local slice; remote branches and PRs remain read-only.
 - Grants global OpenCode tool permission to manager v37, managed `general`, and verifier while retaining their distinct behavioral roles.

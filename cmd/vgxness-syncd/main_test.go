@@ -350,17 +350,41 @@ func TestServeRejectsUnsafeListenBeforeConfiguration(t *testing.T) {
 	}
 }
 
-func TestServeValidationDefaultsAndDevelopmentOverride(t *testing.T) {
-	if defaultListenAddress != "127.0.0.1:8787" || !validListenAddress(defaultListenAddress, false) {
+func TestServeRejectsRetiredInsecureOverrideBeforeConfiguration(t *testing.T) {
+	oldGetenv := getenv
+	getenv = func(string) string { t.Fatal("environment read before flag validation"); return "" }
+	t.Cleanup(func() { getenv = oldGetenv })
+	var stderr strings.Builder
+	if got := runServe(context.Background(), []string{"--development-allow-insecure-non-loopback=true", "--listen", defaultListenAddress}, &stderr); got != 2 {
+		t.Fatalf("exit code = %d, want 2", got)
+	}
+	if message := stderr.String(); !strings.Contains(message, "retired") || !strings.Contains(message, "false") || !strings.Contains(message, "compatibility") {
+		t.Fatalf("stderr = %q, want self-contained compatibility diagnostic", message)
+	}
+}
+
+func TestServeAcceptsExplicitlyDisabledLegacyOverride(t *testing.T) {
+	oldGetenv := getenv
+	reads := 0
+	getenv = func(string) string { reads++; return "" }
+	t.Cleanup(func() { getenv = oldGetenv })
+	var stderr strings.Builder
+	if got := runServe(context.Background(), []string{"--development-allow-insecure-non-loopback=false", "--listen", defaultListenAddress}, &stderr); got != 1 {
+		t.Fatalf("exit code = %d, want configuration failure 1", got)
+	}
+	if reads == 0 || !strings.Contains(stderr.String(), "serve setup failed") {
+		t.Fatal("disabled legacy override did not proceed to configuration")
+	}
+}
+
+func TestServeValidationAllowsOnlyLiteralLoopback(t *testing.T) {
+	if defaultListenAddress != "127.0.0.1:8787" || !validListenAddress(defaultListenAddress) {
 		t.Fatal("default listener is not the exact safe address")
 	}
-	for _, address := range []string{"", ":8787", "0.0.0.0:8787", "localhost:8787", "example.com:8787", "127.0.0.1:0"} {
-		if validListenAddress(address, false) {
+	for _, address := range []string{"", ":8787", "0.0.0.0:8787", "203.0.113.1:8787", "localhost:8787", "example.com:8787", "127.0.0.1:0"} {
+		if validListenAddress(address) {
 			t.Fatalf("unsafe address accepted: %q", address)
 		}
-	}
-	if !validListenAddress("203.0.113.1:8787", true) {
-		t.Fatal("development override rejected literal public address")
 	}
 }
 
