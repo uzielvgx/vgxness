@@ -160,14 +160,33 @@ func TestDeviceAuditRetentionIsBoundedAndOwnerScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	insert(other, 1, time.Now().Add(-auditRetention-time.Hour))
+	tx, err := db.conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trimAuditEvents(ctx, tx, "audit_events", db.owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(db.owner); got != 1 { // retained issue
+		t.Fatalf("expired owner audit cleanup count = %d, want 1", got)
+	}
+	if got := count(other); got != 1 {
+		t.Fatalf("owner isolation count = %d, want 1", got)
+	}
+	if _, err := db.conn.Exec(ctx, "DELETE FROM audit_events WHERE owner_id=$1", other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(ctx, "DELETE FROM owners WHERE id=$1", other); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := repo.AuthenticateDevice(ctx, "not-a-bearer"); err != ErrUnauthenticated {
 		t.Fatalf("authenticate = %v", err)
 	}
 	if got := count(db.owner); got != 2 { // retained issue + new failure
 		t.Fatalf("expired owner audit cleanup count = %d, want 2", got)
-	}
-	if got := count(other); got != 1 {
-		t.Fatalf("owner isolation count = %d, want 1", got)
 	}
 
 	if _, err := db.conn.Exec(ctx, "DELETE FROM audit_events WHERE owner_id=$1", db.owner); err != nil {
@@ -191,7 +210,7 @@ func TestDeviceAuditRetentionIsBoundedAndOwnerScoped(t *testing.T) {
 		t.Fatalf("cleanup did not converge to cap: %d", got)
 	}
 
-	tx, err := db.conn.Begin(ctx)
+	tx, err = db.conn.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
