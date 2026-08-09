@@ -150,6 +150,8 @@ func failure(err error) (int, string) {
 		return 1, "recovery: integration rollback failed; inspect managed artifacts and backups"
 	case errors.Is(err, skills.ErrRecovery):
 		return 1, "recovery: skills rollback failed; inspect managed artifacts and backups"
+	case errors.Is(err, selfinstall.ErrRecovery):
+		return 1, "recovery: self-install activation is incomplete; run `vgxness self status` and retry `vgxness self install` without deleting retained evidence"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return 130, "cancelled: operation cancelled"
 	case errors.Is(err, memory.ErrInvalid):

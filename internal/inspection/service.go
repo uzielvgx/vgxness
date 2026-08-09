@@ -40,7 +40,7 @@ func (s Service) inspect(ctx context.Context, opts config.Options) (Result, erro
 	if s.Health != nil {
 		version, err = s.Health(ctx, paths.Database)
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return Result{}, err
 			}
 			return Result{}, fmt.Errorf("%w: memory health check failed", ErrCorrupt)

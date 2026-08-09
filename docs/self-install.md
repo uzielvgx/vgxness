@@ -11,6 +11,7 @@ The default managed paths are:
 - `~/.local/bin/vgxness` — permanent launcher path.
 - `~/.local/bin/vgxness.launcher.json` — atomic active-version pointer and one rollback reference.
 - `~/.local/share/vgxness/versions/<sha256>/vgxness` — immutable application version.
+- `~/.local/share/vgxness/.manifest-recovery.json` — temporary, create-only recovery evidence retained only while manifest activation is incomplete.
 
 On Windows, the corresponding explicit layout uses `.exe`:
 
@@ -48,6 +49,12 @@ Return to the previous immutable version:
 
 Rollback is intentionally one level. A successful rollback clears the previous-version reference; version files remain content-addressed on disk.
 
+If a manifest activation is interrupted after durable evidence is recorded,
+`self status` reports `state=recovery_pending` and returns a recovery error.
+Preserve the reported journal and predecessor bytes, then rerun `self install`
+with the same absolute paths. Retry either finalizes the verified candidate or
+restores the exact predecessor without overwriting concurrent content.
+
 Windows examples should use absolute paths and the extracted `.exe` candidate:
 
 ```powershell
@@ -63,8 +70,10 @@ Windows examples should use absolute paths and the extracted `.exe` candidate:
 - Existing unmanaged launchers, manifests, symlinks, or modified managed artifacts are refused as conflict or drift.
 - Version directories are named by the verified binary SHA-256 and are never rewritten.
 - Activation replaces only the small manifest after the new version is durable and verified.
+- Manifest activation records the exact candidate and predecessor before changing the active pointer; incomplete publication remains explicitly recoverable.
 - The launcher validates the exact manifest, active path, and active hash before replacing its process. It never invokes a shell.
 - The managed launcher path remains constant across updates and rollback, so persistent integrations do not embed an ephemeral build or version path.
 - The installer does not edit `PATH`, download a release, remove versions, or overwrite foreign files.
+- Installation roots reject symlink ancestors before mutation and remain anchored for transaction writes; a replaced root fails closed or retains writes in the originally opened directory.
 
 If `~/.local/bin` is not already on `PATH`, invoke the permanent launcher by its absolute path or update the shell environment separately.

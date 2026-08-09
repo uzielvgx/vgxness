@@ -16,17 +16,14 @@ type installLock struct {
 	overlapped windows.Overlapped
 }
 
-func acquire(ctx context.Context, path string) (*installLock, error) {
+func acquireFile(ctx context.Context, file *os.File) (*installLock, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
+		_ = file.Close()
 		return nil, err
 	}
 	lock := &installLock{file: file}
 	for {
-		err = windows.LockFileEx(windows.Handle(file.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &lock.overlapped)
+		err := windows.LockFileEx(windows.Handle(file.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &lock.overlapped)
 		if err == nil {
 			return lock, nil
 		}

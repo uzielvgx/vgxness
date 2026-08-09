@@ -19,6 +19,7 @@ import (
 
 var ErrUnauthenticated = errors.New("syncapi unauthenticated")
 var errResponseWrite = errors.New("syncapi response write failure")
+var ErrInvalidAuthenticationLimits = errors.New("syncapi invalid authentication limits")
 
 // FailureObserver receives only a fixed failure classification and response status.
 // Request contents and backend errors are never passed to it.
@@ -64,6 +65,7 @@ type handler struct {
 	backend       SyncBackend
 	capabilities  capabilitiesFunc
 	limits        *requestLimits
+	authLimits    *authenticationLimits
 	observer      FailureObserver
 }
 
@@ -83,6 +85,33 @@ func NewSyncServerHandler(authenticator Authenticator, backend SyncBackend, obse
 	return newHandlerWithBackend(authenticator, nil, backend, observer)
 }
 
+// AuthenticationLimitsConfig configures the process-local, fixed one-minute
+// admission limits that are applied before an authenticator reaches its backend.
+type AuthenticationLimitsConfig struct {
+	GlobalPerMinute int
+	DevicePerMinute int
+	DeviceStates    int
+}
+
+// DefaultAuthenticationLimitsConfig returns the conservative server defaults.
+func DefaultAuthenticationLimitsConfig() AuthenticationLimitsConfig {
+	return AuthenticationLimitsConfig{
+		GlobalPerMinute: defaultAuthenticationGlobalPerMinute,
+		DevicePerMinute: defaultAuthenticationDevicePerMinute,
+		DeviceStates:    defaultAuthenticationDeviceStates,
+	}
+}
+
+// NewSyncServerHandlerWithAuthenticationLimits returns a sync handler with
+// validated pre-authentication admission limits.
+func NewSyncServerHandlerWithAuthenticationLimits(authenticator Authenticator, backend SyncBackend, observer FailureObserver, config AuthenticationLimitsConfig) (http.Handler, error) {
+	limits, err := newAuthenticationLimitsFromConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return newHandlerWithBackendAndAuthenticationLimits(authenticator, nil, backend, observer, limits), nil
+}
+
 func newHandler(authenticator Authenticator, capabilities capabilitiesFunc) http.Handler {
 	return newHandlerWithLimits(authenticator, capabilities, nil)
 }
@@ -92,12 +121,16 @@ func newHandlerWithLimits(authenticator Authenticator, capabilities capabilities
 }
 
 func newHandlerWithBackend(authenticator Authenticator, capabilities capabilitiesFunc, backend SyncBackend, observer FailureObserver) http.Handler {
+	return newHandlerWithBackendAndAuthenticationLimits(authenticator, capabilities, backend, observer, newDefaultAuthenticationLimits())
+}
+
+func newHandlerWithBackendAndAuthenticationLimits(authenticator Authenticator, capabilities capabilitiesFunc, backend SyncBackend, observer FailureObserver, authLimits *authenticationLimits) http.Handler {
 	if capabilities == nil {
 		capabilities = func(context.Context) CapabilitiesResponse {
 			return CapabilitiesResponse{ProtocolVersion: ProtocolVersion, Capabilities: []string{"capabilities"}}
 		}
 	}
-	return &handler{authenticator: authenticator, backend: backend, capabilities: capabilities, limits: newRequestLimits(), observer: observer}
+	return &handler{authenticator: authenticator, backend: backend, capabilities: capabilities, limits: newRequestLimits(), authLimits: authLimits, observer: observer}
 }
 
 func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -129,6 +162,8 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		code := ErrorUnavailable
 		if status == http.StatusUnauthorized {
 			code = ErrorUnauthorized
+		} else if status == http.StatusTooManyRequests {
+			code = ErrorLimitExceeded
 		}
 		writeError(writer, status, code, status == http.StatusUnauthorized, handler.observer)
 		return
@@ -335,6 +370,10 @@ func (handler *handler) authenticate(request *http.Request) (Identity, int) {
 	if !validBearer(bearer) {
 		return Identity{}, http.StatusUnauthorized
 	}
+	deviceID, declared := declaredDeviceID(bearer)
+	if !handler.authLimits.allow(deviceID, declared) {
+		return Identity{}, http.StatusTooManyRequests
+	}
 	if handler.authenticator == nil {
 		return Identity{}, http.StatusServiceUnavailable
 	}
@@ -349,6 +388,20 @@ func (handler *handler) authenticate(request *http.Request) (Identity, int) {
 		return Identity{}, http.StatusUnauthorized
 	}
 	return identity, 0
+}
+
+// declaredDeviceID returns only the syntactically declared, canonical device
+// ID. It intentionally does not validate or retain bearer secret material.
+func declaredDeviceID(bearer string) (uuid.UUID, bool) {
+	parts := strings.Split(bearer, ".")
+	if len(parts) != 3 {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(parts[1])
+	if err != nil || id == uuid.Nil || id.String() != parts[1] {
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 func validBearer(bearer string) bool {
@@ -439,6 +492,114 @@ type requestLimits struct {
 type deviceLimit struct {
 	semaphore chan struct{}
 	active    int
+}
+
+const (
+	defaultAuthenticationGlobalPerMinute = 120
+	defaultAuthenticationDevicePerMinute = 60
+	defaultAuthenticationDeviceStates    = 256
+)
+
+// authenticationLimitConfig is deliberately in-process only: it bounds work
+// before an authenticator can reach PostgreSQL, and resets after each window.
+// Now is injectable solely to make its time behavior deterministic in tests.
+type authenticationLimitConfig struct {
+	GlobalPerWindow int
+	DevicePerWindow int
+	MaxDevices      int
+	Window          time.Duration
+	Now             func() time.Time
+}
+
+type authenticationLimits struct {
+	mu      sync.Mutex
+	config  authenticationLimitConfig
+	global  authenticationWindow
+	devices map[uuid.UUID]authenticationWindow
+}
+
+type authenticationWindow struct {
+	start time.Time
+	used  int
+	seen  time.Time
+}
+
+func newDefaultAuthenticationLimits() *authenticationLimits {
+	limits, err := newAuthenticationLimitsFromConfig(DefaultAuthenticationLimitsConfig())
+	if err != nil {
+		panic(err)
+	}
+	return limits
+}
+
+func newAuthenticationLimitsFromConfig(config AuthenticationLimitsConfig) (*authenticationLimits, error) {
+	if config.GlobalPerMinute < 1 || config.DevicePerMinute < 1 || config.DeviceStates < 1 {
+		return nil, ErrInvalidAuthenticationLimits
+	}
+	return newAuthenticationLimits(authenticationLimitConfig{
+		GlobalPerWindow: config.GlobalPerMinute,
+		DevicePerWindow: config.DevicePerMinute,
+		MaxDevices:      config.DeviceStates,
+		Window:          time.Minute,
+		Now:             time.Now,
+	}), nil
+}
+
+func newAuthenticationLimits(config authenticationLimitConfig) *authenticationLimits {
+	if config.GlobalPerWindow < 1 || config.DevicePerWindow < 1 || config.MaxDevices < 1 || config.Window <= 0 || config.Now == nil {
+		panic("invalid authentication limit configuration")
+	}
+	return &authenticationLimits{config: config, devices: make(map[uuid.UUID]authenticationWindow)}
+}
+
+// allow performs a non-blocking, fixed-window admission decision. A valid
+// bearer always consumes global capacity; its declared UUID additionally gets
+// a fair share without allowing unbounded UUID state.
+func (limits *authenticationLimits) allow(deviceID uuid.UUID, declared bool) bool {
+	now := limits.config.Now()
+	limits.mu.Lock()
+	defer limits.mu.Unlock()
+	if now.Sub(limits.global.start) >= limits.config.Window || limits.global.start.IsZero() {
+		limits.global = authenticationWindow{start: now}
+	}
+	if limits.global.used >= limits.config.GlobalPerWindow {
+		return false
+	}
+	if declared {
+		entry, exists := limits.devices[deviceID]
+		if !exists && len(limits.devices) >= limits.config.MaxDevices {
+			limits.evictDevice(now)
+		}
+		entry = limits.devices[deviceID]
+		if now.Sub(entry.start) >= limits.config.Window || entry.start.IsZero() {
+			entry = authenticationWindow{start: now}
+		}
+		if entry.used >= limits.config.DevicePerWindow {
+			return false
+		}
+		entry.used++
+		entry.seen = now
+		limits.devices[deviceID] = entry
+	}
+	limits.global.used++
+	return true
+}
+
+func (limits *authenticationLimits) evictDevice(now time.Time) {
+	var oldest uuid.UUID
+	var oldestSeen time.Time
+	for id, entry := range limits.devices {
+		if now.Sub(entry.start) >= limits.config.Window || oldestSeen.IsZero() || entry.seen.Before(oldestSeen) {
+			oldest, oldestSeen = id, entry.seen
+		}
+	}
+	delete(limits.devices, oldest)
+}
+
+func (limits *authenticationLimits) deviceCount() int {
+	limits.mu.Lock()
+	defer limits.mu.Unlock()
+	return len(limits.devices)
 }
 
 func newRequestLimits() *requestLimits {

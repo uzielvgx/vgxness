@@ -377,6 +377,41 @@ func TestServeAcceptsExplicitlyDisabledLegacyOverride(t *testing.T) {
 	}
 }
 
+func TestServeRejectsInvalidAuthenticationLimitConfigurationBeforeSetupOrListen(t *testing.T) {
+	for _, test := range []struct{ name, key, value string }{
+		{"malformed global", "VGXNESS_SYNC_AUTH_GLOBAL_PER_MINUTE", "not-a-number"},
+		{"zero device", "VGXNESS_SYNC_AUTH_DEVICE_PER_MINUTE", "0"},
+		{"negative states", "VGXNESS_SYNC_AUTH_DEVICE_STATES", "-1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setupCalls, listenCalls := 0, 0
+			oldSetup, oldListen, oldGetenv := setup, listenTCP, getenv
+			setup = func(context.Context, string, uuid.UUID) (deviceRepository, func(), error) {
+				setupCalls++
+				return nil, nil, nil
+			}
+			listenTCP = func(string, string) (net.Listener, error) {
+				listenCalls++
+				return nil, errors.New("unexpected listen")
+			}
+			getenv = func(key string) string {
+				if key == test.key {
+					return test.value
+				}
+				return ""
+			}
+			t.Cleanup(func() { setup, listenTCP, getenv = oldSetup, oldListen, oldGetenv })
+			var stderr strings.Builder
+			if got := runServe(context.Background(), []string{"--listen", defaultListenAddress}, &stderr); got != 1 {
+				t.Fatalf("exit code = %d, want 1", got)
+			}
+			if setupCalls != 0 || listenCalls != 0 || stderr.String() != "serve configuration failed\n" {
+				t.Fatalf("side effects/message = %d/%d/%q", setupCalls, listenCalls, stderr.String())
+			}
+		})
+	}
+}
+
 func TestServeValidationAllowsOnlyLiteralLoopback(t *testing.T) {
 	if defaultListenAddress != "127.0.0.1:8787" || !validListenAddress(defaultListenAddress) {
 		t.Fatal("default listener is not the exact safe address")

@@ -83,6 +83,26 @@ func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
 	testutil.Require(t, err == nil && len(got) == 1 && got[0].ID == "obs-1", "restart lost data: %+v %v", got, err)
 }
 
+func TestHealth_PreservesCancelledContext(t *testing.T) {
+	store := openTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.Health(ctx)
+	testutil.Require(t, errors.Is(err, context.Canceled), "expected cancellation, got %v", err)
+}
+
+func TestHealthError_PreservesExpiredContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := healthError(ctx, "health check unavailable")
+	testutil.Require(t, errors.Is(err, context.Canceled), "expected cancellation, got %v", err)
+
+	ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	err = healthError(ctx, "health check unavailable")
+	testutil.Require(t, errors.Is(err, context.DeadlineExceeded), "expected deadline, got %v", err)
+}
+
 func TestResolveProject_AdoptsLegacyOnceAndSeparatesSameNamedWorkspaces(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()

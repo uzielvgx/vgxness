@@ -4,6 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Preserves cancellation and deadline identities during storage inspection, aligns documentation with SQLite schema v11, bounds sync authentication and failed-audit retention, and makes self-install manifest activation explicitly recoverable without overwriting concurrent content.
 - Adds proposed `macos-15` source and release-artifact smoke for `darwin/arm64`; support remains preview until a tag-workflow execution provides native evidence.
 - Remediates the Go toolchain and `golang.org/x/text` security dependency floor, and adds proposed tag-release artifact attestations before GitHub release publication.
 - Adds a required, separately aggregated CI vulnerability lane pinned to `golang.org/x/vuln/cmd/govulncheck@v1.6.0` and an opt-in `make vuln` target while keeping the network-dependent scan out of `make verify`.

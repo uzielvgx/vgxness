@@ -4,8 +4,8 @@ package selfinstall
 
 import "os"
 
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
+func syncRoot(root *os.Root) error {
+	directory, err := root.Open(".")
 	if err != nil {
 		return err
 	}

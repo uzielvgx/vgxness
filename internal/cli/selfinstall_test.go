@@ -60,6 +60,13 @@ func TestRunSelfInstallRejectsInvalidArgumentsAndMapsErrors(t *testing.T) {
 	}
 }
 
+func TestFailureMapsSelfInstallRecovery(t *testing.T) {
+	code, message := failure(errors.Join(selfinstall.ErrRecovery, selfinstall.ErrDrift))
+	if code != 1 || !strings.Contains(message, "recovery:") || !strings.Contains(message, "self status") {
+		t.Fatalf("code=%d message=%q", code, message)
+	}
+}
+
 type ErrWrap struct{ err error }
 
 func (wrapped ErrWrap) Error() string { return "wrapped: " + wrapped.err.Error() }
