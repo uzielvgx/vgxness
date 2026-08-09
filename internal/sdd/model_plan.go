@@ -59,9 +59,12 @@ const (
 	PlanLow    Plan = "low"
 	PlanMedium Plan = "medium"
 	PlanHigh   Plan = "high"
+	PlanUltra  Plan = "ultra"
 )
 
-func (value Plan) Valid() bool { return value == PlanLow || value == PlanMedium || value == PlanHigh }
+func (value Plan) Valid() bool {
+	return value == PlanLow || value == PlanMedium || value == PlanHigh || value == PlanUltra
+}
 
 type Role string
 
@@ -123,6 +126,15 @@ var roleMatrices = map[Plan]map[Role]RoleAssignment{
 		RoleResilience: {CapabilityFrontier, EffortHigh}, RoleRefuter: {CapabilityFrontier, EffortHigh},
 		RoleImplementation: {CapabilityFrontier, EffortHigh}, RoleVerification: {CapabilityBalanced, EffortHigh},
 	},
+	PlanUltra: {
+		RoleManager: {CapabilityFrontier, EffortUltra}, RoleResearch: {CapabilityFrontier, EffortHigh},
+		RoleProposal: {CapabilityFrontier, EffortHigh}, RoleSpec: {CapabilityFrontier, EffortHigh},
+		RoleDesign: {CapabilityFrontier, EffortHigh}, RoleTasks: {CapabilityFrontier, EffortHigh},
+		RoleApply: {CapabilityFrontier, EffortHigh}, RoleRisk: {CapabilityFrontier, EffortHigh},
+		RoleReadability: {CapabilityBalanced, EffortHigh}, RoleReliability: {CapabilityFrontier, EffortHigh},
+		RoleResilience: {CapabilityFrontier, EffortHigh}, RoleRefuter: {CapabilityFrontier, EffortHigh},
+		RoleImplementation: {CapabilityFrontier, EffortHigh}, RoleVerification: {CapabilityFrontier, EffortHigh},
+	},
 }
 
 func RoleMatrix(plan Plan) (map[Role]RoleAssignment, error) {
@@ -173,8 +185,8 @@ type ResolvedPlan struct {
 
 func DefaultOpenAICatalog() Catalog {
 	return Catalog{Provider: "openai", Models: []Model{
-		{Provider: "openai", ID: "openai/gpt-5.6-luna-fast", Name: "Luna Fast", Capability: CapabilityEfficient, SupportedEfforts: []Effort{EffortLow, EffortMedium}},
-		{Provider: "openai", ID: "openai/gpt-5.6-terra", Name: "Terra", Capability: CapabilityBalanced, SupportedEfforts: []Effort{EffortLow, EffortMedium, EffortHigh}},
+		{Provider: "openai", ID: "openai/gpt-5.6-luna", Name: "Luna", Capability: CapabilityEfficient, SupportedEfforts: []Effort{EffortLow, EffortMedium, EffortHigh, EffortUltra}},
+		{Provider: "openai", ID: "openai/gpt-5.6-terra", Name: "Terra", Capability: CapabilityBalanced, SupportedEfforts: []Effort{EffortLow, EffortMedium, EffortHigh, EffortUltra}},
 		{Provider: "openai", ID: "openai/gpt-5.6-sol", Name: "Sol", Capability: CapabilityFrontier, SupportedEfforts: []Effort{EffortLow, EffortMedium, EffortHigh, EffortUltra}},
 	}}
 }

@@ -139,7 +139,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessorV3, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(predecessorV3.manifest); digest != "c51f956ae92410757234629600ae540aacad2820abf55435c539f27c26b52ac6" {
+	if digest := artifactSHA256(predecessorV3.manifest); digest != "d086d321a3cacd00d5ced6722a1b53eaf54f56a0309cc7dd815859ba43a10749" {
 		t.Fatalf("current SDD manifest=%s", digest)
 	}
 	for _, profile := range []struct {
@@ -155,10 +155,10 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	}
 	predecessor, err := previousSDDModelPlanBundleV2(current)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(predecessor.manifest); digest != "05c95438b4b4d44dd663f7f39b6e904f63b29a8e17312b107f6f467dcac38faf" {
+	if digest := artifactSHA256(predecessor.manifest); digest != "e3ff5db3fed638f22e4b5b0faa9b642268ea970e11a3705c8e879cef1203e3ba" {
 		t.Fatalf("legacy SDD manifest=%s", digest)
 	}
-	for name, digest := range map[string]string{sddResearchName: "7bcd1f18790e34c48c3c684cbc5c409d0b9163422e89b49a3f389cc026b53906", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
+	for name, digest := range map[string]string{sddResearchName: "4d673078a68d64cc0c45a27777485bf377a37c069aa61c8feda91962950e398f", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
 		if artifactSHA256(predecessor.agents[name]) != digest {
 			t.Fatalf("prior SDD %s digest=%s", name, artifactSHA256(predecessor.agents[name]))
 		}
@@ -167,7 +167,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	combined, err := previousSDDModelPlanBundleV2(priorExplore)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(combined.manifest); digest != "8b7c6c9617904675adbcf42e70d034090d71ec6c3af3b103674e1575ad253835" {
+	if digest := artifactSHA256(combined.manifest); digest != "7d62e9d0f36f9ce06924e9e0a2e76095dd9ac3fb3fe9d97f66a7d763c3c8e364" {
 		t.Fatalf("combined SDD manifest=%s", digest)
 	}
 }

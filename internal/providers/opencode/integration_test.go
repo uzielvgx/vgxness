@@ -141,7 +141,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolSHA256 == "" &&
 			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
 			installed.ArtifactCount == 18 &&
-			installed.ModelEfficient == "openai/gpt-5.6-luna-fast" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
+			installed.ModelEfficient == "openai/gpt-5.6-luna" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired &&
 			installed.DefaultAgent == defaultAgentName &&
 			installed.DefaultAgentPath == filepath.Join(configDirectory, defaultAgentConfigName) &&
@@ -529,6 +529,57 @@ func TestIntegrationSwitchesManagedModelPlanAndRefusesManualDrift(t *testing.T) 
 	_, err = service.Install(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanLow})
 	after, readErr := os.ReadFile(high.Path)
 	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "manual drift changed: err=%v", err)
+}
+
+func TestIntegrationRecognizesHistoricalHighPlanWithLunaFastDegradation(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+
+	historicalConfig, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "openai/gpt-5.6-luna-fast", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol")
+	testutil.NoError(t, err)
+	historicalCatalog := sdd.DefaultOpenAICatalog()
+	for index := range historicalCatalog.Models {
+		model := &historicalCatalog.Models[index]
+		if model.Capability == sdd.CapabilityEfficient {
+			model.ID = "openai/gpt-5.6-luna-fast"
+			model.Name = "Luna Fast"
+			model.SupportedEfforts = []sdd.Effort{sdd.EffortLow, sdd.EffortMedium}
+		}
+	}
+	resolved, err := sdd.ResolveModelPlan(historicalCatalog, sdd.PlanHigh)
+	testutil.NoError(t, err)
+	matrix, err := sdd.RoleMatrix(sdd.PlanHigh)
+	testutil.NoError(t, err)
+	historicalRoles := make(map[sdd.Role]sdd.OpenCodeRoleAssignment, len(resolved.Roles))
+	for role, assignment := range resolved.Roles {
+		historicalRoles[role] = sdd.OpenCodeRoleAssignment{
+			Role: role, Capability: assignment.Capability, Model: assignment.Model.ID,
+			RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort,
+			Variant: sdd.OpenCodeVariantForEffort(assignment.Effort), Degradation: assignment.Degradation,
+			Strength: matrix[role].Strength(),
+		}
+	}
+	readability := historicalRoles[sdd.RoleReadability]
+	testutil.Require(t, readability.Model == "openai/gpt-5.6-luna-fast" && readability.RequestedEffort == sdd.EffortHigh && readability.Effort == sdd.EffortMedium && readability.Degradation.Degraded, "historical readability role=%+v", readability)
+	historical := sdd.OpenCodePlan{
+		SchemaVersion: 1, ActivePlan: sdd.PlanHigh, Provider: "openai",
+		Slots: map[sdd.Capability]string{sdd.CapabilityEfficient: historicalConfig.Efficient, sdd.CapabilityBalanced: historicalConfig.Balanced, sdd.CapabilityFrontier: historicalConfig.Frontier},
+		Roles: historicalRoles, Provenance: historicalConfig.Provenance,
+	}
+	agents, err := modelBoundAgents(historical)
+	testutil.NoError(t, err)
+	historicalBundle, err := encodeModelPlanBundle(historicalConfig, historical, agents)
+	testutil.NoError(t, err)
+	for name, content := range historicalBundle.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", name), content, 0o600))
+	}
+	testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "vgxness", modelPlanManifestName), historicalBundle.manifest, 0o600))
+
+	status, err := service.Status(context.Background(), options)
+	testutil.Require(t, err == nil && status.State == integration.StateInstalled && status.ModelPlan == sdd.PlanHigh && status.ModelEfficient == "openai/gpt-5.6-luna-fast", "status=%+v err=%v", status, err)
 }
 
 func TestIntegrationCustomModelSlots(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 )
 
 func TestApprovedRoleMatrices(t *testing.T) {
-	for _, plan := range []Plan{PlanLow, PlanMedium, PlanHigh} {
+	for _, plan := range []Plan{PlanLow, PlanMedium, PlanHigh, PlanUltra} {
 		matrix, err := RoleMatrix(plan)
 		if err != nil {
 			t.Fatalf("RoleMatrix(%s): %v", plan, err)
@@ -47,6 +47,10 @@ func TestImplementationAndVerificationRoleAssignments(t *testing.T) {
 			RoleImplementation: {Capability: CapabilityFrontier, Effort: EffortHigh},
 			RoleVerification:   {Capability: CapabilityBalanced, Effort: EffortHigh},
 		},
+		PlanUltra: {
+			RoleImplementation: {Capability: CapabilityFrontier, Effort: EffortHigh},
+			RoleVerification:   {Capability: CapabilityFrontier, Effort: EffortHigh},
+		},
 	}
 	for plan, roles := range want {
 		matrix, err := RoleMatrix(plan)
@@ -84,6 +88,22 @@ func TestResolveModelPlanAndEffortDegradation(t *testing.T) {
 	}
 }
 
+func TestUltraPlanIsNoWeakerThanHigh(t *testing.T) {
+	high, err := RoleMatrix(PlanHigh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ultra, err := RoleMatrix(PlanUltra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for role, assignment := range high {
+		if ultra[role].Strength() < assignment.Strength() {
+			t.Fatalf("ultra %s assignment %+v is weaker than high %+v", role, ultra[role], assignment)
+		}
+	}
+}
+
 func TestResolveModelPlanProviderAndUnknownCatalogRules(t *testing.T) {
 	_, err := ResolveModelPlan(Catalog{Provider: "one", Models: []Model{{Provider: "two", ID: "model", Name: "Model", SupportedEfforts: []Effort{EffortLow}}}}, PlanLow)
 	if !errors.Is(err, ErrProviderMismatch) {
@@ -109,7 +129,7 @@ func TestDefaultOpenAICatalog(t *testing.T) {
 	if catalog.Provider != "openai" || len(catalog.Models) != 3 {
 		t.Fatalf("unexpected catalog: %+v", catalog)
 	}
-	want := []string{"Luna Fast", "Terra", "Sol"}
+	want := []string{"Luna", "Terra", "Sol"}
 	for index, name := range want {
 		if catalog.Models[index].Name != name {
 			t.Fatalf("model %d = %q, want %q", index, catalog.Models[index].Name, name)

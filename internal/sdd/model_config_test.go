@@ -8,7 +8,7 @@ import (
 func TestDefaultModelPlanConfiguration(t *testing.T) {
 	config := DefaultModelPlanConfig()
 	if config.ActivePlan != PlanMedium || config.Provider != "openai" ||
-		config.Efficient != "openai/gpt-5.6-luna-fast" ||
+		config.Efficient != "openai/gpt-5.6-luna" ||
 		config.Balanced != "openai/gpt-5.6-terra" ||
 		config.Frontier != "openai/gpt-5.6-sol" || config.Provenance != ModelPlanDefault {
 		t.Fatalf("unexpected defaults: %+v", config)
@@ -23,7 +23,7 @@ func TestDefaultModelPlanConfiguration(t *testing.T) {
 }
 
 func TestOpenCodePlanVariantsAndMatrices(t *testing.T) {
-	for _, plan := range []Plan{PlanLow, PlanMedium, PlanHigh} {
+	for _, plan := range []Plan{PlanLow, PlanMedium, PlanHigh, PlanUltra} {
 		config := DefaultModelPlanConfig()
 		config.ActivePlan = plan
 		resolved, err := ResolveOpenCodePlan(config)
@@ -53,7 +53,7 @@ func TestOpenCodePlanVariantsAndMatrices(t *testing.T) {
 		t.Fatalf("high plan is not mixed or manager is not xhigh: %+v", resolved)
 	}
 	readability := resolved.Roles[RoleReadability]
-	if !readability.Degradation.Degraded || readability.RequestedEffort != EffortHigh || readability.Effort != EffortMedium || readability.Variant != VariantMedium {
+	if readability.Degradation.Degraded || readability.RequestedEffort != EffortHigh || readability.Effort != EffortHigh || readability.Variant != VariantHigh {
 		t.Fatalf("efficient-slot degradation was not preserved: %+v", readability)
 	}
 }
