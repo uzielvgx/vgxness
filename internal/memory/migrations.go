@@ -39,9 +39,13 @@ var schemaV9 string
 //go:embed migrations/010_sync_outbox_claims.sql
 var schemaV10 string
 
+//go:embed migrations/011_sdd_ultra_plan.sql
+var schemaV11 string
+
 type migration struct {
-	version int
-	sql     string
+	version                     int
+	sql                         string
+	requiresForeignKeysDisabled bool
 }
 
 var migrations = []migration{
@@ -55,6 +59,7 @@ var migrations = []migration{
 	{version: 8, sql: schemaV8},
 	{version: 9, sql: schemaV9},
 	{version: 10, sql: schemaV10},
+	{version: 11, sql: schemaV11, requiresForeignKeysDisabled: true},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
@@ -63,23 +68,21 @@ func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
 		return migrationError(ctx, "acquire connection", err)
 	}
 	defer conn.Close()
-	for attempt := 0; ; attempt++ {
-		_, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
-		if err == nil {
-			break
-		}
-		if err = waitForSQLite(ctx, attempt, err); err != nil {
-			return migrationError(ctx, "acquire ownership", err)
-		}
+	if err := beginMigration(ctx, conn); err != nil {
+		return err
 	}
-	committed := false
+	inTransaction := true
+	foreignKeysDisabled := false
 	defer func() {
-		if !committed {
+		if inTransaction {
 			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
 		}
+		if foreignKeysDisabled {
+			_, _ = conn.ExecContext(context.Background(), `PRAGMA foreign_keys=ON`)
+		}
 	}()
-	var head int
-	if err = conn.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&head); err != nil {
+	head, err := migrationHead(ctx, conn)
+	if err != nil {
 		return migrationError(ctx, "read migration ledger", err)
 	}
 	latest := 0
@@ -90,6 +93,27 @@ func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
 	}
 	if head > latest {
 		return fmt.Errorf("%w: database schema version %d is newer than supported version %d", ErrMigration, head, latest)
+	}
+	if requiresForeignKeysDisabled(steps, head) {
+		if _, err = conn.ExecContext(ctx, `ROLLBACK`); err != nil {
+			return migrationError(ctx, "release ownership for foreign-key rebuild", err)
+		}
+		inTransaction = false
+		if _, err = conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+			return migrationError(ctx, "disable foreign keys for rebuild", err)
+		}
+		foreignKeysDisabled = true
+		if err = beginMigration(ctx, conn); err != nil {
+			return err
+		}
+		inTransaction = true
+		head, err = migrationHead(ctx, conn)
+		if err != nil {
+			return migrationError(ctx, "read migration ledger", err)
+		}
+		if head > latest {
+			return fmt.Errorf("%w: database schema version %d is newer than supported version %d", ErrMigration, head, latest)
+		}
 	}
 	for _, step := range steps {
 		if step.version <= head {
@@ -103,10 +127,80 @@ func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
 			return migrationError(ctx, fmt.Sprintf("failed version %d", step.version), err)
 		}
 	}
+	if foreignKeysDisabled {
+		if err = foreignKeyCheck(ctx, conn); err != nil {
+			return err
+		}
+	}
 	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return migrationError(ctx, "commit", err)
 	}
-	committed = true
+	inTransaction = false
+	if foreignKeysDisabled {
+		if err = enableForeignKeys(ctx, conn); err != nil {
+			return err
+		}
+		foreignKeysDisabled = false
+		if err = foreignKeyCheck(ctx, conn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func beginMigration(ctx context.Context, conn *sql.Conn) error {
+	for attempt := 0; ; attempt++ {
+		_, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
+		if err == nil {
+			return nil
+		}
+		if err = waitForSQLite(ctx, attempt, err); err != nil {
+			return migrationError(ctx, "acquire ownership", err)
+		}
+	}
+}
+
+func migrationHead(ctx context.Context, conn *sql.Conn) (int, error) {
+	var head int
+	err := conn.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&head)
+	return head, err
+}
+
+func requiresForeignKeysDisabled(steps []migration, head int) bool {
+	for _, step := range steps {
+		if step.version > head && step.requiresForeignKeysDisabled {
+			return true
+		}
+	}
+	return false
+}
+
+func enableForeignKeys(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`); err != nil {
+		return migrationError(ctx, "restore foreign keys", err)
+	}
+	var enabled int
+	if err := conn.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&enabled); err != nil {
+		return migrationError(ctx, "verify foreign keys enabled", err)
+	}
+	if enabled != 1 {
+		return fmt.Errorf("%w: verify foreign keys enabled", ErrMigration)
+	}
+	return nil
+}
+
+func foreignKeyCheck(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return migrationError(ctx, "verify foreign keys", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return fmt.Errorf("%w: verify foreign keys", ErrMigration)
+	}
+	if err = rows.Err(); err != nil {
+		return migrationError(ctx, "verify foreign keys", err)
+	}
 	return nil
 }
 

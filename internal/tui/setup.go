@@ -11,7 +11,7 @@ import (
 
 const defaultSetupPlan = "medium"
 
-var setupPlans = [...]string{"low", "medium", "high"}
+var setupPlans = [...]string{"low", "medium", "high", "ultra"}
 
 type SetupRequest struct {
 	Workspace string
@@ -251,7 +251,7 @@ func setupPlanIndex(value string) int {
 }
 
 func validSetupPlan(value string) bool {
-	return value == "low" || value == "medium" || value == "high"
+	return value == "low" || value == "medium" || value == "high" || value == "ultra"
 }
 
 func (m *Model) resizeSetup() {

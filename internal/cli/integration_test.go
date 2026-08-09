@@ -44,6 +44,19 @@ func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
 	}
 }
 
+func TestIntegrationCLI_AcceptsUltraModelPlan(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, ModelPlan: sdd.PlanUltra}}
+	code, _, stderr := runIntegrationTest([]string{"integrate", "opencode", "preview", "--model-plan", "ultra"}, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.options.ModelPlan == sdd.PlanUltra && runtime.calls == 1, "exit=%d options=%+v calls=%d stderr=%q", code, runtime.options, runtime.calls, stderr)
+}
+
+func TestIntegrationCLI_CodexReinstallAcceptsModelPlan(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateInstalled, ModelPlan: sdd.PlanUltra}}
+	code, stdout, stderr := runIntegrationTest([]string{"integrate", "codex", "reinstall", "--config-dir", "/tmp/codex", "--model-plan", "ultra"}, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.action == "reinstall" && runtime.options.ModelPlan == sdd.PlanUltra, "exit=%d action=%q options=%+v stderr=%q", code, runtime.action, runtime.options, stderr)
+	testutil.Require(t, strings.Contains(stdout, "model_plan=ultra\n"), "output=%q", stdout)
+}
+
 func TestIntegrationCLIRendersRetainedPredecessorEvidence(t *testing.T) {
 	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled, RetainedPredecessorCount: 2, RetainedPredecessorPath: "/config/vgxness/retained-predecessors"}}
 	_, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", "status"}, runtime)
@@ -145,9 +158,9 @@ func TestIntegrationCLI_InvalidProviderArgumentsShowAccurateUsage(t *testing.T) 
 		},
 		{
 			name:     "codex",
-			args:     []string{"integrate", "codex", "status", "--model-plan", "high"},
-			contains: []string{"usage: vgxness integrate codex <preview|install|status|reinstall|uninstall>", "--config-dir PATH"},
-			absent:   []string{"--model", "--model-plan", "--model-efficient"},
+			args:     []string{"integrate", "codex", "status", "--model-efficient", "openai/gpt-5.6-luna"},
+			contains: []string{"usage: vgxness integrate codex <preview|install|status|reinstall|uninstall>", "--config-dir PATH", "--model-plan"},
+			absent:   []string{"--model-efficient", "--model-balanced", "--model-frontier"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

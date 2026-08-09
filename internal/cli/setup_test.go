@@ -11,6 +11,7 @@ import (
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 	"github.com/vgxness/vgxness/internal/skills"
+	"github.com/vgxness/vgxness/internal/testutil"
 )
 
 type fakeSetupRuntime struct {
@@ -64,6 +65,15 @@ func TestSetupWizardModelPlanFlagsAndRestartMessaging(t *testing.T) {
 			t.Fatalf("output missing %q: %q", expected, stdout.String())
 		}
 	}
+}
+
+func TestSetupWizardAcceptsUltraModelPlan(t *testing.T) {
+	plan := setupPlanFixture(true)
+	plan.Integration.ModelPlan = sdd.PlanUltra
+	fake := &fakeSetupRuntime{plan: plan}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--preview", "--model-plan", "ultra"}, strings.NewReader(""), &stdout, &stderr, fake)
+	testutil.Require(t, code == 0 && stderr.Len() == 0 && fake.options.Integration.ModelPlan == sdd.PlanUltra && strings.Contains(stdout.String(), "Plan de modelos: ultra"), "exit=%d options=%+v stdout=%q stderr=%q", code, fake.options, stdout.String(), stderr.String())
 }
 
 func TestSetupRendersBestEffortDirectoryDurability(t *testing.T) {
@@ -181,7 +191,7 @@ func setupPlanFixture(ready bool) setupflow.Plan {
 	return setupflow.Plan{
 		Provider: "opencode", Steps: setupflow.OpenCodeSteps(), Ready: ready,
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/stable/vgxness", DataDir: "/data"},
-		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ArtifactCount: 18, ModelPlan: sdd.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna-fast", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json", DefaultAgent: "vgxness-manager", DefaultAgentPath: "/config/opencode.json"},
+		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ArtifactCount: 18, ModelPlan: sdd.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json", DefaultAgent: "vgxness-manager", DefaultAgentPath: "/config/opencode.json"},
 		Skills:      skills.Result{State: skills.StateAbsent, Path: "/shared/skills", FileCount: 22},
 		Handshake:   integration.Handshake{OK: ready, Status: integration.HandshakeHealthy},
 	}
