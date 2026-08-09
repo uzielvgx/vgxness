@@ -25,11 +25,11 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 	flags.StringVar(&options.ConfigDir, "config-dir", "", provider+" config directory")
 	if provider == "opencode" {
 		flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
-		flags.Var((*planFlag)(&options.ModelPlan), "model-plan", "active model plan: low, medium, or high")
 		flags.StringVar(&options.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
 		flags.StringVar(&options.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
 		flags.StringVar(&options.ModelFrontier, "model-frontier", "", "exact provider/model for the frontier slot")
 	}
+	flags.Var((*planFlag)(&options.ModelPlan), "model-plan", "active model plan: low, medium, high, or ultra")
 	if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "invalid integration arguments")
 		fmt.Fprintln(stderr, integrationUsage(provider))
@@ -92,9 +92,9 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 
 func integrationUsage(provider string) string {
 	if provider == "opencode" {
-		return "usage: vgxness integrate opencode <preview|install|status|uninstall> [--config-dir PATH] [--model MODEL] [--model-plan low|medium|high] [--model-efficient PROVIDER/MODEL] [--model-balanced PROVIDER/MODEL] [--model-frontier PROVIDER/MODEL]"
+		return "usage: vgxness integrate opencode <preview|install|status|uninstall> [--config-dir PATH] [--model MODEL] [--model-plan low|medium|high|ultra] [--model-efficient PROVIDER/MODEL] [--model-balanced PROVIDER/MODEL] [--model-frontier PROVIDER/MODEL]"
 	}
-	return "usage: vgxness integrate codex <preview|install|status|reinstall|uninstall> [--config-dir PATH]"
+	return "usage: vgxness integrate codex <preview|install|status|reinstall|uninstall> [--config-dir PATH] [--model-plan low|medium|high|ultra]"
 }
 
 type planFlag string
@@ -102,7 +102,7 @@ type planFlag string
 func (value *planFlag) String() string { return string(*value) }
 
 func (value *planFlag) Set(input string) error {
-	if input != "low" && input != "medium" && input != "high" {
+	if input != "low" && input != "medium" && input != "high" && input != "ultra" {
 		return integration.ErrInvalid
 	}
 	*value = planFlag(input)

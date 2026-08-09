@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/vgxness/vgxness/internal/config"
 	_ "modernc.org/sqlite"
@@ -340,10 +341,18 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if !s.syncSchemaHealthy(ctx) {
 		return 0, fmt.Errorf("%w: sync schema unavailable", ErrCorrupt)
 	}
+	if !s.sddSchemaHealthy(ctx) {
+		return 0, fmt.Errorf("%w: SDD schema unavailable", ErrCorrupt)
+	}
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observations_fts WHERE observations_fts MATCH 'healthchecknomatch'`).Scan(&probe); err != nil {
 		return 0, fmt.Errorf("%w: FTS5 unavailable", ErrCorrupt)
 	}
 	return version, nil
+}
+
+func (s *Store) sddSchemaHealthy(ctx context.Context) bool {
+	schema, ok := s.schemaSQL(ctx, "table", "sdd_changes")
+	return ok && schemaHas(schema, "model_plan text not null") && schemaHasExact(schema, "model_planTEXTNOTNULLCHECK(model_planIN('low','medium','high','ultra'))")
 }
 
 func (s *Store) syncSchemaHealthy(ctx context.Context) bool {
@@ -464,6 +473,16 @@ func schemaHas(schema string, fragments ...string) bool {
 		}
 	}
 	return true
+}
+
+func schemaHasExact(schema, fragment string) bool {
+	schema = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, schema)
+	return strings.Contains(schema, fragment)
 }
 
 func (s *Store) schemaSQL(ctx context.Context, kind, name string) (string, bool) {

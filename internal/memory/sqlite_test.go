@@ -67,7 +67,7 @@ func TestMemoryRuntime_LiteralV1UpgradeRestartPreservesDataAndTitles(t *testing.
 		testutil.Require(t, err == nil && got.ID == id && got.Title == title && (id != "old" || got.Content == "literal old token"), "get %s: %+v %v", id, got, err)
 	}
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 10, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 11, "health=%d %v", version, err)
 }
 
 func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
@@ -75,7 +75,7 @@ func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
 	store := openPath(t, path)
 	mustSave(t, store, observation("obs-1", "project-a", "restart token"))
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 10, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 11, "health=%d %v", version, err)
 	_ = store.Close()
 	store = openPath(t, path)
 	defer store.Close()
@@ -240,6 +240,22 @@ func TestMigrate_RejectsNewerSchema(t *testing.T) {
 	_ = db.Close()
 	_, err = Open(context.Background(), path, nil)
 	testutil.Require(t, errors.Is(err, ErrMigration), "expected newer-schema rejection, got %v", err)
+}
+
+func TestOpen_RejectsV10SchemaLabeledV11(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(schemaV1 + schemaV2 + schemaV3 + schemaV4 + schemaV5 + schemaV6 + schemaV7 + schemaV8 + schemaV9 + schemaV10 + `
+		PRAGMA user_version=11;`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+
+	store, err := Open(context.Background(), path, nil)
+	if store != nil {
+		defer store.Close()
+	}
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "expected v10 sdd_changes model_plan CHECK without ultra to be rejected, got %v", err)
 }
 
 func TestHealthFile_RejectsFutureSchemaWithoutMutation(t *testing.T) {
@@ -519,7 +535,7 @@ func TestEnvironmentIsolation_NoAmbientHomeOrNetwork(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 10, "isolated health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 11, "isolated health=%d %v", version, err)
 }
 
 // durableStorageSnapshot hashes durable SQLite state. Read-only SQLite may
@@ -566,7 +582,7 @@ func healthWithoutDurableMutation(t *testing.T, path string) (int, error) {
 func TestHealthFile_HealthyDatabaseWithoutMutation(t *testing.T) {
 	path := migratedPath(t)
 	version, err := healthWithoutDurableMutation(t, path)
-	testutil.Require(t, err == nil && version == 10, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 11, "health=%d err=%v", version, err)
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	version, err = HealthFile(context.Background(), missing)
 	testutil.Require(t, err == nil && version == 0, "missing health=%d err=%v", version, err)
@@ -581,7 +597,7 @@ func TestHealthFile_SeesCommittedWALState(t *testing.T) {
 	mustSave(t, store, observation("wal-observation", "project-a", "WAL health token"))
 
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, err == nil && version == 10, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 11, "health=%d err=%v", version, err)
 }
 
 func TestSQLiteReadURI_IsReadOnly(t *testing.T) {
@@ -665,7 +681,7 @@ func TestOpen_ConcurrentFreshProcesses(t *testing.T) {
 		testutil.NoError(t, command.Wait())
 	}
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, err == nil && version == 10, "concurrent health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 11, "concurrent health=%d err=%v", version, err)
 }
 
 func TestOpen_MigrationRetryBoundAndCancellation(t *testing.T) {

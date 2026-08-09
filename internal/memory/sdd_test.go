@@ -27,12 +27,93 @@ func TestMigrateV4ToV5PreservesMemoryAndAddsIsolatedSDD(t *testing.T) {
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 10, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 11, "health=%d err=%v", version, err)
 	found, err := store.Search(context.Background(), Search{Project: "project-a", Query: "preserved"})
 	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "obs-old", "memory changed: %+v %v", found, err)
 	var tables int
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections')`).Scan(&tables))
 	testutil.Require(t, tables == 5, "SDD tables=%d", tables)
+}
+
+func TestSDDRepositoryAcceptsUltraPlan(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	change, err := store.CreateChange(context.Background(), sdd.CreateChangeRequest{
+		Project: "project-ultra", IdempotencyKey: "ultra-1", Title: "Ultra", Backend: sdd.BackendMemory,
+		InteractionMode: sdd.InteractionAutomatic, Plan: sdd.PlanUltra,
+	})
+	testutil.Require(t, err == nil && change.Plan == sdd.PlanUltra, "change=%+v err=%v", change, err)
+}
+
+func TestSDDUltraMigrationPreservesExistingChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(schemaV1 + schemaV2 + schemaV3 + schemaV4 + schemaV5 + schemaV6 + schemaV7 + schemaV8 + schemaV9 + schemaV10 + `
+		PRAGMA user_version=10;
+		INSERT INTO projects(id) VALUES('project-migration');
+		INSERT INTO sdd_changes(id, project_id, idempotency_key, title, backend, interaction_mode, model_plan, phase, status, state_version, created_at, updated_at)
+		VALUES('change-migration', 'project-migration', 'migration-1', 'Preserved', 'memory', 'automatic', 'high', 'explore', 'active', 1, 1, 1);`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+
+	store := openPath(t, path)
+	defer store.Close()
+	change, err := store.GetChange(context.Background(), sdd.GetChangeRequest{Project: "project-migration", ID: "change-migration"})
+	testutil.Require(t, err == nil && change.Plan == sdd.PlanHigh && change.Title == "Preserved", "change=%+v err=%v", change, err)
+}
+
+func TestSDDUltraMigrationPreservesSDDGraph(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(schemaV1 + schemaV2 + schemaV3 + schemaV4 + schemaV5 + schemaV6 + schemaV7 + schemaV8 + schemaV9 + schemaV10 + `
+		PRAGMA user_version=10;
+		INSERT INTO projects(id) VALUES('project-migration');
+		INSERT INTO sdd_changes(id, project_id, idempotency_key, title, backend, interaction_mode, model_plan, phase, status, state_version, created_at, updated_at)
+		VALUES('change-migration', 'project-migration', 'migration-graph-1', 'Preserved graph', 'memory', 'automatic', 'high', 'proposal', 'active', 1, 1, 1);
+		INSERT INTO sdd_artifacts(id, project_id, change_id, phase, status, current_revision_id, created_at, updated_at)
+		VALUES
+			('artifact-explore', 'project-migration', 'change-migration', 'explore', 'accepted', 'revision-explore', 1, 1),
+			('artifact-proposal', 'project-migration', 'change-migration', 'proposal', 'accepted', 'revision-proposal', 1, 1);`)
+	testutil.NoError(t, err)
+
+	exploreContent := []byte("preserved exploration")
+	exploreDigest := sdd.ContentDigest(exploreContent)
+	proposalContent := []byte("preserved proposal")
+	proposalDigest := sdd.ContentDigest(proposalContent)
+	input := sdd.RevisionBinding{ArtifactID: "artifact-explore", RevisionID: "revision-explore", Digest: exploreDigest}
+	_, err = db.Exec(`INSERT INTO sdd_revisions(id, project_id, change_id, artifact_id, status, content, external_location, content_digest, input_digest, created_at, accepted_at)
+		VALUES('revision-explore', 'project-migration', 'change-migration', 'artifact-explore', 'accepted', ?, NULL, ?, ?, 1, 1)`,
+		exploreContent, exploreDigest, sdd.InputRevisionDigest(nil))
+	testutil.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO sdd_revisions(id, project_id, change_id, artifact_id, status, content, external_location, content_digest, input_digest, created_at, accepted_at)
+		VALUES('revision-proposal', 'project-migration', 'change-migration', 'artifact-proposal', 'accepted', ?, NULL, ?, ?, 1, 1)`,
+		proposalContent, proposalDigest, sdd.InputRevisionDigest([]sdd.RevisionBinding{input}))
+	testutil.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO sdd_revision_links(project_id, change_id, revision_id, input_artifact_id, input_revision_id, input_digest)
+		VALUES('project-migration', 'change-migration', 'revision-proposal', 'artifact-explore', 'revision-explore', ?)`, exploreDigest)
+	testutil.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO sdd_projections(project_id, change_id, artifact_id, revision_id, status, digest, location, recorded_at)
+		VALUES('project-migration', 'change-migration', 'artifact-proposal', 'revision-proposal', 'current', ?, 'openspec/changes/change-migration/proposal.md', 1)`, proposalDigest)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+
+	store := openPath(t, path)
+	defer store.Close()
+	ctx := context.Background()
+	change, err := store.GetChange(ctx, sdd.GetChangeRequest{Project: "project-migration", ID: "change-migration"})
+	testutil.Require(t, err == nil && change.Plan == sdd.PlanHigh && change.Title == "Preserved graph", "change=%+v err=%v", change, err)
+	var artifacts, revisions, links, projections int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sdd_artifacts WHERE project_id='project-migration' AND change_id='change-migration'`).Scan(&artifacts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sdd_revisions WHERE project_id='project-migration' AND change_id='change-migration'`).Scan(&revisions))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sdd_revision_links WHERE project_id='project-migration' AND change_id='change-migration'`).Scan(&links))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sdd_projections WHERE project_id='project-migration' AND change_id='change-migration'`).Scan(&projections))
+	testutil.Require(t, artifacts == 2 && revisions == 2 && links == 1 && projections == 1, "SDD descendants lost: artifacts=%d revisions=%d links=%d projections=%d", artifacts, revisions, links, projections)
+	revision, err := store.GetRevision(ctx, sdd.GetRevisionRequest{Project: "project-migration", ChangeID: change.ID, RevisionID: "revision-proposal"})
+	testutil.Require(t, err == nil && revision.Status == sdd.RevisionAccepted && string(revision.Content) == string(proposalContent) && len(revision.Inputs) == 1 && revision.Inputs[0] == input, "revision=%+v err=%v", revision, err)
+	projection, err := store.ProjectionStatus(ctx, sdd.ProjectionStatusRequest{Project: "project-migration", ChangeID: change.ID, ArtifactID: "artifact-proposal"})
+	testutil.Require(t, err == nil && projection.Status == sdd.ProjectionCurrent && projection.RevisionID == revision.ID && projection.Digest == proposalDigest, "projection=%+v err=%v", projection, err)
 }
 
 func TestSDDRepositoryLifecycleIsolationAndSummaryListing(t *testing.T) {

@@ -53,6 +53,46 @@ func TestSetupNavigationLoadsInstalledPlanAndRendersControlledWritePreview(t *te
 	assertMaximumWidth(t, view, 80)
 }
 
+func TestSetupAcceptsAndPreservesEachModelPlan(t *testing.T) {
+	for _, modelPlan := range []string{"low", "medium", "high", "ultra"} {
+		t.Run(modelPlan, func(t *testing.T) {
+			backend := &recordingSetupBackend{
+				plan:   readySetupPlan(modelPlan),
+				result: successfulSetupResultForPlan(modelPlan),
+			}
+			model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+			model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+			model = updateModel(t, model, setupLoadedMsg{generation: 1, value: SetupStatus{ModelPlan: modelPlan}})
+
+			model, previewCmd := openSetupRoute(t, model)
+			if previewCmd == nil {
+				t.Fatal("opening Setup did not load a real preview")
+			}
+			model = updateModel(t, model, previewCmd())
+			if len(backend.planRequests) != 1 || backend.planRequests[0].Plan != modelPlan {
+				t.Fatalf("preview requests=%+v want plan=%q", backend.planRequests, modelPlan)
+			}
+			if !strings.Contains(model.View().Content, "selected plan  "+modelPlan) {
+				t.Fatalf("preview did not preserve selected plan %q:\n%s", modelPlan, model.View().Content)
+			}
+
+			model = updateModel(t, model, keyPress("a"))
+			updated, applyCmd := model.Update(keyPress("y"))
+			model = updated.(Model)
+			if applyCmd == nil {
+				t.Fatal("confirming Setup did not start apply")
+			}
+			model = updateModel(t, model, applyCmd())
+			if len(backend.applyRequests) != 1 || backend.applyRequests[0].Plan != modelPlan {
+				t.Fatalf("apply requests=%+v want plan=%q", backend.applyRequests, modelPlan)
+			}
+			if model.setup.ModelPlan != modelPlan {
+				t.Fatalf("applied setup plan=%q want %q", model.setup.ModelPlan, modelPlan)
+			}
+		})
+	}
+}
+
 func TestSetupRequiresExplicitConfirmationAndSelectedPlanReachesApply(t *testing.T) {
 	backend := &recordingSetupBackend{plan: readySetupPlan("medium"), result: successfulSetupResult()}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
@@ -204,8 +244,12 @@ func readySetupPlan(plan string) SetupPlan {
 }
 
 func successfulSetupResult() SetupResult {
+	return successfulSetupResultForPlan("high")
+}
+
+func successfulSetupResultForPlan(modelPlan string) SetupResult {
 	return SetupResult{
-		Plan: readySetupPlan("high"), Changed: true,
+		Plan: readySetupPlan(modelPlan), Changed: true,
 		SelfInstallState: "installed", SelfInstallPath: "/bin/vgxness",
 		IntegrationState: "installed", IntegrationPath: "/config/agents/vgxness-manager.md",
 		ArtifactCount: 18, HandshakeOK: true, HandshakeStatus: "healthy", RestartRequired: true,
