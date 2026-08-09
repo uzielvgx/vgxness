@@ -77,13 +77,18 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	listen := flags.String("listen", defaultListenAddress, "listen address")
-	allowInsecure := flags.Bool("development-allow-insecure-non-loopback", false, "development only")
-	if flags.Parse(args) != nil || flags.NArg() != 0 || !validListenAddress(*listen, *allowInsecure) {
-		fmt.Fprintln(stderr, "serve requires a literal loopback listen address")
+	legacyAllowInsecure := flags.Bool("development-allow-insecure-non-loopback", false, "retired; true is rejected")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "serve arguments are invalid")
 		return 2
 	}
-	if *allowInsecure && !isLoopbackAddress(*listen) {
-		fmt.Fprintln(stderr, "WARNING: development insecure non-loopback listener enabled")
+	if *legacyAllowInsecure {
+		fmt.Fprintln(stderr, "development insecure non-loopback override is retired; explicit false is accepted only for compatibility")
+		return 2
+	}
+	if !validListenAddress(*listen) {
+		fmt.Fprintln(stderr, "serve requires a literal loopback listen address")
+		return 2
 	}
 	repository, cleanup, ok := configuredServeRepository(ctx)
 	if !ok {
@@ -140,7 +145,7 @@ func responseFailureObserver(stderr io.Writer) syncapi.FailureObserver {
 	}
 }
 
-func validListenAddress(address string, allowInsecure bool) bool {
+func validListenAddress(address string) bool {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || host == "" {
 		return false
@@ -150,12 +155,7 @@ func validListenAddress(address string, allowInsecure bool) bool {
 		return false
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || allowInsecure)
-}
-
-func isLoopbackAddress(address string) bool {
-	host, _, err := net.SplitHostPort(address)
-	return err == nil && net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
+	return ip != nil && ip.IsLoopback()
 }
 
 type repositoryAuthenticator struct{ repository *syncpg.Repository }

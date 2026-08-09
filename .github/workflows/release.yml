@@ -22,15 +22,19 @@ jobs:
 
   build:
     runs-on: ubuntu-24.04
+    outputs:
+      release_commit: ${{ steps.release_metadata.outputs.commit }}
+      release_date: ${{ steps.release_metadata.outputs.date }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.3
+          go-version: 1.26.5
           cache: true
       - name: Build release assets
+        id: release_metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -42,6 +46,7 @@ jobs:
             --date "$date" \
             --output dist
           printf 'RELEASE_COMMIT=%s\nRELEASE_DATE=%s\n' "$commit" "$date" >> "$GITHUB_ENV"
+          printf 'commit=%s\ndate=%s\n' "$commit" "$date" >> "$GITHUB_OUTPUT"
       - name: Verify Linux artifact and self-install
         shell: bash
         run: |
@@ -106,25 +111,83 @@ jobs:
           $status = & $launcher self status --bin-dir $binDir --data-dir $dataDir
           if ($LASTEXITCODE -ne 0 -or $status -notcontains "state=installed") { throw "Windows launcher status failed" }
 
+  darwin-smoke:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - name: Download shared release assets
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-dist-${{ github.ref_name }}
+          path: dist
+      - name: Verify Darwin artifact and self-install
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.build.outputs.release_commit }}
+          RELEASE_DATE: ${{ needs.build.outputs.release_date }}
+        run: |
+          set -euo pipefail
+          machine="$(uname -m)"
+          if [[ "$machine" != arm64 ]]; then
+            printf 'expected macOS ARM64 runner, got %s\n' "$machine" >&2
+            exit 1
+          fi
+          target=arm64
+          version="${GITHUB_REF_NAME#v}"
+          archive="vgxness_${version}_darwin_${target}.tar.gz"
+          checksum_file="$(mktemp)"
+          awk -v archive="$archive" 'NF == 2 && $2 == archive { print }' dist/SHA256SUMS > "$checksum_file"
+          if [[ "$(wc -l < "$checksum_file" | tr -d ' ')" != 1 ]]; then
+            printf 'expected exactly one checksum for %s\n' "$archive" >&2
+            exit 1
+          fi
+          (cd dist && shasum -a 256 -c "$checksum_file")
+          extract="$(mktemp -d)"
+          install="$(mktemp -d)"
+          tar -xzf "dist/$archive" -C "$extract"
+          binary="$extract/${archive%.tar.gz}/vgxness"
+          version_output="$("$binary" version)"
+          grep -Fx "version=$GITHUB_REF_NAME" <<<"$version_output"
+          grep -Fx "commit=$RELEASE_COMMIT" <<<"$version_output"
+          grep -Fx "date=$RELEASE_DATE" <<<"$version_output"
+          grep -Fx "os=darwin" <<<"$version_output"
+          grep -Fx "arch=$target" <<<"$version_output"
+          preview="$("$binary" self preview --bin-dir "$install/bin" --data-dir "$install/data")"
+          grep -Fx "state=absent" <<<"$preview"
+          install_output="$("$binary" self install --bin-dir "$install/bin" --data-dir "$install/data")"
+          grep -Fx "state=installed" <<<"$install_output"
+          status="$("$install/bin/vgxness" self status --bin-dir "$install/bin" --data-dir "$install/data")"
+          grep -Fx "state=installed" <<<"$status"
+
   publish:
-    needs: [standard-validation, build, windows-smoke]
+    needs: [standard-validation, build, windows-smoke, darwin-smoke]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Download verified release assets
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-dist-${{ github.ref_name }}
           path: dist
-      - name: Verify and publish release
+      - name: Verify release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Attest release assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          (cd dist && sha256sum -c SHA256SUMS)
           version="${GITHUB_REF_NAME#v}"
           assets=(
             "dist/vgxness_${version}_linux_amd64.tar.gz"

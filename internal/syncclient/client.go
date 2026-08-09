@@ -24,11 +24,24 @@ var (
 	ErrUnauthorized         = errors.New("sync client unauthorized")
 	ErrUnavailable          = errors.New("sync client unavailable")
 	ErrDiscoveryUnsupported = errors.New("sync client discovery unsupported")
+	errNilTransportResponse = errors.New("sync client nil transport response")
 )
 
 type Client struct {
 	endpoint   *url.URL
 	httpClient *http.Client
+}
+
+type responseCheckingTransport struct {
+	base http.RoundTripper
+}
+
+func (transport responseCheckingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := transport.base.RoundTrip(request)
+	if response == nil && err == nil {
+		return nil, errNilTransportResponse
+	}
+	return response, err
 }
 
 // New creates a client that never follows credential-bearing redirects.
@@ -37,7 +50,7 @@ func New(endpoint string, transport http.RoundTripper) (*Client, error) {
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" || (u.Path != "" && u.Path != "/") || transport == nil {
 		return nil, ErrInvalidEndpoint
 	}
-	return &Client{endpoint: u, httpClient: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &Client{endpoint: u, httpClient: &http.Client{Transport: responseCheckingTransport{base: transport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 func (client *Client) Discover(ctx context.Context, credential string) (syncservice.Discovery, error) {
@@ -148,6 +161,9 @@ func (client *Client) pushOnce(ctx context.Context, credential string, push sync
 		return nil, false, err
 	}
 	if doErr != nil {
+		if errors.Is(doErr, errNilTransportResponse) {
+			return nil, false, ErrRemote
+		}
 		return nil, true, ErrUnavailable
 	}
 	if response == nil {
@@ -205,7 +221,13 @@ func (client *Client) get(ctx context.Context, path string, query url.Values, cr
 	if err := contextError(ctx, doErr); err != nil {
 		return err
 	}
-	if doErr != nil || response == nil {
+	if doErr != nil {
+		if errors.Is(doErr, errNilTransportResponse) {
+			return ErrRemote
+		}
+		return ErrUnavailable
+	}
+	if response == nil {
 		return ErrRemote
 	}
 	if response.StatusCode == http.StatusNotFound && path == "/v1/sync/discovery" {
