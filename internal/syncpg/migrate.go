@@ -19,12 +19,15 @@ var initialSchema string
 //go:embed migrations/002_resolution_conflict_ids.sql
 var resolutionConflictIDsSchema string
 
+//go:embed migrations/003_audit_retention_index.sql
+var auditRetentionIndexSchema string
+
 type migration struct {
 	version int64
 	sql     string
 }
 
-var migrations = []migration{{version: 1, sql: initialSchema}, {version: 2, sql: resolutionConflictIDsSchema}}
+var migrations = []migration{{version: 1, sql: initialSchema}, {version: 2, sql: resolutionConflictIDsSchema}, {version: 3, sql: auditRetentionIndexSchema}}
 
 // Migrate applies embedded, forward-only PostgreSQL schema migrations.
 func Migrate(ctx context.Context, conn *pgx.Conn) error {

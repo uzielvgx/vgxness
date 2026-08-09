@@ -12,11 +12,7 @@ import (
 
 type installLock struct{ file *os.File }
 
-func acquire(ctx context.Context, path string) (*installLock, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
+func acquireFile(ctx context.Context, file *os.File) (*installLock, error) {
 	for {
 		if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
 			return &installLock{file: file}, nil

@@ -124,6 +124,109 @@ func TestDeviceAuthenticateUpdatesLastSeenAndFailuresAreStaticAudited(t *testing
 	}
 }
 
+func TestDeviceAuditRetentionIsBoundedAndOwnerScoped(t *testing.T) {
+	ctx := context.Background()
+	repo, db := deviceRepository(t)
+	insert := func(owner uuid.UUID, count int, occurredAt time.Time) {
+		t.Helper()
+		if _, err := db.conn.Exec(ctx, "INSERT INTO audit_events(owner_id, action, outcome, reason_code, occurred_at) SELECT $1, 'test.audit', 'failure', 'old', $2 FROM generate_series(1,$3)", owner, occurredAt, count); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(owner uuid.UUID) int {
+		t.Helper()
+		var got int
+		if err := db.conn.QueryRow(ctx, "SELECT count(*) FROM audit_events WHERE owner_id=$1", owner).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if _, err := db.conn.Exec(ctx, "DELETE FROM audit_events WHERE owner_id=$1", db.owner); err != nil {
+		t.Fatal(err)
+	}
+
+	// Administrative audits do not pay two cleanup scans; sustained failed
+	// authentications perform the bounded cleanup instead.
+	insert(db.owner, 1, time.Now().Add(-auditRetention-time.Hour))
+	if _, err := repo.IssueDevice(ctx, "administrative"); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(db.owner); got != 2 {
+		t.Fatalf("administrative audit cleanup changed count to %d, want 2", got)
+	}
+
+	other := uuid.New()
+	if _, err := db.conn.Exec(ctx, "INSERT INTO owners(id) VALUES ($1)", other); err != nil {
+		t.Fatal(err)
+	}
+	insert(other, 1, time.Now().Add(-auditRetention-time.Hour))
+	tx, err := db.conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trimAuditEvents(ctx, tx, "audit_events", db.owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(db.owner); got != 1 { // retained issue
+		t.Fatalf("expired owner audit cleanup count = %d, want 1", got)
+	}
+	if got := count(other); got != 1 {
+		t.Fatalf("owner isolation count = %d, want 1", got)
+	}
+	if _, err := db.conn.Exec(ctx, "DELETE FROM audit_events WHERE owner_id=$1", other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(ctx, "DELETE FROM owners WHERE id=$1", other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AuthenticateDevice(ctx, "not-a-bearer"); err != ErrUnauthenticated {
+		t.Fatalf("authenticate = %v", err)
+	}
+	if got := count(db.owner); got != 2 { // retained issue + new failure
+		t.Fatalf("expired owner audit cleanup count = %d, want 2", got)
+	}
+
+	if _, err := db.conn.Exec(ctx, "DELETE FROM audit_events WHERE owner_id=$1", db.owner); err != nil {
+		t.Fatal(err)
+	}
+	insert(db.owner, auditEventsPerOwner+auditCleanupBatchSize, time.Now())
+	if _, err := repo.AuthenticateDevice(ctx, "not-a-bearer"); err != ErrUnauthenticated {
+		t.Fatalf("first cap authentication = %v", err)
+	}
+	if got := count(db.owner); got != auditEventsPerOwner+1 {
+		t.Fatalf("first bounded cleanup count = %d, want %d", got, auditEventsPerOwner+1)
+	}
+	var newest int
+	if err := db.conn.QueryRow(ctx, "SELECT count(*) FROM audit_events WHERE owner_id=$1 AND reason_code='malformed_bearer'", db.owner).Scan(&newest); err != nil || newest != 1 {
+		t.Fatalf("newest audit preserved = %d, %v", newest, err)
+	}
+	if _, err := repo.AuthenticateDevice(ctx, "not-a-bearer"); err != ErrUnauthenticated {
+		t.Fatalf("second cap authentication = %v", err)
+	}
+	if got := count(db.owner); got != auditEventsPerOwner {
+		t.Fatalf("cleanup did not converge to cap: %d", got)
+	}
+
+	tx, err = db.conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := trimAuditEvents(canceled, tx, "audit_events", db.owner); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled cleanup = %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(db.owner); got != auditEventsPerOwner {
+		t.Fatalf("canceled cleanup changed rows: %d", got)
+	}
+}
+
 func TestDeviceAuthenticationAndRevokeSerializeAtConditionalUpdate(t *testing.T) {
 	ctx := context.Background()
 	conn := testConn(t)

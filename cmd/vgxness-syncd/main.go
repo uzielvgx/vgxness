@@ -90,6 +90,11 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "serve requires a literal loopback listen address")
 		return 2
 	}
+	authLimits, ok := configuredAuthenticationLimits()
+	if !ok {
+		fmt.Fprintln(stderr, "serve configuration failed")
+		return 1
+	}
 	repository, cleanup, ok := configuredServeRepository(ctx)
 	if !ok {
 		fmt.Fprintln(stderr, "serve setup failed")
@@ -102,7 +107,11 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer listener.Close()
-	server := newServer(repositoryAuthenticator{repository}, repositoryBackend{repository}, stderr)
+	server, err := newServerWithAuthenticationLimits(repositoryAuthenticator{repository}, repositoryBackend{repository}, stderr, authLimits)
+	if err != nil {
+		fmt.Fprintln(stderr, "serve configuration failed")
+		return 1
+	}
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	select {
@@ -126,14 +135,49 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 }
 
 func newServer(authenticator syncapi.Authenticator, backend syncapi.SyncBackend, stderr io.Writer) *http.Server {
+	server, err := newServerWithAuthenticationLimits(authenticator, backend, stderr, syncapi.DefaultAuthenticationLimitsConfig())
+	if err != nil {
+		panic(err)
+	}
+	return server
+}
+
+func newServerWithAuthenticationLimits(authenticator syncapi.Authenticator, backend syncapi.SyncBackend, stderr io.Writer, authLimits syncapi.AuthenticationLimitsConfig) (*http.Server, error) {
+	handler, err := syncapi.NewSyncServerHandlerWithAuthenticationLimits(authenticator, backend, responseFailureObserver(stderr), authLimits)
+	if err != nil {
+		return nil, err
+	}
 	return &http.Server{
-		Handler:           syncapi.NewSyncServerHandler(authenticator, backend, responseFailureObserver(stderr)),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
+	}, nil
+}
+
+func configuredAuthenticationLimits() (syncapi.AuthenticationLimitsConfig, bool) {
+	config := syncapi.DefaultAuthenticationLimitsConfig()
+	for _, setting := range []struct {
+		name  string
+		value *int
+	}{
+		{"VGXNESS_SYNC_AUTH_GLOBAL_PER_MINUTE", &config.GlobalPerMinute},
+		{"VGXNESS_SYNC_AUTH_DEVICE_PER_MINUTE", &config.DevicePerMinute},
+		{"VGXNESS_SYNC_AUTH_DEVICE_STATES", &config.DeviceStates},
+	} {
+		text := getenv(setting.name)
+		if text == "" {
+			continue
+		}
+		value, err := strconv.Atoi(text)
+		if err != nil || value < 1 {
+			return syncapi.AuthenticationLimitsConfig{}, false
+		}
+		*setting.value = value
 	}
+	return config, true
 }
 
 func responseFailureObserver(stderr io.Writer) syncapi.FailureObserver {

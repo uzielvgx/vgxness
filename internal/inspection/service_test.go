@@ -25,6 +25,15 @@ func TestInspectionDiagnosesCorruptDBAndCancellation(t *testing.T) {
 		_, err := (Service{Health: healthy}).Status(ctx, config.Options{StorageRoot: t.TempDir()})
 		testutil.Require(t, errors.Is(err, context.Canceled), "expected cancellation, got %v", err)
 	})
+	t.Run("deadline", func(t *testing.T) {
+		for _, inspect := range []func(context.Context, config.Options) (Result, error){
+			(Service{Health: func(context.Context, string) (int, error) { return 0, context.DeadlineExceeded }}).Status,
+			(Service{Health: func(context.Context, string) (int, error) { return 0, context.DeadlineExceeded }}).Doctor,
+		} {
+			_, err := inspect(context.Background(), config.Options{StorageRoot: t.TempDir()})
+			testutil.Require(t, errors.Is(err, context.DeadlineExceeded), "expected deadline, got %v", err)
+		}
+	})
 }
 
 func TestInspection_DoesNotCreateOrMigrateStorage(t *testing.T) {

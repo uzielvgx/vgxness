@@ -300,7 +300,7 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	}
 	rows, err := s.db.QueryContext(ctx, `PRAGMA integrity_check`)
 	if err != nil {
-		return 0, fmt.Errorf("%w: integrity check unavailable", ErrCorrupt)
+		return 0, healthError(ctx, "integrity check unavailable")
 	}
 	integrityRows, integrityOK := 0, true
 	for rows.Next() {
@@ -312,22 +312,28 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	}
 	rowsErr := rows.Err()
 	_ = rows.Close()
+	if err := cancelled(ctx); err != nil {
+		return 0, err
+	}
 	if rowsErr != nil || integrityRows != 1 || !integrityOK {
 		return 0, fmt.Errorf("%w: integrity check failed", ErrCorrupt)
 	}
 	rows, err = s.db.QueryContext(ctx, `PRAGMA foreign_key_check`)
 	if err != nil {
-		return 0, fmt.Errorf("%w: foreign-key check unavailable", ErrCorrupt)
+		return 0, healthError(ctx, "foreign-key check unavailable")
 	}
 	foreignKeyViolation := rows.Next()
 	rowsErr = rows.Err()
 	_ = rows.Close()
+	if err := cancelled(ctx); err != nil {
+		return 0, err
+	}
 	if rowsErr != nil || foreignKeyViolation {
 		return 0, fmt.Errorf("%w: foreign-key check failed", ErrCorrupt)
 	}
 	var version, probe int
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
-		return 0, fmt.Errorf("%w: migration ledger unavailable", ErrCorrupt)
+		return 0, healthError(ctx, "migration ledger unavailable")
 	}
 	if version > migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: database schema version %d is newer than supported version %d", ErrMigration, version, migrations[len(migrations)-1].version)
@@ -336,18 +342,34 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims')`).Scan(&probe); err != nil || probe != 20 {
+		if contextErr := cancelled(ctx); contextErr != nil {
+			return 0, contextErr
+		}
 		return 0, fmt.Errorf("%w: required schema unavailable", ErrCorrupt)
 	}
 	if !s.syncSchemaHealthy(ctx) {
+		if err := cancelled(ctx); err != nil {
+			return 0, err
+		}
 		return 0, fmt.Errorf("%w: sync schema unavailable", ErrCorrupt)
 	}
 	if !s.sddSchemaHealthy(ctx) {
+		if err := cancelled(ctx); err != nil {
+			return 0, err
+		}
 		return 0, fmt.Errorf("%w: SDD schema unavailable", ErrCorrupt)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observations_fts WHERE observations_fts MATCH 'healthchecknomatch'`).Scan(&probe); err != nil {
-		return 0, fmt.Errorf("%w: FTS5 unavailable", ErrCorrupt)
+		return 0, healthError(ctx, "FTS5 unavailable")
 	}
 	return version, nil
+}
+
+func healthError(ctx context.Context, message string) error {
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %s", ErrCorrupt, message)
 }
 
 func (s *Store) sddSchemaHealthy(ctx context.Context) bool {

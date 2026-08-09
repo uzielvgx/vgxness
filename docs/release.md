@@ -25,17 +25,17 @@ Each archive expands to one directory named after the archive stem. That directo
 | `linux/arm64` | Preview / compile-only | Cross-built archive; no native release smoke. |
 | `windows/arm64` | Preview / compile-only | Cross-built archive; no native release smoke. |
 | `darwin/amd64` | Preview / compile-only | Cross-built archive; no native amd64 release-archive smoke. |
-| `darwin/arm64` | Preview / compile-only | Proposed tag-workflow release-archive version, `self preview`, `self install`, and installed-launcher `self status` smoke on standard `macos-15` ARM64; promotion awaits observed native evidence. |
+| `darwin/arm64` | Preview / workflow-gated | The active tag workflow requires release-archive version, `self preview`, `self install`, and installed-launcher `self status` smoke on standard `macos-15` ARM64; promotion awaits an observed successful tag run. |
 
-The complete repository test suite runs on Linux and Windows in CI. Windows also runs the native self-install lifecycle. The proposed, unexecuted tag workflow adds Darwin arm64 release-archive smoke on standard `macos-15` ARM64, but does not yet promote either Darwin architecture.
+The complete repository test suite runs on Linux and Windows in CI. Windows also runs the native self-install lifecycle. The active tag workflow includes Darwin arm64 release-archive smoke on standard `macos-15` ARM64, but the support level remains preview until a successful tag run supplies observed native evidence; Darwin amd64 remains compile-only.
 
 ## Release process
 
 1. Prepare a proposed release by updating `CHANGELOG.md` and confirming the intended tag is strict `v`-prefixed SemVer.
 2. Run `make verify`; native Windows installation evidence remains CI-only.
 3. After any required maintainer approval under the repository's external release policy, create and push the tag. Branch pushes do not create releases.
-4. The proposed, unexecuted tag workflow would call the complete standard validation workflow at the exact tagged SHA while independently deriving the exact 40-character commit and its committer RFC3339 date and running `go run ./cmd/vgxness-release` with those values.
-5. Under the proposed workflow, publication would require standard validation, complete asset construction, checksum verification, native Linux amd64 smoke, Windows amd64 smoke, and Darwin arm64 release-archive smoke on standard `macos-15` ARM64. The prospective publish job would verify `SHA256SUMS`, attest `dist/*` with GitHub Actions provenance, then publish the six archives and `SHA256SUMS` with `gh release create --verify-tag`.
+4. The active tag workflow calls the complete standard validation workflow at the exact tagged SHA while independently deriving the exact 40-character commit and its committer RFC3339 date and running `go run ./cmd/vgxness-release` with those values.
+5. Publication requires standard validation, complete asset construction, checksum verification, native Linux amd64 smoke, Windows amd64 smoke, and Darwin arm64 release-archive smoke on standard `macos-15` ARM64. The publish job verifies `SHA256SUMS`, attests `dist/*` with GitHub Actions provenance, then publishes the six archives and `SHA256SUMS` with `gh release create --verify-tag`.
 
 If a future execution of the proposed workflow fails after GitHub creates a
 draft release or uploads only part of the asset set, a workflow rerun is not
@@ -88,7 +88,7 @@ gh attestation verify vgxness_0.1.0-alpha.1_linux_amd64.tar.gz \
   --repo uzielvgx/vgxness
 ```
 
-Release binaries are not code-signed or notarized yet. For artifacts produced by a future execution of the proposed tag workflow, verify the repository/release URL, GitHub Actions provenance attestation, and `SHA256SUMS` before executing a binary.
+Release binaries are not code-signed or notarized yet. For artifacts produced by the tag workflow, verify the repository/release URL, GitHub Actions provenance attestation, and `SHA256SUMS` before executing a binary.
 
 ## Install and operate
 

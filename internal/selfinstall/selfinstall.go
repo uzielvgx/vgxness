@@ -3,6 +3,9 @@ package selfinstall
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,14 +24,16 @@ var (
 	ErrConflict   = errors.New("self-install conflicts with existing content")
 	ErrDrift      = errors.New("managed self-install has drifted")
 	ErrNoRollback = errors.New("no previous managed version is available")
+	ErrRecovery   = errors.New("self-install recovery is required")
 )
 
 type State string
 
 const (
-	StateAbsent    State = "absent"
-	StateInstalled State = "installed"
-	StateDrifted   State = "drifted"
+	StateAbsent          State = "absent"
+	StateInstalled       State = "installed"
+	StateDrifted         State = "drifted"
+	StateRecoveryPending State = "recovery_pending"
 )
 
 type Options struct {
@@ -58,13 +63,19 @@ type Runtime interface {
 }
 
 type Config struct {
-	SourceExecutable string
-	Now              func() time.Time
+	SourceExecutable     string
+	Now                  func() time.Time
+	afterManifestPublish func() error // package-test fault injection
+	afterManifestMove    func() error // package-test fault injection
+	afterAnchorsOpen     func() error // package-test fault injection
 }
 
 type Service struct {
-	source string
-	now    func() time.Time
+	source               string
+	now                  func() time.Time
+	afterManifestPublish func() error
+	afterManifestMove    func() error
+	afterAnchorsOpen     func() error
 }
 
 type paths struct {
@@ -74,6 +85,7 @@ type paths struct {
 	manifest string
 	versions string
 	lock     string
+	recovery string
 }
 
 type inspection struct {
@@ -82,6 +94,63 @@ type inspection struct {
 	manifest         launcher.Manifest
 	manifestRaw      []byte
 	reusableLauncher bool
+}
+
+type installAnchors struct {
+	bin  *os.Root
+	data *os.Root
+}
+
+func executableName() string {
+	if runtime.GOOS == "windows" {
+		return "vgxness.exe"
+	}
+	return "vgxness"
+}
+
+func (anchors installAnchors) close() {
+	if anchors.bin != nil {
+		_ = anchors.bin.Close()
+	}
+	if anchors.data != nil {
+		_ = anchors.data.Close()
+	}
+}
+
+func openAnchors(target paths) (installAnchors, error) {
+	bin, err := openInstallRoot(target.binDir, false)
+	if err != nil {
+		return installAnchors{}, fmt.Errorf("%w: open launcher anchor: %v", ErrDrift, err)
+	}
+	data, err := openInstallRoot(target.dataDir, false)
+	if err != nil {
+		_ = bin.Close()
+		return installAnchors{}, fmt.Errorf("%w: open data anchor: %v", ErrDrift, err)
+	}
+	if err := requireRootDirectory(data, "versions", false); err != nil {
+		_ = bin.Close()
+		_ = data.Close()
+		return installAnchors{}, err
+	}
+	return installAnchors{bin: bin, data: data}, nil
+}
+
+func prepareAnchors(target paths) (installAnchors, error) {
+	bin, err := openInstallRoot(target.binDir, true)
+	if err != nil {
+		return installAnchors{}, fmt.Errorf("prepare launcher directory: %w", err)
+	}
+	data, err := openInstallRoot(target.dataDir, true)
+	if err != nil {
+		_ = bin.Close()
+		return installAnchors{}, fmt.Errorf("prepare version data directory: %w", err)
+	}
+	if err := requireRootDirectory(data, "versions", true); err != nil {
+		_ = bin.Close()
+		_ = data.Close()
+		return installAnchors{}, fmt.Errorf("prepare versions directory: %w", err)
+	}
+	return installAnchors{bin: bin, data: data}, nil
 }
 
 func New(config Config) *Service {
@@ -99,7 +168,7 @@ func New(config Config) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{source: source, now: now}
+	return &Service{source: source, now: now, afterManifestPublish: config.afterManifestPublish, afterManifestMove: config.afterManifestMove, afterAnchorsOpen: config.afterAnchorsOpen}
 }
 
 func (service *Service) Preview(ctx context.Context, options Options) (Result, error) {
@@ -118,32 +187,51 @@ func (service *Service) Status(ctx context.Context, options Options) (Result, er
 
 func (service *Service) Install(ctx context.Context, options Options) (Result, error) {
 	initial, err := service.inspect(ctx, options)
+	if err != nil && !errors.Is(err, ErrRecovery) {
+		return Result{}, err
+	}
+	pendingRecovery := errors.Is(err, ErrRecovery)
+	if !pendingRecovery && initial.result.State == StateDrifted {
+		return Result{}, ErrConflict
+	}
+	if !pendingRecovery && initial.result.State == StateInstalled && !initial.result.UpdateAvailable {
+		return initial.result, nil
+	}
+	anchors, err := prepareAnchors(initial.paths)
 	if err != nil {
 		return Result{}, err
 	}
-	if initial.result.State == StateDrifted {
-		return Result{}, ErrConflict
+	defer anchors.close()
+	if service.afterAnchorsOpen != nil {
+		if err := service.afterAnchorsOpen(); err != nil {
+			return Result{}, err
+		}
 	}
-	if initial.result.State == StateInstalled && !initial.result.UpdateAvailable {
-		return initial.result, nil
+	lockFile, err := anchors.data.OpenFile(".install.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return Result{}, err
 	}
-	if err := prepareDirectory(initial.paths.binDir); err != nil {
-		return Result{}, fmt.Errorf("prepare launcher directory: %w", err)
-	}
-	if err := prepareDirectory(initial.paths.dataDir); err != nil {
-		return Result{}, fmt.Errorf("prepare version data directory: %w", err)
-	}
-	if err := prepareDirectory(initial.paths.versions); err != nil {
-		return Result{}, fmt.Errorf("prepare versions directory: %w", err)
-	}
-	lock, err := acquire(ctx, initial.paths.lock)
+	lock, err := acquireFile(ctx, lockFile)
 	if err != nil {
 		return Result{}, err
 	}
 	defer lock.release()
-	current, err := service.inspect(ctx, options)
+	if result, err := recoverManifestRoot(anchors, initial.paths); err != nil {
+		return result, err
+	}
+	current := initial
+	if !anchorsStillNamed(anchors, initial.paths) {
+		if pendingRecovery {
+			return recoveryResult(initial.result, fmt.Errorf("%w: install roots moved while recovery was pending", ErrRecovery))
+		}
+		return Result{}, ErrDrift
+	}
+	current, err = service.inspect(ctx, options)
 	if err != nil {
 		return Result{}, err
+	}
+	if !anchorsStillNamed(anchors, initial.paths) {
+		return Result{}, ErrDrift
 	}
 	if current.result.State == StateDrifted {
 		return Result{}, ErrConflict
@@ -151,16 +239,16 @@ func (service *Service) Install(ctx context.Context, options Options) (Result, e
 	if current.result.State == StateInstalled && !current.result.UpdateAvailable {
 		return current.result, nil
 	}
-	if err := installVersion(ctx, service.source, current.paths, current.result.SourceSHA256); err != nil {
+	if err := installVersionRoot(ctx, service.source, anchors.data, current.result.SourceSHA256); err != nil {
 		return Result{}, err
 	}
 	launcherTemporary := ""
 	if current.result.State == StateAbsent && !current.reusableLauncher {
-		launcherTemporary, err = installLauncher(ctx, service.source, current.paths.launcher, current.result.SourceSHA256)
+		launcherTemporary, err = installLauncherRoot(ctx, service.source, anchors.bin, executableName(), current.result.SourceSHA256)
 		if err != nil {
 			return Result{}, err
 		}
-		defer os.Remove(launcherTemporary)
+		defer anchors.bin.Remove(launcherTemporary)
 	}
 	launcherDigest := current.manifest.LauncherSHA256
 	if current.result.State == StateAbsent {
@@ -176,15 +264,19 @@ func (service *Service) Install(ctx context.Context, options Options) (Result, e
 		ActivePath: launcher.VersionPath(current.paths.dataDir, current.result.SourceSHA256), ActiveSHA256: current.result.SourceSHA256,
 		PreviousSHA256: previous, UpdatedAt: service.now().UTC().Format(time.RFC3339Nano),
 	}
-	if err := writeManifest(ctx, current.paths.manifest, manifest, current.manifestRaw); err != nil {
-		return Result{}, err
-	}
-	verified, err := service.inspect(ctx, options)
-	if err != nil || verified.result.State != StateInstalled || verified.result.ActiveSHA256 != current.result.SourceSHA256 {
+	if !anchorsStillNamed(anchors, current.paths) {
 		return Result{}, ErrDrift
 	}
-	verified.result.Changed = true
-	return verified.result, nil
+	if err := service.writeManifestRoot(ctx, anchors, current.paths, manifest, current.manifestRaw); err != nil {
+		return recoveryResult(current.result, err)
+	}
+	result := current.result
+	result.State, result.ActiveSHA256, result.PreviousSHA256, result.RollbackAvailable, result.UpdateAvailable, result.Changed = StateInstalled, current.result.SourceSHA256, previous, previous != "", false, true
+	if !anchorsStillNamed(anchors, current.paths) {
+		result.State = StateDrifted
+		return result, ErrDrift
+	}
+	return result, nil
 }
 
 func (service *Service) Rollback(ctx context.Context, options Options) (Result, error) {
@@ -198,20 +290,39 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	if initial.result.State != StateInstalled || initial.result.PreviousSHA256 == "" {
 		return Result{}, ErrNoRollback
 	}
-	lock, err := acquire(ctx, initial.paths.lock)
+	anchors, err := openAnchors(initial.paths)
+	if err != nil {
+		return Result{}, err
+	}
+	defer anchors.close()
+	lockFile, err := anchors.data.OpenFile(".install.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return Result{}, err
+	}
+	lock, err := acquireFile(ctx, lockFile)
 	if err != nil {
 		return Result{}, err
 	}
 	defer lock.release()
-	current, err := service.inspect(ctx, options)
+	current := initial
+	if result, err := recoverManifestRoot(anchors, initial.paths); err != nil {
+		return result, err
+	}
+	if !anchorsStillNamed(anchors, initial.paths) {
+		return Result{}, ErrDrift
+	}
+	current, err = service.inspect(ctx, options)
 	if err != nil {
 		return Result{}, err
+	}
+	if !anchorsStillNamed(anchors, initial.paths) {
+		return Result{}, ErrDrift
 	}
 	if current.result.State != StateInstalled || current.result.PreviousSHA256 == "" {
 		return Result{}, ErrNoRollback
 	}
 	previousPath := launcher.VersionPath(current.paths.dataDir, current.result.PreviousSHA256)
-	previousDigest, err := launcher.FileSHA256(previousPath)
+	previousDigest, err := fileSHA256Root(anchors.data, filepath.Join("versions", current.result.PreviousSHA256, executableName()))
 	if err != nil || previousDigest != current.result.PreviousSHA256 {
 		return Result{}, ErrDrift
 	}
@@ -220,15 +331,19 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	manifest.ActiveSHA256 = previousDigest
 	manifest.PreviousSHA256 = ""
 	manifest.UpdatedAt = service.now().UTC().Format(time.RFC3339Nano)
-	if err := writeManifest(ctx, current.paths.manifest, manifest, current.manifestRaw); err != nil {
-		return Result{}, err
-	}
-	verified, err := service.inspect(ctx, options)
-	if err != nil || verified.result.State != StateInstalled || verified.result.ActiveSHA256 != previousDigest {
+	if !anchorsStillNamed(anchors, current.paths) {
 		return Result{}, ErrDrift
 	}
-	verified.result.Changed = true
-	return verified.result, nil
+	if err := service.writeManifestRoot(ctx, anchors, current.paths, manifest, current.manifestRaw); err != nil {
+		return recoveryResult(current.result, err)
+	}
+	result := current.result
+	result.ActiveSHA256, result.PreviousSHA256, result.RollbackAvailable, result.UpdateAvailable, result.Changed = previousDigest, "", false, false, true
+	if !anchorsStillNamed(anchors, current.paths) {
+		result.State = StateDrifted
+		return result, ErrDrift
+	}
+	return result, nil
 }
 
 func (service *Service) inspect(ctx context.Context, options Options) (inspection, error) {
@@ -247,6 +362,12 @@ func (service *Service) inspect(ctx context.Context, options Options) (inspectio
 		State: StateAbsent, LauncherPath: resolved.launcher, ManifestPath: resolved.manifest,
 		DataDir: resolved.dataDir, SourceSHA256: sourceDigest,
 	}}
+	if _, err := os.Lstat(resolved.recovery); err == nil {
+		state.result.State = StateRecoveryPending
+		return state, ErrRecovery
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return state, err
+	}
 	launcherInfo, launcherErr := os.Lstat(resolved.launcher)
 	manifestInfo, manifestErr := os.Lstat(resolved.manifest)
 	launcherAbsent := errors.Is(launcherErr, os.ErrNotExist)
@@ -335,184 +456,125 @@ func resolvePaths(options Options) (paths, error) {
 	return paths{
 		binDir: filepath.Clean(binDir), dataDir: filepath.Clean(dataDir), launcher: launcherPath,
 		manifest: launcher.SidecarPath(launcherPath), versions: filepath.Join(filepath.Clean(dataDir), "versions"),
-		lock: filepath.Join(filepath.Clean(dataDir), ".install.lock"),
+		lock:     filepath.Join(filepath.Clean(dataDir), ".install.lock"),
+		recovery: filepath.Join(filepath.Clean(dataDir), ".manifest-recovery.json"),
 	}, nil
 }
 
-func installVersion(ctx context.Context, source string, target paths, digest string) error {
-	versionDirectory := filepath.Dir(launcher.VersionPath(target.dataDir, digest))
-	if info, err := os.Lstat(versionDirectory); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return ErrDrift
-		}
-		installedDigest, hashErr := launcher.FileSHA256(launcher.VersionPath(target.dataDir, digest))
-		if hashErr != nil || installedDigest != digest {
-			return ErrDrift
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	temporary, err := os.MkdirTemp(target.versions, ".version-*")
-	if err != nil {
-		return fmt.Errorf("create version directory: %w", err)
-	}
-	defer os.RemoveAll(temporary)
-	temporaryBinary := filepath.Join(temporary, filepath.Base(launcher.VersionPath(target.dataDir, digest)))
-	if err := copyExecutable(ctx, source, temporaryBinary, 0o555, digest); err != nil {
-		return err
-	}
-	if err := os.Rename(temporary, versionDirectory); err != nil {
-		installedDigest, hashErr := launcher.FileSHA256(launcher.VersionPath(target.dataDir, digest))
-		if hashErr == nil && installedDigest == digest {
-			return nil
-		}
-		return fmt.Errorf("activate immutable version: %w", err)
-	}
-	return syncDirectory(target.versions)
+type manifestRecovery struct {
+	Manifest  string `json:"manifest"`
+	Expected  []byte `json:"expected"`
+	Published []byte `json:"published"`
+	Backup    string `json:"backup,omitempty"`
 }
 
-func installLauncher(ctx context.Context, source, target, digest string) (string, error) {
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".vgxness-launcher-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("create launcher: %w", err)
+func recoveryResult(result Result, err error) (Result, error) {
+	if !errors.Is(err, ErrRecovery) {
+		return Result{}, err
 	}
-	temporaryPath := temporary.Name()
-	_ = temporary.Close()
-	_ = os.Remove(temporaryPath)
-	if err := copyExecutable(ctx, source, temporaryPath, 0o755, digest); err != nil {
-		_ = os.Remove(temporaryPath)
-		return "", err
-	}
-	if err := os.Link(temporaryPath, target); err != nil {
-		_ = os.Remove(temporaryPath)
-		if errors.Is(err, os.ErrExist) {
-			return "", ErrConflict
-		}
-		return "", fmt.Errorf("install launcher: %w", err)
-	}
-	if err := syncDirectory(filepath.Dir(target)); err != nil {
-		removeIfSameFile(target, temporaryPath)
-		_ = os.Remove(temporaryPath)
-		return "", fmt.Errorf("sync launcher directory: %w", err)
-	}
-	return temporaryPath, nil
+	result.State = StateRecoveryPending
+	result.Changed = true
+	return result, err
 }
 
-func copyExecutable(ctx context.Context, source, target string, mode os.FileMode, digest string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	input, err := os.Open(source)
+// openInstallRoot walks from the filesystem root one component at a time. Each
+// component is checked before opening and then identity-checked against the
+// opened child, closing the check/use window that MkdirAll would leave around
+// caller-controlled symlink ancestors.
+func openInstallRoot(path string, create bool) (*os.Root, error) {
+	clean, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer input.Close()
-	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if runtime.GOOS == "darwin" && (clean == "/var" || strings.HasPrefix(clean, "/var/")) {
+		clean = "/private" + clean
+	}
+	volumeRoot := filepath.VolumeName(clean) + string(os.PathSeparator)
+	relative, err := filepath.Rel(volumeRoot, clean)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return nil, ErrInvalid
+	}
+	root, err := os.OpenRoot(volumeRoot)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	failed := true
-	defer func() {
-		_ = output.Close()
-		if failed {
-			_ = os.Remove(target)
+	if relative == "." {
+		return root, nil
+	}
+	for _, component := range strings.Split(relative, string(os.PathSeparator)) {
+		before, statErr := root.Lstat(component)
+		created := false
+		if errors.Is(statErr, os.ErrNotExist) && create {
+			if err := root.Mkdir(component, 0o700); err != nil {
+				_ = root.Close()
+				return nil, err
+			}
+			created = true
+			before, statErr = root.Lstat(component)
 		}
-	}()
-	if _, err := io.Copy(output, io.LimitReader(input, launcher.MaxBinarySize+1)); err != nil {
-		return err
+		if statErr != nil || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+			_ = root.Close()
+			return nil, ErrDrift
+		}
+		child, err := root.OpenRoot(component)
+		if err != nil {
+			_ = root.Close()
+			return nil, fmt.Errorf("%w: open install ancestor: %v", ErrDrift, err)
+		}
+		after, err := child.Stat(".")
+		if err != nil || !os.SameFile(before, after) {
+			_ = child.Close()
+			_ = root.Close()
+			return nil, ErrDrift
+		}
+		if created {
+			if err := child.Chmod(".", 0o700); err != nil {
+				_ = child.Close()
+				_ = root.Close()
+				return nil, err
+			}
+		}
+		_ = root.Close()
+		root = child
 	}
-	if err := output.Sync(); err != nil {
-		return err
+	return root, nil
+}
+
+func requireRootDirectory(root *os.Root, name string, create bool) error {
+	before, err := root.Lstat(name)
+	created := false
+	if errors.Is(err, os.ErrNotExist) && create {
+		if err := root.Mkdir(name, 0o700); err != nil {
+			return err
+		}
+		created = true
+		before, err = root.Lstat(name)
 	}
-	if err := output.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(target, mode); err != nil {
-		return err
-	}
-	actual, err := launcher.FileSHA256(target)
-	if err != nil || actual != digest {
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
 		return ErrDrift
 	}
-	failed = false
+	child, err := root.OpenRoot(name)
+	if err != nil {
+		return ErrDrift
+	}
+	defer child.Close()
+	after, err := child.Stat(".")
+	if err != nil || !os.SameFile(before, after) {
+		return ErrDrift
+	}
+	if created {
+		return child.Chmod(".", 0o700)
+	}
 	return nil
 }
 
-func writeManifest(ctx context.Context, path string, manifest launcher.Manifest, expected []byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	data, err := json.Marshal(manifest)
-	if err != nil {
-		return ErrInvalid
-	}
-	data = append(data, '\n')
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".vgxness-manifest-*.tmp")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if len(expected) == 0 {
-		if err := os.Link(temporaryPath, path); err != nil {
-			if errors.Is(err, os.ErrExist) {
-				return ErrConflict
-			}
-			return err
-		}
-		return syncDirectory(filepath.Dir(path))
-	}
-	before, err := os.Lstat(path)
-	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return ErrConflict
-	}
-	current, err := readRegular(path, 64<<10)
-	if err != nil || !bytes.Equal(current, expected) {
-		return ErrConflict
-	}
-	currentInfo, err := os.Lstat(path)
-	if err != nil || !os.SameFile(before, currentInfo) {
-		return ErrConflict
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return err
-	}
-	return syncDirectory(filepath.Dir(path))
-}
-
-func prepareDirectory(path string) error {
-	if info, err := os.Lstat(path); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return ErrDrift
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return ErrDrift
-	}
-	return os.Chmod(path, 0o700)
+func anchorsStillNamed(anchors installAnchors, target paths) bool {
+	binPath, binErr := os.Stat(target.binDir)
+	binRoot, binRootErr := anchors.bin.Stat(".")
+	dataPath, dataErr := os.Stat(target.dataDir)
+	dataRoot, dataRootErr := anchors.data.Stat(".")
+	return binErr == nil && binRootErr == nil && dataErr == nil && dataRootErr == nil &&
+		os.SameFile(binPath, binRoot) && os.SameFile(dataPath, dataRoot)
 }
 
 func readRegular(path string, maximum int64) ([]byte, error) {
@@ -539,10 +601,350 @@ func readRegular(path string, maximum int64) ([]byte, error) {
 	return data, nil
 }
 
-func removeIfSameFile(target, expected string) {
-	targetInfo, targetErr := os.Lstat(target)
-	expectedInfo, expectedErr := os.Lstat(expected)
-	if targetErr == nil && expectedErr == nil && os.SameFile(targetInfo, expectedInfo) {
-		_ = os.Remove(target)
+func rootTemporaryName(prefix string) (string, error) {
+	bytes := make([]byte, 12)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
 	}
+	return prefix + hex.EncodeToString(bytes), nil
+}
+
+func readRegularRoot(root *os.Root, name string, maximum int64) ([]byte, error) {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > maximum {
+		return nil, ErrDrift
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(info, after) {
+		return nil, ErrDrift
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil || int64(len(data)) > maximum {
+		return nil, ErrDrift
+	}
+	return data, nil
+}
+
+func fileSHA256Root(root *os.Root, name string) (string, error) {
+	data, err := readRegularRoot(root, name, launcher.MaxBinarySize)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func copyExecutableRoot(ctx context.Context, source string, root *os.Root, name string, mode os.FileMode, digest string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	failed := true
+	defer func() {
+		_ = output.Close()
+		if failed {
+			_ = root.Remove(name)
+		}
+	}()
+	if _, err := io.Copy(output, io.LimitReader(input, launcher.MaxBinarySize+1)); err != nil {
+		return err
+	}
+	if err := output.Sync(); err != nil {
+		return err
+	}
+	if err := output.Close(); err != nil {
+		return err
+	}
+	if err := root.Chmod(name, mode); err != nil {
+		return err
+	}
+	actual, err := fileSHA256Root(root, name)
+	if err != nil || actual != digest {
+		return ErrDrift
+	}
+	failed = false
+	return nil
+}
+
+func installVersionRoot(ctx context.Context, source string, root *os.Root, digest string) error {
+	directory := filepath.Join("versions", digest)
+	binary := filepath.Join(directory, executableName())
+	if info, err := root.Lstat(directory); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return ErrDrift
+		}
+		installed, hashErr := fileSHA256Root(root, binary)
+		if hashErr != nil || installed != digest {
+			return ErrDrift
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := rootTemporaryName(".version-")
+	if err != nil {
+		return err
+	}
+	if err := root.Mkdir(temporary, 0o700); err != nil {
+		return err
+	}
+	defer root.RemoveAll(temporary)
+	temporaryRoot, err := root.OpenRoot(temporary)
+	if err != nil {
+		return err
+	}
+	defer temporaryRoot.Close()
+	if err := copyExecutableRoot(ctx, source, temporaryRoot, executableName(), 0o555, digest); err != nil {
+		return err
+	}
+	if err := publishRootDirectoryNoReplace(root, temporary, directory); err != nil {
+		installed, hashErr := fileSHA256Root(root, binary)
+		if hashErr == nil && installed == digest {
+			return nil
+		}
+		return fmt.Errorf("activate immutable version: %w", err)
+	}
+	return syncRoot(root)
+}
+
+func installLauncherRoot(ctx context.Context, source string, root *os.Root, target, digest string) (string, error) {
+	temporary, err := rootTemporaryName(".vgxness-launcher-")
+	if err != nil {
+		return "", err
+	}
+	if err := copyExecutableRoot(ctx, source, root, temporary, 0o755, digest); err != nil {
+		return "", err
+	}
+	if err := root.Link(temporary, target); err != nil {
+		_ = root.Remove(temporary)
+		if errors.Is(err, os.ErrExist) {
+			return "", ErrConflict
+		}
+		return "", fmt.Errorf("install launcher: %w", err)
+	}
+	if err := syncRoot(root); err != nil {
+		removeRootIfSameFile(root, target, temporary)
+		_ = root.Remove(temporary)
+		return "", fmt.Errorf("sync launcher directory: %w", err)
+	}
+	return temporary, nil
+}
+
+func removeRootIfSameFile(root *os.Root, target, expected string) {
+	targetInfo, targetErr := root.Lstat(target)
+	expectedInfo, expectedErr := root.Lstat(expected)
+	if targetErr == nil && expectedErr == nil && os.SameFile(targetInfo, expectedInfo) {
+		_ = root.Remove(target)
+	}
+}
+
+func writeRootFile(root *os.Root, name string, data []byte, mode os.FileMode) error {
+	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if err := root.Chmod(name, mode); err == nil {
+		_, err = file.Write(data)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+func writeRecoveryRoot(root *os.Root, recovery manifestRecovery) error {
+	data, err := json.Marshal(recovery)
+	if err != nil {
+		return err
+	}
+	temporary, err := rootTemporaryName(".manifest-recovery-")
+	if err != nil {
+		return err
+	}
+	defer root.Remove(temporary)
+	if err := writeRootFile(root, temporary, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := root.Link(temporary, ".manifest-recovery.json"); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%w: recovery evidence already exists", ErrRecovery)
+		}
+		return err
+	}
+	return syncRoot(root)
+}
+
+func (service *Service) writeManifestRoot(ctx context.Context, anchors installAnchors, target paths, manifest launcher.Manifest, expected []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return ErrInvalid
+	}
+	data = append(data, '\n')
+	temporary, err := rootTemporaryName(".vgxness-manifest-")
+	if err != nil {
+		return err
+	}
+	defer anchors.bin.Remove(temporary)
+	if err := writeRootFile(anchors.bin, temporary, data, 0o600); err != nil {
+		return err
+	}
+	recovery := manifestRecovery{Manifest: target.manifest, Expected: expected, Published: data}
+	if len(expected) != 0 {
+		recovery.Backup, err = rootTemporaryName(".vgxness-manifest-backup-")
+		if err != nil {
+			return err
+		}
+	}
+	if err := writeRecoveryRoot(anchors.data, recovery); err != nil {
+		return fmt.Errorf("%w: record manifest publication: %v", ErrRecovery, err)
+	}
+	manifestName := filepath.Base(target.manifest)
+	if len(expected) == 0 {
+		if err := anchors.bin.Link(temporary, manifestName); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("%w: manifest appeared during publication", ErrRecovery)
+			}
+			return fmt.Errorf("%w: publish manifest: %v", ErrRecovery, err)
+		}
+		return service.finishManifestPublishRoot(anchors, target)
+	}
+	before, err := anchors.bin.Lstat(manifestName)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return errors.Join(ErrRecovery, ErrConflict)
+	}
+	current, err := readRegularRoot(anchors.bin, manifestName, 64<<10)
+	if err != nil || !bytes.Equal(current, expected) {
+		return errors.Join(ErrRecovery, ErrConflict)
+	}
+	currentInfo, err := anchors.bin.Lstat(manifestName)
+	if err != nil || !os.SameFile(before, currentInfo) {
+		return errors.Join(ErrRecovery, ErrConflict)
+	}
+	if err := anchors.bin.Rename(manifestName, recovery.Backup); err != nil {
+		return fmt.Errorf("%w: retain manifest predecessor: %v", ErrRecovery, err)
+	}
+	if service.afterManifestMove != nil {
+		if err := service.afterManifestMove(); err != nil {
+			return fmt.Errorf("%w: manifest predecessor moved: %v", ErrRecovery, err)
+		}
+	}
+	if err := anchors.bin.Link(temporary, manifestName); err != nil {
+		return fmt.Errorf("%w: publish manifest without overwrite: %v", ErrRecovery, err)
+	}
+	return service.finishManifestPublishRoot(anchors, target)
+}
+
+func (service *Service) finishManifestPublishRoot(anchors installAnchors, target paths) error {
+	if service.afterManifestPublish != nil {
+		if err := service.afterManifestPublish(); err != nil {
+			return fmt.Errorf("%w: manifest published; durability unknown: %v", ErrRecovery, err)
+		}
+	}
+	if err := syncRoot(anchors.bin); err != nil {
+		return fmt.Errorf("%w: manifest published; sync failed: %v", ErrRecovery, err)
+	}
+	_, err := recoverManifestRoot(anchors, target)
+	return err
+}
+
+func recoverManifestRoot(anchors installAnchors, target paths) (Result, error) {
+	data, err := readRegularRoot(anchors.data, ".manifest-recovery.json", 256<<10)
+	if errors.Is(err, os.ErrNotExist) {
+		return Result{}, nil
+	}
+	result := Result{State: StateRecoveryPending, LauncherPath: target.launcher, ManifestPath: target.manifest, DataDir: target.dataDir, Changed: true}
+	if err != nil {
+		return result, fmt.Errorf("%w: read recovery evidence: %v", ErrRecovery, err)
+	}
+	var recovery manifestRecovery
+	if err := json.Unmarshal(data, &recovery); err != nil || recovery.Manifest != target.manifest || len(recovery.Published) == 0 {
+		return result, fmt.Errorf("%w: invalid recovery evidence", ErrRecovery)
+	}
+	backup := recovery.Backup
+	if backup != "" && filepath.IsAbs(backup) {
+		if filepath.Dir(filepath.Clean(backup)) != filepath.Dir(target.manifest) {
+			return result, fmt.Errorf("%w: invalid recovery evidence", ErrRecovery)
+		}
+		backup = filepath.Base(backup)
+	}
+	if backup != "" && filepath.Base(backup) != backup {
+		return result, fmt.Errorf("%w: invalid recovery evidence", ErrRecovery)
+	}
+	if backup != "" && !validRecoveryBackup(backup) {
+		return result, fmt.Errorf("%w: invalid recovery evidence", ErrRecovery)
+	}
+	manifestName := filepath.Base(target.manifest)
+	current, err := readRegularRoot(anchors.bin, manifestName, 64<<10)
+	if errors.Is(err, os.ErrNotExist) && backup != "" {
+		previous, backupErr := readRegularRoot(anchors.bin, backup, 64<<10)
+		if backupErr != nil || !bytes.Equal(previous, recovery.Expected) {
+			return result, fmt.Errorf("%w: manifest predecessor retained at %q", ErrRecovery, recovery.Backup)
+		}
+		if linkErr := anchors.bin.Link(backup, manifestName); linkErr != nil {
+			return result, fmt.Errorf("%w: restore manifest predecessor without overwrite: %v", ErrRecovery, linkErr)
+		}
+		if syncErr := syncRoot(anchors.bin); syncErr != nil {
+			return result, fmt.Errorf("%w: sync restored manifest predecessor: %v", ErrRecovery, syncErr)
+		}
+		current, err = previous, nil
+	}
+	if err != nil || (!bytes.Equal(current, recovery.Published) && !bytes.Equal(current, recovery.Expected)) {
+		return result, fmt.Errorf("%w: manifest changed while publication was pending", ErrRecovery)
+	}
+	if backup != "" {
+		previous, err := readRegularRoot(anchors.bin, backup, 64<<10)
+		if err == nil && !bytes.Equal(previous, recovery.Expected) {
+			return result, fmt.Errorf("%w: manifest predecessor retained at %q", ErrRecovery, recovery.Backup)
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return result, fmt.Errorf("%w: inspect manifest predecessor at %q: %v", ErrRecovery, recovery.Backup, err)
+		}
+		if err == nil {
+			if err := anchors.bin.Remove(backup); err != nil {
+				return result, fmt.Errorf("%w: retain predecessor cleanup: %v", ErrRecovery, err)
+			}
+		}
+		if err := syncRoot(anchors.bin); err != nil {
+			return result, fmt.Errorf("%w: retain predecessor cleanup: %v", ErrRecovery, err)
+		}
+	}
+	if err := anchors.data.Remove(".manifest-recovery.json"); err != nil {
+		return result, fmt.Errorf("%w: remove recovery evidence: %v", ErrRecovery, err)
+	}
+	if err := syncRoot(anchors.data); err != nil {
+		return result, fmt.Errorf("%w: sync recovery cleanup: %v", ErrRecovery, err)
+	}
+	return Result{}, nil
+}
+
+func validRecoveryBackup(name string) bool {
+	const prefix = ".vgxness-manifest-backup-"
+	suffix := strings.TrimPrefix(name, prefix)
+	if suffix == name || len(suffix) != 24 {
+		return false
+	}
+	_, err := hex.DecodeString(suffix)
+	return err == nil
 }

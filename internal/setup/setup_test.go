@@ -220,6 +220,50 @@ func TestPlanBlocksSkillDriftAndApplyIndependentlyVerifiesSkills(t *testing.T) {
 	}
 }
 
+func TestApplyRetainsSkillsReadbackRecoveryEvidence(t *testing.T) {
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+		statusResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	managed := &fakeIntegration{installResult: integration.Result{State: integration.StateInstalled}, statusResult: integration.Result{State: integration.StateInstalled}}
+	readback := skills.Result{State: skills.StateDrifted, Path: "/shared/skills", BackupPath: "/shared/skills/.vgxness-backups/uninstall-0"}
+	shared := &fakeSkills{
+		preview:   skills.Result{State: skills.StateAbsent},
+		install:   skills.Result{State: skills.StateInstalled, Changed: true},
+		status:    readback,
+		statusErr: skills.ErrDrift,
+	}
+	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	service.skills = shared
+
+	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	if !errors.Is(err, ErrVerification) || !errors.Is(err, skills.ErrRecovery) || !errors.Is(err, skills.ErrDrift) || result.Plan.Skills.State != readback.State || result.Plan.Skills.Path != readback.Path || result.Plan.Skills.BackupPath != readback.BackupPath || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestApplyPreservesSkillsReadbackDeadline(t *testing.T) {
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+		statusResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	managed := &fakeIntegration{installResult: integration.Result{State: integration.StateInstalled}, statusResult: integration.Result{State: integration.StateInstalled}}
+	shared := &fakeSkills{
+		preview:   skills.Result{State: skills.StateAbsent},
+		install:   skills.Result{State: skills.StateInstalled, Changed: true},
+		statusErr: context.DeadlineExceeded,
+	}
+	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	service.skills = shared
+
+	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, skills.ErrRecovery) || result.Recovery != "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestPlanAndStatusBlockSkillConflictWithoutError(t *testing.T) {
 	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}, statusResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable"}}
 	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, statusResult: integration.Result{State: integration.StateInstalled}}

@@ -10,7 +10,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/cli` | `version`, `status`, `doctor`, `memory`, `sdd`, `integrate`, `self`, and `setup` commands. |
 | `internal/tui` | Keyboard-first storage, memory, and confirmation-gated setup UI. |
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
-| `internal/memory` | SQLite/FTS5 schema v5, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. |
+| `internal/memory` | SQLite/FTS5 schema v11, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. The schema is shared storage infrastructure; semantic memory, structured SDD records, and OpenSpec projections remain distinct. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
 | `internal/providers/opencode` | Manager v46, 14 other model-bound agents (including `general` v6, verifier v4, and reviewers v3), model-plan manifest, exact historical plugin v1–v10 and provider-skill v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 42-file, 18-skill catalog includes `sdd-lifecycle`, loaded only after explicit SDD acceptance. |
 | `internal/providers/codex` | Standalone Codex lifecycle for `AGENTS.md` and 14 delegated profiles, with exact `low`, `medium`, `high`, and `ultra` model-plan projections while preserving user-owned `config.toml`. |
@@ -36,7 +36,7 @@ Setup validates an absolute existing workspace, resolves `opencode`, and runs a 
 
 ## Storage
 
-The default database is `~/.vgxness/memory.db`. Canonical workspace bindings isolate project data in one schema-v5 SQLite database. Explicit `--storage-root` and `--project-local` options remain isolated alternatives.
+The default database is `~/.vgxness/memory.db`. Canonical workspace bindings isolate project data in one schema-v11 SQLite database. Explicit `--storage-root` and `--project-local` options remain isolated alternatives.
 
 Semantic observations, references, sessions, and FTS rows are separate from SDD changes, revisions, bindings, idempotency keys, and projection records. A read-only open never migrates the database. Existing older project databases are retained; normal startup does not import or delete them.
 

@@ -16,6 +16,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const (
+	auditRetention        = 30 * 24 * time.Hour
+	auditEventsPerOwner   = 10_000
+	auditCleanupBatchSize = 250
+)
+
 var (
 	// ErrInvalidDeviceName indicates a display name that cannot be stored safely.
 	ErrInvalidDeviceName = errors.New("syncpg invalid device name")
@@ -222,7 +228,28 @@ func deviceAudit(ctx context.Context, tx pgx.Tx, schema string, owner, device uu
 	if device != uuid.Nil {
 		deviceID = device
 	}
-	_, err := tx.Exec(ctx, "INSERT INTO "+pgx.Identifier{schema, "audit_events"}.Sanitize()+" (owner_id, device_id, action, outcome, reason_code) VALUES ($1,$2,$3,$4,NULLIF($5,''))", owner, deviceID, action, outcome, reason)
+	table := pgx.Identifier{schema, "audit_events"}.Sanitize()
+	if _, err := tx.Exec(ctx, "INSERT INTO "+table+" (owner_id, device_id, action, outcome, reason_code) VALUES ($1,$2,$3,$4,NULLIF($5,''))", owner, deviceID, action, outcome, reason); err != nil {
+		return err
+	}
+	// Failed bearer authentication is the untrusted, sustained-write path.
+	// Device issuance and revocation are operator actions, so avoiding cleanup
+	// scans there keeps their transaction cost bounded to the audit insert.
+	if action != "device.authenticate" || outcome != "failure" {
+		return nil
+	}
+	return trimAuditEvents(ctx, tx, table, owner)
+}
+
+// trimAuditEvents keeps audit evidence useful but bounded. It is deliberately
+// synchronous and cancellation-aware: no cleanup goroutine can outlive a
+// request or transaction. Each delete is batch-limited.
+func trimAuditEvents(ctx context.Context, tx pgx.Tx, table string, owner uuid.UUID) error {
+	cutoff := time.Now().Add(-auditRetention)
+	if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE id IN (SELECT id FROM "+table+" WHERE owner_id=$1 AND occurred_at<$2 ORDER BY id LIMIT $3)", owner, cutoff, auditCleanupBatchSize); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE id IN (SELECT id FROM "+table+" WHERE owner_id=$1 ORDER BY id DESC OFFSET $2 LIMIT $3)", owner, auditEventsPerOwner, auditCleanupBatchSize)
 	return err
 }
 

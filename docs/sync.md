@@ -19,6 +19,31 @@ credentials. Keep the database connection string out of command arguments,
 logs, checked-in files, and proxy configuration. Missing or malformed
 configuration fails closed.
 
+Optional admission-limit settings are
+`VGXNESS_SYNC_AUTH_GLOBAL_PER_MINUTE`,
+`VGXNESS_SYNC_AUTH_DEVICE_PER_MINUTE`, and
+`VGXNESS_SYNC_AUTH_DEVICE_STATES`. When unset, they default respectively to
+120, 60, and 256. Each value must be a positive base-10 integer; malformed,
+zero, or negative values fail daemon startup before database setup or listener
+creation. The admission window is fixed at one minute.
+
+## Admission and audit bounds
+
+Before PostgreSQL authentication, the daemon applies the configured admission
+limits; their defaults admit at most 120 valid bearer attempts per minute
+across the process and at most 60 per minute for each syntactically declared
+device UUID. Excess attempts receive the normal
+`429 limit_exceeded` response and do not reach PostgreSQL. The UUID fairness
+state is capped at 256 entries and is process-local, so deployments with
+multiple daemon processes enforce the bound independently.
+
+Failed-authentication audit evidence converges toward a 30-day retained window
+and 10,000 events for the configured owner. Cleanup runs only in a failed
+authentication audit transaction, is cancellation-aware, and deletes at most
+250 expired or over-cap records per audit write; a pre-existing excess can
+therefore persist briefly while subsequent failures converge it. It does not
+create background goroutines.
+
 Start the local listener with:
 
 ```sh

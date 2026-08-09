@@ -130,8 +130,8 @@ func TestMigrateResolutionConflictIDsConstraint(t *testing.T) {
 	if err := Migrate(ctx, conn); err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 2 {
-		t.Fatalf("migrations = %d, want 2", len(migrations))
+	if len(migrations) != 3 {
+		t.Fatalf("migrations = %d, want 3", len(migrations))
 	}
 	var checksum string
 	if err := conn.QueryRow(ctx, "SELECT checksum FROM sync_schema_migrations WHERE version=2").Scan(&checksum); err != nil || checksum != migrationChecksum(migrations[1].sql) {

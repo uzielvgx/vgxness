@@ -94,6 +94,92 @@ func TestRequestLimitsGlobalAndDeviceCleanup(t *testing.T) {
 	}
 }
 
+func TestAuthenticationLimitsBoundGlobalAndDeclaredDeviceAdmissions(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	limits := newAuthenticationLimits(authenticationLimitConfig{
+		GlobalPerWindow: 3,
+		DevicePerWindow: 2,
+		MaxDevices:      2,
+		Window:          time.Minute,
+		Now:             func() time.Time { return now },
+	})
+	first, second, third := uuid.New(), uuid.New(), uuid.New()
+	if !limits.allow(first, true) || !limits.allow(first, true) {
+		t.Fatal("declared device rejected before its capacity")
+	}
+	if limits.allow(first, true) {
+		t.Fatal("declared device exceeded its capacity")
+	}
+	if !limits.allow(second, true) {
+		t.Fatal("second declared device was not admitted")
+	}
+	if limits.allow(third, true) {
+		t.Fatal("global capacity did not bound another declared device")
+	}
+	if got := limits.deviceCount(); got > 2 {
+		t.Fatalf("device state = %d, want bounded at 2", got)
+	}
+	now = now.Add(time.Minute)
+	if !limits.allow(third, true) {
+		t.Fatal("new fixed window did not admit request")
+	}
+}
+
+func TestAuthenticationAdmissionRejectsBeforeAuthenticator(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	auth := &testAuthenticator{identity: Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}}
+	h := &handler{
+		authenticator: auth,
+		capabilities: func(context.Context) CapabilitiesResponse {
+			return CapabilitiesResponse{ProtocolVersion: ProtocolVersion}
+		},
+		limits: newRequestLimits(),
+		authLimits: newAuthenticationLimits(authenticationLimitConfig{
+			GlobalPerWindow: 1, DevicePerWindow: 1, MaxDevices: 1, Window: time.Minute,
+			Now: func() time.Time { return now },
+		}),
+	}
+	request := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/v1/sync/capabilities", nil)
+		r.Header.Set("Authorization", "Bearer "+testBearer)
+		r.Header.Set("Accept", MediaType)
+		return r
+	}
+	h.ServeHTTP(httptest.NewRecorder(), request())
+	recorder := httptest.NewRecorder()
+	h.ServeHTTP(recorder, request())
+	if recorder.Code != http.StatusTooManyRequests || auth.calls != 1 {
+		t.Fatalf("status/authenticator calls = %d/%d, want 429/1", recorder.Code, auth.calls)
+	}
+	assertError(t, recorder, ErrorLimitExceeded, false)
+}
+
+func TestAuthenticationLimitsBoundMalformedAdmissionsAndUUIDChurn(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	limits := newAuthenticationLimits(authenticationLimitConfig{
+		GlobalPerWindow: 20, DevicePerWindow: 2, MaxDevices: 2, Window: time.Minute,
+		Now: func() time.Time { return now },
+	})
+	for range 20 {
+		if !limits.allow(uuid.Nil, false) {
+			t.Fatal("malformed admission rejected before global capacity")
+		}
+	}
+	if limits.allow(uuid.Nil, false) {
+		t.Fatal("malformed admission bypassed global capacity")
+	}
+
+	now = now.Add(time.Minute)
+	for range 10 {
+		if !limits.allow(uuid.New(), true) {
+			t.Fatal("UUID churn rejected before global capacity")
+		}
+		if got := limits.deviceCount(); got > 2 {
+			t.Fatalf("UUID churn left %d device states, want at most 2", got)
+		}
+	}
+}
+
 const testBearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 type testAuthenticator struct {

@@ -206,6 +206,273 @@ func TestInstallRefusesSymlinkDirectory(t *testing.T) {
 	}
 }
 
+func TestInstallRefusesSymlinkAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink privileges vary on Windows")
+	}
+	root := t.TempDir()
+	foreign := filepath.Join(root, "foreign")
+	if err := os.MkdirAll(filepath.Join(foreign, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(foreign, "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(root, "linked")
+	if err := os.Symlink(foreign, linked); err != nil {
+		t.Fatal(err)
+	}
+	service := New(Config{SourceExecutable: writeSource(t, root, "source", "vgxness")})
+	_, err := service.Install(context.Background(), Options{BinDir: filepath.Join(linked, "bin"), DataDir: filepath.Join(root, "data")})
+	if !errors.Is(err, ErrDrift) {
+		t.Fatalf("symlink-ancestor install error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(foreign, "bin", executableName())); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink ancestor was modified: %v", err)
+	}
+}
+
+func TestInstallReportsRecoveryPendingAfterManifestPublicationSyncFailure(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	service := New(Config{
+		SourceExecutable:     writeSource(t, root, "source", "vgxness"),
+		afterManifestPublish: func() error { return errors.New("injected post-publish failure") },
+	})
+	result, err := service.Install(context.Background(), options)
+	if !errors.Is(err, ErrRecovery) || result.State != StateRecoveryPending || !result.Changed {
+		t.Fatalf("Install() result=%#v err=%v", result, err)
+	}
+	service.afterManifestPublish = nil
+	recovered, err := service.Install(context.Background(), options)
+	if err != nil || recovered.State != StateInstalled || recovered.Changed {
+		t.Fatalf("retry result=%#v err=%v", recovered, err)
+	}
+}
+
+func TestRecoveryPendingPreservesConcurrentManifestReplacement(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	service := New(Config{SourceExecutable: writeSource(t, root, "source", "vgxness")})
+	installed, err := service.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(installed.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := []byte("concurrent replacement\n")
+	if err := os.WriteFile(installed.ManifestPath, foreign, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolvePaths(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchors, err := openAnchors(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer anchors.close()
+	if err := writeRecoveryRoot(anchors.data, manifestRecovery{Manifest: installed.ManifestPath, Expected: original, Published: []byte("published\n")}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.Status(context.Background(), options)
+	if !errors.Is(err, ErrRecovery) || status.State != StateRecoveryPending {
+		t.Fatalf("Status() result=%#v err=%v", status, err)
+	}
+	_, err = service.Install(context.Background(), options)
+	if !errors.Is(err, ErrRecovery) {
+		t.Fatalf("Install() error=%v", err)
+	}
+	current, readErr := os.ReadFile(installed.ManifestPath)
+	if readErr != nil || string(current) != string(foreign) {
+		t.Fatalf("concurrent manifest was overwritten: %q read=%v", current, readErr)
+	}
+}
+
+func TestInstallRecoversManifestMovedBeforePublication(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	first := writeSource(t, root, "source-v1", "vgxness-v1")
+	if _, err := New(Config{SourceExecutable: first}).Install(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	second := writeSource(t, root, "source-v2", "vgxness-v2")
+	service := New(Config{SourceExecutable: second, afterManifestMove: func() error { return errors.New("stop after move") }})
+	result, err := service.Install(context.Background(), options)
+	if !errors.Is(err, ErrRecovery) || result.State != StateRecoveryPending {
+		t.Fatalf("interrupted update result=%#v err=%v", result, err)
+	}
+	service.afterManifestMove = nil
+	retried, err := service.Install(context.Background(), options)
+	if err != nil || retried.State != StateInstalled || retried.ActiveSHA256 != retried.SourceSHA256 {
+		t.Fatalf("retry result=%#v err=%v", retried, err)
+	}
+}
+
+func TestInstallRecoveryToleratesBackupCleanupBeforeJournalCleanup(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	first := New(Config{SourceExecutable: writeSource(t, root, "source-v1", "vgxness-v1")})
+	installed, err := first.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.ReadFile(installed.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := New(Config{SourceExecutable: writeSource(t, root, "source-v2", "vgxness-v2")})
+	updated, err := second.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := os.ReadFile(updated.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolvePaths(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchors, err := openAnchors(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer anchors.close()
+	missingBackup := ".vgxness-manifest-backup-00112233445566778899aabb"
+	if err := writeRecoveryRoot(anchors.data, manifestRecovery{Manifest: updated.ManifestPath, Expected: previous, Published: published, Backup: missingBackup}); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := second.Install(context.Background(), options)
+	if err != nil || retried.State != StateInstalled || retried.Changed {
+		t.Fatalf("retry result=%#v err=%v", retried, err)
+	}
+}
+
+func TestInstallRecoveryRejectsArbitraryBackupName(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	service := New(Config{SourceExecutable: writeSource(t, root, "source", "vgxness")})
+	installed, err := service.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(installed.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(options.BinDir, "keep-me")
+	if err := os.WriteFile(victim, []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolvePaths(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchors, err := openAnchors(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer anchors.close()
+	if err := writeRecoveryRoot(anchors.data, manifestRecovery{Manifest: installed.ManifestPath, Expected: []byte("foreign"), Published: manifest, Backup: "keep-me"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Install(context.Background(), options); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("Install() error=%v, want recovery rejection", err)
+	}
+	if data, err := os.ReadFile(victim); err != nil || string(data) != "foreign" {
+		t.Fatalf("victim=%q err=%v", data, err)
+	}
+}
+
+func TestPublishRootDirectoryDoesNotReplaceExistingDirectory(t *testing.T) {
+	rootPath := t.TempDir()
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := root.Mkdir("source", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Mkdir("destination", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishRootDirectoryNoReplace(root, "source", "destination"); err == nil {
+		t.Fatal("publish replaced an existing directory")
+	}
+	for _, name := range []string{"source", "destination"} {
+		if info, err := root.Lstat(name); err != nil || !info.IsDir() {
+			t.Fatalf("%s missing after failed publish: info=%v err=%v", name, info, err)
+		}
+	}
+}
+
+func TestInstallDoesNotFollowReplacementAfterAnchorsOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink privileges vary on Windows")
+	}
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	binDir, dataDir := filepath.Join(parent, "bin"), filepath.Join(parent, "data")
+	foreign := filepath.Join(root, "foreign")
+	if err := os.MkdirAll(filepath.Join(foreign, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(foreign, "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	service := New(Config{SourceExecutable: writeSource(t, root, "source", "vgxness"), afterAnchorsOpen: func() error {
+		moved := filepath.Join(root, "anchored-parent")
+		if err := os.Rename(parent, moved); err != nil {
+			return err
+		}
+		return os.Symlink(foreign, parent)
+	}})
+	_, _ = service.Install(context.Background(), Options{BinDir: binDir, DataDir: dataDir})
+	for _, path := range []string{filepath.Join(foreign, "bin", executableName()), filepath.Join(foreign, "data", "versions"), filepath.Join(foreign, "data", ".install.lock")} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("replacement redirected write into foreign hierarchy at %q: %v", path, err)
+		}
+	}
+}
+
+func TestInstallFailsClosedWhenAnchoredRootsLoseTheirNames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("renaming an open directory is not portable to Windows")
+	}
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	binDir, dataDir := filepath.Join(parent, "bin"), filepath.Join(parent, "data")
+	anchored := filepath.Join(root, "anchored-parent")
+	service := New(Config{SourceExecutable: writeSource(t, root, "source", "vgxness"), afterAnchorsOpen: func() error {
+		if err := os.Rename(parent, anchored); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(binDir, 0o700); err != nil {
+			return err
+		}
+		return os.MkdirAll(dataDir, 0o700)
+	}})
+	installed, err := service.Install(context.Background(), Options{BinDir: binDir, DataDir: dataDir})
+	if !errors.Is(err, ErrDrift) || installed.State != "" {
+		t.Fatalf("Install() result=%#v err=%v", installed, err)
+	}
+	for _, path := range []string{
+		filepath.Join(binDir, executableName()),
+		filepath.Join(binDir, executableName()+".launcher.json"),
+		filepath.Join(dataDir, "versions"),
+		filepath.Join(dataDir, ".install.lock"),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("replacement received write at %q: %v", path, err)
+		}
+	}
+}
+
 func TestCanceledPreviewDoesNotMutate(t *testing.T) {
 	root := t.TempDir()
 	service := New(Config{SourceExecutable: writeSource(t, root, "source", "vgxness")})
@@ -227,11 +494,4 @@ func writeSource(t *testing.T, root, name, content string) string {
 		t.Fatal(err)
 	}
 	return path
-}
-
-func executableName() string {
-	if runtime.GOOS == "windows" {
-		return "vgxness.exe"
-	}
-	return "vgxness"
 }

@@ -257,7 +257,12 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 	if service.skills != nil {
 		skillStatus, err := service.skills.Status(ctx, options.Skills)
 		if err != nil || skillStatus.State != skills.StateInstalled {
-			return result, fmt.Errorf("%w: skills", ErrVerification)
+			result.Plan.Skills = skillStatus
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return result, err
+			}
+			service.discloseIncompleteSkills(&result)
+			return result, errors.Join(fmt.Errorf("%w: skills", ErrVerification), skills.ErrRecovery, err)
 		}
 		result.Plan.Skills = skillStatus
 	}

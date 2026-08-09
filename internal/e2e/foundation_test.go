@@ -254,6 +254,21 @@ func TestDependencyFloors(t *testing.T) {
 	}
 }
 
+func TestDocumentedSQLiteSchemaMatchesMigrationHead(t *testing.T) {
+	migrations := readRepositoryFile(t, "../memory/migrations.go")
+	versions := regexp.MustCompile(`\{version: ([0-9]+),`).FindAllStringSubmatch(migrations, -1)
+	if len(versions) == 0 {
+		t.Fatal("memory migration ledger has no versions")
+	}
+	head := versions[len(versions)-1][1]
+	for _, path := range []string{"../../README.md", "../../docs/memory.md", "../../docs/go-implementation.md", "../../docs/opencode-integration.md", "../../docs/orchestration-flow.md"} {
+		document := readRepositoryFile(t, path)
+		if !strings.Contains(document, "schema v"+head) && !strings.Contains(document, "schema-v"+head) {
+			t.Errorf("%s does not declare current SQLite schema v%s", path, head)
+		}
+	}
+}
+
 func readRepositoryFile(t *testing.T, path string) string {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
