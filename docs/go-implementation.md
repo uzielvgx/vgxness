@@ -13,6 +13,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/memory` | SQLite/FTS5 schema v5, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
 | `internal/providers/opencode` | Manager v46, 14 other model-bound agents (including `general` v6, verifier v4, and reviewers v3), model-plan manifest, exact historical plugin v1–v10 and provider-skill v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 42-file, 18-skill catalog includes `sdd-lifecycle`, loaded only after explicit SDD acceptance. |
+| `internal/providers/codex` | Standalone Codex lifecycle for `AGENTS.md` and 14 delegated profiles, with exact `low`, `medium`, `high`, and `ultra` model-plan projections while preserving user-owned `config.toml`. |
 | `internal/integration`, `internal/setup`, `internal/skills` | Managed OpenCode lifecycle, independent global portable-skill lifecycle, and seven-step CLI/TUI setup workflow. |
 | `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
 | `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |

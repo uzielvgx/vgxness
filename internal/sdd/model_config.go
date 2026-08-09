@@ -54,7 +54,7 @@ type OpenCodePlan struct {
 func DefaultModelPlanConfig() ModelPlanConfig {
 	return ModelPlanConfig{
 		SchemaVersion: 1, ActivePlan: PlanMedium, Provider: "openai",
-		Efficient: "openai/gpt-5.6-luna-fast", Balanced: "openai/gpt-5.6-terra", Frontier: "openai/gpt-5.6-sol",
+		Efficient: "openai/gpt-5.6-luna", Balanced: "openai/gpt-5.6-terra", Frontier: "openai/gpt-5.6-sol",
 		Provenance: ModelPlanDefault,
 	}
 }

@@ -73,12 +73,14 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 	explicit := options.ModelPlan != "" || options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != ""
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	base := sdd.DefaultModelPlanConfig()
+	var installedBundle modelPlanBundle
 	if data, err := readRegularFile(manifestPath); err == nil {
-		installed, _, parseErr := parseInstalledModelPlanManifest(data)
+		installed, bundle, parseErr := parseInstalledModelPlanManifest(data)
 		if parseErr != nil {
 			return modelPlanBundle{}, fmt.Errorf("%w: model plan manifest", integration.ErrConflict)
 		}
 		base = installed.Config
+		installedBundle = bundle
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan manifest", integration.ErrConflict)
 	}
@@ -102,6 +104,15 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 	}
 	if !explicit {
 		config.Provenance = base.Provenance
+	}
+	if options.ModelEfficient == "" && options.ModelBalanced == "" && options.ModelFrontier == "" && config == installedBundle.config {
+		historical, recognized, historicalErr := historicalHighPlanWithLunaFastBundle(config)
+		if historicalErr != nil {
+			return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
+		}
+		if recognized && bytes.Equal(installedBundle.manifest, historical.manifest) {
+			return historical, nil
+		}
 	}
 	return buildModelPlanBundle(config)
 }
@@ -144,6 +155,13 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
+	historical, recognized, err := historicalHighPlanWithLunaFastBundle(config)
+	if err != nil {
+		return modelPlanBundle{}, integration.ErrDrift
+	}
+	if recognized && bytes.Equal(historical.manifest, data) {
+		return historical, nil
+	}
 	candidates, err := predecessorBundles(current)
 	if err != nil {
 		return modelPlanBundle{}, integration.ErrDrift
@@ -154,6 +172,35 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 		}
 	}
 	return modelPlanBundle{}, integration.ErrDrift
+}
+
+func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlanBundle, bool, error) {
+	historicalConfig, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "openai/gpt-5.6-luna-fast", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol")
+	if err != nil {
+		return modelPlanBundle{}, false, err
+	}
+	if config != historicalConfig {
+		return modelPlanBundle{}, false, nil
+	}
+	plan, err := sdd.ResolveOpenCodePlan(historicalConfig)
+	if err != nil {
+		return modelPlanBundle{}, false, err
+	}
+	for role, assignment := range plan.Roles {
+		if assignment.Capability != sdd.CapabilityEfficient || assignment.RequestedEffort != sdd.EffortHigh {
+			continue
+		}
+		assignment.Effort = sdd.EffortMedium
+		assignment.Variant = sdd.OpenCodeVariantForEffort(assignment.Effort)
+		assignment.Degradation = sdd.Degradation{Degraded: true, Reason: fmt.Sprintf("requested effort %s is unsupported by %s; using highest declared effort %s", assignment.RequestedEffort, assignment.Model, assignment.Effort)}
+		plan.Roles[role] = assignment
+	}
+	agents, err := modelBoundAgents(plan)
+	if err != nil {
+		return modelPlanBundle{}, false, err
+	}
+	bundle, err := encodeModelPlanBundle(historicalConfig, plan, agents)
+	return bundle, true, err
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {

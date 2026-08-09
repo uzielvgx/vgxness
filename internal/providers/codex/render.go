@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 var releaseVersion = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)))*)?$`)
@@ -25,6 +27,9 @@ type Artifact struct {
 type Package struct {
 	Artifacts []Artifact
 	SHA256    string
+	profiles  []profile
+	plan      sdd.Plan
+	legacy    bool
 }
 
 type profile struct {
@@ -41,15 +46,33 @@ type profile struct {
 // Render returns the native Codex projection for a strict v-prefixed SemVer
 // release, optionally with a SemVer prerelease. It performs no host interaction.
 func Render(version string) (Package, error) {
+	return RenderPlan(version, sdd.PlanMedium)
+}
+
+// RenderPlan returns the native Codex projection for one shared model plan.
+// The primary manager remains host-selected; the plan binds delegated profiles.
+func RenderPlan(version string, plan sdd.Plan) (Package, error) {
+	selected, err := profilesForPlan(plan)
+	if err != nil {
+		return Package{}, err
+	}
+	return renderPackage(version, selected, plan, false)
+}
+
+func renderLegacy(version string) (Package, error) {
+	return renderPackage(version, legacyProfiles, "", true)
+}
+
+func renderPackage(version string, selected []profile, plan sdd.Plan, legacy bool) (Package, error) {
 	if !releaseVersion.MatchString(version) {
 		return Package{}, errors.New("version must be a strict v-prefixed SemVer release")
 	}
 	artifacts := []Artifact{{Path: "AGENTS.md", Bytes: []byte(managerInstructions)}}
-	for _, item := range profiles {
+	for _, item := range selected {
 		artifacts = append(artifacts, Artifact{Path: item.path, Bytes: []byte(renderProfile(item))})
 	}
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
-	pkg := Package{Artifacts: artifacts}
+	pkg := Package{Artifacts: artifacts, profiles: append([]profile(nil), selected...), plan: plan, legacy: legacy}
 	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
 	if err := pkg.Validate(); err != nil {
 		return Package{}, err
@@ -94,6 +117,51 @@ var profiles = []profile{
 	readOnlyProfile("agents/sdd-apply.toml", "sdd-apply", "Read-only SDD apply handoff", "gpt-5.6", "high", sddReadTools, `Verify supplied accepted revision bindings, artifact digest, current file hash, allowed path, and no-symlink constraint before preparing an implementation handoff. Do not create changes, save or accept revisions, record projections, transition state, write workspace files, or spawn agents. Only general may implement an authorized projection.`),
 }
 
+// legacyProfiles is the exact static package emitted before model plans were
+// introduced. It remains a trusted predecessor for status, uninstall, and a
+// deliberate reinstall into a current plan.
+var legacyProfiles = append([]profile(nil), profiles...)
+
+var profileRoles = map[string]sdd.Role{
+	"agents/explore.toml":      sdd.RoleResearch,
+	"agents/general.toml":      sdd.RoleImplementation,
+	"agents/verifier.toml":     sdd.RoleVerification,
+	"agents/risk.toml":         sdd.RoleRisk,
+	"agents/readability.toml":  sdd.RoleReadability,
+	"agents/reliability.toml":  sdd.RoleReliability,
+	"agents/resilience.toml":   sdd.RoleResilience,
+	"agents/refuter.toml":      sdd.RoleRefuter,
+	"agents/sdd-research.toml": sdd.RoleResearch,
+	"agents/sdd-proposal.toml": sdd.RoleProposal,
+	"agents/sdd-spec.toml":     sdd.RoleSpec,
+	"agents/sdd-design.toml":   sdd.RoleDesign,
+	"agents/sdd-tasks.toml":    sdd.RoleTasks,
+	"agents/sdd-apply.toml":    sdd.RoleApply,
+}
+
+func profilesForPlan(plan sdd.Plan) ([]profile, error) {
+	config := sdd.DefaultModelPlanConfig()
+	config.ActivePlan = plan
+	resolved, err := sdd.ResolveOpenCodePlan(config)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Codex model plan: %w", err)
+	}
+	selected := append([]profile(nil), profiles...)
+	for index := range selected {
+		role, ok := profileRoles[selected[index].path]
+		if !ok {
+			return nil, fmt.Errorf("Codex profile %q has no model-plan role", selected[index].path)
+		}
+		assignment, ok := resolved.Roles[role]
+		if !ok || !strings.HasPrefix(assignment.Model, "openai/") {
+			return nil, fmt.Errorf("Codex role %q has an invalid model assignment", role)
+		}
+		selected[index].model = strings.TrimPrefix(assignment.Model, "openai/")
+		selected[index].reasoning = string(assignment.Variant)
+	}
+	return selected, nil
+}
+
 var memoryReadTools = []string{"memory_recent", "memory_search", "memory_get"}
 var sddReadTools = []string{"memory_recent", "memory_search", "memory_get", "sdd_list", "sdd_get", "sdd_get_revision", "sdd_list_revisions", "sdd_render_projection", "sdd_compare_projection", "sdd_projection_status"}
 
@@ -120,7 +188,11 @@ func tomlStrings(values []string) string {
 // Validate rejects stale digests and content changes to a caller-owned package.
 // Callers must invoke it immediately before publishing the package.
 func (pkg Package) Validate() error {
-	if len(pkg.Artifacts) != len(profiles)+1 {
+	selected := pkg.profiles
+	if len(selected) == 0 {
+		return errors.New("package has no profile identity")
+	}
+	if len(pkg.Artifacts) != len(selected)+1 {
 		return errors.New("package contains an unexpected artifact count")
 	}
 	previous := ""
@@ -139,8 +211,8 @@ func (pkg Package) Validate() error {
 	if string(pkg.Artifacts[0].Bytes) != managerInstructions {
 		return errors.New("invalid manager instructions")
 	}
-	expected := make(map[string]string, len(profiles))
-	for _, item := range profiles {
+	expected := make(map[string]string, len(selected))
+	for _, item := range selected {
 		expected[item.path] = renderProfile(item)
 	}
 	for _, artifact := range pkg.Artifacts[1:] {
@@ -183,7 +255,7 @@ func aggregateSHA256(artifacts []Artifact) string {
 }
 
 func clonePackage(source Package) Package {
-	result := Package{Artifacts: make([]Artifact, len(source.Artifacts)), SHA256: source.SHA256}
+	result := Package{Artifacts: make([]Artifact, len(source.Artifacts)), SHA256: source.SHA256, profiles: append([]profile(nil), source.profiles...), plan: source.plan, legacy: source.legacy}
 	for index, artifact := range source.Artifacts {
 		result.Artifacts[index] = Artifact{Path: artifact.Path, Bytes: append([]byte(nil), artifact.Bytes...)}
 	}

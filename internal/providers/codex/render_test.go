@@ -7,7 +7,59 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/vgxness/vgxness/internal/sdd"
 )
+
+func TestRenderPlanUsesSharedModelMatrix(t *testing.T) {
+	roles := map[string]sdd.Role{
+		"agents/explore.toml":      sdd.RoleResearch,
+		"agents/general.toml":      sdd.RoleImplementation,
+		"agents/verifier.toml":     sdd.RoleVerification,
+		"agents/risk.toml":         sdd.RoleRisk,
+		"agents/readability.toml":  sdd.RoleReadability,
+		"agents/reliability.toml":  sdd.RoleReliability,
+		"agents/resilience.toml":   sdd.RoleResilience,
+		"agents/refuter.toml":      sdd.RoleRefuter,
+		"agents/sdd-research.toml": sdd.RoleResearch,
+		"agents/sdd-proposal.toml": sdd.RoleProposal,
+		"agents/sdd-spec.toml":     sdd.RoleSpec,
+		"agents/sdd-design.toml":   sdd.RoleDesign,
+		"agents/sdd-tasks.toml":    sdd.RoleTasks,
+		"agents/sdd-apply.toml":    sdd.RoleApply,
+	}
+	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+		pkg, err := RenderPlan("v1.2.3", plan)
+		if err != nil {
+			t.Fatalf("RenderPlan(%s): %v", plan, err)
+		}
+		config := sdd.DefaultModelPlanConfig()
+		config.ActivePlan = plan
+		resolved, err := sdd.ResolveOpenCodePlan(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for path, role := range roles {
+			assignment := resolved.Roles[role]
+			content := string(artifact(t, pkg, path).Bytes)
+			model := strings.TrimPrefix(assignment.Model, "openai/")
+			if !strings.Contains(content, `model = "`+model+`"`) || !strings.Contains(content, `model_reasoning_effort = "`+string(assignment.Variant)+`"`) {
+				t.Fatalf("%s %s does not match %+v: %s", plan, path, assignment, content)
+			}
+		}
+	}
+}
+
+func TestLegacyStaticPackageHasFrozenAggregateSHA256(t *testing.T) {
+	pkg, err := renderLegacy("v0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "ec0d53c6f8b76daae0461b0cd54794419d57ced1752ddfe099b1061a1c798909"
+	if pkg.SHA256 != want {
+		t.Fatalf("legacy aggregate SHA-256 = %s, want %s", pkg.SHA256, want)
+	}
+}
 
 func TestRenderProducesNativeCodexProjection(t *testing.T) {
 	pkg, err := Render("v1.2.3")
@@ -94,15 +146,15 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s lacks the exact protected SDD-read allowlist", path)
 		}
 	}
-	if content := string(artifact(t, pkg, "agents/general.toml").Bytes); !strings.Contains(content, "sandbox_mode = \"workspace-write\"") || !strings.Contains(content, "must not own the SDD lifecycle") || !strings.Contains(content, "model = \"gpt-5.6\"") {
+	if content := string(artifact(t, pkg, "agents/general.toml").Bytes); !strings.Contains(content, "sandbox_mode = \"workspace-write\"") || !strings.Contains(content, "must not own the SDD lifecycle") || !strings.Contains(content, "model = \"gpt-5.6-terra\"") || !strings.Contains(content, "model_reasoning_effort = \"medium\"") {
 		t.Error("general profile does not retain its workspace-only boundary")
 	}
-	if content := string(artifact(t, pkg, "agents/explore.toml").Bytes); !strings.Contains(content, "model = \"gpt-5.6-terra\"") {
+	if content := string(artifact(t, pkg, "agents/explore.toml").Bytes); !strings.Contains(content, "model = \"gpt-5.6-luna\"") || !strings.Contains(content, "model_reasoning_effort = \"medium\"") {
 		t.Error("explore profile does not use the supported read-heavy model")
 	}
-	for _, path := range []string{"agents/verifier.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-apply.toml"} {
-		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, "model = \"gpt-5.6\"") {
-			t.Errorf("%s does not use the supported demanding-work model", path)
+	for path, model := range map[string]string{"agents/verifier.toml": "gpt-5.6-luna", "agents/sdd-spec.toml": "gpt-5.6-terra", "agents/sdd-design.toml": "gpt-5.6-sol", "agents/sdd-apply.toml": "gpt-5.6-terra"} {
+		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, `model = "`+model+`"`) {
+			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
 	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 2") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {

@@ -13,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 const maxArtifactBytes = 512 << 10
@@ -48,13 +49,45 @@ func (s *Integration) check(point, name string) error {
 
 var _ integration.ManagedRuntime = (*Integration)(nil)
 
-func codexPackage() (Package, error) { return Render("v0.0.0") }
+func codexPackage(options integration.Options) (Package, error) {
+	plan := options.ModelPlan
+	if plan == "" {
+		plan = sdd.PlanMedium
+	}
+	return RenderPlan("v0.0.0", plan)
+}
+
+func knownPackages() ([]Package, error) {
+	legacy, err := renderLegacy("v0.0.0")
+	if err != nil {
+		return nil, err
+	}
+	packages := []Package{legacy}
+	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+		pkg, err := RenderPlan("v0.0.0", plan)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, pkg)
+	}
+	return packages, nil
+}
+
 func resultFor(root string, pkg Package) integration.Result {
 	durability := "fsync"
 	if runtime.GOOS == "windows" {
 		durability = "file-sync-namespace-best-effort"
 	}
-	return integration.Result{Provider: "codex", Path: root, ArtifactSHA256: pkg.SHA256, ArtifactCount: len(pkg.Artifacts), DirectoryDurability: durability}
+	config := sdd.DefaultModelPlanConfig()
+	plan := pkg.plan
+	if pkg.legacy {
+		plan = sdd.PlanMedium
+	}
+	return integration.Result{
+		Provider: "codex", Path: root, ArtifactSHA256: pkg.SHA256, ArtifactCount: len(pkg.Artifacts), DirectoryDurability: durability,
+		ModelPlan: plan, ModelProvider: config.Provider,
+		ModelEfficient: config.Efficient, ModelBalanced: config.Balanced, ModelFrontier: config.Frontier,
+	}
 }
 func inspectRoot(ctx context.Context, root *Root, pkg Package) (inspection, error) {
 	state := inspection{result: resultFor(root.Path, pkg), artifacts: make([]inspectedArtifact, 0, len(pkg.Artifacts))}
@@ -100,8 +133,42 @@ func inspectRoot(ctx context.Context, root *Root, pkg Package) (inspection, erro
 	}
 	return state, nil
 }
+func inspectKnown(ctx context.Context, root *Root, preferred Package) (inspection, Package, error) {
+	packages, err := knownPackages()
+	if err != nil {
+		return inspection{}, Package{}, err
+	}
+	partial := make([]struct {
+		state inspection
+		pkg   Package
+	}, 0, len(packages))
+	for _, pkg := range packages {
+		state, err := inspectRoot(ctx, root, pkg)
+		if err != nil {
+			return inspection{}, Package{}, err
+		}
+		if state.result.State == integration.StateInstalled {
+			return state, pkg, nil
+		}
+		if state.result.State == integration.StatePartial {
+			partial = append(partial, struct {
+				state inspection
+				pkg   Package
+			}{state: state, pkg: pkg})
+		}
+	}
+	if len(partial) == 1 {
+		return partial[0].state, partial[0].pkg, nil
+	}
+	if len(partial) > 1 {
+		return inspection{}, Package{}, conflict("ambiguous managed Codex package")
+	}
+	state, err := inspectRoot(ctx, root, preferred)
+	return state, preferred, err
+}
+
 func (s *Integration) inspect(ctx context.Context, options integration.Options) (inspection, error) {
-	pkg, err := codexPackage()
+	pkg, err := codexPackage(options)
 	if err != nil {
 		return inspection{}, err
 	}
@@ -117,19 +184,30 @@ func (s *Integration) inspect(ctx context.Context, options integration.Options) 
 		return inspection{}, err
 	}
 	defer root.Close()
-	return inspectRoot(ctx, root, pkg)
+	state, _, err := inspectKnown(ctx, root, pkg)
+	return state, err
 }
 func (s *Integration) Preview(ctx context.Context, options integration.Options) (integration.Result, error) {
 	state, err := s.inspect(ctx, options)
 	if err != nil {
 		return integration.Result{}, err
 	}
+	if options.ModelPlan != "" && state.result.State == integration.StateInstalled {
+		pkg, err := codexPackage(options)
+		if err != nil {
+			return integration.Result{}, err
+		}
+		if state.result.ArtifactSHA256 != pkg.SHA256 {
+			state.result = resultFor(state.result.Path, pkg)
+			state.result.State = integration.StatePartial
+		}
+	}
 	state.result.Changed = state.result.State == integration.StateAbsent || state.result.State == integration.StatePartial
 	state.result.RestartRequired = state.result.Changed
 	return state.result, nil
 }
 func (s *Integration) Status(ctx context.Context, options integration.Options) (integration.Result, error) {
-	pkg, err := codexPackage()
+	pkg, err := codexPackage(options)
 	if err != nil {
 		return integration.Result{}, err
 	}
@@ -147,12 +225,18 @@ func (s *Integration) Status(ctx context.Context, options integration.Options) (
 		return integration.Result{}, err
 	}
 	defer root.Close()
-	state, err := inspectRoot(ctx, root, pkg)
+	state, _, err := inspectKnown(ctx, root, pkg)
 	if err != nil {
 		return state.result, err
 	}
 	if present, err := pending(root, pkg); err != nil || present {
 		return state.result, errors.Join(integration.ErrRecovery, err)
+	}
+	if options.ModelPlan != "" && state.result.State == integration.StateInstalled && state.result.ArtifactSHA256 != pkg.SHA256 {
+		state.result = resultFor(state.result.Path, pkg)
+		state.result.State = integration.StatePartial
+		state.result.Changed = true
+		state.result.RestartRequired = true
 	}
 	return state.result, nil
 }
@@ -160,7 +244,7 @@ func (s *Integration) ManagedLayout(ctx context.Context, options integration.Opt
 	if err := ctx.Err(); err != nil {
 		return integration.ManagedLayout{}, err
 	}
-	pkg, err := codexPackage()
+	pkg, err := codexPackage(options)
 	if err != nil {
 		return integration.ManagedLayout{}, err
 	}
@@ -202,7 +286,7 @@ func pending(root *Root, pkg Package) (bool, error) {
 	return false, nil
 }
 func (s *Integration) ReinstallPending(ctx context.Context, options integration.Options) (bool, error) {
-	pkg, err := codexPackage()
+	pkg, err := codexPackage(options)
 	if err != nil {
 		return false, err
 	}
@@ -306,7 +390,7 @@ func (s *Integration) install(ctx context.Context, root *Root, pkg Package, stat
 	return verified.result, nil
 }
 func (s *Integration) Install(ctx context.Context, options integration.Options) (integration.Result, error) {
-	pkg, err := codexPackage()
+	pkg, err := codexPackage(options)
 	if err != nil {
 		return integration.Result{}, err
 	}
@@ -318,11 +402,65 @@ func (s *Integration) Install(ctx context.Context, options integration.Options) 
 	if p, err := pending(root, pkg); err != nil || p {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	}
-	state, err := inspectRoot(ctx, root, pkg)
+	state, installed, err := inspectKnown(ctx, root, pkg)
 	if err != nil {
 		return integration.Result{}, err
 	}
+	if options.ModelPlan == "" && state.result.State == integration.StateInstalled {
+		pkg = installed
+	}
+	if state.result.State == integration.StateInstalled && installed.SHA256 != pkg.SHA256 {
+		if _, err := s.uninstall(ctx, root, installed, state); err != nil {
+			return integration.Result{}, err
+		}
+		state, err = inspectRoot(ctx, root, pkg)
+		if err != nil {
+			return integration.Result{}, err
+		}
+	}
 	return s.install(ctx, root, pkg, state)
+}
+
+func recoveryPackage(root *Root, fallback Package, preferFallback bool) (Package, error) {
+	packages, err := knownPackages()
+	if err != nil {
+		return Package{}, err
+	}
+	matches := make([]Package, 0, len(packages))
+	for index := range packages {
+		pkg, matched := packages[index], false
+		for _, artifact := range pkg.Artifacts {
+			for _, suffix := range []string{".vgxness-stage", ".vgxness-remove"} {
+				body, _, err := root.Read(artifact.Path+suffix, maxArtifactBytes)
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil || !bytes.Equal(body, artifact.Bytes) {
+					matched = false
+					goto nextPackage
+				}
+				matched = true
+			}
+		}
+		if matched {
+			matches = append(matches, pkg)
+		}
+	nextPackage:
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		if preferFallback {
+			for _, pkg := range matches {
+				if pkg.SHA256 == fallback.SHA256 {
+					return fallback, nil
+				}
+			}
+		}
+		return Package{}, recovery(conflict("ambiguous recovery package"))
+	}
+	return fallback, nil
 }
 func recoverInstalled(ctx context.Context, root *Root, pkg Package) (integration.Result, error) {
 	state, err := inspectRoot(ctx, root, pkg)
@@ -407,7 +545,7 @@ func recoverInstalled(ctx context.Context, root *Root, pkg Package) (integration
 	return verified.result, nil
 }
 func (s *Integration) Uninstall(ctx context.Context, options integration.Options) (integration.Result, error) {
-	pkg, err := codexPackage()
+	pkg, err := codexPackage(options)
 	if err != nil {
 		return integration.Result{}, err
 	}
@@ -428,10 +566,14 @@ func (s *Integration) Uninstall(ctx context.Context, options integration.Options
 	if p, err := pending(root, pkg); err != nil || p {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	}
-	state, err := inspectRoot(ctx, root, pkg)
+	state, installed, err := inspectKnown(ctx, root, pkg)
 	if err != nil {
 		return integration.Result{}, err
 	}
+	return s.uninstall(ctx, root, installed, state)
+}
+
+func (s *Integration) uninstall(ctx context.Context, root *Root, pkg Package, state inspection) (integration.Result, error) {
 	if state.result.State == integration.StateAbsent {
 		return state.result, nil
 	}
@@ -493,11 +635,11 @@ func (s *Integration) Uninstall(ctx context.Context, options integration.Options
 	return verified.result, nil
 }
 func (s *Integration) Reinstall(ctx context.Context, options integration.Options) (integration.Result, error) {
-	pkg, err := codexPackage()
+	pkg, err := codexPackage(options)
 	if err != nil {
 		return integration.Result{}, err
 	}
-	root, err := s.openRoot(ctx, options, false)
+	root, err := s.openRoot(ctx, options, options.ModelPlan != "")
 	if errors.Is(err, os.ErrNotExist) {
 		return integration.Result{}, fmt.Errorf("%w: managed Codex artifacts are absent", integration.ErrInvalid)
 	}
@@ -508,18 +650,55 @@ func (s *Integration) Reinstall(ctx context.Context, options integration.Options
 	if p, err := pending(root, pkg); err != nil {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	} else if p {
+		state, installed, err := inspectKnown(ctx, root, pkg)
+		if err != nil {
+			return integration.Result{}, err
+		}
+		installedExact := state.result.State == integration.StateInstalled
+		if installedExact {
+			pkg = installed
+		}
+		pkg, err = recoveryPackage(root, pkg, installedExact || options.ModelPlan != "")
+		if err != nil {
+			return integration.Result{}, err
+		}
 		return recoverInstalled(ctx, root, pkg)
 	}
-	state, err := inspectRoot(ctx, root, pkg)
+	state, installed, err := inspectKnown(ctx, root, pkg)
 	if err != nil {
 		return integration.Result{}, err
 	}
+	if options.ModelPlan == "" && (state.result.State == integration.StateInstalled || state.result.State == integration.StatePartial) {
+		pkg = installed
+	}
 	switch state.result.State {
 	case integration.StateInstalled:
+		if installed.SHA256 != pkg.SHA256 {
+			if _, err := s.uninstall(ctx, root, installed, state); err != nil {
+				return integration.Result{}, err
+			}
+			state, err = inspectRoot(ctx, root, pkg)
+			if err != nil {
+				return integration.Result{}, err
+			}
+			return s.install(ctx, root, pkg, state)
+		}
 		return state.result, nil
 	case integration.StatePartial:
+		if installed.SHA256 != pkg.SHA256 {
+			if _, err := s.uninstall(ctx, root, installed, state); err != nil {
+				return integration.Result{}, err
+			}
+			state, err = inspectRoot(ctx, root, pkg)
+			if err != nil {
+				return integration.Result{}, err
+			}
+		}
 		return s.install(ctx, root, pkg, state)
 	case integration.StateAbsent:
+		if options.ModelPlan != "" {
+			return s.install(ctx, root, pkg, state)
+		}
 		return integration.Result{}, fmt.Errorf("%w: managed Codex artifacts are absent", integration.ErrInvalid)
 	default:
 		return integration.Result{}, fmt.Errorf("%w: managed Codex artifacts", integration.ErrDrift)
