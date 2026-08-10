@@ -22,6 +22,7 @@ type SetupRequest struct {
 	ModelEfficientEffort string
 	ModelBalancedEffort  string
 	ModelFrontierEffort  string
+	ExpectedPlanDigest   string
 }
 
 type SetupStep struct {
@@ -32,6 +33,7 @@ type SetupStep struct {
 }
 
 type SetupPlan struct {
+	Digest                       string
 	Provider                     string
 	Steps                        []SetupStep
 	SelfInstallState             string
@@ -145,6 +147,7 @@ func (m *Model) applySetup() tea.Cmd {
 	m.setupResult = SetupResult{}
 	m.setupViewport.GotoTop()
 	request := m.setupRequest()
+	request.ExpectedPlanDigest = m.setupPlan.Digest
 	return func() tea.Msg {
 		if m.backend == nil {
 			return setupAppliedMsg{generation: generation, err: fmt.Errorf("setup backend unavailable")}
@@ -185,7 +188,7 @@ func (m *Model) finishSetupOperation() {
 }
 
 func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
-	if msg.generation != m.setupGeneration || msg.request != m.setupRequest() {
+	if msg.generation != m.setupGeneration || setupPreviewRequest(msg.request) != setupPreviewRequest(m.setupRequest()) {
 		return
 	}
 	m.finishSetupOperation()
@@ -284,7 +287,7 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m Model) setupApplyAllowed() bool {
-	if m.setupPlanLoading || !m.setupPreviewed || m.setupPreviewRequest != m.setupRequest() || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || (m.setupOverrides && m.modelEditorError() != "") {
+	if m.setupPlanLoading || !m.setupPreviewed || m.setupPlan.Digest == "" || m.setupPreviewRequest != m.setupRequest() || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || (m.setupOverrides && m.modelEditorError() != "") {
 		return false
 	}
 	action := classifySetup(m.setupPlan)
@@ -479,6 +482,7 @@ func (m Model) setupRouteLines() []string {
 			setupHandshake(result.HandshakeOK, result.HandshakeStatus),
 		)
 		lines = append(lines, setupSelfInstallDetails(result.SelfInstallUpdateAvailable, result.SelfInstallRollbackAvailable, result.SelfInstallActiveSHA256, result.SelfInstallPreviousSHA256)...)
+		lines = append(lines, setupPlanModelProfile(result.Plan)...)
 		if result.RestartRequired {
 			lines = append(lines, "! Restart OpenCode to load the selected model plan.")
 		} else {
@@ -621,6 +625,22 @@ func (m Model) modelProfileSummary() []string {
 		lines = append(lines, fmt.Sprintf("  %s=%s effort=%s", name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelEfforts[index])))
 	}
 	return lines
+}
+
+func setupPreviewRequest(request SetupRequest) SetupRequest {
+	request.ExpectedPlanDigest = ""
+	return request
+}
+
+func setupPlanModelProfile(plan SetupPlan) []string {
+	if plan.ModelEfficient == "" && plan.ModelBalanced == "" && plan.ModelFrontier == "" {
+		return nil
+	}
+	return []string{
+		"model efficient  " + setupValue(plan.ModelEfficient) + "  effort=" + setupValue(plan.ModelEfficientEffort) + "  source=" + setupValue(plan.ModelEfficientSource) + "  availability=" + setupValue(plan.ModelEfficientAvailability),
+		"model balanced   " + setupValue(plan.ModelBalanced) + "  effort=" + setupValue(plan.ModelBalancedEffort) + "  source=" + setupValue(plan.ModelBalancedSource) + "  availability=" + setupValue(plan.ModelBalancedAvailability),
+		"model frontier   " + setupValue(plan.ModelFrontier) + "  effort=" + setupValue(plan.ModelFrontierEffort) + "  source=" + setupValue(plan.ModelFrontierSource) + "  availability=" + setupValue(plan.ModelFrontierAvailability),
+	}
 }
 
 func setupResultHasKnownState(result SetupResult) bool {

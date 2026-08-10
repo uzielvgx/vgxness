@@ -216,7 +216,7 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 		Integration: integration.Result{
 			State: integration.StatePartial, Path: "/config/manager.md", ArtifactCount: 17,
 			ModelPlan: sdd.PlanHigh, ModelProvider: "acme", ModelEfficient: "acme/fast",
-			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", ModelFrontierSource: sdd.ModelSlotCustom, ModelFrontierAvailability: sdd.ModelSlotUnknown, Changed: true, RestartRequired: true,
+			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra, ModelFrontierSource: sdd.ModelSlotCustom, ModelFrontierAvailability: sdd.ModelSlotUnknown, Changed: true, RestartRequired: true,
 		},
 		Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy},
 		Skills:    skills.Result{State: skills.StateInstalled, Changed: true, UpdateNeeded: true},
@@ -240,13 +240,17 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 	testutil.Require(t, runtime.plan.Steps[0].Title == "Check", "preview steps alias setupflow plan: %+v", runtime.plan.Steps)
 
 	applyWorkspace := filepath.Join(t.TempDir(), "workspace")
-	result, err := backend.ApplySetup(context.Background(), tui.SetupRequest{Workspace: applyWorkspace, Plan: "low"})
+	result, err := backend.ApplySetup(context.Background(), tui.SetupRequest{Workspace: applyWorkspace, Plan: "low", ExpectedPlanDigest: "confirmed-digest"})
 	testutil.Require(t, err == nil && result.Changed && result.SelfInstallState == "installed" && result.IntegrationState == "installed" && result.ArtifactCount == 17 && result.HandshakeOK && result.RestartRequired && result.Recovery == "safe recovery", "result=%+v err=%v", result, err)
-	testutil.Require(t, runtime.applyOptions.Workspace == filepath.Clean(applyWorkspace) && runtime.applyOptions.Integration.ModelPlan == sdd.PlanLow, "apply options=%+v", runtime.applyOptions)
+	testutil.Require(t, runtime.applyOptions.Workspace == filepath.Clean(applyWorkspace) && runtime.applyOptions.Integration.ModelPlan == sdd.PlanLow && runtime.applyOptions.ExpectedPlanDigest == "confirmed-digest", "apply options=%+v", runtime.applyOptions)
 	result.Plan.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.result.Plan.Steps[0].Title == "Check", "result steps alias setupflow result: %+v", runtime.result.Plan.Steps)
 	testutil.Require(t, preview.SelfInstallChanged && preview.IntegrationChanged && preview.IntegrationRestartRequired && preview.SkillsChanged && preview.SkillsUpdateNeeded, "preview change signals=%+v", preview)
 	testutil.Require(t, preview.ModelFrontierSource == "custom" && preview.ModelFrontierAvailability == "unknown", "frontier mapping=%+v", preview)
 	testutil.Require(t, preview.SelfInstallUpdateAvailable && preview.SelfInstallRollbackAvailable && preview.SelfInstallActiveSHA256 == "active" && preview.SelfInstallPreviousSHA256 == "previous", "preview self-install fields=%+v", preview)
 	testutil.Require(t, result.SelfInstallUpdateAvailable && result.SelfInstallRollbackAvailable && result.SelfInstallActiveSHA256 == "active" && result.SelfInstallPreviousSHA256 == "previous", "result self-install fields=%+v", result)
+	testutil.Require(t,
+		result.Plan.ModelEfficient == "acme/fast" && result.Plan.ModelBalanced == "acme/balanced" && result.Plan.ModelFrontier == "acme/frontier" && result.Plan.ModelEfficientEffort == "low" && result.Plan.ModelBalancedEffort == "high" && result.Plan.ModelFrontierEffort == "ultra" &&
+			result.Plan.ModelFrontierSource == "custom" && result.Plan.ModelFrontierAvailability == "unknown",
+		"result plan lost model slots=%+v", result.Plan)
 }

@@ -43,6 +43,28 @@ func TestIntegrationPreviewReportsRequestedUltraPlan(t *testing.T) {
 	require(t, err == nil && preview.State == integration.StatePartial && preview.Changed && preview.RestartRequired && preview.ModelPlan == sdd.PlanUltra)
 }
 
+func TestIntegrationRejectsModelSlotCustomizationBeforeWriting(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "codex")
+	for _, options := range []integration.Options{
+		{ConfigDir: root, ModelEfficient: "openai/custom-fast", ModelBalanced: "openai/custom-balanced", ModelFrontier: "openai/custom-frontier"},
+		{ConfigDir: root, ModelEfficient: "openai/custom-fast", ModelBalanced: "anthropic/custom-balanced", ModelFrontier: "acme/custom-frontier"},
+		{ConfigDir: root, ModelEfficientEffort: sdd.EffortHigh, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortHigh},
+		{ConfigDir: root, ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra},
+	} {
+		for name, call := range map[string]func(context.Context, integration.Options) (integration.Result, error){
+			"preview": NewIntegration().Preview, "status": NewIntegration().Status, "install": NewIntegration().Install, "reinstall": NewIntegration().Reinstall, "uninstall": NewIntegration().Uninstall,
+		} {
+			_, err := call(context.Background(), options)
+			if !errors.Is(err, integration.ErrInvalid) || !strings.Contains(err.Error(), "model-slot customization") {
+				t.Fatalf("%s(%+v) error=%v", name, options, err)
+			}
+		}
+		if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("customization created root: %v", err)
+		}
+	}
+}
+
 func TestIntegrationStatusReportsRequestedUltraMismatch(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()

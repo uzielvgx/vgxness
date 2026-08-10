@@ -166,6 +166,9 @@ func TestSetupWizardSuccessfulApplyReportsGlobalSkillCatalog(t *testing.T) {
 	plan := setupPlanFixture(true)
 	resultPlan := plan
 	resultPlan.Skills.FileCount = 23
+	resultPlan.Integration.ModelEfficientEffort, resultPlan.Integration.ModelBalancedEffort, resultPlan.Integration.ModelFrontierEffort = sdd.EffortLow, sdd.EffortHigh, sdd.EffortUltra
+	resultPlan.Integration.ModelEfficientSource, resultPlan.Integration.ModelBalancedSource, resultPlan.Integration.ModelFrontierSource = sdd.ModelSlotCatalog, sdd.ModelSlotCustom, sdd.ModelSlotCustom
+	resultPlan.Integration.ModelEfficientAvailability, resultPlan.Integration.ModelBalancedAvailability, resultPlan.Integration.ModelFrontierAvailability = sdd.ModelSlotCatalogKnown, sdd.ModelSlotUnknown, sdd.ModelSlotUnknown
 	fake := &fakeSetupRuntime{
 		plan: plan,
 		result: setupflow.Result{
@@ -179,8 +182,18 @@ func TestSetupWizardSuccessfulApplyReportsGlobalSkillCatalog(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
 	output := stdout.String()
-	if code != 0 || fake.applyCalls != 1 || stderr.Len() != 0 || !strings.Contains(output, "Paso 3: retiro verificado") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "catálogo global de 23 archivos") || !strings.Contains(output, "skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + sdd-lifecycle") {
+	if code != 0 || fake.applyCalls != 1 || stderr.Len() != 0 || !strings.Contains(output, "Paso 3: retiro verificado") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "catálogo global de 23 archivos") || !strings.Contains(output, "skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + sdd-lifecycle") || !strings.Contains(output, "Slot efficient: provider=openai ref=openai/gpt-5.6-luna effort=low source=catalog availability=catalog-known") || !strings.Contains(output, "Slot balanced: provider=openai ref=openai/gpt-5.6-terra effort=high source=custom availability=unknown") || !strings.Contains(output, "Slot frontier: provider=openai ref=openai/gpt-5.6-sol effort=ultra source=custom availability=unknown") {
 		t.Fatalf("code=%d apply=%d stdout=%q stderr=%q", code, fake.applyCalls, output, stderr.String())
+	}
+}
+
+func TestSetupUsageListsModelSlotFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"invalid"}, strings.NewReader(""), &stdout, &stderr, &fakeSetupRuntime{})
+	for _, flag := range []string{"--model-efficient", "--model-balanced", "--model-frontier", "--model-efficient-effort", "--model-balanced-effort", "--model-frontier-effort"} {
+		if code != 2 || !strings.Contains(stderr.String(), flag) {
+			t.Fatalf("code=%d missing %q: %q", code, flag, stderr.String())
+		}
 	}
 }
 
@@ -206,6 +219,17 @@ func TestSetupWizardDoesNotRequireASecondaryModel(t *testing.T) {
 	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace", "--model", "legacy/ignored"}, strings.NewReader(""), &stdout, &stderr, fake)
 	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 1 || stderr.Len() != 0 {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardBindsApplyToReturnedPlanDigest(t *testing.T) {
+	plan := setupPlanFixture(true)
+	plan.Digest = "confirmed-digest"
+	fake := &fakeSetupRuntime{plan: plan, result: setupflow.Result{Plan: plan, Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}}}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
+	if code != 0 || fake.options.ExpectedPlanDigest != plan.Digest {
+		t.Fatalf("code=%d options=%+v stderr=%q", code, fake.options, stderr.String())
 	}
 }
 

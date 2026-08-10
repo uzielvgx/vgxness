@@ -17,7 +17,7 @@ import (
 
 func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime) int {
 	if len(args) == 0 || args[0] != "opencode" {
-		fmt.Fprintln(stderr, "usage: vgxness setup opencode [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--model-plan low|medium|high|ultra]")
+		fmt.Fprintln(stderr, "usage: vgxness setup opencode [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--model-plan low|medium|high|ultra] [--model-efficient PROVIDER/MODEL --model-efficient-effort EFFORT] [--model-balanced PROVIDER/MODEL --model-balanced-effort EFFORT] [--model-frontier PROVIDER/MODEL --model-frontier-effort EFFORT]")
 		return 2
 	}
 	flags := flag.NewFlagSet("setup opencode", flag.ContinueOnError)
@@ -125,6 +125,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		fmt.Fprintln(stdout, "Confirmación: aceptada.")
 	}
 	fmt.Fprintln(stdout, "\nAplicando el plan aprobado y verificando cada resultado...")
+	options.ExpectedPlanDigest = plan.Digest
 	result, applyErr := runtime.Apply(ctx, options)
 	if applyErr != nil {
 		if result.Recovery != "" {
@@ -137,6 +138,8 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	fmt.Fprintf(stdout, "Paso 2: launcher verificado en %s\n", terminalSafe(result.SelfInstall.LauncherPath))
 	fmt.Fprintln(stdout, "Paso 3: retiro verificado: sólo bytes v1-v10 reconocidos de vgxness.ts y vgxness-autonomous-stacked-pr.")
 	fmt.Fprintf(stdout, "Paso 4: %d artefactos del proveedor verificados en %s\n", result.Integration.ArtifactCount, terminalSafe(result.Integration.ManifestPath))
+	fmt.Fprintln(stdout, "Perfil de modelos aplicado:")
+	renderModelSlots(stdout, result.Plan.Integration)
 	if note := directoryDurabilityNote(result.Integration.DirectoryDurability); note != "" {
 		fmt.Fprintln(stdout, note)
 	}

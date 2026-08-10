@@ -157,6 +157,25 @@ func TestSetupModelEditorEnterPreviewsExactRequestBeforeApply(t *testing.T) {
 	}
 }
 
+func TestSetupApplyUsesConfirmedPreviewDigest(t *testing.T) {
+	backend := &recordingSetupBackend{plan: readySetupPlan("medium"), result: successfulSetupResult()}
+	backend.plan.Digest = "confirmed-digest"
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model, cmd := openSetupRoute(t, model)
+	model = updateModel(t, model, cmd())
+	if !model.setupApplyAllowed() {
+		t.Fatal("digest-bearing preview was not applyable")
+	}
+	model = updateModel(t, model, keyPress("a"))
+	updated, apply := model.Update(keyPress("y"))
+	model = updated.(Model)
+	model = updateModel(t, model, apply())
+	if len(backend.applyRequests) != 1 || backend.applyRequests[0].ExpectedPlanDigest != "confirmed-digest" {
+		t.Fatalf("apply requests=%+v", backend.applyRequests)
+	}
+}
+
 func TestSetupModelEditorPreviewFailureAndEscapePreserveExpectedInput(t *testing.T) {
 	backend := &recordingSetupBackend{plan: readySetupPlan("medium"), planErr: errors.New("preview failed")}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
@@ -314,6 +333,24 @@ func TestSetupRendersSuccessAndFailureRecovery(t *testing.T) {
 		t.Fatalf("failure/recovery rendering is unsafe:\n%s", view)
 	}
 	assertMaximumWidth(t, view, 80)
+}
+
+func TestSetupSuccessReportsAppliedMixedProfileFromResultPlan(t *testing.T) {
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 200, Height: 24})
+	model.setRoute(routeSetup)
+	model.setupGeneration = 1
+	result := successfulSetupResult()
+	result.Plan.ModelEfficient, result.Plan.ModelBalanced, result.Plan.ModelFrontier = "openai/fast", "anthropic/balanced", "acme/frontier"
+	result.Plan.ModelEfficientEffort, result.Plan.ModelBalancedEffort, result.Plan.ModelFrontierEffort = "low", "high", "ultra"
+	result.Plan.ModelEfficientSource, result.Plan.ModelBalancedSource, result.Plan.ModelFrontierSource = "catalog", "custom", "custom"
+	result.Plan.ModelEfficientAvailability, result.Plan.ModelBalancedAvailability, result.Plan.ModelFrontierAvailability = "catalog-known", "unknown", "unknown"
+	model = updateModel(t, model, setupAppliedMsg{generation: 1, value: result})
+	for _, expected := range []string{"model efficient  openai/fast  effort=low  source=catalog  availability=catalog-known", "model balanced   anthropic/balanced  effort=high  source=custom  availability=unknown", "model frontier   acme/frontier  effort=ultra  source=custom  availability=unknown", "Restart OpenCode"} {
+		if !strings.Contains(model.View().Content, expected) {
+			t.Fatalf("success missing %q:\n%s", expected, model.View().Content)
+		}
+	}
 }
 
 func TestSetupIgnoresStaleAsyncMessagesAndProtectsApplyingKeys(t *testing.T) {
@@ -535,7 +572,7 @@ func readySetupPlan(plan string) SetupPlan {
 		{Number: 7, Title: "Recovery"},
 	}
 	return SetupPlan{
-		Provider: "opencode", Steps: steps, Ready: true,
+		Digest: "fixture-digest", Provider: "opencode", Steps: steps, Ready: true,
 		SelfInstallState: "absent", SelfInstallPath: "/bin/vgxness", SkillsState: "absent",
 		IntegrationState: "absent", IntegrationPath: "/config/agents/vgxness-manager.md",
 		ArtifactCount: 18, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: plan,
