@@ -26,42 +26,55 @@ type SetupStep struct {
 }
 
 type SetupPlan struct {
-	Provider         string
-	Steps            []SetupStep
-	SelfInstallState string
-	SelfInstallPath  string
-	IntegrationState string
-	IntegrationPath  string
-	SkillsState      string
-	SkillsPath       string
-	SkillsFileCount  int
-	ArtifactCount    int
-	ModelPlan        string
-	ModelProvider    string
-	ModelEfficient   string
-	ModelBalanced    string
-	ModelFrontier    string
-	HandshakeOK      bool
-	HandshakeStatus  string
-	Ready            bool
-	Blocker          string
+	Provider                     string
+	Steps                        []SetupStep
+	SelfInstallState             string
+	SelfInstallPath              string
+	SelfInstallUpdateAvailable   bool
+	SelfInstallRollbackAvailable bool
+	SelfInstallActiveSHA256      string
+	SelfInstallPreviousSHA256    string
+	SelfInstallChanged           bool
+	IntegrationState             string
+	IntegrationPath              string
+	IntegrationChanged           bool
+	IntegrationRestartRequired   bool
+	SkillsState                  string
+	SkillsPath                   string
+	SkillsFileCount              int
+	SkillsChanged                bool
+	SkillsUpdateNeeded           bool
+	ArtifactCount                int
+	ModelPlan                    string
+	ModelProvider                string
+	ModelEfficient               string
+	ModelBalanced                string
+	ModelFrontier                string
+	HandshakeOK                  bool
+	HandshakeStatus              string
+	Ready                        bool
+	Blocker                      string
 }
 
 type SetupResult struct {
-	Plan             SetupPlan
-	SelfInstallState string
-	SelfInstallPath  string
-	IntegrationState string
-	IntegrationPath  string
-	SkillsState      string
-	SkillsPath       string
-	SkillsFileCount  int
-	ArtifactCount    int
-	HandshakeOK      bool
-	HandshakeStatus  string
-	Recovery         string
-	Changed          bool
-	RestartRequired  bool
+	Plan                         SetupPlan
+	SelfInstallState             string
+	SelfInstallPath              string
+	SelfInstallUpdateAvailable   bool
+	SelfInstallRollbackAvailable bool
+	SelfInstallActiveSHA256      string
+	SelfInstallPreviousSHA256    string
+	IntegrationState             string
+	IntegrationPath              string
+	SkillsState                  string
+	SkillsPath                   string
+	SkillsFileCount              int
+	ArtifactCount                int
+	HandshakeOK                  bool
+	HandshakeStatus              string
+	Recovery                     string
+	Changed                      bool
+	RestartRequired              bool
 }
 
 type setupPlanLoadedMsg struct {
@@ -196,7 +209,11 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.setupConfirm {
 		switch msg.String() {
 		case "y":
-			return true, m.applySetup()
+			if m.setupApplyAllowed() {
+				return true, m.applySetup()
+			}
+			m.setupConfirm = false
+			return true, nil
 		case "n", "esc":
 			m.setupConfirm = false
 			return true, nil
@@ -214,7 +231,7 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "right", "l":
 		return true, m.selectSetupPlan(1)
 	case "a":
-		if !m.setupPlanLoading && m.setupPlanErr == nil && m.setupPlan.Ready {
+		if m.setupApplyAllowed() {
 			m.setupConfirm = true
 		}
 		return true, nil
@@ -229,6 +246,14 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, cmd
 	}
 	return false, nil
+}
+
+func (m Model) setupApplyAllowed() bool {
+	if m.setupPlanLoading || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready {
+		return false
+	}
+	action := classifySetup(m.setupPlan)
+	return action == "initial install" || action == "reinstall/update"
 }
 
 func (m *Model) selectSetupPlan(offset int) tea.Cmd {
@@ -276,26 +301,24 @@ func (m Model) setupRouteLines() []string {
 	lines := []string{"OPENCODE SETUP", "selected plan  " + sanitizeTerminal(m.setupSelected)}
 	switch {
 	case m.setupApplying:
-		lines = append(lines, "", fmt.Sprintf("... Applying verified %d-step plan...", len(m.setupPlan.Steps)), "No per-step progress is reported by the setup service.")
+		lines = append(lines, "", "APPLYING SETUP · VERIFIED PLAN", "Waiting for the setup service; step progress is unavailable.")
 		if m.setupCancelAsked {
 			lines = append(lines, "! Cancellation requested. Waiting for setup recovery...")
 		}
 		return lines
 	case m.setupSucceeded:
 		result := m.setupResult
-		changed := "no"
-		if result.Changed {
-			changed = "yes"
-		}
+		outcome := setupResultOutcome(result)
 		lines = append(lines,
-			"✓ SETUP COMPLETE",
-			"changed  "+changed,
+			"✓ "+strings.ToUpper(outcome)+" COMPLETE",
+			"changed  "+map[bool]string{true: "yes", false: "no"}[result.Changed],
 			"launcher  "+setupValue(result.SelfInstallState)+"  "+setupValue(result.SelfInstallPath),
 			"integration  "+setupValue(result.IntegrationState)+"  "+setupValue(result.IntegrationPath),
 			"shared skills  "+setupValue(result.SkillsState)+"  "+setupValue(result.SkillsPath),
 			fmt.Sprintf("artifacts  %d", result.ArtifactCount),
 			setupHandshake(result.HandshakeOK, result.HandshakeStatus),
 		)
+		lines = append(lines, setupSelfInstallDetails(result.SelfInstallUpdateAvailable, result.SelfInstallRollbackAvailable, result.SelfInstallActiveSHA256, result.SelfInstallPreviousSHA256)...)
 		if result.RestartRequired {
 			lines = append(lines, "! Restart OpenCode to load the selected model plan.")
 		} else {
@@ -303,9 +326,21 @@ func (m Model) setupRouteLines() []string {
 		}
 		return lines
 	case m.setupApplyErr != nil:
-		lines = append(lines, "✕ SETUP FAILED", "Action: review recovery guidance, then press a to retry.")
+		lines = append(lines, "✕ SETUP FAILED")
+		if setupResultHasKnownState(m.setupResult) {
+			lines = append(lines,
+				"launcher  "+setupValue(m.setupResult.SelfInstallState)+"  "+setupValue(m.setupResult.SelfInstallPath),
+				"integration  "+setupValue(m.setupResult.IntegrationState)+"  "+setupValue(m.setupResult.IntegrationPath),
+				"shared skills  "+setupValue(m.setupResult.SkillsState)+"  "+setupValue(m.setupResult.SkillsPath),
+			)
+			lines = append(lines, setupSelfInstallDetails(m.setupResult.SelfInstallUpdateAvailable, m.setupResult.SelfInstallRollbackAvailable, m.setupResult.SelfInstallActiveSHA256, m.setupResult.SelfInstallPreviousSHA256)...)
+		}
 		if m.setupResult.Recovery != "" {
-			lines = append(lines, "Recovery: "+sanitizeTerminal(m.setupResult.Recovery))
+			lines = append(lines, "Recovery: "+sanitizeTerminal(m.setupResult.Recovery), "Action: inspect and refresh before retry.")
+		} else if setupResultHasKnownState(m.setupResult) {
+			lines = append(lines, "! The operation may be partial or unverified.", "Action: inspect and refresh before retry.")
+		} else {
+			lines = append(lines, "Action: refresh the preflight before retrying.")
 		}
 		return lines
 	case m.setupPlanLoading:
@@ -315,12 +350,17 @@ func (m Model) setupRouteLines() []string {
 	}
 
 	plan := m.setupPlan
-	readiness := "! BLOCKED"
-	if plan.Ready {
-		readiness = "✓ READY TO APPLY"
+	action := classifySetup(plan)
+	readiness := "! BLOCKED / RECOVERY"
+	if action == "initial install" || action == "reinstall/update" {
+		readiness = "✓ READY TO APPLY: " + strings.ToUpper(action)
+	}
+	if action == "no changes" {
+		readiness = "✓ NO CHANGES NEEDED"
 	}
 	lines = append(lines,
 		readiness,
+		"action  "+action,
 		"launcher  "+setupValue(plan.SelfInstallState)+"  "+setupValue(plan.SelfInstallPath),
 		"integration  "+setupValue(plan.IntegrationState)+"  "+setupValue(plan.IntegrationPath),
 		"shared skills  "+setupValue(plan.SkillsState)+"  "+setupValue(plan.SkillsPath),
@@ -330,11 +370,15 @@ func (m Model) setupRouteLines() []string {
 		"model frontier   "+setupValue(plan.ModelFrontier),
 		setupHandshake(plan.HandshakeOK, plan.HandshakeStatus),
 	)
+	lines = append(lines, setupSelfInstallDetails(plan.SelfInstallUpdateAvailable, plan.SelfInstallRollbackAvailable, plan.SelfInstallActiveSHA256, plan.SelfInstallPreviousSHA256)...)
 	if plan.Blocker != "" {
 		lines = append(lines, "Blocker: "+sanitizeTerminal(plan.Blocker))
 	}
+	if action == "no changes" {
+		lines = append(lines, "no changes detected by preflight", "Apply is disabled. Press r to refresh the preflight.")
+	}
 	if m.setupConfirm {
-		lines = append(lines, "", "! CONFIRM SETUP", fmt.Sprintf("Apply this verified %d-step plan? [y] yes  [n/Esc] cancel", len(plan.Steps)))
+		lines = append(lines, "", "! CONFIRM "+strings.ToUpper(action), "No files change before y.", fmt.Sprintf("Apply this verified %d-step plan? [y] yes  [n/Esc] cancel", len(plan.Steps)))
 	}
 	lines = append(lines, "", fmt.Sprintf("%d-STEP PLAN (%d artifacts)", len(plan.Steps), plan.ArtifactCount))
 	for _, step := range plan.Steps {
@@ -362,10 +406,61 @@ func (m Model) setupHelp() string {
 	case m.setupSucceeded:
 		return "[r] reload preview  [Esc] Overview  [q] quit"
 	case m.setupApplyErr != nil:
-		return "[a] retry with confirmation  [r] reload  [Esc] Overview"
+		return "[r] inspect/refresh  [Esc] Overview"
 	default:
-		return "[Tab] Backup & Recovery  [h/l or ←/→] plan  [a] apply  [j/k] scroll  [r] reload"
+		if classifySetup(m.setupPlan) == "blocked/recovery" {
+			return "[Tab] Recovery  [r] refresh preflight  [Esc] Overview"
+		}
+		if classifySetup(m.setupPlan) == "no changes" {
+			return "[r] refresh preflight  [Tab] Backup & Recovery  [Esc] Overview"
+		}
+		return "[Tab] Recovery  [h/l] plan  [a] apply  [j/k] scroll  [r] refresh"
 	}
+}
+
+func setupResultHasKnownState(result SetupResult) bool {
+	return result.SelfInstallState != "" || result.SelfInstallPath != "" || result.IntegrationState != "" || result.IntegrationPath != "" || result.SkillsState != "" || result.SkillsPath != "" || result.SelfInstallActiveSHA256 != "" || result.SelfInstallPreviousSHA256 != "" || result.SelfInstallRollbackAvailable
+}
+
+func classifySetup(plan SetupPlan) string {
+	if !plan.Ready || plan.Blocker != "" || plan.SelfInstallState == "drifted" || plan.SelfInstallState == "recovery_pending" || plan.IntegrationState == "drifted" || plan.SkillsState == "drifted" || plan.SkillsState == "conflict" {
+		return "blocked/recovery"
+	}
+	if !plan.HandshakeOK {
+		return "blocked/recovery"
+	}
+	if plan.SelfInstallState == "absent" {
+		return "initial install"
+	}
+	if plan.SelfInstallState == "installed" && plan.IntegrationState == "installed" && plan.SkillsState == "installed" && !plan.SelfInstallChanged && !plan.SelfInstallUpdateAvailable && !plan.IntegrationChanged && !plan.IntegrationRestartRequired && !plan.SkillsChanged && !plan.SkillsUpdateNeeded {
+		return "no changes"
+	}
+	return "reinstall/update"
+}
+
+func setupResultOutcome(result SetupResult) string {
+	if !result.Changed {
+		return "no changes"
+	}
+	if result.Plan.SelfInstallState == "absent" {
+		return "initial install"
+	}
+	return "reinstalled/updated"
+}
+
+func setupSelfInstallDetails(update, rollback bool, activeSHA, previousSHA string) []string {
+	if !update && !rollback && activeSHA == "" && previousSHA == "" {
+		return nil
+	}
+	lines := []string{"self update  " + map[bool]string{true: "yes", false: "no"}[update]}
+	if activeSHA != "" {
+		lines = append(lines, "active SHA  "+setupValue(activeSHA))
+	}
+	if previousSHA != "" {
+		lines = append(lines, "previous SHA  "+setupValue(previousSHA))
+	}
+	lines = append(lines, "rollback  "+map[bool]string{true: "available", false: "unavailable"}[rollback])
+	return lines
 }
 
 func setupValue(value string) string {

@@ -174,6 +174,8 @@ func (backend tuiBackend) ApplySetup(ctx context.Context, request tui.SetupReque
 	return tui.SetupResult{
 		Plan:             tuiSetupPlan(result.Plan),
 		SelfInstallState: fmt.Sprint(result.SelfInstall.State), SelfInstallPath: result.SelfInstall.LauncherPath,
+		SelfInstallUpdateAvailable: result.SelfInstall.UpdateAvailable, SelfInstallRollbackAvailable: result.SelfInstall.RollbackAvailable,
+		SelfInstallActiveSHA256: result.SelfInstall.ActiveSHA256, SelfInstallPreviousSHA256: result.SelfInstall.PreviousSHA256,
 		IntegrationState: fmt.Sprint(result.Integration.State), IntegrationPath: result.Integration.Path,
 		SkillsState: fmt.Sprint(result.Plan.Skills.State), SkillsPath: result.Plan.Skills.Path, SkillsFileCount: result.Plan.Skills.FileCount,
 		ArtifactCount: result.Integration.ArtifactCount,
@@ -350,8 +352,13 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 	return tui.SetupPlan{
 		Provider: plan.Provider, Steps: steps,
 		SelfInstallState: fmt.Sprint(plan.SelfInstall.State), SelfInstallPath: plan.SelfInstall.LauncherPath,
-		IntegrationState: fmt.Sprint(plan.Integration.State), IntegrationPath: plan.Integration.Path,
+		SelfInstallUpdateAvailable: plan.SelfInstall.UpdateAvailable, SelfInstallRollbackAvailable: plan.SelfInstall.RollbackAvailable,
+		SelfInstallActiveSHA256: plan.SelfInstall.ActiveSHA256, SelfInstallPreviousSHA256: plan.SelfInstall.PreviousSHA256,
+		SelfInstallChanged: plan.SelfInstall.Changed,
+		IntegrationState:   fmt.Sprint(plan.Integration.State), IntegrationPath: plan.Integration.Path,
+		IntegrationChanged: plan.Integration.Changed, IntegrationRestartRequired: plan.Integration.RestartRequired,
 		SkillsState: fmt.Sprint(plan.Skills.State), SkillsPath: plan.Skills.Path, SkillsFileCount: plan.Skills.FileCount,
+		SkillsChanged: plan.Skills.Changed, SkillsUpdateNeeded: plan.Skills.UpdateNeeded,
 		ArtifactCount: plan.Integration.ArtifactCount,
 		ModelPlan:     fmt.Sprint(plan.Integration.ModelPlan), ModelProvider: plan.Integration.ModelProvider,
 		ModelEfficient: plan.Integration.ModelEfficient, ModelBalanced: plan.Integration.ModelBalanced,

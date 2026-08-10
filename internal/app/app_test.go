@@ -16,6 +16,7 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/vgxness/vgxness/internal/skills"
 	"github.com/vgxness/vgxness/internal/testutil"
 	"github.com/vgxness/vgxness/internal/tui"
 )
@@ -211,16 +212,17 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 	steps := []setupflow.Step{{Number: 1, Title: "Check", Explanation: "Read only"}, {Number: 2, Title: "Install", Mutates: true}}
 	plan := setupflow.Plan{
 		Provider: "opencode", Steps: steps, Ready: true,
-		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/bin/vgxness"},
+		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/bin/vgxness", Changed: true, UpdateAvailable: true, RollbackAvailable: true, ActiveSHA256: "active", PreviousSHA256: "previous"},
 		Integration: integration.Result{
 			State: integration.StatePartial, Path: "/config/manager.md", ArtifactCount: 17,
 			ModelPlan: sdd.PlanHigh, ModelProvider: "acme", ModelEfficient: "acme/fast",
-			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", RestartRequired: true,
+			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", Changed: true, RestartRequired: true,
 		},
 		Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy},
+		Skills:    skills.Result{State: skills.StateInstalled, Changed: true, UpdateNeeded: true},
 	}
 	runtime := &recordingTUISetupRuntime{plan: plan, result: setupflow.Result{
-		Plan: plan, SelfInstall: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/bin/vgxness"},
+		Plan: plan, SelfInstall: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/bin/vgxness", UpdateAvailable: true, RollbackAvailable: true, ActiveSHA256: "active", PreviousSHA256: "previous"},
 		Integration: integration.Result{State: integration.StateInstalled, Path: "/config/manager.md", ArtifactCount: 17, RestartRequired: true},
 		Handshake:   integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, Changed: true, Recovery: "safe recovery",
 	}}
@@ -242,4 +244,7 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 	testutil.Require(t, runtime.applyOptions.Workspace == filepath.Clean(applyWorkspace) && runtime.applyOptions.Integration.ModelPlan == sdd.PlanLow, "apply options=%+v", runtime.applyOptions)
 	result.Plan.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.result.Plan.Steps[0].Title == "Check", "result steps alias setupflow result: %+v", runtime.result.Plan.Steps)
+	testutil.Require(t, preview.SelfInstallChanged && preview.IntegrationChanged && preview.IntegrationRestartRequired && preview.SkillsChanged && preview.SkillsUpdateNeeded, "preview change signals=%+v", preview)
+	testutil.Require(t, preview.SelfInstallUpdateAvailable && preview.SelfInstallRollbackAvailable && preview.SelfInstallActiveSHA256 == "active" && preview.SelfInstallPreviousSHA256 == "previous", "preview self-install fields=%+v", preview)
+	testutil.Require(t, result.SelfInstallUpdateAvailable && result.SelfInstallRollbackAvailable && result.SelfInstallActiveSHA256 == "active" && result.SelfInstallPreviousSHA256 == "previous", "result self-install fields=%+v", result)
 }
