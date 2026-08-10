@@ -98,6 +98,37 @@ func TestRepositoryOwnerConflictAndReadOnlyState(t *testing.T) {
 	}
 }
 
+func TestOwnerSyncStateInitPersistenceAndIncompatibleOwnerContract(t *testing.T) {
+	ctx, conn := context.Background(), testConn(t)
+	mustNoError(t, Migrate(ctx, conn))
+	owner := uuid.New()
+	repo, err := NewRepository(conn, owner)
+	mustNoError(t, err)
+	mustNoError(t, repo.EnsureOwner(ctx))
+
+	state, err := repo.OwnerState(ctx)
+	mustNoError(t, err)
+	var stored OwnerSyncState
+	mustNoError(t, conn.QueryRow(ctx, `SELECT owner_id,history_id,next_seq FROM owner_sync_state`).Scan(&stored.OwnerID, &stored.HistoryID, &stored.NextSeq))
+	if state.OwnerID != owner || state.HistoryID == uuid.Nil || state.NextSeq != 1 || stored != state {
+		t.Fatalf("initialized state=%+v stored=%+v", state, stored)
+	}
+	mustNoError(t, repo.EnsureOwner(ctx))
+	again, err := repo.OwnerState(ctx)
+	if err != nil || again != state {
+		t.Fatalf("idempotent state=%+v err=%v; want %+v", again, err, state)
+	}
+
+	other, err := NewRepository(conn, uuid.New())
+	mustNoError(t, err)
+	if err := other.EnsureOwner(ctx); !errors.Is(err, ErrOwnerConflict) {
+		t.Fatalf("incompatible EnsureOwner error=%v, want ErrOwnerConflict", err)
+	}
+	if _, err := other.OwnerState(ctx); !errors.Is(err, ErrOwnerConflict) {
+		t.Fatalf("incompatible OwnerState error=%v, want ErrOwnerConflict", err)
+	}
+}
+
 func TestRepositoryNotInitializedCancellationAndGenericFailure(t *testing.T) {
 	ctx, conn := context.Background(), testConn(t)
 	if err := Migrate(ctx, conn); err != nil {
