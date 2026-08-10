@@ -324,6 +324,39 @@ func TestApplySyncPushResultRetriesWithAdvancingClock(t *testing.T) {
 	testutil.Require(t, state == string(SyncOutboxRetry) && attempts == 1 && code == "temporary" && nextAttempt == expected && leaseUntil == expected, "retry=%q/%d/%q next=%d lease=%d", state, attempts, code, nextAttempt, leaseUntil)
 }
 
+func TestSyncOutboxClaimRetryApplyContract(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	now := fixedTime
+	store.now = func() time.Time { return now }
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+	testutil.NoError(t, err)
+	mutation := syncMutation("550e8400-e29b-41d4-a716-4466554400d1", "project")
+	enqueueMutation(t, store, mutation)
+
+	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].State == SyncOutboxPending && claims[0].Attempts == 0 && claims[0].LastErrorCode == "", "pending claims=%+v err=%v", claims, err)
+	first := claims[0]
+	next := now.Add(time.Second)
+	testutil.NoError(t, store.MarkSyncOutboxRetry(ctx, mutation.MutationID, first.ClaimToken, next, "transport"))
+
+	now = next
+	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].State == SyncOutboxRetry && claims[0].Attempts == 1 && claims[0].LastErrorCode == "transport" && claims[0].FirstClaimToken == first.FirstClaimToken && claims[0].ClaimToken != first.ClaimToken, "retry claims=%+v err=%v", claims, err)
+	retry := claims[0]
+	testutil.Require(t, errors.Is(store.MarkSyncOutboxRetry(ctx, mutation.MutationID, first.ClaimToken, now.Add(time.Second), "transport"), ErrNotFound), "stale claim retry accepted")
+
+	sequence := int64(1)
+	result := syncservice.Result{MutationID: mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &sequence, Version: 1}
+	testutil.NoError(t, store.ApplySyncPushResult(ctx, mutation.MutationID, retry.ClaimToken, result))
+	testutil.NoError(t, store.ApplySyncPushResult(ctx, mutation.MutationID, retry.ClaimToken, result))
+	var outbox, receipts, version int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE mutation_id=?`, mutation.MutationID).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_push_results WHERE mutation_id=?`, mutation.MutationID).Scan(&receipts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id='project'`).Scan(&version))
+	testutil.Require(t, outbox == 0 && receipts == 1 && version == 1, "applied rows=%d/%d version=%d", outbox, receipts, version)
+}
+
 func TestApplySyncPushResultRebasesArchivedCreateAsArchive(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
