@@ -56,8 +56,10 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	setupOutput := run(t, environment, workspace, sourceExecutable,
 		"setup", "opencode", "--yes", "--workspace", workspace,
 		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
+		"--model-efficient", "openai/gpt-5.6-luna", "--model-balanced", "anthropic/claude-sonnet", "--model-frontier", "acme/frontier",
+		"--model-efficient-effort", "low", "--model-balanced-effort", "high", "--model-frontier-effort", "ultra",
 	)
-	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy"} {
+	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy", "Slot efficient: provider=openai ref=openai/gpt-5.6-luna effort=low source=catalog availability=catalog-known", "Slot balanced: provider=anthropic ref=anthropic/claude-sonnet effort=high source=custom availability=unknown", "Slot frontier: provider=acme ref=acme/frontier effort=ultra source=custom availability=unknown", "Reinicia OpenCode para cargar vgxness-manager"} {
 		if !strings.Contains(setupOutput, expected) {
 			t.Fatalf("setup output is missing %q:\n%s", expected, setupOutput)
 		}
@@ -95,8 +97,12 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatalf("setup retained retired OpenCode plugin: %v", err)
 	}
 	managerData, err := os.ReadFile(manager)
-	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 46")) || !bytes.Contains(managerData, []byte("Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery.")) || !bytes.Contains(managerData, []byte("automatically load `stacked-pr`")) || bytes.Contains(managerData, []byte("automatically load `vgxness-autonomous-stacked-pr`")) || !bytes.Contains(managerData, []byte("Before delegating any workspace write")) || !bytes.Contains(managerData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(managerData, []byte("Load `sdd-lifecycle` before creating an accepted SDD change")) || !bytes.Contains(managerData, []byte("managed global portable catalog")) || !bytes.Contains(managerData, []byte("same-name/project-local skill collides")) {
+	if err != nil || !bytes.Contains(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 46")) || !bytes.Contains(managerData, []byte("model: acme/frontier\nvariant: xhigh")) || !bytes.Contains(managerData, []byte("Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery.")) || !bytes.Contains(managerData, []byte("automatically load `stacked-pr`")) || bytes.Contains(managerData, []byte("automatically load `vgxness-autonomous-stacked-pr`")) || !bytes.Contains(managerData, []byte("Before delegating any workspace write")) || !bytes.Contains(managerData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(managerData, []byte("Load `sdd-lifecycle` before creating an accepted SDD change")) || !bytes.Contains(managerData, []byte("managed global portable catalog")) || !bytes.Contains(managerData, []byte("same-name/project-local skill collides")) {
 		t.Fatalf("setup did not install the executable SDD manager contract: %v", err)
+	}
+	manifestData, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", "model-plan.json"))
+	if err != nil || !bytes.Contains(manifestData, []byte(`"schemaVersion": 2`)) || !bytes.Contains(manifestData, []byte(`"provider": "mixed"`)) {
+		t.Fatalf("setup did not install the mixed v2 manifest: %v\n%s", err, manifestData)
 	}
 	generalData, generalErr := os.ReadFile(general)
 	verifierData, verifierErr := os.ReadFile(verifier)
@@ -115,7 +121,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"setup", "opencode", "--status", "--workspace", workspace,
 		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
 	)
-	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") {
+	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") || !strings.Contains(statusOutput, "Slot balanced: provider=anthropic ref=anthropic/claude-sonnet effort=high source=custom availability=unknown") {
 		t.Fatalf("installed setup is not healthy:\n%s", statusOutput)
 	}
 
