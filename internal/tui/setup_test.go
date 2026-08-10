@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -90,6 +91,156 @@ func TestSetupAcceptsAndPreservesEachModelPlan(t *testing.T) {
 				t.Fatalf("applied setup plan=%q want %q", model.setup.ModelPlan, modelPlan)
 			}
 		})
+	}
+}
+
+func TestSetupModelProfileEditorCyclesEffortBlocksInvalidAndConfirmsExactRequest(t *testing.T) {
+	backend := &recordingSetupBackend{plan: readySetupPlan("medium"), result: successfulSetupResult()}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setRoute(routeSetup)
+	model.setupPlan = readySetupPlan("medium")
+	model.setupModelRefs = [3]string{"openai/fast", "anthropic/balanced", "acme/frontier"}
+	model.setupModelEfforts = [3]string{"low", "medium", "high"}
+	model = updateModel(t, model, keyPress("m"))
+	if !strings.Contains(model.View().Content, "MODEL PROFILE EDITOR") || !strings.Contains(model.setupHelp(), "[Tab] effort") {
+		t.Fatalf("editor/help missing:\n%s\n%s", model.View().Content, model.setupHelp())
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	if model.setupModelEfforts[0] != "medium" {
+		t.Fatalf("effort did not cycle: %+v", model.setupModelEfforts)
+	}
+	model.setupModelRefs[1] = ""
+	if model.setupApplyAllowed() || !strings.Contains(model.View().Content, "Each slot needs") {
+		t.Fatalf("invalid profile was hidden or applyable:\n%s", model.View().Content)
+	}
+	model.setupModelRefs[1] = "anthropic/balanced"
+	updated, previewCmd := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if previewCmd == nil || model.setupApplyAllowed() {
+		t.Fatal("profile edit did not require a fresh preview")
+	}
+	model = updateModel(t, model, previewCmd())
+	model = updateModel(t, model, keyPress("a"))
+	if !strings.Contains(model.View().Content, "effort=medium") || !strings.Contains(model.View().Content, "unknown availability") {
+		t.Fatalf("confirmation missing exact profile/warning:\n%s", model.View().Content)
+	}
+	updated, cmd := model.Update(keyPress("y"))
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("valid mixed profile did not apply")
+	}
+	model = updateModel(t, model, cmd())
+	if len(backend.applyRequests) != 1 || backend.applyRequests[0].ModelBalanced != "anthropic/balanced" || backend.applyRequests[0].ModelEfficientEffort != "medium" || backend.applyRequests[0].ModelFrontierEffort != "high" {
+		t.Fatalf("apply request=%+v", backend.applyRequests)
+	}
+	assertMaximumWidth(t, model.View().Content, 80)
+}
+
+func TestSetupModelEditorEnterPreviewsExactRequestBeforeApply(t *testing.T) {
+	backend := &recordingSetupBackend{plan: readySetupPlan("medium"), result: successfulSetupResult()}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setRoute(routeSetup)
+	model.setupPlan = readySetupPlan("medium")
+	model.setupModelRefs = [3]string{"openai/fast", "anthropic/balanced", "acme/frontier"}
+	model.setupModelEfforts = [3]string{"low", "high", "ultra"}
+	model = updateModel(t, model, keyPress("m"))
+	updated, previewCmd := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if previewCmd == nil || !model.setupPlanLoading || model.setupApplyAllowed() {
+		t.Fatalf("editor entered without blocking for preview: cmd=%v loading=%t", previewCmd, model.setupPlanLoading)
+	}
+	model = updateModel(t, model, previewCmd())
+	if len(backend.planRequests) != 1 || backend.planRequests[0].ModelBalanced != "anthropic/balanced" || backend.planRequests[0].ModelFrontierEffort != "ultra" || !model.setupApplyAllowed() {
+		t.Fatalf("preview/request=%+v allowed=%t", backend.planRequests, model.setupApplyAllowed())
+	}
+}
+
+func TestSetupModelEditorPreviewFailureAndEscapePreserveExpectedInput(t *testing.T) {
+	backend := &recordingSetupBackend{plan: readySetupPlan("medium"), planErr: errors.New("preview failed")}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setRoute(routeSetup)
+	model.setupPlan = readySetupPlan("medium")
+	model.setupModelRefs = [3]string{"openai/fast", "anthropic/balanced", "acme/frontier"}
+	model.setupModelEfforts = [3]string{"low", "high", "ultra"}
+	model = updateModel(t, model, keyPress("m"))
+	updated, cmd := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	model = updateModel(t, model, cmd())
+	if model.setupModelRefs[1] != "anthropic/balanced" || model.setupModelEfforts[2] != "ultra" || !model.setupModelEditing && model.setupApplyAllowed() {
+		t.Fatalf("failed preview lost or applied input: refs=%+v efforts=%+v", model.setupModelRefs, model.setupModelEfforts)
+	}
+	model = updateModel(t, model, keyPress("m"))
+	model.setupModelRefs[0] = "changed/model"
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if model.setupModelRefs[0] != "openai/fast" || model.setupModelEditing {
+		t.Fatalf("Esc did not restore editor snapshot: refs=%+v editing=%t", model.setupModelRefs, model.setupModelEditing)
+	}
+}
+
+func TestSetupRejectsStaleOrMismatchedPreviewResponse(t *testing.T) {
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	model.setRoute(routeSetup)
+	model.setupModelRefs = [3]string{"openai/fast", "anthropic/balanced", "acme/frontier"}
+	model.setupModelEfforts = [3]string{"low", "high", "ultra"}
+	model.setupOverrides = true
+	model.setupGeneration = 3
+	request := model.setupRequest()
+	model.handleSetupPlanLoaded(setupPlanLoadedMsg{generation: 3, request: SetupRequest{Workspace: "/workspace", Plan: "medium", ModelEfficient: "other/fast"}, value: readySetupPlan("low")})
+	if model.setupPlan.ModelPlan != "" || model.setupModelRefs != [3]string{"openai/fast", "anthropic/balanced", "acme/frontier"} {
+		t.Fatalf("mismatched response replaced newer input: plan=%+v refs=%+v request=%+v", model.setupPlan, model.setupModelRefs, request)
+	}
+}
+
+func TestSetupScrollSynchronizesCurrentRouteBeforeViewportUpdate(t *testing.T) {
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 14})
+	model.setRoute(routeSetup)
+	plan := readySetupPlan("medium")
+	for index := 8; index <= 24; index++ {
+		plan.Steps = append(plan.Steps, SetupStep{Number: index, Title: fmt.Sprintf("later-step-%02d", index)})
+	}
+	model.setupPlan = plan
+	model.setupPreviewed = true
+	model.setupPreviewRequest = model.setupRequest()
+	if strings.Contains(model.View().Content, "later-step-24") {
+		t.Fatal("test plan did not clip initial route")
+	}
+	for range 30 {
+		model = updateModel(t, model, keyPress("j"))
+	}
+	if !strings.Contains(model.View().Content, "later-step-24") {
+		t.Fatalf("scroll did not reveal current route content:\n%s", model.View().Content)
+	}
+}
+
+func TestSetupModelEditorRejectsUnsafeReferencesInline(t *testing.T) {
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setRoute(routeSetup)
+	model.setupPlan = readySetupPlan("medium")
+	model.setupModelRefs = [3]string{"openai/fast", "anthropic/bad?ref", "acme/frontier"}
+	model.setupModelEfforts = [3]string{"low", "high", "ultra"}
+	model = updateModel(t, model, keyPress("m"))
+	updated, cmd := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if cmd != nil || !model.setupModelEditing || model.setupModelRefs[1] != "anthropic/bad?ref" || !strings.Contains(model.View().Content, "provider/model") {
+		t.Fatalf("unsafe ref previewed or was cleared: cmd=%v refs=%+v view=%s", cmd, model.setupModelRefs, model.View().Content)
+	}
+}
+
+func TestSetupModelReferenceSyntaxMatchesSafeContract(t *testing.T) {
+	for _, test := range []struct {
+		reference string
+		valid     bool
+	}{
+		{"openai/gpt-5.6", true}, {"provider/nested/model", true}, {"openai/bad?ref", false}, {"openai/bad#ref", false}, {"openai/bad@ref", false}, {"openai/bad=ref", false}, {`openai/bad\ref`, false}, {"openai/bad ref", false}, {strings.Repeat("a", 255) + "/b", false},
+	} {
+		if got := validSetupModelReference(test.reference); got != test.valid {
+			t.Fatalf("validSetupModelReference(%q)=%t want %t", test.reference, got, test.valid)
+		}
 	}
 }
 
@@ -212,6 +363,8 @@ func TestSetupCannotConfirmWhileTerminalIsTooSmall(t *testing.T) {
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	model.setRoute(routeSetup)
 	model.setupPlan = readySetupPlan("medium")
+	model.setupPreviewed = true
+	model.setupPreviewRequest = model.setupRequest()
 	model = updateModel(t, model, keyPress("a"))
 	if !model.setupConfirm {
 		t.Fatal("setup confirmation did not open")

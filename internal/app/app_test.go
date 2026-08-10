@@ -216,7 +216,7 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 		Integration: integration.Result{
 			State: integration.StatePartial, Path: "/config/manager.md", ArtifactCount: 17,
 			ModelPlan: sdd.PlanHigh, ModelProvider: "acme", ModelEfficient: "acme/fast",
-			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", Changed: true, RestartRequired: true,
+			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", ModelFrontierSource: sdd.ModelSlotCustom, ModelFrontierAvailability: sdd.ModelSlotUnknown, Changed: true, RestartRequired: true,
 		},
 		Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy},
 		Skills:    skills.Result{State: skills.StateInstalled, Changed: true, UpdateNeeded: true},
@@ -234,7 +234,8 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 		expectedWorkspace, _ := filepath.Abs("project")
 		testutil.Require(t, runtime.planOptions.Workspace == filepath.Clean(expectedWorkspace) && runtime.planOptions.Integration.ModelPlan == sdd.Plan(selected), "selected=%s options=%+v", selected, runtime.planOptions)
 	}
-	preview, _ := backend.PlanSetup(context.Background(), tui.SetupRequest{Workspace: "/workspace", Plan: "high"})
+	preview, _ := backend.PlanSetup(context.Background(), tui.SetupRequest{Workspace: "/workspace", Plan: "high", ModelEfficient: "openai/fast", ModelBalanced: "anthropic/balanced", ModelFrontier: "acme/frontier", ModelEfficientEffort: "low", ModelBalancedEffort: "high", ModelFrontierEffort: "ultra"})
+	testutil.Require(t, runtime.planOptions.Integration.ModelEfficient == "openai/fast" && runtime.planOptions.Integration.ModelBalanced == "anthropic/balanced" && runtime.planOptions.Integration.ModelFrontier == "acme/frontier" && runtime.planOptions.Integration.ModelEfficientEffort == sdd.EffortLow && runtime.planOptions.Integration.ModelBalancedEffort == sdd.EffortHigh && runtime.planOptions.Integration.ModelFrontierEffort == sdd.EffortUltra, "exact profile options=%+v", runtime.planOptions)
 	preview.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.plan.Steps[0].Title == "Check", "preview steps alias setupflow plan: %+v", runtime.plan.Steps)
 
@@ -245,6 +246,7 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 	result.Plan.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.result.Plan.Steps[0].Title == "Check", "result steps alias setupflow result: %+v", runtime.result.Plan.Steps)
 	testutil.Require(t, preview.SelfInstallChanged && preview.IntegrationChanged && preview.IntegrationRestartRequired && preview.SkillsChanged && preview.SkillsUpdateNeeded, "preview change signals=%+v", preview)
+	testutil.Require(t, preview.ModelFrontierSource == "custom" && preview.ModelFrontierAvailability == "unknown", "frontier mapping=%+v", preview)
 	testutil.Require(t, preview.SelfInstallUpdateAvailable && preview.SelfInstallRollbackAvailable && preview.SelfInstallActiveSHA256 == "active" && preview.SelfInstallPreviousSHA256 == "previous", "preview self-install fields=%+v", preview)
 	testutil.Require(t, result.SelfInstallUpdateAvailable && result.SelfInstallRollbackAvailable && result.SelfInstallActiveSHA256 == "active" && result.SelfInstallPreviousSHA256 == "previous", "result self-install fields=%+v", result)
 }

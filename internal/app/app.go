@@ -331,7 +331,10 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 	if !plan.Valid() {
 		return setupflow.Options{}, fmt.Errorf("invalid TUI setup plan")
 	}
-	return setupflow.Options{Workspace: workspace, Integration: integration.Options{ModelPlan: plan}}, nil
+	return setupflow.Options{Workspace: workspace, Integration: integration.Options{ModelPlan: plan,
+		ModelEfficient: request.ModelEfficient, ModelBalanced: request.ModelBalanced, ModelFrontier: request.ModelFrontier,
+		ModelEfficientEffort: sdd.Effort(request.ModelEfficientEffort), ModelBalancedEffort: sdd.Effort(request.ModelBalancedEffort), ModelFrontierEffort: sdd.Effort(request.ModelFrontierEffort),
+	}}, nil
 }
 
 func cleanWorkspace(workspace string) (string, error) {
@@ -362,8 +365,11 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 		ArtifactCount: plan.Integration.ArtifactCount,
 		ModelPlan:     fmt.Sprint(plan.Integration.ModelPlan), ModelProvider: plan.Integration.ModelProvider,
 		ModelEfficient: plan.Integration.ModelEfficient, ModelBalanced: plan.Integration.ModelBalanced,
-		ModelFrontier: plan.Integration.ModelFrontier,
-		HandshakeOK:   plan.Handshake.OK, HandshakeStatus: plan.Handshake.Status.String(),
+		ModelFrontier:        plan.Integration.ModelFrontier,
+		ModelEfficientEffort: string(plan.Integration.ModelEfficientEffort), ModelBalancedEffort: string(plan.Integration.ModelBalancedEffort), ModelFrontierEffort: string(plan.Integration.ModelFrontierEffort),
+		ModelEfficientSource: string(plan.Integration.ModelEfficientSource), ModelBalancedSource: string(plan.Integration.ModelBalancedSource), ModelFrontierSource: string(plan.Integration.ModelFrontierSource),
+		ModelEfficientAvailability: string(plan.Integration.ModelEfficientAvailability), ModelBalancedAvailability: string(plan.Integration.ModelBalancedAvailability), ModelFrontierAvailability: string(plan.Integration.ModelFrontierAvailability),
+		HandshakeOK: plan.Handshake.OK, HandshakeStatus: plan.Handshake.Status.String(),
 		Ready: plan.Ready, Blocker: plan.Blocker,
 	}
 }

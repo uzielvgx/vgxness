@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/sdd"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
@@ -35,6 +37,9 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	flags.StringVar(&options.Integration.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
 	flags.StringVar(&options.Integration.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
 	flags.StringVar(&options.Integration.ModelFrontier, "model-frontier", "", "exact provider/model for the frontier slot")
+	flags.Var(effortFlag{target: &options.Integration.ModelEfficientEffort}, "model-efficient-effort", "effort for the efficient mixed slot")
+	flags.Var(effortFlag{target: &options.Integration.ModelBalancedEffort}, "model-balanced-effort", "effort for the balanced mixed slot")
+	flags.Var(effortFlag{target: &options.Integration.ModelFrontierEffort}, "model-frontier-effort", "effort for the frontier mixed slot")
 	flags.StringVar(&options.SelfInstall.BinDir, "bin-dir", "", "stable launcher directory")
 	flags.StringVar(&options.SelfInstall.DataDir, "data-dir", "", "version data directory")
 	flags.StringVar(&options.Integration.ConfigDir, "config-dir", "", "OpenCode configuration directory")
@@ -45,6 +50,21 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	if runtime == nil {
 		fmt.Fprintln(stderr, "operational: setup runtime is unavailable")
 		return 1
+	}
+	if hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration) {
+		if options.Integration.ModelEfficient == "" || options.Integration.ModelBalanced == "" || options.Integration.ModelFrontier == "" || !validSetupModelReference(options.Integration.ModelEfficient) || !validSetupModelReference(options.Integration.ModelBalanced) || !validSetupModelReference(options.Integration.ModelFrontier) {
+			fmt.Fprintln(stderr, "invalid: model slots must be valid provider/model references")
+			return 2
+		}
+		mixed := modelProvider(options.Integration.ModelEfficient) != modelProvider(options.Integration.ModelBalanced) || modelProvider(options.Integration.ModelEfficient) != modelProvider(options.Integration.ModelFrontier)
+		if mixed && (options.Integration.ModelEfficientEffort == "" || options.Integration.ModelBalancedEffort == "" || options.Integration.ModelFrontierEffort == "") {
+			fmt.Fprintln(stderr, "invalid: mixed model slots require all refs and efforts")
+			return 2
+		}
+		if !mixed && hasSetupSlotEffort(options.Integration) {
+			fmt.Fprintln(stderr, "invalid: per-slot efforts require mixed providers")
+			return 2
+		}
 	}
 	if workspace == "" {
 		current, err := os.Getwd()
@@ -152,7 +172,7 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintln(writer, "  Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario + Explore + general escritor + verificador + cinco revisores + seis agentes SDD + MCP --full administrado como único runtime")
 	fmt.Fprintf(writer, "  Artefactos administrados: %d\n", plan.Integration.ArtifactCount)
 	fmt.Fprintf(writer, "  Plan de modelos: %s provider=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider))
-	fmt.Fprintf(writer, "  Slots: efficient=%s balanced=%s frontier=%s\n", terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier))
+	renderModelSlots(writer, plan.Integration)
 	fmt.Fprintf(writer, "  Manifest: %s\n", terminalSafe(plan.Integration.ManifestPath))
 	if note := directoryDurabilityNote(plan.Integration.DirectoryDurability); note != "" {
 		fmt.Fprintf(writer, "  %s\n", note)
@@ -172,7 +192,8 @@ func renderSetupStatus(writer io.Writer, plan setupflow.Plan, workspace string) 
 	fmt.Fprintf(writer, "Launcher: state=%s path=%s active_sha256=%s\n", plan.SelfInstall.State, terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.ActiveSHA256)
 	fmt.Fprintf(writer, "Integración: state=%s projection=agents+mcp-full artifacts=%d manager=%s\n", plan.Integration.State, plan.Integration.ArtifactCount, terminalSafe(plan.Integration.Path))
 	fmt.Fprintf(writer, "Skills globales: state=%s path=%s files=%d\n", plan.Skills.State, terminalSafe(plan.Skills.Path), plan.Skills.FileCount)
-	fmt.Fprintf(writer, "Plan de modelos: %s provider=%s efficient=%s balanced=%s frontier=%s manifest=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider), terminalSafe(plan.Integration.ModelEfficient), terminalSafe(plan.Integration.ModelBalanced), terminalSafe(plan.Integration.ModelFrontier), terminalSafe(plan.Integration.ManifestPath))
+	fmt.Fprintf(writer, "Plan de modelos: %s provider=%s manifest=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider), terminalSafe(plan.Integration.ManifestPath))
+	renderModelSlots(writer, plan.Integration)
 	fmt.Fprintf(writer, "Agente predeterminado: %s config=%s\n", terminalSafe(plan.Integration.DefaultAgent), terminalSafe(plan.Integration.DefaultAgentPath))
 	if note := directoryDurabilityNote(plan.Integration.DirectoryDurability); note != "" {
 		fmt.Fprintln(writer, note)
@@ -186,6 +207,59 @@ func renderSetupStatus(writer io.Writer, plan setupflow.Plan, workspace string) 
 	} else {
 		fmt.Fprintf(writer, "Resultado: requiere atención. %s\n", terminalSafe(plan.Blocker))
 	}
+}
+
+type effortFlag struct{ target *sdd.Effort }
+
+func (value effortFlag) String() string { return string(*value.target) }
+func (value effortFlag) Set(input string) error {
+	effort := sdd.Effort(input)
+	if !effort.Valid() {
+		return setupflow.ErrInvalid
+	}
+	*value.target = effort
+	return nil
+}
+
+func renderModelSlots(writer io.Writer, result integration.Result) {
+	for _, slot := range []struct {
+		name, ref    string
+		effort       sdd.Effort
+		source       sdd.ModelSlotSource
+		availability sdd.ModelSlotAvailability
+	}{
+		{"efficient", result.ModelEfficient, result.ModelEfficientEffort, result.ModelEfficientSource, result.ModelEfficientAvailability},
+		{"balanced", result.ModelBalanced, result.ModelBalancedEffort, result.ModelBalancedSource, result.ModelBalancedAvailability},
+		{"frontier", result.ModelFrontier, result.ModelFrontierEffort, result.ModelFrontierSource, result.ModelFrontierAvailability},
+	} {
+		fmt.Fprintf(writer, "  Slot %s: provider=%s ref=%s effort=%s source=%s availability=%s\n", slot.name, terminalSafe(modelProvider(slot.ref)), terminalSafe(slot.ref), slot.effort, slot.source, slot.availability)
+	}
+}
+
+func modelProvider(reference string) string {
+	provider, _, _ := strings.Cut(reference, "/")
+	return provider
+}
+func hasSetupSlotEffort(options integration.Options) bool {
+	return options.ModelEfficientEffort != "" || options.ModelBalancedEffort != "" || options.ModelFrontierEffort != ""
+}
+func hasSetupSlotRef(options integration.Options) bool {
+	return options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != ""
+}
+func validSetupModelReference(reference string) bool {
+	provider, model, found := strings.Cut(reference, "/")
+	if !found || provider == "" || model == "" || len(reference) > 256 || strings.TrimSpace(reference) != reference {
+		return false
+	}
+	for _, value := range []string{provider, model} {
+		for _, character := range value {
+			if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.' || (value == model && character == '/') {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func directoryDurabilityNote(value string) string {

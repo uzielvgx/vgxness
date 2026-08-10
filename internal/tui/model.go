@@ -205,6 +205,16 @@ type Model struct {
 	setupGeneration        int
 	cancelSetup            context.CancelFunc
 	setupView              setupView
+	setupModelEditing      bool
+	setupModelSlot         int
+	setupModelRefs         [3]string
+	setupModelEfforts      [3]string
+	setupModelEntryRefs    [3]string
+	setupModelEntryEfforts [3]string
+	setupOverrides         bool
+	setupEntryOverrides    bool
+	setupPreviewRequest    SetupRequest
+	setupPreviewed         bool
 	recoveryMode           string
 	recoveryPlan           RecoveryPlan
 	recoveryBackups        []BackupSummary
@@ -711,6 +721,12 @@ func (m *Model) setRoute(next route) {
 		m.setupApplyErr = nil
 		m.setupSucceeded = false
 		m.setupConfirm = false
+		m.setupModelEditing = false
+		m.setupOverrides = false
+		m.setupModelRefs = [3]string{}
+		m.setupModelEfforts = [3]string{}
+		m.setupPreviewRequest = SetupRequest{}
+		m.setupPreviewed = false
 		m.setupViewport.GotoTop()
 		m.resetRecoveryState()
 	}
