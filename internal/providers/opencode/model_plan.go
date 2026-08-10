@@ -30,11 +30,13 @@ const (
 )
 
 type modelPlanManifest struct {
-	SchemaVersion int                 `json:"schemaVersion"`
-	ManagedBy     string              `json:"managedBy"`
-	Config        sdd.ModelPlanConfig `json:"config"`
-	Resolved      sdd.OpenCodePlan    `json:"resolved"`
-	Artifacts     map[string]string   `json:"artifacts"`
+	SchemaVersion int                    `json:"schemaVersion"`
+	ManagedBy     string                 `json:"managedBy"`
+	Config        *sdd.ModelPlanConfig   `json:"config,omitempty"`
+	Resolved      *sdd.OpenCodePlan      `json:"resolved,omitempty"`
+	ConfigV2      *sdd.ModelPlanConfigV2 `json:"configV2,omitempty"`
+	ResolvedV2    *sdd.OpenCodePlanV2    `json:"resolvedV2,omitempty"`
+	Artifacts     map[string]string      `json:"artifacts"`
 }
 
 type modelPlanBundle struct {
@@ -58,8 +60,6 @@ func buildModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
 	return encodeModelPlanBundle(config, resolved, agents)
 }
 
-// buildModelPlanBundleV2 deliberately does not encode a manifest. Slice 3 owns
-// manifest v2 dispatch and persistence; this slice only prepares agent bytes.
 func buildModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
 	resolved, err := sdd.ResolveOpenCodePlanV2(config)
 	if err != nil {
@@ -69,11 +69,11 @@ func buildModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, erro
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	return modelPlanBundle{configV2: &config, resolvedV2: &resolved, agents: agents}, nil
+	return encodeModelPlanBundleV2(config, resolved, agents)
 }
 
 func encodeModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, agents map[string][]byte) (modelPlanBundle, error) {
-	manifest := modelPlanManifest{SchemaVersion: 1, ManagedBy: "vgxness", Config: config, Resolved: resolved, Artifacts: make(map[string]string, len(agents))}
+	manifest := modelPlanManifest{SchemaVersion: 1, ManagedBy: "vgxness", Config: &config, Resolved: &resolved, Artifacts: make(map[string]string, len(agents))}
 	for name, content := range agents {
 		manifest.Artifacts[filepath.ToSlash(filepath.Join("agents", name))] = artifactSHA256(content)
 	}
@@ -85,20 +85,51 @@ func encodeModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan
 	return modelPlanBundle{config: config, resolved: resolved, agents: agents, manifest: data}, nil
 }
 
+func encodeModelPlanBundleV2(config sdd.ModelPlanConfigV2, resolved sdd.OpenCodePlanV2, agents map[string][]byte) (modelPlanBundle, error) {
+	manifest := modelPlanManifest{SchemaVersion: 2, ManagedBy: "vgxness", ConfigV2: &config, ResolvedV2: &resolved, Artifacts: make(map[string]string, len(agents))}
+	for name, content := range agents {
+		manifest.Artifacts[filepath.ToSlash(filepath.Join("agents", name))] = artifactSHA256(content)
+	}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return modelPlanBundle{}, fmt.Errorf("%w: encode model plan", integration.ErrInvalid)
+	}
+	data = append(data, '\n')
+	return modelPlanBundle{configV2: &config, resolvedV2: &resolved, agents: agents, manifest: data}, nil
+}
+
 func requestedModelPlan(options integration.Options, configDirectory string) (modelPlanBundle, error) {
 	explicit := options.ModelPlan != "" || options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != ""
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	base := sdd.DefaultModelPlanConfig()
 	var installedBundle modelPlanBundle
+	var installedV2 *sdd.ModelPlanConfigV2
 	if data, err := readRegularFile(manifestPath); err == nil {
 		installed, bundle, parseErr := parseInstalledModelPlanManifest(data)
 		if parseErr != nil {
-			return modelPlanBundle{}, fmt.Errorf("%w: model plan manifest", integration.ErrConflict)
+			return modelPlanBundle{}, parseErr
 		}
-		base = installed.Config
 		installedBundle = bundle
+		if installed.ConfigV2 != nil {
+			installedV2 = installed.ConfigV2
+		} else {
+			base = *installed.Config
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan manifest", integration.ErrConflict)
+	}
+	if installedV2 != nil {
+		if !explicit && !hasSlotEffort(options) {
+			return installedBundle, nil
+		}
+		config, err := overrideModelPlanConfigV2(*installedV2, options)
+		if err != nil {
+			return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
+		}
+		if config.Provider != "mixed" {
+			return modelPlanBundle{}, fmt.Errorf("%w: v2 model plan must remain mixed", integration.ErrInvalid)
+		}
+		return buildModelPlanBundleV2(config)
 	}
 	plan := base.ActivePlan
 	if options.ModelPlan != "" {
@@ -144,6 +175,50 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 		}
 	}
 	return buildModelPlanBundle(config)
+}
+
+func overrideModelPlanConfigV2(installed sdd.ModelPlanConfigV2, options integration.Options) (sdd.ModelPlanConfigV2, error) {
+	plan := installed.ActivePlan
+	if options.ModelPlan != "" {
+		plan = options.ModelPlan
+	}
+	slots := make(map[sdd.Capability]sdd.ModelSlotConfig, len(installed.Slots))
+	for capability, slot := range installed.Slots {
+		slots[capability] = slot
+	}
+	for _, override := range []struct {
+		capability sdd.Capability
+		reference  string
+		effort     sdd.Effort
+	}{
+		{sdd.CapabilityEfficient, options.ModelEfficient, options.ModelEfficientEffort},
+		{sdd.CapabilityBalanced, options.ModelBalanced, options.ModelBalancedEffort},
+		{sdd.CapabilityFrontier, options.ModelFrontier, options.ModelFrontierEffort},
+	} {
+		slot := slots[override.capability]
+		if override.reference != "" {
+			slot.Reference = override.reference
+			defaultSlot := sdd.DefaultModelPlanConfigV2().Slots[override.capability]
+			if slot.Reference == defaultSlot.Reference {
+				slot.Source, slot.Availability = sdd.ModelSlotCatalog, sdd.ModelSlotCatalogKnown
+			} else {
+				slot.Source, slot.Availability = sdd.ModelSlotCustom, sdd.ModelSlotUnknown
+			}
+		}
+		if override.effort != "" {
+			if !override.effort.Valid() {
+				return sdd.ModelPlanConfigV2{}, integration.ErrInvalid
+			}
+			slot.RequestedEffort = override.effort
+		}
+		slots[override.capability] = slot
+	}
+	config, err := sdd.NewModelPlanConfigV2(plan, slots[sdd.CapabilityEfficient], slots[sdd.CapabilityBalanced], slots[sdd.CapabilityFrontier])
+	if err != nil {
+		return sdd.ModelPlanConfigV2{}, err
+	}
+	config.Provenance = installed.Provenance
+	return config, nil
 }
 
 func modelPlanV2Requested(efficient, balanced, frontier string) bool {
@@ -192,7 +267,7 @@ func parseInstalledModelPlanManifest(data []byte) (modelPlanManifest, modelPlanB
 	if err != nil {
 		return modelPlanManifest{}, modelPlanBundle{}, err
 	}
-	bundle, err := modelPlanBundleForManifest(data, manifest.Config)
+	bundle, err := modelPlanBundleForDecodedManifest(data, manifest)
 	return manifest, bundle, err
 }
 
@@ -201,7 +276,7 @@ func parseModelPlanManifest(data []byte) (modelPlanManifest, error) {
 	if err != nil {
 		return modelPlanManifest{}, err
 	}
-	if _, err := modelPlanBundleForManifest(data, manifest.Config); err != nil {
+	if _, err := modelPlanBundleForDecodedManifest(data, manifest); err != nil {
 		return modelPlanManifest{}, err
 	}
 	return manifest, nil
@@ -211,10 +286,37 @@ func decodeModelPlanManifest(data []byte) (modelPlanManifest, error) {
 	var manifest modelPlanManifest
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) == nil || manifest.SchemaVersion != 1 || manifest.ManagedBy != "vgxness" {
+	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) == nil || manifest.ManagedBy != "vgxness" {
+		return modelPlanManifest{}, integration.ErrDrift
+	}
+	switch manifest.SchemaVersion {
+	case 1:
+		if manifest.Config == nil || manifest.Resolved == nil || manifest.ConfigV2 != nil || manifest.ResolvedV2 != nil || manifest.Artifacts == nil {
+			return modelPlanManifest{}, integration.ErrDrift
+		}
+	case 2:
+		if manifest.Config != nil || manifest.Resolved != nil || manifest.ConfigV2 == nil || manifest.ResolvedV2 == nil || manifest.Artifacts == nil {
+			return modelPlanManifest{}, integration.ErrDrift
+		}
+	default:
 		return modelPlanManifest{}, integration.ErrDrift
 	}
 	return manifest, nil
+}
+
+func modelPlanBundleForDecodedManifest(data []byte, manifest modelPlanManifest) (modelPlanBundle, error) {
+	if manifest.SchemaVersion == 2 {
+		return modelPlanBundleForManifestV2(data, *manifest.ConfigV2)
+	}
+	return modelPlanBundleForManifest(data, *manifest.Config)
+}
+
+func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
+	current, err := buildModelPlanBundleV2(config)
+	if err != nil || !bytes.Equal(current.manifest, data) {
+		return modelPlanBundle{}, integration.ErrDrift
+	}
+	return current, nil
 }
 
 func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelPlanBundle, error) {

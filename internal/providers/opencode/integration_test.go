@@ -500,7 +500,7 @@ func TestIntegrationRefusesModifiedModelPlanManifest(t *testing.T) {
 	testutil.NoError(t, os.WriteFile(installed.ManifestPath, modified, 0o600))
 	_, err = service.Install(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh})
 	after, readErr := os.ReadFile(installed.ManifestPath)
-	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "manifest drift changed: err=%v", err)
+	testutil.Require(t, errors.Is(err, integration.ErrDrift) && readErr == nil && bytes.Equal(after, modified), "manifest drift changed: err=%v", err)
 }
 
 func TestIntegrationSwitchesManagedModelPlanAndRefusesManualDrift(t *testing.T) {
@@ -717,7 +717,7 @@ func TestRequestedModelPlanBuildsV2BundleForMixedSlots(t *testing.T) {
 	}, configDirectory)
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		bundle.configV2 != nil && bundle.resolvedV2 != nil && len(bundle.manifest) == 0 &&
+		bundle.configV2 != nil && bundle.resolvedV2 != nil && len(bundle.manifest) != 0 &&
 			bundle.configV2.Slots[sdd.CapabilityEfficient].Source == sdd.ModelSlotCatalog &&
 			bundle.configV2.Slots[sdd.CapabilityEfficient].Availability == sdd.ModelSlotCatalogKnown &&
 			bundle.configV2.Slots[sdd.CapabilityBalanced].Source == sdd.ModelSlotCustom &&
@@ -2696,4 +2696,156 @@ func TestIntegration_RollbackNeverRemovesOrOverwritesConcurrentReplacement(t *te
 	testutil.NoError(t, err)
 	_, backupErr := os.Stat(backup)
 	testutil.Require(t, string(data) == "foreign" && backupErr == nil && errors.Is(restoreErr, integration.ErrRecovery), "uninstall rollback overwrote replacement or hid recovery failure: target=%q backup=%v restore=%v", data, backupErr, restoreErr)
+}
+
+func TestIntegrationMixedV2ManifestPersistsAndStatusIsExact(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	options := integration.Options{
+		ConfigDir: root, ModelPlan: sdd.PlanHigh,
+		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "openai/gpt-5.6-sol",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+	}
+	service := NewIntegration()
+	installed, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	manifestPath := filepath.Join(root, "vgxness", modelPlanManifestName)
+	manifest, err := os.ReadFile(manifestPath)
+	testutil.NoError(t, err)
+	parsed, err := parseModelPlanManifest(manifest)
+	testutil.NoError(t, err)
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
+	testutil.NoError(t, err)
+	testutil.Require(t,
+		parsed.SchemaVersion == 2 && parsed.ConfigV2 != nil && parsed.ResolvedV2 != nil &&
+			status.State == integration.StateInstalled && status.Provider == "opencode" && status.ModelProvider == "mixed" &&
+			status.ModelBalanced == "anthropic/claude-sonnet" && installed.RestartRequired && installed.Changed &&
+			!bytes.Contains(manifest, []byte("token")) && !bytes.Contains(manifest, []byte("authorization")),
+		"installed=%+v status=%+v manifest=%s", installed, status, manifest)
+}
+
+func TestModelPlanManifestV1RemainsExactAndV2RejectsDrift(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: root})
+	testutil.NoError(t, err)
+	path := filepath.Join(root, "vgxness", modelPlanManifestName)
+	before, err := os.ReadFile(path)
+	testutil.NoError(t, err)
+	_, err = service.Status(context.Background(), integration.Options{ConfigDir: root})
+	testutil.NoError(t, err)
+	after, err := os.ReadFile(path)
+	testutil.NoError(t, err)
+	testutil.Require(t, bytes.Equal(before, after), "v1 manifest was rewritten")
+
+	bundle, err := requestedModelPlan(integration.Options{
+		ModelPlan:      sdd.PlanMedium,
+		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "openai/gpt-5.6-sol",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+	}, filepath.Join(t.TempDir(), "opencode"))
+	testutil.NoError(t, err)
+	var document map[string]any
+	testutil.NoError(t, json.Unmarshal(bundle.manifest, &document))
+	document["token"] = "forbidden"
+	malformed, err := json.Marshal(document)
+	testutil.NoError(t, err)
+	_, err = parseModelPlanManifest(malformed)
+	testutil.Require(t, errors.Is(err, integration.ErrDrift), "authorization field accepted: %v", err)
+	document["schemaVersion"] = 99
+	unknown, err := json.Marshal(document)
+	testutil.NoError(t, err)
+	_, err = parseModelPlanManifest(unknown)
+	testutil.Require(t, errors.Is(err, integration.ErrDrift), "unknown schema accepted: %v", err)
+}
+
+func TestModelPlanV2SlotChangeOnlyChangesDependentAgentHashes(t *testing.T) {
+	options := integration.Options{
+		ModelPlan:      sdd.PlanMedium,
+		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "openai/gpt-5.6-sol",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+	}
+	first, err := requestedModelPlan(options, filepath.Join(t.TempDir(), "opencode"))
+	testutil.NoError(t, err)
+	options.ModelBalanced = "anthropic/claude-opus"
+	second, err := requestedModelPlan(options, filepath.Join(t.TempDir(), "opencode"))
+	testutil.NoError(t, err)
+	roles := map[string]sdd.Role{
+		managerAgentName: sdd.RoleManager, exploreAgentName: sdd.RoleResearch,
+		generalAgentName: sdd.RoleImplementation, verifierAgentName: sdd.RoleVerification,
+		reviewRiskName: sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
+		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
+		reviewRefuterName: sdd.RoleRefuter, sddResearchName: sdd.RoleResearch,
+		sddProposalName: sdd.RoleProposal, sddSpecName: sdd.RoleSpec,
+		sddDesignName: sdd.RoleDesign, sddTasksName: sdd.RoleTasks, sddApplyName: sdd.RoleApply,
+	}
+	for name, role := range roles {
+		changed := artifactSHA256(first.agents[name]) != artifactSHA256(second.agents[name])
+		wantChanged := first.resolvedV2.Roles[role].Capability == sdd.CapabilityBalanced
+		testutil.Require(t, changed == wantChanged, "%s changed=%t want=%t", name, changed, wantChanged)
+	}
+	testutil.Require(t, !bytes.Equal(first.manifest, second.manifest), "manifest hash did not change")
+}
+
+func TestRequestedModelPlanV2PartialOverridesPreserveInstalledSlots(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	baseOptions := integration.Options{
+		ModelPlan:      sdd.PlanMedium,
+		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+	}
+	base, err := requestedModelPlan(baseOptions, root)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), base.manifest, 0o600))
+
+	model, err := requestedModelPlan(integration.Options{ConfigDir: root, ModelBalanced: "anthropic/claude-opus"}, root)
+	testutil.NoError(t, err)
+	testutil.Require(t, model.configV2.Slots[sdd.CapabilityEfficient] == base.configV2.Slots[sdd.CapabilityEfficient] && model.configV2.Slots[sdd.CapabilityBalanced].Reference == "anthropic/claude-opus" && model.configV2.Slots[sdd.CapabilityBalanced].Source == sdd.ModelSlotCustom, "model override=%+v", model.configV2)
+
+	plan, err := requestedModelPlan(integration.Options{ConfigDir: root, ModelPlan: sdd.PlanHigh}, root)
+	testutil.NoError(t, err)
+	testutil.Require(t, plan.configV2.ActivePlan == sdd.PlanHigh && reflect.DeepEqual(plan.configV2.Slots, base.configV2.Slots), "plan override=%+v", plan.configV2)
+
+	effort, err := requestedModelPlan(integration.Options{ConfigDir: root, ModelFrontierEffort: sdd.EffortHigh}, root)
+	testutil.NoError(t, err)
+	testutil.Require(t, effort.configV2.Slots[sdd.CapabilityFrontier].Reference == "acme/frontier" && effort.configV2.Slots[sdd.CapabilityFrontier].RequestedEffort == sdd.EffortHigh, "effort override=%+v", effort.configV2)
+
+	_, err = requestedModelPlan(integration.Options{ConfigDir: root, ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol"}, root)
+	testutil.Require(t, errors.Is(err, integration.ErrInvalid), "homogeneous v2 override error=%v", err)
+}
+
+func TestModelPlanManifestEnvelopeRejectsCrossVersionFieldsAndNilArtifacts(t *testing.T) {
+	bundle, err := requestedModelPlan(integration.Options{
+		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+	}, filepath.Join(t.TempDir(), "opencode"))
+	testutil.NoError(t, err)
+	var document map[string]any
+	testutil.NoError(t, json.Unmarshal(bundle.manifest, &document))
+	document["config"] = sdd.DefaultModelPlanConfig()
+	crossVersion, err := json.Marshal(document)
+	testutil.NoError(t, err)
+	_, err = decodeModelPlanManifest(crossVersion)
+	testutil.Require(t, errors.Is(err, integration.ErrDrift), "v2 config accepted: %v", err)
+	delete(document, "config")
+	document["artifacts"] = nil
+	nilArtifacts, err := json.Marshal(document)
+	testutil.NoError(t, err)
+	_, err = decodeModelPlanManifest(nilArtifacts)
+	testutil.Require(t, errors.Is(err, integration.ErrDrift), "nil artifacts accepted: %v", err)
+
+	v1, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	var v1Document map[string]any
+	testutil.NoError(t, json.Unmarshal(v1.manifest, &v1Document))
+	v1Document["configV2"] = document["configV2"]
+	v1CrossVersion, err := json.Marshal(v1Document)
+	testutil.NoError(t, err)
+	_, err = decodeModelPlanManifest(v1CrossVersion)
+	testutil.Require(t, errors.Is(err, integration.ErrDrift), "v1 configV2 accepted: %v", err)
+	delete(v1Document, "configV2")
+	v1Document["artifacts"] = nil
+	v1NilArtifacts, err := json.Marshal(v1Document)
+	testutil.NoError(t, err)
+	_, err = decodeModelPlanManifest(v1NilArtifacts)
+	testutil.Require(t, errors.Is(err, integration.ErrDrift), "v1 nil artifacts accepted: %v", err)
 }
