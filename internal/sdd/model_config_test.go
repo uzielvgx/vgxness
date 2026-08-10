@@ -84,3 +84,85 @@ func TestUltraMapsConservativelyToXHigh(t *testing.T) {
 		t.Fatalf("ultra variant=%q", got)
 	}
 }
+
+func TestResolveOpenCodePlanV2MixedProvidersAndIndependentEfforts(t *testing.T) {
+	config := ModelPlanConfigV2{SchemaVersion: 2, ActivePlan: PlanMedium, Provider: "mixed", Provenance: ModelPlanCLI, Slots: map[Capability]ModelSlotConfig{
+		CapabilityEfficient: {Reference: "openai/gpt-5.6-luna", RequestedEffort: EffortLow, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
+		CapabilityBalanced:  {Reference: "acme/balanced", RequestedEffort: EffortUltra, Source: ModelSlotCustom, Availability: ModelSlotUnknown},
+		CapabilityFrontier:  {Reference: "openai/gpt-5.6-sol", RequestedEffort: EffortUltra, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
+	}}
+	resolved, err := ResolveOpenCodePlanV2(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Provider != "mixed" || resolved.Roles[RoleResearch].Provider != "openai" || resolved.Roles[RoleManager].Provider != "openai" {
+		t.Fatalf("providers not preserved: %+v", resolved)
+	}
+	if got := resolved.Roles[RoleProposal]; got.Provider != "acme" || got.Model != "acme/balanced" || got.Effort != EffortUltra || got.Degradation.Degraded {
+		t.Fatalf("custom assignment=%+v", got)
+	}
+	if got := resolved.Roles[RoleManager]; got.Effort != EffortUltra || got.Degradation.Degraded {
+		t.Fatalf("frontier assignment=%+v", got)
+	}
+}
+
+func TestResolveOpenCodePlanV2Validation(t *testing.T) {
+	base := DefaultModelPlanConfigV2()
+	delete(base.Slots, CapabilityFrontier)
+	if _, err := ResolveOpenCodePlanV2(base); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing slot error=%v", err)
+	}
+	base = DefaultModelPlanConfigV2()
+	base.Slots[CapabilityEfficient] = ModelSlotConfig{Reference: "acme/fast", RequestedEffort: EffortLow, Source: ModelSlotCustom, Availability: ModelSlotCatalogKnown}
+	if _, err := ResolveOpenCodePlanV2(base); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("custom availability error=%v", err)
+	}
+	base = DefaultModelPlanConfigV2()
+	base.Slots[Capability("extra")] = base.Slots[CapabilityEfficient]
+	if _, err := ResolveOpenCodePlanV2(base); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("extra slot error=%v", err)
+	}
+	if _, err := NewModelPlanConfig(PlanMedium, "openai/fast", "acme/balanced", "openai/frontier"); !errors.Is(err, ErrProviderMismatch) {
+		t.Fatalf("v1 mixed provider error=%v", err)
+	}
+	if _, err := ResolveOpenCodePlan(DefaultModelPlanConfig()); err != nil {
+		t.Fatalf("v1 regression: %v", err)
+	}
+}
+
+func TestModelPlanConfigV2ProviderSummaryIsDerivedAndValidated(t *testing.T) {
+	defaults := DefaultModelPlanConfigV2()
+	if defaults.Provider != "openai" {
+		t.Fatalf("default provider=%q", defaults.Provider)
+	}
+	mixed, err := NewModelPlanConfigV2(PlanMedium,
+		ModelSlotConfig{Reference: "openai/gpt-5.6-luna", RequestedEffort: EffortLow, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
+		ModelSlotConfig{Reference: "acme/balanced", RequestedEffort: EffortMedium, Source: ModelSlotCustom, Availability: ModelSlotUnknown},
+		ModelSlotConfig{Reference: "openai/gpt-5.6-sol", RequestedEffort: EffortHigh, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
+	)
+	if err != nil || mixed.Provider != "mixed" {
+		t.Fatalf("mixed config=%+v err=%v", mixed, err)
+	}
+	mixed.Provider = "openai"
+	if _, err := ResolveOpenCodePlanV2(mixed); !errors.Is(err, ErrProviderMismatch) {
+		t.Fatalf("serialized provider mismatch error=%v", err)
+	}
+}
+
+func TestResolveOpenCodePlanV2UsesAuthoritativeSlotEfforts(t *testing.T) {
+	config := DefaultModelPlanConfigV2()
+	config.ActivePlan = PlanHigh
+	resolved, err := ResolveOpenCodePlanV2(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := resolved.Roles[RoleManager]
+	if manager.RequestedEffort != EffortMedium || manager.Effort != EffortMedium || manager.Strength != capabilityRank(CapabilityFrontier)*10+effortRank(EffortMedium) {
+		t.Fatalf("manager=%+v", manager)
+	}
+	for capability, slot := range config.Slots {
+		if resolved.Slots[capability].RequestedEffort != slot.RequestedEffort {
+			t.Fatalf("%s effort mutated: got %s want %s", capability, resolved.Slots[capability].RequestedEffort, slot.RequestedEffort)
+		}
+	}
+}
