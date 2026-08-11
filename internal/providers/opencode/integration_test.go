@@ -703,6 +703,122 @@ func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
 	}
 }
 
+func TestRequestedModelPlanBuildsV2BundleForMixedSlots(t *testing.T) {
+	configDirectory := t.TempDir()
+	bundle, err := requestedModelPlan(integration.Options{
+		ConfigDir:            configDirectory,
+		ModelPlan:            sdd.PlanHigh,
+		ModelEfficient:       "openai/gpt-5.6-luna",
+		ModelBalanced:        "anthropic/claude-sonnet",
+		ModelFrontier:        "acme/frontier",
+		ModelEfficientEffort: sdd.EffortLow,
+		ModelBalancedEffort:  sdd.EffortHigh,
+		ModelFrontierEffort:  sdd.EffortUltra,
+	}, configDirectory)
+	testutil.NoError(t, err)
+	testutil.Require(t,
+		bundle.configV2 != nil && bundle.resolvedV2 != nil && len(bundle.manifest) == 0 &&
+			bundle.configV2.Slots[sdd.CapabilityEfficient].Source == sdd.ModelSlotCatalog &&
+			bundle.configV2.Slots[sdd.CapabilityEfficient].Availability == sdd.ModelSlotCatalogKnown &&
+			bundle.configV2.Slots[sdd.CapabilityBalanced].Source == sdd.ModelSlotCustom &&
+			bundle.configV2.Slots[sdd.CapabilityBalanced].Availability == sdd.ModelSlotUnknown &&
+			bundle.resolvedV2.Roles[sdd.RoleManager].Model == "acme/frontier" && bundle.resolvedV2.Roles[sdd.RoleManager].Effort == sdd.EffortUltra &&
+			bytes.Contains(bundle.agents[managerAgentName], []byte("model: acme/frontier\nvariant: xhigh")),
+		"unexpected v2 bundle: %+v", bundle,
+	)
+	for agent, role := range map[string]sdd.Role{
+		managerAgentName: sdd.RoleManager, exploreAgentName: sdd.RoleResearch,
+		generalAgentName: sdd.RoleImplementation, verifierAgentName: sdd.RoleVerification,
+		reviewRiskName: sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
+		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
+		reviewRefuterName: sdd.RoleRefuter, sddResearchName: sdd.RoleResearch,
+		sddProposalName: sdd.RoleProposal, sddSpecName: sdd.RoleSpec,
+		sddDesignName: sdd.RoleDesign, sddTasksName: sdd.RoleTasks, sddApplyName: sdd.RoleApply,
+	} {
+		assignment := bundle.resolvedV2.Roles[role]
+		content := string(bundle.agents[agent])
+		testutil.Require(t, strings.Contains(content, "model: "+assignment.Model) && strings.Contains(content, "variant: "+string(assignment.Variant)), "agent %s did not preserve %s/%s: %s", agent, assignment.Model, assignment.Effort, content)
+	}
+}
+
+func TestRequestedModelPlanKeepsV1BundleWithoutMixedSemantics(t *testing.T) {
+	options := integration.Options{ConfigDir: t.TempDir(), ModelPlan: sdd.PlanHigh, ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier"}
+	bundle, err := requestedModelPlan(options, options.ConfigDir)
+	testutil.NoError(t, err)
+	testutil.Require(t, bundle.configV2 == nil && bundle.resolvedV2 == nil && len(bundle.manifest) != 0 && bundle.config.Provider == "acme", "unexpected v1 bundle: %+v", bundle)
+}
+
+func TestRequestedModelPlanInheritsInstalledSlotsForPartialMixedOverride(t *testing.T) {
+	configDirectory := t.TempDir()
+	installed, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(manifestPath), 0o700))
+	testutil.NoError(t, os.WriteFile(manifestPath, installed.manifest, 0o600))
+
+	bundle, err := requestedModelPlan(integration.Options{
+		ConfigDir: configDirectory, ModelBalanced: "anthropic/claude-sonnet",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+	}, configDirectory)
+	testutil.NoError(t, err)
+	testutil.Require(t,
+		bundle.configV2 != nil &&
+			bundle.configV2.Slots[sdd.CapabilityEfficient].Reference == "openai/gpt-5.6-luna" &&
+			bundle.configV2.Slots[sdd.CapabilityBalanced].Reference == "anthropic/claude-sonnet" &&
+			bundle.configV2.Slots[sdd.CapabilityFrontier].Reference == "openai/gpt-5.6-sol",
+		"partial mixed override did not inherit installed slots: %+v", bundle.configV2,
+	)
+}
+
+func TestRequestedModelPlanRejectsInvalidPartialSlotEffort(t *testing.T) {
+	configDirectory := t.TempDir()
+	_, err := requestedModelPlan(integration.Options{ConfigDir: configDirectory, ModelEfficientEffort: sdd.Effort("invalid")}, configDirectory)
+	testutil.Require(t, errors.Is(err, integration.ErrInvalid), "invalid partial slot effort error=%v", err)
+}
+
+func TestRequestedModelPlanRejectsHomogeneousSlotEfforts(t *testing.T) {
+	configDirectory := t.TempDir()
+	_, err := requestedModelPlan(integration.Options{ConfigDir: configDirectory, ModelEfficientEffort: sdd.EffortHigh}, configDirectory)
+	testutil.Require(t, errors.Is(err, integration.ErrInvalid), "homogeneous slot effort error=%v", err)
+}
+
+func TestRequestedModelPlanRejectsMixedSlotsWithoutCompleteEfforts(t *testing.T) {
+	for name, options := range map[string]integration.Options{
+		"none":    {ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "openai/gpt-5.6-sol"},
+		"partial": {ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "openai/gpt-5.6-sol", ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh},
+	} {
+		t.Run(name, func(t *testing.T) {
+			configDirectory := t.TempDir()
+			options.ConfigDir = configDirectory
+			_, err := requestedModelPlan(options, configDirectory)
+			testutil.Require(t, errors.Is(err, integration.ErrInvalid), "mixed %s efforts error=%v", name, err)
+		})
+	}
+}
+
+func TestRequestedModelPlanMixedPartialOverrideRequiresAndPreservesAllEfforts(t *testing.T) {
+	configDirectory := t.TempDir()
+	installed, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(manifestPath), 0o700))
+	testutil.NoError(t, os.WriteFile(manifestPath, installed.manifest, 0o600))
+
+	bundle, err := requestedModelPlan(integration.Options{
+		ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh, ModelBalanced: "anthropic/claude-sonnet",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+	}, configDirectory)
+	testutil.NoError(t, err)
+	testutil.Require(t,
+		bundle.configV2 != nil &&
+			bundle.configV2.Slots[sdd.CapabilityEfficient].Reference == "openai/gpt-5.6-luna" && bundle.configV2.Slots[sdd.CapabilityEfficient].RequestedEffort == sdd.EffortLow &&
+			bundle.configV2.Slots[sdd.CapabilityBalanced].Reference == "anthropic/claude-sonnet" && bundle.configV2.Slots[sdd.CapabilityBalanced].RequestedEffort == sdd.EffortHigh &&
+			bundle.configV2.Slots[sdd.CapabilityFrontier].Reference == "openai/gpt-5.6-sol" && bundle.configV2.Slots[sdd.CapabilityFrontier].RequestedEffort == sdd.EffortUltra &&
+			bundle.resolvedV2.Roles[sdd.RoleManager].Effort == sdd.EffortUltra,
+		"mixed partial override lost references or efforts: %+v", bundle,
+	)
+}
+
 func TestIntegration_RepairsOnlyMissingManagedArtifact(t *testing.T) {
 	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")

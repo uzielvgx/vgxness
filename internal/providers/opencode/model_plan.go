@@ -38,10 +38,12 @@ type modelPlanManifest struct {
 }
 
 type modelPlanBundle struct {
-	config   sdd.ModelPlanConfig
-	resolved sdd.OpenCodePlan
-	agents   map[string][]byte
-	manifest []byte
+	config     sdd.ModelPlanConfig
+	resolved   sdd.OpenCodePlan
+	configV2   *sdd.ModelPlanConfigV2
+	resolvedV2 *sdd.OpenCodePlanV2
+	agents     map[string][]byte
+	manifest   []byte
 }
 
 func buildModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
@@ -54,6 +56,20 @@ func buildModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
 		return modelPlanBundle{}, err
 	}
 	return encodeModelPlanBundle(config, resolved, agents)
+}
+
+// buildModelPlanBundleV2 deliberately does not encode a manifest. Slice 3 owns
+// manifest v2 dispatch and persistence; this slice only prepares agent bytes.
+func buildModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
+	resolved, err := sdd.ResolveOpenCodePlanV2(config)
+	if err != nil {
+		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
+	}
+	agents, err := modelBoundAgentsV2(resolved)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	return modelPlanBundle{configV2: &config, resolvedV2: &resolved, agents: agents}, nil
 }
 
 func encodeModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, agents map[string][]byte) (modelPlanBundle, error) {
@@ -98,6 +114,19 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 	if options.ModelFrontier != "" {
 		frontier = options.ModelFrontier
 	}
+	if modelPlanV2Requested(efficient, balanced, frontier) {
+		config, err := modelPlanConfigV2(options, plan, efficient, balanced, frontier)
+		if err != nil {
+			return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
+		}
+		if !explicit && !hasSlotEffort(options) {
+			config.Provenance = base.Provenance
+		}
+		return buildModelPlanBundleV2(config)
+	}
+	if hasSlotEffort(options) {
+		return modelPlanBundle{}, fmt.Errorf("%w: per-slot efforts require mixed providers", integration.ErrInvalid)
+	}
 	config, err := sdd.NewModelPlanConfig(plan, efficient, balanced, frontier)
 	if err != nil {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
@@ -115,6 +144,47 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 		}
 	}
 	return buildModelPlanBundle(config)
+}
+
+func modelPlanV2Requested(efficient, balanced, frontier string) bool {
+	return modelProvider(efficient) != modelProvider(balanced) || modelProvider(efficient) != modelProvider(frontier)
+}
+
+func hasSlotEffort(options integration.Options) bool {
+	return options.ModelEfficientEffort != "" || options.ModelBalancedEffort != "" || options.ModelFrontierEffort != ""
+}
+
+func modelProvider(reference string) string {
+	provider, _, found := strings.Cut(reference, "/")
+	if !found {
+		return ""
+	}
+	return provider
+}
+
+func modelPlanConfigV2(options integration.Options, plan sdd.Plan, efficient, balanced, frontier string) (sdd.ModelPlanConfigV2, error) {
+	defaults := sdd.DefaultModelPlanConfigV2().Slots
+	slots := []struct {
+		capability sdd.Capability
+		reference  string
+		effort     sdd.Effort
+	}{
+		{sdd.CapabilityEfficient, efficient, options.ModelEfficientEffort},
+		{sdd.CapabilityBalanced, balanced, options.ModelBalancedEffort},
+		{sdd.CapabilityFrontier, frontier, options.ModelFrontierEffort},
+	}
+	config := make([]sdd.ModelSlotConfig, len(slots))
+	for index, slot := range slots {
+		if !slot.effort.Valid() {
+			return sdd.ModelPlanConfigV2{}, integration.ErrInvalid
+		}
+		config[index] = sdd.ModelSlotConfig{Reference: slot.reference, RequestedEffort: slot.effort, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown}
+		if slot.reference == defaults[slot.capability].Reference {
+			config[index].Source = sdd.ModelSlotCatalog
+			config[index].Availability = sdd.ModelSlotCatalogKnown
+		}
+	}
+	return sdd.NewModelPlanConfigV2(plan, config[0], config[1], config[2])
 }
 
 func parseInstalledModelPlanManifest(data []byte) (modelPlanManifest, modelPlanBundle, error) {
@@ -437,6 +507,18 @@ func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, e
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, generalPreviousMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
+}
+
+func modelBoundAgentsV2(plan sdd.OpenCodePlanV2) (map[string][]byte, error) {
+	legacy := sdd.OpenCodePlan{Roles: make(map[sdd.Role]sdd.OpenCodeRoleAssignment, len(plan.Roles))}
+	for role, assignment := range plan.Roles {
+		legacy.Roles[role] = sdd.OpenCodeRoleAssignment{
+			Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model,
+			RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant,
+			Degradation: assignment.Degradation, Strength: assignment.Strength,
+		}
+	}
+	return modelBoundAgents(legacy)
 }
 
 func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {

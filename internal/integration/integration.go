@@ -36,12 +36,15 @@ type Handshake struct {
 func (status HandshakeStatus) String() string { return string(status) }
 
 type Options struct {
-	ConfigDir      string
-	HomeDir        string
-	ModelPlan      sdd.Plan
-	ModelEfficient string
-	ModelBalanced  string
-	ModelFrontier  string
+	ConfigDir            string
+	HomeDir              string
+	ModelPlan            sdd.Plan
+	ModelEfficient       string
+	ModelBalanced        string
+	ModelFrontier        string
+	ModelEfficientEffort sdd.Effort
+	ModelBalancedEffort  sdd.Effort
+	ModelFrontierEffort  sdd.Effort
 }
 
 type Result struct {
