@@ -31,6 +31,38 @@ type ModelPlanConfig struct {
 	Provenance    ModelPlanProvenance `json:"provenance"`
 }
 
+type ModelSlotSource string
+
+const (
+	ModelSlotCatalog ModelSlotSource = "catalog"
+	ModelSlotCustom  ModelSlotSource = "custom"
+)
+
+type ModelSlotAvailability string
+
+const (
+	ModelSlotCatalogKnown ModelSlotAvailability = "catalog-known"
+	ModelSlotUnknown      ModelSlotAvailability = "unknown"
+)
+
+// ModelSlotConfig describes one authoritative v2 capability slot. Custom
+// references are syntactically validated only; they do not assert provider
+// authorization or catalog support.
+type ModelSlotConfig struct {
+	Reference       string                `json:"reference"`
+	RequestedEffort Effort                `json:"requestedEffort"`
+	Source          ModelSlotSource       `json:"source"`
+	Availability    ModelSlotAvailability `json:"availability"`
+}
+
+type ModelPlanConfigV2 struct {
+	SchemaVersion int                            `json:"schemaVersion"`
+	ActivePlan    Plan                           `json:"activePlan"`
+	Provider      string                         `json:"provider"`
+	Slots         map[Capability]ModelSlotConfig `json:"slots"`
+	Provenance    ModelPlanProvenance            `json:"provenance"`
+}
+
 type OpenCodeRoleAssignment struct {
 	Role            Role            `json:"role"`
 	Capability      Capability      `json:"capability"`
@@ -51,12 +83,59 @@ type OpenCodePlan struct {
 	Provenance    ModelPlanProvenance             `json:"provenance"`
 }
 
+type OpenCodeRoleAssignmentV2 struct {
+	Role            Role            `json:"role"`
+	Capability      Capability      `json:"capability"`
+	Provider        string          `json:"provider"`
+	Model           string          `json:"model"`
+	RequestedEffort Effort          `json:"requestedEffort"`
+	Effort          Effort          `json:"effort"`
+	Variant         OpenCodeVariant `json:"variant"`
+	Degradation     Degradation     `json:"degradation"`
+	Strength        int             `json:"strength"`
+}
+
+type OpenCodePlanV2 struct {
+	SchemaVersion int                               `json:"schemaVersion"`
+	ActivePlan    Plan                              `json:"activePlan"`
+	Provider      string                            `json:"provider"`
+	Slots         map[Capability]ModelSlotConfig    `json:"slots"`
+	Roles         map[Role]OpenCodeRoleAssignmentV2 `json:"roles"`
+	Provenance    ModelPlanProvenance               `json:"provenance"`
+}
+
 func DefaultModelPlanConfig() ModelPlanConfig {
 	return ModelPlanConfig{
 		SchemaVersion: 1, ActivePlan: PlanMedium, Provider: "openai",
 		Efficient: "openai/gpt-5.6-luna", Balanced: "openai/gpt-5.6-terra", Frontier: "openai/gpt-5.6-sol",
 		Provenance: ModelPlanDefault,
 	}
+}
+
+func DefaultModelPlanConfigV2() ModelPlanConfigV2 {
+	return ModelPlanConfigV2{
+		SchemaVersion: 2, ActivePlan: PlanMedium, Provider: "openai", Provenance: ModelPlanDefault,
+		Slots: map[Capability]ModelSlotConfig{
+			CapabilityEfficient: {Reference: "openai/gpt-5.6-luna", RequestedEffort: EffortMedium, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
+			CapabilityBalanced:  {Reference: "openai/gpt-5.6-terra", RequestedEffort: EffortMedium, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
+			CapabilityFrontier:  {Reference: "openai/gpt-5.6-sol", RequestedEffort: EffortMedium, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
+		},
+	}
+}
+
+func NewModelPlanConfigV2(plan Plan, efficient, balanced, frontier ModelSlotConfig) (ModelPlanConfigV2, error) {
+	config := ModelPlanConfigV2{SchemaVersion: 2, ActivePlan: plan, Provenance: ModelPlanCLI, Slots: map[Capability]ModelSlotConfig{
+		CapabilityEfficient: efficient, CapabilityBalanced: balanced, CapabilityFrontier: frontier,
+	}}
+	provider, err := modelPlanConfigV2Provider(config)
+	if err != nil {
+		return ModelPlanConfigV2{}, err
+	}
+	config.Provider = provider
+	if _, err := ResolveOpenCodePlanV2(config); err != nil {
+		return ModelPlanConfigV2{}, err
+	}
+	return config, nil
 }
 
 func NewModelPlanConfig(plan Plan, efficient, balanced, frontier string) (ModelPlanConfig, error) {
@@ -112,6 +191,53 @@ func ResolveOpenCodePlan(config ModelPlanConfig) (OpenCodePlan, error) {
 	return result, nil
 }
 
+func ResolveOpenCodePlanV2(config ModelPlanConfigV2) (OpenCodePlanV2, error) {
+	if err := validateModelPlanConfigV2(config); err != nil {
+		return OpenCodePlanV2{}, err
+	}
+	providers := make(map[string]bool, len(config.Slots))
+	resolvedSlots := make(map[Capability]ModelSlotConfig, len(config.Slots))
+	effective := make(map[Capability]Effort, len(config.Slots))
+	degradations := make(map[Capability]Degradation, len(config.Slots))
+	for capability, slot := range config.Slots {
+		provider, _ := modelProvider(slot.Reference)
+		providers[provider] = true
+		resolvedSlots[capability] = slot
+		effective[capability] = slot.RequestedEffort
+		if slot.Source == ModelSlotCatalog {
+			model := catalogModel(capability, slot.Reference)
+			effort, degraded := resolveEffort(model.SupportedEfforts, slot.RequestedEffort)
+			effective[capability] = effort
+			if degraded {
+				degradations[capability] = Degradation{Degraded: true, Reason: fmt.Sprintf("requested effort %s is unsupported by %s; using highest declared effort %s", slot.RequestedEffort, slot.Reference, effort)}
+			}
+		}
+	}
+	provider := "mixed"
+	if len(providers) == 1 {
+		for value := range providers {
+			provider = value
+		}
+	}
+	provenance := config.Provenance
+	if provenance == "" {
+		provenance = ModelPlanCLI
+	}
+	matrix, _ := RoleMatrix(config.ActivePlan)
+	result := OpenCodePlanV2{SchemaVersion: 2, ActivePlan: config.ActivePlan, Provider: provider, Slots: resolvedSlots, Roles: make(map[Role]OpenCodeRoleAssignmentV2, len(matrix)), Provenance: provenance}
+	for role, assignment := range matrix {
+		slot := resolvedSlots[assignment.Capability]
+		slotProvider, _ := modelProvider(slot.Reference)
+		result.Roles[role] = OpenCodeRoleAssignmentV2{
+			Role: role, Capability: assignment.Capability, Provider: slotProvider, Model: slot.Reference,
+			RequestedEffort: slot.RequestedEffort, Effort: effective[assignment.Capability],
+			Variant: OpenCodeVariantForEffort(effective[assignment.Capability]), Degradation: degradations[assignment.Capability],
+			Strength: RoleAssignment{Capability: assignment.Capability, Effort: effective[assignment.Capability]}.Strength(),
+		}
+	}
+	return result, nil
+}
+
 func OpenCodeVariantForEffort(effort Effort) OpenCodeVariant {
 	switch effort {
 	case EffortLow:
@@ -147,6 +273,74 @@ func validateModelPlanConfig(config ModelPlanConfig) (string, error) {
 		return "", fmt.Errorf("%w: configured provider %q does not match slots", ErrProviderMismatch, config.Provider)
 	}
 	return provider, nil
+}
+
+func validateModelPlanConfigV2(config ModelPlanConfigV2) error {
+	if config.SchemaVersion != 2 || !config.ActivePlan.Valid() || config.Provenance != ModelPlanDefault && config.Provenance != ModelPlanCLI || len(config.Slots) != 3 {
+		return ErrInvalid
+	}
+	for _, capability := range []Capability{CapabilityEfficient, CapabilityBalanced, CapabilityFrontier} {
+		slot, ok := config.Slots[capability]
+		if !ok || !slot.RequestedEffort.Valid() {
+			return ErrInvalid
+		}
+		if _, err := modelProvider(slot.Reference); err != nil {
+			return err
+		}
+		switch slot.Source {
+		case ModelSlotCatalog:
+			if slot.Availability != ModelSlotCatalogKnown || catalogModel(capability, slot.Reference).ID == "" {
+				return ErrInvalid
+			}
+		case ModelSlotCustom:
+			if slot.Availability != ModelSlotUnknown {
+				return ErrInvalid
+			}
+		default:
+			return ErrInvalid
+		}
+	}
+	provider, err := modelPlanConfigV2Provider(config)
+	if err != nil {
+		return err
+	}
+	if config.Provider != provider {
+		return fmt.Errorf("%w: configured provider %q does not match slots", ErrProviderMismatch, config.Provider)
+	}
+	return nil
+}
+
+// modelPlanConfigV2Provider derives the serialized summary from authoritative
+// slot references. ActivePlan selects roles only; it never changes slot effort.
+func modelPlanConfigV2Provider(config ModelPlanConfigV2) (string, error) {
+	providers := make(map[string]bool, len(config.Slots))
+	for _, capability := range []Capability{CapabilityEfficient, CapabilityBalanced, CapabilityFrontier} {
+		slot, ok := config.Slots[capability]
+		if !ok {
+			return "", ErrInvalid
+		}
+		provider, err := modelProvider(slot.Reference)
+		if err != nil {
+			return "", err
+		}
+		providers[provider] = true
+	}
+	if len(providers) != 1 {
+		return "mixed", nil
+	}
+	for provider := range providers {
+		return provider, nil
+	}
+	return "", ErrInvalid
+}
+
+func catalogModel(capability Capability, reference string) Model {
+	for _, model := range DefaultOpenAICatalog().Models {
+		if model.Capability == capability && model.ID == reference {
+			return model
+		}
+	}
+	return Model{}
 }
 
 func modelProvider(reference string) (string, error) {
