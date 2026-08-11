@@ -9,10 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/modelcatalog"
 	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/vgxness/vgxness/internal/skills"
 )
 
 func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime) int {
@@ -168,6 +172,8 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 		fmt.Fprintf(writer, "\nPaso %d de %d — %s [%s]\n  %s\n", step.Number, len(plan.Steps), step.Title, change, step.Explanation)
 	}
 	fmt.Fprintln(writer, "\nResumen de destinos y estado detectado:")
+	fmt.Fprintf(writer, "  Lifecycle action: %s\n", setupLifecycleAction(plan))
+	fmt.Fprintf(writer, "  Plan digest: %s\n", terminalSafe(plan.Digest))
 	fmt.Fprintf(writer, "  Launcher: %s (estado=%s)\n", terminalSafe(plan.SelfInstall.LauncherPath), plan.SelfInstall.State)
 	fmt.Fprintf(writer, "  Versiones: %s\n", terminalSafe(plan.SelfInstall.DataDir))
 	fmt.Fprintf(writer, "  Manager: %s (estado=%s)\n", terminalSafe(plan.Integration.Path), plan.Integration.State)
@@ -235,8 +241,47 @@ func renderModelSlots(writer io.Writer, result integration.Result) {
 		{"balanced", result.ModelBalanced, result.ModelBalancedEffort, result.ModelBalancedSource, result.ModelBalancedAvailability},
 		{"frontier", result.ModelFrontier, result.ModelFrontierEffort, result.ModelFrontierSource, result.ModelFrontierAvailability},
 	} {
-		fmt.Fprintf(writer, "  Slot %s: provider=%s ref=%s effort=%s source=%s availability=%s\n", slot.name, terminalSafe(modelProvider(slot.ref)), terminalSafe(slot.ref), slot.effort, slot.source, slot.availability)
+		line := fmt.Sprintf("  Slot %s: provider=%s ref=%s effort=%s source=%s availability=%s", slot.name, terminalSafe(modelProvider(slot.ref)), terminalSafe(slot.ref), terminalSafe(string(slot.effort)), terminalSafe(string(slot.source)), terminalSafe(string(slot.availability)))
+		if len(line) <= 80 {
+			fmt.Fprintln(writer, line)
+			continue
+		}
+		fmt.Fprintf(writer, "  Slot %s:\n", slot.name)
+		renderSetupField(writer, "    provider=", modelProvider(slot.ref))
+		renderSetupField(writer, "    ref=", slot.ref)
+		renderSetupField(writer, "    effort=", string(slot.effort))
+		renderSetupField(writer, "    source=", string(slot.source))
+		renderSetupField(writer, "    availability=", string(slot.availability))
 	}
+}
+
+func renderSetupField(writer io.Writer, prefix, value string) {
+	value = terminalSafe(value)
+	continuation := strings.Repeat(" ", len(prefix))
+	for {
+		room := 80 - len(prefix)
+		if len(value) <= room {
+			fmt.Fprintln(writer, prefix+value)
+			return
+		}
+		cut := room
+		for cut > 0 && !utf8.RuneStart(value[cut]) {
+			cut--
+		}
+		fmt.Fprintln(writer, prefix+value[:cut])
+		value, prefix = value[cut:], continuation
+	}
+}
+
+func setupLifecycleAction(plan setupflow.Plan) string {
+	if plan.SelfInstall.State == selfinstall.StateAbsent || plan.Integration.State == integration.StateAbsent || plan.Skills.State == skills.StateAbsent {
+		return "install"
+	}
+	if plan.SelfInstall.State == selfinstall.StateInstalled && plan.Integration.State == integration.StateInstalled && plan.Skills.State == skills.StateInstalled &&
+		!plan.SelfInstall.Changed && !plan.SelfInstall.UpdateAvailable && !plan.Integration.Changed && !plan.Integration.RestartRequired && !plan.Skills.Changed && !plan.Skills.UpdateNeeded {
+		return "no-change"
+	}
+	return "update/reinstall"
 }
 
 func modelProvider(reference string) string {
@@ -250,19 +295,8 @@ func hasSetupSlotRef(options integration.Options) bool {
 	return options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != ""
 }
 func validSetupModelReference(reference string) bool {
-	provider, model, found := strings.Cut(reference, "/")
-	if !found || provider == "" || model == "" || len(reference) > 256 || strings.TrimSpace(reference) != reference {
-		return false
-	}
-	for _, value := range []string{provider, model} {
-		for _, character := range value {
-			if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.' || (value == model && character == '/') {
-				continue
-			}
-			return false
-		}
-	}
-	return true
+	_, valid := modelcatalog.ValidReference(reference)
+	return valid
 }
 
 func directoryDurabilityNote(value string) string {

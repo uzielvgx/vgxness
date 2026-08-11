@@ -77,6 +77,31 @@ func TestRefreshUsesExplicitRefreshFlag(t *testing.T) {
 	}
 }
 
+func TestValidReferenceUsesAuthoritativeBoundedGrammar(t *testing.T) {
+	valid := []string{
+		"provider/model",
+		"provider/model:variant@host+feature/nested",
+		strings.Repeat("a", maxSegmentBytes) + "/" + strings.Repeat("b", maxReferenceBytes-maxSegmentBytes-1),
+	}
+	for _, reference := range valid {
+		if provider, ok := ValidReference(reference); !ok || provider != strings.Split(reference, "/")[0] {
+			t.Errorf("ValidReference(%q) = (%q, %t), want provider and true", reference, provider, ok)
+		}
+	}
+
+	invalid := []string{
+		"model", "@provider/model", "provider//model", "provider/model name",
+		"provider/model?query", "provider/model#fragment", "provider/model=value", `provider/model\path`,
+		strings.Repeat("a", maxSegmentBytes+1) + "/model",
+		strings.Repeat("a", maxSegmentBytes) + "/" + strings.Repeat("b", maxSegmentBytes),
+	}
+	for _, reference := range invalid {
+		if provider, ok := ValidReference(reference); ok || provider != "" {
+			t.Errorf("ValidReference(%q) = (%q, %t), want empty and false", reference, provider, ok)
+		}
+	}
+}
+
 func TestDiscoverRejectsMalformedOutput(t *testing.T) {
 	tests := []struct {
 		name   string
