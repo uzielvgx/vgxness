@@ -641,6 +641,9 @@ func validSetupModelReference(reference string) bool {
 }
 
 func (m *Model) selectSetupPlan(offset int) tea.Cmd {
+	if m.setupAssignmentsExact {
+		return nil
+	}
 	index := setupPlanIndex(m.setupSelected)
 	next := max(0, min(len(setupPlans)-1, index+offset))
 	if next == index {
@@ -684,7 +687,11 @@ func (m Model) setupRouteLines() []string {
 	if m.setupView == setupViewRecovery {
 		return m.recoveryRouteLines()
 	}
-	lines := []string{"OPENCODE SETUP", "selected plan  " + sanitizeTerminal(m.setupSelected)}
+	header := "selected plan  " + sanitizeTerminal(m.setupSelected)
+	if m.setupAssignmentsExact {
+		header = "per-agent assignments"
+	}
+	lines := []string{"OPENCODE SETUP", header}
 	if m.setupModelEditing {
 		if m.setupAssignmentsSeeded {
 			return append(lines, m.modelAssignmentLines()...)
@@ -713,7 +720,11 @@ func (m Model) setupRouteLines() []string {
 		lines = append(lines, setupSelfInstallDetails(result.SelfInstallUpdateAvailable, result.SelfInstallRollbackAvailable, result.SelfInstallActiveSHA256, result.SelfInstallPreviousSHA256)...)
 		lines = append(lines, setupPlanModelProfile(result.Plan, m.setupViewport.Width())...)
 		if result.RestartRequired {
-			lines = append(lines, "! Restart OpenCode to load the selected model plan.")
+			target := "selected model plan"
+			if m.setupAssignmentsExact {
+				target = "per-agent assignments"
+			}
+			lines = append(lines, "! Restart OpenCode to load the "+target+".")
 		} else {
 			lines = append(lines, "Restart OpenCode if it is already running.")
 		}
@@ -819,6 +830,13 @@ func (m Model) setupHelp() string {
 	case m.setupApplyErr != nil:
 		return "[r] inspect/refresh  [Esc] Overview"
 	default:
+		if m.setupAssignmentsExact {
+			help := "[m] edit assignments  [Tab] Recovery  [r] refresh preflight"
+			if m.setupApplyAllowed() {
+				help += "  [a] apply"
+			}
+			return help + "  [j/k] scroll"
+		}
 		if classifySetup(m.setupPlan) == "blocked/recovery" {
 			return "[Tab] Recovery  [r] refresh preflight  [Esc] Overview"
 		}
