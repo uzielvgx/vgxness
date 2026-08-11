@@ -2702,7 +2702,7 @@ func TestIntegrationMixedV2ManifestPersistsAndStatusIsExact(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "opencode")
 	options := integration.Options{
 		ConfigDir: root, ModelPlan: sdd.PlanHigh,
-		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "openai/gpt-5.6-sol",
+		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
 		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
 	}
 	service := NewIntegration()
@@ -2713,14 +2713,35 @@ func TestIntegrationMixedV2ManifestPersistsAndStatusIsExact(t *testing.T) {
 	testutil.NoError(t, err)
 	parsed, err := parseModelPlanManifest(manifest)
 	testutil.NoError(t, err)
+	managerData, err := os.ReadFile(filepath.Join(root, "agents", managerAgentName))
+	testutil.NoError(t, err)
+	generalData, err := os.ReadFile(filepath.Join(root, "agents", generalAgentName))
+	testutil.NoError(t, err)
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		parsed.SchemaVersion == 2 && parsed.ConfigV2 != nil && parsed.ResolvedV2 != nil &&
+		parsed.SchemaVersion == 2 && parsed.ConfigV2 != nil && parsed.ConfigV2.Provider == "mixed" && parsed.ResolvedV2 != nil &&
 			status.State == integration.StateInstalled && status.Provider == "opencode" && status.ModelProvider == "mixed" &&
-			status.ModelBalanced == "anthropic/claude-sonnet" && installed.RestartRequired && installed.Changed &&
+			parsed.ConfigV2.Slots[sdd.CapabilityEfficient].Reference == "openai/gpt-5.6-luna" && parsed.ConfigV2.Slots[sdd.CapabilityEfficient].RequestedEffort == sdd.EffortLow && parsed.ConfigV2.Slots[sdd.CapabilityEfficient].Source == sdd.ModelSlotCatalog && parsed.ConfigV2.Slots[sdd.CapabilityEfficient].Availability == sdd.ModelSlotCatalogKnown &&
+			parsed.ConfigV2.Slots[sdd.CapabilityBalanced].Reference == "anthropic/claude-sonnet" && parsed.ConfigV2.Slots[sdd.CapabilityBalanced].RequestedEffort == sdd.EffortHigh && parsed.ConfigV2.Slots[sdd.CapabilityBalanced].Source == sdd.ModelSlotCustom && parsed.ConfigV2.Slots[sdd.CapabilityBalanced].Availability == sdd.ModelSlotUnknown &&
+			parsed.ConfigV2.Slots[sdd.CapabilityFrontier].Reference == "acme/frontier" && parsed.ConfigV2.Slots[sdd.CapabilityFrontier].RequestedEffort == sdd.EffortUltra && parsed.ConfigV2.Slots[sdd.CapabilityFrontier].Source == sdd.ModelSlotCustom && parsed.ConfigV2.Slots[sdd.CapabilityFrontier].Availability == sdd.ModelSlotUnknown &&
+			status.ModelEfficient == "openai/gpt-5.6-luna" && status.ModelEfficientEffort == sdd.EffortLow && status.ModelEfficientSource == sdd.ModelSlotCatalog && status.ModelEfficientAvailability == sdd.ModelSlotCatalogKnown &&
+			status.ModelBalanced == "anthropic/claude-sonnet" && status.ModelBalancedEffort == sdd.EffortHigh && status.ModelBalancedSource == sdd.ModelSlotCustom && status.ModelBalancedAvailability == sdd.ModelSlotUnknown &&
+			status.ModelFrontier == "acme/frontier" && status.ModelFrontierEffort == sdd.EffortUltra && status.ModelFrontierSource == sdd.ModelSlotCustom && status.ModelFrontierAvailability == sdd.ModelSlotUnknown &&
+			bytes.Contains(managerData, []byte("model: acme/frontier\nvariant: xhigh")) &&
+			bytes.Contains(generalData, []byte("model: acme/frontier\nvariant: xhigh")) &&
+			installed.RestartRequired && installed.Changed &&
 			!bytes.Contains(manifest, []byte("token")) && !bytes.Contains(manifest, []byte("authorization")),
 		"installed=%+v status=%+v manifest=%s", installed, status, manifest)
+
+	changed := options
+	changed.ModelBalanced = "anthropic/claude-opus"
+	preview, err := service.Preview(context.Background(), changed)
+	testutil.Require(t, err == nil && preview.State == integration.StatePartial && preview.RestartRequired, "slot preview=%+v err=%v", preview, err)
+	reinstalled, err := service.Install(context.Background(), changed)
+	testutil.NoError(t, err)
+	status, err = service.Status(context.Background(), integration.Options{ConfigDir: root})
+	testutil.Require(t, err == nil && reinstalled.Changed && reinstalled.RestartRequired && status.State == integration.StateInstalled && status.ModelBalanced == "anthropic/claude-opus" && status.ModelBalancedEffort == sdd.EffortHigh, "reinstalled=%+v status=%+v err=%v", reinstalled, status, err)
 }
 
 func TestModelPlanManifestV1RemainsExactAndV2RejectsDrift(t *testing.T) {

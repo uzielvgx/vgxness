@@ -21,7 +21,16 @@ vgxness setup opencode --yes
 vgxness setup opencode --status
 ```
 
-Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explicit absolute destinations. Setup publishes portable skills to OpenCode's discoverable global root; use the lower-level `vgxness skills --skills-dir PATH` lifecycle only for isolated custom roots. Use `--model-plan low|medium|high|ultra` and the optional `--model-efficient`, `--model-balanced`, and `--model-frontier` exact provider/model slots to configure the installed profiles. These flags overlay the verified installed manifest; omitted values remain unchanged. Fresh no-flag setup selects `medium` with `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. Setup validates configuration and managed identities; it does not claim to probe runtime model availability. `--model` is accepted only as a temporary no-op compatibility flag.
+Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explicit absolute destinations. Setup publishes portable skills to OpenCode's discoverable global root; use the lower-level `vgxness skills --skills-dir PATH` lifecycle only for isolated custom roots. Use `--model-plan low|medium|high|ultra` for a homogeneous preset, or set the efficient, balanced, and frontier provider/model slots independently. A mixed-provider setup must include all three `--model-efficient`, `--model-balanced`, and `--model-frontier` references plus all three `--model-efficient-effort`, `--model-balanced-effort`, and `--model-frontier-effort` values. For example:
+
+```sh
+vgxness setup opencode --yes \
+  --model-efficient openai/gpt-5.6-luna --model-efficient-effort low \
+  --model-balanced anthropic/claude-sonnet --model-balanced-effort high \
+  --model-frontier acme/frontier --model-frontier-effort ultra
+```
+
+With no model override flags, planning can retain the installed configuration or default selection. Once any slot reference or effort override is supplied, the public setup command requires all three slot references; if those references use mixed providers, it also requires all three effort values. Mixed profiles are recorded in manifest v2; homogeneous presets remain v1. Fresh no-flag setup selects `medium` with `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. Setup validates configuration and managed identities but does not authenticate or probe runtime availability, so custom slots display availability as `unknown`. Restart OpenCode Desktop whenever installed artifacts, a plan, a slot, or an effort changes. `--model` is accepted only as a temporary no-op compatibility flag.
 
 ## Readiness
 
