@@ -259,6 +259,64 @@ func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testi
 	}
 }
 
+func TestSetupPlanSelectionIsHiddenForExactAssignments(t *testing.T) {
+	for _, schema := range []int{1, 2} {
+		t.Run(fmt.Sprintf("v%d remains preset", schema), func(t *testing.T) {
+			backend := &recordingSetupBackend{plan: assignmentSetupPlan(schema)}
+			model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+			model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+			model.setRoute(routeSetup)
+			model.setupSelected = "medium"
+			model.handleSetupPlanLoaded(setupPlanLoadedMsg{generation: model.setupGeneration, request: model.setupRequest(), value: backend.plan})
+			updated, cmd := model.Update(keyPress("l"))
+			model = updated.(Model)
+			model = updateModel(t, model, cmd())
+			if len(backend.planRequests) != 1 || backend.planRequests[0].Plan != "high" || model.setupSelected != "high" {
+				t.Fatalf("legacy preset selection did not preview high: requests=%+v selected=%q", backend.planRequests, model.setupSelected)
+			}
+		})
+	}
+
+	backend := &recordingSetupBackend{plan: assignmentSetupPlan(3), catalog: []SetupCatalogModel{{Provider: "acme", Reference: "acme/next"}}}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setRoute(routeSetup)
+	model.setupSelected = "medium"
+	model.handleSetupPlanLoaded(setupPlanLoadedMsg{generation: model.setupGeneration, request: model.setupRequest(), value: backend.plan})
+	request, selected, digest := model.setupRequest(), model.setupSelected, model.setupPlan.Digest
+	updated, cmd := model.Update(keyPress("l"))
+	model = updated.(Model)
+	if cmd != nil || !setupRequestsEqual(request, model.setupRequest()) || selected != model.setupSelected || digest != model.setupPlan.Digest || len(backend.planRequests) != 0 {
+		t.Fatalf("exact preset selection changed state: cmd=%v request=%+v selected=%q digest=%q calls=%d", cmd, model.setupRequest(), model.setupSelected, model.setupPlan.Digest, len(backend.planRequests))
+	}
+	if view, help := model.View().Content, model.setupHelp(); strings.Contains(view, "selected plan") || !strings.Contains(view, "per-agent assignments") || strings.Contains(help, "[h/l]") || !strings.Contains(help, "[m]") || !strings.Contains(help, "[a]") || !strings.Contains(help, "[r]") {
+		t.Fatalf("exact setup UI=%q help=%q", view, help)
+	}
+	assertMaximumWidth(t, model.View().Content, 80)
+	model.setupPlan = assignmentSetupPlan(3)
+	model.setupPlan.SelfInstallState, model.setupPlan.IntegrationState, model.setupPlan.SkillsState = "installed", "installed", "installed"
+	model.setupPreviewed, model.setupPreviewRequest = true, model.setupRequest()
+	if help := model.setupHelp(); !strings.Contains(help, "[m] edit assignments") || !strings.Contains(help, "[r]") || !strings.Contains(help, "Recovery") || !strings.Contains(help, "[j/k]") || strings.Contains(help, "[a]") || strings.Contains(help, "[h/l]") {
+		t.Fatalf("exact no-change help=%q", help)
+	}
+
+	model.seedSetupAssignments(assignmentSetupPlan(2))
+	model.setupCatalog = backend.catalog
+	model = updateModel(t, model, keyPress("m"))
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	updated, preview := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if !model.setupAssignmentsExact {
+		t.Fatalf("matrix edit did not promote legacy assignments: editing=%t slot=%d row=%+v", model.setupModelEditing, model.setupModelSlot, model.setupAssignmentRows[0])
+	}
+	if preview == nil {
+		t.Fatal("matrix edit did not request a fresh preview")
+	}
+	if _, cmd = model.Update(keyPress("l")); cmd != nil {
+		t.Fatal("promoted assignments allowed a preset preview")
+	}
+}
+
 func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
 	const discovered = "local-provider/non-static:model@host+variant"
 	backend := &recordingSetupBackend{
