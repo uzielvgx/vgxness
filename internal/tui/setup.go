@@ -9,7 +9,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-const defaultSetupPlan = "medium"
+const (
+	defaultSetupPlan          = "medium"
+	SetupModelAssignmentCount = 15
+)
 
 var setupPlans = [...]string{"low", "medium", "high", "ultra"}
 
@@ -22,7 +25,32 @@ type SetupRequest struct {
 	ModelEfficientEffort string
 	ModelBalancedEffort  string
 	ModelFrontierEffort  string
+	ModelAssignments     *[SetupModelAssignmentCount]SetupModelAssignmentRequest
 	ExpectedPlanDigest   string
+}
+
+type SetupModelAssignmentRequest struct {
+	ArtifactKey     string
+	Provider        string
+	Reference       string
+	RequestedEffort string
+	Source          string
+	Availability    string
+}
+
+type SetupModelAssignment struct {
+	ArtifactKey       string
+	Role              string
+	Class             string
+	Provider          string
+	Model             string
+	RequestedEffort   string
+	Effort            string
+	Variant           string
+	Degraded          bool
+	DegradationReason string
+	Source            string
+	Availability      string
 }
 
 type SetupStep struct {
@@ -53,6 +81,8 @@ type SetupPlan struct {
 	SkillsChanged                bool
 	SkillsUpdateNeeded           bool
 	ArtifactCount                int
+	ModelSchemaVersion           int
+	ModelAssignments             *[SetupModelAssignmentCount]SetupModelAssignment
 	ModelPlan                    string
 	ModelProvider                string
 	ModelEfficient               string
@@ -705,6 +735,10 @@ func setupHandshake(ok bool, status string) string {
 
 func cloneSetupPlan(value SetupPlan) SetupPlan {
 	value.Steps = append([]SetupStep(nil), value.Steps...)
+	if value.ModelAssignments != nil {
+		assignments := *value.ModelAssignments
+		value.ModelAssignments = &assignments
+	}
 	return value
 }
 

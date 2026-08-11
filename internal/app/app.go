@@ -327,14 +327,36 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 	if err != nil {
 		return setupflow.Options{}, err
 	}
-	plan := sdd.Plan(request.Plan)
-	if !plan.Valid() {
-		return setupflow.Options{}, fmt.Errorf("invalid TUI setup plan")
+	integrationOptions := integration.Options{}
+	if request.ModelAssignments != nil {
+		assignments := make(map[string]sdd.ManagedAgentModelConfig, tui.SetupModelAssignmentCount)
+		for _, row := range request.ModelAssignments {
+			if row.ArtifactKey == "" {
+				return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
+			}
+			if _, duplicate := assignments[row.ArtifactKey]; duplicate {
+				return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
+			}
+			assignments[row.ArtifactKey] = sdd.ManagedAgentModelConfig{
+				Provider: row.Provider, Reference: row.Reference, RequestedEffort: sdd.Effort(row.RequestedEffort),
+				Source: sdd.ModelSlotSource(row.Source), Availability: sdd.ModelSlotAvailability(row.Availability),
+			}
+		}
+		if len(assignments) != integration.ModelAssignmentCount {
+			return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
+		}
+		integrationOptions.ModelAssignments = &assignments
+	} else {
+		plan := sdd.Plan(request.Plan)
+		if !plan.Valid() {
+			return setupflow.Options{}, fmt.Errorf("invalid TUI setup plan")
+		}
+		integrationOptions = integration.Options{ModelPlan: plan,
+			ModelEfficient: request.ModelEfficient, ModelBalanced: request.ModelBalanced, ModelFrontier: request.ModelFrontier,
+			ModelEfficientEffort: sdd.Effort(request.ModelEfficientEffort), ModelBalancedEffort: sdd.Effort(request.ModelBalancedEffort), ModelFrontierEffort: sdd.Effort(request.ModelFrontierEffort),
+		}
 	}
-	return setupflow.Options{Workspace: workspace, ExpectedPlanDigest: request.ExpectedPlanDigest, Integration: integration.Options{ModelPlan: plan,
-		ModelEfficient: request.ModelEfficient, ModelBalanced: request.ModelBalanced, ModelFrontier: request.ModelFrontier,
-		ModelEfficientEffort: sdd.Effort(request.ModelEfficientEffort), ModelBalancedEffort: sdd.Effort(request.ModelBalancedEffort), ModelFrontierEffort: sdd.Effort(request.ModelFrontierEffort),
-	}}, nil
+	return setupflow.Options{Workspace: workspace, ExpectedPlanDigest: request.ExpectedPlanDigest, Integration: integrationOptions}, nil
 }
 
 func cleanWorkspace(workspace string) (string, error) {
@@ -352,6 +374,18 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 			Number: step.Number, Title: step.Title, Explanation: step.Explanation, Mutates: step.Mutates,
 		}
 	}
+	var modelAssignments *[tui.SetupModelAssignmentCount]tui.SetupModelAssignment
+	if plan.Integration.ModelAssignments != nil {
+		modelAssignments = new([tui.SetupModelAssignmentCount]tui.SetupModelAssignment)
+		for index, row := range plan.Integration.ModelAssignments {
+			modelAssignments[index] = tui.SetupModelAssignment{
+				ArtifactKey: row.ArtifactKey, Role: string(row.Role), Class: string(row.Class), Provider: row.Provider, Model: row.Model,
+				RequestedEffort: string(row.RequestedEffort), Effort: string(row.Effort), Variant: string(row.Variant),
+				Degraded: row.Degradation.Degraded, DegradationReason: row.Degradation.Reason,
+				Source: string(row.Source), Availability: string(row.Availability),
+			}
+		}
+	}
 	return tui.SetupPlan{
 		Digest: plan.Digest, Provider: plan.Provider, Steps: steps,
 		SelfInstallState: fmt.Sprint(plan.SelfInstall.State), SelfInstallPath: plan.SelfInstall.LauncherPath,
@@ -362,8 +396,9 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 		IntegrationChanged: plan.Integration.Changed, IntegrationRestartRequired: plan.Integration.RestartRequired,
 		SkillsState: fmt.Sprint(plan.Skills.State), SkillsPath: plan.Skills.Path, SkillsFileCount: plan.Skills.FileCount,
 		SkillsChanged: plan.Skills.Changed, SkillsUpdateNeeded: plan.Skills.UpdateNeeded,
-		ArtifactCount: plan.Integration.ArtifactCount,
-		ModelPlan:     fmt.Sprint(plan.Integration.ModelPlan), ModelProvider: plan.Integration.ModelProvider,
+		ArtifactCount:      plan.Integration.ArtifactCount,
+		ModelSchemaVersion: plan.Integration.ModelSchemaVersion, ModelAssignments: modelAssignments,
+		ModelPlan: fmt.Sprint(plan.Integration.ModelPlan), ModelProvider: plan.Integration.ModelProvider,
 		ModelEfficient: plan.Integration.ModelEfficient, ModelBalanced: plan.Integration.ModelBalanced,
 		ModelFrontier:        plan.Integration.ModelFrontier,
 		ModelEfficientEffort: string(plan.Integration.ModelEfficientEffort), ModelBalancedEffort: string(plan.Integration.ModelBalancedEffort), ModelFrontierEffort: string(plan.Integration.ModelFrontierEffort),

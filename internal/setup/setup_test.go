@@ -3,10 +3,12 @@ package setup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	"github.com/vgxness/vgxness/internal/skills"
 )
@@ -515,6 +517,64 @@ func TestApplyDoesNotPublishSkillsAfterIntegrationFailure(t *testing.T) {
 	if !errors.Is(err, integration.ErrConflict) || strings.Contains(result.Recovery, "global de skills quedó instalado") || strings.Contains(strings.Join(shared.calls, ","), "skills-install") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
+}
+
+func TestPlanDigestBindsAssignmentRowsAndCopiesPreview(t *testing.T) {
+	rows := testModelAssignmentRows()
+	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent, ModelSchemaVersion: 3, ModelAssignments: &rows}}
+	service := New(&fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}}, preview, func(string) (integration.Runtime, error) { return preview, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	first, err := service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	second, secondErr := service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	if err != nil || secondErr != nil || first.Digest != second.Digest || first.Integration.ModelAssignments == preview.previewResult.ModelAssignments {
+		t.Fatalf("first=%+v second=%+v errors=%v/%v", first, second, err, secondErr)
+	}
+	rows[0].Model = "acme/changed"
+	changed, err := service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	if err != nil || changed.Digest == first.Digest || first.Integration.ModelAssignments[0].Model == rows[0].Model {
+		t.Fatalf("first=%+v changed=%+v err=%v", first.Integration.ModelAssignments[0], changed.Integration.ModelAssignments[0], err)
+	}
+}
+
+func TestApplyPreservesAndCopiesAssignmentRowsAcrossSparseReadback(t *testing.T) {
+	rows := testModelAssignmentRows()
+	modelResult := integration.Result{State: integration.StateAbsent, ModelSchemaVersion: 3, ModelAssignments: &rows}
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+		statusResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	managed := &fakeIntegration{installResult: integration.Result{State: integration.StateInstalled}, statusResult: integration.Result{State: integration.StateInstalled}}
+	service := New(installer, &fakeIntegration{previewResult: modelResult}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
+	if err != nil || result.Integration.ModelAssignments == nil || result.Plan.Integration.ModelAssignments == nil || result.Integration.ModelAssignments == &rows || result.Plan.Integration.ModelAssignments == result.Integration.ModelAssignments {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	want := result.Integration.ModelAssignments[0].Model
+	rows[0].Model = "mutated/source"
+	result.Plan.Integration.ModelAssignments[0].Model = "mutated/plan"
+	if result.Integration.ModelAssignments[0].Model != want {
+		t.Fatalf("assignment rows alias another boundary: %+v", result)
+	}
+}
+
+func TestApplyErrorReadbackPreservesAndCopiesAssignmentRows(t *testing.T) {
+	rows := testModelAssignmentRows()
+	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent, ModelSchemaVersion: 3, ModelAssignments: &rows}}
+	managed := &fakeIntegration{installErr: integration.ErrRecovery, statusResult: integration.Result{State: integration.StatePartial}, statusErr: errors.New("status")}
+	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}, installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)}}
+	service := New(installer, preview, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
+	if !errors.Is(err, integration.ErrRecovery) || result.Integration.ModelSchemaVersion != 3 || result.Integration.ModelAssignments == nil || result.Plan.Integration.ModelAssignments == nil || result.Integration.ModelAssignments == result.Plan.Integration.ModelAssignments {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func testModelAssignmentRows() [integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3 {
+	var rows [integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3
+	for index := range rows {
+		rows[index] = sdd.OpenCodeAgentAssignmentV3{ArtifactKey: fmt.Sprintf("agents/agent-%02d.md", index), Provider: "acme", Model: fmt.Sprintf("acme/model-%02d", index)}
+	}
+	return rows
 }
 
 func TestApplyDisclosesIncompleteSkillsRecovery(t *testing.T) {
