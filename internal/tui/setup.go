@@ -14,8 +14,14 @@ const defaultSetupPlan = "medium"
 var setupPlans = [...]string{"low", "medium", "high", "ultra"}
 
 type SetupRequest struct {
-	Workspace string
-	Plan      string
+	Workspace            string
+	Plan                 string
+	ModelEfficient       string
+	ModelBalanced        string
+	ModelFrontier        string
+	ModelEfficientEffort string
+	ModelBalancedEffort  string
+	ModelFrontierEffort  string
 }
 
 type SetupStep struct {
@@ -50,6 +56,15 @@ type SetupPlan struct {
 	ModelEfficient               string
 	ModelBalanced                string
 	ModelFrontier                string
+	ModelEfficientEffort         string
+	ModelBalancedEffort          string
+	ModelFrontierEffort          string
+	ModelEfficientSource         string
+	ModelBalancedSource          string
+	ModelFrontierSource          string
+	ModelEfficientAvailability   string
+	ModelBalancedAvailability    string
+	ModelFrontierAvailability    string
 	HandshakeOK                  bool
 	HandshakeStatus              string
 	Ready                        bool
@@ -79,6 +94,7 @@ type SetupResult struct {
 
 type setupPlanLoadedMsg struct {
 	generation int
+	request    SetupRequest
 	value      SetupPlan
 	err        error
 }
@@ -105,16 +121,17 @@ func (m *Model) loadSetupPlan() tea.Cmd {
 	m.setupConfirm = false
 	m.setupCancelAsked = false
 	m.setupSucceeded = false
+	m.setupPreviewed = false
 	m.setupApplyErr = nil
 	m.setupPlanErr = nil
 	m.setupViewport.GotoTop()
-	request := SetupRequest{Workspace: m.options.Workspace, Plan: m.setupSelected}
+	request := m.setupRequest()
 	return func() tea.Msg {
 		if m.backend == nil {
-			return setupPlanLoadedMsg{generation: generation, err: fmt.Errorf("setup backend unavailable")}
+			return setupPlanLoadedMsg{generation: generation, request: request, err: fmt.Errorf("setup backend unavailable")}
 		}
 		value, err := m.backend.PlanSetup(ctx, request)
-		return setupPlanLoadedMsg{generation: generation, value: value, err: err}
+		return setupPlanLoadedMsg{generation: generation, request: request, value: value, err: err}
 	}
 }
 
@@ -127,7 +144,7 @@ func (m *Model) applySetup() tea.Cmd {
 	m.setupApplyErr = nil
 	m.setupResult = SetupResult{}
 	m.setupViewport.GotoTop()
-	request := SetupRequest{Workspace: m.options.Workspace, Plan: m.setupSelected}
+	request := m.setupRequest()
 	return func() tea.Msg {
 		if m.backend == nil {
 			return setupAppliedMsg{generation: generation, err: fmt.Errorf("setup backend unavailable")}
@@ -157,6 +174,7 @@ func (m *Model) cancelSetupOperation() {
 	m.setupApplying = false
 	m.setupCancelAsked = false
 	m.setupConfirm = false
+	m.setupPreviewed = false
 }
 
 func (m *Model) finishSetupOperation() {
@@ -167,13 +185,21 @@ func (m *Model) finishSetupOperation() {
 }
 
 func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
-	if msg.generation != m.setupGeneration {
+	if msg.generation != m.setupGeneration || msg.request != m.setupRequest() {
 		return
 	}
 	m.finishSetupOperation()
 	m.setupPlanLoading = false
-	m.setupPlan = cloneSetupPlan(msg.value)
 	m.setupPlanErr = msg.err
+	if msg.err == nil {
+		m.setupPlan = cloneSetupPlan(msg.value)
+		m.setupPreviewRequest = msg.request
+		m.setupPreviewed = true
+		if !m.setupOverrides {
+			m.setupModelRefs = [3]string{msg.value.ModelEfficient, msg.value.ModelBalanced, msg.value.ModelFrontier}
+			m.setupModelEfforts = [3]string{msg.value.ModelEfficientEffort, msg.value.ModelBalancedEffort, msg.value.ModelFrontierEffort}
+		}
+	}
 	m.setupViewport.GotoTop()
 }
 
@@ -219,6 +245,9 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 	}
+	if m.setupModelEditing {
+		return m.updateModelEditorKey(msg)
+	}
 
 	switch msg.String() {
 	case "tab":
@@ -235,12 +264,18 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			m.setupConfirm = true
 		}
 		return true, nil
+	case "m":
+		m.setupModelEditing = true
+		m.setupModelSlot = 0
+		m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupEntryOverrides = m.setupModelRefs, m.setupModelEfforts, m.setupOverrides
+		return true, nil
 	case "r":
 		return true, m.loadSetupPlan()
 	case "esc":
 		m.setRoute(routeOverview)
 		return true, nil
 	case "j", "k", "up", "down", "pgup", "pgdown", "home", "end":
+		m.setupViewport.SetContent(strings.Join(m.setupRouteLines(), "\n"))
 		var cmd tea.Cmd
 		m.setupViewport, cmd = m.setupViewport.Update(msg)
 		return true, cmd
@@ -249,11 +284,131 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m Model) setupApplyAllowed() bool {
-	if m.setupPlanLoading || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready {
+	if m.setupPlanLoading || !m.setupPreviewed || m.setupPreviewRequest != m.setupRequest() || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || (m.setupOverrides && m.modelEditorError() != "") {
 		return false
 	}
 	action := classifySetup(m.setupPlan)
 	return action == "initial install" || action == "reinstall/update"
+}
+
+func (m Model) setupRequest() SetupRequest {
+	request := SetupRequest{Workspace: m.options.Workspace, Plan: m.setupSelected}
+	if m.setupOverrides {
+		request.ModelEfficient, request.ModelBalanced, request.ModelFrontier = m.setupModelRefs[0], m.setupModelRefs[1], m.setupModelRefs[2]
+		if m.modelProfileMixed() {
+			request.ModelEfficientEffort, request.ModelBalancedEffort, request.ModelFrontierEffort = m.setupModelEfforts[0], m.setupModelEfforts[1], m.setupModelEfforts[2]
+		}
+	}
+	return request
+}
+
+func (m *Model) updateModelEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.setupModelRefs, m.setupModelEfforts, m.setupOverrides = m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupEntryOverrides
+		m.setupModelEditing = false
+		return true, nil
+	case "enter":
+		if m.modelEditorError() == "" {
+			m.setupModelEditing = false
+			m.setupOverrides = true
+			return true, m.loadSetupPlan()
+		}
+		return true, nil
+	case "up", "k":
+		m.setupModelSlot = (m.setupModelSlot + 2) % 3
+		return true, nil
+	case "down", "j":
+		m.setupModelSlot = (m.setupModelSlot + 1) % 3
+		return true, nil
+	case "tab", "right", "l":
+		m.setupModelEfforts[m.setupModelSlot] = nextSetupEffort(m.setupModelEfforts[m.setupModelSlot])
+		return true, nil
+	case "backspace":
+		value := []rune(m.setupModelRefs[m.setupModelSlot])
+		if len(value) > 0 {
+			m.setupModelRefs[m.setupModelSlot] = string(value[:len(value)-1])
+		}
+		m.ensureMixedEfforts()
+		return true, nil
+	}
+	if msg.Text != "" {
+		m.setupModelRefs[m.setupModelSlot] += msg.Text
+		m.ensureMixedEfforts()
+		return true, nil
+	}
+	return true, nil
+}
+
+func (m *Model) ensureMixedEfforts() {
+	if m.modelProfileMixed() {
+		for index, effort := range m.setupModelEfforts {
+			if !validSetupPlan(effort) {
+				m.setupModelEfforts[index] = "medium"
+			}
+		}
+	}
+}
+
+func nextSetupEffort(value string) string {
+	for index, effort := range setupPlans {
+		if value == effort {
+			return setupPlans[(index+1)%len(setupPlans)]
+		}
+	}
+	return "medium"
+}
+
+func (m Model) modelProfileMixed() bool {
+	provider := setupModelProvider(m.setupModelRefs[0])
+	return provider == "" || provider != setupModelProvider(m.setupModelRefs[1]) || provider != setupModelProvider(m.setupModelRefs[2])
+}
+
+func setupModelProvider(reference string) string {
+	provider, _, _ := strings.Cut(reference, "/")
+	return provider
+}
+func (m Model) modelProfileChanged() bool {
+	return m.setupOverrides
+}
+func (m Model) modelEditorError() string {
+	for _, ref := range m.setupModelRefs {
+		if !validSetupModelReference(ref) {
+			return "Each slot needs a provider/model reference."
+		}
+	}
+	if m.modelProfileMixed() {
+		for _, effort := range m.setupModelEfforts {
+			if !validSetupPlan(effort) {
+				return "Mixed profiles require low, medium, high, or ultra for every slot."
+			}
+		}
+	} else {
+		for _, effort := range m.setupModelEfforts {
+			if effort != "" {
+				return "Per-slot efforts require mixed providers."
+			}
+		}
+	}
+	return ""
+}
+
+func validSetupModelReference(reference string) bool {
+	provider, model, found := strings.Cut(reference, "/")
+	return found && len(reference) <= 256 && strings.TrimSpace(reference) == reference && validSetupModelPart(provider, false) && validSetupModelPart(model, true)
+}
+
+func validSetupModelPart(value string, slash bool) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.' || slash && character == '/' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (m *Model) selectSetupPlan(offset int) tea.Cmd {
@@ -290,7 +445,9 @@ func (m *Model) resizeSetup() {
 
 func (m Model) renderSetupRoute() []string {
 	preview := m.setupViewport
+	offset := preview.YOffset()
 	preview.SetContent(strings.Join(m.setupRouteLines(), "\n"))
+	preview.SetYOffset(offset)
 	return strings.Split(strings.TrimRight(preview.View(), "\n"), "\n")
 }
 
@@ -299,6 +456,9 @@ func (m Model) setupRouteLines() []string {
 		return m.recoveryRouteLines()
 	}
 	lines := []string{"OPENCODE SETUP", "selected plan  " + sanitizeTerminal(m.setupSelected)}
+	if m.setupModelEditing {
+		return append(lines, m.modelEditorLines()...)
+	}
 	switch {
 	case m.setupApplying:
 		lines = append(lines, "", "APPLYING SETUP · VERIFIED PLAN", "Waiting for the setup service; step progress is unavailable.")
@@ -370,6 +530,9 @@ func (m Model) setupRouteLines() []string {
 		"model frontier   "+setupValue(plan.ModelFrontier),
 		setupHandshake(plan.HandshakeOK, plan.HandshakeStatus),
 	)
+	if err := m.modelEditorError(); err != "" && (m.setupModelEditing || m.setupOverrides) {
+		lines = append(lines, "✕ Model profile: "+err)
+	}
 	lines = append(lines, setupSelfInstallDetails(plan.SelfInstallUpdateAvailable, plan.SelfInstallRollbackAvailable, plan.SelfInstallActiveSHA256, plan.SelfInstallPreviousSHA256)...)
 	if plan.Blocker != "" {
 		lines = append(lines, "Blocker: "+sanitizeTerminal(plan.Blocker))
@@ -378,7 +541,14 @@ func (m Model) setupRouteLines() []string {
 		lines = append(lines, "no changes detected by preflight", "Apply is disabled. Press r to refresh the preflight.")
 	}
 	if m.setupConfirm {
-		lines = append(lines, "", "! CONFIRM "+strings.ToUpper(action), "No files change before y.", fmt.Sprintf("Apply this verified %d-step plan? [y] yes  [n/Esc] cancel", len(plan.Steps)))
+		lines = append(lines, "", "! CONFIRM "+strings.ToUpper(action), "No files change before y.")
+		if m.modelProfileChanged() {
+			if m.modelProfileMixed() {
+				lines = append(lines, "! Custom slots may have unknown availability; no remote probe was made.")
+			}
+			lines = append(lines, m.modelProfileSummary()...)
+		}
+		lines = append(lines, fmt.Sprintf("Apply this verified %d-step plan? [y] yes  [n/Esc] cancel", len(plan.Steps)))
 	}
 	lines = append(lines, "", fmt.Sprintf("%d-STEP PLAN (%d artifacts)", len(plan.Steps), plan.ArtifactCount))
 	for _, step := range plan.Steps {
@@ -403,6 +573,8 @@ func (m Model) setupHelp() string {
 		return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
 	case m.setupConfirm:
 		return "[y] apply  [n/Esc] cancel  No write occurs until y"
+	case m.setupModelEditing:
+		return "[j/k] slot  type/edit ref  [Tab] effort  [Enter] save  [Esc] cancel"
 	case m.setupSucceeded:
 		return "[r] reload preview  [Esc] Overview  [q] quit"
 	case m.setupApplyErr != nil:
@@ -414,8 +586,41 @@ func (m Model) setupHelp() string {
 		if classifySetup(m.setupPlan) == "no changes" {
 			return "[r] refresh preflight  [Tab] Backup & Recovery  [Esc] Overview"
 		}
-		return "[Tab] Recovery  [h/l] plan  [a] apply  [j/k] scroll  [r] refresh"
+		return "[m] model profile  [Tab] Recovery  [h/l] plan  [a] apply  [j/k] scroll"
 	}
+}
+
+func (m Model) modelEditorLines() []string {
+	lines := []string{"MODEL PROFILE EDITOR", "Refs are local inputs; custom availability is unknown (no remote probe)."}
+	for index, name := range []string{"efficient", "balanced", "frontier"} {
+		marker := " "
+		if index == m.setupModelSlot {
+			marker = "▸"
+		}
+		availability := m.setupPlan.ModelEfficientAvailability
+		if index == 1 {
+			availability = m.setupPlan.ModelBalancedAvailability
+		}
+		if index == 2 {
+			availability = m.setupPlan.ModelFrontierAvailability
+		}
+		if m.modelProfileChanged() {
+			availability = "unknown"
+		}
+		lines = append(lines, fmt.Sprintf("%s %-9s %s  effort=%s  availability=%s", marker, name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelEfforts[index]), setupValue(availability)))
+	}
+	if err := m.modelEditorError(); err != "" {
+		lines = append(lines, "✕ "+err)
+	}
+	return append(lines, "", "Enter previews valid inputs; Esc restores entry values.")
+}
+
+func (m Model) modelProfileSummary() []string {
+	lines := []string{"Model profile:"}
+	for index, name := range []string{"efficient", "balanced", "frontier"} {
+		lines = append(lines, fmt.Sprintf("  %s=%s effort=%s", name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelEfforts[index])))
+	}
+	return lines
 }
 
 func setupResultHasKnownState(result SetupResult) bool {

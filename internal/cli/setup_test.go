@@ -76,6 +76,37 @@ func TestSetupWizardAcceptsUltraModelPlan(t *testing.T) {
 	testutil.Require(t, code == 0 && stderr.Len() == 0 && fake.options.Integration.ModelPlan == sdd.PlanUltra && strings.Contains(stdout.String(), "Plan de modelos: ultra"), "exit=%d options=%+v stdout=%q stderr=%q", code, fake.options, stdout.String(), stderr.String())
 }
 
+func TestSetupWizardMixedSlotsCarryEffortsAndNeverClaimAuthorization(t *testing.T) {
+	plan := setupPlanFixture(true)
+	plan.Integration.ModelProvider = "mixed"
+	plan.Integration.ModelEfficient, plan.Integration.ModelBalanced, plan.Integration.ModelFrontier = "openai/fast", "anthropic/balanced", "acme/frontier"
+	plan.Integration.ModelEfficientEffort, plan.Integration.ModelBalancedEffort, plan.Integration.ModelFrontierEffort = sdd.EffortLow, sdd.EffortHigh, sdd.EffortUltra
+	plan.Integration.ModelEfficientSource, plan.Integration.ModelBalancedSource, plan.Integration.ModelFrontierSource = sdd.ModelSlotCatalog, sdd.ModelSlotCustom, sdd.ModelSlotCustom
+	plan.Integration.ModelEfficientAvailability, plan.Integration.ModelBalancedAvailability, plan.Integration.ModelFrontierAvailability = sdd.ModelSlotCatalogKnown, sdd.ModelSlotUnknown, sdd.ModelSlotUnknown
+	fake := &fakeSetupRuntime{plan: plan}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--preview", "--model-efficient", "openai/fast", "--model-balanced", "anthropic/balanced", "--model-frontier", "acme/frontier", "--model-efficient-effort", "low", "--model-balanced-effort", "high", "--model-frontier-effort", "ultra"}, strings.NewReader(""), &stdout, &stderr, fake)
+	testutil.Require(t, code == 0 && stderr.Len() == 0 && fake.options.Integration.ModelFrontierEffort == sdd.EffortUltra, "code=%d options=%+v stderr=%q", code, fake.options, stderr.String())
+	for _, expected := range []string{"Slot efficient: provider=openai ref=openai/fast effort=low source=catalog availability=catalog-known", "Slot balanced: provider=anthropic ref=anthropic/balanced effort=high source=custom availability=unknown", "Slot frontier: provider=acme ref=acme/frontier effort=ultra source=custom availability=unknown"} {
+		testutil.Require(t, strings.Contains(stdout.String(), expected), "missing %q: %s", expected, stdout.String())
+	}
+	testutil.Require(t, !strings.Contains(strings.ToLower(stdout.String()), "authorized"), "output claims authorization: %s", stdout.String())
+}
+
+func TestSetupWizardRejectsHomogeneousEffortOverride(t *testing.T) {
+	fake := &fakeSetupRuntime{plan: setupPlanFixture(true)}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--model-efficient", "openai/a", "--model-balanced", "openai/b", "--model-frontier", "openai/c", "--model-efficient-effort", "low", "--model-balanced-effort", "medium", "--model-frontier-effort", "high"}, strings.NewReader(""), &stdout, &stderr, fake)
+	testutil.Require(t, code == 2 && fake.planCalls == 0 && strings.Contains(stderr.String(), "per-slot efforts require mixed providers"), "code=%d calls=%d stderr=%q", code, fake.planCalls, stderr.String())
+}
+
+func TestSetupWizardRejectsMixedSlotsWithoutAllEffortsBeforePlanning(t *testing.T) {
+	fake := &fakeSetupRuntime{plan: setupPlanFixture(true)}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--model-efficient", "openai/a", "--model-balanced", "anthropic/b", "--model-frontier", "acme/c"}, strings.NewReader(""), &stdout, &stderr, fake)
+	testutil.Require(t, code == 2 && fake.planCalls == 0 && strings.Contains(stderr.String(), "all refs and efforts"), "code=%d calls=%d stderr=%q", code, fake.planCalls, stderr.String())
+}
+
 func TestSetupRendersBestEffortDirectoryDurability(t *testing.T) {
 	plan := setupPlanFixture(true)
 	plan.Integration.DirectoryDurability = "file-sync-namespace-best-effort"

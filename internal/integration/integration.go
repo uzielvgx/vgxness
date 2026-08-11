@@ -48,29 +48,38 @@ type Options struct {
 }
 
 type Result struct {
-	Provider                 string
-	State                    State
-	Path                     string
-	ArtifactSHA256           string
-	ToolPath                 string
-	ToolSHA256               string
-	Changed                  bool
-	BackupPath               string
-	ToolBackupPath           string
-	ModelPlan                sdd.Plan
-	ModelProvider            string
-	ModelEfficient           string
-	ModelBalanced            string
-	ModelFrontier            string
-	ManifestPath             string
-	ManifestSHA256           string
-	DefaultAgent             string
-	DefaultAgentPath         string
-	RestartRequired          bool
-	ArtifactCount            int
-	RetainedPredecessorCount int
-	RetainedPredecessorPath  string
-	DirectoryDurability      string
+	Provider                   string
+	State                      State
+	Path                       string
+	ArtifactSHA256             string
+	ToolPath                   string
+	ToolSHA256                 string
+	Changed                    bool
+	BackupPath                 string
+	ToolBackupPath             string
+	ModelPlan                  sdd.Plan
+	ModelProvider              string
+	ModelEfficient             string
+	ModelBalanced              string
+	ModelFrontier              string
+	ModelEfficientEffort       sdd.Effort
+	ModelBalancedEffort        sdd.Effort
+	ModelFrontierEffort        sdd.Effort
+	ModelEfficientSource       sdd.ModelSlotSource
+	ModelBalancedSource        sdd.ModelSlotSource
+	ModelFrontierSource        sdd.ModelSlotSource
+	ModelEfficientAvailability sdd.ModelSlotAvailability
+	ModelBalancedAvailability  sdd.ModelSlotAvailability
+	ModelFrontierAvailability  sdd.ModelSlotAvailability
+	ManifestPath               string
+	ManifestSHA256             string
+	DefaultAgent               string
+	DefaultAgentPath           string
+	RestartRequired            bool
+	ArtifactCount              int
+	RetainedPredecessorCount   int
+	RetainedPredecessorPath    string
+	DirectoryDurability        string
 }
 
 // ManagedArtifact identifies desired provider-owned content without exposing it.
