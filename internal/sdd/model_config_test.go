@@ -2,6 +2,7 @@ package sdd
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -164,5 +165,159 @@ func TestResolveOpenCodePlanV2UsesAuthoritativeSlotEfforts(t *testing.T) {
 		if resolved.Slots[capability].RequestedEffort != slot.RequestedEffort {
 			t.Fatalf("%s effort mutated: got %s want %s", capability, resolved.Slots[capability].RequestedEffort, slot.RequestedEffort)
 		}
+	}
+}
+
+func TestResolveOpenCodePlanV3PreservesCanonicalOrderAndIndependentAssignments(t *testing.T) {
+	inventory := []ManagedAgentIdentity{
+		{ArtifactKey: "agents/first.md", Role: RoleResearch, Class: ManagedAgentClassCore},
+		{ArtifactKey: "agents/second.md", Role: RoleResearch, Class: ManagedAgentClassSDD},
+		{ArtifactKey: "agents/third.md", Role: RoleApply, Class: ManagedAgentClassSDD},
+	}
+	config := ModelPlanConfigV3{SchemaVersion: 3, Provider: "mixed", Provenance: ModelPlanCLI, Assignments: map[string]ManagedAgentModelConfig{
+		"agents/third.md":  {Provider: "third", Reference: "third/apply", RequestedEffort: EffortUltra, Source: ModelSlotCustom, Availability: ModelSlotUnknown},
+		"agents/first.md":  {Provider: "openai", Reference: "openai/gpt-5.6-luna", RequestedEffort: EffortLow, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
+		"agents/second.md": {Provider: "second", Reference: "second/research", RequestedEffort: EffortHigh, Source: ModelSlotCustom, Availability: ModelSlotUnknown},
+	}}
+
+	resolved, err := ResolveOpenCodePlanV3(config, inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Provider != "mixed" || resolved.SchemaVersion != 3 || resolved.Provenance != ModelPlanCLI {
+		t.Fatalf("resolved metadata=%+v", resolved)
+	}
+	gotOrder := make([]string, 0, len(resolved.Assignments))
+	for _, assignment := range resolved.Assignments {
+		gotOrder = append(gotOrder, assignment.ArtifactKey)
+		if assignment.Provider+"/" == assignment.Model {
+			t.Fatalf("assignment was not independently resolved: %+v", assignment)
+		}
+	}
+	if want := []string{"agents/first.md", "agents/second.md", "agents/third.md"}; !reflect.DeepEqual(gotOrder, want) {
+		t.Fatalf("order=%v want=%v", gotOrder, want)
+	}
+	if resolved.Assignments[0].Role != resolved.Assignments[1].Role || resolved.Assignments[0].Model == resolved.Assignments[1].Model {
+		t.Fatalf("duplicate-role identities collapsed: %+v", resolved.Assignments)
+	}
+}
+
+func TestResolveOpenCodePlanV3Validation(t *testing.T) {
+	inventory := []ManagedAgentIdentity{{ArtifactKey: "agents/only.md", Role: RoleManager, Class: ManagedAgentClassCore}}
+	validAssignment := ManagedAgentModelConfig{Provider: "acme", Reference: "acme/model", RequestedEffort: EffortMedium, Source: ModelSlotCustom, Availability: ModelSlotUnknown}
+	valid := func() ModelPlanConfigV3 {
+		return ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: ModelPlanCLI, Assignments: map[string]ManagedAgentModelConfig{"agents/only.md": validAssignment}}
+	}
+	tests := map[string]func() (ModelPlanConfigV3, []ManagedAgentIdentity){
+		"wrong schema": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			c.SchemaVersion = 2
+			return c, inventory
+		},
+		"missing": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			delete(c.Assignments, "agents/only.md")
+			return c, inventory
+		},
+		"extra": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			c.Assignments["agents/extra.md"] = validAssignment
+			return c, inventory
+		},
+		"provider mismatch": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Provider = "other"
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"malformed reference": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Reference = "https://acme/model"
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"empty middle reference segment": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Reference = "acme//model"
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"empty trailing reference segment": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Reference = "acme/model/"
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"empty nested reference segment": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Reference = "acme/model//variant"
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"summary mismatch": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			c.Provider = "other"
+			return c, inventory
+		},
+		"invalid effort": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.RequestedEffort = ""
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"invalid source": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Source = "other"
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"custom known": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Availability = ModelSlotCatalogKnown
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"catalog unknown": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Source = ModelSlotCatalog
+			a.Availability = ModelSlotUnknown
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"catalog unrecognized": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			c := valid()
+			a := validAssignment
+			a.Source = ModelSlotCatalog
+			a.Availability = ModelSlotCatalogKnown
+			c.Assignments["agents/only.md"] = a
+			return c, inventory
+		},
+		"duplicate inventory": func() (ModelPlanConfigV3, []ManagedAgentIdentity) { return valid(), append(inventory, inventory[0]) },
+		"empty inventory key": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			return valid(), []ManagedAgentIdentity{{Role: RoleManager, Class: ManagedAgentClassCore}}
+		},
+		"invalid inventory role": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			return valid(), []ManagedAgentIdentity{{ArtifactKey: "agents/only.md", Role: "", Class: ManagedAgentClassCore}}
+		},
+		"invalid inventory class": func() (ModelPlanConfigV3, []ManagedAgentIdentity) {
+			return valid(), []ManagedAgentIdentity{{ArtifactKey: "agents/only.md", Role: RoleManager}}
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			config, candidateInventory := test()
+			if _, err := ResolveOpenCodePlanV3(config, candidateInventory); !errors.Is(err, ErrInvalid) && !errors.Is(err, ErrProviderMismatch) {
+				t.Fatalf("invalid v3 input accepted: err=%v", err)
+			}
+		})
 	}
 }

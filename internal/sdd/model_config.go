@@ -104,6 +104,62 @@ type OpenCodePlanV2 struct {
 	Provenance    ModelPlanProvenance               `json:"provenance"`
 }
 
+type ManagedAgentClass string
+
+const (
+	ManagedAgentClassCore   ManagedAgentClass = "core"
+	ManagedAgentClassReview ManagedAgentClass = "review"
+	ManagedAgentClassSDD    ManagedAgentClass = "sdd"
+)
+
+func (class ManagedAgentClass) Valid() bool {
+	return class == ManagedAgentClassCore || class == ManagedAgentClassReview || class == ManagedAgentClassSDD
+}
+
+// ManagedAgentIdentity is provider-owned metadata for one stable managed
+// artifact. ArtifactKey, rather than Role, is the assignment identity.
+type ManagedAgentIdentity struct {
+	ArtifactKey string            `json:"artifactKey"`
+	Role        Role              `json:"role"`
+	Class       ManagedAgentClass `json:"class"`
+}
+
+type ManagedAgentModelConfig struct {
+	Provider        string                `json:"provider"`
+	Reference       string                `json:"reference"`
+	RequestedEffort Effort                `json:"requestedEffort"`
+	Source          ModelSlotSource       `json:"source"`
+	Availability    ModelSlotAvailability `json:"availability"`
+}
+
+type ModelPlanConfigV3 struct {
+	SchemaVersion int                                `json:"schemaVersion"`
+	Provider      string                             `json:"provider"`
+	Assignments   map[string]ManagedAgentModelConfig `json:"assignments"`
+	Provenance    ModelPlanProvenance                `json:"provenance"`
+}
+
+type OpenCodeAgentAssignmentV3 struct {
+	ArtifactKey     string                `json:"artifactKey"`
+	Role            Role                  `json:"role"`
+	Class           ManagedAgentClass     `json:"class"`
+	Provider        string                `json:"provider"`
+	Model           string                `json:"model"`
+	RequestedEffort Effort                `json:"requestedEffort"`
+	Effort          Effort                `json:"effort"`
+	Variant         OpenCodeVariant       `json:"variant"`
+	Degradation     Degradation           `json:"degradation"`
+	Source          ModelSlotSource       `json:"source"`
+	Availability    ModelSlotAvailability `json:"availability"`
+}
+
+type OpenCodePlanV3 struct {
+	SchemaVersion int                         `json:"schemaVersion"`
+	Provider      string                      `json:"provider"`
+	Assignments   []OpenCodeAgentAssignmentV3 `json:"assignments"`
+	Provenance    ModelPlanProvenance         `json:"provenance"`
+}
+
 func DefaultModelPlanConfig() ModelPlanConfig {
 	return ModelPlanConfig{
 		SchemaVersion: 1, ActivePlan: PlanMedium, Provider: "openai",
@@ -236,6 +292,114 @@ func ResolveOpenCodePlanV2(config ModelPlanConfigV2) (OpenCodePlanV2, error) {
 		}
 	}
 	return result, nil
+}
+
+// ResolveOpenCodePlanV3 validates the keyed configuration and emits resolved
+// assignments in inventory order. Callers must supply their canonical managed
+// artifact inventory; map iteration cannot influence the result.
+func ResolveOpenCodePlanV3(config ModelPlanConfigV3, inventory []ManagedAgentIdentity) (OpenCodePlanV3, error) {
+	if config.SchemaVersion != 3 || config.Provenance != ModelPlanDefault && config.Provenance != ModelPlanCLI || len(inventory) == 0 || len(config.Assignments) != len(inventory) {
+		return OpenCodePlanV3{}, ErrInvalid
+	}
+
+	seen := make(map[string]bool, len(inventory))
+	resolved := make([]OpenCodeAgentAssignmentV3, 0, len(inventory))
+	summary := ""
+	for _, identity := range inventory {
+		if !validManagedAgentIdentity(identity) || seen[identity.ArtifactKey] {
+			return OpenCodePlanV3{}, ErrInvalid
+		}
+		seen[identity.ArtifactKey] = true
+		assignment, ok := config.Assignments[identity.ArtifactKey]
+		if !ok {
+			return OpenCodePlanV3{}, ErrInvalid
+		}
+		provider, effort, degradation, err := resolveManagedAgentModel(assignment)
+		if err != nil {
+			return OpenCodePlanV3{}, err
+		}
+		if summary == "" {
+			summary = provider
+		} else if summary != provider {
+			summary = "mixed"
+		}
+		resolved = append(resolved, OpenCodeAgentAssignmentV3{
+			ArtifactKey: identity.ArtifactKey, Role: identity.Role, Class: identity.Class,
+			Provider: provider, Model: assignment.Reference, RequestedEffort: assignment.RequestedEffort,
+			Effort: effort, Variant: OpenCodeVariantForEffort(effort), Degradation: degradation,
+			Source: assignment.Source, Availability: assignment.Availability,
+		})
+	}
+	if config.Provider != summary {
+		return OpenCodePlanV3{}, fmt.Errorf("%w: configured provider %q does not match assignments", ErrProviderMismatch, config.Provider)
+	}
+	return OpenCodePlanV3{SchemaVersion: 3, Provider: summary, Assignments: resolved, Provenance: config.Provenance}, nil
+}
+
+func resolveManagedAgentModel(assignment ManagedAgentModelConfig) (string, Effort, Degradation, error) {
+	provider, err := modelProvider(assignment.Reference)
+	if err != nil || !validV3ModelReference(assignment.Reference) || !assignment.RequestedEffort.Valid() {
+		return "", "", Degradation{}, ErrInvalid
+	}
+	if assignment.Provider != provider {
+		return "", "", Degradation{}, fmt.Errorf("%w: assignment provider %q does not match reference", ErrProviderMismatch, assignment.Provider)
+	}
+	effort := assignment.RequestedEffort
+	degradation := Degradation{}
+	switch assignment.Source {
+	case ModelSlotCatalog:
+		model := catalogModelByReference(assignment.Reference)
+		if assignment.Availability != ModelSlotCatalogKnown || model.ID == "" {
+			return "", "", Degradation{}, ErrInvalid
+		}
+		var degraded bool
+		effort, degraded = resolveEffort(model.SupportedEfforts, assignment.RequestedEffort)
+		if degraded {
+			degradation = Degradation{Degraded: true, Reason: fmt.Sprintf("requested effort %s is unsupported by %s; using highest declared effort %s", assignment.RequestedEffort, assignment.Reference, effort)}
+		}
+	case ModelSlotCustom:
+		if assignment.Availability != ModelSlotUnknown {
+			return "", "", Degradation{}, ErrInvalid
+		}
+	default:
+		return "", "", Degradation{}, ErrInvalid
+	}
+	return provider, effort, degradation, nil
+}
+
+func validV3ModelReference(reference string) bool {
+	for _, segment := range strings.Split(reference, "/") {
+		if segment == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func validManagedAgentIdentity(identity ManagedAgentIdentity) bool {
+	if !identity.Class.Valid() || !validRole(identity.Role) || !strings.HasPrefix(identity.ArtifactKey, "agents/") || !strings.HasSuffix(identity.ArtifactKey, ".md") {
+		return false
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(identity.ArtifactKey, "agents/"), ".md")
+	return name != "" && !strings.Contains(name, "/") && safeModelPart(name, false)
+}
+
+func validRole(role Role) bool {
+	for _, candidate := range AllRoles() {
+		if role == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func catalogModelByReference(reference string) Model {
+	for _, model := range DefaultOpenAICatalog().Models {
+		if model.ID == reference {
+			return model
+		}
+	}
+	return Model{}
 }
 
 func OpenCodeVariantForEffort(effort Effort) OpenCodeVariant {
