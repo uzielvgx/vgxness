@@ -79,7 +79,7 @@ func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
 	_ = store.Close()
 	store = openPath(t, path)
 	defer store.Close()
-	got, err := store.Search(context.Background(), Search{Query: "restart", Project: "project-a"})
+	got, err := store.Search(context.Background(), Search{Query: "restart", Project: "project-a", Scope: ScopeProject})
 	testutil.Require(t, err == nil && len(got) == 1 && got[0].ID == "obs-1", "restart lost data: %+v %v", got, err)
 }
 
@@ -423,6 +423,56 @@ func TestSQLiteMemoryStore_SaveTopicUpsertsSameBoundaryAtomically(t *testing.T) 
 	testutil.Require(t, err == nil && got.Content == second.Content && len(got.References) == 0, "rejected upsert mutated original: %+v %v", got, err)
 }
 
+func TestSQLiteMemoryStore_TopicUpsertPreservesProvenance(t *testing.T) {
+	store := openTestStore(t)
+	first := observation("obs-1", "project-a", "first topic")
+	first.TopicKey = "architecture/store"
+	first.Provenance = Provenance{Producer: "first", SourceProvider: "source", SourceID: "one"}
+	first = mustSave(t, store, first)
+
+	changed := first
+	changed.Content = "changed topic"
+	changed.Provenance.Producer = "second"
+	_, err := store.Save(context.Background(), changed)
+	testutil.Require(t, errors.Is(err, ErrConflict), "provenance change accepted: %v", err)
+	stored, err := store.Get(context.Background(), first.ID, first.Project, first.Scope)
+	testutil.Require(t, err == nil && stored.Provenance == first.Provenance && stored.Content == first.Content, "conflicting upsert mutated stored observation: %+v %v", stored, err)
+
+	same := first
+	same.Content = "same provenance topic"
+	got, err := store.Save(context.Background(), same)
+	testutil.Require(t, err == nil && got.ID == first.ID && got.Provenance == first.Provenance && got.Content == same.Content, "same provenance upsert rejected: %+v %v", got, err)
+}
+
+func TestStore_SaveAndUpdateRejectOversizedFields(t *testing.T) {
+	store := openTestStore(t)
+	for _, test := range []struct {
+		name  string
+		apply func(*Observation)
+	}{
+		{"content", func(item *Observation) { item.Content = strings.Repeat("界", 4097) }},
+		{"title", func(item *Observation) { item.Title = strings.Repeat("界", 257) }},
+		{"references", func(item *Observation) {
+			item.References = make([]string, 51)
+			for i := range item.References {
+				item.References[i] = fmt.Sprintf("reference-%d", i)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := observation("invalid-"+test.name, "project-a", "valid")
+			test.apply(&invalid)
+			_, err := store.Save(context.Background(), invalid)
+			testutil.Require(t, errors.Is(err, ErrInvalid), "Save accepted oversized %s: %v", test.name, err)
+
+			existing := mustSave(t, store, observation("existing-"+test.name, "project-a", "valid"))
+			test.apply(&existing)
+			_, err = store.Update(context.Background(), existing)
+			testutil.Require(t, errors.Is(err, ErrInvalid), "Update accepted oversized %s: %v", test.name, err)
+		})
+	}
+}
+
 func TestStore_RejectsInvalidDuplicateBoundaryAndCancelledWrites(t *testing.T) {
 	store := openTestStore(t)
 	_, err := store.Save(context.Background(), Observation{})
@@ -454,7 +504,7 @@ func TestStore_MetadataRoundTrip(t *testing.T) {
 	item.Provenance = Provenance{Producer: "agent", SourceProvider: "engram", SourceID: "external-1"}
 	item.ReviewAfter = &review
 	mustSave(t, store, item)
-	got, err := store.Search(context.Background(), Search{Query: "metadata", Project: "project-a"})
+	got, err := store.Search(context.Background(), Search{Query: "metadata", Project: "project-a", Scope: ScopeProject})
 	testutil.Require(t, err == nil && len(got) == 1 && got[0].Session == item.Session && got[0].Provenance == item.Provenance && got[0].ReviewAfter.Equal(review), "metadata mismatch: %+v %v", got, err)
 }
 
@@ -541,7 +591,7 @@ func TestSQLiteMemoryStore_SearchGetIsolationAndOrder(t *testing.T) {
 
 func TestStore_SearchRejectsUnsafeInputAndCancellation(t *testing.T) {
 	store := openTestStore(t)
-	for _, search := range []Search{{Project: "p"}, {Query: `"`, Project: "p"}, {Query: "ok", Project: "p", Scope: "global"}} {
+	for _, search := range []Search{{Project: "p"}, {Query: `"`, Project: "p"}, {Query: "ok", Project: "p"}, {Query: "ok", Project: "p", Scope: "global"}} {
 		_, err := store.Search(context.Background(), search)
 		testutil.Require(t, errors.Is(err, ErrInvalid) && !strings.Contains(strings.ToUpper(err.Error()), "SELECT"), "unsafe error: %v", err)
 	}

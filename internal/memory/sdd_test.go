@@ -28,7 +28,7 @@ func TestMigrateV4ToV5PreservesMemoryAndAddsIsolatedSDD(t *testing.T) {
 	defer store.Close()
 	version, err := store.Health(context.Background())
 	testutil.Require(t, err == nil && version == 11, "health=%d err=%v", version, err)
-	found, err := store.Search(context.Background(), Search{Project: "project-a", Query: "preserved"})
+	found, err := store.Search(context.Background(), Search{Project: "project-a", Query: "preserved", Scope: ScopeProject})
 	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "obs-old", "memory changed: %+v %v", found, err)
 	var tables int
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections')`).Scan(&tables))
@@ -145,7 +145,7 @@ func TestSDDRepositoryLifecycleIsolationAndSummaryListing(t *testing.T) {
 
 	observations, err := store.Recent(ctx, Recent{Project: "project-a", Scope: ScopeProject})
 	testutil.Require(t, err == nil && len(observations) == 0, "SDD leaked into recent: %+v %v", observations, err)
-	observations, err = store.Search(ctx, Search{Project: "project-a", Query: "proposal"})
+	observations, err = store.Search(ctx, Search{Project: "project-a", Query: "proposal", Scope: ScopeProject})
 	testutil.Require(t, err == nil && len(observations) == 0, "SDD leaked into search: %+v %v", observations, err)
 	_, err = store.Forget(ctx, research.ID, "project-a", ScopeProject)
 	if !errors.Is(err, ErrNotFound) {

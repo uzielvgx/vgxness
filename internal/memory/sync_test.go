@@ -1396,7 +1396,7 @@ func TestSyncLocalWriteUpdateAndForgetEnqueueFailureRollBack(t *testing.T) {
 			}
 			testutil.Require(t, errors.Is(err, ErrCorrupt), "%s error=%v", operation, err)
 			got, getErr := store.Get(context.Background(), item.ID, item.Project, item.Scope)
-			found, searchErr := store.Search(context.Background(), Search{Query: "original", Project: item.Project})
+			found, searchErr := store.Search(context.Background(), Search{Query: "original", Project: item.Project, Scope: ScopeProject})
 			testutil.Require(t, getErr == nil && got.State == StateActive && got.Content == "original token" && searchErr == nil && len(found) == 1 && found[0].ID == item.ID, "%s state=%+v get=%v search=%+v/%v", operation, got, getErr, found, searchErr)
 		})
 	}
@@ -1643,7 +1643,7 @@ func TestApplyPulledChangeUpdateArchiveAndReferenceValidation(t *testing.T) {
 	testutil.NoError(t, store.ApplyPulledChange(ctx, history, archive))
 	got, err := store.Get(ctx, "second", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.State == StateArchived && got.Content == "updated token" && len(got.References) == 1, "observation=%+v err=%v", got, err)
-	found, searchErr := store.Search(ctx, Search{Query: "updated", Project: "project"})
+	found, searchErr := store.Search(ctx, Search{Query: "updated", Project: "project", Scope: ScopeProject})
 	testutil.Require(t, searchErr == nil && len(found) == 0, "fts=%+v err=%v", found, searchErr)
 	forward := pulledChange(t, 6, 5, pulledObservationMutation("second", syncservice.MutationUpdate, 4, syncservice.LifecycleActive, "no", nil))
 	err = store.ApplyPulledChange(ctx, history, forward)
@@ -1811,7 +1811,7 @@ func TestApplyPulledChangeArchivedAndCorruptInboxRegressions(t *testing.T) {
 		archive := pulledChange(t, 2, 1, pulledObservationMutation("archived", syncservice.MutationCreate, 0, syncservice.LifecycleArchived, "archived token", nil))
 		testutil.NoError(t, store.ApplyPulledChange(ctx, history, project))
 		testutil.NoError(t, store.ApplyPulledChange(ctx, history, archive))
-		found, err := store.Search(ctx, Search{Query: "archived", Project: "project"})
+		found, err := store.Search(ctx, Search{Query: "archived", Project: "project", Scope: ScopeProject})
 		testutil.Require(t, err == nil && len(found) == 0, "search=%+v err=%v", found, err)
 	})
 	t.Run("invalid review after has no effects", func(t *testing.T) {

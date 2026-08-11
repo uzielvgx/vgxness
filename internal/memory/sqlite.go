@@ -737,7 +737,7 @@ func (s *Store) updateTx(ctx context.Context, tx *sql.Tx, existing, item Observa
 	if err := rejectTombstoned(ctx, tx, existing.ID); err != nil {
 		return Observation{}, err
 	}
-	if existing.Project != item.Project || existing.Scope != item.Scope || existing.CreatedAt != item.CreatedAt && !item.CreatedAt.IsZero() {
+	if existing.Project != item.Project || existing.Scope != item.Scope || existing.Provenance != item.Provenance || existing.CreatedAt != item.CreatedAt && !item.CreatedAt.IsZero() {
 		return Observation{}, fmt.Errorf("%w: identity boundary cannot change", ErrConflict)
 	}
 	if existing.State == StateArchived || !(existing.State == item.State || existing.State == StateActive && (item.State == StateNeedsReview || item.State == StateArchived) || existing.State == StateNeedsReview && (item.State == StateActive || item.State == StateArchived)) {
@@ -776,7 +776,7 @@ func (s *Store) Search(ctx context.Context, filter Search) ([]Observation, error
 	if err := cancelled(ctx); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(filter.Query) == "" || filter.Project == "" || filter.Scope != "" && filter.Scope != ScopeProject && filter.Scope != ScopePersonal || filter.Limit < 0 || filter.Limit > 100 {
+	if strings.TrimSpace(filter.Query) == "" || filter.Project == "" || filter.Scope != ScopeProject && filter.Scope != ScopePersonal || filter.Limit < 0 || filter.Limit > 100 {
 		return nil, fmt.Errorf("%w: invalid search input", ErrInvalid)
 	}
 	for _, value := range filter.Types {
@@ -910,7 +910,7 @@ func rejectTombstoned(ctx context.Context, tx *sql.Tx, id string) error {
 	return nil
 }
 func validateObservation(item Observation) error {
-	if item.Project == "" || item.Scope != ScopeProject && item.Scope != ScopePersonal || strings.TrimSpace(item.Type) == "" || strings.TrimSpace(item.Content) == "" || item.Provenance.Producer == "" || item.State != StateActive && item.State != StateNeedsReview && item.State != StateArchived {
+	if item.Project == "" || item.Scope != ScopeProject && item.Scope != ScopePersonal || strings.TrimSpace(item.Type) == "" || strings.TrimSpace(item.Content) == "" || len([]rune(item.Content)) > 4096 || len([]rune(item.Title)) > 256 || len(item.References) > 50 || item.Provenance.Producer == "" || item.State != StateActive && item.State != StateNeedsReview && item.State != StateArchived {
 		return fmt.Errorf("%w: observation fields are invalid", ErrInvalid)
 	}
 	if (item.Provenance.SourceProvider == "") != (item.Provenance.SourceID == "") {
