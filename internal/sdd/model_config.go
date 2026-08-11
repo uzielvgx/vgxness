@@ -508,14 +508,22 @@ func catalogModel(capability Capability, reference string) Model {
 }
 
 func modelProvider(reference string) (string, error) {
-	if reference == "" || len(reference) > 256 || strings.TrimSpace(reference) != reference || strings.ContainsAny(reference, "?#@=\\\r\n\t") {
+	segments := strings.Split(reference, "/")
+	if len(reference) > 512 || len(segments) < 2 || strings.HasPrefix(reference, "@") {
 		return "", ErrInvalid
 	}
-	provider, model, ok := strings.Cut(reference, "/")
-	if !ok || provider == "" || model == "" || !safeModelPart(provider, false) || !safeModelPart(model, true) {
-		return "", ErrInvalid
+	for _, segment := range segments {
+		if segment == "" || len(segment) > 256 {
+			return "", ErrInvalid
+		}
+		for _, character := range segment {
+			if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("-_.:@+", character) {
+				continue
+			}
+			return "", ErrInvalid
+		}
 	}
-	return provider, nil
+	return segments[0], nil
 }
 
 func safeModelPart(value string, slash bool) bool {

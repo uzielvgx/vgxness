@@ -47,6 +47,10 @@ type SetupStatus struct {
 	HandshakeOK      bool
 	HandshakeStatus  string
 	ModelPlan        string
+
+	ModelSchemaVersion int
+	ModelAssignments   *[SetupModelAssignmentCount]SetupModelAssignment
+	statusGeneration   int
 }
 
 type Backend interface {
@@ -203,6 +207,7 @@ type Model struct {
 	setupCancelAsked       bool
 	setupSucceeded         bool
 	setupGeneration        int
+	setupStatusGeneration  int
 	cancelSetup            context.CancelFunc
 	setupView              setupView
 	setupModelEditing      bool
@@ -232,6 +237,22 @@ type Model struct {
 	recoveryRefreshPending bool
 	recoveryRefreshWarning bool
 	cancelRecovery         context.CancelFunc
+
+	setupAssignmentRows         [SetupModelAssignmentCount]SetupModelAssignmentRequest
+	setupAssignmentEntryRows    [SetupModelAssignmentCount]SetupModelAssignmentRequest
+	setupAssignmentsSeeded      bool
+	setupAssignmentsExact       bool
+	setupAssignmentsEntry       bool
+	setupAssignmentsEdited      bool
+	setupAssignmentsEntryEdited bool
+	setupCatalog                []SetupCatalogModel
+	setupCatalogErr             error
+	setupCatalogLoading         bool
+	setupCatalogGeneration      int
+	cancelSetupCatalog          context.CancelFunc
+	setupEditorPlan             SetupPlan
+	setupEditorRequest          SetupRequest
+	setupEditorPreviewed        bool
 
 	spinner spinner.Model
 	help    help.Model
@@ -289,9 +310,10 @@ func (m Model) load() tea.Cmd {
 	}
 	setupStatus := func() tea.Msg {
 		if m.backend == nil {
-			return setupLoadedMsg{generation: generation, err: fmt.Errorf("setup backend unavailable")}
+			return setupLoadedMsg{generation: generation, value: SetupStatus{statusGeneration: m.setupStatusGeneration}, err: fmt.Errorf("setup backend unavailable")}
 		}
 		value, err := m.backend.SetupStatus(m.loadCtx, request)
+		value.statusGeneration = m.setupStatusGeneration
 		return setupLoadedMsg{generation: generation, value: value, err: err}
 	}
 	memories := func() tea.Msg {
@@ -374,7 +396,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if item, ok := m.sections.SelectedItem().(sectionItem); ok {
 					m.setRoute(item.route)
 					if item.route == routeSetup {
-						return m, m.loadSetupPlan()
+						return m, tea.Batch(m.loadSetupPlan(), m.loadSetupCatalog(false))
 					}
 				}
 				return m, nil
@@ -420,10 +442,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelCompletedLoad()
 		return m, nil
 	case setupLoadedMsg:
-		if msg.generation != m.generation {
+		if msg.generation != m.generation || msg.value.statusGeneration != m.setupStatusGeneration {
 			return m, nil
 		}
-		m.setup, m.setupErr, m.setupLoading = msg.value, msg.err, false
+		m.setup, m.setupErr, m.setupLoading = cloneSetupStatus(msg.value), msg.err, false
 		m.cancelCompletedLoad()
 		return m, nil
 	case memoriesLoadedMsg:
@@ -448,6 +470,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case setupAppliedMsg:
 		m.handleSetupApplied(msg)
+		return m, nil
+	case setupCatalogLoadedMsg:
+		m.handleSetupCatalogLoaded(msg)
 		return m, nil
 	case recoveryLoadedMsg:
 		m.handleRecoveryLoaded(msg)
@@ -727,6 +752,8 @@ func (m *Model) setRoute(next route) {
 		m.setupModelEfforts = [3]string{}
 		m.setupPreviewRequest = SetupRequest{}
 		m.setupPreviewed = false
+		m.resetSetupAssignments()
+		m.seedSetupAssignments(SetupPlan{ModelSchemaVersion: m.setup.ModelSchemaVersion, ModelAssignments: m.setup.ModelAssignments})
 		m.setupViewport.GotoTop()
 		m.resetRecoveryState()
 	}

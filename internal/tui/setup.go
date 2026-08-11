@@ -53,6 +53,43 @@ type SetupModelAssignment struct {
 	Availability      string
 }
 
+type SetupCatalogModel struct {
+	Provider     string
+	Reference    string
+	Source       string
+	Availability string
+}
+
+type setupCatalogBackend interface {
+	ModelCatalog(context.Context, bool) ([]SetupCatalogModel, error)
+}
+
+type setupCatalogLoadedMsg struct {
+	generation int
+	rows       []SetupCatalogModel
+	err        error
+}
+
+type setupAgentIdentity struct{ ArtifactKey, Name, Role, Class string }
+
+var setupAgentRows = [SetupModelAssignmentCount]setupAgentIdentity{
+	{"agents/vgxness-manager.md", "manager", "manager", "core"},
+	{"agents/explore.md", "explore", "research", "core"},
+	{"agents/general.md", "general", "implementation", "core"},
+	{"agents/vgxness-verifier.md", "verifier", "verification", "core"},
+	{"agents/vgxness-review-risk.md", "review-risk", "risk", "review"},
+	{"agents/vgxness-review-readability.md", "review-readability", "readability", "review"},
+	{"agents/vgxness-review-reliability.md", "review-reliability", "reliability", "review"},
+	{"agents/vgxness-review-resilience.md", "review-resilience", "resilience", "review"},
+	{"agents/vgxness-review-refuter.md", "review-refuter", "refuter", "review"},
+	{"agents/vgxness-sdd-research.md", "sdd-research", "research", "sdd"},
+	{"agents/vgxness-sdd-proposal.md", "sdd-proposal", "proposal", "sdd"},
+	{"agents/vgxness-sdd-spec.md", "sdd-spec", "spec", "sdd"},
+	{"agents/vgxness-sdd-design.md", "sdd-design", "design", "sdd"},
+	{"agents/vgxness-sdd-tasks.md", "sdd-tasks", "tasks", "sdd"},
+	{"agents/vgxness-sdd-apply.md", "sdd-apply", "apply", "sdd"},
+}
+
 type SetupStep struct {
 	Number      int
 	Title       string
@@ -147,6 +184,46 @@ func (m *Model) initSetup() {
 	m.resetRecoveryState()
 }
 
+func (m *Model) loadSetupCatalog(refresh bool) tea.Cmd {
+	m.cancelSetupCatalogLoad()
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.cancelSetupCatalog = cancel
+	m.setupCatalogGeneration++
+	m.setupCatalogLoading = true
+	m.setupCatalogErr = nil
+	return m.setupCatalogCommand(ctx, refresh, m.setupCatalogGeneration)
+}
+
+func (m Model) setupCatalogCommand(ctx context.Context, refresh bool, generation int) tea.Cmd {
+	return func() tea.Msg {
+		backend, ok := m.backend.(setupCatalogBackend)
+		if !ok {
+			return setupCatalogLoadedMsg{generation: generation, err: fmt.Errorf("model catalog unavailable")}
+		}
+		rows, err := backend.ModelCatalog(ctx, refresh)
+		return setupCatalogLoadedMsg{generation: generation, rows: append([]SetupCatalogModel(nil), rows...), err: err}
+	}
+}
+
+func (m *Model) handleSetupCatalogLoaded(msg setupCatalogLoadedMsg) {
+	if msg.generation != m.setupCatalogGeneration {
+		return
+	}
+	m.cancelSetupCatalogLoad()
+	m.setupCatalogLoading = false
+	m.setupCatalogErr = msg.err
+	if msg.err == nil {
+		m.setupCatalog = append([]SetupCatalogModel(nil), msg.rows...)
+	}
+}
+
+func (m *Model) cancelSetupCatalogLoad() {
+	if m.cancelSetupCatalog != nil {
+		m.cancelSetupCatalog()
+		m.cancelSetupCatalog = nil
+	}
+}
+
 func (m *Model) loadSetupPlan() tea.Cmd {
 	ctx, generation := m.startSetupOperation()
 	m.setupPlanLoading = true
@@ -169,6 +246,7 @@ func (m *Model) loadSetupPlan() tea.Cmd {
 
 func (m *Model) applySetup() tea.Cmd {
 	ctx, generation := m.startSetupOperation()
+	m.setupStatusGeneration++
 	m.setupConfirm = false
 	m.setupApplying = true
 	m.setupCancelAsked = false
@@ -208,6 +286,9 @@ func (m *Model) cancelSetupOperation() {
 	m.setupCancelAsked = false
 	m.setupConfirm = false
 	m.setupPreviewed = false
+	m.cancelSetupCatalogLoad()
+	m.setupCatalogGeneration++
+	m.setupCatalogLoading = false
 }
 
 func (m *Model) finishSetupOperation() {
@@ -218,7 +299,7 @@ func (m *Model) finishSetupOperation() {
 }
 
 func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
-	if msg.generation != m.setupGeneration || setupPreviewRequest(msg.request) != setupPreviewRequest(m.setupRequest()) {
+	if msg.generation != m.setupGeneration || !setupRequestsEqual(msg.request, m.setupRequest()) {
 		return
 	}
 	m.finishSetupOperation()
@@ -232,6 +313,10 @@ func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
 			m.setupModelRefs = [3]string{msg.value.ModelEfficient, msg.value.ModelBalanced, msg.value.ModelFrontier}
 			m.setupModelEfforts = [3]string{msg.value.ModelEfficientEffort, msg.value.ModelBalancedEffort, msg.value.ModelFrontierEffort}
 		}
+		if !m.setupAssignmentsExact {
+			m.seedSetupAssignments(msg.value)
+		}
+		m.setupPreviewRequest = m.setupRequest()
 	}
 	m.setupViewport.GotoTop()
 }
@@ -247,14 +332,15 @@ func (m *Model) handleSetupApplied(msg setupAppliedMsg) {
 	m.setupSucceeded = msg.err == nil
 	m.setupCancelAsked = false
 	if msg.err == nil {
-		m.setup = SetupStatus{
+		m.setup = cloneSetupStatus(SetupStatus{
 			Provider: msg.value.Plan.Provider, Ready: true,
 			SelfInstallState: msg.value.SelfInstallState, SelfInstallPath: msg.value.SelfInstallPath,
 			IntegrationState: msg.value.IntegrationState, IntegrationPath: msg.value.IntegrationPath,
 			ArtifactCount: msg.value.ArtifactCount,
 			HandshakeOK:   msg.value.HandshakeOK, HandshakeStatus: msg.value.HandshakeStatus,
-			ModelPlan: msg.value.Plan.ModelPlan,
-		}
+			ModelPlan:          msg.value.Plan.ModelPlan,
+			ModelSchemaVersion: msg.value.Plan.ModelSchemaVersion, ModelAssignments: msg.value.Plan.ModelAssignments,
+		})
 		m.setupErr = nil
 		m.setupLoading = false
 	}
@@ -275,6 +361,9 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, nil
 		case "n", "esc":
 			m.setupConfirm = false
+			return true, nil
+		case "j", "k":
+		default:
 			return true, nil
 		}
 	}
@@ -300,7 +389,10 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "m":
 		m.setupModelEditing = true
 		m.setupModelSlot = 0
+		m.setupAssignmentEntryRows, m.setupAssignmentsEntry = m.setupAssignmentRows, m.setupAssignmentsExact
+		m.setupAssignmentsEntryEdited = m.setupAssignmentsEdited
 		m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupEntryOverrides = m.setupModelRefs, m.setupModelEfforts, m.setupOverrides
+		m.setupEditorPlan, m.setupEditorRequest, m.setupEditorPreviewed = cloneSetupPlan(m.setupPlan), cloneSetupRequest(m.setupPreviewRequest), m.setupPreviewed
 		return true, nil
 	case "r":
 		return true, m.loadSetupPlan()
@@ -317,7 +409,7 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m Model) setupApplyAllowed() bool {
-	if m.setupPlanLoading || !m.setupPreviewed || m.setupPlan.Digest == "" || m.setupPreviewRequest != m.setupRequest() || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || (m.setupOverrides && m.modelEditorError() != "") {
+	if m.setupPlanLoading || !m.setupPreviewed || m.setupPlan.Digest == "" || !setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || ((m.setupOverrides || m.setupAssignmentsExact) && m.modelEditorError() != "") {
 		return false
 	}
 	action := classifySetup(m.setupPlan)
@@ -326,6 +418,11 @@ func (m Model) setupApplyAllowed() bool {
 
 func (m Model) setupRequest() SetupRequest {
 	request := SetupRequest{Workspace: m.options.Workspace, Plan: m.setupSelected}
+	if m.setupAssignmentsExact {
+		rows := m.setupAssignmentRows
+		request.ModelAssignments = &rows
+		return request
+	}
 	if m.setupOverrides {
 		request.ModelEfficient, request.ModelBalanced, request.ModelFrontier = m.setupModelRefs[0], m.setupModelRefs[1], m.setupModelRefs[2]
 		if m.modelProfileMixed() {
@@ -336,6 +433,9 @@ func (m Model) setupRequest() SetupRequest {
 }
 
 func (m *Model) updateModelEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.setupAssignmentsSeeded {
+		return m.updateAssignmentEditorKey(msg)
+	}
 	switch msg.String() {
 	case "esc":
 		m.setupModelRefs, m.setupModelEfforts, m.setupOverrides = m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupEntryOverrides
@@ -373,6 +473,104 @@ func (m *Model) updateModelEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return true, nil
 }
 
+func (m *Model) updateAssignmentEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.setupAssignmentRows, m.setupAssignmentsExact, m.setupAssignmentsEdited = m.setupAssignmentEntryRows, m.setupAssignmentsEntry, m.setupAssignmentsEntryEdited
+		m.setupModelEditing = false
+		m.restoreSetupEditorPreview()
+		return true, nil
+	case "enter":
+		if m.modelEditorError() == "" {
+			m.setupModelEditing = false
+			return true, m.loadSetupPlan()
+		}
+	case "up", "k":
+		m.setupModelSlot = (m.setupModelSlot + SetupModelAssignmentCount - 1) % SetupModelAssignmentCount
+	case "down", "j":
+		m.setupModelSlot = (m.setupModelSlot + 1) % SetupModelAssignmentCount
+	case "left", "h":
+		m.selectCatalogModel(-1)
+	case "right", "l":
+		m.selectCatalogModel(1)
+	case "[":
+		m.selectAssignmentEffort(-1)
+	case "]":
+		m.selectAssignmentEffort(1)
+	case "r":
+		return true, m.loadSetupCatalog(true)
+	case "q":
+		return false, nil
+	}
+	return true, nil
+}
+
+func (m *Model) selectCatalogModel(offset int) {
+	if len(m.setupCatalog) == 0 {
+		return
+	}
+	current := m.setupAssignmentRows[m.setupModelSlot].Reference
+	index := 0
+	for candidate, row := range m.setupCatalog {
+		if row.Reference == current {
+			index = candidate
+			break
+		}
+	}
+	index = (index + offset + len(m.setupCatalog)) % len(m.setupCatalog)
+	selected := m.setupCatalog[index]
+	row := &m.setupAssignmentRows[m.setupModelSlot]
+	row.Provider, row.Reference = selected.Provider, selected.Reference
+	row.Source, row.Availability = selected.Source, selected.Availability
+	m.markAssignmentEdit()
+}
+
+func (m *Model) selectAssignmentEffort(offset int) {
+	row := &m.setupAssignmentRows[m.setupModelSlot]
+	index := setupPlanIndex(row.RequestedEffort)
+	row.RequestedEffort = setupPlans[(index+offset+len(setupPlans))%len(setupPlans)]
+	m.markAssignmentEdit()
+}
+
+func (m *Model) markAssignmentEdit() {
+	m.setupAssignmentsExact = true
+	m.setupAssignmentsEdited = true
+	m.setupPreviewed = false
+	m.setupConfirm = false
+	m.setupPlan.Digest = ""
+}
+
+func (m *Model) resetSetupAssignments() {
+	m.setupAssignmentRows = [SetupModelAssignmentCount]SetupModelAssignmentRequest{}
+	m.setupAssignmentEntryRows = [SetupModelAssignmentCount]SetupModelAssignmentRequest{}
+	m.setupAssignmentsSeeded, m.setupAssignmentsExact, m.setupAssignmentsEntry = false, false, false
+	m.setupAssignmentsEdited, m.setupAssignmentsEntryEdited = false, false
+	m.setupEditorPlan, m.setupEditorRequest, m.setupEditorPreviewed = SetupPlan{}, SetupRequest{}, false
+}
+
+func (m *Model) seedSetupAssignments(plan SetupPlan) {
+	ordered, ok := orderedSetupAssignments(plan.ModelAssignments)
+	if !ok {
+		return
+	}
+	var rows [SetupModelAssignmentCount]SetupModelAssignmentRequest
+	for index, assignment := range ordered {
+		rows[index] = SetupModelAssignmentRequest{
+			ArtifactKey: assignment.ArtifactKey, Provider: assignment.Provider, Reference: assignment.Model,
+			RequestedEffort: assignment.RequestedEffort, Source: assignment.Source, Availability: assignment.Availability,
+		}
+	}
+	m.setupAssignmentRows = rows
+	m.setupAssignmentsSeeded = true
+	m.setupAssignmentsExact = plan.ModelSchemaVersion >= 3
+}
+
+func (m *Model) restoreSetupEditorPreview() {
+	if setupRequestsEqual(m.setupEditorRequest, m.setupRequest()) {
+		m.setupPlan, m.setupPreviewRequest, m.setupPreviewed = cloneSetupPlan(m.setupEditorPlan), cloneSetupRequest(m.setupEditorRequest), m.setupEditorPreviewed
+	}
+}
+
 func (m *Model) ensureMixedEfforts() {
 	if m.modelProfileMixed() {
 		for index, effort := range m.setupModelEfforts {
@@ -402,9 +600,17 @@ func setupModelProvider(reference string) string {
 	return provider
 }
 func (m Model) modelProfileChanged() bool {
-	return m.setupOverrides
+	return m.setupOverrides || m.setupAssignmentsEdited
 }
 func (m Model) modelEditorError() string {
+	if m.setupAssignmentsSeeded {
+		for index, row := range m.setupAssignmentRows {
+			if row.ArtifactKey != setupAgentRows[index].ArtifactKey || !validSetupModelReference(row.Reference) || !validSetupPlan(row.RequestedEffort) || row.Provider != setupModelProvider(row.Reference) {
+				return "Every agent needs a valid catalog provider/model and effort."
+			}
+		}
+		return ""
+	}
 	for _, ref := range m.setupModelRefs {
 		if !validSetupModelReference(ref) {
 			return "Each slot needs a provider/model reference."
@@ -427,16 +633,24 @@ func (m Model) modelEditorError() string {
 }
 
 func validSetupModelReference(reference string) bool {
-	provider, model, found := strings.Cut(reference, "/")
-	return found && len(reference) <= 256 && strings.TrimSpace(reference) == reference && validSetupModelPart(provider, false) && validSetupModelPart(model, true)
+	segments := strings.Split(reference, "/")
+	if len(reference) > 512 || len(segments) < 2 || strings.HasPrefix(reference, "@") {
+		return false
+	}
+	for _, segment := range segments {
+		if !validSetupModelPart(segment) {
+			return false
+		}
+	}
+	return true
 }
 
-func validSetupModelPart(value string, slash bool) bool {
-	if value == "" {
+func validSetupModelPart(value string) bool {
+	if value == "" || len(value) > 256 {
 		return false
 	}
 	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.' || slash && character == '/' {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("-_.:@+", character) {
 			continue
 		}
 		return false
@@ -490,6 +704,9 @@ func (m Model) setupRouteLines() []string {
 	}
 	lines := []string{"OPENCODE SETUP", "selected plan  " + sanitizeTerminal(m.setupSelected)}
 	if m.setupModelEditing {
+		if m.setupAssignmentsSeeded {
+			return append(lines, m.modelAssignmentLines()...)
+		}
 		return append(lines, m.modelEditorLines()...)
 	}
 	switch {
@@ -512,7 +729,7 @@ func (m Model) setupRouteLines() []string {
 			setupHandshake(result.HandshakeOK, result.HandshakeStatus),
 		)
 		lines = append(lines, setupSelfInstallDetails(result.SelfInstallUpdateAvailable, result.SelfInstallRollbackAvailable, result.SelfInstallActiveSHA256, result.SelfInstallPreviousSHA256)...)
-		lines = append(lines, setupPlanModelProfile(result.Plan)...)
+		lines = append(lines, setupPlanModelProfile(result.Plan, m.setupViewport.Width())...)
 		if result.RestartRequired {
 			lines = append(lines, "! Restart OpenCode to load the selected model plan.")
 		} else {
@@ -576,7 +793,9 @@ func (m Model) setupRouteLines() []string {
 	}
 	if m.setupConfirm {
 		lines = append(lines, "", "! CONFIRM "+strings.ToUpper(action), "No files change before y.")
-		if m.modelProfileChanged() {
+		if m.setupAssignmentsExact {
+			lines = append(lines, setupAssignmentRequestProfile(m.setupAssignmentRows, m.setupViewport.Width())...)
+		} else if m.modelProfileChanged() {
 			if m.modelProfileMixed() {
 				lines = append(lines, "! Custom slots may have unknown availability; no remote probe was made.")
 			}
@@ -606,11 +825,14 @@ func (m Model) setupHelp() string {
 	case m.setupApplying:
 		return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
 	case m.setupConfirm:
-		return "[y] apply  [n/Esc] cancel  No write occurs until y"
+		return "[j/k] scroll  [y] apply  [n/Esc] cancel  No write occurs until y"
 	case m.setupModelEditing:
+		if m.setupAssignmentsSeeded {
+			return "[↑↓/j/k] row  [←→] model  [[/]] effort  [r] refresh  [Enter] preview  [Esc] cancel  [q] quit"
+		}
 		return "[j/k] slot  type/edit ref  [Tab] effort  [Enter] save  [Esc] cancel"
 	case m.setupSucceeded:
-		return "[r] reload preview  [Esc] Overview  [q] quit"
+		return "[j/k] scroll  [r] reload preview  [Esc] Overview  [q] quit"
 	case m.setupApplyErr != nil:
 		return "[r] inspect/refresh  [Esc] Overview"
 	default:
@@ -622,6 +844,37 @@ func (m Model) setupHelp() string {
 		}
 		return "[m] model profile  [Tab] Recovery  [h/l] plan  [a] apply  [j/k] scroll"
 	}
+}
+
+func (m Model) modelAssignmentLines() []string {
+	lines := []string{"AGENT ASSIGNMENT MATRIX · 15 agents", "agent                  class/role          provider/model · effort"}
+	for index, identity := range setupAgentRows {
+		marker := " "
+		if index == m.setupModelSlot {
+			marker = "▸"
+		}
+		row := m.setupAssignmentRows[index]
+		reference := setupValue(row.Reference)
+		maxReference := max(12, m.setupViewport.Width()-54)
+		if len([]rune(reference)) > maxReference {
+			reference = string([]rune(reference)[:maxReference-1]) + "…"
+		}
+		lines = append(lines, fmt.Sprintf("%s %-22s %-19s %s · %s", marker, identity.Name, identity.Class+"/"+identity.Role, reference, setupValue(row.RequestedEffort)))
+	}
+	switch {
+	case m.setupCatalogLoading:
+		lines = append(lines, "... Loading local model catalog...")
+	case m.setupCatalogErr != nil:
+		lines = append(lines, "✕ Model catalog unavailable. [r] Retry explicit refresh.")
+	case len(m.setupCatalog) == 0:
+		lines = append(lines, "! No locally cached models. [r] Refresh explicitly.")
+	default:
+		lines = append(lines, fmt.Sprintf("✓ %d catalog models · selection proves catalog presence, not authorization", len(m.setupCatalog)))
+	}
+	if err := m.modelEditorError(); err != "" {
+		lines = append(lines, "✕ "+err)
+	}
+	return lines
 }
 
 func (m Model) modelEditorLines() []string {
@@ -662,7 +915,28 @@ func setupPreviewRequest(request SetupRequest) SetupRequest {
 	return request
 }
 
-func setupPlanModelProfile(plan SetupPlan) []string {
+func setupRequestsEqual(left, right SetupRequest) bool {
+	left, right = setupPreviewRequest(left), setupPreviewRequest(right)
+	if left.ModelAssignments == nil || right.ModelAssignments == nil {
+		return left == right
+	}
+	leftRows, rightRows := *left.ModelAssignments, *right.ModelAssignments
+	left.ModelAssignments, right.ModelAssignments = nil, nil
+	return left == right && leftRows == rightRows
+}
+
+func setupPlanModelProfile(plan SetupPlan, width int) []string {
+	if plan.ModelAssignments != nil {
+		lines := []string{"EXACT AGENT ASSIGNMENTS"}
+		ordered, ok := orderedSetupAssignments(plan.ModelAssignments)
+		if !ok {
+			return append(lines, "! Invalid agent identity set; exact profile not applied.")
+		}
+		for index, row := range ordered {
+			lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Model, row.RequestedEffort, width)
+		}
+		return lines
+	}
 	if plan.ModelEfficient == "" && plan.ModelBalanced == "" && plan.ModelFrontier == "" {
 		return nil
 	}
@@ -671,6 +945,51 @@ func setupPlanModelProfile(plan SetupPlan) []string {
 		"model balanced   " + setupValue(plan.ModelBalanced) + "  effort=" + setupValue(plan.ModelBalancedEffort) + "  source=" + setupValue(plan.ModelBalancedSource) + "  availability=" + setupValue(plan.ModelBalancedAvailability),
 		"model frontier   " + setupValue(plan.ModelFrontier) + "  effort=" + setupValue(plan.ModelFrontierEffort) + "  source=" + setupValue(plan.ModelFrontierSource) + "  availability=" + setupValue(plan.ModelFrontierAvailability),
 	}
+}
+
+func setupAssignmentRequestProfile(rows [SetupModelAssignmentCount]SetupModelAssignmentRequest, width int) []string {
+	lines := []string{"EXACT AGENT ASSIGNMENTS"}
+	for index, row := range rows {
+		lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Reference, row.RequestedEffort, width)
+	}
+	return lines
+}
+
+func appendSetupAssignmentProfile(lines []string, name, reference, effort string, width int) []string {
+	name, reference, effort = sanitizeTerminal(name), sanitizeTerminal(reference), sanitizeTerminal(effort)
+	line := "  " + name + "  " + reference + "  effort=" + effort
+	width = max(20, width)
+	if len(line) <= width {
+		return append(lines, line)
+	}
+	lines = append(lines, "  "+name)
+	prefix, continuation := "    model ", "          "
+	for len(reference) > 0 {
+		count := min(len(reference), width-len(prefix))
+		lines, reference, prefix = append(lines, prefix+reference[:count]), reference[count:], continuation
+	}
+	return append(lines, "    effort="+effort)
+}
+
+func orderedSetupAssignments(rows *[SetupModelAssignmentCount]SetupModelAssignment) ([SetupModelAssignmentCount]SetupModelAssignment, bool) {
+	var ordered [SetupModelAssignmentCount]SetupModelAssignment
+	if rows == nil {
+		return ordered, false
+	}
+	for _, row := range rows {
+		index := -1
+		for candidate, identity := range setupAgentRows {
+			if row.ArtifactKey == identity.ArtifactKey && row.Role == identity.Role && row.Class == identity.Class {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 || ordered[index].ArtifactKey != "" {
+			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
+		}
+		ordered[index] = row
+	}
+	return ordered, true
 }
 
 func setupResultHasKnownState(result SetupResult) bool {
@@ -738,6 +1057,22 @@ func cloneSetupPlan(value SetupPlan) SetupPlan {
 	if value.ModelAssignments != nil {
 		assignments := *value.ModelAssignments
 		value.ModelAssignments = &assignments
+	}
+	return value
+}
+
+func cloneSetupStatus(value SetupStatus) SetupStatus {
+	if value.ModelAssignments != nil {
+		assignments := *value.ModelAssignments
+		value.ModelAssignments = &assignments
+	}
+	return value
+}
+
+func cloneSetupRequest(value SetupRequest) SetupRequest {
+	if value.ModelAssignments != nil {
+		rows := *value.ModelAssignments
+		value.ModelAssignments = &rows
 	}
 	return value
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/vgxness/vgxness/internal/modelcatalog"
+	"github.com/vgxness/vgxness/internal/providers/opencode"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
@@ -32,6 +34,25 @@ type recordingTUISetupRuntime struct {
 	applyOptions setupflow.Options
 	plan         setupflow.Plan
 	result       setupflow.Result
+}
+
+type recordingCatalog struct {
+	refresh   bool
+	discovers int
+	refreshes int
+	snapshot  modelcatalog.Snapshot
+}
+
+func (catalog *recordingCatalog) Discover(context.Context) (modelcatalog.Snapshot, error) {
+	catalog.refresh = false
+	catalog.discovers++
+	return catalog.snapshot, nil
+}
+
+func (catalog *recordingCatalog) Refresh(context.Context) (modelcatalog.Snapshot, error) {
+	catalog.refresh = true
+	catalog.refreshes++
+	return catalog.snapshot, nil
 }
 
 func (runtime *recordingTUISetupRuntime) Status(context.Context, setupflow.Options) (setupflow.Plan, error) {
@@ -299,4 +320,20 @@ func TestTUISetupPlanAssignmentRowsAreMappedAndCopied(t *testing.T) {
 	testutil.Require(t, row.ArtifactKey == rows[0].ArtifactKey && row.Role == string(rows[0].Role) && row.Class == string(rows[0].Class) && row.Provider == rows[0].Provider && row.Model == rows[0].Model && row.RequestedEffort == string(rows[0].RequestedEffort) && row.Effort == string(rows[0].Effort) && row.Variant == string(rows[0].Variant) && row.Degraded && row.DegradationReason == "bounded" && row.Source == string(rows[0].Source) && row.Availability == string(rows[0].Availability), "row=%+v", row)
 	plan.ModelAssignments[0].Model = "mutated/tui"
 	testutil.Require(t, rows[0].Model == "acme/frontier", "TUI plan aliases integration rows: %+v", rows[0])
+}
+
+func TestTUIBackendCatalogMapsNeutralRowsAndRefreshFlag(t *testing.T) {
+	catalog := &recordingCatalog{snapshot: modelcatalog.Snapshot{Models: []string{"acme/a:b@c+d", "other/nested/model"}}}
+	backend := tuiBackend{catalog: catalog}
+	rows, err := backend.ModelCatalog(context.Background(), false)
+	testutil.Require(t, err == nil && !catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 0 && len(rows) == 2 && rows[0] == (tui.SetupCatalogModel{Provider: "acme", Reference: "acme/a:b@c+d", Source: "custom", Availability: "unknown"}), "rows=%+v err=%v", rows, err)
+	var requestRows [tui.SetupModelAssignmentCount]tui.SetupModelAssignmentRequest
+	for index, identity := range opencode.ModelAgentInventoryV3() {
+		requestRows[index] = tui.SetupModelAssignmentRequest{ArtifactKey: identity.ArtifactKey, Provider: rows[0].Provider, Reference: rows[0].Reference, RequestedEffort: "ultra", Source: rows[0].Source, Availability: rows[0].Availability}
+	}
+	options, err := tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", ModelAssignments: &requestRows})
+	resolved, err := sdd.ResolveOpenCodePlanV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: sdd.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
+	testutil.Require(t, err == nil && resolved.Assignments[0].Variant == sdd.VariantXHigh && resolved.Assignments[0].Effort == sdd.EffortUltra && !resolved.Assignments[0].Degradation.Degraded, "resolved=%+v err=%v", resolved, err)
+	rows, err = backend.ModelCatalog(context.Background(), true)
+	testutil.Require(t, err == nil && catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 1 && rows[0].Reference == "acme/a:b@c+d", "refreshed rows=%+v err=%v", rows, err)
 }
