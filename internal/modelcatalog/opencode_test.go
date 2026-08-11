@@ -88,6 +88,7 @@ func TestDiscoverRejectsMalformedOutput(t *testing.T) {
 		{name: "missing model", output: "provider/\n"},
 		{name: "missing nested segment", output: "provider/model//variant\n"},
 		{name: "missing separator", output: "model\n"},
+		{name: "leading at", output: "@provider/model\n"},
 		{name: "whitespace", output: "provider/model name\n"},
 		{name: "control", output: "provider/model\x00\n"},
 		{name: "ansi", output: "\x1b[31mprovider/model\x1b[0m\n"},

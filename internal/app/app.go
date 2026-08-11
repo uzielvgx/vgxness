@@ -16,6 +16,7 @@ import (
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/vgxness/vgxness/internal/modelcatalog"
 	"github.com/vgxness/vgxness/internal/opencodebackup"
 	"github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
@@ -25,6 +26,9 @@ import (
 	"github.com/vgxness/vgxness/internal/skills"
 	"github.com/vgxness/vgxness/internal/tui"
 )
+
+var _ [integration.ModelAssignmentCount - tui.SetupModelAssignmentCount]struct{}
+var _ [tui.SetupModelAssignmentCount - integration.ModelAssignmentCount]struct{}
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runWithMCP(ctx, args, stdin, stdout, stderr, tui.Run, cli.RunMCP)
@@ -81,6 +85,7 @@ func runWithMCP(ctx context.Context, args []string, stdin io.Reader, stdout, std
 			setup:      setupRuntime,
 			recovery:   setupRuntime,
 			memory:     appruntime.NewMemory("cli", true),
+			catalog:    modelcatalog.NewOpenCode("", nil, modelcatalog.Options{}),
 		}
 		return launchTUI(ctx, stdin, stdout, stderr, backend, tui.Options{Workspace: workspace})
 	}
@@ -121,11 +126,39 @@ type tuiMemoryRuntime interface {
 	Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error)
 }
 
+type tuiModelCatalog interface {
+	Discover(context.Context) (modelcatalog.Snapshot, error)
+	Refresh(context.Context) (modelcatalog.Snapshot, error)
+}
+
 type tuiBackend struct {
 	inspection tuiInspectionRuntime
 	setup      tuiSetupRuntime
 	recovery   tuiRecoveryRuntime
 	memory     tuiMemoryRuntime
+	catalog    tuiModelCatalog
+}
+
+func (backend tuiBackend) ModelCatalog(ctx context.Context, refresh bool) ([]tui.SetupCatalogModel, error) {
+	if backend.catalog == nil {
+		return nil, fmt.Errorf("model catalog unavailable")
+	}
+	var snapshot modelcatalog.Snapshot
+	var err error
+	if refresh {
+		snapshot, err = backend.catalog.Refresh(ctx)
+	} else {
+		snapshot, err = backend.catalog.Discover(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]tui.SetupCatalogModel, len(snapshot.Models))
+	for index, reference := range snapshot.Models {
+		provider, _, _ := strings.Cut(reference, "/")
+		rows[index] = tui.SetupCatalogModel{Provider: provider, Reference: reference, Source: "custom", Availability: "unknown"}
+	}
+	return rows, nil
 }
 
 func (backend tuiBackend) Inspect(ctx context.Context, request tui.Request) (tui.Inspection, error) {
@@ -153,6 +186,7 @@ func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) 
 		SkillsState: preview.SkillsState, SkillsPath: preview.SkillsPath, SkillsFileCount: preview.SkillsFileCount,
 		ArtifactCount: preview.ArtifactCount,
 		HandshakeOK:   preview.HandshakeOK, HandshakeStatus: preview.HandshakeStatus, ModelPlan: preview.ModelPlan,
+		ModelSchemaVersion: preview.ModelSchemaVersion, ModelAssignments: preview.ModelAssignments,
 	}, nil
 }
 
@@ -377,7 +411,9 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 	var modelAssignments *[tui.SetupModelAssignmentCount]tui.SetupModelAssignment
 	if plan.Integration.ModelAssignments != nil {
 		modelAssignments = new([tui.SetupModelAssignmentCount]tui.SetupModelAssignment)
-		for index, row := range plan.Integration.ModelAssignments {
+		limit := min(len(plan.Integration.ModelAssignments), len(modelAssignments))
+		for index := range limit {
+			row := plan.Integration.ModelAssignments[index]
 			modelAssignments[index] = tui.SetupModelAssignment{
 				ArtifactKey: row.ArtifactKey, Role: string(row.Role), Class: string(row.Class), Provider: row.Provider, Model: row.Model,
 				RequestedEffort: string(row.RequestedEffort), Effort: string(row.Effort), Variant: string(row.Variant),

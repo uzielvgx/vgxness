@@ -56,7 +56,7 @@ func parseSnapshot(output []byte, source Source) (Snapshot, error) {
 }
 
 func validReference(reference string) (string, bool) {
-	if reference == "" || len(reference) > maxReferenceBytes {
+	if reference == "" || len(reference) > maxReferenceBytes || strings.HasPrefix(reference, "@") {
 		return "", false
 	}
 	segments := strings.Split(reference, "/")

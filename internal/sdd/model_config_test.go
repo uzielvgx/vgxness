@@ -3,6 +3,7 @@ package sdd
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -175,7 +176,7 @@ func TestResolveOpenCodePlanV3PreservesCanonicalOrderAndIndependentAssignments(t
 		{ArtifactKey: "agents/third.md", Role: RoleApply, Class: ManagedAgentClassSDD},
 	}
 	config := ModelPlanConfigV3{SchemaVersion: 3, Provider: "mixed", Provenance: ModelPlanCLI, Assignments: map[string]ManagedAgentModelConfig{
-		"agents/third.md":  {Provider: "third", Reference: "third/apply", RequestedEffort: EffortUltra, Source: ModelSlotCustom, Availability: ModelSlotUnknown},
+		"agents/third.md":  {Provider: "third", Reference: "third/ns:model@beta+fast", RequestedEffort: EffortUltra, Source: ModelSlotCustom, Availability: ModelSlotUnknown},
 		"agents/first.md":  {Provider: "openai", Reference: "openai/gpt-5.6-luna", RequestedEffort: EffortLow, Source: ModelSlotCatalog, Availability: ModelSlotCatalogKnown},
 		"agents/second.md": {Provider: "second", Reference: "second/research", RequestedEffort: EffortHigh, Source: ModelSlotCustom, Availability: ModelSlotUnknown},
 	}}
@@ -199,6 +200,11 @@ func TestResolveOpenCodePlanV3PreservesCanonicalOrderAndIndependentAssignments(t
 	}
 	if resolved.Assignments[0].Role != resolved.Assignments[1].Role || resolved.Assignments[0].Model == resolved.Assignments[1].Model {
 		t.Fatalf("duplicate-role identities collapsed: %+v", resolved.Assignments)
+	}
+	for reference, valid := range map[string]bool{"openai/gpt-5.6": true, "provider/nested/model": true, "openai/a:b@c+d": true, "p/" + strings.Repeat("a", 256) + "/" + strings.Repeat("b", 253): true, "": false, "provider": false, "@provider/model": false, "/model": false, "provider/": false, "provider//model": false, "p/a b": false, "p/a?b": false, "p/a#b": false, "p/a=b": false, `p/a\b`: false, "p/a\nb": false, "p/" + strings.Repeat("a", 257): false, "p/" + strings.Repeat("a", 256) + "/" + strings.Repeat("b", 254): false} {
+		if _, err := modelProvider(reference); (err == nil) != valid {
+			t.Fatalf("modelProvider(%q) error=%v, valid=%t", reference, err, valid)
+		}
 	}
 }
 
