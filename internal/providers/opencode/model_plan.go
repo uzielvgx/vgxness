@@ -36,6 +36,8 @@ type modelPlanManifest struct {
 	Resolved      *sdd.OpenCodePlan      `json:"resolved,omitempty"`
 	ConfigV2      *sdd.ModelPlanConfigV2 `json:"configV2,omitempty"`
 	ResolvedV2    *sdd.OpenCodePlanV2    `json:"resolvedV2,omitempty"`
+	ConfigV3      *sdd.ModelPlanConfigV3 `json:"configV3,omitempty"`
+	ResolvedV3    *sdd.OpenCodePlanV3    `json:"resolvedV3,omitempty"`
 	Artifacts     map[string]string      `json:"artifacts"`
 }
 
@@ -44,6 +46,8 @@ type modelPlanBundle struct {
 	resolved   sdd.OpenCodePlan
 	configV2   *sdd.ModelPlanConfigV2
 	resolvedV2 *sdd.OpenCodePlanV2
+	configV3   *sdd.ModelPlanConfigV3
+	resolvedV3 *sdd.OpenCodePlanV3
 	agents     map[string][]byte
 	manifest   []byte
 }
@@ -72,6 +76,18 @@ func buildModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, erro
 	return encodeModelPlanBundleV2(config, resolved, agents)
 }
 
+func buildModelPlanBundleV3(config sdd.ModelPlanConfigV3) (modelPlanBundle, error) {
+	resolved, err := ResolveModelPlanV3(config)
+	if err != nil {
+		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
+	}
+	agents, err := modelBoundAgentsV3(resolved)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	return encodeModelPlanBundleV3(config, resolved, agents)
+}
+
 func encodeModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, agents map[string][]byte) (modelPlanBundle, error) {
 	manifest := modelPlanManifest{SchemaVersion: 1, ManagedBy: "vgxness", Config: &config, Resolved: &resolved, Artifacts: make(map[string]string, len(agents))}
 	for name, content := range agents {
@@ -98,25 +114,64 @@ func encodeModelPlanBundleV2(config sdd.ModelPlanConfigV2, resolved sdd.OpenCode
 	return modelPlanBundle{configV2: &config, resolvedV2: &resolved, agents: agents, manifest: data}, nil
 }
 
+func encodeModelPlanBundleV3(config sdd.ModelPlanConfigV3, resolved sdd.OpenCodePlanV3, agents map[string][]byte) (modelPlanBundle, error) {
+	manifest := modelPlanManifest{SchemaVersion: 3, ManagedBy: "vgxness", ConfigV3: &config, ResolvedV3: &resolved, Artifacts: make(map[string]string, len(agents))}
+	for name, content := range agents {
+		manifest.Artifacts[filepath.ToSlash(filepath.Join("agents", name))] = artifactSHA256(content)
+	}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return modelPlanBundle{}, fmt.Errorf("%w: encode model plan", integration.ErrInvalid)
+	}
+	data = append(data, '\n')
+	return modelPlanBundle{configV3: &config, resolvedV3: &resolved, agents: agents, manifest: data}, nil
+}
+
 func requestedModelPlan(options integration.Options, configDirectory string) (modelPlanBundle, error) {
 	explicit := options.ModelPlan != "" || options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != ""
+	v3Requested := options.ModelAssignments != nil
+	if v3Requested && (explicit || hasSlotEffort(options)) {
+		return modelPlanBundle{}, fmt.Errorf("%w: per-agent assignments cannot be combined with model slots", integration.ErrInvalid)
+	}
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	base := sdd.DefaultModelPlanConfig()
 	var installedBundle modelPlanBundle
 	var installedV2 *sdd.ModelPlanConfigV2
+	var installedV3 *sdd.ModelPlanConfigV3
 	if data, err := readRegularFile(manifestPath); err == nil {
 		installed, bundle, parseErr := parseInstalledModelPlanManifest(data)
 		if parseErr != nil {
 			return modelPlanBundle{}, parseErr
 		}
 		installedBundle = bundle
-		if installed.ConfigV2 != nil {
+		if installed.ConfigV3 != nil {
+			installedV3 = installed.ConfigV3
+		} else if installed.ConfigV2 != nil {
 			installedV2 = installed.ConfigV2
 		} else {
 			base = *installed.Config
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan manifest", integration.ErrConflict)
+	}
+	if v3Requested {
+		assignments := make(map[string]sdd.ManagedAgentModelConfig, len(*options.ModelAssignments))
+		provider := ""
+		for key, assignment := range *options.ModelAssignments {
+			assignments[key] = assignment
+			if provider == "" {
+				provider = assignment.Provider
+			} else if provider != assignment.Provider {
+				provider = "mixed"
+			}
+		}
+		return buildModelPlanBundleV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: provider, Assignments: assignments, Provenance: sdd.ModelPlanCLI})
+	}
+	if installedV3 != nil {
+		if explicit || hasSlotEffort(options) {
+			return modelPlanBundle{}, fmt.Errorf("%w: installed per-agent plan requires complete per-agent assignments", integration.ErrInvalid)
+		}
+		return installedBundle, nil
 	}
 	if installedV2 != nil {
 		if !explicit && !hasSlotEffort(options) {
@@ -291,11 +346,15 @@ func decodeModelPlanManifest(data []byte) (modelPlanManifest, error) {
 	}
 	switch manifest.SchemaVersion {
 	case 1:
-		if manifest.Config == nil || manifest.Resolved == nil || manifest.ConfigV2 != nil || manifest.ResolvedV2 != nil || manifest.Artifacts == nil {
+		if !manifestHasOnlyFields(data, "schemaVersion", "managedBy", "config", "resolved", "artifacts") || manifest.Config == nil || manifest.Resolved == nil || manifest.ConfigV2 != nil || manifest.ResolvedV2 != nil || manifest.ConfigV3 != nil || manifest.ResolvedV3 != nil || manifest.Artifacts == nil {
 			return modelPlanManifest{}, integration.ErrDrift
 		}
 	case 2:
-		if manifest.Config != nil || manifest.Resolved != nil || manifest.ConfigV2 == nil || manifest.ResolvedV2 == nil || manifest.Artifacts == nil {
+		if !manifestHasOnlyFields(data, "schemaVersion", "managedBy", "configV2", "resolvedV2", "artifacts") || manifest.Config != nil || manifest.Resolved != nil || manifest.ConfigV2 == nil || manifest.ResolvedV2 == nil || manifest.ConfigV3 != nil || manifest.ResolvedV3 != nil || manifest.Artifacts == nil {
+			return modelPlanManifest{}, integration.ErrDrift
+		}
+	case 3:
+		if !manifestHasOnlyFields(data, "schemaVersion", "managedBy", "configV3", "resolvedV3", "artifacts") || manifest.Config != nil || manifest.Resolved != nil || manifest.ConfigV2 != nil || manifest.ResolvedV2 != nil || manifest.ConfigV3 == nil || manifest.ResolvedV3 == nil || manifest.Artifacts == nil {
 			return modelPlanManifest{}, integration.ErrDrift
 		}
 	default:
@@ -304,11 +363,35 @@ func decodeModelPlanManifest(data []byte) (modelPlanManifest, error) {
 	return manifest, nil
 }
 
+func manifestHasOnlyFields(data []byte, expected ...string) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil || len(fields) != len(expected) {
+		return false
+	}
+	for _, field := range expected {
+		if _, ok := fields[field]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func modelPlanBundleForDecodedManifest(data []byte, manifest modelPlanManifest) (modelPlanBundle, error) {
+	if manifest.SchemaVersion == 3 {
+		return modelPlanBundleForManifestV3(data, *manifest.ConfigV3)
+	}
 	if manifest.SchemaVersion == 2 {
 		return modelPlanBundleForManifestV2(data, *manifest.ConfigV2)
 	}
 	return modelPlanBundleForManifest(data, *manifest.Config)
+}
+
+func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (modelPlanBundle, error) {
+	current, err := buildModelPlanBundleV3(config)
+	if err != nil || !bytes.Equal(current.manifest, data) {
+		return modelPlanBundle{}, integration.ErrDrift
+	}
+	return current, nil
 }
 
 func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
@@ -623,6 +706,75 @@ func modelBoundAgentsV2(plan sdd.OpenCodePlanV2) (map[string][]byte, error) {
 	return modelBoundAgents(legacy)
 }
 
+func modelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error) {
+	assignments, err := modelBoundAssignmentsV3(plan)
+	if err != nil {
+		return nil, err
+	}
+	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalPreviousMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
+}
+
+func modelBoundAssignmentsV3(plan sdd.OpenCodePlanV3) (map[string]sdd.OpenCodeRoleAssignment, error) {
+	assignments := make(map[string]sdd.OpenCodeRoleAssignment, len(plan.Assignments))
+	for _, assignment := range plan.Assignments {
+		name := strings.TrimPrefix(assignment.ArtifactKey, "agents/")
+		assignments[name] = sdd.OpenCodeRoleAssignment{
+			Role: assignment.Role, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort,
+			Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation,
+		}
+	}
+	if len(assignments) != len(modelAgentInventoryV3) {
+		return nil, integration.ErrInvalid
+	}
+	return assignments, nil
+}
+
+func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte, error) {
+	assignments, err := modelBoundAssignmentsV3(plan)
+	if err != nil {
+		return nil, err
+	}
+	build := func(managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (map[string][]byte, error) {
+		managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+			return bindManagerTemplate(managerBase, managerMarker, assignment)
+		}
+		return fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, reviews, false)
+	}
+	v45, err := build(previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts())
+	if err != nil {
+		return nil, err
+	}
+	v44, err := build(previousManagerPromptV44, "artifact: opencode-agent/vgxness-manager; version: 44", previousGeneralPromptV3, "artifact: opencode-agent/general; version: 3", canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts())
+	if err != nil {
+		return nil, err
+	}
+	v43, err := build(previousManagerPromptV43, "artifact: opencode-agent/vgxness-manager; version: 43", previousGeneralPromptV2, "artifact: opencode-agent/general; version: 2", previousVerifierPromptV2, "artifact: opencode-agent/vgxness-verifier; version: 2", previousReviewPromptsV2())
+	if err != nil {
+		return nil, err
+	}
+	predecessors := make(map[string][][]byte, len(compactProtocolAgentNames)+1)
+	predecessors[managerAgentName] = [][]byte{v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
+	for _, prior := range []struct {
+		base   string
+		marker string
+	}{
+		{previousManagerPromptV42, "artifact: opencode-agent/vgxness-manager; version: 42"},
+		{previousManagerPromptV41, "artifact: opencode-agent/vgxness-manager; version: 41"},
+		{previousManagerPromptV40, "artifact: opencode-agent/vgxness-manager; version: 40"},
+		{previousManagerPromptV39, "artifact: opencode-agent/vgxness-manager; version: 39"},
+	} {
+		content, bindErr := bindManagerTemplate(prior.base, prior.marker, assignments[managerAgentName])
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		predecessors[managerAgentName] = append(predecessors[managerAgentName], content)
+	}
+	for _, name := range compactProtocolAgentNames {
+		predecessors[name] = [][]byte{v45[name], v44[name], v43[name]}
+	}
+	return predecessors, nil
+}
+
 func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
 	managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 		return bindManagerTemplate(managerBase, managerMarker, assignment)
@@ -635,21 +787,26 @@ func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, 
 }
 
 func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews map[string]string, protectDurableMutations bool) (map[string][]byte, error) {
-	assignments := map[string]sdd.Role{
-		managerAgentName: sdd.RoleManager,
-		exploreAgentName: sdd.RoleResearch,
-		generalAgentName: sdd.RoleImplementation, verifierAgentName: sdd.RoleVerification,
+	assignments := make(map[string]sdd.OpenCodeRoleAssignment, len(modelAgentInventoryV3))
+	for _, identity := range modelAgentInventoryV3 {
+		assignments[strings.TrimPrefix(identity.ArtifactKey, "agents/")] = plan.Roles[identity.Role]
+	}
+	return fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, baseReviews, protectDurableMutations)
+}
+
+func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignment, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews map[string]string, protectDurableMutations bool) (map[string][]byte, error) {
+	reviewRoles := map[string]sdd.Role{
 		reviewRiskName: sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
 		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
 		reviewRefuterName: sdd.RoleRefuter,
 	}
-	agents := make(map[string][]byte, 15)
-	manager, err := managerBinder(plan.Roles[sdd.RoleManager])
+	agents := make(map[string][]byte, integration.ModelAssignmentCount)
+	manager, err := managerBinder(assignments[managerAgentName])
 	if err != nil {
 		return nil, err
 	}
 	agents[managerAgentName] = manager
-	explore, err := bindExplore(plan.Roles[sdd.RoleResearch])
+	explore, err := bindExplore(assignments[exploreAgentName])
 	if err != nil {
 		return nil, err
 	}
@@ -658,7 +815,7 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 	if protectDurableMutations {
 		generalNext = generalCurrentMarker
 	}
-	general, err := bindProfile(generalBase, generalMarker, generalNext, plan.Roles[sdd.RoleImplementation], protectDurableMutations)
+	general, err := bindProfile(generalBase, generalMarker, generalNext, assignments[generalAgentName], protectDurableMutations)
 	if err != nil {
 		return nil, err
 	}
@@ -667,13 +824,13 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 	if protectDurableMutations {
 		verifierNext = verifierCurrentMarker
 	}
-	verifier, err := bindProfile(verifierBase, verifierMarker, verifierNext, plan.Roles[sdd.RoleVerification], protectDurableMutations)
+	verifier, err := bindProfile(verifierBase, verifierMarker, verifierNext, assignments[verifierAgentName], protectDurableMutations)
 	if err != nil {
 		return nil, err
 	}
 	agents[verifierAgentName] = verifier
 	for name, base := range baseReviews {
-		content, bindErr := bindAgent(base, assignments[name], plan.Roles[assignments[name]])
+		content, bindErr := bindAgent(base, reviewRoles[name], assignments[name])
 		if bindErr != nil {
 			return nil, bindErr
 		}
@@ -686,7 +843,7 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec},
 		{sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
 	} {
-		agents[profile.name] = []byte(sddAgentPrompt(profile.role, plan.Roles[profile.role]))
+		agents[profile.name] = []byte(sddAgentPrompt(profile.role, assignments[profile.name]))
 	}
 	return agents, nil
 }

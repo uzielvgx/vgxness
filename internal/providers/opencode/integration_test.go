@@ -692,7 +692,7 @@ func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
 		config.ActivePlan = plan
 		bundle, err := buildModelPlanBundle(config)
 		testutil.NoError(t, err)
-		if len(bundle.agents) != 15 {
+		if len(bundle.agents) != integration.ModelAssignmentCount {
 			t.Fatalf("plan %s agents=%d", plan, len(bundle.agents))
 		}
 		for name, content := range bundle.agents {
@@ -2742,6 +2742,145 @@ func TestIntegrationMixedV2ManifestPersistsAndStatusIsExact(t *testing.T) {
 	testutil.NoError(t, err)
 	status, err = service.Status(context.Background(), integration.Options{ConfigDir: root})
 	testutil.Require(t, err == nil && reinstalled.Changed && reinstalled.RestartRequired && status.State == integration.StateInstalled && status.ModelBalanced == "anthropic/claude-opus" && status.ModelBalancedEffort == sdd.EffortHigh, "reinstalled=%+v status=%+v err=%v", reinstalled, status, err)
+}
+
+func TestIntegrationV3InstallStatusChangeAndUninstall(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	service := NewIntegration()
+
+	installed, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	manifest, err := os.ReadFile(installed.ManifestPath)
+	testutil.NoError(t, err)
+	parsed, err := parseModelPlanManifest(manifest)
+	testutil.NoError(t, err)
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
+	testutil.NoError(t, err)
+	resolved, err := ResolveModelPlanV3(*parsed.ConfigV3)
+	testutil.NoError(t, err)
+	testutil.Require(t,
+		installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired && installed.ArtifactCount == 18 &&
+			parsed.SchemaVersion == 3 && parsed.Config == nil && parsed.Resolved == nil && parsed.ConfigV2 == nil && parsed.ResolvedV2 == nil &&
+			len(parsed.ConfigV3.Assignments) == integration.ModelAssignmentCount && len(parsed.ResolvedV3.Assignments) == integration.ModelAssignmentCount &&
+			status.State == integration.StateInstalled && status.ModelProvider == "acme" && status.ModelAssignments != nil && reflect.DeepEqual(status.ModelAssignments[:], resolved.Assignments) &&
+			status.ModelPlan == "" && status.ModelEfficient == "" && status.ModelBalanced == "" && status.ModelFrontier == "",
+		"installed=%+v status=%+v manifest=%s", installed, status, manifest)
+
+	before := make(map[string][]byte, 16)
+	for _, identity := range ModelAgentInventoryV3() {
+		data, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(identity.ArtifactKey)))
+		testutil.NoError(t, readErr)
+		before[identity.ArtifactKey] = data
+	}
+	stablePaths := []string{filepath.Join(root, defaultAgentConfigName), filepath.Join(root, "vgxness", defaultAgentStateName)}
+	for _, path := range stablePaths {
+		data, readErr := os.ReadFile(path)
+		testutil.NoError(t, readErr)
+		before[path] = data
+	}
+	changed := completeModelAssignmentsV3()
+	generalKey := "agents/" + generalAgentName
+	general := changed[generalKey]
+	general.Reference, general.RequestedEffort = "acme/reassigned", sdd.EffortUltra
+	changed[generalKey] = general
+	changedOptions := integration.Options{ConfigDir: root, ModelAssignments: &changed}
+	preview, err := service.Preview(context.Background(), changedOptions)
+	testutil.Require(t, err == nil && preview.State == integration.StatePartial && preview.RestartRequired, "preview=%+v err=%v", preview, err)
+	reinstalled, err := service.Reinstall(context.Background(), changedOptions)
+	testutil.NoError(t, err)
+	for _, identity := range ModelAgentInventoryV3() {
+		after, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(identity.ArtifactKey)))
+		testutil.NoError(t, readErr)
+		wantChanged := identity.ArtifactKey == generalKey
+		testutil.Require(t, !bytes.Equal(before[identity.ArtifactKey], after) == wantChanged, "%s changed=%t", identity.ArtifactKey, !bytes.Equal(before[identity.ArtifactKey], after))
+	}
+	for _, path := range stablePaths {
+		after, readErr := os.ReadFile(path)
+		testutil.Require(t, readErr == nil && bytes.Equal(before[path], after), "%s changed: %v", path, readErr)
+	}
+	manifestAfter, err := os.ReadFile(installed.ManifestPath)
+	testutil.Require(t, err == nil && !bytes.Equal(manifest, manifestAfter), "manifest did not change: %v", err)
+	status, err = service.Status(context.Background(), integration.Options{ConfigDir: root})
+	testutil.Require(t, err == nil && status.State == integration.StateInstalled && reinstalled.Changed && reinstalled.RestartRequired && len(status.ModelAssignments) == integration.ModelAssignmentCount && status.ModelAssignments[2].Model == "acme/reassigned" && status.ModelAssignments[2].Variant == sdd.VariantXHigh, "reinstalled=%+v status=%+v err=%v", reinstalled, status, err)
+
+	removed, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
+	testutil.Require(t, err == nil && removed.State == integration.StateAbsent && removed.Changed, "removed=%+v err=%v", removed, err)
+}
+
+func TestIntegrationV3RejectsIncompleteAssignmentsBeforeWrites(t *testing.T) {
+	for name, mutate := range map[string]func(map[string]sdd.ManagedAgentModelConfig){
+		"empty": func(assignments map[string]sdd.ManagedAgentModelConfig) {
+			for key := range assignments {
+				delete(assignments, key)
+			}
+		},
+		"missing": func(assignments map[string]sdd.ManagedAgentModelConfig) {
+			delete(assignments, modelAgentInventoryV3[0].ArtifactKey)
+		},
+		"extra": func(assignments map[string]sdd.ManagedAgentModelConfig) {
+			assignments["agents/extra.md"] = assignments[modelAgentInventoryV3[0].ArtifactKey]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "opencode")
+			assignments := completeModelAssignmentsV3()
+			mutate(assignments)
+			_, err := NewIntegration().Install(context.Background(), integration.Options{ConfigDir: root, ModelAssignments: &assignments})
+			_, statErr := os.Stat(root)
+			testutil.Require(t, errors.Is(err, integration.ErrInvalid) && errors.Is(statErr, os.ErrNotExist), "err=%v root=%v", err, statErr)
+		})
+	}
+}
+
+func TestIntegrationV3RecognizesArtifactSpecificPredecessorsWithoutManifest(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	bundle, err := requestedModelPlan(options, root)
+	testutil.NoError(t, err)
+	resolved := make(map[string]sdd.OpenCodeRoleAssignment, len(bundle.resolvedV3.Assignments))
+	for _, row := range bundle.resolvedV3.Assignments {
+		resolved[row.ArtifactKey] = sdd.OpenCodeRoleAssignment{Role: row.Role, Model: row.Model, RequestedEffort: row.RequestedEffort, Effort: row.Effort, Variant: row.Variant, Degradation: row.Degradation}
+	}
+	manager, err := bindManagerTemplate(previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", resolved["agents/"+managerAgentName])
+	testutil.NoError(t, err)
+	general, err := bindProfile(previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", "artifact: opencode-agent/general; version: 4", resolved["agents/"+generalAgentName], false)
+	testutil.NoError(t, err)
+	verifier, err := bindProfile(canonicalVerifierPrompt, verifierPreviousMarker, verifierPreviousMarker, resolved["agents/"+verifierAgentName], false)
+	testutil.NoError(t, err)
+	risk, err := bindAgent(previousReviewPromptsV2()[reviewRiskName], sdd.RoleRisk, resolved["agents/"+reviewRiskName])
+	testutil.NoError(t, err)
+	predecessors := map[string][]byte{managerAgentName: manager, generalAgentName: general, verifierAgentName: verifier, reviewRiskName: risk}
+	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
+	for name, data := range predecessors {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), data, 0o600))
+	}
+
+	service := NewIntegration()
+	preview, err := service.Preview(context.Background(), options)
+	testutil.Require(t, err == nil && preview.State == integration.StatePartial && preview.RestartRequired, "preview=%+v err=%v", preview, err)
+	installed, err := service.Install(context.Background(), options)
+	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed, "installed=%+v err=%v", installed, err)
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
+	testutil.Require(t, err == nil && status.State == integration.StateInstalled, "status=%+v err=%v", status, err)
+	for name := range predecessors {
+		current, readErr := os.ReadFile(filepath.Join(root, "agents", name))
+		testutil.Require(t, readErr == nil && bytes.Equal(current, bundle.agents[name]), "%s was not upgraded exactly: %v", name, readErr)
+	}
+
+	unknownRoot := filepath.Join(t.TempDir(), "opencode")
+	testutil.NoError(t, os.MkdirAll(filepath.Join(unknownRoot, "agents"), 0o700))
+	unknownPath := filepath.Join(unknownRoot, "agents", managerAgentName)
+	unknown := []byte("foreign manager bytes\n")
+	testutil.NoError(t, os.WriteFile(unknownPath, unknown, 0o600))
+	unknownOptions := integration.Options{ConfigDir: unknownRoot, ModelAssignments: &assignments}
+	preview, err = service.Preview(context.Background(), unknownOptions)
+	testutil.Require(t, err == nil && preview.State == integration.StateDrifted, "unknown preview=%+v err=%v", preview, err)
+	_, err = service.Install(context.Background(), unknownOptions)
+	after, readErr := os.ReadFile(unknownPath)
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, unknown), "unknown bytes changed: err=%v read=%v", err, readErr)
 }
 
 func TestModelPlanManifestV1RemainsExactAndV2RejectsDrift(t *testing.T) {

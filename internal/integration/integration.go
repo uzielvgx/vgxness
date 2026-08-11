@@ -18,6 +18,8 @@ type State string
 type HandshakeStatus string
 
 const (
+	ModelAssignmentCount = 15
+
 	StateAbsent    State = "absent"
 	StatePartial   State = "partial"
 	StateInstalled State = "installed"
@@ -38,6 +40,7 @@ func (status HandshakeStatus) String() string { return string(status) }
 type Options struct {
 	ConfigDir            string
 	HomeDir              string
+	ModelAssignments     *map[string]sdd.ManagedAgentModelConfig
 	ModelPlan            sdd.Plan
 	ModelEfficient       string
 	ModelBalanced        string
@@ -59,6 +62,7 @@ type Result struct {
 	ToolBackupPath             string
 	ModelPlan                  sdd.Plan
 	ModelProvider              string
+	ModelAssignments           *[ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3
 	ModelEfficient             string
 	ModelBalanced              string
 	ModelFrontier              string
