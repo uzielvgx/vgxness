@@ -339,7 +339,7 @@ func TestIntegrationRejectsIncompleteSDDPredecessorManifest(t *testing.T) {
 	_, previewErr := service.Preview(context.Background(), options)
 	_, installErr := service.Install(context.Background(), options)
 	after, readErr := os.ReadFile(target)
-	testutil.Require(t, errors.Is(previewErr, integration.ErrConflict) && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, incomplete.manifest), "preview=%v install=%v", previewErr, installErr)
+	testutil.Require(t, errors.Is(previewErr, integration.ErrDrift) && errors.Is(installErr, integration.ErrDrift) && readErr == nil && bytes.Equal(after, incomplete.manifest), "preview=%v install=%v", previewErr, installErr)
 }
 
 func TestIntegrationUpgradesExactCompleteV1ExploreBundle(t *testing.T) {
@@ -402,7 +402,7 @@ func TestIntegrationRejectsModifiedV1ExploreManifest(t *testing.T) {
 	_, previewErr := service.Preview(context.Background(), options)
 	_, installErr := service.Install(context.Background(), options)
 	after, readErr := os.ReadFile(target)
-	testutil.Require(t, errors.Is(previewErr, integration.ErrConflict) && errors.Is(installErr, integration.ErrConflict) && bytes.Equal(after, modified), "modified v1 manifest previewErr=%v installErr=%v read=%v", previewErr, installErr, readErr)
+	testutil.Require(t, errors.Is(previewErr, integration.ErrDrift) && errors.Is(installErr, integration.ErrDrift) && bytes.Equal(after, modified), "modified v1 manifest previewErr=%v installErr=%v read=%v", previewErr, installErr, readErr)
 }
 
 func TestIntegrationPreservesForeignExploreOverrideAndReturnsConflict(t *testing.T) {

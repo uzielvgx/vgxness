@@ -1044,9 +1044,6 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	if err != nil {
 		return inspection{}, err
 	}
-	if plan.configV2 != nil {
-		return inspection{}, fmt.Errorf("%w: OpenCode model-plan manifest v2 is not available", integration.ErrInvalid)
-	}
 	result := integration.Result{
 		Provider: "opencode", State: integration.StateAbsent, Path: managerPath, ArtifactSHA256: artifactSHA256(plan.agents[managerAgentName]),
 		ModelPlan: plan.config.ActivePlan, ModelProvider: plan.resolved.Provider,
@@ -1054,6 +1051,13 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		ManifestPath: manifestPath, ManifestSHA256: artifactSHA256(plan.manifest),
 		DefaultAgent: defaultAgentName, DefaultAgentPath: defaultAgentPath,
 		DirectoryDurability: directoryDurability(),
+	}
+	if plan.configV2 != nil {
+		result.ModelPlan = plan.configV2.ActivePlan
+		result.ModelProvider = plan.resolvedV2.Provider
+		result.ModelEfficient = plan.configV2.Slots[sdd.CapabilityEfficient].Reference
+		result.ModelBalanced = plan.configV2.Slots[sdd.CapabilityBalanced].Reference
+		result.ModelFrontier = plan.configV2.Slots[sdd.CapabilityFrontier].Reference
 	}
 	if defaultAgentState.Drifted {
 		result.State = integration.StateDrifted
