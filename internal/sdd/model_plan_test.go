@@ -136,3 +136,17 @@ func TestDefaultOpenAICatalog(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogSupportedEffortsReturnsOnlyCatalogMetadata(t *testing.T) {
+	efforts := CatalogSupportedEfforts("openai/gpt-5.6-terra")
+	if len(efforts) != 4 || efforts[0] != EffortLow || efforts[3] != EffortUltra {
+		t.Fatalf("catalog efforts=%v", efforts)
+	}
+	efforts[0] = EffortUltra
+	if again := CatalogSupportedEfforts("openai/gpt-5.6-terra"); again[0] != EffortLow {
+		t.Fatalf("catalog efforts share mutable storage: %v", again)
+	}
+	if got := CatalogSupportedEfforts("acme/unlisted"); got != nil {
+		t.Fatalf("unknown efforts=%v, want nil", got)
+	}
+}

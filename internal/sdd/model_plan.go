@@ -191,6 +191,13 @@ func DefaultOpenAICatalog() Catalog {
 	}}
 }
 
+// CatalogSupportedEfforts returns the authoritative effort metadata for a
+// catalog model. A nil result means the reference is not catalog-backed.
+func CatalogSupportedEfforts(reference string) []Effort {
+	model := catalogModelByReference(reference)
+	return append([]Effort(nil), model.SupportedEfforts...)
+}
+
 func ResolveModelPlan(catalog Catalog, plan Plan) (ResolvedPlan, error) {
 	if !validText(catalog.Provider, 128) || len(catalog.Models) == 0 || !plan.Valid() {
 		return ResolvedPlan{}, ErrInvalid
