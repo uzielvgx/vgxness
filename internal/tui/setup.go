@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 const (
@@ -458,19 +459,19 @@ func (m *Model) updateModelEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.setupModelSlot = (m.setupModelSlot + 1) % 3
 		return true, nil
 	case "tab", "right", "l":
-		m.setupModelEfforts[m.setupModelSlot] = nextSetupEffort(m.setupModelEfforts[m.setupModelSlot])
+		m.setupModelEfforts[m.setupModelSlot] = nextSetupEffort(m.setupModelEfforts[m.setupModelSlot], setupSupportedEfforts(m.setupModelRefs[m.setupModelSlot]))
 		return true, nil
 	case "backspace":
 		value := []rune(m.setupModelRefs[m.setupModelSlot])
 		if len(value) > 0 {
 			m.setupModelRefs[m.setupModelSlot] = string(value[:len(value)-1])
 		}
-		m.ensureMixedEfforts()
+		m.ensureMixedEffort(m.setupModelSlot)
 		return true, nil
 	}
 	if msg.Text != "" {
 		m.setupModelRefs[m.setupModelSlot] += msg.Text
-		m.ensureMixedEfforts()
+		m.ensureMixedEffort(m.setupModelSlot)
 		return true, nil
 	}
 	return true, nil
@@ -525,13 +526,21 @@ func (m *Model) selectCatalogModel(offset int) {
 	row := &m.setupAssignmentRows[m.setupModelSlot]
 	row.Provider, row.Reference = selected.Provider, selected.Reference
 	row.Source, row.Availability = selected.Source, selected.Availability
+	if efforts := setupSupportedEfforts(row.Reference); len(efforts) == 0 {
+		row.RequestedEffort = ""
+	} else if !supportsSetupEffort(efforts, row.RequestedEffort) {
+		row.RequestedEffort = efforts[0]
+	}
 	m.markAssignmentEdit()
 }
 
 func (m *Model) selectAssignmentEffort(offset int) {
 	row := &m.setupAssignmentRows[m.setupModelSlot]
-	index := setupPlanIndex(row.RequestedEffort)
-	row.RequestedEffort = setupPlans[(index+offset+len(setupPlans))%len(setupPlans)]
+	next := cycleSetupEffort(row.RequestedEffort, setupSupportedEfforts(row.Reference), offset)
+	if next == row.RequestedEffort {
+		return
+	}
+	row.RequestedEffort = next
 	m.markAssignmentEdit()
 }
 
@@ -574,23 +583,55 @@ func (m *Model) restoreSetupEditorPreview() {
 	}
 }
 
-func (m *Model) ensureMixedEfforts() {
-	if m.modelProfileMixed() {
-		for index, effort := range m.setupModelEfforts {
-			if !validSetupPlan(effort) {
-				m.setupModelEfforts[index] = "medium"
-			}
-		}
+func (m *Model) ensureMixedEffort(index int) {
+	if !m.modelProfileMixed() {
+		return
+	}
+	efforts := setupSupportedEfforts(m.setupModelRefs[index])
+	if len(efforts) == 0 {
+		m.setupModelEfforts[index] = ""
+		return
+	}
+	if !supportsSetupEffort(efforts, m.setupModelEfforts[index]) {
+		m.setupModelEfforts[index] = efforts[0]
 	}
 }
 
-func nextSetupEffort(value string) string {
-	for index, effort := range setupPlans {
+func nextSetupEffort(value string, supported []string) string {
+	return cycleSetupEffort(value, supported, 1)
+}
+
+func cycleSetupEffort(value string, supported []string, offset int) string {
+	if len(supported) == 0 {
+		return value
+	}
+	for index, effort := range supported {
 		if value == effort {
-			return setupPlans[(index+1)%len(setupPlans)]
+			return supported[(index+offset+len(supported))%len(supported)]
 		}
 	}
-	return "medium"
+	if offset < 0 {
+		return supported[len(supported)-1]
+	}
+	return supported[0]
+}
+
+func setupSupportedEfforts(reference string) []string {
+	efforts := sdd.CatalogSupportedEfforts(reference)
+	result := make([]string, len(efforts))
+	for index, effort := range efforts {
+		result[index] = string(effort)
+	}
+	return result
+}
+
+func supportsSetupEffort(supported []string, effort string) bool {
+	for _, candidate := range supported {
+		if candidate == effort {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) modelProfileMixed() bool {
@@ -608,8 +649,15 @@ func (m Model) modelProfileChanged() bool {
 func (m Model) modelEditorError() string {
 	if m.setupAssignmentsSeeded {
 		for index, row := range m.setupAssignmentRows {
-			if row.ArtifactKey != setupAgentRows[index].ArtifactKey || !validSetupModelReference(row.Reference) || !validSetupPlan(row.RequestedEffort) || row.Provider != setupModelProvider(row.Reference) {
+			if row.ArtifactKey != setupAgentRows[index].ArtifactKey || !validSetupModelReference(row.Reference) || row.Provider != setupModelProvider(row.Reference) {
 				return "Every agent needs a valid catalog provider/model and effort."
+			}
+			supported := setupSupportedEfforts(row.Reference)
+			if len(supported) == 0 {
+				return "Model effort metadata is not available."
+			}
+			if !sdd.Effort(row.RequestedEffort).Valid() || !supportsSetupEffort(supported, row.RequestedEffort) {
+				return "Known models require an effort declared by the SDD catalog."
 			}
 		}
 		return ""
@@ -619,10 +667,19 @@ func (m Model) modelEditorError() string {
 			return "Each slot needs a provider/model reference."
 		}
 	}
+	for _, ref := range m.setupModelRefs {
+		if len(setupSupportedEfforts(ref)) == 0 {
+			return "Model effort metadata is not available."
+		}
+	}
 	if m.modelProfileMixed() {
-		for _, effort := range m.setupModelEfforts {
-			if !validSetupPlan(effort) {
-				return "Mixed profiles require low, medium, high, or ultra for every slot."
+		for index, effort := range m.setupModelEfforts {
+			supported := setupSupportedEfforts(m.setupModelRefs[index])
+			if len(supported) == 0 {
+				return "Model effort metadata is not available."
+			}
+			if !sdd.Effort(effort).Valid() || !supportsSetupEffort(supported, effort) {
+				return "Known models require an effort declared by the SDD catalog."
 			}
 		}
 	} else {
@@ -822,9 +879,21 @@ func (m Model) setupHelp() string {
 		return "[j/k] scroll  [y] apply  [n/Esc] cancel  No write occurs until y"
 	case m.setupModelEditing:
 		if m.setupAssignmentsSeeded {
-			return "[↑↓/j/k] row  [←→] model  [[/]] effort  [r] refresh  [Enter] preview  [Esc] cancel  [q] quit"
+			help := "[↑↓/j/k] row  [←→] model"
+			if len(setupSupportedEfforts(m.setupAssignmentRows[m.setupModelSlot].Reference)) > 0 {
+				help += "  [[/]] effort"
+			} else {
+				help += "  effort not available"
+			}
+			return help + "  [r] refresh  [Enter] preview  [Esc] cancel  [q] quit"
 		}
-		return "[j/k] slot  type/edit ref  [Tab] effort  [Enter] save  [Esc] cancel"
+		help := "[j/k] slot  type/edit ref"
+		if len(setupSupportedEfforts(m.setupModelRefs[m.setupModelSlot])) > 0 {
+			help += "  [Tab] effort"
+		} else {
+			help += "  effort not available"
+		}
+		return help + "  [Enter] save  [Esc] cancel"
 	case m.setupSucceeded:
 		return "[j/k] scroll  [r] reload preview  [Esc] Overview  [q] quit"
 	case m.setupApplyErr != nil:
@@ -872,6 +941,7 @@ func (m Model) modelAssignmentLines() []string {
 	default:
 		lines = appendSetupWrapped(lines, "", fmt.Sprintf("✓ %d catalog models · %s", len(m.setupCatalog), setupDiscoveryDisclaimer), m.setupViewport.Width())
 	}
+	lines = append(lines, "allowed efforts  "+setupEffortAvailability(m.setupAssignmentRows[m.setupModelSlot].Reference))
 	if err := m.modelEditorError(); err != "" {
 		lines = append(lines, "✕ "+err)
 	}
@@ -895,12 +965,20 @@ func (m Model) modelEditorLines() []string {
 		if m.modelProfileChanged() {
 			availability = "unknown"
 		}
-		lines = append(lines, fmt.Sprintf("%s %-9s %s  effort=%s  availability=%s", marker, name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelEfforts[index]), setupValue(availability)))
+		lines = append(lines, fmt.Sprintf("%s %-9s %s  effort=%s  allowed=%s  availability=%s", marker, name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelEfforts[index]), setupEffortAvailability(m.setupModelRefs[index]), setupValue(availability)))
 	}
 	if err := m.modelEditorError(); err != "" {
 		lines = append(lines, "✕ "+err)
 	}
 	return append(lines, "", "Enter previews valid inputs; Esc restores entry values.")
+}
+
+func setupEffortAvailability(reference string) string {
+	supported := setupSupportedEfforts(reference)
+	if len(supported) == 0 {
+		return "not available"
+	}
+	return strings.Join(supported, ", ")
 }
 
 func (m Model) modelProfileSummary() []string {
