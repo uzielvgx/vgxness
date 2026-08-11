@@ -49,10 +49,12 @@ const (
 // references are syntactically validated only; they do not assert provider
 // authorization or catalog support.
 type ModelSlotConfig struct {
-	Reference       string                `json:"reference"`
-	RequestedEffort Effort                `json:"requestedEffort"`
-	Source          ModelSlotSource       `json:"source"`
-	Availability    ModelSlotAvailability `json:"availability"`
+	Reference        string                `json:"reference"`
+	RequestedEffort  Effort                `json:"requestedEffort"`
+	Variant          OpenCodeVariant       `json:"variant,omitempty"`
+	VariantSpecified bool                  `json:"variantSpecified,omitempty"`
+	Source           ModelSlotSource       `json:"source"`
+	Availability     ModelSlotAvailability `json:"availability"`
 }
 
 type ModelPlanConfigV2 struct {
@@ -125,11 +127,13 @@ type ManagedAgentIdentity struct {
 }
 
 type ManagedAgentModelConfig struct {
-	Provider        string                `json:"provider"`
-	Reference       string                `json:"reference"`
-	RequestedEffort Effort                `json:"requestedEffort"`
-	Source          ModelSlotSource       `json:"source"`
-	Availability    ModelSlotAvailability `json:"availability"`
+	Provider         string                `json:"provider"`
+	Reference        string                `json:"reference"`
+	RequestedEffort  Effort                `json:"requestedEffort"`
+	Variant          OpenCodeVariant       `json:"variant,omitempty"`
+	VariantSpecified bool                  `json:"variantSpecified,omitempty"`
+	Source           ModelSlotSource       `json:"source"`
+	Availability     ModelSlotAvailability `json:"availability"`
 }
 
 type ModelPlanConfigV3 struct {
@@ -140,17 +144,18 @@ type ModelPlanConfigV3 struct {
 }
 
 type OpenCodeAgentAssignmentV3 struct {
-	ArtifactKey     string                `json:"artifactKey"`
-	Role            Role                  `json:"role"`
-	Class           ManagedAgentClass     `json:"class"`
-	Provider        string                `json:"provider"`
-	Model           string                `json:"model"`
-	RequestedEffort Effort                `json:"requestedEffort"`
-	Effort          Effort                `json:"effort"`
-	Variant         OpenCodeVariant       `json:"variant"`
-	Degradation     Degradation           `json:"degradation"`
-	Source          ModelSlotSource       `json:"source"`
-	Availability    ModelSlotAvailability `json:"availability"`
+	ArtifactKey      string                `json:"artifactKey"`
+	Role             Role                  `json:"role"`
+	Class            ManagedAgentClass     `json:"class"`
+	Provider         string                `json:"provider"`
+	Model            string                `json:"model"`
+	RequestedEffort  Effort                `json:"requestedEffort"`
+	Effort           Effort                `json:"effort"`
+	Variant          OpenCodeVariant       `json:"variant"`
+	VariantSpecified bool                  `json:"variantSpecified,omitempty"`
+	Degradation      Degradation           `json:"degradation"`
+	Source           ModelSlotSource       `json:"source"`
+	Availability     ModelSlotAvailability `json:"availability"`
 }
 
 type OpenCodePlanV3 struct {
@@ -287,7 +292,7 @@ func ResolveOpenCodePlanV2(config ModelPlanConfigV2) (OpenCodePlanV2, error) {
 		result.Roles[role] = OpenCodeRoleAssignmentV2{
 			Role: role, Capability: assignment.Capability, Provider: slotProvider, Model: slot.Reference,
 			RequestedEffort: slot.RequestedEffort, Effort: effective[assignment.Capability],
-			Variant: OpenCodeVariantForEffort(effective[assignment.Capability]), Degradation: degradations[assignment.Capability],
+			Variant: resolvedVariant(slot.Variant, slot.VariantSpecified, effective[assignment.Capability]), Degradation: degradations[assignment.Capability],
 			Strength: RoleAssignment{Capability: assignment.Capability, Effort: effective[assignment.Capability]}.Strength(),
 		}
 	}
@@ -326,7 +331,7 @@ func ResolveOpenCodePlanV3(config ModelPlanConfigV3, inventory []ManagedAgentIde
 		resolved = append(resolved, OpenCodeAgentAssignmentV3{
 			ArtifactKey: identity.ArtifactKey, Role: identity.Role, Class: identity.Class,
 			Provider: provider, Model: assignment.Reference, RequestedEffort: assignment.RequestedEffort,
-			Effort: effort, Variant: OpenCodeVariantForEffort(effort), Degradation: degradation,
+			Effort: effort, Variant: resolvedVariant(assignment.Variant, assignment.VariantSpecified, effort), VariantSpecified: assignment.Variant != "" || assignment.VariantSpecified, Degradation: degradation,
 			Source: assignment.Source, Availability: assignment.Availability,
 		})
 	}
@@ -338,7 +343,7 @@ func ResolveOpenCodePlanV3(config ModelPlanConfigV3, inventory []ManagedAgentIde
 
 func resolveManagedAgentModel(assignment ManagedAgentModelConfig) (string, Effort, Degradation, error) {
 	provider, err := modelProvider(assignment.Reference)
-	if err != nil || !validV3ModelReference(assignment.Reference) || !assignment.RequestedEffort.Valid() {
+	if err != nil || !validV3ModelReference(assignment.Reference) || !assignment.RequestedEffort.Valid() || !validOpenCodeVariant(assignment.Variant) {
 		return "", "", Degradation{}, ErrInvalid
 	}
 	if assignment.Provider != provider {
@@ -372,6 +377,26 @@ func validV3ModelReference(reference string) bool {
 		if segment == "" {
 			return false
 		}
+	}
+	return true
+}
+
+func resolvedVariant(variant OpenCodeVariant, specified bool, effort Effort) OpenCodeVariant {
+	if specified || variant != "" {
+		return variant
+	}
+	return OpenCodeVariantForEffort(effort)
+}
+
+func validOpenCodeVariant(variant OpenCodeVariant) bool {
+	if variant == "" || len(variant) > 64 {
+		return variant == ""
+	}
+	for _, value := range []byte(variant) {
+		if value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '-' || value == '_' {
+			continue
+		}
+		return false
 	}
 	return true
 }
@@ -445,7 +470,7 @@ func validateModelPlanConfigV2(config ModelPlanConfigV2) error {
 	}
 	for _, capability := range []Capability{CapabilityEfficient, CapabilityBalanced, CapabilityFrontier} {
 		slot, ok := config.Slots[capability]
-		if !ok || !slot.RequestedEffort.Valid() {
+		if !ok || !slot.RequestedEffort.Valid() || !validOpenCodeVariant(slot.Variant) {
 			return ErrInvalid
 		}
 		if _, err := modelProvider(slot.Reference); err != nil {

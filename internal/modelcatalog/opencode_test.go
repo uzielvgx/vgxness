@@ -37,7 +37,7 @@ func (runner *fakeRunner) Run(ctx context.Context, executable string, args []str
 }
 
 func TestDiscoverUsesPureLocalCommandAndReturnsDeterministicSnapshot(t *testing.T) {
-	runner := &fakeRunner{stdout: "zeta/model-b\r\nalpha/model-a\r\nzeta/model-a\r\nalpha/model-a\r\n"}
+	runner := &fakeRunner{stdout: "zeta/model-b\r\n{\"variants\":{}}\r\nalpha/model-a\r\n{\"variants\":{}}\r\nzeta/model-a\r\n{\"variants\":{}}\r\n"}
 	discovery := NewOpenCode("/opt/tools/opencode", runner, Options{})
 
 	snapshot, err := discovery.Discover(context.Background())
@@ -45,7 +45,7 @@ func TestDiscoverUsesPureLocalCommandAndReturnsDeterministicSnapshot(t *testing.
 		t.Fatalf("Discover() error = %v", err)
 	}
 
-	wantCall := runnerCall{executable: "/opt/tools/opencode", args: []string{"models", "--pure"}}
+	wantCall := runnerCall{executable: "/opt/tools/opencode", args: []string{"models", "--pure", "--verbose"}}
 	if !reflect.DeepEqual(runner.calls, []runnerCall{wantCall}) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, []runnerCall{wantCall})
 	}
@@ -53,14 +53,36 @@ func TestDiscoverUsesPureLocalCommandAndReturnsDeterministicSnapshot(t *testing.
 		Source:    SourceLocal,
 		Providers: []string{"alpha", "zeta"},
 		Models:    []string{"alpha/model-a", "zeta/model-a", "zeta/model-b"},
+		Variants: map[string][]string{
+			"alpha/model-a": {}, "zeta/model-a": {}, "zeta/model-b": {},
+		},
 	}
 	if !reflect.DeepEqual(snapshot, want) {
 		t.Fatalf("snapshot = %#v, want %#v", snapshot, want)
 	}
 }
 
+func TestDiscoverPreservesVerboseVariantsVerbatim(t *testing.T) {
+	runner := &fakeRunner{stdout: "openai/gpt-5.6-terra\r\n{\"variants\":{\"xhigh\":{},\"max\":{},\"none\":{}}}\r\nopenai/gpt-5.6-luna\r\n{\"variants\":{}}\r\n"}
+	discovery := NewOpenCode("opencode", runner, Options{})
+
+	snapshot, err := discovery.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if !reflect.DeepEqual(snapshot.Variants, map[string][]string{
+		"openai/gpt-5.6-terra": {"xhigh", "max", "none"},
+		"openai/gpt-5.6-luna":  {},
+	}) {
+		t.Fatalf("Variants = %#v", snapshot.Variants)
+	}
+	if want := []string{"models", "--pure", "--verbose"}; !reflect.DeepEqual(runner.calls[0].args, want) {
+		t.Fatalf("args = %#v, want %#v", runner.calls[0].args, want)
+	}
+}
+
 func TestRefreshUsesExplicitRefreshFlag(t *testing.T) {
-	runner := &fakeRunner{stdout: "alpha/model-a\n"}
+	runner := &fakeRunner{stdout: "alpha/model-a\n{\"variants\":{}}\n"}
 	discovery := NewOpenCode("opencode-custom", runner, Options{})
 
 	snapshot, err := discovery.Refresh(context.Background())
@@ -68,7 +90,7 @@ func TestRefreshUsesExplicitRefreshFlag(t *testing.T) {
 		t.Fatalf("Refresh() error = %v", err)
 	}
 
-	wantCall := runnerCall{executable: "opencode-custom", args: []string{"models", "--pure", "--refresh"}}
+	wantCall := runnerCall{executable: "opencode-custom", args: []string{"models", "--pure", "--verbose", "--refresh"}}
 	if !reflect.DeepEqual(runner.calls, []runnerCall{wantCall}) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, []runnerCall{wantCall})
 	}
@@ -125,6 +147,28 @@ func TestDiscoverRejectsMalformedOutput(t *testing.T) {
 			runner := &fakeRunner{stdout: test.output}
 			discovery := NewOpenCode("opencode", runner, Options{})
 
+			if snapshot, err := discovery.Discover(context.Background()); !errors.Is(err, ErrInvalidOutput) || !reflect.DeepEqual(snapshot, Snapshot{}) {
+				t.Fatalf("Discover() = (%#v, %v), want zero snapshot and ErrInvalidOutput", snapshot, err)
+			}
+		})
+	}
+}
+
+func TestDiscoverRejectsUnsafeVerboseRecords(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{name: "missing JSON", output: "openai/model\n"},
+		{name: "missing variants", output: "openai/model\n{}\n"},
+		{name: "trailing JSON", output: "openai/model\n{\"variants\":{}} {}\n"},
+		{name: "duplicate reference", output: "openai/model\n{\"variants\":{}}\nopenai/model\n{\"variants\":{}}\n"},
+		{name: "unsafe token", output: "openai/model\n{\"variants\":{\"max\\n\":{}}}\n"},
+		{name: "oversized token", output: "openai/model\n{\"variants\":{\"" + strings.Repeat("x", maxVariantBytes+1) + "\":{}}}\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			discovery := NewOpenCode("opencode", &fakeRunner{stdout: test.output}, Options{})
 			if snapshot, err := discovery.Discover(context.Background()); !errors.Is(err, ErrInvalidOutput) || !reflect.DeepEqual(snapshot, Snapshot{}) {
 				t.Fatalf("Discover() = (%#v, %v), want zero snapshot and ErrInvalidOutput", snapshot, err)
 			}

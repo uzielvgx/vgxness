@@ -58,11 +58,11 @@ func NewOpenCode(executable string, runner ProcessRunner, options Options) *Open
 }
 
 func (discovery *OpenCode) Discover(ctx context.Context) (Snapshot, error) {
-	return discovery.run(ctx, SourceLocal, []string{"models", "--pure"})
+	return discovery.run(ctx, SourceLocal, []string{"models", "--pure", "--verbose"})
 }
 
 func (discovery *OpenCode) Refresh(ctx context.Context) (Snapshot, error) {
-	return discovery.run(ctx, SourceRefreshed, []string{"models", "--pure", "--refresh"})
+	return discovery.run(ctx, SourceRefreshed, []string{"models", "--pure", "--verbose", "--refresh"})
 }
 
 func (discovery *OpenCode) run(ctx context.Context, source Source, args []string) (Snapshot, error) {
