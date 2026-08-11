@@ -59,7 +59,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"--model-efficient", "openai/gpt-5.6-luna", "--model-balanced", "anthropic/claude-sonnet", "--model-frontier", "acme/frontier",
 		"--model-efficient-effort", "low", "--model-balanced-effort", "high", "--model-frontier-effort", "ultra",
 	)
-	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy", "Slot efficient: provider=openai ref=openai/gpt-5.6-luna effort=low source=catalog availability=catalog-known", "Slot balanced: provider=anthropic ref=anthropic/claude-sonnet effort=high source=custom availability=unknown", "Slot frontier: provider=acme ref=acme/frontier effort=ultra source=custom availability=unknown", "Reinicia OpenCode para cargar vgxness-manager"} {
+	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy", "Slot efficient:\n    provider=openai\n    ref=openai/gpt-5.6-luna\n    effort=low\n    source=catalog\n    availability=catalog-known", "Slot balanced:\n    provider=anthropic\n    ref=anthropic/claude-sonnet\n    effort=high\n    source=custom\n    availability=unknown", "Slot frontier:\n    provider=acme\n    ref=acme/frontier\n    effort=ultra\n    source=custom\n    availability=unknown", "Reinicia OpenCode para cargar vgxness-manager"} {
 		if !strings.Contains(setupOutput, expected) {
 			t.Fatalf("setup output is missing %q:\n%s", expected, setupOutput)
 		}
@@ -121,7 +121,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"setup", "opencode", "--status", "--workspace", workspace,
 		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
 	)
-	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") || !strings.Contains(statusOutput, "Slot balanced: provider=anthropic ref=anthropic/claude-sonnet effort=high source=custom availability=unknown") {
+	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") || !strings.Contains(statusOutput, "Slot balanced:\n    provider=anthropic\n    ref=anthropic/claude-sonnet\n    effort=high\n    source=custom\n    availability=unknown") {
 		t.Fatalf("installed setup is not healthy:\n%s", statusOutput)
 	}
 

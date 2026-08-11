@@ -39,7 +39,7 @@ func parseSnapshot(output []byte, source Source) (Snapshot, error) {
 	models := make(map[string]struct{})
 	for _, line := range lines {
 		line = strings.TrimSuffix(line, "\r")
-		provider, ok := validReference(line)
+		provider, ok := ValidReference(line)
 		if !ok {
 			return Snapshot{}, ErrInvalidOutput
 		}
@@ -55,7 +55,9 @@ func parseSnapshot(output []byte, source Source) (Snapshot, error) {
 	return snapshot, nil
 }
 
-func validReference(reference string) (string, bool) {
+// ValidReference validates the bounded model identifier grammar used at every
+// local discovery and setup boundary and returns its provider segment.
+func ValidReference(reference string) (string, bool) {
 	if reference == "" || len(reference) > maxReferenceBytes || strings.HasPrefix(reference, "@") {
 		return "", false
 	}

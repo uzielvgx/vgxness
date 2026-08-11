@@ -47,6 +47,16 @@ Observed delivery labels are strict: IMPLEMENTED means workspace changes and dev
 
 For complete definitions and status classifications, read the [Product Blueprint](docs/product-blueprint.md). Supporting documents intentionally do not duplicate its roadmap.
 
+## Choose models in Setup
+
+Run `vgxness tui`, press `g`, choose **Setup** with `j`/`k`, and press `Enter`. Press `m` to open the 15-agent assignment matrix. Use `j`/`k` or the arrow keys to move between agents, `h`/`l` or left/right to choose a model, and `[`/`]` to change requested effort. `Enter` returns to a fresh preview; `Esc` cancels the matrix edit.
+
+Setup initially reads the local OpenCode model cache with the exact argv `opencode models --pure`. In the matrix, `r` is an explicit refresh and runs `opencode models --pure --refresh`; a refresh failure keeps the current assignments and cached choices so you can retry. Local discovery proves only that an identifier is present. It does not prove provider authorization, account access, model support, or runtime availability. Non-static discovered identifiers are therefore recorded as `custom` with `unknown` availability.
+
+Review every agent's model, requested effort, source, and availability, plus the preview digest. Press `a`, then `y`, only when that exact preview is correct; no setup files change before `y`. The result reports requested and effective effort, variant, and any degradation reason. Opening or previewing an installed v1/v2 plan does not promote it to v3; editing the matrix does. An installed v3 plan re-enters with the same 15 explicit assignments.
+
+If discovery fails, retry with `r` or keep the retained choices. If preview fails, correct the shown prerequisite and refresh it. If apply fails, follow the displayed recovery guidance and inspect status before retrying; VGXNESS does not silently discard retained installation or recovery evidence.
+
 ## Installation and releases
 
 On macOS or Linux, install the published alpha through the official Homebrew tap:

@@ -278,9 +278,9 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 
 func TestTUISetupAssignmentTransportIsComparableValidatedAndCopied(t *testing.T) {
 	var requestRows [tui.SetupModelAssignmentCount]tui.SetupModelAssignmentRequest
-	for index := range requestRows {
+	for index, identity := range opencode.ModelAgentInventoryV3() {
 		requestRows[index] = tui.SetupModelAssignmentRequest{
-			ArtifactKey: "agents/agent-" + string(rune('a'+index)) + ".md", Provider: "acme", Reference: "acme/model",
+			ArtifactKey: identity.ArtifactKey, Provider: "acme", Reference: "acme/model",
 			RequestedEffort: "medium", Source: "custom", Availability: "unknown",
 		}
 	}
@@ -304,6 +304,13 @@ func TestTUISetupAssignmentTransportIsComparableValidatedAndCopied(t *testing.T)
 	empty[0].ArtifactKey = ""
 	_, err = tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelAssignments: &empty})
 	testutil.Require(t, err != nil, "incomplete assignments accepted")
+	invalid := requestRows
+	invalid[0].Reference = "acme/model?query"
+	_, err = tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", ModelAssignments: &invalid})
+	testutil.Require(t, err != nil, "invalid reference accepted")
+	runtime := &recordingTUISetupRuntime{}
+	_, err = (tuiBackend{setup: runtime}).ApplySetup(context.Background(), tui.SetupRequest{Workspace: "/workspace", ModelAssignments: &invalid})
+	testutil.Require(t, err != nil && runtime.applyOptions == (setupflow.Options{}), "invalid assignment reached apply: options=%+v err=%v", runtime.applyOptions, err)
 }
 
 func TestTUISetupPlanAssignmentRowsAreMappedAndCopied(t *testing.T) {

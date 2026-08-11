@@ -95,9 +95,11 @@ func TestSetupEntryCommandsAreIndependentAndCatalogCancellationIsOwned(t *testin
 }
 
 func TestSetupNavigationLoadsInstalledPlanAndRendersControlledWritePreview(t *testing.T) {
-	backend := &recordingSetupBackend{plan: readySetupPlan("high")}
+	plan := readySetupPlan("high")
+	plan.Digest = strings.Repeat("d", 64)
+	backend := &recordingSetupBackend{plan: plan}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
-	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 26})
 	model = updateModel(t, model, setupLoadedMsg{generation: 1, value: SetupStatus{ModelPlan: "high"}})
 
 	model, cmd := openSetupRoute(t, model)
@@ -110,12 +112,17 @@ func TestSetupNavigationLoadsInstalledPlanAndRendersControlledWritePreview(t *te
 		t.Fatalf("plan requests=%+v", backend.planRequests)
 	}
 	view := model.View().Content
-	for _, expected := range []string{"VGXNESS / SETUP / CONTROLLED WRITE", "READY TO APPLY", "selected plan  high", "7-STEP PLAN", "Global skills-creator", "Retire legacy provider skill"} {
+	for _, expected := range []string{"VGXNESS / SETUP / CONTROLLED WRITE", "READY TO APPLY", "selected plan  high", "action  initial install", "digest  " + strings.Repeat("d", 64), "7-STEP PLAN", "Global skills-creator", "Retire legacy provider skill"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("Setup preview missing %q:\n%s", expected, view)
 		}
 	}
 	assertMaximumWidth(t, view, 80)
+	for _, line := range model.setupRouteLines() {
+		if (strings.HasPrefix(line, "action  ") || strings.HasPrefix(line, "digest  ")) && len(line) > 80 {
+			t.Fatalf("raw action/digest line width=%d: %q", len(line), line)
+		}
+	}
 }
 
 func TestSetupAcceptsAndPreservesEachModelPlan(t *testing.T) {
@@ -226,6 +233,7 @@ func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testi
 			t.Fatalf("matrix missing %q:\n%s", expected, model.View().Content)
 		}
 	}
+	assertMaximumWidth(t, strings.Join(model.modelAssignmentLines(), "\n"), 80)
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
 	model = updateModel(t, model, keyPress("]"))
@@ -248,6 +256,75 @@ func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testi
 	model.setupAssignmentRows[1].Reference = "changed/later"
 	if copyRows[1].Reference != "acme/a:b@c+d" {
 		t.Fatalf("request aliases editor rows: %+v", copyRows[1])
+	}
+}
+
+func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
+	const discovered = "local-provider/non-static:model@host+variant"
+	backend := &recordingSetupBackend{
+		plan:    assignmentSetupPlan(2),
+		catalog: []SetupCatalogModel{{Provider: "local-provider", Reference: discovered, Source: "custom", Availability: "unknown"}},
+	}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 120})
+	model.setRoute(routeSetup)
+	model = updateModel(t, model, model.loadSetupPlan()())
+	model = updateModel(t, model, model.loadSetupCatalog(false)())
+
+	model = updateModel(t, model, keyPress("m"))
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	model = updateModel(t, model, keyPress("]"))
+	request := model.setupRequest()
+	if request.ModelAssignments == nil || len(*request.ModelAssignments) != SetupModelAssignmentCount {
+		t.Fatalf("edit did not create exact assignment request: %+v", request)
+	}
+	if row := request.ModelAssignments[0]; row.Reference != discovered || row.RequestedEffort != "high" || row.Source != "custom" || row.Availability != "unknown" {
+		t.Fatalf("discovered model provenance was lost: %+v", row)
+	}
+
+	preview := assignmentSetupPlan(3)
+	preview.Digest = "journey-digest"
+	for index, row := range *request.ModelAssignments {
+		preview.ModelAssignments[index].Provider = row.Provider
+		preview.ModelAssignments[index].Model = row.Reference
+		preview.ModelAssignments[index].RequestedEffort = row.RequestedEffort
+		preview.ModelAssignments[index].Effort = row.RequestedEffort
+		preview.ModelAssignments[index].Variant = row.RequestedEffort
+		preview.ModelAssignments[index].Source = row.Source
+		preview.ModelAssignments[index].Availability = row.Availability
+	}
+	backend.plan = preview
+	updated, previewCmd := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	model = updateModel(t, model, previewCmd())
+	model = updateModel(t, model, keyPress("a"))
+	confirmation := model.View().Content
+	if !strings.Contains(confirmation, "digest  journey-digest") || strings.Count(confirmation, "model=") != SetupModelAssignmentCount || strings.Count(confirmation, "requested=") != SetupModelAssignmentCount || strings.Count(confirmation, "source=") != SetupModelAssignmentCount || strings.Count(confirmation, "availability=") != SetupModelAssignmentCount {
+		t.Fatalf("confirmation did not bind the exact preview:\n%s", confirmation)
+	}
+
+	backend.result = SetupResult{Plan: preview, SelfInstallState: "installed", IntegrationState: "installed", SkillsState: "installed", ArtifactCount: 18, HandshakeOK: true, HandshakeStatus: "healthy", Changed: true}
+	updated, applyCmd := model.Update(keyPress("y"))
+	model = updated.(Model)
+	model = updateModel(t, model, applyCmd())
+	if len(backend.applyRequests) != 1 || backend.applyRequests[0].ExpectedPlanDigest != "journey-digest" || !setupRequestsEqual(backend.applyRequests[0], request) {
+		t.Fatalf("apply was not bound to preview: %+v", backend.applyRequests)
+	}
+	if view := model.View().Content; !strings.Contains(view, "requested=high") || !strings.Contains(view, "effective=high") || !strings.Contains(view, "variant=high") {
+		t.Fatalf("success hid requested/effective assignment:\n%s", view)
+	}
+
+	installed := *model.setup.ModelAssignments
+	model.setRoute(routeOverview)
+	model.setRoute(routeSetup)
+	reentry := model.setupRequest()
+	if reentry.ModelAssignments == nil || !model.setupAssignmentsSeeded || !model.setupAssignmentsExact {
+		t.Fatalf("re-entry hid installed v3 assignments: request=%+v seeded=%t exact=%t", reentry, model.setupAssignmentsSeeded, model.setupAssignmentsExact)
+	}
+	for index, row := range installed {
+		if model.setupAssignmentRows[index].Reference != row.Model || model.setupAssignmentRows[index].RequestedEffort != row.RequestedEffort || (*reentry.ModelAssignments)[index] != model.setupAssignmentRows[index] {
+			t.Fatalf("re-entry changed assignment %d: row=%+v installed=%+v", index, model.setupAssignmentRows[index], row)
+		}
 	}
 }
 
@@ -285,6 +362,11 @@ func TestSetupAssignmentMatrixCatalogLoadingRefreshEmptyErrorAndStaleSafety(t *t
 	if view := strings.Join(model.modelAssignmentLines(), "\n"); !strings.Contains(view, "Model catalog unavailable") || strings.Contains(view, "secret") || !strings.Contains(view, "[r]") {
 		t.Fatalf("unsafe catalog error state: %s", view)
 	}
+	model.setupCatalog = rows
+	model.handleSetupCatalogLoaded(setupCatalogLoadedMsg{generation: model.setupCatalogGeneration, err: errors.New("unavailable")})
+	if !reflect.DeepEqual(model.setupCatalog, rows) || model.setupAssignmentRows[0].Reference == "" {
+		t.Fatalf("catalog failure discarded seeds: catalog=%+v assignment=%+v", model.setupCatalog, model.setupAssignmentRows[0])
+	}
 }
 
 func TestSetupAssignmentIdentitySeedingAndLongExactRendering(t *testing.T) {
@@ -309,7 +391,7 @@ func TestSetupAssignmentIdentitySeedingAndLongExactRendering(t *testing.T) {
 		t.Fatal("duplicate identity set partially replaced valid rows")
 	}
 	model.setupPlan, model.setupPreviewed, model.setupPreviewRequest, model.setupConfirm = plan, true, model.setupRequest(), true
-	if model.modelProfileChanged() || !strings.Contains(strings.Join(model.setupRouteLines(), "\n"), "effort=ultra") || !strings.Contains(model.setupHelp(), "[j/k] scroll") {
+	if model.modelProfileChanged() || !strings.Contains(strings.Join(model.setupRouteLines(), "\n"), "requested=ultra") || !strings.Contains(model.setupHelp(), "[j/k] scroll") {
 		t.Fatal("exact defaults were hidden or reported edited")
 	}
 	for _, pressed := range []string{"m", "r", "l"} {
@@ -339,9 +421,39 @@ func TestSetupAssignmentIdentitySeedingAndLongExactRendering(t *testing.T) {
 			t.Fatalf("exact line width=%d: %q", len(line), line)
 		}
 	}
-	if !strings.Contains(joined, strings.Repeat("a", 64)) || !strings.Contains(joined, strings.Repeat("b", 64)) || !strings.Contains(joined, "effort=ultra") {
+	if !strings.Contains(joined, strings.Repeat("a", 64)) || !strings.Contains(joined, strings.Repeat("b", 64)) || !strings.Contains(joined, "requested=ultra") {
 		t.Fatal("wrapped exact profile hid model bytes or effort")
 	}
+}
+
+func TestSetupExactAssignmentConfirmationAndOutcomeDiscloseResolution(t *testing.T) {
+	requestRows := [SetupModelAssignmentCount]SetupModelAssignmentRequest{}
+	plan := assignmentSetupPlan(3)
+	for index, identity := range setupAgentRows {
+		requestRows[index] = SetupModelAssignmentRequest{
+			ArtifactKey: identity.ArtifactKey, Provider: "acme", Reference: "acme/model",
+			RequestedEffort: "ultra", Source: "custom", Availability: "unknown",
+		}
+		plan.ModelAssignments[index].RequestedEffort = "ultra"
+		plan.ModelAssignments[index].Effort = "high"
+		plan.ModelAssignments[index].Variant = "high"
+	}
+	plan.ModelAssignments[0].Degraded = true
+	plan.ModelAssignments[0].DegradationReason = "unsupported\nreason"
+
+	confirmation := strings.Join(setupAssignmentRequestProfile(requestRows, 80), "\n")
+	for _, expected := range []string{"requested=ultra", "source=custom", "availability=unknown"} {
+		if !strings.Contains(confirmation, expected) {
+			t.Fatalf("confirmation missing %q:\n%s", expected, confirmation)
+		}
+	}
+	outcome := strings.Join(setupPlanModelProfile(plan, 80), "\n")
+	for _, expected := range []string{"requested=ultra", "effective=high", "variant=high", "degraded=unsupported\\nreason"} {
+		if !strings.Contains(outcome, expected) {
+			t.Fatalf("outcome missing %q:\n%s", expected, outcome)
+		}
+	}
+	assertMaximumWidth(t, confirmation+"\n"+outcome, 80)
 }
 
 func TestSetupModelEditorEnterPreviewsExactRequestBeforeApply(t *testing.T) {
@@ -434,7 +546,7 @@ func TestSetupScrollSynchronizesCurrentRouteBeforeViewportUpdate(t *testing.T) {
 	if strings.Contains(model.View().Content, "later-step-24") {
 		t.Fatal("test plan did not clip initial route")
 	}
-	for range 30 {
+	for range 31 {
 		model = updateModel(t, model, keyPress("j"))
 	}
 	if !strings.Contains(model.View().Content, "later-step-24") {

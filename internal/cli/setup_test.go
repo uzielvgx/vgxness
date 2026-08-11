@@ -87,10 +87,37 @@ func TestSetupWizardMixedSlotsCarryEffortsAndNeverClaimAuthorization(t *testing.
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--preview", "--model-efficient", "openai/fast", "--model-balanced", "anthropic/balanced", "--model-frontier", "acme/frontier", "--model-efficient-effort", "low", "--model-balanced-effort", "high", "--model-frontier-effort", "ultra"}, strings.NewReader(""), &stdout, &stderr, fake)
 	testutil.Require(t, code == 0 && stderr.Len() == 0 && fake.options.Integration.ModelFrontierEffort == sdd.EffortUltra, "code=%d options=%+v stderr=%q", code, fake.options, stderr.String())
-	for _, expected := range []string{"Slot efficient: provider=openai ref=openai/fast effort=low source=catalog availability=catalog-known", "Slot balanced: provider=anthropic ref=anthropic/balanced effort=high source=custom availability=unknown", "Slot frontier: provider=acme ref=acme/frontier effort=ultra source=custom availability=unknown"} {
+	for _, expected := range []string{
+		"Slot efficient:\n    provider=openai\n    ref=openai/fast\n    effort=low\n    source=catalog\n    availability=catalog-known",
+		"Slot balanced:\n    provider=anthropic\n    ref=anthropic/balanced\n    effort=high\n    source=custom\n    availability=unknown",
+		"Slot frontier:\n    provider=acme\n    ref=acme/frontier\n    effort=ultra\n    source=custom\n    availability=unknown",
+	} {
 		testutil.Require(t, strings.Contains(stdout.String(), expected), "missing %q: %s", expected, stdout.String())
 	}
 	testutil.Require(t, !strings.Contains(strings.ToLower(stdout.String()), "authorized"), "output claims authorization: %s", stdout.String())
+}
+
+func TestSetupModelReferenceValidationMatchesCatalogGrammar(t *testing.T) {
+	valid := []string{
+		"provider/model",
+		"provider/model:variant@host+feature/nested",
+		strings.Repeat("a", 256) + "/" + strings.Repeat("b", 255),
+	}
+	for _, reference := range valid {
+		if !validSetupModelReference(reference) {
+			t.Errorf("validSetupModelReference(%q) = false", reference)
+		}
+	}
+	for _, reference := range []string{
+		"model", "@provider/model", "provider//model", "provider/model name",
+		"provider/model?query", "provider/model#fragment", "provider/model=value", `provider/model\path`,
+		strings.Repeat("a", 257) + "/model",
+		strings.Repeat("a", 256) + "/" + strings.Repeat("b", 256),
+	} {
+		if validSetupModelReference(reference) {
+			t.Errorf("validSetupModelReference(%q) = true", reference)
+		}
+	}
 }
 
 func TestSetupWizardRejectsHomogeneousEffortOverride(t *testing.T) {
@@ -132,6 +159,72 @@ func TestSetupWizardPreviewExplainsAllStepsWithoutApplying(t *testing.T) {
 	output := stdout.String()
 	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "18 skills y 42 archivos") || !strings.Contains(output, "end-to-end-testing y sdd-lifecycle") || !strings.Contains(output, "Paso 1 de 7") || !strings.Contains(output, "Paso 7 de 7") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "sustituciones administradas para Explore y general") || !strings.Contains(output, "workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "MCP --full administrado como único runtime") || !strings.Contains(output, "verificador independiente") || !strings.Contains(output, "Artefactos administrados: 18") || !strings.Contains(output, "Agente predeterminado: vgxness-manager") || !strings.Contains(output, "no se modificó ningún archivo") {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, output, stderr.String())
+	}
+}
+
+func TestSetupWizardShowsLifecycleActionAndExactDigestBeforePrompt(t *testing.T) {
+	for _, test := range []struct {
+		name, action string
+		plan         setupflow.Plan
+	}{
+		{name: "install", action: "install", plan: setupPlanFixture(true)},
+		{name: "no change", action: "no-change", plan: func() setupflow.Plan {
+			plan := setupPlanFixture(true)
+			plan.SelfInstall.State, plan.Integration.State, plan.Skills.State = selfinstall.StateInstalled, integration.StateInstalled, skills.StateInstalled
+			return plan
+		}()},
+		{name: "update or reinstall", action: "update/reinstall", plan: func() setupflow.Plan {
+			plan := setupPlanFixture(true)
+			plan.SelfInstall.State, plan.Integration.State, plan.Skills.State = selfinstall.StateInstalled, integration.StateInstalled, skills.StateInstalled
+			plan.Integration.Changed = true
+			return plan
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.plan.Digest = strings.Repeat("d", 64)
+			fake := &fakeSetupRuntime{plan: test.plan}
+			var stdout, stderr bytes.Buffer
+			code := runSetup(context.Background(), []string{"opencode", "--workspace", "/workspace"}, strings.NewReader("\n"), &stdout, &stderr, fake)
+			output := stdout.String()
+			action := "Lifecycle action: " + test.action
+			digest := "Plan digest: " + test.plan.Digest
+			prompt := "¿Aplicar exactamente este plan?"
+			if code != 0 || stderr.Len() != 0 || !strings.Contains(output, action) || !strings.Contains(output, digest) || strings.Index(output, action) > strings.Index(output, prompt) || strings.Index(output, digest) > strings.Index(output, prompt) {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, output, stderr.String())
+			}
+		})
+	}
+}
+
+func TestRenderModelSlotsWrapsMaximumReferenceWithoutLoss(t *testing.T) {
+	reference := strings.Repeat("a", 256) + "/" + strings.Repeat("b", 255)
+	result := integration.Result{
+		ModelEfficient: reference, ModelEfficientEffort: sdd.EffortUltra,
+		ModelEfficientSource: sdd.ModelSlotCustom, ModelEfficientAvailability: sdd.ModelSlotUnknown,
+	}
+	var output bytes.Buffer
+	renderModelSlots(&output, result)
+	for _, line := range strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n") {
+		if len(line) > 80 {
+			t.Fatalf("model slot line width=%d: %q", len(line), line)
+		}
+	}
+	lines := strings.Split(output.String(), "\n")
+	var renderedReference strings.Builder
+	collect := false
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "    ref="):
+			collect = true
+			renderedReference.WriteString(strings.TrimPrefix(line, "    ref="))
+		case collect && strings.HasPrefix(line, "        "):
+			renderedReference.WriteString(strings.TrimPrefix(line, "        "))
+		case collect:
+			collect = false
+		}
+	}
+	if renderedReference.String() != reference || !strings.Contains(output.String(), "effort=ultra") || !strings.Contains(output.String(), "source=custom") || !strings.Contains(output.String(), "availability=unknown") {
+		t.Fatalf("wrapped slot lost data: ref-bytes=%d output=%q", renderedReference.Len(), output.String())
 	}
 }
 
@@ -182,7 +275,7 @@ func TestSetupWizardSuccessfulApplyReportsGlobalSkillCatalog(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
 	output := stdout.String()
-	if code != 0 || fake.applyCalls != 1 || stderr.Len() != 0 || !strings.Contains(output, "Paso 3: retiro verificado") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "catálogo global de 23 archivos") || !strings.Contains(output, "skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + sdd-lifecycle") || !strings.Contains(output, "Slot efficient: provider=openai ref=openai/gpt-5.6-luna effort=low source=catalog availability=catalog-known") || !strings.Contains(output, "Slot balanced: provider=openai ref=openai/gpt-5.6-terra effort=high source=custom availability=unknown") || !strings.Contains(output, "Slot frontier: provider=openai ref=openai/gpt-5.6-sol effort=ultra source=custom availability=unknown") {
+	if code != 0 || fake.applyCalls != 1 || stderr.Len() != 0 || !strings.Contains(output, "Paso 3: retiro verificado") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "catálogo global de 23 archivos") || !strings.Contains(output, "skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + sdd-lifecycle") || !strings.Contains(output, "Slot efficient:\n    provider=openai\n    ref=openai/gpt-5.6-luna\n    effort=low\n    source=catalog\n    availability=catalog-known") || !strings.Contains(output, "Slot balanced:\n    provider=openai\n    ref=openai/gpt-5.6-terra\n    effort=high\n    source=custom\n    availability=unknown") || !strings.Contains(output, "Slot frontier:\n    provider=openai\n    ref=openai/gpt-5.6-sol\n    effort=ultra\n    source=custom\n    availability=unknown") {
 		t.Fatalf("code=%d apply=%d stdout=%q stderr=%q", code, fake.applyCalls, output, stderr.String())
 	}
 }

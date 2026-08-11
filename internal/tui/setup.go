@@ -7,11 +7,14 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/vgxness/vgxness/internal/modelcatalog"
 )
 
 const (
 	defaultSetupPlan          = "medium"
 	SetupModelAssignmentCount = 15
+	setupDiscoveryDisclaimer  = "Local discovery proves identifier presence only; not authorization or support."
 )
 
 var setupPlans = [...]string{"low", "medium", "high", "ultra"}
@@ -633,29 +636,8 @@ func (m Model) modelEditorError() string {
 }
 
 func validSetupModelReference(reference string) bool {
-	segments := strings.Split(reference, "/")
-	if len(reference) > 512 || len(segments) < 2 || strings.HasPrefix(reference, "@") {
-		return false
-	}
-	for _, segment := range segments {
-		if !validSetupModelPart(segment) {
-			return false
-		}
-	}
-	return true
-}
-
-func validSetupModelPart(value string) bool {
-	if value == "" || len(value) > 256 {
-		return false
-	}
-	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("-_.:@+", character) {
-			continue
-		}
-		return false
-	}
-	return true
+	_, valid := modelcatalog.ValidReference(reference)
+	return valid
 }
 
 func (m *Model) selectSetupPlan(offset int) tea.Cmd {
@@ -772,6 +754,7 @@ func (m Model) setupRouteLines() []string {
 	lines = append(lines,
 		readiness,
 		"action  "+action,
+		"digest  "+setupValue(plan.Digest),
 		"launcher  "+setupValue(plan.SelfInstallState)+"  "+setupValue(plan.SelfInstallPath),
 		"integration  "+setupValue(plan.IntegrationState)+"  "+setupValue(plan.IntegrationPath),
 		"shared skills  "+setupValue(plan.SkillsState)+"  "+setupValue(plan.SkillsPath),
@@ -869,7 +852,7 @@ func (m Model) modelAssignmentLines() []string {
 	case len(m.setupCatalog) == 0:
 		lines = append(lines, "! No locally cached models. [r] Refresh explicitly.")
 	default:
-		lines = append(lines, fmt.Sprintf("✓ %d catalog models · selection proves catalog presence, not authorization", len(m.setupCatalog)))
+		lines = appendSetupWrapped(lines, "", fmt.Sprintf("✓ %d catalog models · %s", len(m.setupCatalog), setupDiscoveryDisclaimer), m.setupViewport.Width())
 	}
 	if err := m.modelEditorError(); err != "" {
 		lines = append(lines, "✕ "+err)
@@ -933,8 +916,15 @@ func setupPlanModelProfile(plan SetupPlan, width int) []string {
 			return append(lines, "! Invalid agent identity set; exact profile not applied.")
 		}
 		for index, row := range ordered {
-			lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Model, row.RequestedEffort, width)
+			lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Model, []string{
+				"requested=" + row.RequestedEffort, "effective=" + row.Effort, "variant=" + row.Variant,
+				"source=" + row.Source, "availability=" + row.Availability,
+			}, width)
+			if row.Degraded {
+				lines = appendSetupWrapped(lines, "    degraded=", row.DegradationReason, width)
+			}
 		}
+		lines = appendSetupWrapped(lines, "", setupDiscoveryDisclaimer, width)
 		return lines
 	}
 	if plan.ModelEfficient == "" && plan.ModelBalanced == "" && plan.ModelFrontier == "" {
@@ -950,25 +940,49 @@ func setupPlanModelProfile(plan SetupPlan, width int) []string {
 func setupAssignmentRequestProfile(rows [SetupModelAssignmentCount]SetupModelAssignmentRequest, width int) []string {
 	lines := []string{"EXACT AGENT ASSIGNMENTS"}
 	for index, row := range rows {
-		lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Reference, row.RequestedEffort, width)
+		lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Reference, []string{
+			"requested=" + row.RequestedEffort, "source=" + row.Source, "availability=" + row.Availability,
+		}, width)
+	}
+	lines = appendSetupWrapped(lines, "", setupDiscoveryDisclaimer, width)
+	return lines
+}
+
+func appendSetupAssignmentProfile(lines []string, name, reference string, details []string, width int) []string {
+	name, reference = sanitizeTerminal(name), sanitizeTerminal(reference)
+	line := "  " + name + "  model=" + reference
+	width = max(20, width)
+	if lipgloss.Width(line) <= width {
+		return appendSetupDetails(append(lines, line), details, width)
+	}
+	lines = append(lines, "  "+name)
+	lines = appendSetupWrapped(lines, "    model=", reference, width)
+	return appendSetupDetails(lines, details, width)
+}
+
+func appendSetupDetails(lines, details []string, width int) []string {
+	line := "    "
+	for _, detail := range details {
+		detail = sanitizeTerminal(detail)
+		if lipgloss.Width(line)+1+lipgloss.Width(detail) > width && strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+			line = "    " + detail
+			continue
+		}
+		if strings.TrimSpace(line) != "" {
+			line += " "
+		}
+		line += detail
+	}
+	if strings.TrimSpace(line) != "" {
+		lines = append(lines, line)
 	}
 	return lines
 }
 
-func appendSetupAssignmentProfile(lines []string, name, reference, effort string, width int) []string {
-	name, reference, effort = sanitizeTerminal(name), sanitizeTerminal(reference), sanitizeTerminal(effort)
-	line := "  " + name + "  " + reference + "  effort=" + effort
-	width = max(20, width)
-	if len(line) <= width {
-		return append(lines, line)
-	}
-	lines = append(lines, "  "+name)
-	prefix, continuation := "    model ", "          "
-	for len(reference) > 0 {
-		count := min(len(reference), width-len(prefix))
-		lines, reference, prefix = append(lines, prefix+reference[:count]), reference[count:], continuation
-	}
-	return append(lines, "    effort="+effort)
+func appendSetupWrapped(lines []string, prefix, value string, width int) []string {
+	wrapped := lipgloss.Wrap(prefix+sanitizeTerminal(value), max(20, width), "")
+	return append(lines, strings.Split(wrapped, "\n")...)
 }
 
 func orderedSetupAssignments(rows *[SetupModelAssignmentCount]SetupModelAssignment) ([SetupModelAssignmentCount]SetupModelAssignment, bool) {

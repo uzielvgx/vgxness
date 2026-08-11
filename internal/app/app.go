@@ -364,19 +364,32 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 	integrationOptions := integration.Options{}
 	if request.ModelAssignments != nil {
 		assignments := make(map[string]sdd.ManagedAgentModelConfig, tui.SetupModelAssignmentCount)
+		providerSummary := ""
 		for _, row := range request.ModelAssignments {
-			if row.ArtifactKey == "" {
+			provider, validReference := modelcatalog.ValidReference(row.Reference)
+			effort := sdd.Effort(row.RequestedEffort)
+			source, availability := sdd.ModelSlotSource(row.Source), sdd.ModelSlotAvailability(row.Availability)
+			validProvenance := source == sdd.ModelSlotCatalog && availability == sdd.ModelSlotCatalogKnown || source == sdd.ModelSlotCustom && availability == sdd.ModelSlotUnknown
+			if row.ArtifactKey == "" || !validReference || row.Provider != provider || !effort.Valid() || !validProvenance {
 				return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
 			}
 			if _, duplicate := assignments[row.ArtifactKey]; duplicate {
 				return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
 			}
 			assignments[row.ArtifactKey] = sdd.ManagedAgentModelConfig{
-				Provider: row.Provider, Reference: row.Reference, RequestedEffort: sdd.Effort(row.RequestedEffort),
-				Source: sdd.ModelSlotSource(row.Source), Availability: sdd.ModelSlotAvailability(row.Availability),
+				Provider: row.Provider, Reference: row.Reference, RequestedEffort: effort,
+				Source: source, Availability: availability,
+			}
+			if providerSummary == "" {
+				providerSummary = provider
+			} else if providerSummary != provider {
+				providerSummary = "mixed"
 			}
 		}
 		if len(assignments) != integration.ModelAssignmentCount {
+			return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
+		}
+		if _, err := sdd.ResolveOpenCodePlanV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: providerSummary, Assignments: assignments, Provenance: sdd.ModelPlanCLI}, opencode.ModelAgentInventoryV3()); err != nil {
 			return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
 		}
 		integrationOptions.ModelAssignments = &assignments
