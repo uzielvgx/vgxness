@@ -1046,13 +1046,18 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	}
 	result := integration.Result{
 		Provider: "opencode", State: integration.StateAbsent, Path: managerPath, ArtifactSHA256: artifactSHA256(plan.agents[managerAgentName]),
-		ModelPlan: plan.config.ActivePlan, ModelProvider: plan.resolved.Provider,
-		ModelEfficient: plan.config.Efficient, ModelBalanced: plan.config.Balanced, ModelFrontier: plan.config.Frontier,
 		ManifestPath: manifestPath, ManifestSHA256: artifactSHA256(plan.manifest),
 		DefaultAgent: defaultAgentName, DefaultAgentPath: defaultAgentPath,
 		DirectoryDurability: directoryDurability(),
 	}
-	if plan.configV2 != nil {
+	if plan.configV3 != nil {
+		result.ModelProvider = plan.resolvedV3.Provider
+		assignments, assignmentErr := resultModelAssignments(plan.resolvedV3.Assignments)
+		if assignmentErr != nil {
+			return inspection{}, assignmentErr
+		}
+		result.ModelAssignments = assignments
+	} else if plan.configV2 != nil {
 		result.ModelPlan = plan.configV2.ActivePlan
 		result.ModelProvider = plan.resolvedV2.Provider
 		efficient := plan.configV2.Slots[sdd.CapabilityEfficient]
@@ -1061,6 +1066,9 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		result.ModelEfficient, result.ModelEfficientEffort, result.ModelEfficientSource, result.ModelEfficientAvailability = efficient.Reference, efficient.RequestedEffort, efficient.Source, efficient.Availability
 		result.ModelBalanced, result.ModelBalancedEffort, result.ModelBalancedSource, result.ModelBalancedAvailability = balanced.Reference, balanced.RequestedEffort, balanced.Source, balanced.Availability
 		result.ModelFrontier, result.ModelFrontierEffort, result.ModelFrontierSource, result.ModelFrontierAvailability = frontier.Reference, frontier.RequestedEffort, frontier.Source, frontier.Availability
+	} else {
+		result.ModelPlan, result.ModelProvider = plan.config.ActivePlan, plan.resolved.Provider
+		result.ModelEfficient, result.ModelBalanced, result.ModelFrontier = plan.config.Efficient, plan.config.Balanced, plan.config.Frontier
 	}
 	if defaultAgentState.Drifted {
 		result.State = integration.StateDrifted
@@ -1079,25 +1087,32 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	_, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
 	predecessors := map[string][][]byte{}
 	if !installedPlanOK {
-		managerPrior, predecessorErr := managerPredecessors(plan)
-		if predecessorErr != nil {
-			return inspection{}, predecessorErr
-		}
-		predecessors[managerAgentName] = managerPrior
-		v45, predecessorErr := previousV45ModelPlanBundle(plan)
-		if predecessorErr != nil {
-			return inspection{}, predecessorErr
-		}
-		v44, predecessorErr := previousV44ModelPlanBundle(plan)
-		if predecessorErr != nil {
-			return inspection{}, predecessorErr
-		}
-		v43, predecessorErr := previousV43ModelPlanBundle(v44)
-		if predecessorErr != nil {
-			return inspection{}, predecessorErr
-		}
-		for _, name := range compactProtocolAgentNames {
-			predecessors[name] = [][]byte{v45.agents[name], v44.agents[name], v43.agents[name]}
+		if plan.configV3 != nil {
+			predecessors, err = modelBoundAgentPredecessorsV3(*plan.resolvedV3)
+			if err != nil {
+				return inspection{}, err
+			}
+		} else {
+			managerPrior, predecessorErr := managerPredecessors(plan)
+			if predecessorErr != nil {
+				return inspection{}, predecessorErr
+			}
+			predecessors[managerAgentName] = managerPrior
+			v45, predecessorErr := previousV45ModelPlanBundle(plan)
+			if predecessorErr != nil {
+				return inspection{}, predecessorErr
+			}
+			v44, predecessorErr := previousV44ModelPlanBundle(plan)
+			if predecessorErr != nil {
+				return inspection{}, predecessorErr
+			}
+			v43, predecessorErr := previousV43ModelPlanBundle(v44)
+			if predecessorErr != nil {
+				return inspection{}, predecessorErr
+			}
+			for _, name := range compactProtocolAgentNames {
+				predecessors[name] = [][]byte{v45.agents[name], v44.agents[name], v43.agents[name]}
+			}
 		}
 	}
 	regeneration := func(path string) [][]byte {
@@ -1239,6 +1254,15 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		state.result.State = integration.StatePartial
 	}
 	return state, nil
+}
+
+func resultModelAssignments(resolved []sdd.OpenCodeAgentAssignmentV3) (*[integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3, error) {
+	if len(resolved) != integration.ModelAssignmentCount {
+		return nil, fmt.Errorf("%w: resolved OpenCode v3 assignment count", integration.ErrInvalid)
+	}
+	assignments := new([integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3)
+	copy(assignments[:], resolved)
+	return assignments, nil
 }
 
 func isRetiredSkill(content []byte) bool {

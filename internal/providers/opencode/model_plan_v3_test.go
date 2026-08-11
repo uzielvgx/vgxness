@@ -1,11 +1,29 @@
 package opencode
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
+
+func completeModelAssignmentsV3() map[string]sdd.ManagedAgentModelConfig {
+	assignments := make(map[string]sdd.ManagedAgentModelConfig, len(modelAgentInventoryV3))
+	efforts := []sdd.Effort{sdd.EffortLow, sdd.EffortMedium, sdd.EffortHigh, sdd.EffortUltra}
+	for index, identity := range modelAgentInventoryV3 {
+		assignments[identity.ArtifactKey] = sdd.ManagedAgentModelConfig{
+			Provider: "acme", Reference: fmt.Sprintf("acme/model-%02d", index), RequestedEffort: efforts[index%len(efforts)],
+			Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown,
+		}
+	}
+	return assignments
+}
 
 func TestModelAgentInventoryV3IsCanonical(t *testing.T) {
 	want := []sdd.ManagedAgentIdentity{
@@ -25,6 +43,9 @@ func TestModelAgentInventoryV3IsCanonical(t *testing.T) {
 		{ArtifactKey: "agents/vgxness-sdd-tasks.md", Role: sdd.RoleTasks, Class: sdd.ManagedAgentClassSDD},
 		{ArtifactKey: "agents/vgxness-sdd-apply.md", Role: sdd.RoleApply, Class: sdd.ManagedAgentClassSDD},
 	}
+	if len(want) != integration.ModelAssignmentCount {
+		t.Fatalf("inventory count=%d transport count=%d", len(want), integration.ModelAssignmentCount)
+	}
 	if got := ModelAgentInventoryV3(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("inventory=\n%+v\nwant=\n%+v", got, want)
 	}
@@ -32,6 +53,22 @@ func TestModelAgentInventoryV3IsCanonical(t *testing.T) {
 	got[0].ArtifactKey = "mutated"
 	if ModelAgentInventoryV3()[0].ArtifactKey != want[0].ArtifactKey {
 		t.Fatal("inventory escaped by reference")
+	}
+}
+
+func TestResultModelAssignmentsRejectsNonCanonicalCountAndCopies(t *testing.T) {
+	if _, err := resultModelAssignments(make([]sdd.OpenCodeAgentAssignmentV3, integration.ModelAssignmentCount-1)); !errors.Is(err, integration.ErrInvalid) {
+		t.Fatalf("short resolved rows accepted: %v", err)
+	}
+	rows := make([]sdd.OpenCodeAgentAssignmentV3, integration.ModelAssignmentCount)
+	rows[0].ArtifactKey = "agents/original.md"
+	result, err := resultModelAssignments(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows[0].ArtifactKey = "agents/mutated.md"
+	if result[0].ArtifactKey != "agents/original.md" {
+		t.Fatal("resolved rows escaped by reference")
 	}
 }
 
@@ -48,7 +85,7 @@ func TestResolveModelPlanV3SupportsHomogeneousAndThreeProviderAssignments(t *tes
 	}
 	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "mixed", Provenance: sdd.ModelPlanCLI, Assignments: assignments}
 	resolved, err := ResolveModelPlanV3(config)
-	if err != nil || resolved.Provider != "mixed" || len(resolved.Assignments) != 15 {
+	if err != nil || resolved.Provider != "mixed" || len(resolved.Assignments) != integration.ModelAssignmentCount {
 		t.Fatalf("resolved=%+v err=%v", resolved, err)
 	}
 	for index, assignment := range resolved.Assignments {
@@ -89,7 +126,7 @@ func TestResolveModelPlanV3SupportsHomogeneousAndThreeProviderAssignments(t *tes
 }
 
 func TestResolveModelPlanV3KeepsDuplicateRolePeersDistinct(t *testing.T) {
-	assignments := make(map[string]sdd.ManagedAgentModelConfig, 15)
+	assignments := make(map[string]sdd.ManagedAgentModelConfig, integration.ModelAssignmentCount)
 	for _, identity := range ModelAgentInventoryV3() {
 		assignments[identity.ArtifactKey] = sdd.ManagedAgentModelConfig{Provider: "acme", Reference: "acme/default", RequestedEffort: sdd.EffortMedium, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown}
 	}
@@ -111,4 +148,100 @@ func TestResolveModelPlanV3KeepsDuplicateRolePeersDistinct(t *testing.T) {
 	if models["agents/explore.md"] == models["agents/vgxness-sdd-research.md"] {
 		t.Fatalf("research peers collapsed: %+v", models)
 	}
+}
+
+func TestRequestedModelPlanV3RendersArtifactAssignmentsAndStrictManifest(t *testing.T) {
+	assignments := completeModelAssignmentsV3()
+	bundle, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.configV3 == nil || bundle.resolvedV3 == nil || bundle.configV2 != nil || bundle.resolvedV2 != nil || len(bundle.resolvedV3.Assignments) != integration.ModelAssignmentCount {
+		t.Fatalf("bundle=%+v", bundle)
+	}
+	for _, row := range bundle.resolvedV3.Assignments {
+		name := strings.TrimPrefix(row.ArtifactKey, "agents/")
+		content := bundle.agents[name]
+		if !bytes.Contains(content, []byte("model: "+row.Model+"\nvariant: "+string(row.Variant)+"\n")) {
+			t.Fatalf("%s not rendered with %+v: %s", row.ArtifactKey, row, content)
+		}
+	}
+	if bytes.Equal(bundle.agents[exploreAgentName], bundle.agents[sddResearchName]) {
+		t.Fatal("duplicate-role artifacts collapsed")
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal(bundle.manifest, &document); err != nil {
+		t.Fatal(err)
+	}
+	wantKeys := []string{"artifacts", "configV3", "managedBy", "resolvedV3", "schemaVersion"}
+	gotKeys := make([]string, 0, len(document))
+	for key := range document {
+		gotKeys = append(gotKeys, key)
+	}
+	if !reflect.DeepEqual(sortedStrings(gotKeys), wantKeys) || document["schemaVersion"] != float64(3) {
+		t.Fatalf("manifest keys=%v document=%v", gotKeys, document)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"unknown":          func(value map[string]any) { value["unknown"] = true },
+		"schema confusion": func(value map[string]any) { value["config"] = sdd.DefaultModelPlanConfig() },
+		"nil artifacts":    func(value map[string]any) { value["artifacts"] = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var value map[string]any
+			if err := json.Unmarshal(bundle.manifest, &value); err != nil {
+				t.Fatal(err)
+			}
+			mutate(value)
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeModelPlanManifest(data); !errors.Is(err, integration.ErrDrift) {
+				t.Fatalf("malformed v3 accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestRequestedModelPlanV3RejectsIncompleteAssignments(t *testing.T) {
+	for name, mutate := range map[string]func(map[string]sdd.ManagedAgentModelConfig){
+		"missing": func(assignments map[string]sdd.ManagedAgentModelConfig) {
+			delete(assignments, modelAgentInventoryV3[0].ArtifactKey)
+		},
+		"extra": func(assignments map[string]sdd.ManagedAgentModelConfig) {
+			assignments["agents/extra.md"] = assignments[modelAgentInventoryV3[0].ArtifactKey]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assignments := completeModelAssignmentsV3()
+			mutate(assignments)
+			_, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir())
+			if !errors.Is(err, integration.ErrInvalid) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestRequestedModelPlanV3PresenceDistinguishesNilPointer(t *testing.T) {
+	legacy, err := requestedModelPlan(integration.Options{}, t.TempDir())
+	if err != nil || legacy.configV3 != nil || legacy.config.SchemaVersion != 1 {
+		t.Fatalf("nil pointer did not preserve legacy selection: bundle=%+v err=%v", legacy, err)
+	}
+	var assignments map[string]sdd.ManagedAgentModelConfig
+	if _, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir()); !errors.Is(err, integration.ErrInvalid) {
+		t.Fatalf("explicit nil underlying map accepted: %v", err)
+	}
+}
+
+func sortedStrings(values []string) []string {
+	result := append([]string(nil), values...)
+	for index := 1; index < len(result); index++ {
+		for cursor := index; cursor > 0 && result[cursor] < result[cursor-1]; cursor-- {
+			result[cursor], result[cursor-1] = result[cursor-1], result[cursor]
+		}
+	}
+	return result
 }
