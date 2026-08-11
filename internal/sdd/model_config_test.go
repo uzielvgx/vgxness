@@ -169,6 +169,23 @@ func TestResolveOpenCodePlanV2UsesAuthoritativeSlotEfforts(t *testing.T) {
 	}
 }
 
+func TestResolveOpenCodePlanV2KeepsExplicitEmptyVariants(t *testing.T) {
+	config := DefaultModelPlanConfigV2()
+	for capability, slot := range config.Slots {
+		slot.VariantSpecified = true
+		config.Slots[capability] = slot
+	}
+	resolved, err := ResolveOpenCodePlanV2(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for role, assignment := range resolved.Roles {
+		if assignment.Variant != "" {
+			t.Fatalf("%s explicit empty variant=%q", role, assignment.Variant)
+		}
+	}
+}
+
 func TestResolveOpenCodePlanV3PreservesCanonicalOrderAndIndependentAssignments(t *testing.T) {
 	inventory := []ManagedAgentIdentity{
 		{ArtifactKey: "agents/first.md", Role: RoleResearch, Class: ManagedAgentClassCore},
@@ -205,6 +222,17 @@ func TestResolveOpenCodePlanV3PreservesCanonicalOrderAndIndependentAssignments(t
 		if _, err := modelProvider(reference); (err == nil) != valid {
 			t.Fatalf("modelProvider(%q) error=%v, valid=%t", reference, err, valid)
 		}
+	}
+}
+
+func TestResolveOpenCodePlanV3PreservesVerbatimVariant(t *testing.T) {
+	inventory := []ManagedAgentIdentity{{ArtifactKey: "agents/only.md", Role: RoleManager, Class: ManagedAgentClassCore}}
+	config := ModelPlanConfigV3{SchemaVersion: 3, Provider: "openai", Provenance: ModelPlanCLI, Assignments: map[string]ManagedAgentModelConfig{
+		"agents/only.md": {Provider: "openai", Reference: "openai/gpt-5.6-terra", RequestedEffort: EffortUltra, Variant: "max", Source: ModelSlotCustom, Availability: ModelSlotUnknown},
+	}}
+	resolved, err := ResolveOpenCodePlanV3(config, inventory)
+	if err != nil || len(resolved.Assignments) != 1 || resolved.Assignments[0].Variant != "max" {
+		t.Fatalf("ResolveOpenCodePlanV3() = (%+v, %v), want verbatim max", resolved, err)
 	}
 }
 

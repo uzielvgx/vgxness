@@ -156,7 +156,7 @@ func (backend tuiBackend) ModelCatalog(ctx context.Context, refresh bool) ([]tui
 	rows := make([]tui.SetupCatalogModel, len(snapshot.Models))
 	for index, reference := range snapshot.Models {
 		provider, _, _ := strings.Cut(reference, "/")
-		rows[index] = tui.SetupCatalogModel{Provider: provider, Reference: reference, Source: "custom", Availability: "unknown"}
+		rows[index] = tui.SetupCatalogModel{Provider: provider, Reference: reference, Variants: append([]string{}, snapshot.Variants[reference]...), Source: "custom", Availability: "unknown"}
 	}
 	return rows, nil
 }

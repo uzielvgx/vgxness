@@ -330,10 +330,10 @@ func TestTUISetupPlanAssignmentRowsAreMappedAndCopied(t *testing.T) {
 }
 
 func TestTUIBackendCatalogMapsNeutralRowsAndRefreshFlag(t *testing.T) {
-	catalog := &recordingCatalog{snapshot: modelcatalog.Snapshot{Models: []string{"acme/a:b@c+d", "other/nested/model"}}}
+	catalog := &recordingCatalog{snapshot: modelcatalog.Snapshot{Models: []string{"acme/a:b@c+d", "other/nested/model"}, Variants: map[string][]string{"acme/a:b@c+d": {"xhigh", "max"}, "other/nested/model": {}}}}
 	backend := tuiBackend{catalog: catalog}
 	rows, err := backend.ModelCatalog(context.Background(), false)
-	testutil.Require(t, err == nil && !catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 0 && len(rows) == 2 && rows[0] == (tui.SetupCatalogModel{Provider: "acme", Reference: "acme/a:b@c+d", Source: "custom", Availability: "unknown"}), "rows=%+v err=%v", rows, err)
+	testutil.Require(t, err == nil && !catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 0 && len(rows) == 2 && rows[0].Provider == "acme" && rows[0].Reference == "acme/a:b@c+d" && len(rows[0].Variants) == 2 && rows[0].Variants[0] == "xhigh" && rows[0].Variants[1] == "max" && rows[0].Source == "custom" && rows[0].Availability == "unknown", "rows=%+v err=%v", rows, err)
 	var requestRows [tui.SetupModelAssignmentCount]tui.SetupModelAssignmentRequest
 	for index, identity := range opencode.ModelAgentInventoryV3() {
 		requestRows[index] = tui.SetupModelAssignmentRequest{ArtifactKey: identity.ArtifactKey, Provider: rows[0].Provider, Reference: rows[0].Reference, RequestedEffort: "ultra", Source: rows[0].Source, Availability: rows[0].Availability}

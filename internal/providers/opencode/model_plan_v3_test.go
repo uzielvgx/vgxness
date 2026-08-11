@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -152,6 +154,10 @@ func TestResolveModelPlanV3KeepsDuplicateRolePeersDistinct(t *testing.T) {
 
 func TestRequestedModelPlanV3RendersArtifactAssignmentsAndStrictManifest(t *testing.T) {
 	assignments := completeModelAssignmentsV3()
+	for key, assignment := range assignments {
+		assignment.Variant = "thinking"
+		assignments[key] = assignment
+	}
 	bundle, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -202,6 +208,117 @@ func TestRequestedModelPlanV3RendersArtifactAssignmentsAndStrictManifest(t *test
 				t.Fatalf("malformed v3 accepted: %v", err)
 			}
 		})
+	}
+}
+
+func TestRequestedModelPlanV3OmitsEmptyVariant(t *testing.T) {
+	assignments := completeModelAssignmentsV3()
+	for key, assignment := range assignments {
+		assignment.VariantSpecified = true
+		assignments[key] = assignment
+	}
+	bundle, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range bundle.agents {
+		if bytes.Contains(content, []byte("variant:")) {
+			t.Fatalf("%s renders a provider-default variant: %s", name, content)
+		}
+	}
+}
+
+func TestOmitEmptyVariantLinesRemovesOnlyFirstLine(t *testing.T) {
+	agents := map[string][]byte{"agent.md": []byte("variant: \nvariant: \n")}
+	got := omitEmptyVariantLines(agents)["agent.md"]
+	if want := []byte("variant: \n"); !bytes.Equal(got, want) {
+		t.Fatalf("content=%q want=%q", got, want)
+	}
+}
+
+func TestRequestedModelPlanSameProviderVariantsUseV2AndRenderVerbatim(t *testing.T) {
+	bundle, err := requestedModelPlan(integration.Options{
+		ModelPlan:              sdd.PlanMedium,
+		ModelEfficient:         "openai/gpt-5.6-luna",
+		ModelBalanced:          "openai/gpt-5.6-terra",
+		ModelFrontier:          "openai/gpt-5.6-sol",
+		ModelEfficientVariant:  "xhigh",
+		ModelBalancedVariant:   "max",
+		ModelFrontierVariant:   "none",
+		ModelVariantsSpecified: true,
+	}, t.TempDir())
+	if err != nil || bundle.configV2 == nil || bundle.configV3 != nil {
+		t.Fatalf("bundle=%+v err=%v", bundle, err)
+	}
+	for capability, variant := range map[sdd.Capability]sdd.OpenCodeVariant{
+		sdd.CapabilityEfficient: "xhigh", sdd.CapabilityBalanced: "max", sdd.CapabilityFrontier: "none",
+	} {
+		slot := bundle.configV2.Slots[capability]
+		if slot.Variant != variant || !slot.VariantSpecified || slot.RequestedEffort != sdd.EffortMedium {
+			t.Fatalf("%s slot=%+v", capability, slot)
+		}
+	}
+	for _, variant := range []string{"xhigh", "max", "none"} {
+		found := false
+		for _, content := range bundle.agents {
+			found = found || bytes.Contains(content, []byte("variant: "+variant+"\n"))
+		}
+		if !found {
+			t.Fatalf("variant %q was not rendered verbatim", variant)
+		}
+	}
+}
+
+func TestRequestedModelPlanV2OmitsExplicitEmptyVariants(t *testing.T) {
+	bundle, err := requestedModelPlan(integration.Options{ModelVariantsSpecified: true}, t.TempDir())
+	if err != nil || bundle.configV2 == nil {
+		t.Fatalf("bundle=%+v err=%v", bundle, err)
+	}
+	for name, content := range bundle.agents {
+		if bytes.Contains(content, []byte("variant:")) {
+			t.Fatalf("%s renders explicit empty variant: %s", name, content)
+		}
+	}
+}
+
+func TestRequestedModelPlanV2ReferenceOverrideClearsLegacyVariant(t *testing.T) {
+	installed, err := sdd.NewModelPlanConfigV2(sdd.PlanMedium,
+		sdd.ModelSlotConfig{Reference: "alpha/old", RequestedEffort: sdd.EffortLow, Variant: "max", VariantSpecified: true, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+		sdd.ModelSlotConfig{Reference: "beta/balanced", RequestedEffort: sdd.EffortMedium, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+		sdd.ModelSlotConfig{Reference: "gamma/frontier", RequestedEffort: sdd.EffortHigh, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed.Provenance = sdd.ModelPlanCLI
+	encoded, err := buildModelPlanBundleV2(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "vgxness"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), encoded.manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := requestedModelPlan(integration.Options{ModelEfficient: "alpha/new"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := bundle.configV2.Slots[sdd.CapabilityEfficient]
+	if slot.Reference != "alpha/new" || slot.Variant != "" || slot.VariantSpecified {
+		t.Fatalf("legacy variant survived reference override: %+v", slot)
+	}
+}
+
+func TestModelBoundAgentsPreserveTrustedV1Digest(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest := artifactSHA256(bundle.agents[managerAgentName]); digest != "d31f50a0a2edb950362240c34deb5ed24a2c58e61339d72e9ed102ecda3b4e55" {
+		t.Fatalf("trusted manager digest=%s", digest)
 	}
 }
 

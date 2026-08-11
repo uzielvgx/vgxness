@@ -60,6 +60,7 @@ type SetupModelAssignment struct {
 type SetupCatalogModel struct {
 	Provider     string
 	Reference    string
+	Variants     []string
 	Source       string
 	Availability string
 }

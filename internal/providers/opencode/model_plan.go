@@ -130,7 +130,7 @@ func encodeModelPlanBundleV3(config sdd.ModelPlanConfigV3, resolved sdd.OpenCode
 func requestedModelPlan(options integration.Options, configDirectory string) (modelPlanBundle, error) {
 	explicit := options.ModelPlan != "" || options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != ""
 	v3Requested := options.ModelAssignments != nil
-	if v3Requested && (explicit || hasSlotEffort(options)) {
+	if v3Requested && (explicit || hasSlotEffort(options) || hasSlotVariant(options)) {
 		return modelPlanBundle{}, fmt.Errorf("%w: per-agent assignments cannot be combined with model slots", integration.ErrInvalid)
 	}
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
@@ -168,13 +168,13 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 		return buildModelPlanBundleV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: provider, Assignments: assignments, Provenance: sdd.ModelPlanCLI})
 	}
 	if installedV3 != nil {
-		if explicit || hasSlotEffort(options) {
+		if explicit || hasSlotEffort(options) || hasSlotVariant(options) {
 			return modelPlanBundle{}, fmt.Errorf("%w: installed per-agent plan requires complete per-agent assignments", integration.ErrInvalid)
 		}
 		return installedBundle, nil
 	}
 	if installedV2 != nil {
-		if !explicit && !hasSlotEffort(options) {
+		if !explicit && !hasSlotEffort(options) && !hasSlotVariant(options) {
 			return installedBundle, nil
 		}
 		config, err := overrideModelPlanConfigV2(*installedV2, options)
@@ -200,7 +200,7 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 	if options.ModelFrontier != "" {
 		frontier = options.ModelFrontier
 	}
-	if modelPlanV2Requested(efficient, balanced, frontier) {
+	if modelPlanV2Requested(efficient, balanced, frontier) || hasSlotVariant(options) {
 		config, err := modelPlanConfigV2(options, plan, efficient, balanced, frontier)
 		if err != nil {
 			return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
@@ -245,10 +245,11 @@ func overrideModelPlanConfigV2(installed sdd.ModelPlanConfigV2, options integrat
 		capability sdd.Capability
 		reference  string
 		effort     sdd.Effort
+		variant    sdd.OpenCodeVariant
 	}{
-		{sdd.CapabilityEfficient, options.ModelEfficient, options.ModelEfficientEffort},
-		{sdd.CapabilityBalanced, options.ModelBalanced, options.ModelBalancedEffort},
-		{sdd.CapabilityFrontier, options.ModelFrontier, options.ModelFrontierEffort},
+		{sdd.CapabilityEfficient, options.ModelEfficient, options.ModelEfficientEffort, options.ModelEfficientVariant},
+		{sdd.CapabilityBalanced, options.ModelBalanced, options.ModelBalancedEffort, options.ModelBalancedVariant},
+		{sdd.CapabilityFrontier, options.ModelFrontier, options.ModelFrontierEffort, options.ModelFrontierVariant},
 	} {
 		slot := slots[override.capability]
 		if override.reference != "" {
@@ -265,6 +266,11 @@ func overrideModelPlanConfigV2(installed sdd.ModelPlanConfigV2, options integrat
 				return sdd.ModelPlanConfigV2{}, integration.ErrInvalid
 			}
 			slot.RequestedEffort = override.effort
+		}
+		if options.ModelVariantsSpecified {
+			slot.Variant, slot.VariantSpecified = override.variant, true
+		} else if override.reference != "" {
+			slot.Variant, slot.VariantSpecified = "", false
 		}
 		slots[override.capability] = slot
 	}
@@ -284,6 +290,10 @@ func hasSlotEffort(options integration.Options) bool {
 	return options.ModelEfficientEffort != "" || options.ModelBalancedEffort != "" || options.ModelFrontierEffort != ""
 }
 
+func hasSlotVariant(options integration.Options) bool {
+	return options.ModelVariantsSpecified || options.ModelEfficientVariant != "" || options.ModelBalancedVariant != "" || options.ModelFrontierVariant != ""
+}
+
 func modelProvider(reference string) string {
 	provider, _, found := strings.Cut(reference, "/")
 	if !found {
@@ -298,17 +308,24 @@ func modelPlanConfigV2(options integration.Options, plan sdd.Plan, efficient, ba
 		capability sdd.Capability
 		reference  string
 		effort     sdd.Effort
+		variant    sdd.OpenCodeVariant
 	}{
-		{sdd.CapabilityEfficient, efficient, options.ModelEfficientEffort},
-		{sdd.CapabilityBalanced, balanced, options.ModelBalancedEffort},
-		{sdd.CapabilityFrontier, frontier, options.ModelFrontierEffort},
+		{sdd.CapabilityEfficient, efficient, options.ModelEfficientEffort, options.ModelEfficientVariant},
+		{sdd.CapabilityBalanced, balanced, options.ModelBalancedEffort, options.ModelBalancedVariant},
+		{sdd.CapabilityFrontier, frontier, options.ModelFrontierEffort, options.ModelFrontierVariant},
 	}
 	config := make([]sdd.ModelSlotConfig, len(slots))
 	for index, slot := range slots {
+		if slot.effort == "" {
+			if !options.ModelVariantsSpecified {
+				return sdd.ModelPlanConfigV2{}, integration.ErrInvalid
+			}
+			slot.effort = defaults[slot.capability].RequestedEffort
+		}
 		if !slot.effort.Valid() {
 			return sdd.ModelPlanConfigV2{}, integration.ErrInvalid
 		}
-		config[index] = sdd.ModelSlotConfig{Reference: slot.reference, RequestedEffort: slot.effort, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown}
+		config[index] = sdd.ModelSlotConfig{Reference: slot.reference, RequestedEffort: slot.effort, Variant: slot.variant, VariantSpecified: options.ModelVariantsSpecified || slot.variant != "", Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown}
 		if slot.reference == defaults[slot.capability].Reference {
 			config[index].Source = sdd.ModelSlotCatalog
 			config[index].Availability = sdd.ModelSlotCatalogKnown
@@ -703,7 +720,8 @@ func modelBoundAgentsV2(plan sdd.OpenCodePlanV2) (map[string][]byte, error) {
 			Degradation: assignment.Degradation, Strength: assignment.Strength,
 		}
 	}
-	return modelBoundAgents(legacy)
+	agents, err := modelBoundAgents(legacy)
+	return omitEmptyVariantLines(agents), err
 }
 
 func modelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error) {
@@ -711,7 +729,18 @@ func modelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalPreviousMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
+	agents, err := fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalPreviousMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
+	if err != nil {
+		return nil, err
+	}
+	return omitEmptyVariantLines(agents), nil
+}
+
+func omitEmptyVariantLines(agents map[string][]byte) map[string][]byte {
+	for name, content := range agents {
+		agents[name] = bytes.Replace(content, []byte("variant: \n"), nil, 1)
+	}
+	return agents
 }
 
 func modelBoundAssignmentsV3(plan sdd.OpenCodePlanV3) (map[string]sdd.OpenCodeRoleAssignment, error) {

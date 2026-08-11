@@ -38,16 +38,20 @@ type Handshake struct {
 func (status HandshakeStatus) String() string { return string(status) }
 
 type Options struct {
-	ConfigDir            string
-	HomeDir              string
-	ModelAssignments     *map[string]sdd.ManagedAgentModelConfig
-	ModelPlan            sdd.Plan
-	ModelEfficient       string
-	ModelBalanced        string
-	ModelFrontier        string
-	ModelEfficientEffort sdd.Effort
-	ModelBalancedEffort  sdd.Effort
-	ModelFrontierEffort  sdd.Effort
+	ConfigDir              string
+	HomeDir                string
+	ModelAssignments       *map[string]sdd.ManagedAgentModelConfig
+	ModelPlan              sdd.Plan
+	ModelEfficient         string
+	ModelBalanced          string
+	ModelFrontier          string
+	ModelEfficientEffort   sdd.Effort
+	ModelEfficientVariant  sdd.OpenCodeVariant
+	ModelBalancedEffort    sdd.Effort
+	ModelBalancedVariant   sdd.OpenCodeVariant
+	ModelFrontierEffort    sdd.Effort
+	ModelFrontierVariant   sdd.OpenCodeVariant
+	ModelVariantsSpecified bool
 }
 
 type Result struct {
