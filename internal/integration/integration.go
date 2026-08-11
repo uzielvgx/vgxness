@@ -72,8 +72,12 @@ type Result struct {
 	ModelBalanced              string
 	ModelFrontier              string
 	ModelEfficientEffort       sdd.Effort
+	ModelEfficientVariant      sdd.OpenCodeVariant
 	ModelBalancedEffort        sdd.Effort
+	ModelBalancedVariant       sdd.OpenCodeVariant
 	ModelFrontierEffort        sdd.Effort
+	ModelFrontierVariant       sdd.OpenCodeVariant
+	ModelVariantsSpecified     bool
 	ModelEfficientSource       sdd.ModelSlotSource
 	ModelBalancedSource        sdd.ModelSlotSource
 	ModelFrontierSource        sdd.ModelSlotSource

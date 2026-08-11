@@ -165,27 +165,27 @@ func TestSetupAcceptsAndPreservesEachModelPlan(t *testing.T) {
 	}
 }
 
-func TestSetupModelProfileEditorCyclesEffortAndBlocksUnknownMetadata(t *testing.T) {
+func TestSetupModelProfileEditorCyclesVariantsAndBlocksUnknownMetadata(t *testing.T) {
 	backend := &recordingSetupBackend{plan: readySetupPlan("medium")}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	model.setRoute(routeSetup)
 	model.setupPlan = readySetupPlan("medium")
 	model.setupModelRefs = [3]string{"openai/gpt-5.6-terra", "anthropic/balanced", "acme/frontier"}
-	model.setupModelEfforts = [3]string{"low", "medium", "high"}
+	model.setupCatalog = []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh", "max"}}, {Provider: "anthropic", Reference: "anthropic/balanced", Variants: []string{"thinking"}}, {Provider: "acme", Reference: "acme/frontier", Variants: []string{"none"}}}
 	model = updateModel(t, model, keyPress("m"))
-	if !strings.Contains(model.View().Content, "MODEL PROFILE EDITOR") || !strings.Contains(model.setupHelp(), "[Tab] effort") {
+	if !strings.Contains(model.View().Content, "MODEL PROFILE EDITOR") || !strings.Contains(model.setupHelp(), "[Tab] variant") {
 		t.Fatalf("editor/help missing:\n%s\n%s", model.View().Content, model.setupHelp())
 	}
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
-	if model.setupModelEfforts[0] != "medium" {
-		t.Fatalf("effort did not cycle: %+v", model.setupModelEfforts)
+	if model.setupModelVariants[0] != "xhigh" {
+		t.Fatalf("variant did not cycle: %+v", model.setupModelVariants)
 	}
 	model.setupModelRefs[1] = ""
 	if model.setupApplyAllowed() || !strings.Contains(model.View().Content, "Each slot needs") {
 		t.Fatalf("invalid profile was hidden or applyable:\n%s", model.View().Content)
 	}
-	model.setupModelRefs[1] = "anthropic/balanced"
+	model.setupModelRefs[1] = "unknown/balanced"
 	updated, previewCmd := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated.(Model)
 	if previewCmd != nil || !model.setupModelEditing || !strings.Contains(model.modelEditorError(), "metadata is not available") {
@@ -194,33 +194,167 @@ func TestSetupModelProfileEditorCyclesEffortAndBlocksUnknownMetadata(t *testing.
 	assertMaximumWidth(t, model.View().Content, 80)
 }
 
-func TestSetupModelEditorUsesOnlyAuthoritativeEfforts(t *testing.T) {
+func TestSetupModelEditorUsesOnlyDiscoveredVariants(t *testing.T) {
 	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 200, Height: 24})
 	model.setRoute(routeSetup)
 	model.setupPlan = readySetupPlan("medium")
 	model.setupModelRefs = [3]string{"openai/gpt-5.6-terra", "acme/unlisted", "openai/gpt-5.6-sol"}
-	model.setupModelEfforts = [3]string{"low", "high", "ultra"}
+	model.setupCatalog = []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh", "max"}}, {Provider: "openai", Reference: "openai/gpt-5.6-sol", Variants: []string{}}}
 
 	model = updateModel(t, model, keyPress("m"))
 	view := model.View().Content
-	for _, expected := range []string{"allowed=low, medium, high, ultra", "allowed=not available"} {
+	for _, expected := range []string{"allowed=xhigh, max", "allowed=provider default"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("editor missing %q:\n%s", expected, view)
 		}
 	}
 
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
-	if model.setupModelEfforts[0] != "medium" {
-		t.Fatalf("known model effort=%q, want medium", model.setupModelEfforts[0])
+	if model.setupModelVariants[0] != "xhigh" {
+		t.Fatalf("known model variant=%q, want xhigh", model.setupModelVariants[0])
 	}
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	if help := model.setupHelp(); strings.Contains(help, "[Tab] effort") || !strings.Contains(help, "effort not available") {
-		t.Fatalf("unknown model offered effort selection: %s", help)
+	if help := model.setupHelp(); strings.Contains(help, "[Tab] variant") || !strings.Contains(help, "variant not available") {
+		t.Fatalf("unknown model offered variant selection: %s", help)
 	}
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
-	if model.setupModelEfforts[1] != "high" {
-		t.Fatalf("unknown model effort changed to %q", model.setupModelEfforts[1])
+	if model.setupModelVariants[1] != "" {
+		t.Fatalf("unknown model variant changed to %q", model.setupModelVariants[1])
+	}
+}
+
+func TestSetupLegacyAssignmentsRequireCatalogMembershipWhenAvailable(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		schema   int
+		unlisted bool
+		allowed  bool
+	}{
+		{name: "v1 listed", schema: 1, allowed: true},
+		{name: "v2 listed", schema: 2, allowed: true},
+		{name: "v1 unlisted", schema: 1, unlisted: true},
+		{name: "v2 unlisted", schema: 2, unlisted: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := assignmentSetupPlan(test.schema)
+			if test.unlisted {
+				plan.ModelAssignments[0].Provider = "acme"
+				plan.ModelAssignments[0].Model = "acme/unlisted"
+				plan.ModelAssignments[0].Source = "custom"
+				plan.ModelAssignments[0].Availability = "unknown"
+			}
+			backend := &recordingSetupBackend{catalog: []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh"}}}}
+			model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+			model.setRoute(routeSetup)
+			model = updateModel(t, model, model.loadSetupCatalog(false)())
+			model.handleSetupPlanLoaded(setupPlanLoadedMsg{generation: model.setupGeneration, request: model.setupRequest(), value: plan})
+
+			if got := model.setupApplyAllowed(); got != test.allowed {
+				t.Fatalf("setupApplyAllowed()=%t, want %t; editor error=%q", got, test.allowed, model.modelEditorError())
+			}
+		})
+	}
+}
+
+func TestSetupModelEditorUsesDiscoveredVariantsAndPreservesProviderDefault(t *testing.T) {
+	catalogRows := []SetupCatalogModel{
+		{Provider: "acme", Reference: "acme/fast", Variants: []string{"xhigh", "max"}},
+		{Provider: "acme", Reference: "acme/balanced", Variants: []string{"none", "thinking"}},
+		{Provider: "acme", Reference: "acme/default", Variants: []string{}},
+	}
+	model := NewModel(context.Background(), &recordingSetupBackend{catalog: catalogRows}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setRoute(routeSetup)
+	model.setupPlan = readySetupPlan("medium")
+	model.setupModelRefs = [3]string{"acme/fast", "acme/balanced", "acme/default"}
+	model.setupCatalog = append([]SetupCatalogModel(nil), catalogRows...)
+	updated, catalog := model.Update(keyPress("m"))
+	model = updated.(Model)
+	if catalog == nil || !model.setupCatalogLoading {
+		t.Fatal("editor did not start a catalog load")
+	}
+	model = updateModel(t, model, catalog())
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	if model.setupModelVariants[0] != "xhigh" || !strings.Contains(model.View().Content, "variant=xhigh") {
+		t.Fatalf("catalog variant was not selected/displayed: variants=%+v\n%s", model.setupModelVariants, model.View().Content)
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	if model.setupModelVariants[1] != "none" {
+		t.Fatalf("catalog order was not used: variants=%+v", model.setupModelVariants)
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	before := model.setupModelVariants[2]
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	if model.setupModelVariants[2] != before || !strings.Contains(model.setupHelp(), "provider default") {
+		t.Fatalf("provider default offered variant cycling: variants=%+v help=%q", model.setupModelVariants, model.setupHelp())
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	request := model.setupRequest()
+	if !request.ModelVariantsSpecified || request.ModelEfficientVariant != "xhigh" || request.ModelBalancedVariant != "none" || request.ModelFrontierVariant != "" {
+		t.Fatalf("variants did not transport exactly: %+v", request)
+	}
+	assertMaximumWidth(t, model.View().Content, 80)
+}
+
+func TestSetupExactEditorAcceptsLegacyResolvedVariant(t *testing.T) {
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	plan := assignmentSetupPlan(3)
+	for index := range *plan.ModelAssignments {
+		plan.ModelAssignments[index].VariantSpecified = false
+	}
+	model.seedSetupAssignments(plan)
+	model.setupCatalog = []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh"}}}
+	if err := model.modelEditorError(); err != "" {
+		t.Fatalf("legacy resolved variants rejected: %q", err)
+	}
+}
+
+func TestSetupLegacyAssignmentSeedOmitsDerivedVariants(t *testing.T) {
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	plan := assignmentSetupPlan(3)
+	for index := range *plan.ModelAssignments {
+		plan.ModelAssignments[index].Variant, plan.ModelAssignments[index].VariantSpecified = "xhigh", false
+	}
+	model.seedSetupAssignments(plan)
+	model.setupCatalog = []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh"}}}
+	request := model.setupRequest()
+	if request.ModelAssignments == nil || model.modelEditorError() != "" {
+		t.Fatalf("legacy assignments were not retained: request=%+v error=%q", request, model.modelEditorError())
+	}
+	for _, row := range *request.ModelAssignments {
+		if row.Variant != "" || row.VariantSpecified {
+			t.Fatalf("derived variant reached request: %+v", row)
+		}
+	}
+}
+
+func TestSetupV2AssignmentReentryPreservesExplicitVariant(t *testing.T) {
+	plan := assignmentSetupPlan(2)
+	for index := range *plan.ModelAssignments {
+		plan.ModelAssignments[index].VariantSpecified = false
+	}
+	plan.ModelAssignments[0].Variant, plan.ModelAssignments[0].VariantSpecified = "max", true
+
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	model.setup = SetupStatus{ModelSchemaVersion: 2, ModelAssignments: plan.ModelAssignments}
+	model.setRoute(routeSetup)
+
+	if row := model.setupAssignmentRows[0]; row.Variant != "max" || !row.VariantSpecified {
+		t.Fatalf("re-entry lost explicit v2 variant: %+v", row)
+	}
+}
+
+func TestSetupProfileRequestPreservesSlotEffortsWithVariants(t *testing.T) {
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	model.setupOverrides = true
+	model.setupModelRefs = [3]string{"openai/fast", "anthropic/balanced", "acme/frontier"}
+	model.setupModelEfforts = [3]string{"low", "high", "ultra"}
+	model.setupModelVariants = [3]string{"xhigh", "max", ""}
+	request := model.setupRequest()
+	if request.ModelEfficientEffort != "low" || request.ModelBalancedEffort != "high" || request.ModelFrontierEffort != "ultra" || !request.ModelVariantsSpecified {
+		t.Fatalf("profile request lost slot efforts: %+v", request)
 	}
 }
 
@@ -231,12 +365,13 @@ func TestSetupUnknownMetadataClearsEditedEffortsAndBlocksPreview(t *testing.T) {
 		model.setRoute(routeSetup)
 		model.setupPlan = readySetupPlan("medium")
 		model.setupModelRefs = [3]string{"openai/gpt-5.6-terra", "anthropic/balanced", "openai/gpt-5.6-sol"}
-		model.setupModelEfforts = [3]string{"low", "high", "ultra"}
+		model.setupModelVariants = [3]string{"xhigh", "thinking", "none"}
+		model.setupCatalog = []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh"}}, {Provider: "anthropic", Reference: "anthropic/balanced", Variants: []string{"thinking"}}, {Provider: "openai", Reference: "openai/gpt-5.6-sol", Variants: []string{"none"}}}
 		model = updateModel(t, model, keyPress("m"))
 		model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 		model = updateModel(t, model, keyPress("x"))
-		if model.setupModelEfforts[1] != "" || !strings.Contains(model.modelEditorError(), "metadata is not available") {
-			t.Fatalf("unknown edited profile retained effort or remained valid: efforts=%+v err=%q", model.setupModelEfforts, model.modelEditorError())
+		if model.setupModelVariants[1] != "" || !strings.Contains(model.modelEditorError(), "metadata is not available") {
+			t.Fatalf("unknown edited profile retained variant or remained valid: variants=%+v err=%q", model.setupModelVariants, model.modelEditorError())
 		}
 		updated, preview := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		model = updated.(Model)
@@ -256,8 +391,8 @@ func TestSetupUnknownMetadataClearsEditedEffortsAndBlocksPreview(t *testing.T) {
 		}
 		model = updateModel(t, model, keyPress("m"))
 		model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
-		if row := model.setupAssignmentRows[0]; row.Reference != "acme/unlisted" || row.RequestedEffort != "" || !strings.Contains(model.modelEditorError(), "metadata is not available") {
-			t.Fatalf("unknown assignment retained effort or remained valid: row=%+v err=%q", row, model.modelEditorError())
+		if row := model.setupAssignmentRows[0]; row.Reference != "acme/unlisted" || row.Variant != "" || model.modelEditorError() == "" {
+			t.Fatalf("unknown assignment retained variant or remained valid: row=%+v err=%q", row, model.modelEditorError())
 		}
 		updated, preview := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		model = updated.(Model)
@@ -276,7 +411,7 @@ func TestSetupUnknownMetadataClearsEditedEffortsAndBlocksPreview(t *testing.T) {
 		model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
 		model.setRoute(routeSetup)
 		model.handleSetupPlanLoaded(setupPlanLoadedMsg{generation: model.setupGeneration, request: model.setupRequest(), value: plan})
-		if row := model.setupAssignmentRows[0]; row.RequestedEffort != "high" || model.setupApplyAllowed() || !strings.Contains(model.modelEditorError(), "metadata is not available") {
+		if row := model.setupAssignmentRows[0]; row.RequestedEffort != "high" || model.setupApplyAllowed() || model.modelEditorError() == "" {
 			t.Fatalf("existing unknown assignment was changed or confirmed: row=%+v allowed=%t err=%q", row, model.setupApplyAllowed(), model.modelEditorError())
 		}
 	})
@@ -306,8 +441,8 @@ func TestSetupSameProviderUnlistedRefsBlockPreviewAndApply(t *testing.T) {
 
 func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testing.T) {
 	backend := &recordingSetupBackend{catalog: []SetupCatalogModel{
-		{Provider: "openai", Reference: "openai/gpt-5.6-terra", Source: "catalog", Availability: "catalog-known"},
-		{Provider: "openai", Reference: "openai/gpt-5.6-sol", Source: "catalog", Availability: "catalog-known"},
+		{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh", "max"}, Source: "catalog", Availability: "catalog-known"},
+		{Provider: "openai", Reference: "openai/gpt-5.6-sol", Variants: []string{"none", "thinking"}, Source: "catalog", Availability: "catalog-known"},
 	}}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -333,7 +468,7 @@ func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testi
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
 	model = updateModel(t, model, keyPress("]"))
-	if row := model.setupAssignmentRows[1]; model.setupModelSlot != 1 || !model.setupAssignmentsExact || row.Reference != "openai/gpt-5.6-sol" || row.Source != "catalog" || row.Availability != "catalog-known" || row.RequestedEffort != "high" {
+	if row := model.setupAssignmentRows[1]; model.setupModelSlot != 1 || !model.setupAssignmentsExact || row.Reference != "openai/gpt-5.6-sol" || row.Source != "catalog" || row.Availability != "catalog-known" || row.Variant != "thinking" {
 		t.Fatalf("matrix edit state slot=%d exact=%t row=%+v", model.setupModelSlot, model.setupAssignmentsExact, model.setupAssignmentRows[1])
 	}
 	if model.setupPreviewed || model.setupPlan.Digest != "" {
@@ -373,11 +508,12 @@ func TestSetupPlanSelectionIsHiddenForExactAssignments(t *testing.T) {
 		})
 	}
 
-	backend := &recordingSetupBackend{plan: assignmentSetupPlan(3), catalog: []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-sol"}}}
+	backend := &recordingSetupBackend{plan: assignmentSetupPlan(3), catalog: []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh"}}, {Provider: "openai", Reference: "openai/gpt-5.6-sol", Variants: []string{"none"}}}}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	model.setRoute(routeSetup)
 	model.setupSelected = "medium"
+	model.setupCatalog = append([]SetupCatalogModel(nil), backend.catalog...)
 	model.handleSetupPlanLoaded(setupPlanLoadedMsg{generation: model.setupGeneration, request: model.setupRequest(), value: backend.plan})
 	request, selected, digest := model.setupRequest(), model.setupSelected, model.setupPlan.Digest
 	updated, cmd := model.Update(keyPress("l"))
@@ -417,7 +553,7 @@ func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
 	const discovered = "openai/gpt-5.6-terra"
 	backend := &recordingSetupBackend{
 		plan:    assignmentSetupPlan(2),
-		catalog: []SetupCatalogModel{{Provider: "openai", Reference: discovered, Source: "catalog", Availability: "catalog-known"}},
+		catalog: []SetupCatalogModel{{Provider: "openai", Reference: discovered, Variants: []string{"xhigh", "max"}, Source: "catalog", Availability: "catalog-known"}},
 	}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 120})
@@ -432,7 +568,7 @@ func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
 	if request.ModelAssignments == nil || len(*request.ModelAssignments) != SetupModelAssignmentCount {
 		t.Fatalf("edit did not create exact assignment request: %+v", request)
 	}
-	if row := request.ModelAssignments[0]; row.Reference != discovered || row.RequestedEffort != "high" || row.Source != "catalog" || row.Availability != "catalog-known" {
+	if row := request.ModelAssignments[0]; row.Reference != discovered || row.Variant != "max" || !row.VariantSpecified || row.Source != "catalog" || row.Availability != "catalog-known" {
 		t.Fatalf("catalog model metadata was lost: %+v", row)
 	}
 
@@ -443,7 +579,8 @@ func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
 		preview.ModelAssignments[index].Model = row.Reference
 		preview.ModelAssignments[index].RequestedEffort = row.RequestedEffort
 		preview.ModelAssignments[index].Effort = row.RequestedEffort
-		preview.ModelAssignments[index].Variant = row.RequestedEffort
+		preview.ModelAssignments[index].Variant = row.Variant
+		preview.ModelAssignments[index].VariantSpecified = row.VariantSpecified
 		preview.ModelAssignments[index].Source = row.Source
 		preview.ModelAssignments[index].Availability = row.Availability
 	}
@@ -453,7 +590,7 @@ func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
 	model = updateModel(t, model, previewCmd())
 	model = updateModel(t, model, keyPress("a"))
 	confirmation := model.View().Content
-	if !strings.Contains(confirmation, "digest  journey-digest") || strings.Count(confirmation, "model=") != SetupModelAssignmentCount || strings.Count(confirmation, "requested=") != SetupModelAssignmentCount || strings.Count(confirmation, "source=") != SetupModelAssignmentCount || strings.Count(confirmation, "availability=") != SetupModelAssignmentCount {
+	if !strings.Contains(confirmation, "digest  journey-digest") || strings.Count(confirmation, "model=") != SetupModelAssignmentCount || strings.Count(confirmation, "variant=") != SetupModelAssignmentCount || strings.Count(confirmation, "source=") != SetupModelAssignmentCount || strings.Count(confirmation, "availability=") != SetupModelAssignmentCount {
 		t.Fatalf("confirmation did not bind the exact preview:\n%s", confirmation)
 	}
 
@@ -464,7 +601,7 @@ func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
 	if len(backend.applyRequests) != 1 || backend.applyRequests[0].ExpectedPlanDigest != "journey-digest" || !setupRequestsEqual(backend.applyRequests[0], request) {
 		t.Fatalf("apply was not bound to preview: %+v", backend.applyRequests)
 	}
-	if view := model.View().Content; !strings.Contains(view, "requested=medium") || !strings.Contains(view, "effective=medium") || !strings.Contains(view, "variant=medium") {
+	if view := model.View().Content; !strings.Contains(view, "requested=medium") || !strings.Contains(view, "effective=medium") || !strings.Contains(view, "variant=max") {
 		t.Fatalf("success hid requested/effective assignment:\n%s", view)
 	}
 
@@ -476,7 +613,7 @@ func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
 		t.Fatalf("re-entry hid installed v3 assignments: request=%+v seeded=%t exact=%t", reentry, model.setupAssignmentsSeeded, model.setupAssignmentsExact)
 	}
 	for index, row := range installed {
-		if model.setupAssignmentRows[index].Reference != row.Model || model.setupAssignmentRows[index].RequestedEffort != row.RequestedEffort || (*reentry.ModelAssignments)[index] != model.setupAssignmentRows[index] {
+		if model.setupAssignmentRows[index].Reference != row.Model || model.setupAssignmentRows[index].RequestedEffort != row.RequestedEffort || model.setupAssignmentRows[index].Variant != row.Variant || model.setupAssignmentRows[index].VariantSpecified != row.VariantSpecified || (*reentry.ModelAssignments)[index] != model.setupAssignmentRows[index] {
 			t.Fatalf("re-entry changed assignment %d: row=%+v installed=%+v", index, model.setupAssignmentRows[index], row)
 		}
 	}
@@ -527,6 +664,7 @@ func TestSetupAssignmentIdentitySeedingAndLongExactRendering(t *testing.T) {
 	plan := assignmentSetupPlan(3)
 	longRef := "p/" + strings.Repeat("a", 256) + "/" + strings.Repeat("b", 253)
 	plan.ModelAssignments[0].Model, plan.ModelAssignments[0].Provider, plan.ModelAssignments[0].RequestedEffort = longRef, "p", "ultra"
+	plan.ModelAssignments[0].Variant, plan.ModelAssignments[0].VariantSpecified = "xhigh", true
 	plan.ModelAssignments[0], plan.ModelAssignments[14] = plan.ModelAssignments[14], plan.ModelAssignments[0]
 	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -545,7 +683,7 @@ func TestSetupAssignmentIdentitySeedingAndLongExactRendering(t *testing.T) {
 		t.Fatal("duplicate identity set partially replaced valid rows")
 	}
 	model.setupPlan, model.setupPreviewed, model.setupPreviewRequest, model.setupConfirm = plan, true, model.setupRequest(), true
-	if model.modelProfileChanged() || !strings.Contains(strings.Join(model.setupRouteLines(), "\n"), "requested=ultra") || !strings.Contains(model.setupHelp(), "[j/k] scroll") {
+	if model.modelProfileChanged() || !strings.Contains(strings.Join(model.setupRouteLines(), "\n"), "variant=xhigh") || !strings.Contains(model.setupHelp(), "[j/k] scroll") {
 		t.Fatal("exact defaults were hidden or reported edited")
 	}
 	for _, pressed := range []string{"m", "r", "l"} {
@@ -580,13 +718,27 @@ func TestSetupAssignmentIdentitySeedingAndLongExactRendering(t *testing.T) {
 	}
 }
 
+func TestSetupAssignmentMatrixKeepsTruncatedVariantVisibleAt80Columns(t *testing.T) {
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.seedSetupAssignments(assignmentSetupPlan(3))
+	model.setupAssignmentRows[0].Reference = "provider/" + strings.Repeat("reference", 20)
+	model.setupAssignmentRows[0].Variant = "thinking-with-extra-details"
+	lines := model.modelAssignmentLines()
+	joined := strings.Join(lines, "\n")
+	assertMaximumWidth(t, joined, 80)
+	if !strings.Contains(joined, "· thinking-wi…") {
+		t.Fatalf("truncated variant suffix was hidden:\n%s", joined)
+	}
+}
+
 func TestSetupExactAssignmentConfirmationAndOutcomeDiscloseResolution(t *testing.T) {
 	requestRows := [SetupModelAssignmentCount]SetupModelAssignmentRequest{}
 	plan := assignmentSetupPlan(3)
 	for index, identity := range setupAgentRows {
 		requestRows[index] = SetupModelAssignmentRequest{
 			ArtifactKey: identity.ArtifactKey, Provider: "acme", Reference: "acme/model",
-			RequestedEffort: "ultra", Source: "custom", Availability: "unknown",
+			RequestedEffort: "ultra", Variant: "xhigh", VariantSpecified: true, Source: "custom", Availability: "unknown",
 		}
 		plan.ModelAssignments[index].RequestedEffort = "ultra"
 		plan.ModelAssignments[index].Effort = "high"
@@ -596,7 +748,7 @@ func TestSetupExactAssignmentConfirmationAndOutcomeDiscloseResolution(t *testing
 	plan.ModelAssignments[0].DegradationReason = "unsupported\nreason"
 
 	confirmation := strings.Join(setupAssignmentRequestProfile(requestRows, 80), "\n")
-	for _, expected := range []string{"requested=ultra", "source=custom", "availability=unknown"} {
+	for _, expected := range []string{"variant=xhigh", "source=custom", "availability=unknown"} {
 		if !strings.Contains(confirmation, expected) {
 			t.Fatalf("confirmation missing %q:\n%s", expected, confirmation)
 		}
@@ -824,11 +976,11 @@ func TestSetupSuccessReportsAppliedMixedProfileFromResultPlan(t *testing.T) {
 	model.setupGeneration = 1
 	result := successfulSetupResult()
 	result.Plan.ModelEfficient, result.Plan.ModelBalanced, result.Plan.ModelFrontier = "openai/fast", "anthropic/balanced", "acme/frontier"
-	result.Plan.ModelEfficientEffort, result.Plan.ModelBalancedEffort, result.Plan.ModelFrontierEffort = "low", "high", "ultra"
+	result.Plan.ModelEfficientVariant, result.Plan.ModelBalancedVariant, result.Plan.ModelFrontierVariant = "xhigh", "max", "none"
 	result.Plan.ModelEfficientSource, result.Plan.ModelBalancedSource, result.Plan.ModelFrontierSource = "catalog", "custom", "custom"
 	result.Plan.ModelEfficientAvailability, result.Plan.ModelBalancedAvailability, result.Plan.ModelFrontierAvailability = "catalog-known", "unknown", "unknown"
 	model = updateModel(t, model, setupAppliedMsg{generation: 1, value: result})
-	for _, expected := range []string{"model efficient  openai/fast  effort=low  source=catalog  availability=catalog-known", "model balanced   anthropic/balanced  effort=high  source=custom  availability=unknown", "model frontier   acme/frontier  effort=ultra  source=custom  availability=unknown", "Restart OpenCode"} {
+	for _, expected := range []string{"model efficient  openai/fast  variant=xhigh  source=catalog  availability=catalog-known", "model balanced   anthropic/balanced  variant=max  source=custom  availability=unknown", "model frontier   acme/frontier  variant=none  source=custom  availability=unknown", "Restart OpenCode"} {
 		if !strings.Contains(model.View().Content, expected) {
 			t.Fatalf("success missing %q:\n%s", expected, model.View().Content)
 		}
@@ -1082,7 +1234,7 @@ func assignmentSetupPlan(schema int) SetupPlan {
 	for index, identity := range setupAgentRows {
 		plan.ModelAssignments[index] = SetupModelAssignment{
 			ArtifactKey: identity.ArtifactKey, Role: identity.Role, Class: identity.Class,
-			Provider: "openai", Model: "openai/gpt-5.6-terra", RequestedEffort: "medium",
+			Provider: "openai", Model: "openai/gpt-5.6-terra", RequestedEffort: "medium", Variant: "xhigh", VariantSpecified: true,
 			Source: "catalog", Availability: "catalog-known",
 		}
 	}

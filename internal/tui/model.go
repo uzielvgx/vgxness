@@ -214,8 +214,10 @@ type Model struct {
 	setupModelSlot         int
 	setupModelRefs         [3]string
 	setupModelEfforts      [3]string
+	setupModelVariants     [3]string
 	setupModelEntryRefs    [3]string
 	setupModelEntryEfforts [3]string
+	setupModelEntryVars    [3]string
 	setupOverrides         bool
 	setupEntryOverrides    bool
 	setupPreviewRequest    SetupRequest
@@ -750,6 +752,7 @@ func (m *Model) setRoute(next route) {
 		m.setupOverrides = false
 		m.setupModelRefs = [3]string{}
 		m.setupModelEfforts = [3]string{}
+		m.setupModelVariants = [3]string{}
 		m.setupPreviewRequest = SetupRequest{}
 		m.setupPreviewed = false
 		m.resetSetupAssignments()

@@ -378,6 +378,7 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 			}
 			assignments[row.ArtifactKey] = sdd.ManagedAgentModelConfig{
 				Provider: row.Provider, Reference: row.Reference, RequestedEffort: effort,
+				Variant: sdd.OpenCodeVariant(row.Variant), VariantSpecified: row.VariantSpecified,
 				Source: source, Availability: availability,
 			}
 			if providerSummary == "" {
@@ -401,6 +402,7 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 		integrationOptions = integration.Options{ModelPlan: plan,
 			ModelEfficient: request.ModelEfficient, ModelBalanced: request.ModelBalanced, ModelFrontier: request.ModelFrontier,
 			ModelEfficientEffort: sdd.Effort(request.ModelEfficientEffort), ModelBalancedEffort: sdd.Effort(request.ModelBalancedEffort), ModelFrontierEffort: sdd.Effort(request.ModelFrontierEffort),
+			ModelEfficientVariant: sdd.OpenCodeVariant(request.ModelEfficientVariant), ModelBalancedVariant: sdd.OpenCodeVariant(request.ModelBalancedVariant), ModelFrontierVariant: sdd.OpenCodeVariant(request.ModelFrontierVariant), ModelVariantsSpecified: request.ModelVariantsSpecified,
 		}
 	}
 	return setupflow.Options{Workspace: workspace, ExpectedPlanDigest: request.ExpectedPlanDigest, Integration: integrationOptions}, nil
@@ -429,7 +431,7 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 			row := plan.Integration.ModelAssignments[index]
 			modelAssignments[index] = tui.SetupModelAssignment{
 				ArtifactKey: row.ArtifactKey, Role: string(row.Role), Class: string(row.Class), Provider: row.Provider, Model: row.Model,
-				RequestedEffort: string(row.RequestedEffort), Effort: string(row.Effort), Variant: string(row.Variant),
+				RequestedEffort: string(row.RequestedEffort), Effort: string(row.Effort), Variant: string(row.Variant), VariantSpecified: row.VariantSpecified,
 				Degraded: row.Degradation.Degraded, DegradationReason: row.Degradation.Reason,
 				Source: string(row.Source), Availability: string(row.Availability),
 			}
@@ -451,6 +453,7 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 		ModelEfficient: plan.Integration.ModelEfficient, ModelBalanced: plan.Integration.ModelBalanced,
 		ModelFrontier:        plan.Integration.ModelFrontier,
 		ModelEfficientEffort: string(plan.Integration.ModelEfficientEffort), ModelBalancedEffort: string(plan.Integration.ModelBalancedEffort), ModelFrontierEffort: string(plan.Integration.ModelFrontierEffort),
+		ModelEfficientVariant: string(plan.Integration.ModelEfficientVariant), ModelBalancedVariant: string(plan.Integration.ModelBalancedVariant), ModelFrontierVariant: string(plan.Integration.ModelFrontierVariant), ModelVariantsSpecified: plan.Integration.ModelVariantsSpecified,
 		ModelEfficientSource: string(plan.Integration.ModelEfficientSource), ModelBalancedSource: string(plan.Integration.ModelBalancedSource), ModelFrontierSource: string(plan.Integration.ModelFrontierSource),
 		ModelEfficientAvailability: string(plan.Integration.ModelEfficientAvailability), ModelBalancedAvailability: string(plan.Integration.ModelBalancedAvailability), ModelFrontierAvailability: string(plan.Integration.ModelFrontierAvailability),
 		HandshakeOK: plan.Handshake.OK, HandshakeStatus: plan.Handshake.Status.String(),
