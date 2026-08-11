@@ -741,6 +741,26 @@ func TestRequestedModelPlanBuildsV2BundleForMixedSlots(t *testing.T) {
 	}
 }
 
+func TestLegacyResultModelAssignmentsPreserveV2VariantSpecified(t *testing.T) {
+	config := sdd.DefaultModelPlanConfigV2()
+	for capability, slot := range config.Slots {
+		slot.VariantSpecified = capability == sdd.CapabilityFrontier
+		config.Slots[capability] = slot
+	}
+	bundle, err := buildModelPlanBundleV2(config)
+	testutil.NoError(t, err)
+
+	rows, err := legacyResultModelAssignments(bundle)
+	testutil.NoError(t, err)
+	for _, row := range rows {
+		role := bundle.resolvedV2.Roles[row.Role]
+		want := bundle.configV2.Slots[role.Capability].VariantSpecified
+		if row.VariantSpecified != want {
+			t.Fatalf("%s VariantSpecified=%t, want %t", row.ArtifactKey, row.VariantSpecified, want)
+		}
+	}
+}
+
 func TestRequestedModelPlanKeepsV1BundleWithoutMixedSemantics(t *testing.T) {
 	options := integration.Options{ConfigDir: t.TempDir(), ModelPlan: sdd.PlanHigh, ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier"}
 	bundle, err := requestedModelPlan(options, options.ConfigDir)
@@ -2704,6 +2724,7 @@ func TestIntegrationMixedV2ManifestPersistsAndStatusIsExact(t *testing.T) {
 		ConfigDir: root, ModelPlan: sdd.PlanHigh,
 		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
 		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+		ModelEfficientVariant: "xhigh", ModelBalancedVariant: "max", ModelFrontierVariant: "", ModelVariantsSpecified: true,
 	}
 	service := NewIntegration()
 	installed, err := service.Install(context.Background(), options)
@@ -2725,11 +2746,11 @@ func TestIntegrationMixedV2ManifestPersistsAndStatusIsExact(t *testing.T) {
 			parsed.ConfigV2.Slots[sdd.CapabilityEfficient].Reference == "openai/gpt-5.6-luna" && parsed.ConfigV2.Slots[sdd.CapabilityEfficient].RequestedEffort == sdd.EffortLow && parsed.ConfigV2.Slots[sdd.CapabilityEfficient].Source == sdd.ModelSlotCatalog && parsed.ConfigV2.Slots[sdd.CapabilityEfficient].Availability == sdd.ModelSlotCatalogKnown &&
 			parsed.ConfigV2.Slots[sdd.CapabilityBalanced].Reference == "anthropic/claude-sonnet" && parsed.ConfigV2.Slots[sdd.CapabilityBalanced].RequestedEffort == sdd.EffortHigh && parsed.ConfigV2.Slots[sdd.CapabilityBalanced].Source == sdd.ModelSlotCustom && parsed.ConfigV2.Slots[sdd.CapabilityBalanced].Availability == sdd.ModelSlotUnknown &&
 			parsed.ConfigV2.Slots[sdd.CapabilityFrontier].Reference == "acme/frontier" && parsed.ConfigV2.Slots[sdd.CapabilityFrontier].RequestedEffort == sdd.EffortUltra && parsed.ConfigV2.Slots[sdd.CapabilityFrontier].Source == sdd.ModelSlotCustom && parsed.ConfigV2.Slots[sdd.CapabilityFrontier].Availability == sdd.ModelSlotUnknown &&
-			status.ModelEfficient == "openai/gpt-5.6-luna" && status.ModelEfficientEffort == sdd.EffortLow && status.ModelEfficientSource == sdd.ModelSlotCatalog && status.ModelEfficientAvailability == sdd.ModelSlotCatalogKnown &&
-			status.ModelBalanced == "anthropic/claude-sonnet" && status.ModelBalancedEffort == sdd.EffortHigh && status.ModelBalancedSource == sdd.ModelSlotCustom && status.ModelBalancedAvailability == sdd.ModelSlotUnknown &&
-			status.ModelFrontier == "acme/frontier" && status.ModelFrontierEffort == sdd.EffortUltra && status.ModelFrontierSource == sdd.ModelSlotCustom && status.ModelFrontierAvailability == sdd.ModelSlotUnknown &&
-			bytes.Contains(managerData, []byte("model: acme/frontier\nvariant: xhigh")) &&
-			bytes.Contains(generalData, []byte("model: acme/frontier\nvariant: xhigh")) &&
+			status.ModelEfficient == "openai/gpt-5.6-luna" && status.ModelEfficientEffort == sdd.EffortLow && status.ModelEfficientVariant == "xhigh" && status.ModelEfficientSource == sdd.ModelSlotCatalog && status.ModelEfficientAvailability == sdd.ModelSlotCatalogKnown &&
+			status.ModelBalanced == "anthropic/claude-sonnet" && status.ModelBalancedEffort == sdd.EffortHigh && status.ModelBalancedVariant == "max" && status.ModelBalancedSource == sdd.ModelSlotCustom && status.ModelBalancedAvailability == sdd.ModelSlotUnknown &&
+			status.ModelFrontier == "acme/frontier" && status.ModelFrontierEffort == sdd.EffortUltra && status.ModelFrontierVariant == "" && status.ModelVariantsSpecified && status.ModelFrontierSource == sdd.ModelSlotCustom && status.ModelFrontierAvailability == sdd.ModelSlotUnknown &&
+			bytes.Contains(managerData, []byte("model: acme/frontier")) && !bytes.Contains(managerData, []byte("variant:")) &&
+			bytes.Contains(generalData, []byte("model: acme/frontier")) && !bytes.Contains(generalData, []byte("variant:")) &&
 			installed.RestartRequired && installed.Changed &&
 			!bytes.Contains(manifest, []byte("token")) && !bytes.Contains(manifest, []byte("authorization")),
 		"installed=%+v status=%+v manifest=%s", installed, status, manifest)

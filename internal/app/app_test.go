@@ -288,6 +288,9 @@ func TestTUISetupAssignmentTransportIsComparableValidatedAndCopied(t *testing.T)
 	_ = map[tui.SetupRequest]bool{request: true}
 	options, err := tuiSetupOptions(request)
 	testutil.Require(t, err == nil && options.Integration.ModelAssignments != nil && len(*options.Integration.ModelAssignments) == integration.ModelAssignmentCount, "options=%+v err=%v", options, err)
+	resolved, resolveErr := sdd.ResolveOpenCodePlanV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: sdd.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
+	first := (*options.Integration.ModelAssignments)[requestRows[0].ArtifactKey]
+	testutil.Require(t, resolveErr == nil && first.Variant == "" && !first.VariantSpecified && resolved.Assignments[0].Variant == sdd.VariantMedium, "legacy variant changed config=%+v resolved=%+v err=%v", first, resolved.Assignments[0], resolveErr)
 	firstKey := requestRows[0].ArtifactKey
 	requestRows[0].Reference = "mutated/request"
 	testutil.Require(t, (*options.Integration.ModelAssignments)[firstKey].Reference == "acme/model", "request aliases integration map: %+v", *options.Integration.ModelAssignments)
@@ -327,6 +330,14 @@ func TestTUISetupPlanAssignmentRowsAreMappedAndCopied(t *testing.T) {
 	testutil.Require(t, row.ArtifactKey == rows[0].ArtifactKey && row.Role == string(rows[0].Role) && row.Class == string(rows[0].Class) && row.Provider == rows[0].Provider && row.Model == rows[0].Model && row.RequestedEffort == string(rows[0].RequestedEffort) && row.Effort == string(rows[0].Effort) && row.Variant == string(rows[0].Variant) && row.Degraded && row.DegradationReason == "bounded" && row.Source == string(rows[0].Source) && row.Availability == string(rows[0].Availability), "row=%+v", row)
 	plan.ModelAssignments[0].Model = "mutated/tui"
 	testutil.Require(t, rows[0].Model == "acme/frontier", "TUI plan aliases integration rows: %+v", rows[0])
+}
+
+func TestTUISetupVariantsMapBothProfileSchemas(t *testing.T) {
+	request := tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelEfficientVariant: "xhigh", ModelBalancedVariant: "max", ModelFrontierVariant: "", ModelVariantsSpecified: true}
+	options, err := tuiSetupOptions(request)
+	testutil.Require(t, err == nil && options.Integration.ModelVariantsSpecified && options.Integration.ModelEfficientVariant == "xhigh" && options.Integration.ModelBalancedVariant == "max" && options.Integration.ModelFrontierVariant == "", "options=%+v err=%v", options, err)
+	plan := tuiSetupPlan(setupflow.Plan{Integration: integration.Result{ModelSchemaVersion: 2, ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/default", ModelEfficientVariant: "xhigh", ModelBalancedVariant: "max", ModelVariantsSpecified: true}})
+	testutil.Require(t, plan.ModelEfficientVariant == "xhigh" && plan.ModelBalancedVariant == "max" && plan.ModelVariantsSpecified, "plan=%+v", plan)
 }
 
 func TestTUIBackendCatalogMapsNeutralRowsAndRefreshFlag(t *testing.T) {

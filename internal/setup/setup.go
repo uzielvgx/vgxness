@@ -333,6 +333,12 @@ func preserveModelDetails(result, fallback integration.Result) integration.Resul
 	if result.ModelFrontierEffort == "" {
 		result.ModelFrontierEffort = fallback.ModelFrontierEffort
 	}
+	if !result.ModelVariantsSpecified {
+		result.ModelEfficientVariant = fallback.ModelEfficientVariant
+		result.ModelBalancedVariant = fallback.ModelBalancedVariant
+		result.ModelFrontierVariant = fallback.ModelFrontierVariant
+		result.ModelVariantsSpecified = fallback.ModelVariantsSpecified
+	}
 	if result.ModelEfficientSource == "" {
 		result.ModelEfficientSource = fallback.ModelEfficientSource
 	}

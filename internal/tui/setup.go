@@ -9,7 +9,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 const (
@@ -21,25 +20,31 @@ const (
 var setupPlans = [...]string{"low", "medium", "high", "ultra"}
 
 type SetupRequest struct {
-	Workspace            string
-	Plan                 string
-	ModelEfficient       string
-	ModelBalanced        string
-	ModelFrontier        string
-	ModelEfficientEffort string
-	ModelBalancedEffort  string
-	ModelFrontierEffort  string
-	ModelAssignments     *[SetupModelAssignmentCount]SetupModelAssignmentRequest
-	ExpectedPlanDigest   string
+	Workspace              string
+	Plan                   string
+	ModelEfficient         string
+	ModelBalanced          string
+	ModelFrontier          string
+	ModelEfficientEffort   string
+	ModelBalancedEffort    string
+	ModelFrontierEffort    string
+	ModelEfficientVariant  string
+	ModelBalancedVariant   string
+	ModelFrontierVariant   string
+	ModelVariantsSpecified bool
+	ModelAssignments       *[SetupModelAssignmentCount]SetupModelAssignmentRequest
+	ExpectedPlanDigest     string
 }
 
 type SetupModelAssignmentRequest struct {
-	ArtifactKey     string
-	Provider        string
-	Reference       string
-	RequestedEffort string
-	Source          string
-	Availability    string
+	ArtifactKey      string
+	Provider         string
+	Reference        string
+	RequestedEffort  string
+	Variant          string
+	VariantSpecified bool
+	Source           string
+	Availability     string
 }
 
 type SetupModelAssignment struct {
@@ -51,6 +56,7 @@ type SetupModelAssignment struct {
 	RequestedEffort   string
 	Effort            string
 	Variant           string
+	VariantSpecified  bool
 	Degraded          bool
 	DegradationReason string
 	Source            string
@@ -133,6 +139,10 @@ type SetupPlan struct {
 	ModelEfficientEffort         string
 	ModelBalancedEffort          string
 	ModelFrontierEffort          string
+	ModelEfficientVariant        string
+	ModelBalancedVariant         string
+	ModelFrontierVariant         string
+	ModelVariantsSpecified       bool
 	ModelEfficientSource         string
 	ModelBalancedSource          string
 	ModelFrontierSource          string
@@ -317,6 +327,7 @@ func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
 		if !m.setupOverrides {
 			m.setupModelRefs = [3]string{msg.value.ModelEfficient, msg.value.ModelBalanced, msg.value.ModelFrontier}
 			m.setupModelEfforts = [3]string{msg.value.ModelEfficientEffort, msg.value.ModelBalancedEffort, msg.value.ModelFrontierEffort}
+			m.setupModelVariants = [3]string{msg.value.ModelEfficientVariant, msg.value.ModelBalancedVariant, msg.value.ModelFrontierVariant}
 		}
 		if !m.setupAssignmentsExact {
 			m.seedSetupAssignments(msg.value)
@@ -396,9 +407,9 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.setupModelSlot = 0
 		m.setupAssignmentEntryRows, m.setupAssignmentsEntry = m.setupAssignmentRows, m.setupAssignmentsExact
 		m.setupAssignmentsEntryEdited = m.setupAssignmentsEdited
-		m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupEntryOverrides = m.setupModelRefs, m.setupModelEfforts, m.setupOverrides
+		m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupModelEntryVars, m.setupEntryOverrides = m.setupModelRefs, m.setupModelEfforts, m.setupModelVariants, m.setupOverrides
 		m.setupEditorPlan, m.setupEditorRequest, m.setupEditorPreviewed = cloneSetupPlan(m.setupPlan), cloneSetupRequest(m.setupPreviewRequest), m.setupPreviewed
-		return true, nil
+		return true, m.loadSetupCatalog(false)
 	case "r":
 		return true, m.loadSetupPlan()
 	case "esc":
@@ -414,7 +425,7 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m Model) setupApplyAllowed() bool {
-	if m.setupPlanLoading || !m.setupPreviewed || m.setupPlan.Digest == "" || !setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || ((m.setupOverrides || m.setupAssignmentsExact) && m.modelEditorError() != "") {
+	if m.setupPlanLoading || !m.setupPreviewed || m.setupPlan.Digest == "" || !setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || ((m.setupOverrides || m.setupAssignmentsExact || m.setupAssignmentsSeeded && m.setupCatalogAvailable()) && m.modelEditorError() != "") {
 		return false
 	}
 	action := classifySetup(m.setupPlan)
@@ -430,9 +441,9 @@ func (m Model) setupRequest() SetupRequest {
 	}
 	if m.setupOverrides {
 		request.ModelEfficient, request.ModelBalanced, request.ModelFrontier = m.setupModelRefs[0], m.setupModelRefs[1], m.setupModelRefs[2]
-		if m.modelProfileMixed() {
-			request.ModelEfficientEffort, request.ModelBalancedEffort, request.ModelFrontierEffort = m.setupModelEfforts[0], m.setupModelEfforts[1], m.setupModelEfforts[2]
-		}
+		request.ModelEfficientEffort, request.ModelBalancedEffort, request.ModelFrontierEffort = m.setupModelEfforts[0], m.setupModelEfforts[1], m.setupModelEfforts[2]
+		request.ModelEfficientVariant, request.ModelBalancedVariant, request.ModelFrontierVariant = m.setupModelVariants[0], m.setupModelVariants[1], m.setupModelVariants[2]
+		request.ModelVariantsSpecified = true
 	}
 	return request
 }
@@ -443,7 +454,7 @@ func (m *Model) updateModelEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "esc":
-		m.setupModelRefs, m.setupModelEfforts, m.setupOverrides = m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupEntryOverrides
+		m.setupModelRefs, m.setupModelEfforts, m.setupModelVariants, m.setupOverrides = m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupModelEntryVars, m.setupEntryOverrides
 		m.setupModelEditing = false
 		return true, nil
 	case "enter":
@@ -460,19 +471,19 @@ func (m *Model) updateModelEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.setupModelSlot = (m.setupModelSlot + 1) % 3
 		return true, nil
 	case "tab", "right", "l":
-		m.setupModelEfforts[m.setupModelSlot] = nextSetupEffort(m.setupModelEfforts[m.setupModelSlot], setupSupportedEfforts(m.setupModelRefs[m.setupModelSlot]))
+		m.setupModelVariants[m.setupModelSlot] = nextSetupVariant(m.setupModelVariants[m.setupModelSlot], m.setupVariantsForModel(m.setupModelRefs[m.setupModelSlot]))
 		return true, nil
 	case "backspace":
 		value := []rune(m.setupModelRefs[m.setupModelSlot])
 		if len(value) > 0 {
 			m.setupModelRefs[m.setupModelSlot] = string(value[:len(value)-1])
 		}
-		m.ensureMixedEffort(m.setupModelSlot)
+		m.ensureModelVariant(m.setupModelSlot)
 		return true, nil
 	}
 	if msg.Text != "" {
 		m.setupModelRefs[m.setupModelSlot] += msg.Text
-		m.ensureMixedEffort(m.setupModelSlot)
+		m.ensureModelVariant(m.setupModelSlot)
 		return true, nil
 	}
 	return true, nil
@@ -499,9 +510,9 @@ func (m *Model) updateAssignmentEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "right", "l":
 		m.selectCatalogModel(1)
 	case "[":
-		m.selectAssignmentEffort(-1)
+		m.selectAssignmentVariant(-1)
 	case "]":
-		m.selectAssignmentEffort(1)
+		m.selectAssignmentVariant(1)
 	case "r":
 		return true, m.loadSetupCatalog(true)
 	case "q":
@@ -527,21 +538,23 @@ func (m *Model) selectCatalogModel(offset int) {
 	row := &m.setupAssignmentRows[m.setupModelSlot]
 	row.Provider, row.Reference = selected.Provider, selected.Reference
 	row.Source, row.Availability = selected.Source, selected.Availability
-	if efforts := setupSupportedEfforts(row.Reference); len(efforts) == 0 {
-		row.RequestedEffort = ""
-	} else if !supportsSetupEffort(efforts, row.RequestedEffort) {
-		row.RequestedEffort = efforts[0]
+	variants := m.setupVariantsForModel(row.Reference)
+	row.VariantSpecified = true
+	if len(variants) == 0 {
+		row.Variant = ""
+	} else if !supportsSetupVariant(variants, row.Variant) {
+		row.Variant = variants[0]
 	}
 	m.markAssignmentEdit()
 }
 
-func (m *Model) selectAssignmentEffort(offset int) {
+func (m *Model) selectAssignmentVariant(offset int) {
 	row := &m.setupAssignmentRows[m.setupModelSlot]
-	next := cycleSetupEffort(row.RequestedEffort, setupSupportedEfforts(row.Reference), offset)
-	if next == row.RequestedEffort {
+	next := cycleSetupVariant(row.Variant, m.setupVariantsForModel(row.Reference), offset)
+	if next == row.Variant {
 		return
 	}
-	row.RequestedEffort = next
+	row.Variant, row.VariantSpecified = next, true
 	m.markAssignmentEdit()
 }
 
@@ -568,9 +581,13 @@ func (m *Model) seedSetupAssignments(plan SetupPlan) {
 	}
 	var rows [SetupModelAssignmentCount]SetupModelAssignmentRequest
 	for index, assignment := range ordered {
+		variant := assignment.Variant
+		if !assignment.VariantSpecified {
+			variant = ""
+		}
 		rows[index] = SetupModelAssignmentRequest{
 			ArtifactKey: assignment.ArtifactKey, Provider: assignment.Provider, Reference: assignment.Model,
-			RequestedEffort: assignment.RequestedEffort, Source: assignment.Source, Availability: assignment.Availability,
+			RequestedEffort: assignment.RequestedEffort, Variant: variant, VariantSpecified: assignment.VariantSpecified, Source: assignment.Source, Availability: assignment.Availability,
 		}
 	}
 	m.setupAssignmentRows = rows
@@ -584,25 +601,22 @@ func (m *Model) restoreSetupEditorPreview() {
 	}
 }
 
-func (m *Model) ensureMixedEffort(index int) {
-	if !m.modelProfileMixed() {
+func (m *Model) ensureModelVariant(index int) {
+	variants := m.setupVariantsForModel(m.setupModelRefs[index])
+	if len(variants) == 0 {
+		m.setupModelVariants[index] = ""
 		return
 	}
-	efforts := setupSupportedEfforts(m.setupModelRefs[index])
-	if len(efforts) == 0 {
-		m.setupModelEfforts[index] = ""
-		return
-	}
-	if !supportsSetupEffort(efforts, m.setupModelEfforts[index]) {
-		m.setupModelEfforts[index] = efforts[0]
+	if !supportsSetupVariant(variants, m.setupModelVariants[index]) {
+		m.setupModelVariants[index] = variants[0]
 	}
 }
 
-func nextSetupEffort(value string, supported []string) string {
-	return cycleSetupEffort(value, supported, 1)
+func nextSetupVariant(value string, supported []string) string {
+	return cycleSetupVariant(value, supported, 1)
 }
 
-func cycleSetupEffort(value string, supported []string, offset int) string {
+func cycleSetupVariant(value string, supported []string, offset int) string {
 	if len(supported) == 0 {
 		return value
 	}
@@ -617,27 +631,35 @@ func cycleSetupEffort(value string, supported []string, offset int) string {
 	return supported[0]
 }
 
-func setupSupportedEfforts(reference string) []string {
-	efforts := sdd.CatalogSupportedEfforts(reference)
-	result := make([]string, len(efforts))
-	for index, effort := range efforts {
-		result[index] = string(effort)
-	}
-	return result
-}
-
-func supportsSetupEffort(supported []string, effort string) bool {
+func supportsSetupVariant(supported []string, variant string) bool {
 	for _, candidate := range supported {
-		if candidate == effort {
+		if candidate == variant {
 			return true
 		}
 	}
 	return false
 }
 
-func (m Model) modelProfileMixed() bool {
-	provider := setupModelProvider(m.setupModelRefs[0])
-	return provider == "" || provider != setupModelProvider(m.setupModelRefs[1]) || provider != setupModelProvider(m.setupModelRefs[2])
+func (m Model) setupVariantsForModel(reference string) []string {
+	for _, row := range m.setupCatalog {
+		if row.Reference == reference {
+			return append([]string(nil), row.Variants...)
+		}
+	}
+	return nil
+}
+
+func (m Model) knownSetupModel(reference string) bool {
+	for _, row := range m.setupCatalog {
+		if row.Reference == reference {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) setupCatalogAvailable() bool {
+	return m.setupCatalogGeneration != 0 && !m.setupCatalogLoading && (m.setupCatalogErr == nil || len(m.setupCatalog) != 0)
 }
 
 func setupModelProvider(reference string) string {
@@ -650,15 +672,12 @@ func (m Model) modelProfileChanged() bool {
 func (m Model) modelEditorError() string {
 	if m.setupAssignmentsSeeded {
 		for index, row := range m.setupAssignmentRows {
-			if row.ArtifactKey != setupAgentRows[index].ArtifactKey || !validSetupModelReference(row.Reference) || row.Provider != setupModelProvider(row.Reference) {
-				return "Every agent needs a valid catalog provider/model and effort."
+			if row.ArtifactKey != setupAgentRows[index].ArtifactKey || !validSetupModelReference(row.Reference) || row.Provider != setupModelProvider(row.Reference) || !m.knownSetupModel(row.Reference) {
+				return "Every agent needs a discovered provider/model and variant."
 			}
-			supported := setupSupportedEfforts(row.Reference)
-			if len(supported) == 0 {
-				return "Model effort metadata is not available."
-			}
-			if !sdd.Effort(row.RequestedEffort).Valid() || !supportsSetupEffort(supported, row.RequestedEffort) {
-				return "Known models require an effort declared by the SDD catalog."
+			variants := m.setupVariantsForModel(row.Reference)
+			if len(variants) > 0 && row.Variant != "" && !supportsSetupVariant(variants, row.Variant) || len(variants) == 0 && row.Variant != "" {
+				return "Known models require a discovered variant or provider default."
 			}
 		}
 		return ""
@@ -668,26 +687,13 @@ func (m Model) modelEditorError() string {
 			return "Each slot needs a provider/model reference."
 		}
 	}
-	for _, ref := range m.setupModelRefs {
-		if len(setupSupportedEfforts(ref)) == 0 {
-			return "Model effort metadata is not available."
+	for index, ref := range m.setupModelRefs {
+		if !m.knownSetupModel(ref) {
+			return "Model variant metadata is not available."
 		}
-	}
-	if m.modelProfileMixed() {
-		for index, effort := range m.setupModelEfforts {
-			supported := setupSupportedEfforts(m.setupModelRefs[index])
-			if len(supported) == 0 {
-				return "Model effort metadata is not available."
-			}
-			if !sdd.Effort(effort).Valid() || !supportsSetupEffort(supported, effort) {
-				return "Known models require an effort declared by the SDD catalog."
-			}
-		}
-	} else {
-		for _, effort := range m.setupModelEfforts {
-			if effort != "" {
-				return "Per-slot efforts require mixed providers."
-			}
+		variants := m.setupVariantsForModel(ref)
+		if len(variants) > 0 && !supportsSetupVariant(variants, m.setupModelVariants[index]) || len(variants) == 0 && m.setupModelVariants[index] != "" {
+			return "Known models require a discovered variant or provider default."
 		}
 	}
 	return ""
@@ -848,9 +854,7 @@ func (m Model) setupRouteLines() []string {
 		if m.setupAssignmentsExact {
 			lines = append(lines, setupAssignmentRequestProfile(m.setupAssignmentRows, m.setupViewport.Width())...)
 		} else if m.modelProfileChanged() {
-			if m.modelProfileMixed() {
-				lines = append(lines, "! Custom slots may have unknown availability; no remote probe was made.")
-			}
+			lines = append(lines, "! Discovery proves identifier presence only; no remote probe was made.")
 			lines = append(lines, m.modelProfileSummary()...)
 		}
 		lines = append(lines, fmt.Sprintf("Apply this verified %d-step plan? [y] yes  [n/Esc] cancel", len(plan.Steps)))
@@ -881,18 +885,22 @@ func (m Model) setupHelp() string {
 	case m.setupModelEditing:
 		if m.setupAssignmentsSeeded {
 			help := "[↑↓/j/k] row  [←→] model"
-			if len(setupSupportedEfforts(m.setupAssignmentRows[m.setupModelSlot].Reference)) > 0 {
-				help += "  [[/]] effort"
+			if len(m.setupVariantsForModel(m.setupAssignmentRows[m.setupModelSlot].Reference)) > 0 {
+				help += "  [[/]] variant"
+			} else if m.knownSetupModel(m.setupAssignmentRows[m.setupModelSlot].Reference) {
+				help += "  provider default"
 			} else {
-				help += "  effort not available"
+				help += "  variant not available"
 			}
 			return help + "  [r] refresh  [Enter] preview  [Esc] cancel  [q] quit"
 		}
 		help := "[j/k] slot  type/edit ref"
-		if len(setupSupportedEfforts(m.setupModelRefs[m.setupModelSlot])) > 0 {
-			help += "  [Tab] effort"
+		if len(m.setupVariantsForModel(m.setupModelRefs[m.setupModelSlot])) > 0 {
+			help += "  [Tab] variant"
+		} else if m.knownSetupModel(m.setupModelRefs[m.setupModelSlot]) {
+			help += "  provider default"
 		} else {
-			help += "  effort not available"
+			help += "  variant not available"
 		}
 		return help + "  [Enter] save  [Esc] cancel"
 	case m.setupSucceeded:
@@ -918,7 +926,7 @@ func (m Model) setupHelp() string {
 }
 
 func (m Model) modelAssignmentLines() []string {
-	lines := []string{"AGENT ASSIGNMENT MATRIX · 15 agents", "agent                  class/role          provider/model · effort"}
+	lines := []string{"AGENT ASSIGNMENT MATRIX · 15 agents", "agent                  class/role          provider/model · variant"}
 	for index, identity := range setupAgentRows {
 		marker := " "
 		if index == m.setupModelSlot {
@@ -926,11 +934,10 @@ func (m Model) modelAssignmentLines() []string {
 		}
 		row := m.setupAssignmentRows[index]
 		reference := setupValue(row.Reference)
-		maxReference := max(12, m.setupViewport.Width()-54)
-		if len([]rune(reference)) > maxReference {
-			reference = string([]rune(reference)[:maxReference-1]) + "…"
-		}
-		lines = append(lines, fmt.Sprintf("%s %-22s %-19s %s · %s", marker, identity.Name, identity.Class+"/"+identity.Role, reference, setupValue(row.RequestedEffort)))
+		variant := truncateSetupRunes(setupValue(row.Variant), 12)
+		maxReference := max(12, m.setupViewport.Width()-48-lipgloss.Width(variant))
+		reference = truncateSetupRunes(reference, maxReference)
+		lines = append(lines, fmt.Sprintf("%s %-22s %-19s %s · %s", marker, identity.Name, identity.Class+"/"+identity.Role, reference, variant))
 	}
 	switch {
 	case m.setupCatalogLoading:
@@ -942,11 +949,19 @@ func (m Model) modelAssignmentLines() []string {
 	default:
 		lines = appendSetupWrapped(lines, "", fmt.Sprintf("✓ %d catalog models · %s", len(m.setupCatalog), setupDiscoveryDisclaimer), m.setupViewport.Width())
 	}
-	lines = append(lines, "allowed efforts  "+setupEffortAvailability(m.setupAssignmentRows[m.setupModelSlot].Reference))
+	lines = append(lines, "allowed variants  "+m.setupVariantAvailability(m.setupAssignmentRows[m.setupModelSlot].Reference))
 	if err := m.modelEditorError(); err != "" {
 		lines = append(lines, "✕ "+err)
 	}
 	return lines
+}
+
+func truncateSetupRunes(value string, maximum int) string {
+	runes := []rune(value)
+	if len(runes) <= maximum {
+		return value
+	}
+	return string(runes[:maximum-1]) + "…"
 }
 
 func (m Model) modelEditorLines() []string {
@@ -966,7 +981,7 @@ func (m Model) modelEditorLines() []string {
 		if m.modelProfileChanged() {
 			availability = "unknown"
 		}
-		lines = append(lines, fmt.Sprintf("%s %-9s %s  effort=%s  allowed=%s  availability=%s", marker, name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelEfforts[index]), setupEffortAvailability(m.setupModelRefs[index]), setupValue(availability)))
+		lines = append(lines, fmt.Sprintf("%s %-9s %s  variant=%s  allowed=%s  availability=%s", marker, name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelVariants[index]), m.setupVariantAvailability(m.setupModelRefs[index]), setupValue(availability)))
 	}
 	if err := m.modelEditorError(); err != "" {
 		lines = append(lines, "✕ "+err)
@@ -974,18 +989,21 @@ func (m Model) modelEditorLines() []string {
 	return append(lines, "", "Enter previews valid inputs; Esc restores entry values.")
 }
 
-func setupEffortAvailability(reference string) string {
-	supported := setupSupportedEfforts(reference)
-	if len(supported) == 0 {
-		return "not available"
+func (m Model) setupVariantAvailability(reference string) string {
+	supported := m.setupVariantsForModel(reference)
+	if len(supported) > 0 {
+		return strings.Join(supported, ", ")
 	}
-	return strings.Join(supported, ", ")
+	if m.knownSetupModel(reference) {
+		return "provider default"
+	}
+	return "not available"
 }
 
 func (m Model) modelProfileSummary() []string {
 	lines := []string{"Model profile:"}
 	for index, name := range []string{"efficient", "balanced", "frontier"} {
-		lines = append(lines, fmt.Sprintf("  %s=%s effort=%s", name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelEfforts[index])))
+		lines = append(lines, fmt.Sprintf("  %s=%s variant=%s", name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelVariants[index])))
 	}
 	return lines
 }
@@ -1028,9 +1046,9 @@ func setupPlanModelProfile(plan SetupPlan, width int) []string {
 		return nil
 	}
 	return []string{
-		"model efficient  " + setupValue(plan.ModelEfficient) + "  effort=" + setupValue(plan.ModelEfficientEffort) + "  source=" + setupValue(plan.ModelEfficientSource) + "  availability=" + setupValue(plan.ModelEfficientAvailability),
-		"model balanced   " + setupValue(plan.ModelBalanced) + "  effort=" + setupValue(plan.ModelBalancedEffort) + "  source=" + setupValue(plan.ModelBalancedSource) + "  availability=" + setupValue(plan.ModelBalancedAvailability),
-		"model frontier   " + setupValue(plan.ModelFrontier) + "  effort=" + setupValue(plan.ModelFrontierEffort) + "  source=" + setupValue(plan.ModelFrontierSource) + "  availability=" + setupValue(plan.ModelFrontierAvailability),
+		"model efficient  " + setupValue(plan.ModelEfficient) + "  variant=" + setupValue(plan.ModelEfficientVariant) + "  source=" + setupValue(plan.ModelEfficientSource) + "  availability=" + setupValue(plan.ModelEfficientAvailability),
+		"model balanced   " + setupValue(plan.ModelBalanced) + "  variant=" + setupValue(plan.ModelBalancedVariant) + "  source=" + setupValue(plan.ModelBalancedSource) + "  availability=" + setupValue(plan.ModelBalancedAvailability),
+		"model frontier   " + setupValue(plan.ModelFrontier) + "  variant=" + setupValue(plan.ModelFrontierVariant) + "  source=" + setupValue(plan.ModelFrontierSource) + "  availability=" + setupValue(plan.ModelFrontierAvailability),
 	}
 }
 
@@ -1038,7 +1056,7 @@ func setupAssignmentRequestProfile(rows [SetupModelAssignmentCount]SetupModelAss
 	lines := []string{"EXACT AGENT ASSIGNMENTS"}
 	for index, row := range rows {
 		lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Reference, []string{
-			"requested=" + row.RequestedEffort, "source=" + row.Source, "availability=" + row.Availability,
+			"variant=" + row.Variant, "source=" + row.Source, "availability=" + row.Availability,
 		}, width)
 	}
 	lines = appendSetupWrapped(lines, "", setupDiscoveryDisclaimer, width)

@@ -335,6 +335,17 @@ func TestPlanAndApplyPreserveExactModelSlotDetails(t *testing.T) {
 	}
 }
 
+func TestPreserveModelDetailsKeepsV2Variants(t *testing.T) {
+	fallback := integration.Result{ModelEfficientVariant: "xhigh", ModelBalancedVariant: "max", ModelFrontierVariant: "thinking", ModelVariantsSpecified: true}
+	if result := preserveModelDetails(integration.Result{}, fallback); result.ModelEfficientVariant != "xhigh" || result.ModelBalancedVariant != "max" || result.ModelFrontierVariant != "thinking" || !result.ModelVariantsSpecified {
+		t.Fatalf("fallback variants lost: %+v", result)
+	}
+	result := preserveModelDetails(integration.Result{ModelVariantsSpecified: true}, fallback)
+	if result.ModelEfficientVariant != "" || result.ModelBalancedVariant != "" || result.ModelFrontierVariant != "" || !result.ModelVariantsSpecified {
+		t.Fatalf("explicit provider defaults replaced: %+v", result)
+	}
+}
+
 func TestApplyRetiresProviderSkillBeforePublishingGlobalSkill(t *testing.T) {
 	var events []string
 	installer := &fakeInstaller{

@@ -1065,9 +1065,10 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		efficient := plan.configV2.Slots[sdd.CapabilityEfficient]
 		balanced := plan.configV2.Slots[sdd.CapabilityBalanced]
 		frontier := plan.configV2.Slots[sdd.CapabilityFrontier]
-		result.ModelEfficient, result.ModelEfficientEffort, result.ModelEfficientSource, result.ModelEfficientAvailability = efficient.Reference, efficient.RequestedEffort, efficient.Source, efficient.Availability
-		result.ModelBalanced, result.ModelBalancedEffort, result.ModelBalancedSource, result.ModelBalancedAvailability = balanced.Reference, balanced.RequestedEffort, balanced.Source, balanced.Availability
-		result.ModelFrontier, result.ModelFrontierEffort, result.ModelFrontierSource, result.ModelFrontierAvailability = frontier.Reference, frontier.RequestedEffort, frontier.Source, frontier.Availability
+		result.ModelEfficient, result.ModelEfficientEffort, result.ModelEfficientVariant, result.ModelEfficientSource, result.ModelEfficientAvailability = efficient.Reference, efficient.RequestedEffort, efficient.Variant, efficient.Source, efficient.Availability
+		result.ModelBalanced, result.ModelBalancedEffort, result.ModelBalancedVariant, result.ModelBalancedSource, result.ModelBalancedAvailability = balanced.Reference, balanced.RequestedEffort, balanced.Variant, balanced.Source, balanced.Availability
+		result.ModelFrontier, result.ModelFrontierEffort, result.ModelFrontierVariant, result.ModelFrontierSource, result.ModelFrontierAvailability = frontier.Reference, frontier.RequestedEffort, frontier.Variant, frontier.Source, frontier.Availability
+		result.ModelVariantsSpecified = efficient.VariantSpecified || balanced.VariantSpecified || frontier.VariantSpecified
 	} else {
 		result.ModelSchemaVersion = 1
 		result.ModelPlan, result.ModelProvider = plan.config.ActivePlan, plan.resolved.Provider
@@ -1298,6 +1299,7 @@ func legacyResultModelAssignments(plan modelPlanBundle) (*[integration.ModelAssi
 			}
 			row.Provider, row.Model = assignment.Provider, assignment.Model
 			row.RequestedEffort, row.Effort, row.Variant, row.Degradation = assignment.RequestedEffort, assignment.Effort, assignment.Variant, assignment.Degradation
+			row.VariantSpecified = slot.VariantSpecified
 			row.Source, row.Availability = slot.Source, slot.Availability
 		} else {
 			assignment, ok := plan.resolved.Roles[identity.Role]
