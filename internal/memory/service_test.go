@@ -57,6 +57,26 @@ func TestMemoryService_RememberDefaultsAndCallerFieldBoundary(t *testing.T) {
 	testutil.Require(t, err == nil && got.Title == "Title" && got.Project == "default" && got.Scope == ScopeProject && got.Type == "learning" && got.State == StateActive && got.Provenance == (Provenance{Producer: "cli"}) && got.Session == "s" && got.TopicKey == "topic" && len(got.References) == 1 && got.References[0] == "prior", "defaults/boundary: %+v %v", got, err)
 }
 
+func TestMemoryService_RememberRejectsWhitespaceOnlyTitleBeforeStore(t *testing.T) {
+	for _, test := range []struct {
+		name, title string
+		calls       int
+	}{
+		{"empty remains compatible", "", 1},
+		{"whitespace", " \t", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeMemoryStore{}
+			_, err := NewMemoryService(store, "cli", nil).Remember(context.Background(), Remember{Title: test.title, Content: "body"})
+			if test.calls == 0 {
+				testutil.Require(t, errors.Is(err, ErrInvalid) && store.calls == 0, "whitespace title reached store: %q %v", test.title, err)
+				return
+			}
+			testutil.Require(t, err == nil && store.calls == 1, "empty title no longer compatible: %v", err)
+		})
+	}
+}
+
 func TestMemoryService_AllowsGovernedNeedsReviewLifecycle(t *testing.T) {
 	store := &fakeMemoryStore{}
 	service := NewMemoryService(store, "controlplane", nil)
