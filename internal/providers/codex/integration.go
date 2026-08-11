@@ -50,6 +50,10 @@ func (s *Integration) check(point, name string) error {
 var _ integration.ManagedRuntime = (*Integration)(nil)
 
 func codexPackage(options integration.Options) (Package, error) {
+	if options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != "" ||
+		options.ModelEfficientEffort != "" || options.ModelBalancedEffort != "" || options.ModelFrontierEffort != "" {
+		return Package{}, fmt.Errorf("%w: Codex does not support model-slot customization", integration.ErrInvalid)
+	}
 	plan := options.ModelPlan
 	if plan == "" {
 		plan = sdd.PlanMedium

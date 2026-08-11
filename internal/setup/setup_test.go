@@ -110,6 +110,16 @@ func (fake *fakeProber) Probe(context.Context, string) (integration.Handshake, e
 	return fake.result, fake.err
 }
 
+func applyConfirmed(t *testing.T, service *Service, options Options) (Result, error) {
+	t.Helper()
+	plan, err := service.Plan(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.ExpectedPlanDigest = plan.Digest
+	return service.Apply(context.Background(), options)
+}
+
 func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/bin/vgxness", DataDir: "/data"}}
 	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md"}}
@@ -139,6 +149,112 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestPlanDigestIsStableAndBindsFullPlan(t *testing.T) {
+	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}}
+	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent, ModelEfficient: "openai/fast"}}
+	service := New(installer, preview, func(string) (integration.Runtime, error) { return preview, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	first, err := service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	second, secondErr := service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	if err != nil || secondErr != nil || first.Digest == "" || first.Digest != second.Digest {
+		t.Fatalf("digests=%q/%q errors=%v/%v", first.Digest, second.Digest, err, secondErr)
+	}
+	preview.previewResult.ModelEfficient = "acme/fast"
+	changed, err := service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	if err != nil || changed.Digest == first.Digest {
+		t.Fatalf("slot change digest=%q err=%v", changed.Digest, err)
+	}
+	preview.previewResult.ModelEfficient = "openai/fast"
+	preview.previewResult.State = integration.StatePartial
+	changed, err = service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	if err != nil || changed.Digest == first.Digest {
+		t.Fatalf("state change digest=%q err=%v", changed.Digest, err)
+	}
+	otherWorkspace, err := service.Plan(context.Background(), Options{Workspace: "/other-workspace"})
+	if err != nil || otherWorkspace.Digest == "" || otherWorkspace.Digest == changed.Digest {
+		t.Fatalf("workspace digest=%q current=%q err=%v", otherWorkspace.Digest, changed.Digest, err)
+	}
+}
+
+func TestApplyDigestBindsWorkspaceBeforeMutation(t *testing.T) {
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+		statusResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}
+	managed := &fakeIntegration{installResult: integration.Result{State: integration.StateInstalled}, statusResult: integration.Result{State: integration.StateInstalled}}
+	service := New(installer, preview, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+
+	confirmed, err := service.Plan(context.Background(), Options{Workspace: "/workspace-a"})
+	if err != nil || confirmed.Digest == "" {
+		t.Fatalf("plan=%+v err=%v", confirmed, err)
+	}
+	if _, err := service.Apply(context.Background(), Options{Workspace: "/workspace-b", ExpectedPlanDigest: confirmed.Digest}); !errors.Is(err, ErrPrerequisite) || strings.Contains(strings.Join(installer.calls, ","), "self-install") || strings.Contains(strings.Join(managed.calls, ","), "integration-install") {
+		t.Fatalf("cross-workspace apply err=%v installer=%v integration=%v", err, installer.calls, managed.calls)
+	}
+	if _, err := service.Apply(context.Background(), Options{Workspace: "/workspace-a", ExpectedPlanDigest: confirmed.Digest}); err != nil {
+		t.Fatalf("same-workspace apply err=%v", err)
+	}
+}
+
+func TestApplyRejectsMismatchedPlanDigestBeforeMutation(t *testing.T) {
+	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}}
+	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}
+	service := New(installer, preview, func(string) (integration.Runtime, error) { return preview, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace", ExpectedPlanDigest: "stale"})
+	if !errors.Is(err, ErrPrerequisite) || len(installer.calls) != 1 || len(preview.calls) != 1 || result.Plan.Digest == "" {
+		t.Fatalf("result=%+v err=%v installer=%v preview=%v", result, err, installer.calls, preview.calls)
+	}
+}
+
+func TestApplyRejectsEmptyPlanDigestBeforeMutation(t *testing.T) {
+	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}}
+	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}
+	service := New(installer, preview, func(string) (integration.Runtime, error) { return preview, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+
+	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	if !errors.Is(err, ErrPrerequisite) || result.Plan.Digest == "" || strings.Join(installer.calls, ",") != "self-preview" || strings.Join(preview.calls, ",") != "integration-preview" {
+		t.Fatalf("result=%+v err=%v installer=%v preview=%v", result, err, installer.calls, preview.calls)
+	}
+}
+
+func TestApplyReadsBackIntegrationAfterRecoveryError(t *testing.T) {
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	installCause := errors.New("install failed")
+	installErr := errors.Join(integration.ErrRecovery, installCause)
+	statusErr := errors.New("status failed")
+	observed := integration.Result{State: integration.StatePartial, Path: "/config/observed"}
+	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent, ModelEfficient: "openai/fast"}}
+	managed := &fakeIntegration{installErr: installErr, statusResult: observed, statusErr: statusErr}
+	service := New(installer, preview, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	plan, err := service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace", ExpectedPlanDigest: plan.Digest})
+	if !errors.Is(err, integration.ErrRecovery) || !errors.Is(err, installCause) || !errors.Is(err, statusErr) || strings.Join(managed.calls, ",") != "integration-install,integration-status" || result.Integration.State != observed.State || result.Plan.Integration.Path != observed.Path || result.Integration.ModelEfficient != "openai/fast" || result.Plan.Integration.ModelEfficient != "openai/fast" || !strings.Contains(result.Recovery, "integración no pudo revertir") {
+		t.Fatalf("result=%+v err=%v calls=%v", result, err, managed.calls)
+	}
+}
+
+func TestApplyReturnsObservedDriftedSelfStatusInResultAndPlan(t *testing.T) {
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+		statusResult:  selfinstall.Result{State: selfinstall.StateDrifted, LauncherPath: "/stable", ActiveSHA256: "observed-drift"},
+	}
+	managed := &fakeIntegration{installResult: integration.Result{State: integration.StateInstalled}}
+	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
+	if !errors.Is(err, ErrVerification) || result.SelfInstall.State != selfinstall.StateDrifted || result.Plan.SelfInstall.ActiveSHA256 != "observed-drift" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestPlanReportsUnavailablePrerequisiteWithoutApplying(t *testing.T) {
 	installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent}}
 	preview := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}
@@ -147,7 +263,7 @@ func TestPlanReportsUnavailablePrerequisiteWithoutApplying(t *testing.T) {
 	if err != nil || plan.Ready || plan.Blocker == "" || len(plan.Steps) != 7 {
 		t.Fatalf("unexpected blocked plan=%#v err=%v", plan, err)
 	}
-	if _, err := service.Apply(context.Background(), Options{Workspace: "/workspace"}); !errors.Is(err, ErrPrerequisite) {
+	if _, err := service.Apply(context.Background(), Options{Workspace: "/workspace", ExpectedPlanDigest: plan.Digest}); !errors.Is(err, ErrPrerequisite) {
 		t.Fatalf("apply error=%v", err)
 	}
 	if strings.Contains(strings.Join(installer.calls, ","), "self-install") {
@@ -173,15 +289,47 @@ func TestApplyInstallsThroughStableLauncherAndVerifiesEverything(t *testing.T) {
 		requestedLauncher = path
 		return managed, nil
 	}, health)
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if requestedLauncher != launcherPath || !result.Changed || result.Handshake.Status != integration.HandshakeHealthy || result.Recovery != "" {
 		t.Fatalf("unexpected result=%#v launcher=%q", result, requestedLauncher)
 	}
-	if strings.Join(managed.calls, ",") != "integration-install,integration-status" || health.calls != 2 {
+	if strings.Join(managed.calls, ",") != "integration-install,integration-status" || health.calls != 3 {
 		t.Fatalf("managed=%v health=%d", managed.calls, health.calls)
+	}
+}
+
+func TestPlanAndApplyPreserveExactModelSlotDetails(t *testing.T) {
+	requested := integration.Options{
+		ModelEfficient: "openai/fast", ModelBalanced: "anthropic/balanced", ModelFrontier: "acme/frontier",
+		ModelEfficientEffort: "low", ModelBalancedEffort: "high", ModelFrontierEffort: "ultra",
+	}
+	modelResult := integration.Result{
+		State:          integration.StateAbsent,
+		ModelEfficient: requested.ModelEfficient, ModelBalanced: requested.ModelBalanced, ModelFrontier: requested.ModelFrontier,
+		ModelEfficientEffort: requested.ModelEfficientEffort, ModelBalancedEffort: requested.ModelBalancedEffort, ModelFrontierEffort: requested.ModelFrontierEffort,
+		ModelEfficientSource: "custom", ModelBalancedSource: "custom", ModelFrontierSource: "custom",
+		ModelEfficientAvailability: "unknown", ModelBalancedAvailability: "unknown", ModelFrontierAvailability: "unknown",
+	}
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+		statusResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable", ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	managed := &fakeIntegration{installResult: modelResult, statusResult: integration.Result{State: integration.StateInstalled}}
+	service := New(installer, &fakeIntegration{previewResult: modelResult}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+
+	plan, err := service.Plan(context.Background(), Options{Workspace: "/workspace", Integration: requested})
+	if err != nil || plan.Integration != modelResult {
+		t.Fatalf("plan=%+v err=%v", plan.Integration, err)
+	}
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace", Integration: requested})
+	wantInstalled := modelResult
+	wantInstalled.State = integration.StateInstalled
+	if err != nil || result.Integration != wantInstalled || result.Plan.Integration != wantInstalled {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 
@@ -196,7 +344,7 @@ func TestApplyRetiresProviderSkillBeforePublishingGlobalSkill(t *testing.T) {
 	shared := &fakeSkills{preview: skills.Result{State: skills.StateAbsent}, install: skills.Result{State: skills.StateInstalled}, status: skills.Result{State: skills.StateInstalled}, events: &events}
 	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
-	if _, err := service.Apply(context.Background(), Options{Workspace: "/workspace"}); err != nil || strings.Join(events, ",") != "integration-install,skills-install" {
+	if _, err := applyConfirmed(t, service, Options{Workspace: "/workspace"}); err != nil || strings.Join(events, ",") != "integration-install,skills-install" {
 		t.Fatalf("err=%v events=%v", err, events)
 	}
 }
@@ -214,8 +362,8 @@ func TestPlanBlocksSkillDriftAndApplyIndependentlyVerifiesSkills(t *testing.T) {
 	}
 	installed := &fakeSkills{preview: skills.Result{State: skills.StateAbsent}, install: skills.Result{State: skills.StateInstalled, Changed: true}, status: skills.Result{State: skills.StateInstalled}}
 	service.skills = installed
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
-	if err != nil || !result.Changed || strings.Join(installed.calls, ",") != "skills-preview,skills-install,skills-status" {
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
+	if err != nil || !result.Changed || strings.Join(installed.calls, ",") != "skills-preview,skills-preview,skills-install,skills-status" {
 		t.Fatalf("result=%+v err=%v calls=%v", result, err, installed.calls)
 	}
 }
@@ -237,7 +385,7 @@ func TestApplyRetainsSkillsReadbackRecoveryEvidence(t *testing.T) {
 	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
 
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
 	if !errors.Is(err, ErrVerification) || !errors.Is(err, skills.ErrRecovery) || !errors.Is(err, skills.ErrDrift) || result.Plan.Skills.State != readback.State || result.Plan.Skills.Path != readback.Path || result.Plan.Skills.BackupPath != readback.BackupPath || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -253,13 +401,14 @@ func TestApplyPreservesSkillsReadbackDeadline(t *testing.T) {
 	shared := &fakeSkills{
 		preview:   skills.Result{State: skills.StateAbsent},
 		install:   skills.Result{State: skills.StateInstalled, Changed: true},
+		status:    skills.Result{State: skills.StateDrifted, Path: "/skills/observed"},
 		statusErr: context.DeadlineExceeded,
 	}
 	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
 
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
-	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, skills.ErrRecovery) || result.Recovery != "" {
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, skills.ErrRecovery) || result.Recovery != "" || result.Plan.Skills.State != skills.StateDrifted || result.Plan.Skills.Path != "/skills/observed" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
@@ -304,8 +453,8 @@ func TestApplyRollsBackManagedUpdateWhenIntegrationFails(t *testing.T) {
 	}
 	managed := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, installErr: integration.ErrConflict}
 	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
-	if !errors.Is(err, integration.ErrConflict) || result.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "revirtió") || !strings.Contains(strings.Join(installer.calls, ","), "self-rollback") {
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
+	if !errors.Is(err, integration.ErrConflict) || result.SelfInstall.ActiveSHA256 != oldDigest || result.Plan.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "revirtió") || !strings.Contains(strings.Join(installer.calls, ","), "self-rollback") {
 		t.Fatalf("result=%#v err=%v calls=%v", result, err, installer.calls)
 	}
 }
@@ -319,7 +468,7 @@ func TestApplyReportsIntegrationAndLauncherRecovery(t *testing.T) {
 	}
 	managed := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, installErr: errors.Join(integration.ErrConflict, integration.ErrRecovery)}
 	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
 	if !errors.Is(err, integration.ErrRecovery) || !strings.Contains(result.Recovery, "integración no pudo revertir") || !strings.Contains(result.Recovery, "revirtió") {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
@@ -336,7 +485,11 @@ func TestApplyRollbackSurvivesCallerCancellation(t *testing.T) {
 	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err := service.Apply(ctx, Options{Workspace: "/workspace"})
+	plan, planErr := service.Plan(context.Background(), Options{Workspace: "/workspace"})
+	if planErr != nil {
+		t.Fatal(planErr)
+	}
+	result, err := service.Apply(ctx, Options{Workspace: "/workspace", ExpectedPlanDigest: plan.Digest})
 	if !errors.Is(err, context.Canceled) || result.SelfInstall.ActiveSHA256 != oldDigest || installer.rollbackCtxErr != nil {
 		t.Fatalf("result=%#v err=%v rollback context=%v", result, err, installer.rollbackCtxErr)
 	}
@@ -347,7 +500,7 @@ func TestApplyDoesNotInstallSkillsWhenLauncherFails(t *testing.T) {
 	shared := &fakeSkills{preview: skills.Result{State: skills.StateAbsent}}
 	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return &fakeIntegration{}, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
-	if _, err := service.Apply(context.Background(), Options{Workspace: "/workspace"}); err == nil || strings.Contains(strings.Join(shared.calls, ","), "skills-install") {
+	if _, err := applyConfirmed(t, service, Options{Workspace: "/workspace"}); err == nil || strings.Contains(strings.Join(shared.calls, ","), "skills-install") {
 		t.Fatalf("err=%v skills=%v", err, shared.calls)
 	}
 }
@@ -358,7 +511,7 @@ func TestApplyDoesNotPublishSkillsAfterIntegrationFailure(t *testing.T) {
 	managed := &fakeIntegration{installErr: integration.ErrConflict}
 	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
 	if !errors.Is(err, integration.ErrConflict) || strings.Contains(result.Recovery, "global de skills quedó instalado") || strings.Contains(strings.Join(shared.calls, ","), "skills-install") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -375,7 +528,7 @@ func TestApplyDisclosesIncompleteSkillsRecovery(t *testing.T) {
 	shared := &fakeSkills{preview: skills.Result{State: skills.StateAbsent}, installErr: errors.Join(errors.New("sync failed"), skills.ErrRecovery)}
 	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
 	if !errors.Is(err, skills.ErrRecovery) || result.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "revirtió") || !strings.Contains(result.Recovery, "v1-v10") || !strings.Contains(result.Recovery, "plugin heredado vgxness.ts") || !strings.Contains(result.Recovery, "skill heredada vgxness-autonomous-stacked-pr") || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") || !strings.Contains(result.Recovery, "puede haber quedado parcial") || strings.Contains(result.Recovery, "verificado") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -390,7 +543,7 @@ func TestApplyDisclosesUnconfirmedSkillsAfterOrdinaryInstallFailure(t *testing.T
 	shared := &fakeSkills{preview: skills.Result{State: skills.StateAbsent}, installErr: errors.New("publication failed")}
 	service := New(installer, &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
 	service.skills = shared
-	result, err := service.Apply(context.Background(), Options{Workspace: "/workspace"})
+	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
 	if err == nil || !strings.Contains(result.Recovery, "launcher administrado se conserva") || !strings.Contains(result.Recovery, "v1-v10") || !strings.Contains(result.Recovery, "plugin heredado vgxness.ts") || !strings.Contains(result.Recovery, "skill heredada vgxness-autonomous-stacked-pr") || !strings.Contains(result.Recovery, "vgxness skills status") || !strings.Contains(result.Recovery, "vgxness skills install") || strings.Contains(result.Recovery, "puede haber quedado parcial") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}

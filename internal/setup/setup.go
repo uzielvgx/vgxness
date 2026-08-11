@@ -2,6 +2,9 @@ package setup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -25,14 +28,17 @@ type Step struct {
 }
 
 type Options struct {
-	SelfInstall selfinstall.Options
-	Integration integration.Options
-	Skills      skills.Options
-	Workspace   string
+	SelfInstall        selfinstall.Options
+	Integration        integration.Options
+	Skills             skills.Options
+	Workspace          string
+	ExpectedPlanDigest string
 }
 
 type Plan struct {
+	Digest      string
 	Provider    string
+	Workspace   string
 	Steps       []Step
 	SelfInstall selfinstall.Result
 	Integration integration.Result
@@ -89,8 +95,9 @@ func OpenCodeSteps() []Step {
 	}
 }
 
-func (service *Service) Plan(ctx context.Context, options Options) (Plan, error) {
-	plan := Plan{Provider: "opencode", Steps: OpenCodeSteps()}
+func (service *Service) Plan(ctx context.Context, options Options) (plan Plan, err error) {
+	plan = Plan{Provider: "opencode", Workspace: options.Workspace, Steps: OpenCodeSteps()}
+	defer func() { plan.Digest = planDigest(plan) }()
 	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.prober == nil || options.Workspace == "" {
 		return plan, ErrInvalid
 	}
@@ -141,7 +148,7 @@ func (service *Service) Plan(ctx context.Context, options Options) (Plan, error)
 }
 
 func (service *Service) Status(ctx context.Context, options Options) (Plan, error) {
-	plan := Plan{Provider: "opencode", Steps: OpenCodeSteps()}
+	plan := Plan{Provider: "opencode", Workspace: options.Workspace, Steps: OpenCodeSteps()}
 	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.prober == nil || options.Workspace == "" {
 		return plan, ErrInvalid
 	}
@@ -192,11 +199,15 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 	if err != nil {
 		return result, err
 	}
+	if options.ExpectedPlanDigest == "" || options.ExpectedPlanDigest != plan.Digest {
+		return result, fmt.Errorf("%w: confirmed preview no longer matches", ErrPrerequisite)
+	}
 	if !plan.Ready {
 		return result, ErrPrerequisite
 	}
 	installed, err := service.installer.Install(ctx, options.SelfInstall)
 	result.SelfInstall = installed
+	result.Plan.SelfInstall = installed
 	if err != nil {
 		return result, err
 	}
@@ -206,8 +217,14 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 		return result, err
 	}
 	integrated, err := managed.Install(ctx, options.Integration)
-	result.Integration = integrated
+	result.Integration = preserveModelDetails(integrated, plan.Integration)
+	result.Plan.Integration = result.Integration
 	if err != nil {
+		observed, statusErr := managed.Status(ctx, options.Integration)
+		if observed != (integration.Result{}) {
+			result.Integration = preserveModelDetails(observed, result.Plan.Integration)
+			result.Plan.Integration = result.Integration
+		}
 		integrationRecoveryIncomplete := errors.Is(err, integration.ErrRecovery)
 		service.recoverBinary(ctx, options, plan, installed, &result)
 		if integrationRecoveryIncomplete {
@@ -216,6 +233,9 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 				message += " " + result.Recovery
 			}
 			result.Recovery = message
+		}
+		if statusErr != nil {
+			return result, errors.Join(err, statusErr)
 		}
 		return result, err
 	}
@@ -234,12 +254,16 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 		}
 	}
 	selfStatus, err := service.installer.Status(ctx, options.SelfInstall)
+	result.SelfInstall = selfStatus
+	result.Plan.SelfInstall = selfStatus
 	if err != nil || selfStatus.State != selfinstall.StateInstalled || selfStatus.ActiveSHA256 != installed.ActiveSHA256 {
 		result.Recovery = "La instalación se conserva para no borrar archivos sin una identidad comprobada. Ejecuta `vgxness self status` y repara el drift antes de reintentar."
 		service.discloseSkills(&result, skillInstalled)
 		return result, fmt.Errorf("%w: self-install", ErrVerification)
 	}
 	integrationStatus, err := managed.Status(ctx, options.Integration)
+	result.Integration = preserveModelDetails(integrationStatus, result.Plan.Integration)
+	result.Plan.Integration = result.Integration
 	if err != nil || integrationStatus.State != integration.StateInstalled {
 		result.Recovery = "Los archivos instalados se conservan. Ejecuta `vgxness integrate opencode status` para inspeccionar y `uninstall` sólo si deseas retirarlos recuperablemente."
 		service.discloseSkills(&result, skillInstalled)
@@ -247,13 +271,12 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 	}
 	handshake, err := service.prober.Probe(ctx, options.Workspace)
 	result.Handshake = handshake
+	result.Plan.Handshake = handshake
 	if err != nil || !handshake.OK {
 		result.Recovery = "El launcher y la integración quedaron instalados, pero OpenCode no respondió saludablemente. Corrige OpenCode y ejecuta `vgxness setup opencode --status`."
 		service.discloseSkills(&result, skillInstalled)
 		return result, fmt.Errorf("%w: handshake", ErrVerification)
 	}
-	result.SelfInstall = selfStatus
-	result.Integration = integrationStatus
 	if service.skills != nil {
 		skillStatus, err := service.skills.Status(ctx, options.Skills)
 		if err != nil || skillStatus.State != skills.StateInstalled {
@@ -268,6 +291,59 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 	}
 	result.Changed = installed.Changed || integrated.Changed || skillInstalled.Changed
 	return result, nil
+}
+
+func planDigest(plan Plan) string {
+	plan.Digest = ""
+	encoded, _ := json.Marshal(plan)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func preserveModelDetails(result, fallback integration.Result) integration.Result {
+	if result.ModelPlan == "" {
+		result.ModelPlan = fallback.ModelPlan
+	}
+	if result.ModelProvider == "" {
+		result.ModelProvider = fallback.ModelProvider
+	}
+	if result.ModelEfficient == "" {
+		result.ModelEfficient = fallback.ModelEfficient
+	}
+	if result.ModelBalanced == "" {
+		result.ModelBalanced = fallback.ModelBalanced
+	}
+	if result.ModelFrontier == "" {
+		result.ModelFrontier = fallback.ModelFrontier
+	}
+	if result.ModelEfficientEffort == "" {
+		result.ModelEfficientEffort = fallback.ModelEfficientEffort
+	}
+	if result.ModelBalancedEffort == "" {
+		result.ModelBalancedEffort = fallback.ModelBalancedEffort
+	}
+	if result.ModelFrontierEffort == "" {
+		result.ModelFrontierEffort = fallback.ModelFrontierEffort
+	}
+	if result.ModelEfficientSource == "" {
+		result.ModelEfficientSource = fallback.ModelEfficientSource
+	}
+	if result.ModelBalancedSource == "" {
+		result.ModelBalancedSource = fallback.ModelBalancedSource
+	}
+	if result.ModelFrontierSource == "" {
+		result.ModelFrontierSource = fallback.ModelFrontierSource
+	}
+	if result.ModelEfficientAvailability == "" {
+		result.ModelEfficientAvailability = fallback.ModelEfficientAvailability
+	}
+	if result.ModelBalancedAvailability == "" {
+		result.ModelBalancedAvailability = fallback.ModelBalancedAvailability
+	}
+	if result.ModelFrontierAvailability == "" {
+		result.ModelFrontierAvailability = fallback.ModelFrontierAvailability
+	}
+	return result
 }
 
 func (service *Service) discloseSkills(result *Result, installed skills.Result) {
@@ -310,5 +386,6 @@ func (service *Service) recoverBinary(ctx context.Context, options Options, plan
 		return
 	}
 	result.SelfInstall = rolledBack
+	result.Plan.SelfInstall = rolledBack
 	result.Recovery = "La actualización del binario se revirtió a la versión administrada anterior."
 }

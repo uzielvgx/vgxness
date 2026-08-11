@@ -331,7 +331,7 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 	if !plan.Valid() {
 		return setupflow.Options{}, fmt.Errorf("invalid TUI setup plan")
 	}
-	return setupflow.Options{Workspace: workspace, Integration: integration.Options{ModelPlan: plan,
+	return setupflow.Options{Workspace: workspace, ExpectedPlanDigest: request.ExpectedPlanDigest, Integration: integration.Options{ModelPlan: plan,
 		ModelEfficient: request.ModelEfficient, ModelBalanced: request.ModelBalanced, ModelFrontier: request.ModelFrontier,
 		ModelEfficientEffort: sdd.Effort(request.ModelEfficientEffort), ModelBalancedEffort: sdd.Effort(request.ModelBalancedEffort), ModelFrontierEffort: sdd.Effort(request.ModelFrontierEffort),
 	}}, nil
@@ -353,7 +353,7 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 		}
 	}
 	return tui.SetupPlan{
-		Provider: plan.Provider, Steps: steps,
+		Digest: plan.Digest, Provider: plan.Provider, Steps: steps,
 		SelfInstallState: fmt.Sprint(plan.SelfInstall.State), SelfInstallPath: plan.SelfInstall.LauncherPath,
 		SelfInstallUpdateAvailable: plan.SelfInstall.UpdateAvailable, SelfInstallRollbackAvailable: plan.SelfInstall.RollbackAvailable,
 		SelfInstallActiveSHA256: plan.SelfInstall.ActiveSHA256, SelfInstallPreviousSHA256: plan.SelfInstall.PreviousSHA256,
