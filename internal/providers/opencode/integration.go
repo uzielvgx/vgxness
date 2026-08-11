@@ -1051,6 +1051,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		DirectoryDurability: directoryDurability(),
 	}
 	if plan.configV3 != nil {
+		result.ModelSchemaVersion = 3
 		result.ModelProvider = plan.resolvedV3.Provider
 		assignments, assignmentErr := resultModelAssignments(plan.resolvedV3.Assignments)
 		if assignmentErr != nil {
@@ -1058,6 +1059,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		result.ModelAssignments = assignments
 	} else if plan.configV2 != nil {
+		result.ModelSchemaVersion = 2
 		result.ModelPlan = plan.configV2.ActivePlan
 		result.ModelProvider = plan.resolvedV2.Provider
 		efficient := plan.configV2.Slots[sdd.CapabilityEfficient]
@@ -1067,8 +1069,16 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		result.ModelBalanced, result.ModelBalancedEffort, result.ModelBalancedSource, result.ModelBalancedAvailability = balanced.Reference, balanced.RequestedEffort, balanced.Source, balanced.Availability
 		result.ModelFrontier, result.ModelFrontierEffort, result.ModelFrontierSource, result.ModelFrontierAvailability = frontier.Reference, frontier.RequestedEffort, frontier.Source, frontier.Availability
 	} else {
+		result.ModelSchemaVersion = 1
 		result.ModelPlan, result.ModelProvider = plan.config.ActivePlan, plan.resolved.Provider
 		result.ModelEfficient, result.ModelBalanced, result.ModelFrontier = plan.config.Efficient, plan.config.Balanced, plan.config.Frontier
+	}
+	if result.ModelAssignments == nil {
+		assignments, assignmentErr := legacyResultModelAssignments(plan)
+		if assignmentErr != nil {
+			return inspection{}, assignmentErr
+		}
+		result.ModelAssignments = assignments
 	}
 	if defaultAgentState.Drifted {
 		result.State = integration.StateDrifted
@@ -1086,11 +1096,16 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	}
 	_, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
 	predecessors := map[string][][]byte{}
+	predecessorRecognizers := map[string]func([]byte) bool{}
 	if !installedPlanOK {
 		if plan.configV3 != nil {
 			predecessors, err = modelBoundAgentPredecessorsV3(*plan.resolvedV3)
 			if err != nil {
 				return inspection{}, err
+			}
+			for _, identity := range modelAgentInventoryV3 {
+				name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
+				predecessorRecognizers[name] = modelBoundAgentPredecessorRecognizerV3(*plan.configV3, identity.ArtifactKey)
 			}
 		} else {
 			managerPrior, predecessorErr := managerPredecessors(plan)
@@ -1143,6 +1158,9 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	}}
 	for index := range state.artifacts {
 		state.artifacts[index].retainedRoot = configDirectory
+		if recognize := predecessorRecognizers[filepath.Base(state.artifacts[index].path)]; recognize != nil {
+			state.artifacts[index].recognize = recognize
+		}
 	}
 	retained, retainedErr := retainedPredecessorInventory(configDirectory)
 	if retainedErr != nil || retained.evidenceCount != 0 {
@@ -1263,6 +1281,36 @@ func resultModelAssignments(resolved []sdd.OpenCodeAgentAssignmentV3) (*[integra
 	assignments := new([integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3)
 	copy(assignments[:], resolved)
 	return assignments, nil
+}
+
+func legacyResultModelAssignments(plan modelPlanBundle) (*[integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3, error) {
+	rows := make([]sdd.OpenCodeAgentAssignmentV3, 0, len(modelAgentInventoryV3))
+	for _, identity := range modelAgentInventoryV3 {
+		row := sdd.OpenCodeAgentAssignmentV3{ArtifactKey: identity.ArtifactKey, Role: identity.Role, Class: identity.Class}
+		if plan.resolvedV2 != nil && plan.configV2 != nil {
+			assignment, ok := plan.resolvedV2.Roles[identity.Role]
+			if !ok {
+				return nil, fmt.Errorf("%w: missing OpenCode v2 role assignment", integration.ErrInvalid)
+			}
+			slot, ok := plan.configV2.Slots[assignment.Capability]
+			if !ok {
+				return nil, fmt.Errorf("%w: missing OpenCode v2 slot", integration.ErrInvalid)
+			}
+			row.Provider, row.Model = assignment.Provider, assignment.Model
+			row.RequestedEffort, row.Effort, row.Variant, row.Degradation = assignment.RequestedEffort, assignment.Effort, assignment.Variant, assignment.Degradation
+			row.Source, row.Availability = slot.Source, slot.Availability
+		} else {
+			assignment, ok := plan.resolved.Roles[identity.Role]
+			if !ok {
+				return nil, fmt.Errorf("%w: missing OpenCode v1 role assignment", integration.ErrInvalid)
+			}
+			row.Provider, row.Model = plan.resolved.Provider, assignment.Model
+			row.RequestedEffort, row.Effort, row.Variant, row.Degradation = assignment.RequestedEffort, assignment.Effort, assignment.Variant, assignment.Degradation
+			row.Source, row.Availability = sdd.ModelSlotCustom, sdd.ModelSlotUnknown
+		}
+		rows = append(rows, row)
+	}
+	return resultModelAssignments(rows)
 }
 
 func isRetiredSkill(content []byte) bool {

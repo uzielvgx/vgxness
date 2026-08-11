@@ -124,7 +124,7 @@ func (service *Service) Plan(ctx context.Context, options Options) (plan Plan, e
 		return plan, err
 	}
 	plan.SelfInstall = selfResult
-	plan.Integration = integrationResult
+	plan.Integration = cloneIntegrationResult(integrationResult)
 	plan.Skills = skillResult
 	handshake, handshakeErr := service.prober.Probe(ctx, options.Workspace)
 	plan.Handshake = handshake
@@ -175,7 +175,7 @@ func (service *Service) Status(ctx context.Context, options Options) (Plan, erro
 		return plan, err
 	}
 	plan.SelfInstall = selfResult
-	plan.Integration = integrationResult
+	plan.Integration = cloneIntegrationResult(integrationResult)
 	plan.Skills = skillResult
 	handshake, handshakeErr := service.prober.Probe(ctx, options.Workspace)
 	plan.Handshake = handshake
@@ -218,12 +218,12 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 	}
 	integrated, err := managed.Install(ctx, options.Integration)
 	result.Integration = preserveModelDetails(integrated, plan.Integration)
-	result.Plan.Integration = result.Integration
+	result.Plan.Integration = cloneIntegrationResult(result.Integration)
 	if err != nil {
 		observed, statusErr := managed.Status(ctx, options.Integration)
 		if observed != (integration.Result{}) {
 			result.Integration = preserveModelDetails(observed, result.Plan.Integration)
-			result.Plan.Integration = result.Integration
+			result.Plan.Integration = cloneIntegrationResult(result.Integration)
 		}
 		integrationRecoveryIncomplete := errors.Is(err, integration.ErrRecovery)
 		service.recoverBinary(ctx, options, plan, installed, &result)
@@ -263,7 +263,7 @@ func (service *Service) Apply(ctx context.Context, options Options) (Result, err
 	}
 	integrationStatus, err := managed.Status(ctx, options.Integration)
 	result.Integration = preserveModelDetails(integrationStatus, result.Plan.Integration)
-	result.Plan.Integration = result.Integration
+	result.Plan.Integration = cloneIntegrationResult(result.Integration)
 	if err != nil || integrationStatus.State != integration.StateInstalled {
 		result.Recovery = "Los archivos instalados se conservan. Ejecuta `vgxness integrate opencode status` para inspeccionar y `uninstall` sólo si deseas retirarlos recuperablemente."
 		service.discloseSkills(&result, skillInstalled)
@@ -301,6 +301,14 @@ func planDigest(plan Plan) string {
 }
 
 func preserveModelDetails(result, fallback integration.Result) integration.Result {
+	result = cloneIntegrationResult(result)
+	fallback = cloneIntegrationResult(fallback)
+	if result.ModelSchemaVersion == 0 {
+		result.ModelSchemaVersion = fallback.ModelSchemaVersion
+	}
+	if result.ModelAssignments == nil {
+		result.ModelAssignments = fallback.ModelAssignments
+	}
 	if result.ModelPlan == "" {
 		result.ModelPlan = fallback.ModelPlan
 	}
@@ -342,6 +350,14 @@ func preserveModelDetails(result, fallback integration.Result) integration.Resul
 	}
 	if result.ModelFrontierAvailability == "" {
 		result.ModelFrontierAvailability = fallback.ModelFrontierAvailability
+	}
+	return result
+}
+
+func cloneIntegrationResult(result integration.Result) integration.Result {
+	if result.ModelAssignments != nil {
+		assignments := *result.ModelAssignments
+		result.ModelAssignments = &assignments
 	}
 	return result
 }

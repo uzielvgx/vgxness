@@ -775,6 +775,123 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 	return predecessors, nil
 }
 
+func modelBoundAgentPredecessorRecognizerV3(config sdd.ModelPlanConfigV3, artifactKey string) func([]byte) bool {
+	return func(candidate []byte) bool {
+		model, effort, ok := modelBinding(candidate)
+		provider, _, found := strings.Cut(model, "/")
+		if !ok || !found || provider == "" {
+			return false
+		}
+		assignments := make(map[string]sdd.ManagedAgentModelConfig, len(config.Assignments))
+		for key, assignment := range config.Assignments {
+			assignments[key] = assignment
+		}
+		if _, present := assignments[artifactKey]; !present {
+			return false
+		}
+		assignments[artifactKey] = sdd.ManagedAgentModelConfig{
+			Provider: provider, Reference: model, RequestedEffort: effort,
+			Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown,
+		}
+		candidateConfig := config
+		candidateConfig.Assignments = assignments
+		candidateConfig.Provider = assignmentProviderSummary(assignments)
+		resolved, err := ResolveModelPlanV3(candidateConfig)
+		if err != nil {
+			return false
+		}
+		name := strings.TrimPrefix(artifactKey, "agents/")
+		predecessors, err := modelBoundAgentPredecessorCandidatesV3(resolved, name)
+		if err != nil {
+			return false
+		}
+		for _, predecessor := range predecessors {
+			if bytes.Equal(candidate, predecessor) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func modelBinding(content []byte) (string, sdd.Effort, bool) {
+	var model, variant string
+	for _, line := range strings.Split(string(content), "\n") {
+		if strings.HasPrefix(line, "model: ") {
+			if model != "" {
+				return "", "", false
+			}
+			model = strings.TrimPrefix(line, "model: ")
+		}
+		if strings.HasPrefix(line, "variant: ") {
+			if variant != "" {
+				return "", "", false
+			}
+			variant = strings.TrimPrefix(line, "variant: ")
+		}
+	}
+	if model == "" {
+		return "", "", false
+	}
+	switch sdd.OpenCodeVariant(variant) {
+	case sdd.VariantLow:
+		return model, sdd.EffortLow, true
+	case sdd.VariantMedium:
+		return model, sdd.EffortMedium, true
+	case sdd.VariantHigh:
+		return model, sdd.EffortHigh, true
+	case sdd.VariantXHigh:
+		return model, sdd.EffortUltra, true
+	default:
+		return "", "", false
+	}
+}
+
+func assignmentProviderSummary(assignments map[string]sdd.ManagedAgentModelConfig) string {
+	summary := ""
+	for _, assignment := range assignments {
+		if summary == "" {
+			summary = assignment.Provider
+		} else if summary != assignment.Provider {
+			return "mixed"
+		}
+	}
+	return summary
+}
+
+func modelBoundAgentPredecessorCandidatesV3(plan sdd.OpenCodePlanV3, name string) ([][]byte, error) {
+	predecessors, err := modelBoundAgentPredecessorsV3(plan)
+	if err != nil {
+		return nil, err
+	}
+	candidates := append([][]byte(nil), predecessors[name]...)
+	agents, err := modelBoundAgentsV3(plan)
+	if err != nil {
+		return nil, err
+	}
+	appendCandidate := func(candidate []byte) {
+		if len(candidate) != 0 {
+			candidates = append(candidates, candidate)
+		}
+	}
+	switch name {
+	case exploreAgentName:
+		appendCandidate(previousExplorePredecessor(agents[name]))
+	case generalAgentName:
+		appendCandidate(previousGeneralPredecessor(agents[name]))
+	case verifierAgentName:
+		appendCandidate(previousVerifierPredecessor(agents[name]))
+	default:
+		for _, identity := range modelAgentInventoryV3 {
+			if identity.ArtifactKey == "agents/"+name && identity.Class == sdd.ManagedAgentClassSDD {
+				appendCandidate(previousSDDAgentPredecessor(identity.Role, agents[name]))
+				break
+			}
+		}
+	}
+	return candidates, nil
+}
+
 func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
 	managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 		return bindManagerTemplate(managerBase, managerMarker, assignment)

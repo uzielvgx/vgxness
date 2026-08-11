@@ -254,3 +254,49 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 			result.Plan.ModelFrontierSource == "custom" && result.Plan.ModelFrontierAvailability == "unknown",
 		"result plan lost model slots=%+v", result.Plan)
 }
+
+func TestTUISetupAssignmentTransportIsComparableValidatedAndCopied(t *testing.T) {
+	var requestRows [tui.SetupModelAssignmentCount]tui.SetupModelAssignmentRequest
+	for index := range requestRows {
+		requestRows[index] = tui.SetupModelAssignmentRequest{
+			ArtifactKey: "agents/agent-" + string(rune('a'+index)) + ".md", Provider: "acme", Reference: "acme/model",
+			RequestedEffort: "medium", Source: "custom", Availability: "unknown",
+		}
+	}
+	request := tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelAssignments: &requestRows}
+	_ = map[tui.SetupRequest]bool{request: true}
+	options, err := tuiSetupOptions(request)
+	testutil.Require(t, err == nil && options.Integration.ModelAssignments != nil && len(*options.Integration.ModelAssignments) == integration.ModelAssignmentCount, "options=%+v err=%v", options, err)
+	firstKey := requestRows[0].ArtifactKey
+	requestRows[0].Reference = "mutated/request"
+	testutil.Require(t, (*options.Integration.ModelAssignments)[firstKey].Reference == "acme/model", "request aliases integration map: %+v", *options.Integration.ModelAssignments)
+	assignment := (*options.Integration.ModelAssignments)[firstKey]
+	assignment.Reference = "mutated/options"
+	(*options.Integration.ModelAssignments)[firstKey] = assignment
+	testutil.Require(t, requestRows[0].Reference == "mutated/request", "integration map aliases request rows: %+v", requestRows[0])
+
+	duplicate := requestRows
+	duplicate[1].ArtifactKey = duplicate[0].ArtifactKey
+	_, err = tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelAssignments: &duplicate})
+	testutil.Require(t, err != nil, "duplicate assignments accepted")
+	empty := requestRows
+	empty[0].ArtifactKey = ""
+	_, err = tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelAssignments: &empty})
+	testutil.Require(t, err != nil, "incomplete assignments accepted")
+}
+
+func TestTUISetupPlanAssignmentRowsAreMappedAndCopied(t *testing.T) {
+	var rows [integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3
+	rows[0] = sdd.OpenCodeAgentAssignmentV3{
+		ArtifactKey: "agents/vgxness-manager.md", Role: sdd.RoleManager, Class: sdd.ManagedAgentClassCore,
+		Provider: "acme", Model: "acme/frontier", RequestedEffort: sdd.EffortUltra, Effort: sdd.EffortHigh,
+		Variant: sdd.VariantHigh, Degradation: sdd.Degradation{Degraded: true, Reason: "bounded"}, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown,
+	}
+	source := setupflow.Plan{Integration: integration.Result{ModelSchemaVersion: 3, ModelAssignments: &rows}}
+	plan := tuiSetupPlan(source)
+	testutil.Require(t, plan.ModelSchemaVersion == 3 && plan.ModelAssignments != nil, "plan=%+v", plan)
+	row := plan.ModelAssignments[0]
+	testutil.Require(t, row.ArtifactKey == rows[0].ArtifactKey && row.Role == string(rows[0].Role) && row.Class == string(rows[0].Class) && row.Provider == rows[0].Provider && row.Model == rows[0].Model && row.RequestedEffort == string(rows[0].RequestedEffort) && row.Effort == string(rows[0].Effort) && row.Variant == string(rows[0].Variant) && row.Degraded && row.DegradationReason == "bounded" && row.Source == string(rows[0].Source) && row.Availability == string(rows[0].Availability), "row=%+v", row)
+	plan.ModelAssignments[0].Model = "mutated/tui"
+	testutil.Require(t, rows[0].Model == "acme/frontier", "TUI plan aliases integration rows: %+v", rows[0])
+}

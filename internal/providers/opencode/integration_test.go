@@ -2883,6 +2883,53 @@ func TestIntegrationV3RecognizesArtifactSpecificPredecessorsWithoutManifest(t *t
 	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, unknown), "unknown bytes changed: err=%v read=%v", err, readErr)
 }
 
+func TestIntegrationV3EditedSeedRecognizesExactLegacyModelsWithoutManifest(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	legacyAssignments := completeModelAssignmentsV3()
+	legacyBundle, err := requestedModelPlan(integration.Options{ModelAssignments: &legacyAssignments}, root)
+	testutil.NoError(t, err)
+	legacy := make(map[string]sdd.OpenCodeRoleAssignment, len(legacyBundle.resolvedV3.Assignments))
+	for _, row := range legacyBundle.resolvedV3.Assignments {
+		legacy[row.ArtifactKey] = sdd.OpenCodeRoleAssignment{Role: row.Role, Model: row.Model, RequestedEffort: row.RequestedEffort, Effort: row.Effort, Variant: row.Variant, Degradation: row.Degradation}
+	}
+	manager, err := bindManagerTemplate(previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", legacy["agents/"+managerAgentName])
+	testutil.NoError(t, err)
+	general, err := bindProfile(previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", "artifact: opencode-agent/general; version: 4", legacy["agents/"+generalAgentName], false)
+	testutil.NoError(t, err)
+	risk, err := bindAgent(previousReviewPromptsV2()[reviewRiskName], sdd.RoleRisk, legacy["agents/"+reviewRiskName])
+	testutil.NoError(t, err)
+	legacyBytes := map[string][]byte{managerAgentName: manager, generalAgentName: general, reviewRiskName: risk}
+	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
+	for name, data := range legacyBytes {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), data, 0o600))
+	}
+
+	edited := completeModelAssignmentsV3()
+	for _, key := range []string{"agents/" + managerAgentName, "agents/" + generalAgentName, "agents/" + reviewRiskName} {
+		assignment := edited[key]
+		assignment.Reference = "acme/edited-" + strings.TrimSuffix(filepath.Base(key), ".md")
+		edited[key] = assignment
+	}
+	options := integration.Options{ConfigDir: root, ModelAssignments: &edited}
+	service := NewIntegration()
+	preview, err := service.Preview(context.Background(), options)
+	testutil.Require(t, err == nil && preview.State == integration.StatePartial && preview.RestartRequired, "edited legacy preview=%+v err=%v", preview, err)
+	installed, err := service.Install(context.Background(), options)
+	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed, "edited legacy install=%+v err=%v", installed, err)
+
+	modifiedRoot := filepath.Join(t.TempDir(), "opencode")
+	modifiedPath := filepath.Join(modifiedRoot, "agents", managerAgentName)
+	modified := append(append([]byte(nil), manager...), []byte("\nuser modification\n")...)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(modifiedPath), 0o700))
+	testutil.NoError(t, os.WriteFile(modifiedPath, modified, 0o600))
+	modifiedOptions := integration.Options{ConfigDir: modifiedRoot, ModelAssignments: &edited}
+	preview, err = service.Preview(context.Background(), modifiedOptions)
+	testutil.Require(t, err == nil && preview.State == integration.StateDrifted, "modified legacy preview=%+v err=%v", preview, err)
+	_, err = service.Install(context.Background(), modifiedOptions)
+	after, readErr := os.ReadFile(modifiedPath)
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "modified legacy bytes changed: err=%v read=%v", err, readErr)
+}
+
 func TestModelPlanManifestV1RemainsExactAndV2RejectsDrift(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
@@ -3008,4 +3055,57 @@ func TestModelPlanManifestEnvelopeRejectsCrossVersionFieldsAndNilArtifacts(t *te
 	testutil.NoError(t, err)
 	_, err = decodeModelPlanManifest(v1NilArtifacts)
 	testutil.Require(t, errors.Is(err, integration.ErrDrift), "v1 nil artifacts accepted: %v", err)
+}
+
+func TestIntegrationExposesCanonicalAssignmentRowsForEveryModelSchema(t *testing.T) {
+	tests := []struct {
+		name    string
+		options integration.Options
+		schema  int
+	}{
+		{name: "v1", schema: 1},
+		{name: "v2", schema: 2, options: integration.Options{
+			ModelPlan: sdd.PlanHigh, ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
+			ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+		}},
+		{name: "v3", schema: 3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "opencode")
+			options := test.options
+			options.ConfigDir = root
+			if test.schema == 3 {
+				assignments := completeModelAssignmentsV3()
+				options.ModelAssignments = &assignments
+			}
+			service := NewIntegration()
+			installed, err := service.Install(context.Background(), options)
+			testutil.NoError(t, err)
+			before, err := os.ReadFile(installed.ManifestPath)
+			testutil.NoError(t, err)
+
+			for name, inspect := range map[string]func(context.Context, integration.Options) (integration.Result, error){"preview": service.Preview, "status": service.Status} {
+				result, inspectErr := inspect(context.Background(), integration.Options{ConfigDir: root})
+				testutil.NoError(t, inspectErr)
+				testutil.Require(t, result.ModelSchemaVersion == test.schema && result.ModelAssignments != nil, "%s result=%+v", name, result)
+				for index, identity := range ModelAgentInventoryV3() {
+					row := result.ModelAssignments[index]
+					testutil.Require(t, row.ArtifactKey == identity.ArtifactKey && row.Role == identity.Role && row.Class == identity.Class && row.Provider != "" && row.Model != "", "%s row %d=%+v identity=%+v", name, index, row, identity)
+					if test.schema == 1 {
+						testutil.Require(t, row.Source == sdd.ModelSlotCustom && row.Availability == sdd.ModelSlotUnknown, "%s v1 row claims availability: %+v", name, row)
+					}
+					if test.schema == 2 {
+						manifest, parseErr := parseModelPlanManifest(before)
+						testutil.NoError(t, parseErr)
+						resolved := manifest.ResolvedV2.Roles[identity.Role]
+						slot := manifest.ConfigV2.Slots[resolved.Capability]
+						testutil.Require(t, row.Source == slot.Source && row.Availability == slot.Availability, "%s v2 row metadata=%+v slot=%+v", name, row, slot)
+					}
+				}
+			}
+			after, err := os.ReadFile(installed.ManifestPath)
+			testutil.Require(t, err == nil && bytes.Equal(before, after), "schema %d manifest changed: %v", test.schema, err)
+		})
+	}
 }

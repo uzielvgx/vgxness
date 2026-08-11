@@ -60,6 +60,7 @@ type Result struct {
 	Changed                    bool
 	BackupPath                 string
 	ToolBackupPath             string
+	ModelSchemaVersion         int
 	ModelPlan                  sdd.Plan
 	ModelProvider              string
 	ModelAssignments           *[ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3
