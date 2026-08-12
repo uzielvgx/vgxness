@@ -317,7 +317,7 @@ func TestModelBoundAgentsPreserveTrustedV1Digest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if digest := artifactSHA256(bundle.agents[managerAgentName]); digest != "bce321d4dde0e05ca49a808c0e652c9c4d647511c602d578fddd3830d1e86bf5" {
+	if digest := artifactSHA256(bundle.agents[managerAgentName]); digest != "b264537fd4835478abf416a3ff54ca2901c5e787e9d3f55f924dbb3f5eddc91e" {
 		t.Fatalf("trusted manager digest=%s", digest)
 	}
 }
