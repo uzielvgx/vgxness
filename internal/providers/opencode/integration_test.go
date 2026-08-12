@@ -87,6 +87,19 @@ func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 	testutil.Require(t, os.IsNotExist(statErr), "preview mutated filesystem: %v", statErr)
 }
 
+func TestNewPreviewIntegrationAcceptsOnlyAbsoluteCleanLauncherPath(t *testing.T) {
+	if _, err := NewPreviewIntegration("relative/vgxness"); !errors.Is(err, integration.ErrInvalid) {
+		t.Fatalf("relative launcher error=%v", err)
+	}
+	if _, err := NewPreviewIntegration("/managed/../launcher/vgxness"); !errors.Is(err, integration.ErrInvalid) {
+		t.Fatalf("unclean launcher error=%v", err)
+	}
+	preview, err := NewPreviewIntegration("/launcher/vgxness")
+	if err != nil || preview.executable != "/launcher/vgxness" {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+}
+
 func TestManagedMCPUsesFullMode(t *testing.T) {
 	config, err := managedMCPConfig("/opt/vgxness")
 	testutil.NoError(t, err)

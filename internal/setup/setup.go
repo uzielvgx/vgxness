@@ -65,6 +65,11 @@ type Runtime interface {
 
 type IntegrationFactory func(string) (integration.Runtime, error)
 
+// PreviewIntegrationFactory binds a planned launcher without asserting its
+// on-disk ownership. Publication is always performed through the managed
+// factory after shared launcher verification.
+type PreviewIntegrationFactory func(string) (integration.Runtime, error)
+
 type Prober interface {
 	Probe(context.Context, string) (integration.Handshake, error)
 }
@@ -81,6 +86,176 @@ type Service struct {
 
 func New(installer selfinstall.Runtime, preview integration.Runtime, integrations IntegrationFactory, prober Prober) *Service {
 	return &Service{installer: installer, preview: preview, integrations: integrations, prober: prober}
+}
+
+type serviceShared struct {
+	service *Service
+	options Options
+}
+
+// Shared exposes the launcher and global-skills boundary for a composite setup
+// without changing Service's established single-provider transaction.
+func (service *Service) Shared(options Options) SharedRuntime {
+	return serviceShared{service: service, options: options}
+}
+
+// OpenCodeProvider builds the composite OpenCode runtime. It keeps the
+// pre-write handshake and planned launcher binding with the setup service.
+func (service *Service) OpenCodeProvider(options Options, previews PreviewIntegrationFactory) ProviderRuntime {
+	return &openCodeProvider{service: service, options: options, previews: previews}
+}
+
+type openCodeProvider struct {
+	service  *Service
+	options  Options
+	previews PreviewIntegrationFactory
+}
+
+func (*openCodeProvider) Provider() Provider { return ProviderOpenCode }
+
+func (provider *openCodeProvider) Plan(ctx context.Context, shared SharedPlan) (ProviderPlan, error) {
+	plan := ProviderPlan{Provider: ProviderOpenCode}
+	if provider == nil || provider.service == nil || provider.previews == nil || provider.service.managedIntegrations == nil || provider.service.prober == nil || provider.options.Workspace == "" || !shared.Ready || shared.Launcher.LauncherPath == "" {
+		return plan, ErrPrerequisite
+	}
+	handshake, err := provider.service.prober.Probe(ctx, provider.options.Workspace)
+	if err != nil {
+		return plan, err
+	}
+	if !handshake.OK {
+		plan.Blocker = "OpenCode is unavailable or unhealthy."
+		return plan, nil
+	}
+	preview, err := provider.previews(shared.Launcher.LauncherPath)
+	if err != nil {
+		return plan, err
+	}
+	result, err := preview.Preview(ctx, provider.options.Integration)
+	if err != nil {
+		return plan, err
+	}
+	plan.Installed = result.State == integration.StateInstalled
+	plan.Changed = result.Changed || !plan.Installed
+	plan.ArtifactSHA256 = result.ArtifactSHA256
+	plan.ArtifactCount = result.ArtifactCount
+	plan.State = result.State
+	if result.Provider != "" && result.Provider != string(ProviderOpenCode) {
+		plan.Blocker = "provider preview identity does not match selection"
+	} else if result.State != integration.StateAbsent && result.State != integration.StateInstalled && result.State != integration.StatePartial {
+		plan.Blocker = "provider integration has drift or is unsafe to overwrite"
+	} else if result.ArtifactSHA256 == "" {
+		plan.Blocker = "provider preview lacks managed artifact identity"
+	}
+	plan.Ready = plan.Blocker == ""
+	return plan, nil
+}
+
+func (provider *openCodeProvider) Apply(ctx context.Context, plan ProviderPlan, shared SharedResult) (ProviderResult, error) {
+	result := ProviderResult{Provider: ProviderOpenCode}
+	if provider == nil || provider.service == nil || provider.previews == nil || provider.service.managedIntegrations == nil || provider.service.prober == nil || !plan.Ready || !shared.Verified || shared.Launcher.State != selfinstall.StateInstalled || shared.Launcher.LauncherPath == "" {
+		return result, ErrPrerequisite
+	}
+	preview, err := provider.previews(shared.Launcher.LauncherPath)
+	if err != nil {
+		return result, err
+	}
+	current, err := preview.Preview(ctx, provider.options.Integration)
+	if err != nil {
+		return result, err
+	}
+	if current.ArtifactSHA256 != plan.ArtifactSHA256 || current.ArtifactCount != plan.ArtifactCount {
+		return result, fmt.Errorf("%w: opencode preview identity", ErrVerification)
+	}
+	managed, err := provider.service.managedIntegrations(shared.Launcher.LauncherPath)
+	if err != nil {
+		return result, err
+	}
+	handshake, err := provider.service.prober.Probe(ctx, provider.options.Workspace)
+	if err != nil || !handshake.OK {
+		return result, fmt.Errorf("%w: opencode pre-write handshake", ErrVerification)
+	}
+	installed, err := managed.Install(ctx, provider.options.Integration)
+	result.Changed = installed.Changed
+	if err != nil {
+		return result, err
+	}
+	status, err := managed.Status(ctx, provider.options.Integration)
+	if err != nil {
+		return result, err
+	}
+	if status.Provider != string(ProviderOpenCode) || status.State != integration.StateInstalled || status.ArtifactSHA256 != plan.ArtifactSHA256 || status.ArtifactCount != plan.ArtifactCount {
+		return result, fmt.Errorf("%w: opencode integration identity", ErrVerification)
+	}
+	handshake, err = provider.service.prober.Probe(ctx, provider.options.Workspace)
+	if err != nil || !handshake.OK {
+		return result, fmt.Errorf("%w: opencode handshake", ErrVerification)
+	}
+	result.Verified = true
+	return result, nil
+}
+
+func (shared serviceShared) Plan(ctx context.Context) (SharedPlan, error) {
+	if shared.service == nil || shared.service.installer == nil || shared.options.Workspace == "" {
+		return SharedPlan{}, ErrInvalid
+	}
+	launcher, err := shared.service.installer.Preview(ctx, shared.options.SelfInstall)
+	if err != nil {
+		return SharedPlan{}, err
+	}
+	plan := SharedPlan{Ready: true, Changed: launcher.Changed, Launcher: launcher, Skills: skills.Result{State: skills.StateInstalled}}
+	if shared.service.skills != nil {
+		plan.Skills, err = shared.service.skills.Preview(ctx, shared.options.Skills)
+		if err != nil && !errors.Is(err, skills.ErrDrift) && !errors.Is(err, skills.ErrConflict) {
+			return plan, err
+		}
+		plan.Changed = plan.Changed || plan.Skills.Changed || plan.Skills.UpdateNeeded
+	}
+	if launcher.State == selfinstall.StateDrifted || plan.Skills.State == skills.StateDrifted || plan.Skills.State == skills.StateConflict {
+		plan.Ready = false
+		plan.Blocker = "Managed launcher or shared skills have drift or a conflict."
+	}
+	return plan, nil
+}
+
+func (shared serviceShared) Apply(ctx context.Context, plan SharedPlan) (SharedResult, error) {
+	if !plan.Ready {
+		return SharedResult{}, ErrPrerequisite
+	}
+	installed, err := shared.service.installer.Install(ctx, shared.options.SelfInstall)
+	result := SharedResult{Changed: installed.Changed}
+	if err != nil {
+		return result, err
+	}
+	status, err := shared.service.installer.Status(ctx, shared.options.SelfInstall)
+	if err != nil || status.State != selfinstall.StateInstalled || status.ActiveSHA256 != installed.ActiveSHA256 {
+		return result, fmt.Errorf("%w: shared launcher", ErrVerification)
+	}
+	result.Verified = true
+	result.Launcher = status
+	return result, nil
+}
+
+// Finalize publishes global skills only after every selected provider has
+// completed its verified write. Provider references prevent launcher rollback.
+func (shared serviceShared) Finalize(ctx context.Context, _ SharedPlan, result SharedResult) (SharedResult, error) {
+	if shared.service == nil || !result.Verified {
+		return result, ErrPrerequisite
+	}
+	if shared.service.skills == nil {
+		return result, nil
+	}
+	installed, err := shared.service.skills.Install(ctx, shared.options.Skills)
+	result.Changed = result.Changed || installed.Changed
+	if err != nil {
+		result.Recovery = "Launcher and provider integrations remain installed; run `vgxness skills status` then `vgxness skills install` to complete global skills."
+		return result, err
+	}
+	status, err := shared.service.skills.Status(ctx, shared.options.Skills)
+	if err != nil || status.State != skills.StateInstalled {
+		result.Recovery = "Launcher and provider integrations remain installed; run `vgxness skills status` then `vgxness skills install` to repair global skills."
+		return result, fmt.Errorf("%w: shared skills", ErrVerification)
+	}
+	return result, nil
 }
 
 func OpenCodeSteps() []Step {

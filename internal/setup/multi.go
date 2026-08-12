@@ -65,6 +65,7 @@ type SharedResult struct {
 type SharedRuntime interface {
 	Plan(context.Context) (SharedPlan, error)
 	Apply(context.Context, SharedPlan) (SharedResult, error)
+	Finalize(context.Context, SharedPlan, SharedResult) (SharedResult, error)
 }
 
 type MultiOptions struct {
@@ -281,6 +282,19 @@ func (m *Multi) Apply(ctx context.Context, options MultiOptions) (MultiResult, e
 		}
 		if !outcome.Verified {
 			return result, fmt.Errorf("%w: %s", ErrVerification, item.Provider)
+		}
+	}
+	if m.shared != nil {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		shared, err := m.shared.Finalize(ctx, plan.SharedPlan, result.Shared)
+		result.Shared = shared
+		if err != nil {
+			return result, err
+		}
+		if !shared.Verified {
+			return result, ErrVerification
 		}
 	}
 	return result, nil
