@@ -88,14 +88,15 @@ func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 }
 
 func TestNewPreviewIntegrationAcceptsOnlyAbsoluteCleanLauncherPath(t *testing.T) {
+	launcherPath := filepath.Join(t.TempDir(), "launcher", "vgxness")
 	if _, err := NewPreviewIntegration("relative/vgxness"); !errors.Is(err, integration.ErrInvalid) {
 		t.Fatalf("relative launcher error=%v", err)
 	}
 	if _, err := NewPreviewIntegration("/managed/../launcher/vgxness"); !errors.Is(err, integration.ErrInvalid) {
 		t.Fatalf("unclean launcher error=%v", err)
 	}
-	preview, err := NewPreviewIntegration("/launcher/vgxness")
-	if err != nil || preview.executable != "/launcher/vgxness" {
+	preview, err := NewPreviewIntegration(launcherPath)
+	if err != nil || preview.executable != launcherPath {
 		t.Fatalf("preview=%+v err=%v", preview, err)
 	}
 }
