@@ -19,10 +19,24 @@ func RunSkills(ctx context.Context, args []string, stdout, stderr io.Writer, run
 	flags := flag.NewFlagSet("skills "+command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var options skills.Options
+	var compatibility bool
 	flags.StringVar(&options.Dir, "skills-dir", "", "absolute shared skills directory")
-	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+	flags.BoolVar(&compatibility, "compatibility", false, "inventory declared legacy portable skills (status only)")
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || compatibility && command != "status" {
 		fmt.Fprintln(stderr, "invalid skills arguments")
 		return 2
+	}
+	if compatibility {
+		report, err := compatibilityReport(ctx, options, runtime)
+		if err != nil {
+			code, message := failure(err)
+			fmt.Fprintln(stderr, message)
+			return code
+		}
+		for _, entry := range report {
+			fmt.Fprintf(stdout, "compatibility[%s]=%s sha256=%s\n", terminalSafe(entry.Path), entry.State, entry.Digest)
+		}
+		return 0
 	}
 	var result skills.Result
 	var err error
@@ -57,4 +71,16 @@ func RunSkills(ctx context.Context, args []string, stdout, stderr io.Writer, run
 		fmt.Fprintf(stdout, "sha256[%s]=%s\n", name, result.Hashes[name])
 	}
 	return 0
+}
+
+type compatibilityRuntime interface {
+	Compatibility(context.Context, skills.Options) ([]skills.CompatibilityEntry, error)
+}
+
+func compatibilityReport(ctx context.Context, options skills.Options, runtime skills.Runtime) ([]skills.CompatibilityEntry, error) {
+	compatible, ok := runtime.(compatibilityRuntime)
+	if !ok {
+		return nil, skills.ErrInvalid
+	}
+	return compatible.Compatibility(ctx, options)
 }

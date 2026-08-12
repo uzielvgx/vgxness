@@ -286,6 +286,60 @@ func TestCatalogRejectsUnownedDigestPathsAndDuplicateInstalledNames(t *testing.T
 	}
 }
 
+func TestCompatibilityClassifiesDeclaredLegacyPathsWithoutMutation(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	service := syntheticMigrationService()
+	legacy := filepath.Join(destination, "agent-skill-engineer")
+	assertWrite(t, filepath.Join(legacy, "SKILL.md"), []byte("old skill"))
+	assertWrite(t, filepath.Join(legacy, "nested", "guide.txt"), []byte("foreign"))
+	before, err := os.ReadFile(filepath.Join(legacy, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.Compatibility(context.Background(), Options{Dir: destination})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report) != 2 || report[0].Path != "agent-skill-engineer/SKILL.md" || report[0].State != CompatibilityRecognized || report[1].Path != "agent-skill-engineer/nested/guide.txt" || report[1].State != CompatibilityModifiedOrUnknown {
+		t.Fatalf("report=%+v", report)
+	}
+	after, err := os.ReadFile(filepath.Join(legacy, "SKILL.md"))
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("after=%q err=%v", after, err)
+	}
+
+	if err := os.Remove(filepath.Join(legacy, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	report, err = service.Compatibility(context.Background(), Options{Dir: destination})
+	if err != nil || report[0].State != CompatibilityAbsent {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+	if err := os.RemoveAll(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	report, err = service.Compatibility(context.Background(), Options{Dir: destination})
+	if err != nil || report[0].State != CompatibilityConflict || report[1].State != CompatibilityConflict {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+}
+
+func TestCompatibilityRecognizesAllLifecycleAcceptedLegacyContent(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "skills")
+	service := syntheticMigrationService()
+	legacy := filepath.Join(destination, "agent-skill-engineer")
+	for _, content := range [][]byte{[]byte("old skill"), []byte("new skill")} {
+		assertWrite(t, filepath.Join(legacy, "SKILL.md"), content)
+		report, err := service.Compatibility(context.Background(), Options{Dir: destination})
+		if err != nil || report[0].State != CompatibilityRecognized {
+			t.Fatalf("content=%q report=%+v err=%v", content, report, err)
+		}
+	}
+}
+
 func TestValidSkillName(t *testing.T) {
 	for _, test := range []struct {
 		name  string
