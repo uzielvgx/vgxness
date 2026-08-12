@@ -37,6 +37,22 @@ const (
 )
 
 type Options struct{ Dir string }
+
+type CompatibilityState string
+
+const (
+	CompatibilityAbsent            CompatibilityState = "absent"
+	CompatibilityRecognized        CompatibilityState = "recognized"
+	CompatibilityModifiedOrUnknown CompatibilityState = "modified-or-unknown"
+	CompatibilityConflict          CompatibilityState = "conflict"
+)
+
+type CompatibilityEntry struct {
+	Path   string             `json:"path"`
+	Digest string             `json:"sha256"`
+	State  CompatibilityState `json:"state"`
+}
+
 type Result struct {
 	State        State             `json:"state"`
 	Path         string            `json:"path"`
@@ -452,6 +468,95 @@ func (s *Service) Status(ctx context.Context, options Options) (Result, error) {
 	}
 	result, _, err := s.inspect(options, nil)
 	return result, err
+}
+
+// Compatibility inventories declared historical portable-skill artifacts without
+// changing the selected skills directory.
+func (s *Service) Compatibility(ctx context.Context, options Options) ([]CompatibilityEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	entries, err := s.entries()
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.resolvedCatalog()
+	if err != nil {
+		return nil, err
+	}
+	rootPath, err := skillsRoot(options)
+	if err != nil {
+		return nil, err
+	}
+	report := compatibilityEntries(c)
+	r, _, err := openRoot(context.Background(), rootPath, false)
+	if err != nil {
+		return nil, err
+	}
+	if r == nil {
+		return report, nil
+	}
+	defer r.Close()
+	for index := range report {
+		legacy, relative, _ := strings.Cut(report[index].Path, "/")
+		info, err := r.Lstat(native(legacy))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			report[index].State = CompatibilityConflict
+			continue
+		}
+		parent, err := openRelativeRoot(context.Background(), r, filepath.Join(native(legacy), filepath.Dir(native(relative))), false)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			report[index].State = CompatibilityConflict
+			continue
+		}
+		actual, _, readErr := regular(parent, filepath.Base(native(relative)))
+		closeErr := parent.Close()
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil || closeErr != nil {
+			report[index].State = CompatibilityConflict
+			continue
+		}
+		identity := legacyIdentity(c, report[index].Path)
+		if bytes.Equal(actual, entries[identity]) || s.predecessor(identity, actual) || digest(actual) == report[index].Digest {
+			report[index].State = CompatibilityRecognized
+		} else {
+			report[index].State = CompatibilityModifiedOrUnknown
+		}
+	}
+	return report, nil
+}
+
+func legacyIdentity(c catalog, path string) string {
+	legacy, relative, _ := strings.Cut(path, "/")
+	for _, definition := range c.definitions {
+		for _, source := range definition.legacy {
+			if source.name == legacy {
+				return definition.name + "/" + relative
+			}
+		}
+	}
+	return ""
+}
+
+func compatibilityEntries(c catalog) []CompatibilityEntry {
+	var report []CompatibilityEntry
+	for _, definition := range c.definitions {
+		for _, legacy := range definition.legacy {
+			for relative, digest := range legacy.digests {
+				report = append(report, CompatibilityEntry{Path: legacy.name + "/" + relative, Digest: digest, State: CompatibilityAbsent})
+			}
+		}
+	}
+	sort.Slice(report, func(i, j int) bool { return report[i].Path < report[j].Path })
+	return report
 }
 
 type original struct {
