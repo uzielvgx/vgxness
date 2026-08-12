@@ -118,6 +118,7 @@ const (
 Accept only one parent mission containing:
 
 - mode: initial or scoped-validation
+- Candidate Capsule: the same exact Candidate Capsule identity and scope for every reviewer
 - candidateIdentity: the SHA-256 identity of the exact frozen diff
 - changedPaths: the exact paths in that diff
 - diffScope: the exact review boundary
@@ -130,11 +131,11 @@ Accept Mission Instance v1 and Candidate Capsule v1 only within their 8 KiB/4 Ki
 
 In initial mode, perform one complete sweep through your assigned lens. In scoped-validation mode, inspect only the frozen severe-finding ledger and correction delta. Scoped validation may approve or escalate an unresolved severe finding, but it must not add unrelated findings or propose another correction cycle.
 
-Report only concrete user-impacting defects supported by path:line evidence. BLOCKER and CRITICAL require concrete proof. Mark evidenceClass deterministic only for directly reproducible proof such as a failing test, violated invariant, or exact unsafe path; otherwise mark it inferential. WARNING and SUGGESTION are informational and never block.
+Report only concrete user-impacting defects supported by path:line evidence. BLOCKER and CRITICAL require concrete proof. Mark evidenceClass deterministic only for directly reproducible proof such as a failing test, violated invariant, or exact unsafe path; otherwise mark it inferential. WARNING and SUGGESTION are informational and never block. Each Evidence Receipt needs a stable evidenceId that is non-empty and unique within the envelope, and its candidateDigest equals candidate.digest. proofRefs must resolve to exactly one same-envelope Evidence Receipt.
 
 Return exactly one compact Child Return Envelope v1 JSON object (<=16 KiB; <=32 evidence items, <=16 findings, <=64 paths, <=512 bytes per summary or excerpt) and no Markdown. Include candidate, summary, evidence receipts, findings, unknowns, assumptions, and blockers. Treat malformed, oversized, stale, or missing-digest capsules as INCONCLUSIVE.
 
-{"schemaVersion":1,"mode":"initial|scoped-validation","lens":"risk|readability|reliability|resilience","candidate":{"digest":"sha256","changedPaths":["path"]},"summary":"<=512 bytes","evidence":[{"kind":"source","locator":"path:line","candidateDigest":"sha256","observedResult":"observed","digest":"sha256","excerpt":"<=512 bytes","availability":"reopenable"}],"findings":[{"id":"<stable lens ID>","location":"path:line","severity":"BLOCKER|CRITICAL|WARNING|SUGGESTION","claim":"observable defect","evidenceClass":"deterministic|inferential","proofRefs":["evidence"]}],"verdict":"clean|findings|approve|escalate","unknowns":[],"assumptions":[],"blockers":[]}
+{"schemaVersion":1,"mode":"initial|scoped-validation","lens":"risk|readability|reliability|resilience","candidate":{"digest":"sha256","changedPaths":["path"]},"summary":"<=512 bytes","evidence":[{"evidenceId":"<stable ID>","kind":"source","locator":"path:line","candidateDigest":"sha256","observedResult":"observed","digest":"sha256","excerpt":"<=512 bytes","availability":"reopenable"}],"findings":[{"id":"<stable lens ID>","location":"path:line","severity":"BLOCKER|CRITICAL|WARNING|SUGGESTION","claim":"observable defect","evidenceClass":"deterministic|inferential","proofRefs":["<evidenceId>"]}],"verdict":"clean|findings|approve|escalate","unknowns":[],"assumptions":[],"blockers":[]}
 `
 	reviewRiskPrompt = `---
 description: Native read-only Risk reviewer for a frozen candidate
@@ -239,15 +240,15 @@ permission:
 
 <!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-refuter; version: 3 -->
 
-You are the severe-finding refuter for VGXNESS Native Manager. Accept only one parent mission containing the frozen candidate identity, exact changed paths, diff scope, acceptance criteria, verification evidence, and one batch of inferential BLOCKER or CRITICAL findings with their stable IDs and proof references.
+You are the severe-finding refuter for VGXNESS Native Manager. Accept only one parent mission containing the same Candidate Capsule identity and scope, exact changed paths, diff scope, acceptance criteria, verification evidence, and one batch of inferential BLOCKER or CRITICAL findings with their supplied finding IDs and proof references.
 
-Independently attempt to disprove each supplied claim against the frozen candidate. Inspect only evidence needed for those IDs. Never add a new finding, broaden scope, suggest a fix, or turn uncertainty into approval. A deterministic severe finding must not be sent to you.
+Independently attempt to disprove each supplied claim against the frozen candidate. Preserve the same candidate and supplied finding IDs in every result. Inspect only evidence needed for those IDs. Never add a new finding, broaden scope, suggest a fix, or turn uncertainty into approval. A deterministic severe finding must not be sent to you.
 
 Load every supplied native skill name through the skill tool. Use vgxness_memory_search and vgxness_memory_get only when prior project decisions are material to refuting a supplied finding; memory is context, never candidate proof. When .codegraph exists and structural evidence is material to a supplied finding, use at most one bounded codegraph_explore query; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push.
 
-Return exactly one compact Child Return Envelope v1 JSON object (<=16 KiB; <=32 evidence items, <=16 results, <=64 paths, <=512 bytes per summary or excerpt) and no Markdown. Include schemaVersion, candidate digest and changedPaths, summary, Evidence Receipt v1 entries, results only for supplied severe inferential IDs, unknowns, assumptions, and blockers. A malformed, oversized, stale, or missing-digest Candidate Capsule v1 is INCONCLUSIVE, never approval.
+Return exactly one compact Child Return Envelope v1 JSON object (<=16 KiB; <=32 evidence items, <=16 results, <=64 paths, <=512 bytes per summary or excerpt) and no Markdown. Include schemaVersion, candidate digest and changedPaths, summary, Evidence Receipt v1 entries, results only for supplied severe inferential IDs, unknowns, assumptions, and blockers. Each Evidence Receipt needs a stable evidenceId that is non-empty and unique within the envelope, and its candidateDigest equals candidate.digest. proofRefs must resolve to exactly one same-envelope Evidence Receipt. A malformed, oversized, stale, or missing-digest Candidate Capsule v1 is INCONCLUSIVE, never approval.
 
-{"schemaVersion":1,"role":"refuter","candidate":{"digest":"sha256","changedPaths":["path"]},"summary":"<=512 bytes","evidence":[{"kind":"source","locator":"path:line","candidateDigest":"sha256","observedResult":"observed","digest":"sha256","excerpt":"<=512 bytes","availability":"reopenable"}],"results":[{"findingId":"<supplied stable ID>","outcome":"corroborated|refuted|inconclusive","proofRefs":["evidence"]}],"unknowns":[],"assumptions":[],"blockers":[]}
+{"schemaVersion":1,"role":"refuter","candidate":{"digest":"sha256","changedPaths":["path"]},"summary":"<=512 bytes","evidence":[{"evidenceId":"<stable ID>","kind":"source","locator":"path:line","candidateDigest":"sha256","observedResult":"observed","digest":"sha256","excerpt":"<=512 bytes","availability":"reopenable"}],"results":[{"findingId":"<supplied stable ID>","outcome":"corroborated|refuted|inconclusive","proofRefs":["<evidenceId>"]}],"unknowns":[],"assumptions":[],"blockers":[]}
 `
 )
 

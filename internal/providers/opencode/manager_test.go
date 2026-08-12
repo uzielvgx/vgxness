@@ -414,6 +414,20 @@ func TestV46RoutesDirectSingleReadAndKeepsFullAssuranceExceptions(t *testing.T) 
 	}
 }
 
+func TestManagerUsesRecentMemoryOnlyWhenBoundedContextIsAbsentOrMaterial(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manager := string(bundle.agents[managerAgentName])
+	for _, required := range []string{
+		"Do not claim recent memory is injected automatically.",
+		"call vgxness_memory_recent when bounded recent context is absent or material to the task",
+	} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("manager missing memory contract %q", required)
+		}
+	}
+}
+
 func TestGeneralV6UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
