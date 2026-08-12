@@ -104,6 +104,31 @@ func TestMultiSetupChangedPlanAllowsConfirmationButUnchangedDoesNot(t *testing.T
 	}
 }
 
+func TestMultiSetupUnchangedPlanAllowsRetryOnlyForUnverifiedSelectedProvider(t *testing.T) {
+	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
+	model.route = routeSetup
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setupPreviewed = true
+	model.setupPreviewRequest = model.setupRequest()
+	model.setupMultiPlan = setupflow.MultiPlan{
+		Digest: "unchanged",
+		Ready:  true,
+		Providers: []setupflow.ProviderPlan{
+			{Provider: setupflow.ProviderOpenCode, Ready: true, Installed: true},
+		},
+	}
+	model.setupPlan = SetupPlan{Digest: "unchanged", Ready: true}
+	model.setupMultiResult = setupflow.MultiResult{Providers: []setupflow.ProviderResult{{Provider: setupflow.ProviderOpenCode}}}
+	if !model.setupApplyAllowed() {
+		t.Fatal("unchanged plan with an unverified selected provider did not allow retry")
+	}
+
+	model.setupMultiResult.Providers[0].Verified = true
+	if model.setupApplyAllowed() {
+		t.Fatal("unchanged plan with all selected providers verified allowed apply")
+	}
+}
+
 func TestMultiSetupFailureRendersSanitizedReasonOutcomesAndSharedRecovery(t *testing.T) {
 	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
 	model.route = routeSetup

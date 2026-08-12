@@ -522,13 +522,28 @@ func (m Model) multiSetupRequest() MultiSetupRequest {
 
 func (m Model) setupApplyAllowed() bool {
 	if m.multiSetupEnabled() {
-		return !m.setupPlanLoading && m.setupPreviewed && m.setupMultiPlan.Digest != "" && setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) && m.setupPlanErr == nil && m.setupApplyErr == nil && !m.setupSucceeded && m.setupMultiPlan.Ready && m.setupMultiPlan.Blocker == "" && m.setupMultiPlan.Changed && (!m.hasSetupProvider(setupflow.ProviderOpenCode) || !m.modelProfileChanged() || m.modelEditorError() == "")
+		return !m.setupPlanLoading && m.setupPreviewed && m.setupMultiPlan.Digest != "" && setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) && m.setupPlanErr == nil && m.setupApplyErr == nil && !m.setupSucceeded && m.setupMultiPlan.Ready && m.setupMultiPlan.Blocker == "" && (m.setupMultiPlan.Changed || m.multiSetupHasUnverifiedProvider()) && (!m.hasSetupProvider(setupflow.ProviderOpenCode) || !m.modelProfileChanged() || m.modelEditorError() == "")
 	}
 	if m.setupPlanLoading || !m.setupPreviewed || m.setupPlan.Digest == "" || !setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || ((m.setupOverrides || m.setupAssignmentsExact || m.setupAssignmentsSeeded && m.setupCatalogAvailable()) && m.modelEditorError() != "") {
 		return false
 	}
 	action := classifySetup(m.setupPlan)
 	return action == "initial install" || action == "reinstall/update"
+}
+
+func (m Model) multiSetupHasUnverifiedProvider() bool {
+	verified := make(map[setupflow.Provider]bool, len(m.setupMultiResult.Providers))
+	for _, outcome := range m.setupMultiResult.Providers {
+		if outcome.Verified {
+			verified[outcome.Provider] = true
+		}
+	}
+	for _, provider := range m.setupMultiPlan.Providers {
+		if !verified[provider.Provider] {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) setupRequest() SetupRequest {
