@@ -1702,6 +1702,11 @@ func TestCurrentReviewerAndRefuterUseChildReturnEnvelopeV1(t *testing.T) {
 	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName} {
 		prompt := string(bundle.agents[name])
 		for _, required := range []string{
+			"Review Binding",
+			"candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+			"Echo the complete Review Binding unchanged",
+			"missing, mismatched, or stale Review Binding is INCONCLUSIVE",
+			"correctionDelta only in scoped-validation mode with a frozenLedger",
 			"same exact Candidate Capsule identity and scope",
 			"stable evidenceId",
 			"non-empty and unique within the envelope",
@@ -1714,6 +1719,11 @@ func TestCurrentReviewerAndRefuterUseChildReturnEnvelopeV1(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
+		"Review Binding",
+		"candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+		"Echo the complete Review Binding unchanged",
+		"missing, mismatched, or stale Review Binding is INCONCLUSIVE",
+		"only supplied severe inferential finding IDs",
 		"same Candidate Capsule identity and scope",
 		"supplied finding IDs",
 		"stable evidenceId",
@@ -1782,6 +1792,9 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"call vgxness_memory_recent when bounded recent context is absent or material to the task",
 		"Zero lenses", "One dominant lens", "Four lenses",
 		"severe inferential findings", "one batch", "one correction transaction and one scoped validation",
+		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+		"Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation",
+		"A correction changes the candidate digest and invalidates all prior validation and review evidence",
 		"installation, permissions, durability, or shared contracts",
 		"repository-confined `go fmt ./...` command and focused tests before freeze",
 		"verifier to run go test ./... and go vet ./...",
@@ -1799,6 +1812,18 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Errorf("manager prompt retains deprecated mechanic %q", forbidden)
+		}
+	}
+	verifier := string(bundle.agents[verifierAgentName])
+	for _, required := range []string{
+		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+		"Echo the complete Review Binding unchanged",
+		"A missing, mismatched, or stale Review Binding is INCONCLUSIVE.",
+		"If either digest differs, stop and return INCONCLUSIVE.",
+		"reviewBinding, candidate",
+	} {
+		if !strings.Contains(verifier, required) {
+			t.Errorf("verifier prompt is missing Review Binding contract %q", required)
 		}
 	}
 }

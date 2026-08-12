@@ -35,6 +35,10 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
 		"sole Git and GitHub actor", "delegated implementation worker",
 		"Stop on ambiguity or a failed skill gate", "Do not commit or push without an explicit current-task request",
+		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+		"Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation",
+		"A correction changes the candidate digest and invalidates all prior validation and review evidence",
+		"Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding",
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("canonical current manager missing %q", required)
@@ -48,6 +52,12 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 		if strings.Contains(manager, forbidden) {
 			t.Errorf("canonical current manager retains forbidden cleanup %q", forbidden)
 		}
+	}
+	if got := strings.Count(manager, "A correction changes the candidate digest and invalidates all prior validation and review evidence."); got != 1 {
+		t.Errorf("correction invalidation rule count=%d, want 1", got)
+	}
+	if strings.Contains(manager, "A correction creates a new candidate digest and invalidates all prior validation and review evidence.") {
+		t.Error("manager retains duplicate correction invalidation rule")
 	}
 	if _, exists := bundle.agents[autonomousStackedPRSkillName]; exists {
 		t.Fatal("managed skill was added to model-bound agents")
