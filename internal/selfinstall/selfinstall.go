@@ -828,7 +828,7 @@ func (service *Service) writeManifestRoot(ctx context.Context, anchors installAn
 			}
 			return fmt.Errorf("%w: publish manifest: %v", ErrRecovery, err)
 		}
-		return service.finishManifestPublishRoot(anchors, target)
+		return service.finishManifestPublishRoot(ctx, anchors, target)
 	}
 	before, err := anchors.bin.Lstat(manifestName)
 	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
@@ -853,14 +853,17 @@ func (service *Service) writeManifestRoot(ctx context.Context, anchors installAn
 	if err := anchors.bin.Link(temporary, manifestName); err != nil {
 		return fmt.Errorf("%w: publish manifest without overwrite: %v", ErrRecovery, err)
 	}
-	return service.finishManifestPublishRoot(anchors, target)
+	return service.finishManifestPublishRoot(ctx, anchors, target)
 }
 
-func (service *Service) finishManifestPublishRoot(anchors installAnchors, target paths) error {
+func (service *Service) finishManifestPublishRoot(ctx context.Context, anchors installAnchors, target paths) error {
 	if service.afterManifestPublish != nil {
 		if err := service.afterManifestPublish(); err != nil {
 			return fmt.Errorf("%w: manifest published; durability unknown: %v", ErrRecovery, err)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(ErrRecovery, err)
 	}
 	if err := syncRoot(anchors.bin); err != nil {
 		return fmt.Errorf("%w: manifest published; sync failed: %v", ErrRecovery, err)
