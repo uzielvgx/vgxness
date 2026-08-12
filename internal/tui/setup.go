@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
+	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
 const (
@@ -34,6 +35,19 @@ type SetupRequest struct {
 	ModelVariantsSpecified bool
 	ModelAssignments       *[SetupModelAssignmentCount]SetupModelAssignmentRequest
 	ExpectedPlanDigest     string
+}
+
+// MultiSetupRequest is the optional composite setup contract owned by the TUI.
+type MultiSetupRequest struct {
+	Setup              SetupRequest
+	Providers          []setupflow.Provider
+	ExpectedPlanDigest string
+	Verified           []setupflow.ProviderResult
+}
+
+type MultiSetupBackend interface {
+	PlanMultiSetup(context.Context, MultiSetupRequest) (setupflow.MultiPlan, error)
+	ApplyMultiSetup(context.Context, MultiSetupRequest) (setupflow.MultiResult, error)
 }
 
 type SetupModelAssignmentRequest struct {
@@ -181,12 +195,14 @@ type setupPlanLoadedMsg struct {
 	request    SetupRequest
 	value      SetupPlan
 	err        error
+	multi      *setupflow.MultiPlan
 }
 
 type setupAppliedMsg struct {
 	generation int
 	value      SetupResult
 	err        error
+	multi      *setupflow.MultiResult
 }
 
 func (m *Model) initSetup() {
@@ -196,6 +212,9 @@ func (m *Model) initSetup() {
 	m.setupViewport = preview
 	m.setupSelected = defaultSetupPlan
 	m.setupView = setupViewInstall
+	if _, ok := m.backend.(MultiSetupBackend); ok {
+		m.setupProviders = []setupflow.Provider{setupflow.ProviderOpenCode}
+	}
 	m.resetRecoveryState()
 }
 
@@ -250,7 +269,12 @@ func (m *Model) loadSetupPlan() tea.Cmd {
 	m.setupPlanErr = nil
 	m.setupViewport.GotoTop()
 	request := m.setupRequest()
+	multiRequest := m.multiSetupRequest()
 	return func() tea.Msg {
+		if backend, ok := m.backend.(MultiSetupBackend); ok {
+			value, err := backend.PlanMultiSetup(ctx, multiRequest)
+			return setupPlanLoadedMsg{generation: generation, request: request, multi: &value, err: err}
+		}
 		if m.backend == nil {
 			return setupPlanLoadedMsg{generation: generation, request: request, err: fmt.Errorf("setup backend unavailable")}
 		}
@@ -271,7 +295,13 @@ func (m *Model) applySetup() tea.Cmd {
 	m.setupViewport.GotoTop()
 	request := m.setupRequest()
 	request.ExpectedPlanDigest = m.setupPlan.Digest
+	multiRequest := m.multiSetupRequest()
+	multiRequest.ExpectedPlanDigest = m.setupMultiPlan.Digest
 	return func() tea.Msg {
+		if backend, ok := m.backend.(MultiSetupBackend); ok {
+			value, err := backend.ApplyMultiSetup(ctx, multiRequest)
+			return setupAppliedMsg{generation: generation, multi: &value, err: err}
+		}
 		if m.backend == nil {
 			return setupAppliedMsg{generation: generation, err: fmt.Errorf("setup backend unavailable")}
 		}
@@ -321,6 +351,13 @@ func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
 	m.setupPlanLoading = false
 	m.setupPlanErr = msg.err
 	if msg.err == nil {
+		if msg.multi != nil {
+			m.setupMultiPlan = *msg.multi
+			m.setupPlan = SetupPlan{Digest: msg.multi.Digest, Ready: msg.multi.Ready, Blocker: msg.multi.Blocker, ModelPlan: m.setupSelected}
+			m.setupPreviewRequest, m.setupPreviewed = m.setupRequest(), true
+			m.setupViewport.GotoTop()
+			return
+		}
 		m.setupPlan = cloneSetupPlan(msg.value)
 		m.setupPreviewRequest = msg.request
 		m.setupPreviewed = true
@@ -344,6 +381,14 @@ func (m *Model) handleSetupApplied(msg setupAppliedMsg) {
 	m.finishSetupOperation()
 	m.setupApplying = false
 	m.setupResult = cloneSetupResult(msg.value)
+	if msg.multi != nil {
+		m.setupMultiResult = *msg.multi
+		m.setupApplyErr = msg.err
+		m.setupSucceeded = msg.err == nil
+		m.setupCancelAsked = false
+		m.setupViewport.GotoTop()
+		return
+	}
 	m.setupApplyErr = msg.err
 	m.setupSucceeded = msg.err == nil
 	m.setupCancelAsked = false
@@ -388,7 +433,20 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "o", "c":
+		if m.multiSetupEnabled() {
+			provider := setupflow.ProviderOpenCode
+			if msg.String() == "c" {
+				provider = setupflow.ProviderCodex
+			}
+			m.toggleSetupProvider(provider)
+			return true, m.loadSetupPlan()
+		}
 	case "tab":
+		if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
+			m.setupView = setupViewRecovery
+			return true, nil
+		}
 		m.cancelSetupOperation()
 		m.setupView = setupViewRecovery
 		m.resetRecoveryState()
@@ -403,6 +461,9 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case "m":
+		if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
+			return true, nil
+		}
 		m.setupModelEditing = true
 		m.setupModelSlot = 0
 		m.setupAssignmentEntryRows, m.setupAssignmentsEntry = m.setupAssignmentRows, m.setupAssignmentsExact
@@ -424,12 +485,65 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
+func (m Model) multiSetupEnabled() bool { _, ok := m.backend.(MultiSetupBackend); return ok }
+func (m Model) hasSetupProvider(provider setupflow.Provider) bool {
+	for _, value := range m.setupProviders {
+		if value == provider {
+			return true
+		}
+	}
+	return false
+}
+func (m *Model) toggleSetupProvider(provider setupflow.Provider) {
+	m.setupConfirm, m.setupSucceeded, m.setupApplyErr = false, false, nil
+	m.setupResult, m.setupMultiResult = SetupResult{}, setupflow.MultiResult{}
+	if m.hasSetupProvider(provider) {
+		if len(m.setupProviders) == 1 {
+			return
+		}
+		for index, value := range m.setupProviders {
+			if value == provider {
+				m.setupProviders = append(m.setupProviders[:index], m.setupProviders[index+1:]...)
+				return
+			}
+		}
+	}
+	m.setupProviders = append(m.setupProviders, provider)
+}
+func (m Model) multiSetupRequest() MultiSetupRequest {
+	verified := make([]setupflow.ProviderResult, 0, len(m.setupMultiResult.Providers))
+	for _, outcome := range m.setupMultiResult.Providers {
+		if outcome.Verified {
+			verified = append(verified, outcome)
+		}
+	}
+	return MultiSetupRequest{Setup: m.setupRequest(), Providers: append([]setupflow.Provider(nil), m.setupProviders...), Verified: verified}
+}
+
 func (m Model) setupApplyAllowed() bool {
+	if m.multiSetupEnabled() {
+		return !m.setupPlanLoading && m.setupPreviewed && m.setupMultiPlan.Digest != "" && setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) && m.setupPlanErr == nil && m.setupApplyErr == nil && !m.setupSucceeded && m.setupMultiPlan.Ready && m.setupMultiPlan.Blocker == "" && (m.setupMultiPlan.Changed || m.multiSetupHasUnverifiedProvider()) && (!m.hasSetupProvider(setupflow.ProviderOpenCode) || !m.modelProfileChanged() || m.modelEditorError() == "")
+	}
 	if m.setupPlanLoading || !m.setupPreviewed || m.setupPlan.Digest == "" || !setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || ((m.setupOverrides || m.setupAssignmentsExact || m.setupAssignmentsSeeded && m.setupCatalogAvailable()) && m.modelEditorError() != "") {
 		return false
 	}
 	action := classifySetup(m.setupPlan)
 	return action == "initial install" || action == "reinstall/update"
+}
+
+func (m Model) multiSetupHasUnverifiedProvider() bool {
+	verified := make(map[setupflow.Provider]bool, len(m.setupMultiResult.Providers))
+	for _, outcome := range m.setupMultiResult.Providers {
+		if outcome.Verified {
+			verified[outcome.Provider] = true
+		}
+	}
+	for _, provider := range m.setupMultiPlan.Providers {
+		if !verified[provider.Provider] {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) setupRequest() SetupRequest {
@@ -751,6 +865,9 @@ func (m Model) setupRouteLines() []string {
 	if m.setupView == setupViewRecovery {
 		return m.recoveryRouteLines()
 	}
+	if m.multiSetupEnabled() {
+		return m.multiSetupRouteLines()
+	}
 	header := "selected plan  " + sanitizeTerminal(m.setupSelected)
 	if m.setupAssignmentsExact {
 		header = "per-agent assignments"
@@ -873,9 +990,114 @@ func (m Model) setupRouteLines() []string {
 	return lines
 }
 
+func (m Model) multiSetupRouteLines() []string {
+	providers := ""
+	for _, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex} {
+		marker := " "
+		if m.hasSetupProvider(provider) {
+			marker = "✓"
+		}
+		providers += marker + " " + string(provider) + "  "
+	}
+	lines := []string{"MULTI-PROVIDER SETUP", "providers  " + strings.TrimSpace(providers), "shared plan  " + sanitizeTerminal(m.setupSelected)}
+	if m.hasSetupProvider(setupflow.ProviderCodex) {
+		lines = append(lines, "! Codex: shared plan only; OpenCode custom slots do not apply.")
+	}
+	if m.setupPlanLoading {
+		return append(lines, "", "... Loading verified provider preview...")
+	}
+	if m.setupApplying {
+		return append(lines, "", "... Applying shared work then providers in order...")
+	}
+	if m.setupApplyErr != nil {
+		lines = append(lines, "✕ SETUP PARTIAL/FAILED")
+		lines = append(lines, "Reason: "+sanitizeTerminal(m.setupApplyErr.Error()))
+		for _, row := range m.setupMultiResult.Providers {
+			lines = append(lines, providerOutcomeLine(row))
+		}
+		if m.setupMultiResult.Shared.Recovery != "" {
+			lines = append(lines, "Recovery: "+sanitizeTerminal(m.setupMultiResult.Shared.Recovery))
+		}
+		return append(lines, "Action: [r] replan/retry; verified unchanged providers are skipped.")
+	}
+	if m.setupSucceeded {
+		lines = append(lines, "✓ SETUP COMPLETE")
+		for _, row := range m.setupMultiResult.Providers {
+			lines = append(lines, providerOutcomeLine(row))
+		}
+		return lines
+	}
+	plan := m.setupMultiPlan
+	state := "! BLOCKED"
+	if plan.Ready {
+		state = "✓ READY TO APPLY"
+	}
+	if plan.Ready && !plan.Changed {
+		state = "✓ NO CHANGES"
+	}
+	lines = append(lines, state, "digest  "+setupValue(plan.Digest))
+	for _, row := range plan.Providers {
+		glyph := "!"
+		if row.Ready {
+			glyph = "✓"
+		}
+		status := "needs install"
+		if row.Installed && !row.Changed {
+			status = "installed"
+		}
+		lines = append(lines, glyph+" "+string(row.Provider)+"  "+status)
+		if row.Blocker != "" {
+			lines = append(lines, "  blocker  "+sanitizeTerminal(row.Blocker))
+		}
+	}
+	if plan.Blocker != "" {
+		lines = append(lines, "Blocker: "+sanitizeTerminal(plan.Blocker))
+	}
+	if m.setupConfirm {
+		lines = append(lines, "", "! CONFIRM MULTI-PROVIDER APPLY", "Apply shared work once, then providers? [y] yes  [n/Esc] cancel")
+	}
+	return lines
+}
+
+func providerOutcomeLine(row setupflow.ProviderResult) string {
+	glyph := "✕"
+	if row.Verified {
+		glyph = "✓"
+	}
+	if row.Skipped {
+		glyph = "✓"
+	}
+	value := "unverified"
+	if row.Verified {
+		value = "verified"
+	}
+	if row.Skipped {
+		value = "verified unchanged; skipped"
+	}
+	return glyph + " " + string(row.Provider) + "  " + value
+}
+
 func (m Model) setupHelp() string {
 	if m.setupView == setupViewRecovery {
 		return m.recoveryHelp()
+	}
+	if m.multiSetupEnabled() {
+		if m.setupApplying {
+			return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
+		}
+		if m.setupConfirm {
+			return "[y] apply  [n/Esc] cancel  No write occurs until y"
+		}
+		help := "[o] OpenCode  [c] Codex  [h/l] shared plan  [r] refresh"
+		if m.hasSetupProvider(setupflow.ProviderOpenCode) {
+			help += "  [m] model profile  [Tab] Recovery"
+		} else {
+			help += "  [Tab] verification/retry"
+		}
+		if m.setupApplyAllowed() {
+			help += "  [a] apply"
+		}
+		return help
 	}
 	switch {
 	case m.setupApplying:

@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
 const (
@@ -197,6 +198,9 @@ type Model struct {
 	cancelMemory           context.CancelFunc
 	setupPlan              SetupPlan
 	setupResult            SetupResult
+	setupProviders         []setupflow.Provider
+	setupMultiPlan         setupflow.MultiPlan
+	setupMultiResult       setupflow.MultiResult
 	setupViewport          viewport.Model
 	setupSelected          string
 	setupPlanErr           error
@@ -275,7 +279,7 @@ func NewModel(ctx context.Context, backend Backend, options Options) Model {
 		sectionItem{route: routeOverview, title: "Overview", description: "workspace summary"},
 		sectionItem{route: routeSystem, title: "System", description: "read-only health"},
 		sectionItem{route: routeMemory, title: "Memory", description: "search and inspect"},
-		sectionItem{route: routeSetup, title: "Setup", description: "controlled OpenCode write"},
+		sectionItem{route: routeSetup, title: "Setup", description: "controlled provider setup"},
 	}, delegate, 24, 4)
 	sections.SetShowTitle(false)
 	sections.SetShowFilter(false)
@@ -744,6 +748,8 @@ func (m *Model) setRoute(next route) {
 		}
 		m.setupPlan = SetupPlan{}
 		m.setupResult = SetupResult{}
+		m.setupMultiPlan = setupflow.MultiPlan{}
+		m.setupMultiResult = setupflow.MultiResult{}
 		m.setupPlanErr = nil
 		m.setupApplyErr = nil
 		m.setupSucceeded = false

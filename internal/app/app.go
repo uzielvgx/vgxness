@@ -83,6 +83,8 @@ func runWithMCP(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		backend := tuiBackend{
 			inspection: inspection.Service{Health: memory.HealthFile},
 			setup:      setupRuntime,
+			opencode:   integrationRuntime,
+			codex:      codexIntegrationRuntime,
 			recovery:   setupRuntime,
 			memory:     appruntime.NewMemory("cli", true),
 			catalog:    modelcatalog.NewOpenCode("", nil, modelcatalog.Options{}),
@@ -110,6 +112,14 @@ type tuiSetupRuntime interface {
 	Status(context.Context, setupflow.Options) (setupflow.Plan, error)
 }
 
+type tuiSharedSetupRuntime interface {
+	Shared(setupflow.Options) setupflow.SharedRuntime
+}
+
+type tuiOpenCodeProviderRuntime interface {
+	OpenCodeProvider(setupflow.Options, setupflow.PreviewIntegrationFactory) setupflow.ProviderRuntime
+}
+
 type tuiRecoveryRuntime interface {
 	PlanProtectedReinstall(context.Context, setupflow.ProtectedReinstallRequest) (setupflow.ProtectedReinstallPlan, error)
 	ListBackups(context.Context, setupflow.BackupListRequest) (setupflow.BackupListResult, error)
@@ -134,9 +144,74 @@ type tuiModelCatalog interface {
 type tuiBackend struct {
 	inspection tuiInspectionRuntime
 	setup      tuiSetupRuntime
+	opencode   integration.Runtime
+	codex      integration.Runtime
 	recovery   tuiRecoveryRuntime
 	memory     tuiMemoryRuntime
 	catalog    tuiModelCatalog
+}
+
+func (backend tuiBackend) PlanMultiSetup(ctx context.Context, request tui.MultiSetupRequest) (setupflow.MultiPlan, error) {
+	multi, options, err := backend.multiSetup(request)
+	if err != nil {
+		return setupflow.MultiPlan{}, err
+	}
+	return multi.Plan(ctx, options)
+}
+
+func (backend tuiBackend) ApplyMultiSetup(ctx context.Context, request tui.MultiSetupRequest) (setupflow.MultiResult, error) {
+	multi, options, err := backend.multiSetup(request)
+	if err != nil {
+		return setupflow.MultiResult{}, err
+	}
+	return multi.Apply(ctx, options)
+}
+
+func (backend tuiBackend) multiSetup(request tui.MultiSetupRequest) (*setupflow.Multi, setupflow.MultiOptions, error) {
+	shared, ok := backend.setup.(tuiSharedSetupRuntime)
+	if !ok {
+		return nil, setupflow.MultiOptions{}, fmt.Errorf("multi-provider setup unavailable")
+	}
+	openCode, ok := backend.setup.(tuiOpenCodeProviderRuntime)
+	if !ok {
+		return nil, setupflow.MultiOptions{}, fmt.Errorf("multi-provider OpenCode setup unavailable")
+	}
+	for _, provider := range request.Providers {
+		if provider == setupflow.ProviderCodex && backend.codex == nil {
+			return nil, setupflow.MultiOptions{}, fmt.Errorf("selected provider is unavailable")
+		}
+	}
+	options, err := tuiSetupOptions(request.Setup)
+	if err != nil {
+		return nil, setupflow.MultiOptions{}, err
+	}
+	runtimes := make([]setupflow.ProviderRuntime, 0, len(request.Providers))
+	for _, provider := range request.Providers {
+		if provider == setupflow.ProviderOpenCode {
+			runtimes = append(runtimes, openCode.OpenCodeProvider(options, func(path string) (integration.Runtime, error) {
+				return opencode.NewPreviewIntegration(path)
+			}))
+			continue
+		}
+		codexOptions, err := codexSetupOptions(options.Integration)
+		if err != nil {
+			return nil, setupflow.MultiOptions{}, err
+		}
+		runtimes = append(runtimes, setupflow.NewIntegrationProvider(provider, backend.codex, codexOptions))
+	}
+	multi := setupflow.NewMultiWithShared(shared.Shared(options), runtimes...)
+	return multi, setupflow.MultiOptions{Providers: request.Providers, ExpectedPlanDigest: request.ExpectedPlanDigest, Verified: request.Verified}, nil
+}
+
+func codexSetupOptions(options integration.Options) (integration.Options, error) {
+	if options.ConfigDir != "" {
+		return integration.Options{ConfigDir: options.ConfigDir, ModelPlan: options.ModelPlan}, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return integration.Options{}, fmt.Errorf("resolve Codex home directory")
+	}
+	return integration.Options{HomeDir: home, ModelPlan: options.ModelPlan}, nil
 }
 
 func (backend tuiBackend) ModelCatalog(ctx context.Context, refresh bool) ([]tui.SetupCatalogModel, error) {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
 func (fakeBackend) PlanRecovery(context.Context, RecoveryPlanRequest) (RecoveryPlan, error) {
@@ -26,6 +27,31 @@ func (fakeBackend) RestoreBackup(context.Context, RestoreRequest) (RestoreResult
 }
 func (fakeBackend) ProtectedReinstall(context.Context, ProtectedReinstallRequest) (ProtectedReinstallResult, error) {
 	return ProtectedReinstallResult{}, nil
+}
+
+func TestCodexOnlyRecoveryNeverLoadsOpenCodeBackupFlow(t *testing.T) {
+	backend := &recordingMultiSetupBackend{}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model.route, model.setupView = routeSetup, setupViewRecovery
+	model.setupProviders = []setupflow.Provider{setupflow.ProviderCodex}
+	if lines := strings.Join(model.recoveryRouteLines(), "\n"); !strings.Contains(lines, "backups are unavailable") {
+		t.Fatalf("recovery lines=%s", lines)
+	}
+	updated, command := model.updateRecoveryKey(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
+	if !updated || command != nil || model.recoveryConfirm != recoveryConfirmNone {
+		t.Fatalf("handled=%t cmd=%v confirm=%v", updated, command, model.recoveryConfirm)
+	}
+	updated, command = model.updateRecoveryKey(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
+	if !updated || command == nil || model.setupView != setupViewInstall {
+		t.Fatalf("retry handled=%t cmd=%v view=%v", updated, command, model.setupView)
+	}
+}
+
+func TestRecoveryHelpListsRefresh(t *testing.T) {
+	model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
+	if help := model.recoveryHelp(); !strings.Contains(help, "[r] refresh") {
+		t.Fatalf("help=%q", help)
+	}
 }
 
 type recordingRecoveryBackend struct {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
 const (
@@ -387,6 +388,21 @@ func (m *Model) handleRecoveryReinstalled(msg recoveryReinstalledMsg) tea.Cmd {
 }
 
 func (m *Model) updateRecoveryKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
+		if msg.String() == "tab" {
+			m.setupView = setupViewInstall
+			return true, m.loadSetupPlan()
+		}
+		if msg.String() == "esc" {
+			m.setRoute(routeOverview)
+			return true, nil
+		}
+		if msg.String() == "r" {
+			m.setupView = setupViewInstall
+			return true, m.loadSetupPlan()
+		}
+		return true, nil
+	}
 	if m.recoveryConfirm != recoveryConfirmNone {
 		switch msg.String() {
 		case "y":
@@ -474,6 +490,9 @@ func (m *Model) moveRecoverySelection(offset int) {
 }
 
 func (m Model) recoveryRouteLines() []string {
+	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
+		return []string{"CODEX SETUP  Verification & Retry", "! OpenCode backups are unavailable for Codex-only setup.", "Action: [r] replan and retry; no backup or restore action will run.", "[Tab] return to Setup"}
+	}
 	lines := []string{"OPENCODE SETUP  Install  [Backup & Recovery]", "mode  " + strings.ToUpper(m.recoveryMode)}
 	if m.recoveryMode == RecoveryModeFull {
 		lines = append(lines, "! FULL BACKUP WARNING", "  May contain credentials; local storage is 0700/0600 with no encryption.")
@@ -632,6 +651,9 @@ func (m Model) recoveryFailureLines() []string {
 }
 
 func (m Model) recoveryHelp() string {
+	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
+		return "[r/Tab] replan Setup  [Esc] Overview"
+	}
 	if m.recoveryOperation.mutating() {
 		return "Controlled write locked  [ctrl+c] request cancellation and wait"
 	}
@@ -641,7 +663,7 @@ func (m Model) recoveryHelp() string {
 	if m.recoveryPreview.SnapshotID != "" {
 		return "[j/k] inspect conflicts  [x] restore missing only  [Esc] close preview"
 	}
-	return "[Tab] Install  [h/l] mode  [j/k] snapshot  [p] preview  controlled writes: [b] backup [i] reinstall"
+	return "[Tab] Install  [r] refresh  [h/l] mode  [j/k] snapshot  [p] preview  controlled writes: [b] backup [i] reinstall"
 }
 
 func (m *Model) clearRecoveryOutcome() {

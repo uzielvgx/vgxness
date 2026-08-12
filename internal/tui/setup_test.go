@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
 type recordingSetupBackend struct {
@@ -25,6 +26,123 @@ type recordingSetupBackend struct {
 	catalogCalls   []bool
 	catalogStarted chan struct{}
 	catalogBlock   chan struct{}
+}
+
+type recordingMultiSetupBackend struct {
+	recordingSetupBackend
+	multiPlan     setupflow.MultiPlan
+	multiResult   setupflow.MultiResult
+	multiRequests []MultiSetupRequest
+}
+
+func (backend *recordingMultiSetupBackend) PlanMultiSetup(_ context.Context, request MultiSetupRequest) (setupflow.MultiPlan, error) {
+	backend.multiRequests = append(backend.multiRequests, request)
+	return backend.multiPlan, nil
+}
+func (backend *recordingMultiSetupBackend) ApplyMultiSetup(_ context.Context, request MultiSetupRequest) (setupflow.MultiResult, error) {
+	backend.multiRequests = append(backend.multiRequests, request)
+	return backend.multiResult, nil
+}
+
+func TestMultiSetupTogglesProvidersAndBlocksCodexModelEditor(t *testing.T) {
+	backend := &recordingMultiSetupBackend{}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model.route = routeSetup
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	if !model.hasSetupProvider(setupflow.ProviderOpenCode) || model.hasSetupProvider(setupflow.ProviderCodex) {
+		t.Fatalf("default providers=%v", model.setupProviders)
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'c', Text: "c"}))
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'o', Text: "o"}))
+	if model.hasSetupProvider(setupflow.ProviderOpenCode) || !model.hasSetupProvider(setupflow.ProviderCodex) {
+		t.Fatalf("toggle providers=%v", model.setupProviders)
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'm', Text: "m"}))
+	if model.setupModelEditing || !strings.Contains(strings.Join(model.setupRouteLines(), "\n"), "shared plan only") {
+		t.Fatalf("codex model state=%t lines=%v", model.setupModelEditing, model.setupRouteLines())
+	}
+}
+
+func TestMultiSetupApplyPassesOnlyVerifiedOutcomesToRetry(t *testing.T) {
+	backend := &recordingMultiSetupBackend{multiResult: setupflow.MultiResult{Providers: []setupflow.ProviderResult{{Provider: setupflow.ProviderOpenCode, Verified: true}, {Provider: setupflow.ProviderCodex}}}}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model.route = routeSetup
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setupMultiPlan = setupflow.MultiPlan{Digest: "digest", Ready: true}
+	model.setupPlan = SetupPlan{Digest: "digest", Ready: true}
+	model.setupPreviewed = true
+	message := model.applySetup()()
+	model = updateModel(t, model, message)
+	if len(backend.multiRequests) != 1 || len(model.setupMultiResult.Providers) != 2 {
+		t.Fatalf("requests=%#v result=%#v", backend.multiRequests, model.setupMultiResult)
+	}
+	request := model.multiSetupRequest()
+	if len(request.Verified) != 1 || !request.Verified[0].Verified {
+		t.Fatalf("retry outcomes=%#v", request.Verified)
+	}
+}
+
+func TestMultiSetupChangedPlanAllowsConfirmationButUnchangedDoesNot(t *testing.T) {
+	backend := &recordingMultiSetupBackend{}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model.route = routeSetup
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setupPreviewed = true
+	model.setupPreviewRequest = model.setupRequest()
+	model.setupMultiPlan = setupflow.MultiPlan{Digest: "changed", Ready: true, Changed: true}
+	model.setupPlan = SetupPlan{Digest: "changed", Ready: true}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
+	if !model.setupConfirm {
+		t.Fatal("changed multi plan did not open confirmation")
+	}
+	model.setupConfirm = false
+	model.setupMultiPlan.Changed = false
+	model.setupPlan.Digest = model.setupMultiPlan.Digest
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
+	if model.setupConfirm || !strings.Contains(strings.Join(model.setupRouteLines(), "\n"), "NO CHANGES") {
+		t.Fatal("unchanged multi plan allowed apply")
+	}
+}
+
+func TestMultiSetupUnchangedPlanAllowsRetryOnlyForUnverifiedSelectedProvider(t *testing.T) {
+	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
+	model.route = routeSetup
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setupPreviewed = true
+	model.setupPreviewRequest = model.setupRequest()
+	model.setupMultiPlan = setupflow.MultiPlan{
+		Digest: "unchanged",
+		Ready:  true,
+		Providers: []setupflow.ProviderPlan{
+			{Provider: setupflow.ProviderOpenCode, Ready: true, Installed: true},
+		},
+	}
+	model.setupPlan = SetupPlan{Digest: "unchanged", Ready: true}
+	model.setupMultiResult = setupflow.MultiResult{Providers: []setupflow.ProviderResult{{Provider: setupflow.ProviderOpenCode}}}
+	if !model.setupApplyAllowed() {
+		t.Fatal("unchanged plan with an unverified selected provider did not allow retry")
+	}
+
+	model.setupMultiResult.Providers[0].Verified = true
+	if model.setupApplyAllowed() {
+		t.Fatal("unchanged plan with all selected providers verified allowed apply")
+	}
+}
+
+func TestMultiSetupFailureRendersSanitizedReasonOutcomesAndSharedRecovery(t *testing.T) {
+	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
+	model.route = routeSetup
+	model.setupApplyErr = errors.New("bad\nreason\x1b")
+	model.setupMultiResult = setupflow.MultiResult{
+		Shared:    setupflow.SharedResult{Recovery: "restore\nlauncher"},
+		Providers: []setupflow.ProviderResult{{Provider: setupflow.ProviderOpenCode, Verified: true}, {Provider: setupflow.ProviderCodex}},
+	}
+	view := strings.Join(model.setupRouteLines(), "\n")
+	for _, expected := range []string{"Reason: bad\\nreason\\x1b", "Recovery: restore\\nlauncher", "✓ opencode", "✕ codex", "replan/retry"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("missing %q in %s", expected, view)
+		}
+	}
 }
 
 func (backend *recordingSetupBackend) ModelCatalog(ctx context.Context, refresh bool) ([]SetupCatalogModel, error) {
