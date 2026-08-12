@@ -35,6 +35,11 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	if len(tools.Tools) != 2 || tools.Tools[0].Name != "memory_recent" || tools.Tools[1].Name != "memory_search" {
 		t.Fatalf("listed tools = %+v", tools.Tools)
 	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "memory_get" || isMutationTool(tool.Name) {
+			t.Fatalf("normal mode exposed protected tool %q", tool.Name)
+		}
+	}
 	result, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "memory_search", Arguments: map[string]any{"query": "alpha and beta"}})
 	if err != nil {
 		t.Fatalf("CallTool() error = %v", err)
@@ -44,6 +49,15 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	}
 	if !backend.recall.MatchAny || backend.recall.Query != "alpha and beta" {
 		t.Fatalf("memory_search request = %+v", backend.recall)
+	}
+	for _, name := range append([]string{"memory_get"}, mutationToolNames...) {
+		protected, protectedErr := session.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: map[string]any{"id": "entry-1"}})
+		if protectedErr == nil && !protected.IsError {
+			t.Fatalf("normal mode invoked unregistered tool %q: %+v", name, protected)
+		}
+	}
+	if backend.getCalls != 0 || backend.rememberCalls != 0 || backend.forgetCalls != 0 {
+		t.Fatalf("normal mode reached protected memory backend: get=%d save=%d forget=%d", backend.getCalls, backend.rememberCalls, backend.forgetCalls)
 	}
 }
 
@@ -119,7 +133,27 @@ func TestFullServerExposesMemoryParityTools(t *testing.T) {
 	if got := discoveredNames(t, server); !sameStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)
 	}
+	mutations := 0
+	for _, name := range want {
+		if isMutationTool(name) {
+			mutations++
+		}
+	}
+	if mutations != 8 {
+		t.Fatalf("full mode mutation set = %d, want 8", mutations)
+	}
 }
+
+func isMutationTool(name string) bool {
+	for _, mutation := range mutationToolNames {
+		if name == mutation {
+			return true
+		}
+	}
+	return false
+}
+
+var mutationToolNames = []string{"memory_save", "memory_forget", "sdd_create", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_accept_revision", "sdd_record_projection"}
 
 func TestFullServerAdvertisesExactMutationSchemas(t *testing.T) {
 	server, err := newFullWithReader(context.Background(), "/workspace", &fakeReader{project: "project-1"})
@@ -419,17 +453,18 @@ func TestServerSanitizesUnavailableStorage(t *testing.T) {
 }
 
 type fakeReader struct {
-	project   string
-	workspace string
-	recent    memory.Recent
-	recall    memory.Recall
-	recentErr error
-	recallErr error
-	entry     memory.Entry
-	remember  memory.Remember
-	lookup    memory.Lookup
-	forget    memory.Forget
-	getErr    error
+	project                              string
+	workspace                            string
+	recent                               memory.Recent
+	recall                               memory.Recall
+	recentErr                            error
+	recallErr                            error
+	entry                                memory.Entry
+	remember                             memory.Remember
+	lookup                               memory.Lookup
+	forget                               memory.Forget
+	getErr                               error
+	getCalls, rememberCalls, forgetCalls int
 }
 
 type fakeSDDReader struct {
@@ -534,16 +569,19 @@ func (reader *fakeReader) Recall(_ context.Context, request memory.Recall) ([]me
 }
 
 func (reader *fakeReader) Get(_ context.Context, request memory.Lookup) (memory.Entry, error) {
+	reader.getCalls++
 	reader.lookup = request
 	return reader.entry, reader.getErr
 }
 
 func (reader *fakeReader) Remember(_ context.Context, request memory.Remember) (memory.Entry, error) {
+	reader.rememberCalls++
 	reader.remember = request
 	return reader.entry, nil
 }
 
 func (reader *fakeReader) Forget(_ context.Context, request memory.Forget) (memory.Entry, error) {
+	reader.forgetCalls++
 	reader.forget = request
 	return reader.entry, nil
 }

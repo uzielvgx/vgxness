@@ -4,7 +4,7 @@
 
 VGXNESS installs no OpenCode plugin and therefore has no installed hook surface. It does not install or manage OpenCode callbacks, shell hooks, Git hooks, automatic memory injection, compaction, observability, or plugin session identity.
 
-Managed OpenCode and generated Codex use `vgxness mcp --full`. MCP requests carry no caller identity; host/operator permissions, user authorization, and task scope own authorization. This document makes no runtime-security claim.
+MCP uses local stdio and assumes its host is trusted. Requests carry no caller identity or session authentication. `vgxness mcp` is default-deny and exposes only `memory_recent` and `memory_search`; only the explicit `vgxness mcp --full` command exposes the full read/write set. Managed OpenCode and generated Codex use that explicit command, but their read-only agent/tool allowlists exclude every mutating MCP tool. Those host allowlists, operator permissions, user authorization, and task scope are part of the authorization boundary. This document makes no runtime-security claim.
 
 ## Historical retirement context
 
