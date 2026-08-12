@@ -6,9 +6,16 @@ Current delivery policy is manager v46 and global `stacked-pr` v3. Before branch
 
 Delivery labels are evidence-only: IMPLEMENTED requires completed workspace changes and observed developmental checks, but not independent verification; VERIFIED requires the exact frozen candidate to pass independent verification and review; DELIVERED requires the exact commit to be published and a new current-task PR created and read back; MERGED requires that PR merge and base containment/readback; INSTALLED additionally requires installation and handshake readback. No later state is inferred.
 
-VGXNESS installs 18 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v46; managed `general` v6; verifier v4; reviewer profiles v3; a read-only `explore` override; and six hidden read-only SDD profiles), one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. There is no installed plugin. Managed OpenCode and generated Codex use `vgxness mcp --full`, exposing exactly five memory tools and 13 SDD tools.
+VGXNESS installs 18 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v46; managed `general` v6; verifier v4; reviewer profiles v3; a read-only `explore` override; and six hidden read-only SDD profiles), one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. There is no installed plugin. The managed MCP launch command is `vgxness mcp --full`; it exposes the full five memory tools and 13 SDD tools read/write set. Read-only managed profiles receive explicit non-mutating allowlists.
 
-MCP exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
+MCP is local stdio for a trusted OpenCode host. It has no caller identity or session authentication: host tool allowlists, operator permissions, user authorization, and task scope are its authorization boundary. No capability token or additional authentication framework is provided.
+
+| Mode | Discovery | Contract |
+| --- | --- | --- |
+| `vgxness mcp` | `memory_recent`, `memory_search` | Default-deny read-only mode: this server does not register `memory_get` or mutating tools, and rejects calls to their unregistered names. |
+| `vgxness mcp --full` | 18 tools | Five memory tools and 13 SDD tools, including eight mutations: `memory_save`, `memory_forget`, `sdd_create`, `sdd_set_interaction_mode`, `sdd_transition`, `sdd_save_revision`, `sdd_accept_revision`, and `sdd_record_projection`. |
+
+Full MCP exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
 
 - `vgxness_memory_search`
 - `vgxness_memory_recent`
@@ -29,7 +36,7 @@ MCP exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
 - `vgxness_sdd_render_projection`
 - `vgxness_sdd_compare_projection`
 
-The SDD tools store structured changes and immutable accepted revisions or transform supplied bytes. They do not route work, invoke agents, access the filesystem, write OpenSpec files, or advance phases on their own. MCP has no caller identity, so host/operator permissions, user authorization, and task scope own authorization. OpenCode remains the execution authority for all engineering work.
+The SDD tools store structured changes and immutable accepted revisions or transform supplied bytes. They do not route work, invoke agents, access the filesystem, write OpenSpec files, or advance phases on their own. OpenCode remains the execution authority for all engineering work.
 
 ## Install and inspect
 

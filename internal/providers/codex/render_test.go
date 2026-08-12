@@ -123,6 +123,13 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 				t.Errorf("%s exposes protected tool %q", item.Path, tool)
 			}
 		}
+		if strings.Contains(content, `sandbox_mode = "read-only"`) {
+			for _, tool := range protectedTools {
+				if strings.Contains(content, `enabled_tools = [`) && strings.Contains(content, `"`+tool+`"`) {
+					t.Errorf("read-only %s allowlists protected tool %q", item.Path, tool)
+				}
+			}
+		}
 	}
 	for _, path := range []string{"agents/explore.toml", "agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml", "agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml"} {
 		content := string(artifact(t, pkg, path).Bytes)

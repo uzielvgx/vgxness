@@ -1799,6 +1799,55 @@ func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 	}
 }
 
+func TestManagedProfilesExcludeMCPMutations(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	mutations := []string{"vgxness_memory_save", "vgxness_memory_forget", "vgxness_sdd_create", "vgxness_sdd_set_interaction_mode", "vgxness_sdd_transition", "vgxness_sdd_save_revision", "vgxness_sdd_accept_revision", "vgxness_sdd_record_projection"}
+	profiles := []string{exploreAgentName, generalAgentName, verifierAgentName, reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName, sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName, sddApplyName}
+	for _, name := range profiles {
+		permissions := managedPermissions(t, bundle.agents[name])
+		for _, tool := range mutations {
+			if got := effectiveManagedPermission(permissions, tool); got != "deny" {
+				t.Errorf("%s effective permission for %q = %q, want deny", name, tool, got)
+			}
+		}
+	}
+}
+
+func managedPermissions(t *testing.T, prompt []byte) map[string]string {
+	t.Helper()
+	parts := strings.SplitN(string(prompt), "---", 3)
+	if len(parts) != 3 {
+		t.Fatalf("managed frontmatter is malformed: %q", prompt)
+	}
+	permissions := map[string]string{}
+	inPermissions := false
+	for _, line := range strings.Split(parts[1], "\n") {
+		if line == "permission:" {
+			inPermissions = true
+			continue
+		}
+		if !inPermissions || !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		key, value, ok := strings.Cut(strings.TrimSpace(line), ": ")
+		if ok {
+			permissions[strings.Trim(key, `"`)] = value
+		}
+	}
+	return permissions
+}
+
+func effectiveManagedPermission(permissions map[string]string, tool string) string {
+	if value, ok := permissions[tool]; ok {
+		return value
+	}
+	if value, ok := permissions["*"]; ok {
+		return value
+	}
+	return "deny"
+}
+
 func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)

@@ -14,6 +14,8 @@ command = "vgxness"
 args = ["mcp", "--full"]
 ```
 
+This is an explicit full-trust local-stdio launch. MCP has no caller identity or session authentication; the trusted host assumption, Codex `enabled_tools` allowlists, operator permissions, user authorization, and task scope are the authorization boundary. Keep read-only profiles on non-mutating allowlists. Without `--full`, this server registers only `memory_recent` and `memory_search` and rejects calls to other unregistered names; full mode exposes five memory and 13 SDD tools, including the eight mutating tools. VGXNESS does not issue capability tokens or add an authentication framework.
+
 The locally observed Codex 0.147.0 exposes top-level `--strict-config`, but `codex mcp` rejects that option. Validate the loaded configuration noninteractively with:
 
 ```sh

@@ -35,6 +35,8 @@ func TestRunMCPRejectsArgumentsAndReportsStartupFailureToStderr(t *testing.T) {
 	}{
 		{args: []string{"extra"}, code: 2},
 		{args: []string{"--workspace", "/other"}, code: 2},
+		{args: []string{"--full=invalid"}, code: 2},
+		{args: []string{"--full", "extra"}, code: 2},
 		{err: errors.New("unavailable"), code: 1},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -50,9 +52,19 @@ func TestRunMCPRejectsArgumentsAndReportsStartupFailureToStderr(t *testing.T) {
 }
 
 func TestRunMCPFullIsExplicit(t *testing.T) {
-	var got bool
-	code := runMCP(context.Background(), []string{"--full"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, "/workspace", func(_ context.Context, _ string, _ config.Options, full bool) error { got = full; return nil })
-	if code != 0 || !got {
-		t.Fatalf("code=%d full=%v", code, got)
+	for _, tc := range []struct {
+		args []string
+		full bool
+	}{
+		{nil, false},
+		{[]string{"--full"}, true},
+		{[]string{"--full=true"}, true},
+		{[]string{"--full=false"}, false},
+	} {
+		var got bool
+		code := runMCP(context.Background(), tc.args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, "/workspace", func(_ context.Context, _ string, _ config.Options, full bool) error { got = full; return nil })
+		if code != 0 || got != tc.full {
+			t.Fatalf("args=%v code=%d full=%v", tc.args, code, got)
+		}
 	}
 }
