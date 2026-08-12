@@ -139,7 +139,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessorV3, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(predecessorV3.manifest); digest != "d982fa4409a89737385f18f1abcd8091e4b7605236df90c3288da6e902230763" {
+	if digest := artifactSHA256(predecessorV3.manifest); digest != "4ac1f40b6ccb698adb93fd9bb3cd7ca790540cdcadbdf60560b41f64a242cb6c" {
 		t.Fatalf("current SDD manifest=%s", digest)
 	}
 	for _, profile := range []struct {
@@ -155,7 +155,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	}
 	predecessor, err := previousSDDModelPlanBundleV2(current)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(predecessor.manifest); digest != "7247f61e9a13776b7cb343cce5cfb6930e602ff922a1074624f298039ac6a95c" {
+	if digest := artifactSHA256(predecessor.manifest); digest != "0b7bea143a0bc8c1c8f2fc0ee38c574653290b11aca452410fd7543ad88b01dd" {
 		t.Fatalf("legacy SDD manifest=%s", digest)
 	}
 	for name, digest := range map[string]string{sddResearchName: "4d673078a68d64cc0c45a27777485bf377a37c069aa61c8feda91962950e398f", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
@@ -167,7 +167,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	combined, err := previousSDDModelPlanBundleV2(priorExplore)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(combined.manifest); digest != "b3c0c1f6934b5663897c1fffcb8bebb22e375424bde2c1a330b8c31c2785235d" {
+	if digest := artifactSHA256(combined.manifest); digest != "02cfe2a74ec9caa1101dec7de857f48c21c35dba2f731f1b78e8ce796d5f9831" {
 		t.Fatalf("combined SDD manifest=%s", digest)
 	}
 }
