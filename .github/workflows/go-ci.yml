@@ -71,6 +71,53 @@ jobs:
           path: coverage.out
           if-no-files-found: warn
 
+  postgres-integration:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: vgxness_test
+          POSTGRES_PASSWORD: vgxness_test
+          POSTGRES_DB: vgxness_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vgxness_test -d vgxness_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      VGXNESS_TEST_POSTGRES_DSN: postgresql://vgxness_test:vgxness_test@localhost:5432/vgxness_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache: true
+      - name: Prefetch modules
+        run: go mod download
+      - name: Require PostgreSQL DSN
+        run: test -n "${VGXNESS_TEST_POSTGRES_DSN:-}"
+      - name: Run PostgreSQL integration tests
+        run: |
+          set -o pipefail
+          go test -json -count=1 ./internal/syncpg ./cmd/vgxness-syncd | tee postgres-test.json
+          if awk 'index($0, "\"Action\":\"skip\"") { found=1 } END { exit !found }' postgres-test.json; then
+            printf 'PostgreSQL test output contains a skipped test or package\n' >&2
+            exit 1
+          fi
+      - name: Upload PostgreSQL test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: postgres-test-json
+          path: postgres-test.json
+          if-no-files-found: warn
+
   race:
     runs-on: ubuntu-24.04
     steps:
@@ -234,12 +281,13 @@ jobs:
   quality:
     name: quality
     if: ${{ always() }}
-    needs: [coverage, race, static, vulnerability, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]
+    needs: [coverage, postgres-integration, race, static, vulnerability, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every standard lane
         env:
           COVERAGE_RESULT: ${{ needs.coverage.result }}
+          POSTGRES_INTEGRATION_RESULT: ${{ needs.postgres-integration.result }}
           RACE_RESULT: ${{ needs.race.result }}
           STATIC_RESULT: ${{ needs.static.result }}
           VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
@@ -259,6 +307,7 @@ jobs:
             fi
           }
           require_success coverage "$COVERAGE_RESULT"
+          require_success postgres-integration "$POSTGRES_INTEGRATION_RESULT"
           require_success race "$RACE_RESULT"
           require_success static "$STATIC_RESULT"
           require_success vulnerability "$VULNERABILITY_RESULT"
