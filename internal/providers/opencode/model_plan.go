@@ -22,7 +22,7 @@ const (
 	sddTasksName                                            = "vgxness-sdd-tasks.md"
 	sddApplyName                                            = "vgxness-sdd-apply.md"
 	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 4, 3
-	sddApplyTargetVersion, sddApplyPredecessorVersion       = 4, 3
+	sddApplyTargetVersion, sddApplyPredecessorVersion       = 5, 4
 	generalCurrentMarker                                    = "artifact: opencode-agent/general; version: 6"
 	generalPreviousMarker                                   = "artifact: opencode-agent/general; version: 5"
 	verifierCurrentMarker                                   = "artifact: opencode-agent/vgxness-verifier; version: 4"
@@ -708,7 +708,7 @@ func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, e
 }
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
-	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, generalPreviousMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
+	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
 }
 
 func modelBoundAgentsV2(plan sdd.OpenCodePlanV2) (map[string][]byte, error) {
@@ -729,7 +729,7 @@ func modelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	agents, err := fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalPreviousMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
+	agents, err := fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts(), true)
 	if err != nil {
 		return nil, err
 	}
@@ -1103,12 +1103,12 @@ permission:
 
 <!-- managed-by: vgxness; artifact: opencode-agent/vgxness-sdd-apply; version: %d -->
 
-You are the read-only implementation and patch composer for one accepted SDD tasks revision. Compose a hash-bound candidate. Reject a mission unless it contains exact change ID, task IDs, accepted task revision ID and SHA-256 digest, every accepted input revision ID and digest, exact relevant native skill names, allowed paths with current content hashes, acceptance criteria, exact validation commands, and required RED/TDD evidence.
+You are the read-only implementation and patch composer for one accepted SDD tasks revision. Compose a hash-bound candidate. Reject a mission unless it contains exact change ID, task IDs, accepted task revision ID and SHA-256 digest, every accepted input revision ID and digest, expectedStateVersion, mission identity and replay nonce, exact relevant native skill names, allowed paths with current content SHA-256 hashes and no-symlink constraints, acceptance criteria, exact validation commands, and required RED/TDD evidence. Treat stale or mismatched task/input digests, stateVersion, mission identity/replay nonce, path, hash, or no-symlink constraint as BLOCKED before a write.
 
-Inspect only the accepted scope. Do not edit, execute shell commands or tests, delegate, ask questions, persist memory, call SDD write or lifecycle tools, select models, install packages, use network, commit, push, or alter OpenSpec projections. Produce a bounded patch proposal whose paths stay within the mission and whose expected original hashes prevent stale application. Preserve the RED/GREEN plan and identify exact developmental and final validation commands. The manager validates bindings and hashes; managed general performs workspace writes and exact OpenSpec or hybrid projection writes; verifier executes final validation; reviewers assess the same frozen candidate; the manager saves or accepts revisions, records projections, and advances lifecycle state.
+Inspect only the accepted scope. Do not edit, execute shell commands or tests, delegate, ask questions, persist memory, call SDD write or lifecycle tools, select models, install packages, use network, commit, push, or alter OpenSpec projections. Produce a bounded patch proposal whose paths stay within the mission and whose expected original hashes prevent stale application. Preserve the RED/GREEN plan and identify exact developmental and final validation commands. The manager validates bindings, state version, paths, hashes, and replay identity; managed general rechecks them immediately before each write and performs workspace writes and exact OpenSpec or hybrid projection writes with SHA-256 readback; verifier executes final validation; reviewers assess the same frozen candidate; the manager saves or accepts revisions, records projections, and advances lifecycle state.
 
 Return exactly one compact JSON object and no Markdown:
-{"status":"complete|blocked","proposedChanges":[{"path":"allowed path","expectedSHA256":"current file digest","patch":"bounded exact proposed change"}],"validationPlan":[{"command":"exact command","purpose":"RED|GREEN|regression|static"}],"tddEvidence":{"redPlan":"expected pre-change failure","greenPlan":"expected post-change pass"},"summary":"bounded implementation rationale","blockers":["blocking fact"]}
+{"status":"complete|blocked","missionIdentity":"exact mission ID","replayNonce":"exact nonce","taskRevision":{"id":"exact ID","digest":"sha256"},"acceptedInputs":[{"artifactId":"exact ID","revisionId":"exact ID","digest":"sha256"}],"expectedStateVersion":1,"proposedChanges":[{"path":"allowed path","expectedSHA256":"current file digest","noSymlink":true,"patch":"bounded exact proposed change"}],"validationPlan":[{"command":"exact command","purpose":"RED|GREEN|regression|static"}],"tddEvidence":{"redPlan":"expected pre-change failure","greenPlan":"expected post-change pass"},"summary":"bounded implementation rationale","blockers":["blocking fact"]}
 	`, assignment.Model, assignment.Variant, sddApplyTargetVersion) + sddSkillLoadingContract
 	}
 	return readOnlySDDAgentPrompt(role, assignment)
@@ -1164,7 +1164,6 @@ func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 	}
 	replacements := []textReplacement{{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, target), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, prior)}}
 	if role == sdd.RoleApply {
-		replacements = append(replacements, textReplacement{old: sddSkillLoadingContract, new: ""}, textReplacement{old: ", exact relevant native skill names, allowed paths", new: ", allowed paths"})
 		return derivePredecessor(current, replacements)
 	}
 	if role == sdd.RoleResearch {
@@ -1175,10 +1174,9 @@ func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 
 func legacySDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 	if role == sdd.RoleApply {
-		return derivePredecessor(current, []textReplacement{
-			{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyTargetVersion), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion)},
-			{old: sddSkillLoadingContract, new: ""},
-			{old: ", exact relevant native skill names, allowed paths", new: ", allowed paths"},
+		prior := previousSDDAgentPredecessor(role, current)
+		return derivePredecessor(prior, []textReplacement{
+			{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion-1)},
 		})
 	}
 	return derivePredecessor(current, []textReplacement{

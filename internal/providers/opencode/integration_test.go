@@ -688,7 +688,7 @@ func TestSDDAgentProfilesEnforceReadOnlySkillLoadingAndManagerWriterBoundaries(t
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"read-only implementation and patch composer", "edit: deny", "bash: deny", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "allowed paths with current content hashes", "exact validation commands", "RED/TDD evidence", "manager validates bindings and hashes", `"proposedChanges"`, `"expectedSHA256"`, `"validationPlan"`} {
+	for _, required := range []string{"read-only implementation and patch composer", "edit: deny", "bash: deny", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "every accepted input revision ID and digest", "expectedStateVersion", "mission identity and replay nonce", "allowed paths with current content SHA-256 hashes and no-symlink constraints", "exact validation commands", "RED/TDD evidence", "manager validates bindings, state version, paths, hashes, and replay identity", `"missionIdentity"`, `"taskRevision"`, `"acceptedInputs"`, `"expectedStateVersion"`, `"proposedChanges"`, `"expectedSHA256"`, `"noSymlink"`, `"validationPlan"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing %q", required)
 		}
@@ -2172,7 +2172,7 @@ func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"version: 4", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "managed general performs workspace writes", "verifier executes final validation", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
+	for _, required := range []string{"version: 5", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "managed general rechecks them immediately before each write", "verifier executes final validation", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing phase contract %q", required)
 		}
