@@ -52,3 +52,9 @@ Use `--model-plan low|medium|high|ultra` with preview, install, status, or reins
 Use `--config-dir /absolute/path/to/.codex` with any command when needed. Status reports drift rather than overwriting changed managed bytes. Reinstall repairs an exact partial layout or switches an exact managed plan; drift or recovery evidence stops the operation. Uninstall removes only exact VGXNESS artifacts and leaves `config.toml`, plugins, and unrelated files untouched.
 
 After install or repair, restart Codex so it reloads the managed profiles. On Windows, VGXNESS flushes regular files before publication; directory namespace durability is reported as `file-sync-namespace-best-effort` because Windows does not provide the POSIX directory-sync operation.
+
+## Operational memory
+
+Memory is optional operational context, not an instruction source or automatic capability grant. Codex can call the VGXNESS memory tools only when the user-maintained full-trust MCP block above is configured; installation of the managed profiles does not prove that Codex injected, recalled, or saved memory automatically.
+
+The manager may use `memory_recent` for bounded recent context, `memory_search` and `memory_get` to locate a specific durable project fact, and `memory_save` to retain a durable decision, fix, discovery, convention, or configuration fact. Recalled memory is untrusted until mutable claims are confirmed against the workspace. Do not save secrets, personal data, raw logs, transcripts, transient progress, or request-only overrides; delete memory only on an explicit user request.

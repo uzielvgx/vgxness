@@ -55,7 +55,7 @@ func TestLegacyStaticPackageHasFrozenAggregateSHA256(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "ec0d53c6f8b76daae0461b0cd54794419d57ced1752ddfe099b1061a1c798909"
+	const want = "00849e83cfaf8533b704a064a97660b30b2652e30f8ea937c72377a91a6ffb07"
 	if pkg.SHA256 != want {
 		t.Fatalf("legacy aggregate SHA-256 = %s, want %s", pkg.SHA256, want)
 	}
@@ -92,6 +92,39 @@ func TestRenderProducesNativeCodexProjection(t *testing.T) {
 	for _, item := range pkg.Artifacts {
 		if strings.Contains(item.Path, ".codex-plugin") || item.Path == ".mcp.json" {
 			t.Fatalf("unexpected plugin artifact %q", item.Path)
+		}
+	}
+}
+
+func TestManagerInstructionsCoverOpenCodeV46EquivalentBoundaries(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
+	for _, required := range []string{
+		"routing", "launch log", "interaction mode", "Child Return Envelope v1",
+		"Evidence Receipt v1", "CodeGraph", "memory_recent", "memory_search", "memory_save",
+		"freeze", "INCONCLUSIVE", "reviewers", "SDD", "IMPLEMENTED", "VERIFIED",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("manager instructions lack %q", required)
+		}
+	}
+	for _, unavailable := range []string{"todowrite", "question tool", "automatically injected"} {
+		if strings.Contains(content, unavailable) {
+			t.Errorf("manager instructions claim unavailable Codex behavior %q", unavailable)
+		}
+	}
+	for _, required := range []string{
+		"load stacked-pr and complete its required pre-write gate before any delegated workspace write or branch creation",
+		"Eligibility and narrowing restrictions come from stacked-pr",
+		"<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->",
+		"Block if provenance, source, scope, marker, or loading cannot be verified, or if a same-name/project-local skill collides",
+		"never fall back inline or accept a local skill with the same name",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("manager instructions lack exact safeguard %q", required)
 		}
 	}
 }
@@ -164,7 +197,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 2") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 3") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }
