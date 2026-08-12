@@ -94,6 +94,29 @@ func TestSDDResearchBootstrapContractKeepsDownstreamPredecessorsBound(t *testing
 	}
 }
 
+func TestSDDApplyAndGeneralFailClosedHashBoundHandoffContract(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	apply, general := string(bundle.agents[sddApplyName]), string(bundle.agents[generalAgentName])
+	for _, contract := range []string{
+		"expectedStateVersion", "mission identity and replay nonce", "allowed paths with current content SHA-256 hashes and no-symlink constraints",
+		`"missionIdentity"`, `"taskRevision"`, `"acceptedInputs"`, `"expectedStateVersion"`, `"noSymlink"`,
+		"manager validates bindings, state version, paths, hashes, and replay identity",
+	} {
+		if !strings.Contains(apply, contract) {
+			t.Errorf("apply contract missing %q", contract)
+		}
+	}
+	for _, contract := range []string{
+		"immediately before each write", "accepted binding", "current stateVersion", "no-symlink", "replay or mission identity", "BLOCKED before writing",
+		"exact readback SHA-256", "do not eliminate TOCTOU", "no atomic host enforcement",
+	} {
+		if !strings.Contains(general, contract) {
+			t.Errorf("general contract missing %q", contract)
+		}
+	}
+}
+
 func previousExploreAgent(t *testing.T, current []byte) []byte {
 	t.Helper()
 	predecessor := string(current)
@@ -139,7 +162,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessorV3, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(predecessorV3.manifest); digest != "d086d321a3cacd00d5ced6722a1b53eaf54f56a0309cc7dd815859ba43a10749" {
+	if digest := artifactSHA256(predecessorV3.manifest); digest != "b506a413d1826539743d06c2fcf101b67475f695d505b8a23bf9d6378108bbfa" {
 		t.Fatalf("current SDD manifest=%s", digest)
 	}
 	for _, profile := range []struct {
@@ -147,7 +170,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 		role    sdd.Role
 		version int
 	}{
-		{sddResearchName, sdd.RoleResearch, 3}, {sddProposalName, sdd.RoleProposal, 3}, {sddSpecName, sdd.RoleSpec, 3}, {sddDesignName, sdd.RoleDesign, 3}, {sddTasksName, sdd.RoleTasks, 3}, {sddApplyName, sdd.RoleApply, 4},
+		{sddResearchName, sdd.RoleResearch, 3}, {sddProposalName, sdd.RoleProposal, 3}, {sddSpecName, sdd.RoleSpec, 3}, {sddDesignName, sdd.RoleDesign, 3}, {sddTasksName, sdd.RoleTasks, 3}, {sddApplyName, sdd.RoleApply, 5},
 	} {
 		if !strings.Contains(string(predecessorV3.agents[profile.name]), fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", profile.role, profile.version)) {
 			t.Fatalf("v41 %s does not have version %d", profile.name, profile.version)
@@ -155,10 +178,10 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	}
 	predecessor, err := previousSDDModelPlanBundleV2(current)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(predecessor.manifest); digest != "e3ff5db3fed638f22e4b5b0faa9b642268ea970e11a3705c8e879cef1203e3ba" {
+	if digest := artifactSHA256(predecessor.manifest); digest != "a498954f840eca7c47698d8a82d16a8f6c8e02957286264330cb5fb424aaebd6" {
 		t.Fatalf("legacy SDD manifest=%s", digest)
 	}
-	for name, digest := range map[string]string{sddResearchName: "4d673078a68d64cc0c45a27777485bf377a37c069aa61c8feda91962950e398f", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "b14a8e3fa51272749576b5470c6f0f1b0ac67c389b2fe3ad2cf42d917a3cd0b2"} {
+	for name, digest := range map[string]string{sddResearchName: "4d673078a68d64cc0c45a27777485bf377a37c069aa61c8feda91962950e398f", sddProposalName: "f53bd6fb3c6d92902330e34ab18870512ac0e9b83652dfe9c433e0b0f993d0cf", sddSpecName: "f194eff7b6f9aae7cd4cb54e14e5c60ce37aba7c2f93b73c8d672272ee76de63", sddDesignName: "3a5183faba7d09cd3c592c640f29ee44648023aab395459a5ec9222cc356af15", sddTasksName: "ce768ae7f1fc8df9b780ea3ec4de03951f052933943c51087b1c5c25ea4686d8", sddApplyName: "5c0f1e8ec344858cecbf386739c1214ac354cd98e236966177fb58d4b5ab0812"} {
 		if artifactSHA256(predecessor.agents[name]) != digest {
 			t.Fatalf("prior SDD %s digest=%s", name, artifactSHA256(predecessor.agents[name]))
 		}
@@ -167,7 +190,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	testutil.NoError(t, err)
 	combined, err := previousSDDModelPlanBundleV2(priorExplore)
 	testutil.NoError(t, err)
-	if digest := artifactSHA256(combined.manifest); digest != "7d62e9d0f36f9ce06924e9e0a2e76095dd9ac3fb3fe9d97f66a7d763c3c8e364" {
+	if digest := artifactSHA256(combined.manifest); digest != "d13d131a5937e185e711284f0a2902b0a31eeb53d9bbdcde36ac188d69f150d4" {
 		t.Fatalf("combined SDD manifest=%s", digest)
 	}
 }

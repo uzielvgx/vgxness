@@ -688,7 +688,7 @@ func TestSDDAgentProfilesEnforceReadOnlySkillLoadingAndManagerWriterBoundaries(t
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"read-only implementation and patch composer", "edit: deny", "bash: deny", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "allowed paths with current content hashes", "exact validation commands", "RED/TDD evidence", "manager validates bindings and hashes", `"proposedChanges"`, `"expectedSHA256"`, `"validationPlan"`} {
+	for _, required := range []string{"read-only implementation and patch composer", "edit: deny", "bash: deny", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "every accepted input revision ID and digest", "expectedStateVersion", "mission identity and replay nonce", "allowed paths with current content SHA-256 hashes and no-symlink constraints", "exact validation commands", "RED/TDD evidence", "manager validates bindings, state version, paths, hashes, and replay identity", `"missionIdentity"`, `"taskRevision"`, `"acceptedInputs"`, `"expectedStateVersion"`, `"proposedChanges"`, `"expectedSHA256"`, `"noSymlink"`, `"validationPlan"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing %q", required)
 		}
@@ -1690,7 +1690,7 @@ func TestCurrentReviewerAndRefuterUseChildReturnEnvelopeV1(t *testing.T) {
 	testutil.NoError(t, err)
 	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
 		prompt := string(bundle.agents[name])
-		for _, field := range []string{`"schemaVersion"`, `"candidate":{"digest"`, `"changedPaths"`, `"summary"`, `"evidence":[{"kind"`, `"locator"`, `"candidateDigest"`, `"observedResult"`, `"availability"`, `"unknowns"`, `"assumptions"`, `"blockers"`} {
+		for _, field := range []string{`"schemaVersion"`, `"candidate":{"digest"`, `"changedPaths"`, `"summary"`, `"evidence":[{"evidenceId"`, `"kind"`, `"locator"`, `"candidateDigest"`, `"observedResult"`, `"availability"`, `"unknowns"`, `"assumptions"`, `"blockers"`} {
 			if !strings.Contains(prompt, field) {
 				t.Errorf("%s missing envelope field %s", name, field)
 			}
@@ -1698,6 +1698,42 @@ func TestCurrentReviewerAndRefuterUseChildReturnEnvelopeV1(t *testing.T) {
 	}
 	if strings.Contains(reviewRefuterPrompt, `{"candidateIdentity":"<sha256>","results"`) {
 		t.Error("refuter retains legacy-only return example")
+	}
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName} {
+		prompt := string(bundle.agents[name])
+		for _, required := range []string{
+			"Review Binding",
+			"candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+			"Echo the complete Review Binding unchanged",
+			"missing, mismatched, or stale Review Binding is INCONCLUSIVE",
+			"correctionDelta only in scoped-validation mode with a frozenLedger",
+			"same exact Candidate Capsule identity and scope",
+			"stable evidenceId",
+			"non-empty and unique within the envelope",
+			"candidateDigest equals candidate.digest",
+			"proofRefs must resolve to exactly one same-envelope Evidence Receipt",
+		} {
+			if !strings.Contains(prompt, required) {
+				t.Errorf("%s missing review evidence contract %q", name, required)
+			}
+		}
+	}
+	for _, required := range []string{
+		"Review Binding",
+		"candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+		"Echo the complete Review Binding unchanged",
+		"missing, mismatched, or stale Review Binding is INCONCLUSIVE",
+		"only supplied severe inferential finding IDs",
+		"same Candidate Capsule identity and scope",
+		"supplied finding IDs",
+		"stable evidenceId",
+		"non-empty and unique within the envelope",
+		"candidateDigest equals candidate.digest",
+		"proofRefs must resolve to exactly one same-envelope Evidence Receipt",
+	} {
+		if !strings.Contains(reviewRefuterPrompt, required) {
+			t.Errorf("refuter missing evidence contract %q", required)
+		}
 	}
 }
 
@@ -1752,10 +1788,13 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"Never launch the same task twice",
 		"unavailable, missing, or stale",
 		"the delegated worker continues with native reads and search without blocking",
-		"automatically injected recent-memory reference block",
-		"only when that bounded context block is absent or unavailable",
+		"Do not claim recent memory is injected automatically.",
+		"call vgxness_memory_recent when bounded recent context is absent or material to the task",
 		"Zero lenses", "One dominant lens", "Four lenses",
 		"severe inferential findings", "one batch", "one correction transaction and one scoped validation",
+		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+		"Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation",
+		"A correction changes the candidate digest and invalidates all prior validation and review evidence",
 		"installation, permissions, durability, or shared contracts",
 		"repository-confined `go fmt ./...` command and focused tests before freeze",
 		"verifier to run go test ./... and go vet ./...",
@@ -1773,6 +1812,18 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Errorf("manager prompt retains deprecated mechanic %q", forbidden)
+		}
+	}
+	verifier := string(bundle.agents[verifierAgentName])
+	for _, required := range []string{
+		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+		"Echo the complete Review Binding unchanged",
+		"A missing, mismatched, or stale Review Binding is INCONCLUSIVE.",
+		"If either digest differs, stop and return INCONCLUSIVE.",
+		"reviewBinding, candidate",
+	} {
+		if !strings.Contains(verifier, required) {
+			t.Errorf("verifier prompt is missing Review Binding contract %q", required)
 		}
 	}
 }
@@ -2121,7 +2172,7 @@ func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"version: 4", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "managed general performs workspace writes", "verifier executes final validation", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
+	for _, required := range []string{"version: 5", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "managed general rechecks them immediately before each write", "verifier executes final validation", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing phase contract %q", required)
 		}
