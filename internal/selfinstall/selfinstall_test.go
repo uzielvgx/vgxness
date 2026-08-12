@@ -1,6 +1,7 @@
 package selfinstall
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -247,6 +248,164 @@ func TestInstallReportsRecoveryPendingAfterManifestPublicationSyncFailure(t *tes
 	recovered, err := service.Install(context.Background(), options)
 	if err != nil || recovered.State != StateInstalled || recovered.Changed {
 		t.Fatalf("retry result=%#v err=%v", recovered, err)
+	}
+}
+
+func TestInstallCancellationAfterManifestPublicationRequiresRecoveryAndRetry(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service := New(Config{
+		SourceExecutable: writeSource(t, root, "source", "vgxness"),
+		afterManifestPublish: func() error {
+			cancel()
+			return nil
+		},
+	})
+	result, err := service.Install(ctx, options)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrRecovery) || result.State != StateRecoveryPending || !result.Changed {
+		t.Fatalf("Install() result=%#v err=%v", result, err)
+	}
+	service.afterManifestPublish = nil
+	retried, err := service.Install(context.Background(), options)
+	if err != nil || retried.State != StateInstalled || retried.Changed {
+		t.Fatalf("retry result=%#v err=%v", retried, err)
+	}
+}
+
+func TestRollbackRefusesTamperedPreviousVersionWithoutChangingActiveManifest(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	first := New(Config{SourceExecutable: writeSource(t, root, "source-v1", "vgxness-v1")})
+	v1, err := first.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := New(Config{SourceExecutable: writeSource(t, root, "source-v2", "vgxness-v2")})
+	v2, err := second.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousPath := launcher.VersionPath(options.DataDir, v1.ActiveSHA256)
+	if err := os.Chmod(previousPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(previousPath, []byte("tampered"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	manifestBefore, err := os.ReadFile(v2.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Rollback(context.Background(), options); !errors.Is(err, ErrDrift) {
+		t.Fatalf("Rollback() error=%v, want ErrDrift", err)
+	}
+	manifestAfter, err := os.ReadFile(v2.ManifestPath)
+	if err != nil || !bytes.Equal(manifestAfter, manifestBefore) {
+		t.Fatalf("active manifest changed=%q err=%v", manifestAfter, err)
+	}
+	if digest, err := launcher.FileSHA256(launcher.VersionPath(options.DataDir, v2.ActiveSHA256)); err != nil || digest != v2.ActiveSHA256 {
+		t.Fatalf("active version digest=%q err=%v", digest, err)
+	}
+	if data, err := os.ReadFile(previousPath); err != nil || string(data) != "tampered" {
+		t.Fatalf("previous version restored=%q err=%v", data, err)
+	}
+}
+
+func TestConcurrentInstallsSerializeWithoutCorruption(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	entered, release := make(chan struct{}), make(chan struct{})
+	firstService := New(Config{
+		SourceExecutable: writeSource(t, root, "source", "vgxness"),
+		afterManifestPublish: func() error {
+			close(entered)
+			<-release
+			return nil
+		},
+	})
+	secondAnchored := make(chan struct{})
+	secondService := New(Config{
+		SourceExecutable: firstService.source,
+		afterAnchorsOpen: func() error {
+			close(secondAnchored)
+			return nil
+		},
+	})
+	firstDone := make(chan struct {
+		result Result
+		err    error
+	}, 1)
+	go func() {
+		result, err := firstService.Install(context.Background(), options)
+		firstDone <- struct {
+			result Result
+			err    error
+		}{result, err}
+	}()
+	<-entered
+	secondDone := make(chan struct {
+		result Result
+		err    error
+	}, 1)
+	go func() {
+		result, err := secondService.Install(context.Background(), options)
+		secondDone <- struct {
+			result Result
+			err    error
+		}{result, err}
+	}()
+	<-secondAnchored
+	close(release)
+	first, second := <-firstDone, <-secondDone
+	if first.err != nil || second.err != nil || first.result.State != StateInstalled || second.result.State != StateInstalled || second.result.Changed {
+		t.Fatalf("first=%#v/%v second=%#v/%v", first.result, first.err, second.result, second.err)
+	}
+	status, err := firstService.Status(context.Background(), options)
+	if err != nil || status.State != StateInstalled || status.ActiveSHA256 != status.SourceSHA256 {
+		t.Fatalf("status=%#v err=%v", status, err)
+	}
+	versions, err := os.ReadDir(filepath.Join(options.DataDir, "versions"))
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("versions=%v err=%v", versions, err)
+	}
+}
+
+func TestWaitingInstallCancellationDoesNotMutateLockedTransaction(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	entered, release := make(chan struct{}), make(chan struct{})
+	service := New(Config{SourceExecutable: writeSource(t, root, "source", "vgxness"), afterManifestPublish: func() error {
+		close(entered)
+		<-release
+		return nil
+	}})
+	firstDone := make(chan error, 1)
+	go func() { _, err := service.Install(context.Background(), options); firstDone <- err }()
+	<-entered
+	manifestPath := filepath.Join(options.BinDir, executableName()+".launcher.json")
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() { _, err := service.Install(ctx, options); secondDone <- err }()
+	cancel()
+	if err := <-secondDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("waiting Install() error=%v", err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("waiting install mutated manifest=%q err=%v", after, err)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if status, err := service.Status(context.Background(), options); err != nil || status.State != StateInstalled {
+		t.Fatalf("status=%#v err=%v", status, err)
 	}
 }
 
