@@ -357,6 +357,16 @@ func NewManagedIntegration(executable string) (*Integration, error) {
 	return &Integration{now: time.Now, executable: managed}, nil
 }
 
+// NewPreviewIntegration binds a prospective managed launcher without claiming
+// filesystem ownership. It is safe to use before shared launcher publication.
+func NewPreviewIntegration(executable string) (*Integration, error) {
+	executable = strings.TrimSpace(executable)
+	if executable == "" || !filepath.IsAbs(executable) || executable != filepath.Clean(executable) {
+		return nil, fmt.Errorf("%w: preview VGXNESS launcher", integration.ErrInvalid)
+	}
+	return &Integration{now: time.Now, executable: executable}, nil
+}
+
 func validateManagedLauncher(candidate string) (string, error) {
 	candidate = strings.TrimSpace(candidate)
 	if candidate == "" || !filepath.IsAbs(candidate) {

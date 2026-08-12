@@ -23,9 +23,10 @@ type fakeMultiProvider struct {
 }
 
 type fakeShared struct {
-	plan     SharedPlan
-	applyErr error
-	calls    *[]string
+	plan        SharedPlan
+	applyErr    error
+	finalizeErr error
+	calls       *[]string
 }
 
 type fakeIntegrationRuntime struct {
@@ -71,6 +72,10 @@ func (f fakeShared) Apply(context.Context, SharedPlan) (SharedResult, error) {
 	*f.calls = append(*f.calls, "shared:apply")
 	return SharedResult{Verified: f.applyErr == nil}, f.applyErr
 }
+func (f fakeShared) Finalize(context.Context, SharedPlan, SharedResult) (SharedResult, error) {
+	*f.calls = append(*f.calls, "shared:finalize")
+	return SharedResult{Verified: f.finalizeErr == nil}, f.finalizeErr
+}
 
 func (f fakeMultiProvider) Provider() Provider { return f.name }
 func (f fakeMultiProvider) Plan(context.Context, SharedPlan) (ProviderPlan, error) {
@@ -111,6 +116,63 @@ func TestMultiApplyOrdersProvidersAndSharesWorkOnce(t *testing.T) {
 	}
 	if len(result.Providers) != 2 || !result.Providers[0].Verified || !result.Providers[1].Verified {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestMultiFinalizesSharedWorkOnlyAfterAllProvidersVerify(t *testing.T) {
+	calls := []string{}
+	multi := NewMultiWithShared(fakeShared{plan: SharedPlan{Ready: true}, calls: &calls}, fakeMultiProvider{name: ProviderOpenCode, plan: ProviderPlan{Ready: true}, calls: &calls}, fakeMultiProvider{name: ProviderCodex, plan: ProviderPlan{Ready: true}, calls: &calls})
+	plan, err := multi.Plan(context.Background(), MultiOptions{Providers: []Provider{ProviderOpenCode, ProviderCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	if _, err := multi.Apply(context.Background(), MultiOptions{Providers: []Provider{ProviderOpenCode, ProviderCodex}, ExpectedPlanDigest: plan.Digest}); err != nil || strings.Count(strings.Join(calls, ","), "shared:finalize") != 1 || !strings.HasSuffix(strings.Join(calls, ","), "shared:finalize") {
+		t.Fatalf("err=%v calls=%v", err, calls)
+	}
+}
+
+func TestMultiDoesNotFinalizeSharedWorkAfterProviderFailureOrCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		provider fakeMultiProvider
+		cancel   bool
+	}{
+		{name: "failure", provider: fakeMultiProvider{name: ProviderOpenCode, plan: ProviderPlan{Ready: true}, applyErr: errors.New("provider failed")}},
+		{name: "cancellation", provider: fakeMultiProvider{name: ProviderOpenCode, plan: ProviderPlan{Ready: true}}, cancel: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := []string{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			test.provider.calls = &calls
+			if test.cancel {
+				test.provider.cancelOnApply = cancel
+			}
+			multi := NewMultiWithShared(fakeShared{plan: SharedPlan{Ready: true}, calls: &calls}, test.provider, fakeMultiProvider{name: ProviderCodex, plan: ProviderPlan{Ready: true}, calls: &calls})
+			plan, err := multi.Plan(ctx, MultiOptions{Providers: []Provider{ProviderOpenCode, ProviderCodex}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = multi.Apply(ctx, MultiOptions{Providers: []Provider{ProviderOpenCode, ProviderCodex}, ExpectedPlanDigest: plan.Digest})
+			if err == nil || strings.Contains(strings.Join(calls, ","), "shared:finalize") {
+				t.Fatalf("err=%v calls=%v", err, calls)
+			}
+		})
+	}
+}
+
+func TestMultiFinalizeFailurePreservesVerifiedProviderOutcomes(t *testing.T) {
+	calls := []string{}
+	failure := errors.New("skills failed")
+	multi := NewMultiWithShared(fakeShared{plan: SharedPlan{Ready: true}, finalizeErr: failure, calls: &calls}, fakeMultiProvider{name: ProviderOpenCode, plan: ProviderPlan{Ready: true}, calls: &calls})
+	plan, err := multi.Plan(context.Background(), MultiOptions{Providers: []Provider{ProviderOpenCode}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := multi.Apply(context.Background(), MultiOptions{Providers: []Provider{ProviderOpenCode}, ExpectedPlanDigest: plan.Digest})
+	if !errors.Is(err, failure) || len(result.Providers) != 1 || !result.Providers[0].Verified || strings.Count(strings.Join(calls, ","), "shared:finalize") != 1 {
+		t.Fatalf("result=%+v err=%v calls=%v", result, err, calls)
 	}
 }
 

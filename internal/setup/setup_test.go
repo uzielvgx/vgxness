@@ -74,11 +74,21 @@ func (fake *fakeIntegration) Uninstall(context.Context, integration.Options) (in
 	fake.calls = append(fake.calls, "integration-uninstall")
 	return integration.Result{}, nil
 }
+func (fake *fakeIntegration) ManagedLayout(context.Context, integration.Options) (integration.ManagedLayout, error) {
+	return integration.ManagedLayout{}, nil
+}
+func (fake *fakeIntegration) ReinstallPending(context.Context, integration.Options) (bool, error) {
+	return false, nil
+}
+func (fake *fakeIntegration) Reinstall(context.Context, integration.Options) (integration.Result, error) {
+	return integration.Result{}, nil
+}
 
 type fakeProber struct {
-	result integration.Handshake
-	err    error
-	calls  int
+	result  integration.Handshake
+	results []integration.Handshake
+	err     error
+	calls   int
 }
 
 type fakeSkills struct {
@@ -108,6 +118,11 @@ func (fake *fakeSkills) Uninstall(context.Context, skills.Options) (skills.Resul
 }
 
 func (fake *fakeProber) Probe(context.Context, string) (integration.Handshake, error) {
+	if len(fake.results) > fake.calls {
+		result := fake.results[fake.calls]
+		fake.calls++
+		return result, fake.err
+	}
 	fake.calls++
 	return fake.result, fake.err
 }
@@ -120,6 +135,103 @@ func applyConfirmed(t *testing.T, service *Service, options Options) (Result, er
 	}
 	options.ExpectedPlanDigest = plan.Digest
 	return service.Apply(context.Background(), options)
+}
+
+func TestSharedBoundaryPlansAndAppliesLauncherAndSkills(t *testing.T) {
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateAbsent},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, ActiveSHA256: strings.Repeat("a", 64)},
+		statusResult:  selfinstall.Result{State: selfinstall.StateInstalled, ActiveSHA256: strings.Repeat("a", 64)},
+	}
+	sharedSkills := &fakeSkills{
+		preview: skills.Result{State: skills.StateAbsent},
+		install: skills.Result{State: skills.StateInstalled, Changed: true},
+		status:  skills.Result{State: skills.StateInstalled},
+	}
+	service := New(installer, nil, nil, nil)
+	service.skills = sharedSkills
+	boundary := service.Shared(Options{Workspace: "/workspace"})
+	plan, err := boundary.Plan(context.Background())
+	if err != nil || !plan.Ready {
+		t.Fatalf("plan=%#v err=%v", plan, err)
+	}
+	result, err := boundary.Apply(context.Background(), plan)
+	if err != nil || !result.Verified || result.Changed {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if got := strings.Join(sharedSkills.calls, ","); got != "skills-preview" {
+		t.Fatalf("skills published before providers: %s", got)
+	}
+	result, err = boundary.Finalize(context.Background(), plan, result)
+	if err != nil || !result.Verified || !result.Changed {
+		t.Fatalf("finalize result=%#v err=%v", result, err)
+	}
+	if got := strings.Join(installer.calls, ","); got != "self-preview,self-install,self-status" {
+		t.Fatalf("launcher calls=%s", got)
+	}
+	if got := strings.Join(sharedSkills.calls, ","); got != "skills-preview,skills-install,skills-status" {
+		t.Fatalf("skills calls=%s", got)
+	}
+}
+
+func TestOpenCodeProviderStopsBeforeInstallWhenPreWriteHandshakeFlips(t *testing.T) {
+	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "frozen", ArtifactCount: 18}}
+	managed := &fakeIntegration{}
+	health := &fakeProber{results: []integration.Handshake{{OK: true, Status: integration.HandshakeHealthy}, {Status: integration.HandshakeUnavailable}}}
+	service := New(&fakeInstaller{}, nil, nil, health)
+	service.managedIntegrations = func(string) (integration.ManagedRuntime, error) { return managed, nil }
+	provider := service.OpenCodeProvider(Options{Workspace: "/workspace"}, func(string) (integration.Runtime, error) { return preview, nil })
+	plan, err := provider.Plan(context.Background(), SharedPlan{Ready: true, Launcher: selfinstall.Result{LauncherPath: "/planned/vgxness"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Apply(context.Background(), plan, SharedResult{Verified: true, Launcher: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/verified/vgxness"}}); !errors.Is(err, ErrVerification) || strings.Contains(strings.Join(managed.calls, ","), "integration-install") {
+		t.Fatalf("err=%v managed=%v", err, managed.calls)
+	}
+}
+
+func TestOpenCodeProviderUsesVerifiedLauncherAndHandshakeGates(t *testing.T) {
+	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "frozen", ArtifactCount: 18}}
+	managed := &fakeIntegration{
+		installResult: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "frozen", ArtifactCount: 18},
+		statusResult:  integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "frozen", ArtifactCount: 18},
+	}
+	health := &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}}
+	service := New(&fakeInstaller{}, nil, nil, health)
+	managedPath := ""
+	service.managedIntegrations = func(path string) (integration.ManagedRuntime, error) {
+		managedPath = path
+		return managed, nil
+	}
+	previewPaths := []string{}
+	provider := service.OpenCodeProvider(Options{Workspace: "/workspace"}, func(path string) (integration.Runtime, error) {
+		previewPaths = append(previewPaths, path)
+		return preview, nil
+	})
+	plan, err := provider.Plan(context.Background(), SharedPlan{Ready: true, Launcher: selfinstall.Result{LauncherPath: "/planned/vgxness"}})
+	if err != nil || !plan.Ready || health.calls != 1 || strings.Join(previewPaths, ",") != "/planned/vgxness" {
+		t.Fatalf("plan=%+v err=%v probes=%d previews=%v", plan, err, health.calls, previewPaths)
+	}
+	result, err := provider.Apply(context.Background(), plan, SharedResult{Verified: true, Launcher: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/verified/vgxness"}})
+	if err != nil || !result.Verified || managedPath != "/verified/vgxness" || strings.Join(previewPaths, ",") != "/planned/vgxness,/verified/vgxness" || health.calls != 3 {
+		t.Fatalf("result=%+v err=%v managed=%q previews=%v probes=%d", result, err, managedPath, previewPaths, health.calls)
+	}
+}
+
+func TestOpenCodeProviderRejectsChangedPreviewBeforeProviderWrite(t *testing.T) {
+	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "frozen", ArtifactCount: 18}}
+	managed := &fakeIntegration{}
+	service := New(&fakeInstaller{}, nil, nil, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	service.managedIntegrations = func(string) (integration.ManagedRuntime, error) { return managed, nil }
+	provider := service.OpenCodeProvider(Options{Workspace: "/workspace"}, func(string) (integration.Runtime, error) { return preview, nil })
+	plan, err := provider.Plan(context.Background(), SharedPlan{Ready: true, Launcher: selfinstall.Result{LauncherPath: "/planned/vgxness"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview.previewResult.ArtifactSHA256 = "changed"
+	if _, err := provider.Apply(context.Background(), plan, SharedResult{Verified: true, Launcher: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/verified/vgxness"}}); !errors.Is(err, ErrVerification) || strings.Contains(strings.Join(managed.calls, ","), "integration-install") {
+		t.Fatalf("err=%v managed=%v", err, managed.calls)
+	}
 }
 
 func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
