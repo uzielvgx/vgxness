@@ -42,22 +42,37 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		}
 	})
 	t.Run("standard lanes are independent and aggregated", func(t *testing.T) {
-		lanes := []string{"coverage", "race", "static", "vulnerability", "linux-e2e", "fuzz-openspec", "fuzz-launcher-manifest", "windows-compile", "windows-install", "darwin-smoke"}
+		lanes := []string{"coverage", "postgres-integration", "race", "static", "vulnerability", "linux-e2e", "fuzz-openspec", "fuzz-launcher-manifest", "windows-compile", "windows-install", "darwin-smoke"}
 		for _, lane := range lanes {
 			if !strings.Contains(workflow, "  "+lane+":\n") {
 				t.Errorf("workflow missing standard lane %q", lane)
 			}
 		}
-		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, race, static, vulnerability, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]") {
+		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, postgres-integration, race, static, vulnerability, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]") {
 			t.Error("only the standard aggregate gate may depend on validation lanes")
 		}
 		if !strings.Contains(workflow, "  quality:\n    name: quality\n    if: ${{ always() }}") {
 			t.Error("workflow must preserve the always-running quality check required by branch protection")
 		}
-		for _, result := range []string{"needs.coverage.result", "needs.race.result", "needs.static.result", "needs.vulnerability.result", "needs.linux-e2e.result", "needs.fuzz-openspec.result", "needs.fuzz-launcher-manifest.result", "needs.windows-compile.result", "needs.windows-install.result", "needs.darwin-smoke.result"} {
+		for _, result := range []string{"needs.coverage.result", "needs.postgres-integration.result", "needs.race.result", "needs.static.result", "needs.vulnerability.result", "needs.linux-e2e.result", "needs.fuzz-openspec.result", "needs.fuzz-launcher-manifest.result", "needs.windows-compile.result", "needs.windows-install.result", "needs.darwin-smoke.result"} {
 			if !strings.Contains(workflow, result) {
 				t.Errorf("aggregate gate does not require %q", result)
 			}
+		}
+	})
+	t.Run("PostgreSQL evidence is durable", func(t *testing.T) {
+		start := strings.Index(workflow, "  postgres-integration:\n")
+		end := strings.Index(workflow, "  race:\n")
+		if start < 0 || end <= start {
+			t.Fatal("workflow must define the PostgreSQL integration lane before race")
+		}
+		lane := workflow[start:end]
+		if !strings.Contains(lane, "image: postgres:17") {
+			t.Error("PostgreSQL integration lane must pin the service image to postgres:17")
+		}
+		upload := strings.Index(lane, "- name: Upload PostgreSQL test evidence")
+		if upload < 0 || !strings.Contains(lane[upload:], "if: always()") || !strings.Contains(lane[upload:], "path: postgres-test.json") {
+			t.Error("PostgreSQL test evidence upload must always publish postgres-test.json")
 		}
 	})
 	t.Run("vulnerability scanning is pinned and isolated", func(t *testing.T) {
@@ -115,6 +130,8 @@ func TestGoCIWorkflowContract(t *testing.T) {
 	t.Run("all standard evidence is declared", func(t *testing.T) {
 		for _, command := range []string{
 			"go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...", "go test -count=1 -race ./...",
+			"test -n \"${VGXNESS_TEST_POSTGRES_DSN:-}\"", "go test -json -count=1 ./internal/syncpg ./cmd/vgxness-syncd",
+			"postgres-test.json", "\\\"Action\\\":\\\"skip\\\"", "PostgreSQL test output contains a skipped test or package",
 			"go tool cover -func=coverage.out", "required=74.5", "Coverage floor failed:",
 			"go vet ./...", "gofmt -l .", "go mod tidy -diff", "git diff --check",
 			"go mod verify", "go build -trimpath ./...",
@@ -137,8 +154,8 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		if strings.Contains(workflow, "go mod tidy\n") || strings.Contains(workflow, "go test -c -o") || strings.Contains(workflow, "while IFS=") {
 			t.Error("workflow contains a mutating tidy or serial Windows test compilation")
 		}
-		if strings.Count(workflow, "run: go mod download") != 7 {
-			t.Error("the seven cold-runner test and smoke jobs must prefetch modules")
+		if strings.Count(workflow, "run: go mod download") != 8 {
+			t.Error("the eight cold-runner test and smoke jobs must prefetch modules")
 		}
 	})
 	t.Run("coverage upload survives failure", func(t *testing.T) {
