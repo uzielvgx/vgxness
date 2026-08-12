@@ -36,6 +36,59 @@ type recordingTUISetupRuntime struct {
 	result       setupflow.Result
 }
 
+type recordingShared struct{ applies int }
+
+func (shared *recordingShared) Plan(context.Context) (setupflow.SharedPlan, error) {
+	return setupflow.SharedPlan{Ready: true}, nil
+}
+func (shared *recordingShared) Apply(context.Context, setupflow.SharedPlan) (setupflow.SharedResult, error) {
+	shared.applies++
+	return setupflow.SharedResult{Verified: true}, nil
+}
+func (shared *recordingShared) Finalize(context.Context, setupflow.SharedPlan, setupflow.SharedResult) (setupflow.SharedResult, error) {
+	shared.applies++
+	return setupflow.SharedResult{Verified: true}, nil
+}
+
+type recordingMultiSetupRuntime struct {
+	recordingTUISetupRuntime
+	shared   *recordingShared
+	openCode integration.Runtime
+}
+
+func (runtime *recordingMultiSetupRuntime) Shared(setupflow.Options) setupflow.SharedRuntime {
+	return runtime.shared
+}
+
+func (runtime *recordingMultiSetupRuntime) OpenCodeProvider(options setupflow.Options, _ setupflow.PreviewIntegrationFactory) setupflow.ProviderRuntime {
+	return setupflow.NewIntegrationProvider(setupflow.ProviderOpenCode, runtime.openCode, options.Integration)
+}
+
+type recordingMultiIntegration struct {
+	provider                                      string
+	preview                                       integration.Result
+	install                                       integration.Result
+	status                                        integration.Result
+	installErr                                    error
+	previewOptions, installOptions, statusOptions integration.Options
+}
+
+func (runtime *recordingMultiIntegration) Preview(_ context.Context, options integration.Options) (integration.Result, error) {
+	runtime.previewOptions = options
+	return runtime.preview, nil
+}
+func (runtime *recordingMultiIntegration) Install(_ context.Context, options integration.Options) (integration.Result, error) {
+	runtime.installOptions = options
+	return runtime.install, runtime.installErr
+}
+func (runtime *recordingMultiIntegration) Status(_ context.Context, options integration.Options) (integration.Result, error) {
+	runtime.statusOptions = options
+	return runtime.status, nil
+}
+func (*recordingMultiIntegration) Uninstall(context.Context, integration.Options) (integration.Result, error) {
+	return integration.Result{}, nil
+}
+
 type recordingCatalog struct {
 	refresh   bool
 	discovers int
@@ -90,6 +143,48 @@ func (runtime *recordingTUIMemoryRuntime) Get(_ context.Context, _ config.Option
 		Project: request.Project, Scope: request.Scope, Type: "architecture",
 		State: memory.StateActive, References: runtime.references,
 	}, nil
+}
+
+func TestTUIBackendMultiSetupPlansSelectionsAndPreservesProviderOptions(t *testing.T) {
+	shared := &recordingShared{}
+	openCode := &recordingMultiIntegration{preview: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "open", ArtifactCount: 1}, install: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "open", ArtifactCount: 1}, status: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "open", ArtifactCount: 1}}
+	setup := &recordingMultiSetupRuntime{shared: shared, openCode: openCode}
+	codex := &recordingMultiIntegration{preview: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex", ArtifactCount: 2}, install: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "codex", ArtifactCount: 2}, status: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "codex", ArtifactCount: 2}}
+	backend := tuiBackend{setup: setup, opencode: openCode, codex: codex}
+	request := tui.MultiSetupRequest{Setup: tui.SetupRequest{Workspace: t.TempDir(), Plan: "high", ModelEfficient: "openai/fast"}, Providers: []setupflow.Provider{setupflow.ProviderCodex, setupflow.ProviderOpenCode}}
+	for _, providers := range [][]setupflow.Provider{{setupflow.ProviderOpenCode}, {setupflow.ProviderCodex}, request.Providers} {
+		plan, err := backend.PlanMultiSetup(context.Background(), tui.MultiSetupRequest{Setup: request.Setup, Providers: providers})
+		if err != nil || len(plan.Providers) != len(providers) {
+			t.Fatalf("providers=%v plan=%#v err=%v", providers, plan, err)
+		}
+	}
+	plan, err := backend.PlanMultiSetup(context.Background(), request)
+	if err != nil || len(plan.Providers) != 2 || plan.Providers[0].Provider != setupflow.ProviderOpenCode || plan.Providers[1].Provider != setupflow.ProviderCodex {
+		t.Fatalf("plan=%#v err=%v", plan, err)
+	}
+	if openCode.previewOptions.ModelEfficient != "openai/fast" || codex.previewOptions.ModelPlan != sdd.PlanHigh || codex.previewOptions.ConfigDir != "" || codex.previewOptions.HomeDir == "" || codex.previewOptions.ModelEfficient != "" {
+		t.Fatalf("opencode=%#v codex=%#v", openCode.previewOptions, codex.previewOptions)
+	}
+	result, err := backend.ApplyMultiSetup(context.Background(), tui.MultiSetupRequest{Setup: request.Setup, Providers: request.Providers, ExpectedPlanDigest: plan.Digest})
+	if err != nil || shared.applies != 2 || len(result.Providers) != 2 || !result.Providers[0].Verified || !result.Providers[1].Verified {
+		t.Fatalf("result=%#v err=%v shared=%d", result, err, shared.applies)
+	}
+}
+
+func TestTUIBackendMultiSetupReturnsPartialProviderResult(t *testing.T) {
+	openCode := &recordingMultiIntegration{preview: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "open", ArtifactCount: 1}, install: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "open", ArtifactCount: 1}, status: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "open", ArtifactCount: 1}}
+	setup := &recordingMultiSetupRuntime{shared: &recordingShared{}, openCode: openCode}
+	codex := &recordingMultiIntegration{preview: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex", ArtifactCount: 1}, installErr: context.Canceled}
+	backend := tuiBackend{setup: setup, opencode: openCode, codex: codex}
+	request := tui.MultiSetupRequest{Setup: tui.SetupRequest{Workspace: t.TempDir(), Plan: "medium"}, Providers: []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex}}
+	plan, err := backend.PlanMultiSetup(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := backend.ApplyMultiSetup(context.Background(), tui.MultiSetupRequest{Setup: request.Setup, Providers: request.Providers, ExpectedPlanDigest: plan.Digest})
+	if err == nil || len(result.Providers) != 2 || !result.Providers[0].Verified || result.Providers[1].Verified {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
 }
 
 func TestMemoryRuntime_ReadAbsentStorageOperationalAndNonMutating(t *testing.T) {
