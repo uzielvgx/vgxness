@@ -1690,7 +1690,7 @@ func TestCurrentReviewerAndRefuterUseChildReturnEnvelopeV1(t *testing.T) {
 	testutil.NoError(t, err)
 	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
 		prompt := string(bundle.agents[name])
-		for _, field := range []string{`"schemaVersion"`, `"candidate":{"digest"`, `"changedPaths"`, `"summary"`, `"evidence":[{"kind"`, `"locator"`, `"candidateDigest"`, `"observedResult"`, `"availability"`, `"unknowns"`, `"assumptions"`, `"blockers"`} {
+		for _, field := range []string{`"schemaVersion"`, `"candidate":{"digest"`, `"changedPaths"`, `"summary"`, `"evidence":[{"evidenceId"`, `"kind"`, `"locator"`, `"candidateDigest"`, `"observedResult"`, `"availability"`, `"unknowns"`, `"assumptions"`, `"blockers"`} {
 			if !strings.Contains(prompt, field) {
 				t.Errorf("%s missing envelope field %s", name, field)
 			}
@@ -1698,6 +1698,32 @@ func TestCurrentReviewerAndRefuterUseChildReturnEnvelopeV1(t *testing.T) {
 	}
 	if strings.Contains(reviewRefuterPrompt, `{"candidateIdentity":"<sha256>","results"`) {
 		t.Error("refuter retains legacy-only return example")
+	}
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName} {
+		prompt := string(bundle.agents[name])
+		for _, required := range []string{
+			"same exact Candidate Capsule identity and scope",
+			"stable evidenceId",
+			"non-empty and unique within the envelope",
+			"candidateDigest equals candidate.digest",
+			"proofRefs must resolve to exactly one same-envelope Evidence Receipt",
+		} {
+			if !strings.Contains(prompt, required) {
+				t.Errorf("%s missing review evidence contract %q", name, required)
+			}
+		}
+	}
+	for _, required := range []string{
+		"same Candidate Capsule identity and scope",
+		"supplied finding IDs",
+		"stable evidenceId",
+		"non-empty and unique within the envelope",
+		"candidateDigest equals candidate.digest",
+		"proofRefs must resolve to exactly one same-envelope Evidence Receipt",
+	} {
+		if !strings.Contains(reviewRefuterPrompt, required) {
+			t.Errorf("refuter missing evidence contract %q", required)
+		}
 	}
 }
 
@@ -1752,8 +1778,8 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"Never launch the same task twice",
 		"unavailable, missing, or stale",
 		"the delegated worker continues with native reads and search without blocking",
-		"automatically injected recent-memory reference block",
-		"only when that bounded context block is absent or unavailable",
+		"Do not claim recent memory is injected automatically.",
+		"call vgxness_memory_recent when bounded recent context is absent or material to the task",
 		"Zero lenses", "One dominant lens", "Four lenses",
 		"severe inferential findings", "one batch", "one correction transaction and one scoped validation",
 		"installation, permissions, durability, or shared contracts",
