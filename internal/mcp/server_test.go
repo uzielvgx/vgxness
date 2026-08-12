@@ -122,7 +122,7 @@ func TestServerBindsWorkspaceAndExposesOnlyReadTools(t *testing.T) {
 	}
 }
 
-func TestFullServerExposesMemoryParityTools(t *testing.T) {
+func TestFullServerExposesExactToolAndMutationInventory(t *testing.T) {
 	backend := &fakeReader{project: "project-1"}
 	server, err := newFullWithReader(context.Background(), "/workspace", backend)
 	if err != nil {
