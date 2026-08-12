@@ -43,6 +43,20 @@ func TestIntegrationPreviewReportsRequestedUltraPlan(t *testing.T) {
 	require(t, err == nil && preview.State == integration.StatePartial && preview.Changed && preview.RestartRequired && preview.ModelPlan == sdd.PlanUltra)
 }
 
+func TestIntegrationPreviewPartialExplicitPlanUsesDesiredPackageIdentity(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "codex")
+	service := NewIntegration()
+	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium})
+	require(t, os.Remove(filepath.Join(root, "agents", "general.toml")) == nil)
+	want, err := RenderPlan("v0.0.0", sdd.PlanUltra)
+	require(t, err == nil)
+
+	preview, err := service.Preview(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra})
+	if err != nil || preview.State != integration.StatePartial || !preview.Changed || !preview.RestartRequired || preview.ArtifactSHA256 != want.SHA256 || preview.ArtifactCount != len(want.Artifacts) || preview.ModelPlan != sdd.PlanUltra || preview.ModelProvider == "" {
+		t.Fatalf("Preview(partial requested ultra) = %+v, %v", preview, err)
+	}
+}
+
 func TestIntegrationRejectsModelSlotCustomizationBeforeWriting(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	for _, options := range []integration.Options{

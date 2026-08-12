@@ -196,12 +196,12 @@ func (s *Integration) Preview(ctx context.Context, options integration.Options) 
 	if err != nil {
 		return integration.Result{}, err
 	}
-	if options.ModelPlan != "" && state.result.State == integration.StateInstalled {
+	if options.ModelPlan != "" && (state.result.State == integration.StateInstalled || state.result.State == integration.StatePartial) {
 		pkg, err := codexPackage(options)
 		if err != nil {
 			return integration.Result{}, err
 		}
-		if state.result.ArtifactSHA256 != pkg.SHA256 {
+		if state.result.State == integration.StatePartial || state.result.ArtifactSHA256 != pkg.SHA256 {
 			state.result = resultFor(state.result.Path, pkg)
 			state.result.State = integration.StatePartial
 		}
