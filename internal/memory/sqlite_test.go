@@ -403,6 +403,118 @@ func TestMigrate_RollsBackAndReportsVersion(t *testing.T) {
 	testutil.Require(t, err == nil && count == 0, "migration was not rolled back: count=%d err=%v", count, err)
 }
 
+func TestApplyMigrations_LaterFailureRollsBackDDLVersionAndRetriesDurably(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	ctx := context.Background()
+	base := []migration{{version: 1, sql: `CREATE TABLE durable(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO durable(value) VALUES('before');`}}
+	failing := append(base, migration{version: 2, sql: `CREATE TABLE transient(id INTEGER PRIMARY KEY);`}, migration{version: 3, sql: `CREATE TABLE never_committed(id); SELECT no_such_function();`})
+	var version, transient, neverCommitted, rows int
+	corrected := append(base, migration{version: 2, sql: `CREATE TABLE transient(id INTEGER PRIMARY KEY);`}, migration{version: 3, sql: `CREATE TABLE durable_extra(id INTEGER PRIMARY KEY); INSERT INTO durable_extra VALUES(7);`})
+	assertRollback := func(db *sql.DB) {
+		testutil.NoError(t, db.QueryRow(`PRAGMA user_version`).Scan(&version))
+		testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='transient'`).Scan(&transient))
+		testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='never_committed'`).Scan(&neverCommitted))
+		testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM durable WHERE value='before'`).Scan(&rows))
+		testutil.Require(t, version == 1 && transient == 0 && neverCommitted == 0 && rows == 1, "rollback version=%d tables=%d/%d rows=%d", version, transient, neverCommitted, rows)
+	}
+	func() {
+		db, err := sql.Open("sqlite", path)
+		testutil.NoError(t, err)
+		defer func() { testutil.NoError(t, db.Close()) }()
+		testutil.NoError(t, applyMigrations(ctx, db, base))
+		err = applyMigrations(ctx, db, failing)
+		testutil.Require(t, errors.Is(err, ErrMigration) && strings.Contains(err.Error(), "version 3"), "migration error=%v", err)
+		assertRollback(db)
+	}()
+	func() {
+		db, err := sql.Open("sqlite", path)
+		testutil.NoError(t, err)
+		defer func() { testutil.NoError(t, db.Close()) }()
+		assertRollback(db)
+		testutil.NoError(t, applyMigrations(ctx, db, corrected))
+	}()
+	func() {
+		db, err := sql.Open("sqlite", path)
+		testutil.NoError(t, err)
+		defer func() { testutil.NoError(t, db.Close()) }()
+		testutil.NoError(t, db.QueryRow(`PRAGMA user_version`).Scan(&version))
+		testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM durable_extra WHERE id=7`).Scan(&rows))
+		testutil.Require(t, version == 3 && rows == 1, "durable retry version=%d rows=%d", version, rows)
+	}()
+}
+
+func TestApplyMigrations_ForeignKeyFailureRollsBackAndRetriesWithEnforcement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	ctx := context.Background()
+	base := []migration{{version: 1, sql: `CREATE TABLE parents(id INTEGER PRIMARY KEY); CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id)); INSERT INTO parents VALUES(1); INSERT INTO children VALUES(1,1);`}}
+	failing := append(base, migration{version: 2, requiresForeignKeysDisabled: true, sql: `CREATE TABLE rebuilt(id INTEGER PRIMARY KEY); INSERT INTO children VALUES(2,99);`})
+	var version, rebuilt, children, childID, parentID, foreignKeys int
+	corrected := append(base, migration{version: 2, requiresForeignKeysDisabled: true, sql: `CREATE TABLE rebuilt(id INTEGER PRIMARY KEY); INSERT INTO children VALUES(2,1);`})
+	configureAndAssertRollback := func(db *sql.DB) {
+		testutil.NoError(t, func() error { _, err := db.Exec(`PRAGMA foreign_keys=ON`); return err }())
+		testutil.NoError(t, db.QueryRow(`PRAGMA user_version`).Scan(&version))
+		testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='rebuilt'`).Scan(&rebuilt))
+		testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM children`).Scan(&children))
+		testutil.NoError(t, db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
+		testutil.Require(t, version == 1 && rebuilt == 0 && children == 1 && foreignKeys == 1, "rollback version=%d rebuilt=%d children=%d fk=%d", version, rebuilt, children, foreignKeys)
+	}
+	func() {
+		db, err := sql.Open("sqlite", path)
+		testutil.NoError(t, err)
+		defer func() { testutil.NoError(t, db.Close()) }()
+		testutil.NoError(t, func() error { _, err := db.Exec(`PRAGMA foreign_keys=ON`); return err }())
+		testutil.NoError(t, applyMigrations(ctx, db, base))
+		err = applyMigrations(ctx, db, failing)
+		testutil.Require(t, errors.Is(err, ErrMigration), "foreign-key migration error=%v", err)
+		configureAndAssertRollback(db)
+	}()
+	func() {
+		db, err := sql.Open("sqlite", path)
+		testutil.NoError(t, err)
+		defer func() { testutil.NoError(t, db.Close()) }()
+		configureAndAssertRollback(db)
+		testutil.NoError(t, applyMigrations(ctx, db, corrected))
+	}()
+	func() {
+		db, err := sql.Open("sqlite", path)
+		testutil.NoError(t, err)
+		defer func() { testutil.NoError(t, db.Close()) }()
+		testutil.NoError(t, func() error { _, err := db.Exec(`PRAGMA foreign_keys=ON`); return err }())
+		testutil.NoError(t, db.QueryRow(`PRAGMA user_version`).Scan(&version))
+		testutil.NoError(t, db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='rebuilt'`).Scan(&rebuilt))
+		testutil.NoError(t, db.QueryRow(`SELECT id, parent_id FROM children WHERE id=2`).Scan(&childID, &parentID))
+		testutil.NoError(t, db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
+		testutil.Require(t, version == 2 && rebuilt == 1 && childID == 2 && parentID == 1 && foreignKeys == 1, "durable retry version=%d rebuilt=%d child=%d parent=%d fk=%d", version, rebuilt, childID, parentID, foreignKeys)
+		_, err = db.Exec(`INSERT INTO children VALUES(3,99)`)
+		testutil.Require(t, err != nil, "foreign keys accepted invalid child after retry")
+	}()
+}
+
+func TestOpen_V10ToV11RestoresForeignKeysAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(schemaV1 + schemaV2 + schemaV3 + schemaV4 + schemaV5 + schemaV6 + schemaV7 + schemaV8 + schemaV9 + schemaV10 + `
+		INSERT INTO projects(id) VALUES('project-v10');
+		INSERT INTO sdd_changes(id,project_id,idempotency_key,title,backend,interaction_mode,model_plan,phase,status,state_version,created_at,updated_at) VALUES('change-v10','project-v10','key-v10','V10 change','memory','automatic','high','explore','active',7,100,200);
+		PRAGMA user_version=10;`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+	store := openPath(t, path)
+	testutil.NoError(t, store.Close())
+	store = openPath(t, path)
+	defer store.Close()
+	var version, foreignKeys, stateVersion, createdAt, updatedAt int
+	var id, projectID, idempotencyKey, title, backend, interactionMode, modelPlan, phase, status string
+	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
+	testutil.NoError(t, store.db.QueryRow(`SELECT id,project_id,idempotency_key,title,backend,interaction_mode,model_plan,phase,status,state_version,created_at,updated_at FROM sdd_changes WHERE id='change-v10'`).Scan(&id, &projectID, &idempotencyKey, &title, &backend, &interactionMode, &modelPlan, &phase, &status, &stateVersion, &createdAt, &updatedAt))
+	testutil.Require(t, version == 11 && id == "change-v10" && projectID == "project-v10" && idempotencyKey == "key-v10" && title == "V10 change" && backend == "memory" && interactionMode == "automatic" && modelPlan == "high" && phase == "explore" && status == "active" && stateVersion == 7 && createdAt == 100 && updatedAt == 200, "V11 migration did not preserve V10 change: version=%d id=%q project=%q key=%q title=%q backend=%q mode=%q plan=%q phase=%q status=%q state=%d created=%d updated=%d", version, id, projectID, idempotencyKey, title, backend, interactionMode, modelPlan, phase, status, stateVersion, createdAt, updatedAt)
+	testutil.NoError(t, store.db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
+	testutil.Require(t, foreignKeys == 1, "foreign_keys=%d after restart", foreignKeys)
+	_, err = store.db.Exec(`INSERT INTO sdd_changes(id,project_id,idempotency_key,title,backend,interaction_mode,model_plan,phase,status,state_version,created_at,updated_at) VALUES('invalid','missing','key','title','memory','automatic','ultra','explore','active',1,1,1)`)
+	testutil.Require(t, err != nil, "foreign keys accepted invalid V11 sdd_changes row")
+}
+
 func TestSQLiteMemoryStore_SaveTopicUpsertsSameBoundaryAtomically(t *testing.T) {
 	store := openTestStore(t)
 	first := observation("obs-1", "project-a", "first topic")
