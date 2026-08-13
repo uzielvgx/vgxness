@@ -64,6 +64,22 @@ func TestLegacyStaticPackageHasFrozenAggregateSHA256(t *testing.T) {
 	}
 }
 
+func TestActiveV6PackageIsRecognizedPredecessor(t *testing.T) {
+	pkg, err := renderActiveV6("v0.0.0", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pkg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pkg.SHA256, "51c05d2dc6255a044f559a0e4c51f5eceea621331490aaafe99a6e2632c384bc"; got != want {
+		t.Fatalf("active v6 aggregate SHA-256 = %s, want %s", got, want)
+	}
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 6; parity: opencode-v47") || strings.Contains(content, "Provider-native delegation policy") {
+		t.Fatal("active v6 reconstruction changed")
+	}
+}
+
 func TestPreConsolidationV4PackageValidatesExactly(t *testing.T) {
 	pkg, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
 	if err != nil {
@@ -161,6 +177,25 @@ func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
 	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
 	if got := OrchestrationContractIdentity(); got != orchestration.ContractIdentity || !strings.Contains(content, orchestration.ContractPolicy) {
 		t.Errorf("Codex manager lacks shared contract %q", orchestration.ContractIdentity)
+	}
+}
+
+func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
+	for _, required := range []string{
+		"Provider-native delegation policy:",
+		"fresh native Codex task with the exact agent_type",
+		"explore, general, verifier, risk, readability, reliability, resilience, refuter, sdd-research, sdd-proposal, sdd-spec, sdd-design, sdd-tasks, or sdd-apply",
+		"Never combine an explicit agent_type with a full-history fork.",
+		"omit agent_type and treat the child as inherited manager context, not specialist delegation.",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("manager lacks provider-native delegation rule %q", required)
+		}
 	}
 }
 
@@ -263,7 +298,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"agents/explore.toml", "agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml", "agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml"} {
+	for _, path := range []string{"agents/explore.toml", "agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml", "agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml", "agents/sdd-apply.toml"} {
 		content := string(artifact(t, pkg, path).Bytes)
 		if !strings.Contains(content, "sandbox_mode = \"read-only\"") {
 			t.Errorf("%s is not read-only", path)
@@ -296,8 +331,37 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 6") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 7; parity: opencode-v47") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
+	}
+}
+
+func TestDelegationProfileMatrix(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := map[string]string{
+		"explore": "read-only", "general": "workspace-write", "verifier": "read-only", "risk": "read-only",
+		"readability": "read-only", "reliability": "read-only", "resilience": "read-only", "refuter": "read-only",
+		"sdd-research": "read-only", "sdd-proposal": "read-only", "sdd-spec": "read-only", "sdd-design": "read-only", "sdd-tasks": "read-only", "sdd-apply": "read-only",
+	}
+	if len(profiles) != 14 {
+		t.Fatal("specialist matrix must cover fourteen agent types")
+	}
+	for name, sandbox := range profiles {
+		content := string(artifact(t, pkg, "agents/"+name+".toml").Bytes)
+		for _, required := range []string{`name = "` + name + `"`, `sandbox_mode = "` + sandbox + `"`} {
+			if !strings.Contains(content, required) {
+				t.Errorf("%s profile lacks boundary %q", name, required)
+			}
+		}
+	}
+	for _, item := range pkg.Artifacts[1:] {
+		content := string(item.Bytes)
+		if strings.Contains(content, `sandbox_mode = "workspace-write"`) && !strings.Contains(content, `name = "general"`) {
+			t.Errorf("only general may have workspace-write: %s", item.Path)
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-.PHONY: fast verify vuln
+.PHONY: fast verify vuln codex-e2e
 
 fast:
 	test -z "$$(gofmt -l .)"
@@ -21,3 +21,7 @@ verify:
 
 vuln:
 	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+codex-e2e:
+	test "$${VGXNESS_CODEX_E2E:-}" = 1
+	go test -tags='e2e codex_e2e' -count=1 -run '^TestCodexDelegationRuntime$$' ./internal/e2e
