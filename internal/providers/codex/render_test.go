@@ -71,9 +71,49 @@ func TestPreConsolidationV4PackageValidatesExactly(t *testing.T) {
 	if err := pkg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v", err)
 	}
+	if want := "9031d782efe059c742fcd81aa18ce42e7dcb0548cbc9499d66129fd5a6dd8584"; pkg.SHA256 != want {
+		t.Fatalf("pre-consolidation aggregate SHA-256 = %s, want %s", pkg.SHA256, want)
+	}
+	for path, want := range map[string]string{
+		"AGENTS.md":                "1285ef553459e32204b1a831fb71e08f4d42fc16137499cda8a5d609ce512736",
+		"agents/explore.toml":      "ed25b0ee240b26399120da052e11fa1f65d61d5e011a4d4081b4b1133be6558c",
+		"agents/general.toml":      "3214bf5949d552fd6ec59af5e300876ee6c1ad8e28ff4baa9069951335341e85",
+		"agents/readability.toml":  "e207973aaf8bb19056374eaeaa57963d8268b7d752ed01522c42b1ede66f3d8c",
+		"agents/refuter.toml":      "2fcd25a96f8c06186e75a9b46964e6ffe9cf3f3588fa58b753cb8289edd07787",
+		"agents/reliability.toml":  "fcce0f1f9eadb4b515bc0371ab4d4ef001f3e3d917f00ebd3f88b9699f018eb9",
+		"agents/resilience.toml":   "96b3f89abf76b4487ae54da3eb69f1e2d3167292695a9fada64a14558d1c5b93",
+		"agents/risk.toml":         "dfd4262726f97a3c1a4a521b288ae450d7f053b53fb425f6b8b095cbe37f8021",
+		"agents/sdd-apply.toml":    "aa4a57bee133575e1ad4e1555ce436bc060952b915161c23b770d863d123d48c",
+		"agents/sdd-design.toml":   "709288a685535a7b49751235551c42504cbc2c38638cd078c836348edd044e7f",
+		"agents/sdd-proposal.toml": "265f732cb510c84aba55f6135baf5e854970d873b43e8fcd8a33bdc6f2c60e9e",
+		"agents/sdd-research.toml": "6a742443c781db400f9bd4bfffa181b90082f72188f3debe654511777989b08c",
+		"agents/sdd-spec.toml":     "dfccae05c08f55bc6b90323cc21bd2572a7811ade23576fa2165ae0f8490269a",
+		"agents/sdd-tasks.toml":    "d7ce9f58e31b3e6eead94f4a183e0460d4ce5abfb734fff004eec1d9a187fe65",
+		"agents/verifier.toml":     "b0745cfb08a31860eb527115a9c66866e4819f58720242bc7c5e59666c3a6935",
+	} {
+		if got := sha256.Sum256(artifact(t, pkg, path).Bytes); hex.EncodeToString(got[:]) != want {
+			t.Errorf("%s SHA-256 = %s, want %s", path, hex.EncodeToString(got[:]), want)
+		}
+	}
 	pkg.Artifacts[0].Bytes[0] ^= 1
 	if err := pkg.Validate(); err == nil {
 		t.Fatal("Validate accepted a mutated predecessor")
+	}
+}
+
+func TestPackageValidateRejectsMixedCurrentAndPreConsolidationArtifacts(t *testing.T) {
+	current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Artifacts[0] = predecessor.Artifacts[0]
+	current.SHA256 = aggregate(current.Artifacts)
+	if err := current.Validate(); err == nil {
+		t.Fatal("Validate accepted a recomputed mixed package")
 	}
 }
 
@@ -291,6 +331,30 @@ func TestPackageValidateRejectsCallerMutationsAndStaleDigests(t *testing.T) {
 	pkg.SHA256 = aggregate(pkg.Artifacts)
 	if err := pkg.Validate(); err == nil {
 		t.Fatal("Validate accepted caller mutation after digest recomputation")
+	}
+}
+
+func TestPackageValidateRequiresExactArtifactPaths(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Package){
+		"unknown replaces expected": func(pkg *Package) {
+			pkg.Artifacts[len(pkg.Artifacts)-1] = Artifact{Path: "agents/unknown.toml"}
+		},
+		"duplicate path": func(pkg *Package) {
+			pkg.Artifacts[len(pkg.Artifacts)-1] = pkg.Artifacts[len(pkg.Artifacts)-2]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := clonePackage(pkg)
+			mutate(&candidate)
+			candidate.SHA256 = aggregate(candidate.Artifacts)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("Validate accepted an incomplete or duplicate package")
+			}
+		})
 	}
 }
 

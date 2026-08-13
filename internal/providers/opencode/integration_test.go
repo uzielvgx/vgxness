@@ -1662,6 +1662,33 @@ func TestIntegrationUpgradesOnlyCompletePreConsolidationV1MediumPackage(t *testi
 	}
 }
 
+func TestIntegrationRejectsMixedManifestlessV3Predecessors(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	first, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, root)
+	testutil.NoError(t, err)
+	otherAssignments := completeModelAssignmentsV3()
+	item := otherAssignments["agents/general.md"]
+	item.Reference = "acme/other-general"
+	otherAssignments["agents/general.md"] = item
+	second, err := requestedModelPlan(integration.Options{ModelAssignments: &otherAssignments}, root)
+	testutil.NoError(t, err)
+	for name, content := range first.agents {
+		if name == generalAgentName {
+			content = previousGeneralPredecessor(second.agents[name])
+		}
+		path := filepath.Join(root, "agents", name)
+		testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		testutil.NoError(t, os.WriteFile(path, content, 0o600))
+	}
+	service := NewIntegration()
+	preview, previewErr := service.Preview(context.Background(), integration.Options{ConfigDir: root, ModelAssignments: &assignments})
+	before, readErr := os.ReadFile(filepath.Join(root, "agents", generalAgentName))
+	installed, installErr := service.Install(context.Background(), integration.Options{ConfigDir: root, ModelAssignments: &assignments})
+	after, afterErr := os.ReadFile(filepath.Join(root, "agents", generalAgentName))
+	testutil.Require(t, previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && afterErr == nil && bytes.Equal(before, after), "preview=%+v install=%+v err=%v", preview, installed, installErr)
+}
+
 func TestIntegrationRecoversCompleteV43BundleWithoutManifest(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
@@ -3089,10 +3116,11 @@ func TestIntegrationV3EditedSeedRecognizesExactLegacyModelsWithoutManifest(t *te
 	}
 	options := integration.Options{ConfigDir: root, ModelAssignments: &edited}
 	service := NewIntegration()
-	preview, err := service.Preview(context.Background(), options)
-	testutil.Require(t, err == nil && preview.State == integration.StatePartial && preview.RestartRequired, "edited legacy preview=%+v err=%v", preview, err)
-	installed, err := service.Install(context.Background(), options)
-	testutil.Require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed, "edited legacy install=%+v err=%v", installed, err)
+	preview, previewErr := service.Preview(context.Background(), options)
+	before, readErr := os.ReadFile(filepath.Join(root, "agents", generalAgentName))
+	_, installErr := service.Install(context.Background(), options)
+	after, afterErr := os.ReadFile(filepath.Join(root, "agents", generalAgentName))
+	testutil.Require(t, previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && afterErr == nil && bytes.Equal(before, after), "edited legacy preview=%+v install=%v", preview, installErr)
 
 	modifiedRoot := filepath.Join(t.TempDir(), "opencode")
 	modifiedPath := filepath.Join(modifiedRoot, "agents", managerAgentName)
@@ -3103,8 +3131,8 @@ func TestIntegrationV3EditedSeedRecognizesExactLegacyModelsWithoutManifest(t *te
 	preview, err = service.Preview(context.Background(), modifiedOptions)
 	testutil.Require(t, err == nil && preview.State == integration.StateDrifted, "modified legacy preview=%+v err=%v", preview, err)
 	_, err = service.Install(context.Background(), modifiedOptions)
-	after, readErr := os.ReadFile(modifiedPath)
-	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "modified legacy bytes changed: err=%v read=%v", err, readErr)
+	modifiedAfter, modifiedReadErr := os.ReadFile(modifiedPath)
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && modifiedReadErr == nil && bytes.Equal(modifiedAfter, modified), "modified legacy bytes changed: err=%v read=%v", err, modifiedReadErr)
 }
 
 func TestModelPlanManifestV1RemainsExactAndV2RejectsDrift(t *testing.T) {
