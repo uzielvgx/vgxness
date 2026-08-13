@@ -93,6 +93,33 @@ func TestCacheBodyReads(t *testing.T) {
 		t.Fatal(n)
 	}
 }
+
+func TestRefreshBypassesCache(t *testing.T) {
+	r := t.TempDir()
+	o := Options{CWD: r, Home: filepath.Join(r, "home"), CachePath: filepath.Join(r, "cache")}
+	skill(t, filepath.Join(r, ".agents/skills/one/SKILL.md"), "one")
+	scan(t, o)
+	if refreshed := refresh(t, o); refreshed.FromCache {
+		t.Fatal("refresh used cache")
+	}
+}
+
+func TestEmptyHomeAddsNoRelativeRoots(t *testing.T) {
+	for _, root := range roots(Options{CWD: t.TempDir()}) {
+		if !filepath.IsAbs(root.path) {
+			t.Fatalf("relative root %q", root.path)
+		}
+	}
+}
+
+func refresh(t *testing.T, o Options) Snapshot {
+	t.Helper()
+	s, err := Refresh(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
 func TestRejectsNonRegularAndReplacement(t *testing.T) {
 	r := t.TempDir()
 	p := filepath.Join(r, ".agents/skills/x/SKILL.md")

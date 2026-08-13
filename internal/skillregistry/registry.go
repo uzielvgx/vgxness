@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -91,6 +92,7 @@ type Options struct {
 	Home      string
 	Host      string
 	CachePath string
+	Fresh     bool
 }
 type root struct {
 	path, scope, source string
@@ -111,7 +113,11 @@ func Scan(ctx context.Context, options Options) (Snapshot, error) {
 	}
 	options.Host = normalizedHost(options.Host)
 	roots := roots(options)
-	cached, valid := loadCache(options.CachePath, roots, options)
+	var cached Snapshot
+	valid := false
+	if !options.Fresh {
+		cached, valid = loadCache(options.CachePath, roots, options)
+	}
 	if valid {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
@@ -159,6 +165,12 @@ func Scan(ctx context.Context, options Options) (Snapshot, error) {
 		storeCache(ctx, options.CachePath, roots, snapshot)
 	}
 	return snapshot, nil
+}
+
+// Refresh scans all configured roots without using a cached snapshot.
+func Refresh(ctx context.Context, options Options) (Snapshot, error) {
+	options.Fresh = true
+	return Scan(ctx, options)
 }
 func (snapshot Snapshot) Resolve(name string) (Selection, error) {
 	var matches []Candidate
@@ -240,14 +252,16 @@ func roots(options Options) []root {
 			break
 		}
 	}
-	homeRank := 1 << 20
-	add(filepath.Join(options.Home, ".agents", "skills"), "home", "common", homeRank)
-	if host == "opencode" {
-		add(filepath.Join(options.Home, ".config", "opencode", "skills"), "home", "opencode", homeRank)
-		add(filepath.Join(options.Home, ".claude", "skills"), "home", "opencode", homeRank)
+	if options.Home != "" {
+		homeRank := 1 << 20
+		add(filepath.Join(options.Home, ".agents", "skills"), "home", "common", homeRank)
+		if host == "opencode" {
+			add(filepath.Join(options.Home, ".config", "opencode", "skills"), "home", "opencode", homeRank)
+			add(filepath.Join(options.Home, ".claude", "skills"), "home", "opencode", homeRank)
+		}
 	}
-	if host == "codex" {
-		add(filepath.Join(string(filepath.Separator), "etc", "codex", "skills"), "system", "codex", homeRank+1)
+	if host == "codex" && runtime.GOOS != "windows" {
+		add(filepath.Join(string(filepath.Separator), "etc", "codex", "skills"), "system", "codex", 1<<20+1)
 	}
 	return out
 }
@@ -405,8 +419,14 @@ func inside(base, path string) bool {
 	relative, err := filepath.Rel(base, path)
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
-func hash(value []byte) string             { sum := sha256.Sum256(value); return hex.EncodeToString(sum[:]) }
-func CacheKey(workspace string) string     { return hash([]byte(filepath.Clean(workspace)))[:16] }
+func hash(value []byte) string { sum := sha256.Sum256(value); return hex.EncodeToString(sum[:]) }
+func CacheKey(workspace string, host ...string) string {
+	key := filepath.Clean(workspace)
+	if len(host) > 0 {
+		key += "\x00" + normalizedHost(host[0])
+	}
+	return hash([]byte(key))[:16]
+}
 func digest(candidates []Candidate) string { b, _ := json.Marshal(candidates); return hash(b) }
 func loadCache(path string, roots []root, options Options) (Snapshot, bool) {
 	if path == "" {
