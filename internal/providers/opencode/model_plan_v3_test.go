@@ -322,6 +322,34 @@ func TestModelBoundAgentsPreserveTrustedV1Digest(t *testing.T) {
 	}
 }
 
+func TestPreConsolidationV1MediumBundleIsExactAndRejectsMutations(t *testing.T) {
+	bundle, err := preConsolidationV1MediumBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest := artifactSHA256(bundle.agents[managerAgentName]); digest != "d31f50a0a2edb950362240c34deb5ed24a2c58e61339d72e9ed102ecda3b4e55" {
+		t.Fatalf("manager digest=%s", digest)
+	}
+	for name, want := range map[string]string{
+		exploreAgentName: "7b6cf0", generalAgentName: "0b9442", reviewReadabilityName: "691d6d", reviewRefuterName: "ee35fc",
+		reviewReliabilityName: "48de5a", reviewResilienceName: "c6a7f0", reviewRiskName: "be3b78", sddApplyName: "b36f80",
+		sddDesignName: "c7dc18", sddProposalName: "17e203", sddResearchName: "0d5246", sddSpecName: "91cd90",
+		sddTasksName: "1ce6e2", verifierAgentName: "1e83df",
+	} {
+		if got := artifactSHA256(bundle.agents[name]); !strings.HasPrefix(got, want) {
+			t.Fatalf("%s digest=%s, want prefix %s", name, got, want)
+		}
+	}
+	if _, err := modelPlanBundleForManifest(bundle.manifest, bundle.config); err != nil {
+		t.Fatalf("exact predecessor manifest rejected: %v", err)
+	}
+	modified := append([]byte(nil), bundle.manifest...)
+	modified[len(modified)-2] ^= 1
+	if _, err := modelPlanBundleForManifest(modified, bundle.config); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("modified predecessor manifest accepted: %v", err)
+	}
+}
+
 func TestRequestedModelPlanV3RejectsIncompleteAssignments(t *testing.T) {
 	for name, mutate := range map[string]func(map[string]sdd.ManagedAgentModelConfig){
 		"missing": func(assignments map[string]sdd.ManagedAgentModelConfig) {

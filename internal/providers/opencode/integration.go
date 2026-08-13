@@ -1104,6 +1104,15 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		return inspection{}, fmt.Errorf("inspect OpenCode integration directory: %w", containerErr)
 	}
 	_, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
+	preConsolidation, predecessorErr := preConsolidationV1MediumBundle()
+	if predecessorErr != nil {
+		return inspection{}, predecessorErr
+	}
+	predecessorManifest, predecessorManifestErr := readRegularFile(manifestPath)
+	predecessorManifestInstalled := predecessorManifestErr == nil && bytes.Equal(predecessorManifest, preConsolidation.manifest)
+	if predecessorManifestErr != nil && !errors.Is(predecessorManifestErr, os.ErrNotExist) {
+		return inspection{}, fmt.Errorf("inspect OpenCode model plan manifest: %w", predecessorManifestErr)
+	}
 	predecessors := map[string][][]byte{}
 	predecessorRecognizers := map[string]func([]byte) bool{}
 	if !installedPlanOK {
@@ -1228,6 +1237,12 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		item.present = true
 		present++
+		if predecessorManifestInstalled {
+			if expected, ok := preConsolidation.agents[filepath.Base(item.path)]; ok && !bytes.Equal(current, expected) {
+				state.result.State = integration.StateDrifted
+				return state, nil
+			}
+		}
 		if item.defaultAgent != nil && (!item.defaultAgentSnapshotPresent || !bytes.Equal(current, item.prior)) {
 			state.result.State = integration.StateDrifted
 			return state, nil
@@ -1238,6 +1253,10 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 			item.exact = bytes.Equal(current, item.content)
 		}
 		if !item.exact {
+			if installedPlanOK && len(installedPlanBytes[item.path]) != 0 && !bytes.Equal(current, installedPlanBytes[item.path]) {
+				state.result.State = integration.StateDrifted
+				return state, nil
+			}
 			if item.defaultState && isLegacyDefaultAgentState(current) {
 				item.upgrade = true
 				item.prior = append([]byte(nil), current...)
