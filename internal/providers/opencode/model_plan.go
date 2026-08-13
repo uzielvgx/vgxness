@@ -873,7 +873,11 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 		return nil, err
 	}
 	predecessors := make(map[string][][]byte, len(compactProtocolAgentNames)+1)
-	predecessors[managerAgentName] = [][]byte{v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
+	v46, err := bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 46", assignments[managerAgentName])
+	if err != nil {
+		return nil, err
+	}
+	predecessors[managerAgentName] = [][]byte{v46, v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
 	for _, prior := range []struct {
 		base   string
 		marker string

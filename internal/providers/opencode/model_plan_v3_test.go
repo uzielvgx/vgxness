@@ -347,6 +347,36 @@ func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
 	}
 }
 
+func TestModelBoundV3V46ManagerPredecessorIsExact(t *testing.T) {
+	plan, err := ResolveModelPlanV3(sdd.ModelPlanConfigV3{
+		SchemaVersion: 3,
+		Provider:      "acme",
+		Provenance:    sdd.ModelPlanCLI,
+		Assignments:   completeModelAssignmentsV3(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignments, err := modelBoundAssignmentsV3(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 46", assignments[managerAgentName])
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessors, err := modelBoundAgentPredecessorsV3(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, predecessor := range predecessors[managerAgentName] {
+		if bytes.Equal(predecessor, expected) {
+			return
+		}
+	}
+	t.Fatal("manifestless v3 predecessors lack exact trusted v46 manager")
+}
+
 func TestPreConsolidationV1MediumBundleIsExactAndRejectsMutations(t *testing.T) {
 	bundle, err := preConsolidationV1MediumBundle()
 	if err != nil {
