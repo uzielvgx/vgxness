@@ -335,13 +335,17 @@ type reinstallAnchor struct {
 
 func NewIntegration() *Integration {
 	executable, _ := os.Executable()
+	return newIntegration(executable, os.Getenv("VGXNESS_LAUNCHER"))
+}
+
+func newIntegration(executable, configuredLauncher string) *Integration {
 	if executable != "" {
 		executable, _ = filepath.Abs(executable)
 		if resolved, err := filepath.EvalSymlinks(executable); err == nil {
 			executable = resolved
 		}
 	}
-	if stable := trustedLauncher(executable, os.Getenv("VGXNESS_LAUNCHER")); stable != "" {
+	if stable := trustedLauncher(executable, configuredLauncher); stable != "" {
 		executable = stable
 	}
 	return &Integration{now: time.Now, executable: executable}
@@ -384,6 +388,15 @@ func validateManagedLauncher(candidate string) (string, error) {
 		return "", launcher.ErrInvalid
 	}
 	return candidate, nil
+}
+
+func (service *Integration) validateMutableLauncher() error {
+	managed, err := validateManagedLauncher(service.executable)
+	if err != nil {
+		return fmt.Errorf("%w: managed VGXNESS launcher: %w", integration.ErrInvalid, err)
+	}
+	service.executable = managed
+	return nil
 }
 
 func trustedLauncher(activeExecutable, candidate string) string {
@@ -462,6 +475,9 @@ func managedLayout(root string, artifacts []artifact) (integration.ManagedLayout
 // Reinstall atomically regenerates the recognized managed set without touching
 // unrelated OpenCode files or creating the legacy uninstall backup directory.
 func (service *Integration) Reinstall(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
+	if err := service.validateMutableLauncher(); err != nil {
+		return integration.Result{}, err
+	}
 	pending, err := service.ReinstallPending(ctx, options)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, integration.ErrInvalid) {
@@ -713,6 +729,9 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 }
 
 func (service *Integration) Install(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
+	if err := service.validateMutableLauncher(); err != nil {
+		return integration.Result{}, err
+	}
 	if pending, err := service.ReinstallPending(ctx, options); err != nil || pending {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	}
@@ -798,6 +817,9 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 }
 
 func (service *Integration) Uninstall(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
+	if err := service.validateMutableLauncher(); err != nil {
+		return integration.Result{}, err
+	}
 	if pending, err := service.ReinstallPending(ctx, options); err != nil || pending {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	}

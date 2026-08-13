@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/launcher"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
@@ -22,6 +24,41 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 	"github.com/vgxness/vgxness/internal/tui"
 )
+
+func managedLauncherForTest(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := launcher.FileSHA256(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(root, "data")
+	activePath := launcher.VersionPath(dataDir, digest)
+	launcherPath := filepath.Join(root, "bin", "vgxness")
+	for _, path := range []string{filepath.Dir(activePath), filepath.Dir(launcherPath)} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{activePath, launcherPath} {
+		if err := os.Link(source, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := launcher.Manifest{SchemaVersion: launcher.SchemaVersion, ManagedBy: launcher.ManagedBy, LauncherPath: launcherPath, LauncherSHA256: digest, DataDir: dataDir, ActivePath: activePath, ActiveSHA256: digest, UpdatedAt: "2026-01-01T00:00:00Z"}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher.SidecarPath(launcherPath), append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return launcherPath
+}
 
 type recordingTUIMemoryRuntime struct {
 	recall     memory.Recall
@@ -206,6 +243,7 @@ func TestMemoryRuntime_SaveCloseAndOfflineRestart(t *testing.T) {
 }
 
 func TestOpenCodeIntegrationRuntime_InstallStatusAndRecoverableUninstall(t *testing.T) {
+	t.Setenv("VGXNESS_LAUNCHER", managedLauncherForTest(t))
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	var out, stderr bytes.Buffer
 	code := Run(context.Background(), []string{"integrate", "opencode", "install", "--model", "openai/gpt-5.6-sol", "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)

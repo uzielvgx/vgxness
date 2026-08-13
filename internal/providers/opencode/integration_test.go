@@ -21,6 +21,112 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
+func TestMain(m *testing.M) {
+	// Package lifecycle tests model the normal managed-launcher environment.
+	// Fail-closed tests explicitly clear this variable with t.Setenv.
+	if candidate := os.Getenv("VGXNESS_LAUNCHER"); candidate != "" {
+		if managed, err := validateManagedLauncher(candidate); err == nil {
+			active, _ := launcher.Load(managed)
+			if executable, execErr := os.Executable(); execErr == nil && trustedLauncher(executable, managed) != "" && active.LauncherPath == managed {
+				os.Exit(m.Run())
+			}
+		}
+	}
+	root, err := os.MkdirTemp("", "opencode-managed-launcher-*")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(root)
+	source, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	digest, err := launcher.FileSHA256(source)
+	if err != nil {
+		panic(err)
+	}
+	dataDir := filepath.Join(root, "data")
+	activePath := launcher.VersionPath(dataDir, digest)
+	launcherPath := filepath.Join(root, "bin", "vgxness")
+	for _, path := range []string{filepath.Dir(activePath), filepath.Dir(launcherPath)} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			panic(err)
+		}
+	}
+	if err := os.Link(source, activePath); err != nil {
+		panic(err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(launcherPath, data, 0o755); err != nil {
+		panic(err)
+	}
+	manifest, err := json.Marshal(launcher.Manifest{SchemaVersion: launcher.SchemaVersion, ManagedBy: launcher.ManagedBy, LauncherPath: launcherPath, LauncherSHA256: digest, DataDir: dataDir, ActivePath: activePath, ActiveSHA256: digest, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(launcher.SidecarPath(launcherPath), append(manifest, '\n'), 0o600); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("VGXNESS_LAUNCHER", launcherPath); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
+func managedLauncherForTest(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("", "opencode-managed-launcher-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := launcher.FileSHA256(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(root, "data")
+	activePath := launcher.VersionPath(dataDir, digest)
+	launcherPath := filepath.Join(root, "bin", "vgxness")
+	if err := os.MkdirAll(filepath.Dir(activePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(launcherPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(source, activePath); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcherPath, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal(launcher.Manifest{SchemaVersion: launcher.SchemaVersion, ManagedBy: launcher.ManagedBy, LauncherPath: launcherPath, LauncherSHA256: digest, DataDir: dataDir, ActivePath: activePath, ActiveSHA256: digest, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher.SidecarPath(launcherPath), append(manifest, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return launcherPath
+}
+
+func managedIntegrationForTest(t *testing.T) *Integration {
+	t.Helper()
+	service, err := NewManagedIntegration(managedLauncherForTest(t))
+	testutil.NoError(t, err)
+	return service
+}
+
 func errorContainsEquivalentPath(err error, want string) bool {
 	if err == nil {
 		return false
@@ -85,6 +191,72 @@ func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 		"unexpected preview: %#v", result,
 	)
 	testutil.Require(t, os.IsNotExist(statErr), "preview mutated filesystem: %v", statErr)
+}
+
+func TestIntegration_DirectInstallRefusesTransientExecutableBeforeWrites(t *testing.T) {
+	t.Setenv("VGXNESS_LAUNCHER", "")
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := &Integration{now: time.Now, executable: "vgxness"}
+	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	if !errors.Is(err, integration.ErrInvalid) {
+		t.Fatalf("direct install error=%v", err)
+	}
+	if _, statErr := os.Stat(configDirectory); !os.IsNotExist(statErr) {
+		t.Fatalf("direct install wrote config directory: %v", statErr)
+	}
+}
+
+func TestIntegration_MutableOperationsRejectInvalidLauncherBeforeWrites(t *testing.T) {
+	t.Run("managed install after launcher tampering", func(t *testing.T) {
+		launcherPath := managedLauncherForTest(t)
+		service, err := NewManagedIntegration(launcherPath)
+		testutil.NoError(t, err)
+		testutil.NoError(t, os.WriteFile(launcherPath, []byte("tampered"), 0o755))
+		configDirectory := filepath.Join(t.TempDir(), "opencode")
+		_, err = service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+		testutil.Require(t, errors.Is(err, integration.ErrInvalid), "install error=%v", err)
+		_, statErr := os.Stat(configDirectory)
+		testutil.Require(t, os.IsNotExist(statErr), "install wrote config directory: %v", statErr)
+	})
+	t.Run("direct uninstall", func(t *testing.T) {
+		configDirectory := filepath.Join(t.TempDir(), "opencode")
+		service := &Integration{now: time.Now, executable: "vgxness"}
+		_, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: configDirectory})
+		testutil.Require(t, errors.Is(err, integration.ErrInvalid), "uninstall error=%v", err)
+		_, statErr := os.Stat(configDirectory)
+		testutil.Require(t, os.IsNotExist(statErr), "uninstall wrote config directory: %v", statErr)
+	})
+}
+
+func TestIntegration_PersistsManagedLauncherAfterCandidateRemoval(t *testing.T) {
+	launcherPath := managedLauncherForTest(t)
+	t.Setenv("VGXNESS_LAUNCHER", launcherPath)
+	candidate := filepath.Join(t.TempDir(), "candidate", "vgxness")
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(candidate), 0o700))
+	manifest, err := launcher.Load(launcherPath)
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.Link(manifest.ActivePath, candidate))
+	service := newIntegration(candidate, launcherPath)
+	testutil.Require(t, service.executable == launcherPath, "integration executable=%q", service.executable)
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	installed, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.Remove(candidate))
+	config, err := os.ReadFile(installed.DefaultAgentPath)
+	testutil.NoError(t, err)
+	var values map[string]json.RawMessage
+	testutil.NoError(t, json.Unmarshal(config, &values))
+	mcp, exists, err := openCodeMCP(values)
+	testutil.NoError(t, err)
+	testutil.Require(t,
+		exists && strings.Contains(string(mcp), launcherPath) && strings.Contains(string(mcp), `"mcp"`) && strings.Contains(string(mcp), `"--full"`) && !strings.Contains(string(mcp), candidate),
+		"persisted MCP command does not use durable launcher: %s", mcp)
+	if _, err := os.Stat(filepath.Join(configDirectory, "plugins", memoryPluginName)); !os.IsNotExist(err) {
+		t.Fatalf("retired memory/SDD plugin was persisted: %v", err)
+	}
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.NoError(t, err)
+	testutil.Require(t, status.State == integration.StateInstalled, "status after candidate removal: %#v", status)
 }
 
 func TestNewPreviewIntegrationAcceptsOnlyAbsoluteCleanLauncherPath(t *testing.T) {
@@ -2772,6 +2944,11 @@ func TestTrustedLauncherRequiresManagedLauncherForCurrentActiveBinary(t *testing
 	managed, err := NewManagedIntegration(launcherPath)
 	testutil.NoError(t, err)
 	testutil.Require(t, managed.executable == launcherPath, "managed integration executable=%q", managed.executable)
+	installed, err := managed.Install(context.Background(), integration.Options{ConfigDir: filepath.Join(root, "opencode")})
+	testutil.NoError(t, err)
+	config, err := os.ReadFile(installed.DefaultAgentPath)
+	testutil.NoError(t, err)
+	testutil.Require(t, strings.Contains(string(config), launcherPath) && strings.Contains(string(config), `"mcp"`) && strings.Contains(string(config), `"--full"`), "MCP did not persist managed launcher: %s", config)
 	testutil.NoError(t, os.WriteFile(launcherPath, []byte("tampered"), 0o755))
 	if _, err := NewManagedIntegration(launcherPath); !errors.Is(err, integration.ErrInvalid) {
 		t.Fatalf("tampered managed launcher error=%v", err)
