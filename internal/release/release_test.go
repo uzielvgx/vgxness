@@ -343,6 +343,42 @@ func TestPublishAssetsDoesNotReplaceOutputFile(t *testing.T) {
 	}
 }
 
+func TestPublishAssetsRejectsForeignOutputAfterSuccessfulPublish(t *testing.T) {
+	parent := t.TempDir()
+	assets := filepath.Join(parent, "assets")
+	moved := filepath.Join(parent, "moved")
+	output := filepath.Join(parent, "output")
+	if err := os.Mkdir(assets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assets, "artifact"), []byte("owned"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	published, err := publishAssetsWithHooks(assets, output, func(source, destination string) error {
+		if err := os.Rename(source, moved); err != nil {
+			return err
+		}
+		if err := os.Mkdir(source, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(source, "artifact"), []byte("foreign"), 0o644); err != nil {
+			return err
+		}
+		return os.Rename(source, destination)
+	}, func(string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "publication conflict") || published {
+		t.Fatalf("publish result = %v, %v; want unpublished conflict", published, err)
+	}
+	foreign, err := os.ReadFile(filepath.Join(output, "artifact"))
+	if err != nil || string(foreign) != "foreign" {
+		t.Fatalf("foreign output = %q, %v", foreign, err)
+	}
+	owned, err := os.ReadFile(filepath.Join(moved, "artifact"))
+	if err != nil || string(owned) != "owned" {
+		t.Fatalf("moved staging = %q, %v", owned, err)
+	}
+}
+
 func fixtureFiles(executable string) []archiveFile {
 	return []archiveFile{
 		{name: executable, data: []byte("binary"), mode: 0o755},
