@@ -1,14 +1,21 @@
 # VGXNESS native manager flow
 
-The active product has one execution path: the installed OpenCode-native manager v46. OpenCode supplies workspace tools and Task workers. VGXNESS supplies exact managed profiles (`general` v6, verifier v4, and reviewers v3), model bindings, setup, lifecycle contracts, and MCP configuration. Managed OpenCode and generated Codex use `vgxness mcp --full`; no plugin, automatic memory recall, compaction, observability, or session identity is installed.
+The active product has provider-native OpenCode and Codex managers sharing `vgxness-orchestration/v1`. OpenCode supplies workspace tools and Task workers; Codex retains its native profiles and MCP tool semantics. VGXNESS supplies managed profiles, model bindings, setup, lifecycle contracts, and MCP configuration. No plugin, automatic memory recall, compaction, observability, or session identity is installed.
 
 ## Route selection
 
 The top-level `vgxness-manager` chooses the smallest capable route:
 
-1. direct inline work;
-2. bounded native read-only delegation;
-3. optional structured SDD after user approval.
+`vgxness-orchestration/v1` evaluates routing predicates in this order:
+
+1. accepted structured SDD;
+2. authorized implementation to general;
+3. direct only for non-repository work or one exact local read;
+4. structural and all other repository work to Explore.
+
+Structural Evidence Capsules carry the contract identity, source revision, source, stale flag, and contradiction flag. They may be reused only when identity and revision match and neither flag is set; stale, contradictory, missing, or mismatched evidence falls back to direct inspection.
+
+After candidate freeze, review depth is deterministic: zero lenses for passive docs/images, one reliability lens for ordinary work, and four lenses for concrete hot paths (including permissions, authentication, security, payments, installers, data loss, process boundaries, and durability).
 
 At most four independent read-only subworks may overlap. Synthesis, revision acceptance, OpenSpec writes, patch application, validation, projection recording, phase transitions, and all workspace writes remain sequential and manager-owned.
 

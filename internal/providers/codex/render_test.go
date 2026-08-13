@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
@@ -152,6 +153,17 @@ func TestRenderProducesNativeCodexProjection(t *testing.T) {
 	}
 }
 
+func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
+	if got := OrchestrationContractIdentity(); got != orchestration.ContractIdentity || !strings.Contains(content, orchestration.ContractPolicy) {
+		t.Errorf("Codex manager lacks shared contract %q", orchestration.ContractIdentity)
+	}
+}
+
 func TestManagerInstructionsCoverOpenCodeV46SectionParity(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
@@ -284,7 +296,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 5") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 6") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }
