@@ -1620,6 +1620,48 @@ func TestIntegrationRecoversCompleteV45BundleWithoutManifest(t *testing.T) {
 	testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled, "preview=%+v install=%+v", preview, installed)
 }
 
+func TestIntegrationUpgradesOnlyCompletePreConsolidationV1MediumPackage(t *testing.T) {
+	bundle, err := preConsolidationV1MediumBundle()
+	testutil.NoError(t, err)
+	for name, mutate := range map[string]func(modelPlanBundle){
+		"exact":   func(bundle modelPlanBundle) {},
+		"mutated": func(bundle modelPlanBundle) { bundle.agents[generalAgentName][0] ^= 1 },
+		"mixed": func(bundle modelPlanBundle) {
+			current, buildErr := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+			testutil.NoError(t, buildErr)
+			testutil.Require(t, !bytes.Equal(bundle.agents[generalAgentName], current.agents[generalAgentName]), "current general artifact unexpectedly matches predecessor")
+			bundle.agents[generalAgentName] = current.agents[generalAgentName]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "opencode")
+			agents := make(map[string][]byte, len(bundle.agents))
+			for agent, content := range bundle.agents {
+				agents[agent] = append([]byte(nil), content...)
+			}
+			candidate := modelPlanBundle{config: bundle.config, resolved: bundle.resolved, agents: agents, manifest: append([]byte(nil), bundle.manifest...)}
+			mutate(candidate)
+			for agent, content := range candidate.agents {
+				path := filepath.Join(root, "agents", agent)
+				testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+				testutil.NoError(t, os.WriteFile(path, content, 0o600))
+			}
+			testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
+			testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), candidate.manifest, 0o600))
+			service := NewIntegration()
+			preview, previewErr := service.Preview(context.Background(), integration.Options{ConfigDir: root})
+			installed, installErr := service.Install(context.Background(), integration.Options{ConfigDir: root})
+			if name == "exact" {
+				testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled && installed.Changed, "preview=%+v previewErr=%v installed=%+v installErr=%v", preview, previewErr, installed, installErr)
+				return
+			}
+			managerPath := filepath.Join(root, "agents", managerAgentName)
+			after, readErr := os.ReadFile(managerPath)
+			testutil.Require(t, previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, candidate.agents[managerAgentName]), "preview=%+v previewErr=%v installErr=%v", preview, previewErr, installErr)
+		})
+	}
+}
+
 func TestIntegrationRecoversCompleteV43BundleWithoutManifest(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())

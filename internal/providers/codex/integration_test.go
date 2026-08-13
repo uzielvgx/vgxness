@@ -153,6 +153,34 @@ func TestIntegrationReinstallMigratesLegacyStaticPackage(t *testing.T) {
 	require(t, err == nil && strings.Contains(string(general), `model = "gpt-5.6-sol"`) && strings.Contains(string(general), `model_reasoning_effort = "high"`))
 }
 
+func TestIntegrationReinstallsOnlyCompletePreConsolidationV4Package(t *testing.T) {
+	for name, mutate := range map[string]func(*Package){
+		"exact":   func(pkg *Package) {},
+		"mutated": func(pkg *Package) { pkg.Artifacts[1].Bytes[0] ^= 1 },
+		"mixed": func(pkg *Package) {
+			current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+			require(t, err == nil)
+			pkg.Artifacts[0] = current.Artifacts[0]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "codex")
+			pkg, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+			require(t, err == nil)
+			mutate(&pkg)
+			before := append([]byte(nil), pkg.Artifacts[1].Bytes...)
+			writePackage(t, root, pkg)
+			result, reinstallErr := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium})
+			if name == "exact" {
+				require(t, reinstallErr == nil && result.State == integration.StateInstalled && result.Changed)
+				return
+			}
+			after, readErr := os.ReadFile(filepath.Join(root, pkg.Artifacts[1].Path))
+			require(t, errors.Is(reinstallErr, integration.ErrDrift) && readErr == nil && string(after) == string(before))
+		})
+	}
+}
+
 func TestIntegrationPlanSwitchBlocksUnknownDrift(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()

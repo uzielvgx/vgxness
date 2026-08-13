@@ -63,6 +63,20 @@ func TestLegacyStaticPackageHasFrozenAggregateSHA256(t *testing.T) {
 	}
 }
 
+func TestPreConsolidationV4PackageValidatesExactly(t *testing.T) {
+	pkg, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pkg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	pkg.Artifacts[0].Bytes[0] ^= 1
+	if err := pkg.Validate(); err == nil {
+		t.Fatal("Validate accepted a mutated predecessor")
+	}
+}
+
 func TestRenderProducesNativeCodexProjection(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {

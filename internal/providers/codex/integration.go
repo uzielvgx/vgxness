@@ -67,6 +67,11 @@ func knownPackages() ([]Package, error) {
 		return nil, err
 	}
 	packages := []Package{legacy}
+	preConsolidation, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+	if err != nil {
+		return nil, err
+	}
+	packages = append(packages, preConsolidation)
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		pkg, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
