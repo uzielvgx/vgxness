@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/vgxness/vgxness/internal/orchestration"
+	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 const contextEvalSchemaVersion = 1
@@ -241,6 +244,13 @@ func TestManagerContextEvaluationAssets(t *testing.T) {
 		if containsString(string(baselineBytes), forbidden) {
 			t.Errorf("baseline contains prohibited holdout detail %q", forbidden)
 		}
+	}
+}
+
+func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil || OrchestrationContractIdentity() != orchestration.ContractIdentity || !strings.Contains(string(bundle.agents[managerAgentName]), orchestration.ContractPolicy) {
+		t.Errorf("OpenCode manager lacks shared contract %q", orchestration.ContractIdentity)
 	}
 }
 

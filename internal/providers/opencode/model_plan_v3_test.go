@@ -312,13 +312,38 @@ func TestRequestedModelPlanV2ReferenceOverrideClearsLegacyVariant(t *testing.T) 
 	}
 }
 
-func TestModelBoundAgentsPreserveTrustedV1Digest(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+func TestV46ManagerPredecessorPreservesTrustedV1Digest(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := previousV46ModelPlanBundle(current)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if digest := artifactSHA256(bundle.agents[managerAgentName]); digest != "b264537fd4835478abf416a3ff54ca2901c5e787e9d3f55f924dbb3f5eddc91e" {
 		t.Fatalf("trusted manager digest=%s", digest)
+	}
+}
+
+func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v46, err := previousV46ModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recognized, err := modelPlanBundleForManifest(v46.manifest, current.config); err != nil || artifactSHA256(recognized.agents[managerAgentName]) != artifactSHA256(v46.agents[managerAgentName]) {
+		t.Fatalf("manifest recognition = %v, %v", recognized, err)
+	}
+	predecessors, err := managerPredecessors(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(predecessors) == 0 || artifactSHA256(predecessors[0]) != artifactSHA256(v46.agents[managerAgentName]) {
+		t.Fatal("manifestless predecessor recognition lacks exact v46 manager")
 	}
 }
 

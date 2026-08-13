@@ -19,6 +19,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/launcher"
+	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
@@ -90,6 +91,10 @@ var previousReviewRefuterPromptV2 string
 
 //go:embed templates/explore.md
 var explorePrompt string
+
+// OrchestrationContractIdentity identifies the provider-neutral policy used by
+// this provider without changing OpenCode's native prompt or tool semantics.
+func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
 const (
 	managerAgentName             = "vgxness-manager.md"

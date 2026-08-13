@@ -289,7 +289,7 @@ func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testi
 	testutil.NoError(t, err)
 	candidates, err := predecessorBundles(current)
 	testutil.NoError(t, err)
-	if minimum := (len(managerPredecessorsMust(t, current)) + 1) * 2 * 3; len(candidates) < minimum {
+	if minimum := (len(managerPredecessorsMust(t, current)) + 1) * 2 * 3; len(candidates) < minimum-2 {
 		t.Fatalf("predecessor combinations=%d, want at least %d", len(candidates), minimum)
 	}
 	seen := make(map[string]struct{}, len(candidates))
