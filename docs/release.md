@@ -54,7 +54,9 @@ go run ./cmd/vgxness-release \
   --output /absolute/empty-or-new/dist
 ```
 
-The output directory must be absent or empty. The packager refuses traversal, malformed metadata, symlinks, files, and nonempty output directories. It stages all builds before reserving the output directory, then creates every archive and checksum there exclusively without replacing existing entries. If publication fails or the output changes concurrently, the command fails closed and may leave a partial, nonempty output directory for inspection; remove it or choose a new output path before retrying.
+The output directory must be absent. The packager refuses traversal, malformed metadata, symlinks, files, and existing output directories. It stages all builds before reserving the output directory, syncs every staged archive and `SHA256SUMS`, syncs the staging and output-parent directories where the platform supports it, then creates every archive and checksum there exclusively without replacing existing entries. If a required sync fails before publication, the command reports the retained staging directory. If publication or its post-publication parent sync fails, it reports the retained output path; inspect it before removing it or choosing a new output path for a retry.
+
+On Linux and macOS, file and directory sync errors are required failures. On Windows, `MoveFileExW` requests write-through publication, but Go does not provide equivalent directory-sync semantics here; staging and directory sync are therefore best-effort no-ops. This does not promise crash durability across Windows filesystems, devices, drivers, or power loss.
 
 ## Verify acquisition
 

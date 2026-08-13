@@ -343,6 +343,197 @@ func TestPublishAssetsDoesNotReplaceOutputFile(t *testing.T) {
 	}
 }
 
+func TestPackageRetainsStagingWhenArchiveSyncFails(t *testing.T) {
+	repository := releaseFixtureRepository(t)
+	parent := t.TempDir()
+	output := filepath.Join(parent, "dist")
+	errSync := errors.New("injected archive sync failure")
+	err := packageWithBuildAndHooks(context.Background(), releaseFixtureOptions(repository, output), releaseFixtureBuild, durabilityHooks{
+		syncFile: func(path string) error {
+			if strings.HasSuffix(path, ".tar.gz") || strings.HasSuffix(path, ".zip") {
+				return errSync
+			}
+			return nil
+		}, syncDirectory: func(string) error { return nil }, publish: publishNoReplace,
+	})
+	if !errors.Is(err, errSync) || !strings.Contains(err.Error(), "staging retained at") {
+		t.Fatalf("Package error = %v, want retained archive sync error", err)
+	}
+	assertRetainedStaging(t, parent)
+}
+
+func TestPackageRetainsStagingWhenChecksumsSyncFails(t *testing.T) {
+	repository := releaseFixtureRepository(t)
+	parent := t.TempDir()
+	output := filepath.Join(parent, "dist")
+	errSync := errors.New("injected checksum sync failure")
+	err := packageWithBuildAndHooks(context.Background(), releaseFixtureOptions(repository, output), releaseFixtureBuild, durabilityHooks{
+		syncFile: func(path string) error {
+			if filepath.Base(path) == "SHA256SUMS" {
+				return errSync
+			}
+			return nil
+		}, syncDirectory: func(string) error { return nil }, publish: publishNoReplace,
+	})
+	if !errors.Is(err, errSync) || !strings.Contains(err.Error(), "staging retained at") {
+		t.Fatalf("Package error = %v, want retained checksum sync error", err)
+	}
+	assertRetainedStaging(t, parent)
+}
+
+func TestPackageRetainsStagingWhenDirectorySyncFails(t *testing.T) {
+	repository := releaseFixtureRepository(t)
+	parent := t.TempDir()
+	output := filepath.Join(parent, "dist")
+	errSync := errors.New("injected staging directory sync failure")
+	err := packageWithBuildAndHooks(context.Background(), releaseFixtureOptions(repository, output), releaseFixtureBuild, durabilityHooks{
+		syncFile: func(string) error { return nil },
+		syncDirectory: func(path string) error {
+			if path != parent {
+				return errSync
+			}
+			return nil
+		}, publish: publishNoReplace,
+	})
+	if !errors.Is(err, errSync) || !strings.Contains(err.Error(), "staging retained at") {
+		t.Fatalf("Package error = %v, want retained staging directory sync error", err)
+	}
+	assertRetainedStaging(t, parent)
+}
+
+func TestPackageReportsPublishedOutputWhenPublicationPartiallyFails(t *testing.T) {
+	repository := releaseFixtureRepository(t)
+	output := filepath.Join(t.TempDir(), "dist")
+	errPublish := errors.New("injected partial publication failure")
+	err := packageWithBuildAndHooks(context.Background(), releaseFixtureOptions(repository, output), releaseFixtureBuild, durabilityHooks{
+		syncFile: func(string) error { return nil }, syncDirectory: func(string) error { return nil },
+		publish: func(source, destination string) error {
+			if err := os.Rename(source, destination); err != nil {
+				return err
+			}
+			return errPublish
+		},
+	})
+	if !errors.Is(err, errPublish) || !strings.Contains(err.Error(), "published output retained at") {
+		t.Fatalf("Package error = %v, want retained published output", err)
+	}
+	if _, err := os.Stat(filepath.Join(output, "SHA256SUMS")); err != nil {
+		t.Fatalf("published evidence unavailable: %v", err)
+	}
+}
+
+func TestPackageReportsPublishedOutputWhenOutputParentSyncFails(t *testing.T) {
+	repository := releaseFixtureRepository(t)
+	parent := t.TempDir()
+	output := filepath.Join(parent, "dist")
+	errSync := errors.New("injected output parent sync failure")
+	parentSyncs := 0
+	err := packageWithBuildAndHooks(context.Background(), releaseFixtureOptions(repository, output), releaseFixtureBuild, durabilityHooks{
+		syncFile: func(string) error { return nil },
+		syncDirectory: func(path string) error {
+			if path == parent {
+				parentSyncs++
+				if parentSyncs == 2 {
+					return errSync
+				}
+			}
+			return nil
+		}, publish: publishNoReplace,
+	})
+	if !errors.Is(err, errSync) || !strings.Contains(err.Error(), "published output retained at") {
+		t.Fatalf("Package error = %v, want retained published output parent sync error", err)
+	}
+	if _, err := os.Stat(filepath.Join(output, "SHA256SUMS")); err != nil {
+		t.Fatalf("published evidence unavailable: %v", err)
+	}
+}
+
+func TestPackageDoesNotPublishWhenParentSyncCancelsContext(t *testing.T) {
+	repository := releaseFixtureRepository(t)
+	parent := t.TempDir()
+	output := filepath.Join(parent, "dist")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	published := false
+	err := packageWithBuildAndHooks(ctx, releaseFixtureOptions(repository, output), releaseFixtureBuild, durabilityHooks{
+		syncFile: func(string) error { return nil },
+		syncDirectory: func(path string) error {
+			if path == parent {
+				cancel()
+			}
+			return nil
+		},
+		publish: func(string, string) error {
+			published = true
+			return nil
+		},
+	})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "staging retained at") {
+		t.Fatalf("Package error = %v, want retained context.Canceled", err)
+	}
+	if published {
+		t.Fatal("publish called after cancellation")
+	}
+	if _, statErr := os.Lstat(output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("output exists after cancellation: %v", statErr)
+	}
+	assertRetainedStaging(t, parent)
+}
+
+func TestPackageRetainsStagingWhenPublicationErrorLeavesForeignOutput(t *testing.T) {
+	repository := releaseFixtureRepository(t)
+	parent := t.TempDir()
+	output := filepath.Join(parent, "dist")
+	errPublish := errors.New("injected publication failure")
+	err := packageWithBuildAndHooks(context.Background(), releaseFixtureOptions(repository, output), releaseFixtureBuild, durabilityHooks{
+		syncFile: func(string) error { return nil }, syncDirectory: func(string) error { return nil },
+		publish: func(_, destination string) error {
+			if err := os.Mkdir(destination, 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(destination, "foreign"), []byte("foreign"), 0o644); err != nil {
+				return err
+			}
+			return errPublish
+		},
+	})
+	if !errors.Is(err, errPublish) || !strings.Contains(err.Error(), "publication conflict") || !strings.Contains(err.Error(), "staging retained at") {
+		t.Fatalf("Package error = %v, want retained staging publication conflict", err)
+	}
+	assertRetainedStaging(t, parent)
+	data, err := os.ReadFile(filepath.Join(output, "foreign"))
+	if err != nil || string(data) != "foreign" {
+		t.Fatalf("foreign output = %q, %v", data, err)
+	}
+}
+
+func releaseFixtureRepository(t *testing.T) string {
+	t.Helper()
+	repository := t.TempDir()
+	for name, contents := range map[string]string{"LICENSE": "license", "README.md": "readme"} {
+		if err := os.WriteFile(filepath.Join(repository, name), []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repository
+}
+
+func releaseFixtureOptions(repository, output string) Options {
+	return Options{Version: "v0.1.0-alpha.1", Commit: testCommit, Date: "2026-07-29T01:02:03Z", Output: output, Repository: repository}
+}
+
+func releaseFixtureBuild(_ context.Context, _, binaryPath string, _ target, _ Options) error {
+	return os.WriteFile(binaryPath, []byte("binary"), 0o755)
+}
+
+func assertRetainedStaging(t *testing.T, parent string) {
+	t.Helper()
+	stages, err := filepath.Glob(filepath.Join(parent, ".vgxness-release-*"))
+	if err != nil || len(stages) != 1 {
+		t.Fatalf("retained staging = %q, %v", stages, err)
+	}
+}
+
 func fixtureFiles(executable string) []archiveFile {
 	return []archiveFile{
 		{name: executable, data: []byte("binary"), mode: 0o755},
