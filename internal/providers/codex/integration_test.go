@@ -12,6 +12,26 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
+func TestKnownPackagesRecognizeActiveV6ForEveryPlan(t *testing.T) {
+	known, err := knownPackages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+		v6, err := renderActiveV6("v0.0.0", plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, pkg := range known {
+			found = found || pkg.SHA256 == v6.SHA256
+		}
+		if !found {
+			t.Errorf("known packages omit active v6 %s", plan)
+		}
+	}
+}
+
 func TestIntegrationReinstallSwitchesAndPersistsModelPlan(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()

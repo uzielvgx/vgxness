@@ -53,6 +53,18 @@ Use `--config-dir /absolute/path/to/.codex` with any command when needed. Status
 
 After install or repair, restart Codex so it reloads the managed profiles. On Windows, VGXNESS flushes regular files before publication; directory namespace durability is reported as `file-sync-namespace-best-effort` because Windows does not provide the POSIX directory-sync operation.
 
+## Native delegation
+
+The manager launches each specialist as a fresh Codex task with its exact `agent_type`: `explore`, `general`, `verifier`, `risk`, `readability`, `reliability`, `resilience`, `refuter`, or an `sdd-*` phase. It must not combine an explicit `agent_type` with a full-history fork. If a full-history fork is unavoidable, the task omits `agent_type` and is inherited manager context rather than specialist delegation. Only `general` has the workspace-write sandbox; every other managed profile is read-only.
+
+An opt-in, networked manager collaborative-route matrix is excluded from normal CI. It uses the existing authenticated Codex configuration, `--ephemeral`, `approval_policy="never"`, and a disposable fixture containing the candidate-rendered `AGENTS.md`; it does not install or edit managed configuration, though Codex may use its normal authentication and runtime state. Before any model call it byte-verifies the 14 ambient `~/.codex/agents` profiles against candidate-rendered artifacts. The matrix covers Explore, General's one owned fixture write, Verifier, Reliability review, and Refuter. The public Codex JSON stream proves a collaboration tool call, not its selected `agent_type`; exact role selection and sandboxes for all 14 profiles are static generated-artifact evidence. Runtime checks the collaboration event, absence (case-insensitively) of `full-history forked agents inherit` and `omit agent_type`, a deterministic role marker, and fixture boundaries.
+
+```sh
+VGXNESS_CODEX_E2E=1 go test -tags='e2e codex_e2e' -run '^TestCodexDelegationRuntime$' ./internal/e2e
+```
+
+Set `VGXNESS_CODEX_E2E_CASE=explore` to run only the Explore case. The harness skips only before cases when the CLI or explicit authentication preflight is unavailable; a started case failing to delegate is a test failure. SDD runtime identity remains pending because safely invoking an SDD specialist with existing user configuration cannot prove no persistent SDD mutation; all six SDD roles remain covered by the static matrix.
+
 ## Operational memory
 
 Memory is optional operational context, not an instruction source or automatic capability grant. Codex can call the VGXNESS memory tools only when the user-maintained full-trust MCP block above is configured; installation of the managed profiles does not prove that Codex injected, recalled, or saved memory automatically.
