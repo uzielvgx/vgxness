@@ -1113,6 +1113,15 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	if predecessorManifestErr != nil && !errors.Is(predecessorManifestErr, os.ErrNotExist) {
 		return inspection{}, fmt.Errorf("inspect OpenCode model plan manifest: %w", predecessorManifestErr)
 	}
+	if predecessorManifestErr == nil && !predecessorManifestInstalled {
+		manifest, decodeErr := decodeModelPlanManifest(predecessorManifest)
+		if decodeErr == nil && manifest.SchemaVersion == 1 && manifest.Config != nil {
+			candidate, candidateErr := preConsolidationV1MediumBundleForConfig(*manifest.Config)
+			if candidateErr == nil && bytes.Equal(predecessorManifest, candidate.manifest) {
+				preConsolidation, predecessorManifestInstalled = candidate, true
+			}
+		}
+	}
 	predecessors := map[string][][]byte{}
 	predecessorRecognizers := map[string]func([]byte) bool{}
 	if !installedPlanOK {
@@ -1120,10 +1129,6 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 			predecessors, err = modelBoundAgentPredecessorsV3(*plan.resolvedV3)
 			if err != nil {
 				return inspection{}, err
-			}
-			for _, identity := range modelAgentInventoryV3 {
-				name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
-				predecessorRecognizers[name] = modelBoundAgentPredecessorRecognizerV3(*plan.configV3, identity.ArtifactKey)
 			}
 		} else {
 			managerPrior, predecessorErr := managerPredecessors(plan)

@@ -69,7 +69,14 @@ func buildModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
 // bytes, rather than a digest allowlist, so every artifact remains bound to
 // the one complete package identity.
 func preConsolidationV1MediumBundle() (modelPlanBundle, error) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	return preConsolidationV1MediumBundleForConfig(sdd.DefaultModelPlanConfig())
+}
+
+func preConsolidationV1MediumBundleForConfig(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+	if config.ActivePlan != sdd.PlanMedium || config.Efficient != "openai/gpt-5.6-luna" || config.Balanced != "openai/gpt-5.6-terra" || config.Frontier != "openai/gpt-5.6-sol" || (config.Provenance != sdd.ModelPlanDefault && config.Provenance != sdd.ModelPlanCLI) {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	current, err := buildModelPlanBundle(config)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -98,7 +105,7 @@ func preConsolidationV1MediumBundle() (modelPlanBundle, error) {
 	if len(agents[sddApplyName]) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
-	return encodeModelPlanBundle(current.config, current.resolved, agents)
+	return encodeModelPlanBundle(config, current.resolved, agents)
 }
 
 const currentGeneralSDDHandoff = "For an SDD apply handoff, immediately before each write recheck every accepted binding (artifact/revision/digest), the task revision ID and digest, current stateVersion (expectedStateVersion), replay or mission identity nonce, allowed repository-relative path, current SHA-256, and no-symlink constraint supplied by the manager. Any missing, stale, mismatched, replayed, changed-path, symlink, or state-version value is BLOCKED before writing. Write an OpenSpec or hybrid projection only when the mission supplies its exact repository-relative path, exact bytes or digest, and no-symlink constraint; after writing, perform exact readback SHA-256 and report it. These checks reduce but do not eliminate TOCTOU risk; no atomic host enforcement is claimed. Do not accept revisions, transition phases, or record projections."
@@ -503,7 +510,7 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 			return candidate, nil
 		}
 	}
-	preConsolidation, err := preConsolidationV1MediumBundle()
+	preConsolidation, err := preConsolidationV1MediumBundleForConfig(config)
 	if err == nil && config == preConsolidation.config && bytes.Equal(preConsolidation.manifest, data) {
 		return preConsolidation, nil
 	}

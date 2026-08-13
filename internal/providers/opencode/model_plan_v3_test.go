@@ -340,8 +340,29 @@ func TestPreConsolidationV1MediumBundleIsExactAndRejectsMutations(t *testing.T) 
 			t.Fatalf("%s digest=%s, want prefix %s", name, got, want)
 		}
 	}
+	if digest := artifactSHA256(bundle.manifest); digest != "bf07e85359a185f4ce05e642b8b6acba950ebb954211549c7a870d8de330364c" {
+		t.Fatalf("default-openai-catalog manifest digest=%s", digest)
+	}
 	if _, err := modelPlanBundleForManifest(bundle.manifest, bundle.config); err != nil {
 		t.Fatalf("exact predecessor manifest rejected: %v", err)
+	}
+	setupCLI := bundle.config
+	setupCLI.Provenance = sdd.ModelPlanCLI
+	setup, err := preConsolidationV1MediumBundleForConfig(setupCLI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest := artifactSHA256(setup.manifest); digest != "6cec48b749f130a6a8fd3221f47188e64dc251f18997771448622c127d24c4d0" {
+		t.Fatalf("setup-cli manifest digest=%s", digest)
+	}
+	if _, err := modelPlanBundleForManifest(setup.manifest, setup.config); err != nil {
+		t.Fatalf("setup-cli predecessor manifest rejected: %v", err)
+	}
+	unknown := setup.config
+	unknown.Provenance = "unknown"
+	unknownManifest := bytes.Replace(setup.manifest, []byte(`"provenance": "setup-cli"`), []byte(`"provenance": "unknown"`), -1)
+	if _, err := modelPlanBundleForManifest(unknownManifest, unknown); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("unknown provenance accepted: %v", err)
 	}
 	modified := append([]byte(nil), bundle.manifest...)
 	modified[len(modified)-2] ^= 1
