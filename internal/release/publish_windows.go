@@ -24,4 +24,9 @@ func publishNoReplace(source, destination string) error {
 	return nil
 }
 
+// Windows does not provide the directory fsync semantics required by the
+// release transition; MoveFileExW requests write-through for the rename.
+func syncFilePath(string) error      { return nil }
+func syncDirectoryPath(string) error { return nil }
+
 const moveFileWriteThrough = 0x8

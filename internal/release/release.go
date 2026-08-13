@@ -55,6 +55,12 @@ type archiveFile struct {
 	mode os.FileMode
 }
 
+type durabilityHooks struct {
+	syncFile      func(string) error
+	syncDirectory func(string) error
+	publish       func(string, string) error
+}
+
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("vgxness-release", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -84,10 +90,25 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func Package(ctx context.Context, options Options) error {
-	return packageWithBuild(ctx, options, build)
+	return packageWithBuildAndHooks(ctx, options, build, durabilityHooks{
+		syncFile:      syncFilePath,
+		syncDirectory: syncDirectoryPath,
+		publish:       publishNoReplace,
+	})
 }
 
 func packageWithBuild(ctx context.Context, options Options, builder func(context.Context, string, string, target, Options) error) error {
+	return packageWithBuildAndHooks(ctx, options, builder, durabilityHooks{
+		syncFile:      syncFilePath,
+		syncDirectory: syncDirectoryPath,
+		publish:       publishNoReplace,
+	})
+}
+
+func packageWithBuildAndHooks(ctx context.Context, options Options, builder func(context.Context, string, string, target, Options) error, hooks durabilityHooks) (resultErr error) {
+	if hooks.syncFile == nil || hooks.syncDirectory == nil || hooks.publish == nil {
+		return errors.New("invalid release durability hooks")
+	}
 	date, err := validateMetadata(options.Version, options.Commit, options.Date)
 	if err != nil {
 		return err
@@ -121,7 +142,16 @@ func packageWithBuild(ctx context.Context, options Options, builder func(context
 	if err != nil {
 		return fmt.Errorf("create staging directory: %w", err)
 	}
-	defer os.RemoveAll(stage)
+	stageRetained := true
+	defer func() {
+		if !stageRetained {
+			_ = os.RemoveAll(stage)
+			return
+		}
+		if resultErr != nil {
+			resultErr = fmt.Errorf("%w; staging retained at %s", resultErr, stage)
+		}
+	}()
 	assets := stage
 	work := filepath.Join(stage, "work")
 	if err := os.Mkdir(work, 0o755); err != nil {
@@ -168,6 +198,9 @@ func packageWithBuild(ctx context.Context, options Options, builder func(context
 		if err != nil {
 			return fmt.Errorf("package %s/%s: %w", target.os, target.arch, err)
 		}
+		if err := hooks.syncFile(archivePath); err != nil {
+			return fmt.Errorf("sync staged archive %s: %w", archiveName, err)
+		}
 		archives = append(archives, archiveName)
 	}
 	if err := ctx.Err(); err != nil {
@@ -179,9 +212,25 @@ func packageWithBuild(ctx context.Context, options Options, builder func(context
 	if err := writeChecksums(assets, archives); err != nil {
 		return err
 	}
-	if err := publishAssets(assets, output); err != nil {
+	checksums := filepath.Join(assets, "SHA256SUMS")
+	if err := hooks.syncFile(checksums); err != nil {
+		return fmt.Errorf("sync staged SHA256SUMS: %w", err)
+	}
+	if err := hooks.syncDirectory(assets); err != nil {
+		return fmt.Errorf("sync staging directory: %w", err)
+	}
+	if err := hooks.syncDirectory(parent); err != nil {
+		return fmt.Errorf("sync output parent before publish: %w", err)
+	}
+	published, err := publishAssetsWithHooks(assets, output, hooks.publish, hooks.syncDirectory)
+	if err != nil {
+		if published {
+			stageRetained = false
+			return fmt.Errorf("%w; published output retained at %s", err, output)
+		}
 		return err
 	}
+	stageRetained = false
 	return nil
 }
 
@@ -190,28 +239,55 @@ func publishAssets(assets, output string) error {
 }
 
 func publishAssetsWith(assets, output string, publish func(string, string) error) error {
+	_, err := publishAssetsWithHooks(assets, output, publish, syncDirectoryPath)
+	return err
+}
+
+func publishAssetsWithHooks(assets, output string, publish func(string, string) error, syncDirectory func(string) error) (bool, error) {
+	staged, err := os.Open(assets)
+	if err != nil {
+		return false, fmt.Errorf("open staged assets: %w", err)
+	}
+	defer staged.Close()
+	stagedInfo, err := staged.Stat()
+	if err != nil {
+		return false, fmt.Errorf("inspect staged assets: %w", err)
+	}
 	entries, err := os.ReadDir(assets)
 	if err != nil {
-		return fmt.Errorf("read staged assets: %w", err)
+		return false, fmt.Errorf("read staged assets: %w", err)
 	}
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
-			return fmt.Errorf("inspect staged asset %s: %w", entry.Name(), err)
+			return false, fmt.Errorf("inspect staged asset %s: %w", entry.Name(), err)
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("staged asset %s is not a regular file", entry.Name())
+			return false, fmt.Errorf("staged asset %s is not a regular file", entry.Name())
 		}
 	}
 	if _, err := os.Lstat(output); err == nil {
-		return errors.New("output changed before publish: output already exists")
+		return false, errors.New("output changed before publish: output already exists")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect output before publish: %w", err)
+		return false, fmt.Errorf("inspect output before publish: %w", err)
 	}
 	if err := publish(assets, output); err != nil {
-		return fmt.Errorf("publish staged release: %w", err)
+		outputInfo, statErr := os.Stat(output)
+		if statErr == nil && os.SameFile(stagedInfo, outputInfo) {
+			return true, fmt.Errorf("publish staged release: %w", err)
+		}
+		if statErr == nil {
+			return false, fmt.Errorf("publish staged release: %w; publication conflict: output identity differs", err)
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return false, fmt.Errorf("publish staged release: %w; inspect output identity: %v", err, statErr)
+		}
+		return false, fmt.Errorf("publish staged release: %w", err)
 	}
-	return nil
+	if err := syncDirectory(filepath.Dir(output)); err != nil {
+		return true, fmt.Errorf("sync output parent after publish: %w", err)
+	}
+	return true, nil
 }
 
 func validateMetadata(version, commit, date string) (time.Time, error) {
