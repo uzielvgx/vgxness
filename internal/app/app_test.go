@@ -3,15 +3,19 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/vgxness/vgxness/internal/cli"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/launcher"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
@@ -22,6 +26,45 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 	"github.com/vgxness/vgxness/internal/tui"
 )
+
+func managedLauncherForTest(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := launcher.FileSHA256(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(root, "data")
+	activePath := launcher.VersionPath(dataDir, digest)
+	launcherPath := filepath.Join(root, "bin", "vgxness")
+	for _, path := range []string{filepath.Dir(activePath), filepath.Dir(launcherPath)} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(activePath, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(activePath, launcherPath); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal(launcher.Manifest{SchemaVersion: launcher.SchemaVersion, ManagedBy: launcher.ManagedBy, LauncherPath: launcherPath, LauncherSHA256: digest, DataDir: dataDir, ActivePath: activePath, ActiveSHA256: digest, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher.SidecarPath(launcherPath), append(manifest, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return launcherPath
+}
 
 type recordingTUIMemoryRuntime struct {
 	recall     memory.Recall
@@ -206,15 +249,20 @@ func TestMemoryRuntime_SaveCloseAndOfflineRestart(t *testing.T) {
 }
 
 func TestOpenCodeIntegrationRuntime_InstallStatusAndRecoverableUninstall(t *testing.T) {
+	integrationRuntime, err := opencode.NewManagedIntegration(managedLauncherForTest(t))
+	testutil.NoError(t, err)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	var out, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"integrate", "opencode", "install", "--model", "openai/gpt-5.6-sol", "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
+	run := func(args []string) int {
+		return runWithMCPAndRuntimes(context.Background(), args, strings.NewReader(""), &out, &stderr, tui.Run, cli.RunMCP, appRuntimes{opencode: integrationRuntime})
+	}
+	code := run([]string{"integrate", "opencode", "install", "--model", "openai/gpt-5.6-sol", "--config-dir", configDirectory})
 	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=installed") && stderr.Len() == 0, "install exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
 	out.Reset()
-	code = Run(context.Background(), []string{"integrate", "opencode", "status", "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
+	code = run([]string{"integrate", "opencode", "status", "--config-dir", configDirectory})
 	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=installed") && strings.Contains(out.String(), "changed=false"), "status exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
 	out.Reset()
-	code = Run(context.Background(), []string{"integrate", "opencode", "uninstall", "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
+	code = run([]string{"integrate", "opencode", "uninstall", "--config-dir", configDirectory})
 	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=absent") && strings.Contains(out.String(), "backup="), "uninstall exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
 }
 

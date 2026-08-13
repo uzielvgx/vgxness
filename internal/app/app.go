@@ -37,11 +37,20 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 type tuiLauncher func(context.Context, io.Reader, io.Writer, io.Writer, tui.Backend, tui.Options) int
 type mcpLauncher func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int
 
+type appRuntimes struct {
+	opencode integration.Runtime
+	codex    integration.Runtime
+}
+
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher) int {
 	return runWithMCP(ctx, args, stdin, stdout, stderr, launchTUI, cli.RunMCP)
 }
 
 func runWithMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher, launchMCP mcpLauncher) int {
+	return runWithMCPAndRuntimes(ctx, args, stdin, stdout, stderr, launchTUI, launchMCP, appRuntimes{opencode: opencode.NewIntegration(), codex: codex.NewIntegration()})
+}
+
+func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher, launchMCP mcpLauncher, runtimes appRuntimes) int {
 	if len(args) > 0 && args[0] == "version" {
 		return cli.RunVersion(args[1:], stdout, stderr)
 	}
@@ -60,8 +69,14 @@ func runWithMCP(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return 2
 	}
 	installer := selfinstall.New(selfinstall.Config{})
-	integrationRuntime := opencode.NewIntegration()
-	codexIntegrationRuntime := codex.NewIntegration()
+	integrationRuntime := runtimes.opencode
+	if integrationRuntime == nil {
+		integrationRuntime = opencode.NewIntegration()
+	}
+	codexIntegrationRuntime := runtimes.codex
+	if codexIntegrationRuntime == nil {
+		codexIntegrationRuntime = codex.NewIntegration()
+	}
 	cliMemory := appruntime.NewMemory("cli", false)
 	setupRuntime := setupflow.NewWithRecovery(
 		installer,
