@@ -23,7 +23,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 47",
+		"artifact: opencode-agent/vgxness-manager; version: 48",
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
 		"managed global portable catalog",
@@ -71,7 +71,7 @@ func TestV46UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	for _, required := range []string{"version: 47", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
+	for _, required := range []string{"version: 48", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
 		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
 			t.Errorf("manager missing compact protocol %q", required)
 		}
@@ -321,7 +321,7 @@ func TestGeneralV6RequiresConciseDecisiveReturns(t *testing.T) {
 	testutil.NoError(t, err)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/general; version: 6",
+		"artifact: opencode-agent/general; version: 7",
 		"Ordinary implementation returns are entire compact Child Return Envelope v1 JSON objects serialized as UTF-8 and target <=512 bytes with status, changed paths, exact checks/results, and blockers only when present.",
 		"Candidate identity, authorization, acceptance, and INCONCLUSIVE evidence are mandatory only",
 		"The <=16 KiB envelope applies only to full-assurance frozen, risky, verification, or SDD missions.",
@@ -411,7 +411,7 @@ func TestV46RoutesDirectSingleReadAndKeepsFullAssuranceExceptions(t *testing.T) 
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 47",
+		"artifact: opencode-agent/vgxness-manager; version: 48",
 		"Directly answer a repository read-only informational request only when the user names an exact local file or asks for the standard root README, one read suffices, and no search, graph traversal, cross-file inference, architecture/flow analysis, or diagnosis is needed.",
 		"Otherwise use Explore; implementations remain delegated to managed general.",
 		"For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`.",
@@ -443,7 +443,7 @@ func TestGeneralV6UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 	testutil.NoError(t, err)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/general; version: 6",
+		"artifact: opencode-agent/general; version: 7",
 		"Ordinary bounded missions are entire compact JSON objects serialized as UTF-8 and target <=512 bytes",
 		"Ordinary implementation returns are entire compact Child Return Envelope v1 JSON objects serialized as UTF-8 and target <=512 bytes with status, changed paths, exact checks/results, and blockers only when present.",
 		"Candidate identity, authorization, acceptance, and INCONCLUSIVE evidence are mandatory only when supplied or required by a frozen, risky, verification, or SDD mission.",

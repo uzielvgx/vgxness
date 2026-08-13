@@ -26,6 +26,9 @@ import (
 //go:embed templates/manager.md
 var canonicalManagerPrompt string
 
+//go:embed templates/manager.v46.md
+var previousManagerPromptV46 string
+
 //go:embed templates/manager.v45.md
 var previousManagerPromptV45 string
 
@@ -58,6 +61,9 @@ var previousAutonomousStackedPRSkillV2 string
 
 //go:embed templates/general.md
 var canonicalGeneralPrompt string
+
+//go:embed templates/general.v6.md
+var previousGeneralPromptV6 string
 
 //go:embed templates/general.v4.md
 var previousGeneralPromptV4 string
@@ -1191,7 +1197,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: predecessors[managerAgentName], regenerations: regeneration(managerPath)},
 		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{previousExplorePredecessor(plan.agents[exploreAgentName])}, regenerations: regeneration(explorePath)},
-		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: append(predecessors[generalAgentName], previousGeneralPredecessor(plan.agents[generalAgentName])), regenerations: regeneration(generalPath)},
+		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: predecessors[generalAgentName], regenerations: regeneration(generalPath)},
 		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: append(predecessors[verifierAgentName], previousVerifierPredecessor(plan.agents[verifierAgentName])), regenerations: regeneration(verifierPath)},
 		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: predecessors[reviewRiskName], regenerations: regeneration(reviewRiskPath)},
 		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: predecessors[reviewReadabilityName], regenerations: regeneration(reviewReadabilityPath)},

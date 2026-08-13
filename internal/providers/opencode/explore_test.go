@@ -200,7 +200,9 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 	service, options := NewIntegration(), integration.Options{ConfigDir: config}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	broadPredecessor, err := previousBroadPermissionModelPlanBundle(current)
+	v47, err := previousV47ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	broadPredecessor, err := previousBroadPermissionModelPlanBundle(v47)
 	testutil.NoError(t, err)
 	prior, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
