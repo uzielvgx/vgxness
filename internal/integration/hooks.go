@@ -1,0 +1,80 @@
+package integration
+
+import (
+	"context"
+
+	"github.com/vgxness/vgxness/internal/hooks"
+)
+
+// Observe adds best-effort lifecycle observation without changing runtime results.
+func Observe(runtime Runtime, emitter hooks.Emitter) Runtime {
+	if emitter == nil || runtime == nil {
+		return runtime
+	}
+	if managed, ok := runtime.(ManagedRuntime); ok {
+		return observedManaged{ManagedRuntime: managed, emitter: emitter}
+	}
+	return observedRuntime{Runtime: runtime, emitter: emitter}
+}
+
+type observedRuntime struct {
+	Runtime
+	emitter hooks.Emitter
+}
+
+func (r observedRuntime) Preview(ctx context.Context, options Options) (Result, error) {
+	result, err := r.Runtime.Preview(ctx, options)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationPreviewCompleted, result, err)
+	return result, err
+}
+func (r observedRuntime) Install(ctx context.Context, options Options) (Result, error) {
+	result, err := r.Runtime.Install(ctx, options)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationInstallCompleted, result, err)
+	return result, err
+}
+func (r observedRuntime) Status(ctx context.Context, options Options) (Result, error) {
+	result, err := r.Runtime.Status(ctx, options)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationStatusCompleted, result, err)
+	return result, err
+}
+func (r observedRuntime) Uninstall(ctx context.Context, options Options) (Result, error) {
+	result, err := r.Runtime.Uninstall(ctx, options)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationUninstallCompleted, result, err)
+	return result, err
+}
+
+type observedManaged struct {
+	ManagedRuntime
+	emitter hooks.Emitter
+}
+
+func (r observedManaged) Preview(ctx context.Context, o Options) (Result, error) {
+	result, err := r.ManagedRuntime.Preview(ctx, o)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationPreviewCompleted, result, err)
+	return result, err
+}
+func (r observedManaged) Install(ctx context.Context, o Options) (Result, error) {
+	result, err := r.ManagedRuntime.Install(ctx, o)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationInstallCompleted, result, err)
+	return result, err
+}
+func (r observedManaged) Status(ctx context.Context, o Options) (Result, error) {
+	result, err := r.ManagedRuntime.Status(ctx, o)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationStatusCompleted, result, err)
+	return result, err
+}
+func (r observedManaged) Uninstall(ctx context.Context, o Options) (Result, error) {
+	result, err := r.ManagedRuntime.Uninstall(ctx, o)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationUninstallCompleted, result, err)
+	return result, err
+}
+func emitIntegration(ctx context.Context, emitter hooks.Emitter, build func(string, string, bool, string, int64, bool) (hooks.Draft, error), result Result, err error) {
+	if err != nil {
+		return
+	}
+	defer func() { recover() }()
+	draft, err := build(result.Provider, string(result.State), result.Changed, result.ArtifactSHA256, int64(result.ArtifactCount), result.RestartRequired)
+	if err == nil {
+		emitter.Emit(ctx, draft)
+	}
+}

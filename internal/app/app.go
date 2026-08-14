@@ -13,6 +13,7 @@ import (
 	appruntime "github.com/vgxness/vgxness/internal/app/runtime"
 	"github.com/vgxness/vgxness/internal/cli"
 	"github.com/vgxness/vgxness/internal/config"
+	"github.com/vgxness/vgxness/internal/hooks"
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -38,8 +39,9 @@ type tuiLauncher func(context.Context, io.Reader, io.Writer, io.Writer, tui.Back
 type mcpLauncher func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int
 
 type appRuntimes struct {
-	opencode integration.Runtime
-	codex    integration.Runtime
+	opencode   integration.Runtime
+	codex      integration.Runtime
+	dispatcher *hooks.Dispatcher
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher) int {
@@ -51,6 +53,11 @@ func runWithMCP(ctx context.Context, args []string, stdin io.Reader, stdout, std
 }
 
 func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher, launchMCP mcpLauncher, runtimes appRuntimes) int {
+	dispatcher := runtimes.dispatcher
+	if dispatcher == nil {
+		dispatcher = hooks.New()
+	}
+	defer dispatcher.Close()
 	if len(args) > 0 && args[0] == "version" {
 		return cli.RunVersion(args[1:], stdout, stderr)
 	}
@@ -73,16 +80,26 @@ func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, 
 	if integrationRuntime == nil {
 		integrationRuntime = opencode.NewIntegration()
 	}
+	integrationRuntime = integration.Observe(integrationRuntime, dispatcher)
 	codexIntegrationRuntime := runtimes.codex
 	if codexIntegrationRuntime == nil {
 		codexIntegrationRuntime = codex.NewIntegration()
 	}
-	cliMemory := appruntime.NewMemory("cli", false)
+	codexIntegrationRuntime = integration.Observe(codexIntegrationRuntime, dispatcher)
+	cliMemory := appruntime.NewMemoryWithHooks("cli", false, dispatcher)
 	setupRuntime := setupflow.NewWithRecovery(
 		installer,
 		integrationRuntime,
 		func(executable string) (integration.ManagedRuntime, error) {
-			return opencode.NewManagedIntegration(executable)
+			runtime, err := opencode.NewManagedIntegration(executable)
+			if err != nil {
+				return nil, err
+			}
+			managed, ok := integration.Observe(runtime, dispatcher).(integration.ManagedRuntime)
+			if !ok {
+				return nil, errors.New("operational: managed integration observation unavailable")
+			}
+			return managed, nil
 		},
 		func(options opencodebackup.Options) (setupflow.BackupEngine, error) {
 			return opencodebackup.New(options)
@@ -101,12 +118,13 @@ func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, 
 			opencode:   integrationRuntime,
 			codex:      codexIntegrationRuntime,
 			recovery:   setupRuntime,
-			memory:     appruntime.NewMemory("cli", true),
+			memory:     appruntime.NewMemoryWithHooks("cli", true, dispatcher),
 			catalog:    modelcatalog.NewOpenCode("", nil, modelcatalog.Options{}),
+			hooks:      dispatcher,
 		}
 		return launchTUI(ctx, stdin, stdout, stderr, backend, tui.Options{Workspace: workspace})
 	}
-	return cli.RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, codexIntegrationRuntime, installer, setupRuntime, appruntime.NewSDD())
+	return cli.RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, codexIntegrationRuntime, installer, setupRuntime, appruntime.NewSDDWithHooks(dispatcher))
 }
 
 func mustWorkspace() string {
@@ -164,6 +182,7 @@ type tuiBackend struct {
 	recovery   tuiRecoveryRuntime
 	memory     tuiMemoryRuntime
 	catalog    tuiModelCatalog
+	hooks      hooks.Emitter
 }
 
 func (backend tuiBackend) PlanMultiSetup(ctx context.Context, request tui.MultiSetupRequest) (setupflow.MultiPlan, error) {
@@ -204,7 +223,11 @@ func (backend tuiBackend) multiSetup(request tui.MultiSetupRequest) (*setupflow.
 	for _, provider := range request.Providers {
 		if provider == setupflow.ProviderOpenCode {
 			runtimes = append(runtimes, openCode.OpenCodeProvider(options, func(path string) (integration.Runtime, error) {
-				return opencode.NewPreviewIntegration(path)
+				runtime, err := opencode.NewPreviewIntegration(path)
+				if err != nil {
+					return nil, err
+				}
+				return integration.Observe(runtime, backend.hooks), nil
 			}))
 			continue
 		}

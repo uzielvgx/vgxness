@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/cli"
 	"github.com/vgxness/vgxness/internal/config"
+	"github.com/vgxness/vgxness/internal/hooks"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/launcher"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -26,6 +28,53 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 	"github.com/vgxness/vgxness/internal/tui"
 )
+
+func TestAppHooksVersionClosesInjectedDispatcher(t *testing.T) {
+	d := hooks.New()
+	var out, errOut bytes.Buffer
+	code := runWithMCPAndRuntimes(context.Background(), []string{"version"}, strings.NewReader(""), &out, &errOut, tui.Run, cli.RunMCP, appRuntimes{dispatcher: d})
+	if code != 0 || out.Len() == 0 {
+		t.Fatalf("version code=%d output=%q", code, out.String())
+	}
+	if err := d.Register("after", func(context.Context, hooks.Event) error { return nil }, hooks.NameMemorySaved); !errors.Is(err, hooks.ErrClosed) {
+		t.Fatalf("dispatcher remains open: %v", err)
+	}
+}
+
+func TestAppHooksCLIMemorySaveEmitsAndCloses(t *testing.T) {
+	d := hooks.New()
+	var events []hooks.Event
+	if err := d.Register("test", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameMemorySaved); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	root := t.TempDir()
+	code := runWithMCPAndRuntimes(context.Background(), []string{"memory", "save", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"title":"T","content":"hook token","project":"p"}`), &out, &errOut, tui.Run, cli.RunMCP, appRuntimes{dispatcher: d})
+	if code != 0 || len(events) != 1 || events[0].Name() != hooks.NameMemorySaved || out.Len() == 0 || strings.Contains(errOut.String(), "hook") {
+		t.Fatalf("code=%d events=%d output=%q err=%q", code, len(events), out.String(), errOut.String())
+	}
+	if err := d.Register("after", func(context.Context, hooks.Event) error { return nil }, hooks.NameMemorySaved); !errors.Is(err, hooks.ErrClosed) {
+		t.Fatal("dispatcher remains open")
+	}
+}
+
+func TestAppHooksIntegrationStatusEmitsAndCloses(t *testing.T) {
+	d := hooks.New()
+	var events []hooks.Event
+	if err := d.Register("test", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameIntegrationStatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	codex := &recordingMultiIntegration{status: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: strings.Repeat("a", 64), ArtifactCount: 1}}
+	var out, errOut bytes.Buffer
+	code := runWithMCPAndRuntimes(context.Background(), []string{"integrate", "codex", "status", "--config-dir", dir}, strings.NewReader(""), &out, &errOut, tui.Run, cli.RunMCP, appRuntimes{codex: codex, dispatcher: d})
+	if code != 0 || !strings.Contains(out.String(), "installed") || len(events) != 1 || events[0].Name() != hooks.NameIntegrationStatusCompleted || codex.statusOptions.ConfigDir != dir {
+		t.Fatalf("code=%d output=%q events=%d options=%+v", code, out.String(), len(events), codex.statusOptions)
+	}
+	if err := d.Register("after", func(context.Context, hooks.Event) error { return nil }, hooks.NameIntegrationStatusCompleted); !errors.Is(err, hooks.ErrClosed) {
+		t.Fatal("dispatcher remains open")
+	}
+}
 
 func managedLauncherForTest(t *testing.T) string {
 	t.Helper()
