@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
@@ -13,7 +11,6 @@ import (
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/sdd"
-	"github.com/vgxness/vgxness/internal/skillregistry"
 )
 
 func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
@@ -35,7 +32,7 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() error = %v", err)
 	}
-	if len(tools.Tools) != 5 || tools.Tools[0].Name != "memory_recent" || tools.Tools[1].Name != "memory_search" {
+	if len(tools.Tools) != 2 || tools.Tools[0].Name != "memory_recent" || tools.Tools[1].Name != "memory_search" {
 		t.Fatalf("listed tools = %+v", tools.Tools)
 	}
 	for _, tool := range tools.Tools {
@@ -61,99 +58,6 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	}
 	if backend.getCalls != 0 || backend.rememberCalls != 0 || backend.forgetCalls != 0 {
 		t.Fatalf("normal mode reached protected memory backend: get=%d save=%d forget=%d", backend.getCalls, backend.rememberCalls, backend.forgetCalls)
-	}
-}
-
-func TestSkillRegistryResolvesAndVerifiesFromOneSnapshot(t *testing.T) {
-	server, err := newWithReader(context.Background(), t.TempDir(), &fakeReader{project: "project-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.skillHome = t.TempDir()
-	path := server.workspace + "/.agents/skills/one/SKILL.md"
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("---\nname: one\n---\nbody"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := server.skillResolve(context.Background(), skillResolveInput{Name: "one"})
-	if err != nil || resolved.Binding.Name != "one" {
-		t.Fatalf("resolve = %+v, %v", resolved, err)
-	}
-	verified, err := server.skillVerify(context.Background(), skillVerifyInput{Binding: resolved.Binding})
-	if err != nil || !verified.Verified || verified.Binding.SHA256 == "" {
-		t.Fatalf("verify = %+v, %v", verified, err)
-	}
-	if _, err := server.skillResolve(context.Background(), skillResolveInput{Name: "one", Host: "invalid"}); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("invalid host error = %v", err)
-	}
-	forged := resolved.Binding
-	forged.SHA256 = "forged"
-	if _, err := server.skillVerify(context.Background(), skillVerifyInput{Binding: forged}); !errors.Is(err, skillregistry.ErrDrift) {
-		t.Fatalf("drift error = %v", err)
-	}
-	if _, err := server.skillResolve(context.Background(), skillResolveInput{Name: "missing"}); !errors.Is(err, skillregistry.ErrNotFound) {
-		t.Fatalf("missing error = %v", err)
-	}
-}
-
-func TestSkillRegistryToolHandlersAndAnnotations(t *testing.T) {
-	server, err := newWithReader(context.Background(), t.TempDir(), &fakeReader{project: "project-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.skillHome = t.TempDir()
-	path := filepath.Join(server.workspace, ".agents/skills/one/SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("---\nname: one\n---"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	list, _, _ := server.callSkillList(context.Background(), nil, skillListInput{})
-	resolve, selection, _ := server.callSkillResolve(context.Background(), nil, skillResolveInput{Name: "one"})
-	verify, _, _ := server.callSkillVerify(context.Background(), nil, skillVerifyInput{Binding: selection.Binding})
-	invalid, _, _ := server.callSkillList(context.Background(), nil, skillListInput{Host: "invalid"})
-	missing, _, _ := server.callSkillResolve(context.Background(), nil, skillResolveInput{Name: "missing"})
-	forged := selection.Binding
-	forged.SHA256 = "forged"
-	drift, _, _ := server.callSkillVerify(context.Background(), nil, skillVerifyInput{Binding: forged})
-	if list.IsError || resolve.IsError || verify.IsError || !invalid.IsError || !missing.IsError || !drift.IsError {
-		t.Fatal("handler mapping")
-	}
-	server.skillHome = ""
-	unavailable, _, _ := server.callSkillList(context.Background(), nil, skillListInput{})
-	if !unavailable.IsError {
-		t.Fatal("empty home")
-	}
-}
-
-func TestSkillRegistryVerifiesExactAmbiguousBinding(t *testing.T) {
-	workspace, home := t.TempDir(), t.TempDir()
-	server, err := newWithReader(context.Background(), workspace, &fakeReader{project: "project-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.skillHome = home
-	for _, path := range []string{filepath.Join(workspace, ".agents/skills/a/SKILL.md"), filepath.Join(workspace, ".opencode/skills/b/SKILL.md")} {
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("---\nname: same\n---"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	snapshot, err := skillregistry.Scan(context.Background(), skillregistry.Options{CWD: workspace, Home: home, Host: "opencode"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	selection, err := snapshot.ResolvePath(filepath.Join(workspace, ".opencode/skills/b/SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if verified, err := server.skillVerify(context.Background(), skillVerifyInput{Binding: selection.Binding, Host: "opencode"}); err != nil || !verified.Verified {
-		t.Fatalf("verify=%+v err=%v", verified, err)
 	}
 }
 
@@ -224,7 +128,7 @@ func TestFullServerExposesExactToolAndMutationInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newFullWithReader() error = %v", err)
 	}
-	want := []string{"memory_recent", "memory_search", "skill_registry_list", "skill_registry_resolve", "skill_registry_verify", "memory_get", "memory_save", "memory_forget", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_get_revision", "sdd_list_revisions", "sdd_accept_revision", "sdd_render_projection", "sdd_compare_projection", "sdd_record_projection", "sdd_projection_status"}
+	want := []string{"memory_recent", "memory_search", "memory_get", "memory_save", "memory_forget", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_get_revision", "sdd_list_revisions", "sdd_accept_revision", "sdd_render_projection", "sdd_compare_projection", "sdd_record_projection", "sdd_projection_status"}
 	sort.Strings(want)
 	if got := discoveredNames(t, server); !sameStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)

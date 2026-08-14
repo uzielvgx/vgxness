@@ -76,7 +76,7 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|sdd|integrate|self|skills|skill-registry|setup>")
+		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|sdd|integrate|self|skills|setup>")
 		return 2
 	}
 	command := args[0]
@@ -136,8 +136,6 @@ func terminalSafe(value string) string {
 		default:
 			if character < ' ' || character == 0x7f {
 				fmt.Fprintf(&safe, `\x%02x`, character)
-			} else if character >= 0x80 && character <= 0x9f {
-				fmt.Fprintf(&safe, `\u%04x`, character)
 			} else {
 				safe.WriteRune(character)
 			}

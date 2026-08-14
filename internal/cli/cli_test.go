@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,71 +11,6 @@ import (
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
-
-func TestSkillRegistryListStatusAndRefresh(t *testing.T) {
-	workspace := t.TempDir()
-	path := workspace + "/.agents/skills/one/SKILL.md"
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("---\nname: one\n---"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	for _, command := range []string{"list", "status", "refresh"} {
-		var out, stderr bytes.Buffer
-		if code := RunSkillRegistry(context.Background(), []string{command}, &out, &stderr, workspace); code != 0 || stderr.Len() != 0 || out.Len() == 0 {
-			t.Fatalf("%s: code=%d stdout=%q stderr=%q", command, code, out.String(), stderr.String())
-		}
-	}
-	var status, statusErr bytes.Buffer
-	if code := RunSkillRegistry(context.Background(), []string{"status"}, &status, &statusErr, workspace); code != 0 || !strings.Contains(status.String(), "status=") || !strings.Contains(status.String(), "candidates=1") || !strings.Contains(status.String(), "from_cache=") || !strings.Contains(status.String(), "root path=") {
-		t.Fatalf("status: code=%d stdout=%q stderr=%q", code, status.String(), statusErr.String())
-	}
-	var out, stderr bytes.Buffer
-	if code := RunSkillRegistry(context.Background(), []string{"status", "--host", "invalid"}, &out, &stderr, workspace); code != 2 || !strings.HasPrefix(stderr.String(), "usage:") {
-		t.Fatalf("invalid host: code=%d stderr=%q", code, stderr.String())
-	}
-	if code := RunSkillRegistry(context.Background(), []string{"list", "extra"}, &out, &stderr, workspace); code != 2 {
-		t.Fatalf("extra arg code=%d", code)
-	}
-}
-
-func TestSkillRegistryHostPolicy(t *testing.T) {
-	workspace := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	path := filepath.Join(workspace, ".opencode", "skills", "host", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("host"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	var common, opencode, stderr bytes.Buffer
-	if RunSkillRegistry(context.Background(), []string{"list", "--host", "common"}, &common, &stderr, workspace) != 0 || RunSkillRegistry(context.Background(), []string{"list", "--host", "opencode"}, &opencode, &stderr, workspace) != 0 || common.Len() != 0 || !strings.Contains(opencode.String(), "name=host") {
-		t.Fatalf("common=%q opencode=%q stderr=%q", common.String(), opencode.String(), stderr.String())
-	}
-}
-
-func TestSkillRegistryListEscapesC1Controls(t *testing.T) {
-	workspace := t.TempDir()
-	path := filepath.Join(workspace, ".agents", "skills", "one", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("---\nname: one\u009bcontrol\n---"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	var out, stderr bytes.Buffer
-	if code := RunSkillRegistry(context.Background(), []string{"list"}, &out, &stderr, workspace); code != 0 || strings.ContainsRune(out.String(), '\u009b') || !strings.Contains(out.String(), `\u009b`) {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), stderr.String())
-	}
-}
 
 type fakeInspector struct {
 	result inspection.Result
