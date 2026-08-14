@@ -44,7 +44,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Prefetch modules
         run: go mod download
@@ -96,7 +96,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Prefetch modules
         run: go mod download
@@ -127,7 +127,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Prefetch modules
         run: go mod download
@@ -143,7 +143,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Vet
         run: go vet ./...
@@ -167,7 +167,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
@@ -181,7 +181,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Prefetch modules
         run: go mod download
@@ -197,7 +197,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Prefetch modules
         run: go mod download
@@ -213,7 +213,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Prefetch modules
         run: go mod download
@@ -229,7 +229,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Cross-build Windows
         run: |
@@ -249,7 +249,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Prefetch modules
         run: go mod download
@@ -267,7 +267,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.5
+          go-version: 1.26.6
           cache: true
       - name: Prefetch modules
         run: go mod download

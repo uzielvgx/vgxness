@@ -14,7 +14,7 @@ func TestGoCIWorkflowContract(t *testing.T) {
 	t.Run("workflow is auditable", func(t *testing.T) {
 		for _, want := range []string{
 			"workflow_call:", "permissions:\n  contents: read", "pull_request:", "push:", "branches: [main]",
-			"go-version: 1.26.5", "persist-credentials: false", "cancel-in-progress: true",
+			"go-version: 1.26.6", "persist-credentials: false", "cancel-in-progress: true",
 			"ref: ${{ inputs.ref || github.sha }}",
 			"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
 			"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
@@ -30,8 +30,8 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		if strings.Contains(workflow, "go-version: 1.26.3") {
 			t.Error("workflow must not use stale Go 1.26.3")
 		}
-		if got, want := strings.Count(workflow, "go-version: 1.26.5"), strings.Count(workflow, "actions/setup-go@"); got != want {
-			t.Errorf("workflow must configure Go 1.26.5 in every setup-go step: got %d, want %d", got, want)
+		if got, want := strings.Count(workflow, "go-version: 1.26.6"), strings.Count(workflow, "actions/setup-go@"); got != want {
+			t.Errorf("workflow must configure Go 1.26.6 in every setup-go step: got %d, want %d", got, want)
 		}
 		pinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$`)
 		for _, line := range strings.Split(workflow, "\n") {
@@ -182,7 +182,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"release_commit: ${{ steps.release_metadata.outputs.commit }}", "release_date: ${{ steps.release_metadata.outputs.date }}", "id: release_metadata",
 		"  darwin-smoke:\n    needs: build\n    runs-on: macos-15", "needs: [standard-validation, build, windows-smoke, darwin-smoke]",
 		"contents: write", "id-token: write", "attestations: write", "sha256sum -c SHA256SUMS",
-		"go-version: 1.26.5",
+		"go-version: 1.26.6",
 		"Verify Linux artifact and self-install", "Verify Windows artifact and self-install", "Verify Darwin artifact and self-install", "--verify-tag", "--prerelease",
 		"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
 		"actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
