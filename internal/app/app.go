@@ -57,6 +57,9 @@ func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, 
 	if len(args) > 0 && args[0] == "skills" {
 		return cli.RunSkills(ctx, args[1:], stdout, stderr, skills.New())
 	}
+	if len(args) > 0 && args[0] == "skill-registry" {
+		return cli.RunSkillRegistry(ctx, args[1:], stdout, stderr, mustWorkspace())
+	}
 	if len(args) > 0 && args[0] == "mcp" {
 		if launchMCP == nil {
 			fmt.Fprintln(stderr, "operational: MCP launcher is unavailable")

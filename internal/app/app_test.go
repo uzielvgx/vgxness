@@ -66,6 +66,29 @@ func managedLauncherForTest(t *testing.T) string {
 	return launcherPath
 }
 
+func TestAppDispatchesSkillRegistryStatus(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, ".agents", "skills", "one", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("one"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	var out, stderr bytes.Buffer
+	if code := runWithMCPAndRuntimes(context.Background(), []string{"skill-registry", "status"}, nil, &out, &stderr, nil, nil, appRuntimes{}); code != 0 || !strings.Contains(out.String(), "status=") {
+		t.Fatalf("code=%d out=%q err=%q", code, out.String(), stderr.String())
+	}
+	t.Chdir(old)
+}
+
 type recordingTUIMemoryRuntime struct {
 	recall     memory.Recall
 	lookup     memory.Lookup
