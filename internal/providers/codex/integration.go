@@ -78,11 +78,6 @@ func knownPackages() ([]Package, error) {
 			return nil, err
 		}
 		packages = append(packages, v6)
-		v7, err := renderActiveV7("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v7)
 		pkg, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			return nil, err

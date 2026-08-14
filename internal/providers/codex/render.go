@@ -61,7 +61,7 @@ func RenderPlan(version string, plan sdd.Plan) (Package, error) {
 }
 
 func renderLegacy(version string) (Package, error) {
-	pkg, err := renderPackage(version, historicalProfiles(legacyProfiles), "", true)
+	pkg, err := renderPackage(version, legacyProfiles, "", true)
 	if err != nil {
 		return Package{}, err
 	}
@@ -78,7 +78,7 @@ func renderPreConsolidationV4(version string, plan sdd.Plan) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	pkg, err := renderPackage(version, historicalProfiles(selected), plan, false)
+	pkg, err := renderPackage(version, selected, plan, false)
 	if err != nil {
 		return Package{}, err
 	}
@@ -94,32 +94,11 @@ func renderActiveV6(version string, plan sdd.Plan) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	pkg, err := renderPackage(version, historicalProfiles(selected), plan, false)
-	if err != nil {
-		return Package{}, err
-	}
-	pkg.Artifacts[0].Bytes = []byte(activeV6ManagerInstructions())
-	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
-	return pkg, nil
-}
-
-// renderActiveV7 reconstructs the immediate predecessor of the current package.
-func renderActiveV7(version string, plan sdd.Plan) (Package, error) {
-	selected, err := profilesForPlan(plan)
-	if err != nil {
-		return Package{}, err
-	}
-	for index := range selected {
-		if selected[index].name == "general" {
-			selected[index].mcpTools = nil
-			selected[index].instructions = generalInstructionsV7
-		}
-	}
 	pkg, err := renderPackage(version, selected, plan, false)
 	if err != nil {
 		return Package{}, err
 	}
-	pkg.Artifacts[0].Bytes = []byte(activeV7ManagerInstructions())
+	pkg.Artifacts[0].Bytes = []byte(activeV6ManagerInstructions())
 	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
 	return pkg, nil
 }
@@ -184,18 +163,13 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
 func activeManagerInstructions() string {
-	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 8; parity: opencode-v48", 1)
-	return value + "\n\nProvider-native delegation policy: for every specialist route, launch a fresh native Codex task with the exact agent_type: explore, general, verifier, risk, readability, reliability, resilience, refuter, sdd-research, sdd-proposal, sdd-spec, sdd-design, sdd-tasks, or sdd-apply. Never combine an explicit agent_type with a full-history fork. If full history is unavoidable, omit agent_type and treat the child as inherited manager context, not specialist delegation.\n\nCurrent skill-loading override: load native skills only for built-ins without SKILL.md or a supplied binding; file-backed skills are resolved through the registry. Skill registry delegation: resolve logical skill names only through the read-only skill_registry_list and skill_registry_resolve tools using host codex. Pass the returned vgxness.skill-binding/v1 unchanged with immutable skillHost codex to the worker: schema, name, description, logicalPath, canonicalPath, baseDir, scope, source, snapshotDigest, loadMode exact-path, and SHA256. Do not embed or load skill bodies in the manager.\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n"
+	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 7; parity: opencode-v47", 1)
+	return value + "\n\nProvider-native delegation policy: for every specialist route, launch a fresh native Codex task with the exact agent_type: explore, general, verifier, risk, readability, reliability, resilience, refuter, sdd-research, sdd-proposal, sdd-spec, sdd-design, sdd-tasks, or sdd-apply. Never combine an explicit agent_type with a full-history fork. If full history is unavoidable, omit agent_type and treat the child as inherited manager context, not specialist delegation.\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n"
 }
 
 func activeV6ManagerInstructions() string {
 	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 6; parity: opencode-v47", 1)
 	return value + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n"
-}
-
-func activeV7ManagerInstructions() string {
-	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 7; parity: opencode-v47", 1)
-	return value + "\n\nProvider-native delegation policy: for every specialist route, launch a fresh native Codex task with the exact agent_type: explore, general, verifier, risk, readability, reliability, resilience, refuter, sdd-research, sdd-proposal, sdd-spec, sdd-design, sdd-tasks, or sdd-apply. Never combine an explicit agent_type with a full-history fork. If full history is unavoidable, omit agent_type and treat the child as inherited manager context, not specialist delegation.\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n"
 }
 
 func legacyManagerInstructions() string {
@@ -236,7 +210,7 @@ The manager is the sole Git and GitHub actor. Managed general must never branch,
 
 var profiles = []profile{
 	readOnlyProfile("agents/explore.toml", "explore", "Read-only repository exploration", "gpt-5.6-terra", "medium", memoryReadTools, `Investigate only the manager-bounded question and return concise evidence with exact paths and line references. Use native Codex repository inspection first for structure and dependencies, then narrow source inspection as needed. Do not edit files, run mutating commands, access the network, spawn agents, or broaden scope. Separate facts, inferences, and unknowns.`),
-	workspaceProfile("agents/general.toml", "general", "Authorized workspace implementation", "gpt-5.6", "high", skillBindingVerifyTools, generalInstructions),
+	workspaceProfile("agents/general.toml", "general", "Authorized workspace implementation", "gpt-5.6", "high", nil, `Implement only the manager-authorized workspace scope. Diagnose before editing, preserve unrelated changes, and use the smallest correct change. For safely testable behavior, add a focused failing test and observe RED before production edits, then validate GREEN. Manager missions supply accepted SDD inputs and evidence. Do not spawn agents, access external directories or network services, install packages, mutate durable memory, or mutate SDD lifecycle state. General may implement workspace changes but must not own the SDD lifecycle. Do not commit or push.`),
 	readOnlyProfile("agents/verifier.toml", "verifier", "Independent frozen-candidate validation", "gpt-5.6", "high", nil, `Validate exactly one frozen candidate using only manager-permitted read-only commands. Manager missions supply the accepted inputs and evidence. Record the supplied candidate identity before and after validation; if it differs, return INCONCLUSIVE. `+reviewBindingInstructions+` Report PASS, FAIL, or INCONCLUSIVE with observed evidence only, reporting the same candidate identity before and after.`),
 	readOnlyProfile("agents/risk.toml", "risk", "Focused security and risk review", "gpt-5.6-terra", "high", memoryReadTools, `Review the supplied frozen candidate for security, authorization, data, process, and operational risks. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or validate beyond the manager scope. Return concrete findings with evidence, severity, and residual uncertainty.`),
 	readOnlyProfile("agents/readability.toml", "readability", "Focused code readability review", "gpt-5.6-terra", "medium", memoryReadTools, `Review the supplied frozen candidate for clarity, maintainability, naming, structure, and documentation. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or broaden scope. Return evidence-backed findings only.`),
@@ -252,10 +226,6 @@ var profiles = []profile{
 }
 
 const reviewBindingInstructions = `Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria. Reject a missing, mismatched, or stale Review Binding as INCONCLUSIVE, and echo the complete Review Binding unchanged.`
-
-const generalInstructionsV7 = `Implement only the manager-authorized workspace scope. Diagnose before editing, preserve unrelated changes, and use the smallest correct change. For safely testable behavior, add a focused failing test and observe RED before production edits, then validate GREEN. Manager missions supply accepted SDD inputs and evidence. Do not spawn agents, access external directories or network services, install packages, mutate durable memory, or mutate SDD lifecycle state. General may implement workspace changes but must not own the SDD lifecycle. Do not commit or push.`
-
-const generalInstructions = `Implement only the manager-authorized workspace scope. Load native skills only for built-ins without SKILL.md or a supplied binding; file-backed skills require binding verification then exact-path reading. Diagnose before editing, preserve unrelated changes, and use the smallest correct change. For safely testable behavior, add a focused failing test and observe RED before production edits, then validate GREEN. Manager missions supply accepted SDD inputs and evidence. Do not spawn agents, access external directories or network services, install packages, mutate durable memory, or mutate SDD lifecycle state. General may implement workspace changes but must not own the SDD lifecycle. For every supplied vgxness.skill-binding/v1 and immutable skillHost codex, call skill_registry_verify with the unchanged binding and host codex before reading its canonicalPath. Block unless schema, name, description, logicalPath, canonicalPath, baseDir, scope, source, snapshotDigest, loadMode exact-path, and SHA256 verify unchanged; then read only that exact path. Do not resolve logical names, substitute paths, or read a body before verification. Do not commit or push.`
 
 // legacyProfiles is the exact static package emitted before model plans were
 // introduced. It remains a trusted predecessor for status, uninstall, and a
@@ -303,7 +273,6 @@ func profilesForPlan(plan sdd.Plan) ([]profile, error) {
 }
 
 var memoryReadTools = []string{"memory_recent", "memory_search", "memory_get"}
-var skillBindingVerifyTools = []string{"skill_registry_verify"}
 var sddReadTools = []string{"memory_recent", "memory_search", "memory_get", "sdd_list", "sdd_get", "sdd_get_revision", "sdd_list_revisions", "sdd_render_projection", "sdd_compare_projection", "sdd_projection_status"}
 
 func readOnlyProfile(path, name, description, model, reasoning string, tools []string, instructions string) profile {
@@ -349,9 +318,9 @@ func (pkg Package) Validate() error {
 		}
 		previous = artifact.Path
 	}
-	if !packageMatches(pkg, selected, activeManagerInstructions()) && !packageMatches(pkg, historicalProfiles(selected), activeV6ManagerInstructions()) && !packageMatches(pkg, activeV7Profiles(pkg.plan), activeV7ManagerInstructions()) && !(pkg.legacy && packageMatches(pkg, historicalProfiles(selected), legacyManagerInstructions())) {
+	if !packageMatches(pkg, selected, activeManagerInstructions()) && !packageMatches(pkg, selected, activeV6ManagerInstructions()) && !(pkg.legacy && packageMatches(pkg, selected, legacyManagerInstructions())) {
 		predecessors, predecessorErr := preConsolidationProfilesForPlan(pkg.plan)
-		if predecessorErr != nil || !packageMatches(pkg, historicalProfiles(predecessors), preConsolidationManagerInstructions()) {
+		if predecessorErr != nil || !packageMatches(pkg, predecessors, preConsolidationManagerInstructions()) {
 			return errors.New("invalid Codex package identity")
 		}
 	}
@@ -359,31 +328,6 @@ func (pkg Package) Validate() error {
 		return errors.New("invalid package aggregate SHA-256")
 	}
 	return nil
-}
-
-func activeV7Profiles(plan sdd.Plan) []profile {
-	profiles, err := profilesForPlan(plan)
-	if err != nil {
-		return nil
-	}
-	for index := range profiles {
-		if profiles[index].name == "general" {
-			profiles[index].mcpTools = nil
-			profiles[index].instructions = generalInstructionsV7
-		}
-	}
-	return profiles
-}
-
-func historicalProfiles(profiles []profile) []profile {
-	profiles = append([]profile(nil), profiles...)
-	for index := range profiles {
-		if profiles[index].name == "general" {
-			profiles[index].mcpTools = nil
-			profiles[index].instructions = generalInstructionsV7
-		}
-	}
-	return profiles
 }
 
 func packageMatches(pkg Package, profiles []profile, manager string) bool {
