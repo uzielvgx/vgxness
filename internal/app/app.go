@@ -44,6 +44,12 @@ type appRuntimes struct {
 	dispatcher *hooks.Dispatcher
 }
 
+type tuiHookRegistry interface {
+	hooks.Emitter
+	Register(hooks.ListenerID, hooks.Listener, ...hooks.Name) error
+	Unregister(hooks.ListenerID) bool
+}
+
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, launchTUI tuiLauncher) int {
 	return runWithMCP(ctx, args, stdin, stdout, stderr, launchTUI, cli.RunMCP)
 }
@@ -182,7 +188,18 @@ type tuiBackend struct {
 	recovery   tuiRecoveryRuntime
 	memory     tuiMemoryRuntime
 	catalog    tuiModelCatalog
-	hooks      hooks.Emitter
+	hooks      tuiHookRegistry
+}
+
+func (backend tuiBackend) Register(id hooks.ListenerID, listener hooks.Listener, names ...hooks.Name) error {
+	if backend.hooks == nil {
+		return errors.New("hook registry unavailable")
+	}
+	return backend.hooks.Register(id, listener, names...)
+}
+
+func (backend tuiBackend) Unregister(id hooks.ListenerID) bool {
+	return backend.hooks != nil && backend.hooks.Unregister(id)
 }
 
 func (backend tuiBackend) PlanMultiSetup(ctx context.Context, request tui.MultiSetupRequest) (setupflow.MultiPlan, error) {

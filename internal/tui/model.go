@@ -259,6 +259,9 @@ type Model struct {
 	setupEditorPlan             SetupPlan
 	setupEditorRequest          SetupRequest
 	setupEditorPreviewed        bool
+	activity                    []activityRow
+	activityAliases             map[activitySubject]uint64
+	activityAlias               uint64
 
 	spinner spinner.Model
 	help    help.Model
@@ -294,6 +297,7 @@ func NewModel(ctx context.Context, backend Backend, options Options) Model {
 		route: routeOverview, focus: focusContent, sections: sections,
 		inspectionLoading: true, setupLoading: true, memoriesLoading: true,
 		spinner: spin, help: help.New(), keys: newKeyMap(),
+		activityAliases: make(map[activitySubject]uint64),
 	}
 	model.initMemory()
 	model.initSetup()
@@ -499,6 +503,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case activityMsg:
+		m.addActivity(msg.event)
+		return m, nil
 	}
 	return m, nil
 }
@@ -562,6 +569,8 @@ func (m Model) renderRoute() []string {
 	lines = append(lines, m.renderInspection()...)
 	lines = append(lines, "", "SETUP")
 	lines = append(lines, m.renderSetup()...)
+	lines = append(lines, "")
+	lines = append(lines, m.renderActivity()...)
 	lines = append(lines, "", "RECENT PROJECT MEMORY")
 	return append(lines, m.renderMemories()...)
 }
