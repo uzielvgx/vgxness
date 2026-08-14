@@ -366,6 +366,12 @@ func TestRunDispatchesExplicitTUI(t *testing.T) {
 		if backend == nil || options.Workspace == "" {
 			t.Fatalf("invalid TUI launch: backend=%v options=%+v", backend, options)
 		}
+		if _, ok := backend.(interface {
+			Register(hooks.ListenerID, hooks.Listener, ...hooks.Name) error
+			Unregister(hooks.ListenerID) bool
+		}); !ok {
+			t.Fatal("TUI backend does not expose the optional activity registry")
+		}
 		return 23
 	}
 	var stdout, stderr bytes.Buffer

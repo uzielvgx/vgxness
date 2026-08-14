@@ -30,7 +30,10 @@ func Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, backend
 		tea.WithOutput(stdout),
 		tea.WithoutSignalHandler(),
 	)
-	if _, err := program.Run(); err != nil {
+	stopActivity := attachSessionActivity(backend, program)
+	_, err := program.Run()
+	stopActivity()
+	if err != nil {
 		if ctx.Err() != nil {
 			return 130
 		}
