@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vgxness/vgxness/internal/config"
+	"github.com/vgxness/vgxness/internal/hooks"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/secrets"
@@ -31,15 +32,25 @@ type Memory struct {
 	readOnly   bool
 	transport  http.RoundTripper
 	credential func(string) (string, error)
+	hooks      hooks.Emitter
 }
 
 // NewMemory creates a memory runtime with the supplied producer and access mode.
 func NewMemory(producer string, readOnly bool) Memory {
-	return Memory{producer: producer, readOnly: readOnly, transport: http.DefaultTransport, credential: secrets.System().Get}
+	return NewMemoryWithHooks(producer, readOnly, nil)
+}
+
+// NewMemoryWithHooks adds best-effort lifecycle observation to a memory runtime.
+func NewMemoryWithHooks(producer string, readOnly bool, emitter hooks.Emitter) Memory {
+	return Memory{producer: producer, readOnly: readOnly, transport: http.DefaultTransport, credential: secrets.System().Get, hooks: emitter}
 }
 
 func (runtime Memory) Remember(ctx context.Context, opts config.Options, request memory.Remember) (memory.Entry, error) {
-	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Remember(ctx, request)
+	entry, err := memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Remember(ctx, request)
+	if err == nil {
+		runtime.emitMemory(ctx, false, entry)
+	}
+	return entry, err
 }
 
 func (runtime Memory) Recall(ctx context.Context, opts config.Options, request memory.Recall) ([]memory.Entry, error) {
@@ -55,9 +66,30 @@ func (runtime Memory) Get(ctx context.Context, opts config.Options, request memo
 }
 
 func (runtime Memory) Forget(ctx context.Context, opts config.Options, request memory.Forget) (memory.Entry, error) {
-	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.Entry, error) {
+	entry, err := withWritableStore(ctx, opts, func(store *memory.Store) (memory.Entry, error) {
 		return memory.NewMemoryService(store, runtime.producerName(), nil).Forget(ctx, request)
 	})
+	if err == nil {
+		runtime.emitMemory(ctx, true, entry)
+	}
+	return entry, err
+}
+
+func (runtime Memory) emitMemory(ctx context.Context, forgotten bool, entry memory.Entry) {
+	if runtime.hooks == nil {
+		return
+	}
+	defer func() { recover() }()
+	var draft hooks.Draft
+	var err error
+	if forgotten {
+		draft, err = hooks.NewMemoryForgotten(entry.Project, entry.ID, string(entry.Scope), entry.Type, string(entry.State), entry.CreatedAt, entry.UpdatedAt)
+	} else {
+		draft, err = hooks.NewMemorySaved(entry.Project, entry.ID, string(entry.Scope), entry.Type, string(entry.State), entry.CreatedAt, entry.UpdatedAt)
+	}
+	if err == nil {
+		runtime.hooks.Emit(ctx, draft)
+	}
 }
 
 func (runtime Memory) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
@@ -457,19 +489,27 @@ func withStore[T any](open func() (*memory.Store, error), operation func(*memory
 }
 
 // SDD adapts SDD services to the CLI runtime contract.
-type SDD struct{}
+type SDD struct{ hooks hooks.Emitter }
 
 // NewSDD creates an SDD runtime.
 func NewSDD() SDD {
-	return SDD{}
+	return NewSDDWithHooks(nil)
 }
+
+// NewSDDWithHooks adds best-effort lifecycle observation to an SDD runtime.
+func NewSDDWithHooks(emitter hooks.Emitter) SDD { return SDD{hooks: emitter} }
 
 func (SDD) ResolveSDDProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
 	return withWritableStore(ctx, opts, func(store *memory.Store) (string, error) { return store.ResolveProject(ctx, workspace) })
 }
 
-func (SDD) CreateChange(ctx context.Context, opts config.Options, request sdd.CreateChangeRequest) (sdd.Change, error) {
-	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Change, error) { return sdd.NewService(store).CreateChange(ctx, request) })
+func (runtime SDD) CreateChange(ctx context.Context, opts config.Options, request sdd.CreateChangeRequest) (sdd.Change, error) {
+	result, err := withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Change, error) { return sdd.NewService(store).CreateChange(ctx, request) })
+	if err == nil {
+		draft, draftErr := hooks.NewChangeCreated(result.Project, result.ID, string(result.Phase), string(result.Status), result.StateVersion)
+		runtime.emitDraft(ctx, draft, draftErr)
+	}
+	return result, err
 }
 
 func (SDD) ListChanges(ctx context.Context, opts config.Options, request sdd.ListChangesRequest) ([]sdd.Change, error) {
@@ -520,16 +560,26 @@ func (SDD) ListRevisions(ctx context.Context, opts config.Options, request sdd.L
 	return sdd.NewService(store).ListRevisions(ctx, request)
 }
 
-func (SDD) AcceptRevision(ctx context.Context, opts config.Options, request sdd.AcceptRevisionRequest) (sdd.Revision, error) {
-	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Revision, error) {
+func (runtime SDD) AcceptRevision(ctx context.Context, opts config.Options, request sdd.AcceptRevisionRequest) (sdd.Revision, error) {
+	result, err := withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Revision, error) {
 		return sdd.NewService(store).AcceptRevision(ctx, request)
 	})
+	if err == nil {
+		draft, draftErr := hooks.NewRevisionAccepted(result.Project, result.ChangeID, result.ArtifactID, result.ID, string(result.Artifact), string(result.Status), string(result.Digest), string(result.InputDigest), result.StateVersion)
+		runtime.emitDraft(ctx, draft, draftErr)
+	}
+	return result, err
 }
 
-func (SDD) TransitionChange(ctx context.Context, opts config.Options, request sdd.TransitionChangeRequest) (sdd.Change, error) {
-	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Change, error) {
+func (runtime SDD) TransitionChange(ctx context.Context, opts config.Options, request sdd.TransitionChangeRequest) (sdd.Change, error) {
+	result, err := withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Change, error) {
 		return sdd.NewService(store).TransitionChange(ctx, request)
 	})
+	if err == nil {
+		draft, draftErr := hooks.NewChangeTransitioned(result.Project, result.ID, string(result.Phase), string(result.Status), result.StateVersion)
+		runtime.emitDraft(ctx, draft, draftErr)
+	}
+	return result, err
 }
 
 func (SDD) ProjectionStatus(ctx context.Context, opts config.Options, request sdd.ProjectionStatusRequest) (sdd.Projection, error) {
@@ -541,10 +591,23 @@ func (SDD) ProjectionStatus(ctx context.Context, opts config.Options, request sd
 	return sdd.NewService(store).ProjectionStatus(ctx, request)
 }
 
-func (SDD) RecordProjection(ctx context.Context, opts config.Options, request sdd.RecordProjectionRequest) (sdd.Projection, error) {
-	return withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Projection, error) {
+func (runtime SDD) RecordProjection(ctx context.Context, opts config.Options, request sdd.RecordProjectionRequest) (sdd.Projection, error) {
+	result, err := withWritableStore(ctx, opts, func(store *memory.Store) (sdd.Projection, error) {
 		return sdd.NewService(store).RecordProjection(ctx, request)
 	})
+	if err == nil {
+		draft, draftErr := hooks.NewProjectionRecorded(result.Project, result.ChangeID, result.ArtifactID, result.RevisionID, string(result.Status), string(result.Digest), result.StateVersion)
+		runtime.emitDraft(ctx, draft, draftErr)
+	}
+	return result, err
+}
+
+func (runtime SDD) emitDraft(ctx context.Context, draft hooks.Draft, err error) {
+	if runtime.hooks == nil || err != nil {
+		return
+	}
+	defer func() { recover() }()
+	runtime.hooks.Emit(ctx, draft)
 }
 
 func (SDD) RenderProjection(ctx context.Context, opts config.Options, request sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error) {
