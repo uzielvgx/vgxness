@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,7 +15,6 @@ import (
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/sdd"
-	"github.com/vgxness/vgxness/internal/skillregistry"
 )
 
 var (
@@ -34,13 +31,11 @@ const maxJSONInteger = 9_007_199_254_740_991
 
 // Server is an MCP server bound to one canonical workspace.
 type Server struct {
-	server    *sdk.Server
-	reader    memoryReader
-	project   string
-	full      bool
-	sdd       sddReader
-	workspace string
-	skillHome string
+	server  *sdk.Server
+	reader  memoryReader
+	project string
+	full    bool
+	sdd     sddReader
 }
 
 type sddReader interface {
@@ -247,19 +242,11 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 		}
 		return nil, ErrUnavailable
 	}
-	home, _ := os.UserHomeDir()
-	absolute, err := filepath.Abs(workspace)
-	if err != nil {
-		return nil, ErrInvalidInput
-	}
-	server := &Server{reader: reader, project: project, full: full, workspace: absolute, skillHome: home}
+	server := &Server{reader: reader, project: project, full: full}
 	server.server = sdk.NewServer(&sdk.Implementation{Name: "vgxness-memory", Version: "0.1.0"}, nil)
 	annotations := &sdk.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
 	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_recent", Description: "Read recent project memory entries. This tool never writes data.", Annotations: annotations}, server.callRecent)
 	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_search", Description: "Search project memory entries. This tool never writes data.", Annotations: annotations}, server.callSearch)
-	sdk.AddTool(server.server, &sdk.Tool{Name: "skill_registry_list", Description: "List skill metadata from the current workspace policy. This tool never writes data.", Annotations: annotations}, server.callSkillList)
-	sdk.AddTool(server.server, &sdk.Tool{Name: "skill_registry_resolve", Description: "Resolve one skill to an exact binding from the current workspace policy. This tool never writes data.", Annotations: annotations}, server.callSkillResolve)
-	sdk.AddTool(server.server, &sdk.Tool{Name: "skill_registry_verify", Description: "Verify one exact skill binding from the current workspace policy. This tool never writes data.", Annotations: annotations}, server.callSkillVerify)
 	if full {
 		writeAnnotations := &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(false)}
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations}, server.callGet)
@@ -301,24 +288,6 @@ type searchInput struct {
 
 type getInput struct {
 	ID string `json:"id" jsonschema:"required"`
-}
-type skillResolveInput struct {
-	Name string `json:"name" jsonschema:"required"`
-	Host string `json:"host,omitempty"`
-}
-type skillVerifyInput struct {
-	Binding skillregistry.Binding `json:"binding" jsonschema:"required"`
-	Host    string                `json:"host,omitempty"`
-}
-type skillListInput struct {
-	Host string `json:"host,omitempty"`
-}
-type skillListResult struct {
-	Snapshot skillregistry.Snapshot `json:"snapshot"`
-}
-type skillVerifyResult struct {
-	Binding  skillregistry.Binding `json:"binding"`
-	Verified bool                  `json:"verified"`
 }
 
 type saveInput struct {
@@ -725,83 +694,6 @@ func (server *Server) callRecent(ctx context.Context, _ *sdk.CallToolRequest, in
 func (server *Server) callSearch(ctx context.Context, _ *sdk.CallToolRequest, input searchInput) (*sdk.CallToolResult, result, error) {
 	output, err := server.search(ctx, input)
 	return toolResponse(err, output)
-}
-
-func (server *Server) skills(ctx context.Context, host string) (skillregistry.Snapshot, error) {
-	if err := ctx.Err(); err != nil {
-		return skillregistry.Snapshot{}, err
-	}
-	if !validSkillHost(host) {
-		return skillregistry.Snapshot{}, ErrInvalidInput
-	}
-	if server.skillHome == "" {
-		return skillregistry.Snapshot{}, ErrUnavailable
-	}
-	return skillregistry.Scan(ctx, skillregistry.Options{CWD: server.workspace, Home: server.skillHome, Host: host})
-}
-func (server *Server) skillList(ctx context.Context, input skillListInput) (skillListResult, error) {
-	snapshot, err := server.skills(ctx, input.Host)
-	if err != nil {
-		return skillListResult{}, err
-	}
-	return skillListResult{Snapshot: snapshot}, nil
-}
-func (server *Server) skillResolve(ctx context.Context, input skillResolveInput) (skillregistry.Selection, error) {
-	if strings.TrimSpace(input.Name) == "" {
-		return skillregistry.Selection{}, ErrInvalidInput
-	}
-	snapshot, err := server.skills(ctx, input.Host)
-	if err != nil {
-		return skillregistry.Selection{}, err
-	}
-	return snapshot.Resolve(input.Name)
-}
-func (server *Server) skillVerify(ctx context.Context, input skillVerifyInput) (skillVerifyResult, error) {
-	snapshot, err := server.skills(ctx, input.Host)
-	if err != nil {
-		return skillVerifyResult{}, err
-	}
-	if err := snapshot.Verify(input.Binding); err != nil {
-		return skillVerifyResult{}, err
-	}
-	return skillVerifyResult{Binding: input.Binding, Verified: true}, nil
-}
-func (server *Server) callSkillList(ctx context.Context, _ *sdk.CallToolRequest, input skillListInput) (*sdk.CallToolResult, skillListResult, error) {
-	output, err := server.skillList(ctx, input)
-	return skillResponse(err, output)
-}
-func validSkillHost(host string) bool {
-	return host == "" || host == "common" || host == "codex" || host == "opencode"
-}
-func (server *Server) callSkillResolve(ctx context.Context, _ *sdk.CallToolRequest, input skillResolveInput) (*sdk.CallToolResult, skillregistry.Selection, error) {
-	output, err := server.skillResolve(ctx, input)
-	return skillResponse(err, output)
-}
-func (server *Server) callSkillVerify(ctx context.Context, _ *sdk.CallToolRequest, input skillVerifyInput) (*sdk.CallToolResult, skillVerifyResult, error) {
-	output, err := server.skillVerify(ctx, input)
-	return skillResponse(err, output)
-}
-func skillResponse[T any](err error, output T) (*sdk.CallToolResult, T, error) {
-	if err == nil {
-		return toolText("Skill registry result returned.", false), output, nil
-	}
-	var zero T
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return toolText("request cancelled", true), zero, nil
-	}
-	if errors.Is(err, ErrInvalidInput) {
-		return toolText("invalid tool input", true), zero, nil
-	}
-	if errors.Is(err, skillregistry.ErrNotFound) {
-		return toolText("skill not found", true), zero, nil
-	}
-	if errors.Is(err, skillregistry.ErrAmbiguous) {
-		return toolText("skill selection is ambiguous", true), zero, nil
-	}
-	if errors.Is(err, skillregistry.ErrDrift) {
-		return toolText("skill binding drifted", true), zero, nil
-	}
-	return toolText("skill registry unavailable", true), zero, nil
 }
 
 func (server *Server) callGet(ctx context.Context, _ *sdk.CallToolRequest, input getInput) (*sdk.CallToolResult, entry, error) {
