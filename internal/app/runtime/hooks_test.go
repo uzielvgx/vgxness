@@ -249,7 +249,15 @@ func TestMemorySyncEmptyProjectDirUsesCanonicalWorkingDirectory(t *testing.T) {
 }
 
 func TestCanonicalInvocationWorkspaceCanonicalizesRelativeAndSymlinkPaths(t *testing.T) {
-	workspace := t.TempDir()
+	workspace, err := os.MkdirTemp(".", "canonical-workspace-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workspace) })
+	workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

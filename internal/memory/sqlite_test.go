@@ -105,7 +105,7 @@ func TestHealthError_PreservesExpiredContext(t *testing.T) {
 }
 
 func TestStableProjectID_IsPureAndMatchesResolveProject(t *testing.T) {
-	workspace := filepath.Join(string(filepath.Separator), "work", "example")
+	workspace := filepath.Join(t.TempDir(), "example")
 	wantDigest := sha256.Sum256([]byte(workspace))
 	want := "example-" + fmt.Sprintf("%x", wantDigest[:6])
 	got, err := StableProjectID(workspace)
@@ -113,7 +113,7 @@ func TestStableProjectID_IsPureAndMatchesResolveProject(t *testing.T) {
 		t.Fatalf("StableProjectID() = %q, %v; want %q", got, err, want)
 	}
 	long := strings.Repeat("x", 244)
-	longWorkspace := filepath.Join(string(filepath.Separator), "work", long)
+	longWorkspace := filepath.Join(t.TempDir(), long)
 	got, err = StableProjectID(longWorkspace)
 	separator := strings.LastIndex(got, "-")
 	if err != nil || separator < 0 || len([]rune(got[:separator])) != 243 || len(got[separator+1:]) != 12 {
