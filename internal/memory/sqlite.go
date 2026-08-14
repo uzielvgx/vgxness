@@ -551,6 +551,20 @@ func (s *Store) schemaIndexColumns(ctx context.Context, name string, want ...str
 	return !rows.Next() && rows.Err() == nil
 }
 
+// StableProjectID derives the stable project identity for a canonical workspace.
+// It is pure and performs no filesystem access.
+func StableProjectID(canonicalWorkspace string) (string, error) {
+	if canonicalWorkspace == "" || !filepath.IsAbs(canonicalWorkspace) || filepath.Clean(canonicalWorkspace) != canonicalWorkspace || filepath.Dir(canonicalWorkspace) == canonicalWorkspace {
+		return "", fmt.Errorf("%w: invalid workspace", ErrInvalid)
+	}
+	digest := sha256.Sum256([]byte(canonicalWorkspace))
+	name := []rune(filepath.Base(canonicalWorkspace))
+	if len(name) > 243 {
+		name = name[:243]
+	}
+	return fmt.Sprintf("%s-%x", string(name), digest[:6]), nil
+}
+
 // ResolveProject maps one canonical workspace to one durable project identity.
 // Writable stores persist the binding; read-only stores resolve the same identity
 // without creating a project or root binding.
@@ -573,11 +587,10 @@ func (s *Store) ResolveProject(ctx context.Context, workspace string) (string, e
 	digest := sha256.Sum256([]byte(absolute))
 	workspaceHash := hex.EncodeToString(digest[:])
 	legacyID := filepath.Base(absolute)
-	name := []rune(legacyID)
-	if len(name) > 243 {
-		name = name[:243]
+	stableID, err := StableProjectID(absolute)
+	if err != nil {
+		return "", err
 	}
-	stableID := fmt.Sprintf("%s-%x", string(name), digest[:6])
 	if s.readOnly {
 		var projectID string
 		err = s.db.QueryRowContext(ctx, `SELECT project_id FROM project_roots WHERE workspace_hash=?`, workspaceHash).Scan(&projectID)

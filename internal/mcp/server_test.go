@@ -36,7 +36,7 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 		t.Fatalf("listed tools = %+v", tools.Tools)
 	}
 	for _, tool := range tools.Tools {
-		if tool.Name == "memory_get" || isMutationTool(tool.Name) {
+		if tool.Name == "memory_get" || tool.Name == "memory_sync" || isMutationTool(tool.Name) {
 			t.Fatalf("normal mode exposed protected tool %q", tool.Name)
 		}
 	}
@@ -130,13 +130,19 @@ func TestFullServerExposesExactToolAndMutationInventory(t *testing.T) {
 	}
 	want := []string{"memory_recent", "memory_search", "memory_get", "memory_save", "memory_forget", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_get_revision", "sdd_list_revisions", "sdd_accept_revision", "sdd_render_projection", "sdd_compare_projection", "sdd_record_projection", "sdd_projection_status"}
 	sort.Strings(want)
-	if got := discoveredNames(t, server); !sameStrings(got, want) {
-		t.Fatalf("tool names = %v, want %v", got, want)
+	names := discoveredNames(t, server)
+	if !sameStrings(names, want) {
+		t.Fatalf("tool names = %v, want %v", names, want)
 	}
 	mutations := 0
 	for _, name := range want {
 		if isMutationTool(name) {
 			mutations++
+		}
+	}
+	for _, name := range names {
+		if name == "memory_sync" {
+			t.Fatal("full server exposed memory sync")
 		}
 	}
 	if mutations != 8 {
