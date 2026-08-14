@@ -180,6 +180,25 @@ func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
 	}
 }
 
+func TestSkillRegistryDelegationContract(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
+	general := string(artifact(t, pkg, "agents/general.toml").Bytes)
+	for _, required := range []string{"skill_registry_list", "skill_registry_resolve", "host codex", "skillHost codex", "vgxness.skill-binding/v1", "schema", "description", "baseDir", "scope", "source", "loadMode", "exact-path", "SHA256", "Do not embed or load skill bodies"} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("manager lacks skill registry contract %q", required)
+		}
+	}
+	for _, required := range []string{"built-ins without SKILL.md", "vgxness.skill-binding/v1", "skill_registry_verify", "host codex", "skillHost codex", "schema", "description", "baseDir", "scope", "source", "exact-path", "SHA256", "before reading"} {
+		if !strings.Contains(general, required) {
+			t.Errorf("general lacks exact binding verification %q", required)
+		}
+	}
+}
+
 func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
@@ -227,7 +246,7 @@ func TestManagerInstructionsCoverOpenCodeV46SectionParity(t *testing.T) {
 		"sdd":                {"Use SDD only after the user explicitly requests or accepts it. Load sdd-lifecycle before creating an accepted SDD change. Verify the managed global portable catalog marker <!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->; Block if provenance, source, scope, marker, or loading cannot be verified, or if a same-name/project-local skill collides; never fall back inline or accept a local skill with the same name. If sdd-lifecycle is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. An SDD apply handoff to general must bind task revision ID/digest, accepted inputs, expectedStateVersion, mission identity/replay nonce, and for every target its repository-relative allowed path, current SHA-256, and no-symlink constraint; stale, mismatched, replayed, changed, or symlinked inputs block before a write. Require exact post-write readback SHA-256. These checks reduce but do not eliminate TOCTOU risk; do not claim atomic host enforcement. SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the sdd-lifecycle skill is the sole detailed lifecycle policy."},
 		"delivery-reporting": {"The manager is the sole Git and GitHub actor. Managed general must never branch, stage, commit, push, create a pull request, merge, return a branch, or clean delivery branches. After freeze, verification, and review, perform only native Git/GitHub operations authorized by the loaded skill and current-task authorization. Stop on ambiguity or a failed skill gate; do not invent a fallback delivery procedure. Report only observed labels IMPLEMENTED, VERIFIED, DELIVERED, MERGED, and INSTALLED: IMPLEMENTED: intended workspace changes complete and developmental checks observed; not independently verified. VERIFIED: exact frozen candidate passed independent verifier and required review. DELIVERED: exact commit was published and a new current-task PR was created and read back. MERGED: that PR was verified merged and base containment/readback succeeded. INSTALLED: merged version was installed and installation/handshake readback succeeded. Never infer a later state; never present an earlier state as a later one. Report changed files, RED/GREEN evidence, validation, review, limitations, identities when created, and Git status without raw logs. Never use destructive Git cleanup or discard unrelated work."},
 	}
-	openCodeManager, err := os.ReadFile(filepath.Join("..", "opencode", "templates", "manager.md"))
+	openCodeManager, err := os.ReadFile(filepath.Join("..", "opencode", "templates", "manager.v46.md"))
 	if err != nil {
 		t.Fatalf("read OpenCode v46 baseline: %v", err)
 	}
@@ -310,10 +329,11 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 		}
 	}
 	sddTools := `enabled_tools = ["memory_recent", "memory_search", "memory_get", "sdd_list", "sdd_get", "sdd_get_revision", "sdd_list_revisions", "sdd_render_projection", "sdd_compare_projection", "sdd_projection_status"]`
-	for _, path := range []string{"agents/general.toml", "agents/verifier.toml"} {
-		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, "enabled_tools = []") {
-			t.Errorf("%s must not expose MCP tools", path)
-		}
+	if content := string(artifact(t, pkg, "agents/verifier.toml").Bytes); !strings.Contains(content, "enabled_tools = []") {
+		t.Error("verifier must not expose MCP tools")
+	}
+	if content := string(artifact(t, pkg, "agents/general.toml").Bytes); !strings.Contains(content, `enabled_tools = ["skill_registry_verify"]`) {
+		t.Error("general must expose only exact skill-binding verification")
 	}
 	for _, path := range []string{"agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml", "agents/sdd-apply.toml"} {
 		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, sddTools) {
@@ -331,7 +351,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 7; parity: opencode-v47") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 8; parity: opencode-v48") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole SDD lifecycle") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }

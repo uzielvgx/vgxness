@@ -24,8 +24,8 @@ const (
 	sddApplyName                                            = "vgxness-sdd-apply.md"
 	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 4, 3
 	sddApplyTargetVersion, sddApplyPredecessorVersion       = 5, 4
-	generalCurrentMarker                                    = "artifact: opencode-agent/general; version: 6"
-	generalPreviousMarker                                   = "artifact: opencode-agent/general; version: 5"
+	generalCurrentMarker                                    = "artifact: opencode-agent/general; version: 7"
+	generalPreviousMarker                                   = "artifact: opencode-agent/general; version: 6"
 	verifierCurrentMarker                                   = "artifact: opencode-agent/vgxness-verifier; version: 4"
 	verifierPreviousMarker                                  = "artifact: opencode-agent/vgxness-verifier; version: 3"
 )
@@ -91,6 +91,11 @@ func preConsolidationV1MediumBundleForConfig(config sdd.ModelPlanConfig) (modelP
 	}
 	agents := cloneAgents(current.agents)
 	agents[managerAgentName] = []byte(manager)
+	general, bindErr := previousGeneralPromptV6Bound(current.resolved.Roles[sdd.RoleImplementation])
+	if bindErr != nil {
+		return modelPlanBundle{}, bindErr
+	}
+	agents[generalAgentName] = general
 	agents[generalAgentName] = []byte(strings.Replace(string(agents[generalAgentName]), currentGeneralSDDHandoff, preConsolidationGeneralSDDHandoff, 1))
 	agents[verifierAgentName] = []byte(strings.Replace(string(agents[verifierAgentName]), currentVerifierBinding, preConsolidationVerifierBinding, 1))
 	agents[verifierAgentName] = []byte(strings.Replace(string(agents[verifierAgentName]), "include status PASS|FAIL|INCONCLUSIVE, reviewBinding, candidate, summary,", "include status PASS|FAIL|INCONCLUSIVE, candidate, summary,", 1))
@@ -548,11 +553,15 @@ func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlan
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
+	v47, err := previousV47ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
 	v46, err := previousV46ModelPlanBundle(current)
 	if err != nil {
 		return nil, err
 	}
-	broadPredecessor, err := previousBroadPermissionModelPlanBundle(current)
+	broadPredecessor, err := previousBroadPermissionModelPlanBundle(v47)
 	if err != nil {
 		return nil, err
 	}
@@ -585,7 +594,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		return nil, err
 	}
 	withExplore := make([]modelPlanBundle, 0, 16)
-	for _, manager := range []modelPlanBundle{current, v46, broadPredecessor, v45, v44, v43, managerV42, managerV41, managerV40, managerV39} {
+	for _, manager := range []modelPlanBundle{current, v47, v46, broadPredecessor, v45, v44, v43, managerV42, managerV41, managerV40, managerV39} {
 		withExplore = append(withExplore, manager)
 		explore, err := previousExploreModelPlanBundle(manager)
 		if err != nil {
@@ -619,6 +628,10 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
+	v47, err := previousV47ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
 	v46, err := previousV46ModelPlanBundle(current)
 	if err != nil {
 		return nil, err
@@ -651,16 +664,38 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return [][]byte{v46.agents[managerAgentName], v45.agents[managerAgentName], v44.agents[managerAgentName], v43.agents[managerAgentName], v42.agents[managerAgentName], v41.agents[managerAgentName], v40.agents[managerAgentName], v39.agents[managerAgentName]}, nil
+	return [][]byte{v47.agents[managerAgentName], v46.agents[managerAgentName], v45.agents[managerAgentName], v44.agents[managerAgentName], v43.agents[managerAgentName], v42.agents[managerAgentName], v41.agents[managerAgentName], v40.agents[managerAgentName], v39.agents[managerAgentName]}, nil
+}
+
+func previousV47ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	manager, err := bindManagerTemplate(previousManagerPromptV46, "artifact: opencode-agent/vgxness-manager; version: 46", current.resolved.Roles[sdd.RoleManager])
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	manager = []byte(strings.Replace(string(manager), "version: 46", "version: 47", 1))
+	manager = append(manager, []byte("\n\nContract identity: "+orchestration.ContractIdentity+". "+orchestration.ContractPolicy+"\n")...)
+	agents := cloneAgents(current.agents)
+	agents[managerAgentName] = manager
+	general, err := previousGeneralPromptV6Bound(current.resolved.Roles[sdd.RoleImplementation])
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents[generalAgentName] = general
+	return encodeModelPlanBundle(current.config, current.resolved, agents)
 }
 
 func previousV46ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
-	manager, err := bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 46", current.resolved.Roles[sdd.RoleManager])
+	manager, err := bindManagerTemplate(previousManagerPromptV46, "artifact: opencode-agent/vgxness-manager; version: 46", current.resolved.Roles[sdd.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
 	agents := cloneAgents(current.agents)
 	agents[managerAgentName] = manager
+	general, err := previousGeneralPromptV6Bound(current.resolved.Roles[sdd.RoleImplementation])
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents[generalAgentName] = general
 	return encodeModelPlanBundle(current.config, current.resolved, agents)
 }
 
@@ -731,7 +766,7 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	}
 	agents[managerAgentName] = []byte(legacyManagerPrompt(string(agents[managerAgentName])))
 	if strings.Contains(string(agents[generalAgentName]), generalCurrentMarker) {
-		agents[generalAgentName] = previousGeneralPredecessor(agents[generalAgentName])
+		agents[generalAgentName] = historicalGeneralV5(agents[generalAgentName])
 		if len(agents[generalAgentName]) == 0 {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
@@ -758,7 +793,7 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 
 func previousBroadPermissionModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	agents := cloneAgents(current.agents)
-	agents[generalAgentName] = previousGeneralPredecessor(agents[generalAgentName])
+	agents[generalAgentName] = historicalGeneralV5(agents[generalAgentName])
 	agents[verifierAgentName] = previousVerifierPredecessor(agents[verifierAgentName])
 	if len(agents[generalAgentName]) == 0 || len(agents[verifierAgentName]) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
@@ -860,6 +895,28 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 		}
 		return fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, reviews, false)
 	}
+	v47, err := build(previousManagerPromptV46, "artifact: opencode-agent/vgxness-manager; version: 46", previousGeneralPromptV6, "artifact: opencode-agent/general; version: 6", canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts())
+	if err != nil {
+		return nil, err
+	}
+	v47[managerAgentName] = []byte(strings.Replace(string(v47[managerAgentName]), "version: 46", "version: 47", 1))
+	v47[managerAgentName] = append(v47[managerAgentName], []byte("\n\nContract identity: "+orchestration.ContractIdentity+". "+orchestration.ContractPolicy+"\n")...)
+	for _, agents := range []map[string][]byte{v47} {
+		general, bindErr := previousGeneralPromptV6Bound(assignments[generalAgentName])
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		agents[generalAgentName] = general
+	}
+	v46, err := build(previousManagerPromptV46, "artifact: opencode-agent/vgxness-manager; version: 46", previousGeneralPromptV6, "artifact: opencode-agent/general; version: 6", canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts())
+	if err != nil {
+		return nil, err
+	}
+	general, err := previousGeneralPromptV6Bound(assignments[generalAgentName])
+	if err != nil {
+		return nil, err
+	}
+	v46[generalAgentName] = general
 	v45, err := build(previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", canonicalVerifierPrompt, verifierPreviousMarker, currentReviewPrompts())
 	if err != nil {
 		return nil, err
@@ -873,11 +930,11 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 		return nil, err
 	}
 	predecessors := make(map[string][][]byte, len(compactProtocolAgentNames)+1)
-	v46, err := bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 46", assignments[managerAgentName])
+	_, err = bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 48", assignments[managerAgentName])
 	if err != nil {
 		return nil, err
 	}
-	predecessors[managerAgentName] = [][]byte{v46, v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
+	predecessors[managerAgentName] = [][]byte{v47[managerAgentName], v46[managerAgentName], v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
 	for _, prior := range []struct {
 		base   string
 		marker string
@@ -894,7 +951,14 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 		predecessors[managerAgentName] = append(predecessors[managerAgentName], content)
 	}
 	for _, name := range compactProtocolAgentNames {
-		predecessors[name] = [][]byte{v45[name], v44[name], v43[name]}
+		predecessors[name] = [][]byte{v47[name], v46[name], v45[name], v44[name], v43[name]}
+		if name == generalAgentName {
+			current, currentErr := modelBoundAgentsV3(plan)
+			if currentErr != nil {
+				return nil, currentErr
+			}
+			predecessors[name] = append(predecessors[name], historicalGeneralV5(current[name]))
+		}
 	}
 	return predecessors, nil
 }
@@ -1002,7 +1066,15 @@ func modelBoundAgentPredecessorCandidatesV3(plan sdd.OpenCodePlanV3, name string
 	case exploreAgentName:
 		appendCandidate(previousExplorePredecessor(agents[name]))
 	case generalAgentName:
-		appendCandidate(previousGeneralPredecessor(agents[name]))
+		assignments, assignErr := modelBoundAssignmentsV3(plan)
+		if assignErr != nil {
+			return nil, assignErr
+		}
+		general, bindErr := previousGeneralPromptV6Bound(assignments[name])
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		appendCandidate(general)
 	case verifierAgentName:
 		appendCandidate(previousVerifierPredecessor(agents[name]))
 	default:
@@ -1090,17 +1162,20 @@ func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignmen
 }
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
-	value, err := bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 46", assignment)
+	value, err := bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 48", assignment)
 	return activeManagerPrompt(value), err
 }
 
 func activeManagerPrompt(value []byte) []byte {
-	value = []byte(strings.Replace(string(value), "version: 46", "version: 47", 1))
 	return append(value, []byte("\n\nContract identity: "+orchestration.ContractIdentity+". "+orchestration.ContractPolicy+"\n")...)
 }
 
 func legacyManagerPrompt(value string) string {
+	value = strings.Replace(value, "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 48 -->", "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 46 -->", 1)
 	value = strings.Replace(value, "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 47 -->", "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 46 -->", 1)
+	value = strings.Replace(value, "Load native skills only for built-ins without SKILL.md or a supplied binding; file-backed skills are resolved through the registry.", "Load every clearly applicable native skill through the skill tool.", 1)
+	value = strings.Replace(value, "\n\nResolve logical skills only with the read-only `skill_registry_list` and `skill_registry_resolve` tools using host `opencode`. Pass each returned `vgxness.skill-binding/v1` unchanged with immutable skillHost `opencode` to the worker: schema, name, description, logicalPath, canonicalPath, baseDir, scope, source, snapshotDigest, loadMode `exact-path`, and SHA256. Do not load or embed skill bodies in the manager; only built-ins without SKILL.md use their native skill mechanism.\n\n", "\n\n", 1)
+	value = strings.Replace(value, "\n\nResolve logical skills only with the read-only `vgxness_skill_registry_list` and `vgxness_skill_registry_resolve` tools using host `opencode`. Pass each returned `vgxness.skill-binding/v1` unchanged with immutable skillHost `opencode` to the worker: schema, name, description, logicalPath, canonicalPath, baseDir, scope, source, snapshotDigest, loadMode `exact-path`, and SHA256. Do not load or embed skill bodies in the manager; only built-ins without SKILL.md use their native skill mechanism.\n\n", "\n\n", 1)
 	return strings.Replace(value, "\n\nContract identity: "+orchestration.ContractIdentity+". "+orchestration.ContractPolicy+"\n", "", 1)
 }
 
@@ -1163,7 +1238,21 @@ func bindProfile(base, marker, nextMarker string, assignment sdd.OpenCodeRoleAss
 }
 
 func previousGeneralPredecessor(current []byte) []byte {
-	return derivePredecessor(current, []textReplacement{{old: generalCurrentMarker, new: generalPreviousMarker}, {old: durableMutationDenies, new: ""}})
+	return derivePredecessor(current, []textReplacement{{old: generalCurrentMarker, new: generalPreviousMarker}, {old: "\n\nFor every manager-supplied `vgxness.skill-binding/v1` and immutable skillHost `opencode`, call `skill_registry_verify` with the unchanged binding and host `opencode` before reading its canonicalPath. Block unless schema, name, description, logicalPath, canonicalPath, baseDir, scope, source, snapshotDigest, loadMode `exact-path`, and SHA256 verify unchanged; then read only that exact path. Do not resolve logical names, substitute paths, or read a body before verification.\n", new: "\n"}, {old: durableMutationDenies, new: ""}})
+}
+
+func historicalGeneralV5(current []byte) []byte {
+	value := string(current)
+	value = strings.Replace(value, "Load native skills only for built-ins without SKILL.md or a supplied binding.", "Load every supplied skill by exact name.", 1)
+	value = strings.Replace(value, "\n\nFor every manager-supplied `vgxness.skill-binding/v1` and immutable skillHost `opencode`, call `vgxness_skill_registry_verify` with the unchanged binding and host `opencode` before reading its canonicalPath. Block unless schema, name, description, logicalPath, canonicalPath, baseDir, scope, source, snapshotDigest, loadMode `exact-path`, and SHA256 verify unchanged; then read only that exact path. Do not resolve logical names, substitute paths, or read a body before verification.\n", "\n", 1)
+	value = strings.Replace(value, generalCurrentMarker, "artifact: opencode-agent/general; version: 5", 1)
+	value = strings.Replace(value, generalPreviousMarker, "artifact: opencode-agent/general; version: 5", 1)
+	value = strings.Replace(value, durableMutationDenies, "", 1)
+	return []byte(value)
+}
+
+func previousGeneralPromptV6Bound(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	return bindProfile(previousGeneralPromptV6, "artifact: opencode-agent/general; version: 6", "artifact: opencode-agent/general; version: 6", assignment, true)
 }
 func previousVerifierPredecessor(current []byte) []byte {
 	return derivePredecessor(current, []textReplacement{{old: verifierCurrentMarker, new: verifierPreviousMarker}, {old: durableMutationDenies, new: ""}})

@@ -326,6 +326,24 @@ func TestV46ManagerPredecessorPreservesTrustedV1Digest(t *testing.T) {
 	}
 }
 
+func TestSkillRegistryDelegationContract(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, general := string(bundle.agents[managerAgentName]), string(bundle.agents[generalAgentName])
+	for _, required := range []string{"vgxness_skill_registry_list", "vgxness_skill_registry_resolve", "host `opencode`", "skillHost `opencode`", "vgxness.skill-binding/v1", "schema", "description", "baseDir", "scope", "source", "loadMode", "exact-path", "SHA256", "Do not load or embed skill bodies"} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("manager lacks skill registry contract %q", required)
+		}
+	}
+	for _, required := range []string{"built-ins without SKILL.md", "vgxness.skill-binding/v1", "vgxness_skill_registry_verify", "host `opencode`", "skillHost `opencode`", "schema", "description", "baseDir", "scope", "source", "exact-path", "SHA256", "before reading"} {
+		if !strings.Contains(general, required) {
+			t.Errorf("general lacks exact binding verification %q", required)
+		}
+	}
+}
+
 func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	if err != nil {
@@ -342,7 +360,11 @@ func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(predecessors) == 0 || artifactSHA256(predecessors[0]) != artifactSHA256(v46.agents[managerAgentName]) {
+	found := false
+	for _, predecessor := range predecessors {
+		found = found || artifactSHA256(predecessor) == artifactSHA256(v46.agents[managerAgentName])
+	}
+	if !found {
 		t.Fatal("manifestless predecessor recognition lacks exact v46 manager")
 	}
 }
@@ -361,7 +383,7 @@ func TestModelBoundV3V46ManagerPredecessorIsExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, err := bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 46", assignments[managerAgentName])
+	expected, err := bindManagerTemplate(previousManagerPromptV46, "artifact: opencode-agent/vgxness-manager; version: 46", assignments[managerAgentName])
 	if err != nil {
 		t.Fatal(err)
 	}
