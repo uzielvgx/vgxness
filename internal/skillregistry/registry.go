@@ -25,6 +25,7 @@ var (
 	ErrDrift       = errors.New("skill binding drifted")
 	readSkillFile  = func(f *os.File) ([]byte, error) { return io.ReadAll(io.LimitReader(f, maxSkillBytes+1)) }
 	afterSkillOpen = func() {}
+	statSkill      = os.Stat
 	lstat          = os.Lstat
 	cacheMu        sync.Mutex
 	trustedCaches  = map[string]trustedCache{}
@@ -378,7 +379,7 @@ func readSkillStable(logical, expected string) ([]byte, os.FileInfo, error) {
 	if err != nil || current != expected {
 		return nil, nil, ErrDrift
 	}
-	now, err := os.Stat(current)
+	now, err := statSkill(current)
 	if err != nil || !os.SameFile(info, now) {
 		return nil, nil, ErrDrift
 	}
@@ -394,7 +395,7 @@ func readSkillStable(logical, expected string) ([]byte, os.FileInfo, error) {
 	if err != nil || current != expected {
 		return nil, nil, ErrDrift
 	}
-	currentInfo, err := os.Stat(current)
+	currentInfo, err := statSkill(current)
 	if err != nil || !os.SameFile(info, currentInfo) {
 		return nil, nil, ErrDrift
 	}

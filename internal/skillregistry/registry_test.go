@@ -110,21 +110,12 @@ func TestRejectsNonRegularAndReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	skill(t, p, "x")
-	old := afterSkillOpen
-	afterSkillOpen = func() {
-		q := p + ".new"
-		if err := os.WriteFile(q, []byte("y"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Remove(p); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Rename(q, p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Cleanup(func() { afterSkillOpen = old })
-	if _, err := readSkill(p, mustReal(t, p)); err == nil {
+	replacement := p + ".new"
+	skill(t, replacement, "y")
+	old := statSkill
+	statSkill = func(string) (os.FileInfo, error) { return os.Stat(replacement) }
+	t.Cleanup(func() { statSkill = old })
+	if _, err := readSkill(p, mustReal(t, p)); !errors.Is(err, ErrDrift) {
 		t.Fatal("replacement")
 	}
 }
