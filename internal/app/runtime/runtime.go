@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -106,6 +108,52 @@ func (runtime Memory) ResolveProject(ctx context.Context, opts config.Options, w
 
 // Sync performs a bounded, foreground synchronization without exposing credentials.
 func (runtime Memory) Sync(ctx context.Context, opts config.Options) (memory.SyncResult, error) {
+	result, err := runtime.sync(ctx, opts)
+	if err == nil {
+		runtime.emitMemorySync(ctx, opts.ProjectDir, result)
+	}
+	return result, err
+}
+
+func (runtime Memory) emitMemorySync(ctx context.Context, canonicalWorkspace string, result memory.SyncResult) {
+	if runtime.hooks == nil {
+		return
+	}
+	canonicalWorkspace, err := canonicalInvocationWorkspace(canonicalWorkspace)
+	if err != nil {
+		return
+	}
+	projectID, err := memory.StableProjectID(canonicalWorkspace)
+	if err != nil {
+		return
+	}
+	defer func() { recover() }()
+	draft, err := hooks.NewMemorySyncCompleted(projectID, string(result.Status), int64(result.Pushed), int64(result.PreviouslyAccepted), int64(result.Rejected), int64(result.Retried), int64(result.Conflicts), int64(result.Batches))
+	if err == nil {
+		runtime.hooks.Emit(ctx, draft)
+	}
+}
+
+func canonicalInvocationWorkspace(workspace string) (string, error) {
+	var err error
+	if workspace == "" {
+		workspace, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
+	}
+	workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	workspace, err = filepath.EvalSymlinks(filepath.Clean(workspace))
+	if err != nil {
+		return "", err
+	}
+	return config.CanonicalizeExistingPathCase(workspace), nil
+}
+
+func (runtime Memory) sync(ctx context.Context, opts config.Options) (memory.SyncResult, error) {
 	result := memory.SyncResult{Status: memory.SyncStatusUnavailable}
 	if err := ctx.Err(); err != nil {
 		return result, err

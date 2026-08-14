@@ -151,3 +151,15 @@ func TestObservePreservesManagedRuntimePassThrough(t *testing.T) {
 		t.Fatal("recovery operation emitted V1 event")
 	}
 }
+
+func TestObserveDoesNotAddMemorySyncSurface(t *testing.T) {
+	base := &hookRuntime{result: Result{Provider: "provider", State: StateInstalled}}
+	events := 0
+	d := hooks.New()
+	if err := d.Register("sync", func(context.Context, hooks.Event) error { events++; return nil }, hooks.NameMemorySyncCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Observe(base, d).Status(context.Background(), Options{}); err != nil || events != 0 {
+		t.Fatalf("status err=%v sync events=%d", err, events)
+	}
+}

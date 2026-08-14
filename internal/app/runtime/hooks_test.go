@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -155,5 +157,121 @@ func TestMemoryHooksSuppressInvalidCanceledAndEmitterPanic(t *testing.T) {
 	plain, err := NewMemory("test", false).Remember(context.Background(), opts, memory.Remember{Content: "plain", Project: "project"})
 	if err != nil || plain.ID == "" {
 		t.Fatalf("default constructor changed behavior: %+v %v", plain, err)
+	}
+}
+
+func TestMemorySyncHooksMapAllNilResultsAndSuppressInvalidIdentity(t *testing.T) {
+	workspace := t.TempDir()
+	canonicalWorkspace, err := canonicalInvocationWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, err := memory.StableProjectID(canonicalWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range []memory.SyncResult{
+		{Status: memory.SyncStatusAbsent}, {Status: memory.SyncStatusDisabled}, {Status: memory.SyncStatusUnavailable},
+		{Status: memory.SyncStatusUnreachable, Retried: 1}, {Status: memory.SyncStatusCredentialMissing},
+		{Status: memory.SyncStatusCredentialUnavailable}, {Status: memory.SyncStatusIncompatible}, {Status: memory.SyncStatusInvalid},
+		{Status: memory.SyncStatusUnauthorized}, {Status: memory.SyncStatusPartial, Batches: 1}, {Status: memory.SyncStatusRejected, Rejected: 1},
+		{Status: memory.SyncStatusConflict, Conflicts: 1}, {Status: memory.SyncStatusSynced, Pushed: 1, PreviouslyAccepted: 2, Rejected: 3, Retried: 4, Conflicts: 5, Batches: 6},
+	} {
+		t.Run(string(result.Status), func(t *testing.T) {
+			var got hooks.Event
+			d := hooks.New()
+			if err := d.Register("sync", func(_ context.Context, event hooks.Event) error { got = event; return nil }, hooks.NameMemorySyncCompleted); err != nil {
+				t.Fatal(err)
+			}
+			r := NewMemoryWithHooks("test", false, d)
+			r.emitMemorySync(context.Background(), workspace, result)
+			mapped, ok := got.MemorySync()
+			if !ok || got.Subject().ID() != projectID || mapped.Status() != string(result.Status) || mapped.Pushed() != int64(result.Pushed) || mapped.PreviouslyAccepted() != int64(result.PreviouslyAccepted) || mapped.Rejected() != int64(result.Rejected) || mapped.Retried() != int64(result.Retried) || mapped.Conflicts() != int64(result.Conflicts) || mapped.Batches() != int64(result.Batches) {
+				t.Fatalf("event=%+v result=%+v", got, result)
+			}
+		})
+	}
+	for _, workspace := range []string{filepath.Join(t.TempDir(), "missing"), "/"} {
+		var events []hooks.Event
+		d := hooks.New()
+		if err := d.Register("sync", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameMemorySyncCompleted); err != nil {
+			t.Fatal(err)
+		}
+		NewMemoryWithHooks("test", false, d).emitMemorySync(context.Background(), workspace, memory.SyncResult{Status: memory.SyncStatusUnavailable})
+		if len(events) != 0 {
+			t.Fatalf("workspace %q emitted %d events", workspace, len(events))
+		}
+	}
+	NewMemoryWithHooks("test", false, panickingEmitter{}).emitMemorySync(context.Background(), workspace, memory.SyncResult{Status: memory.SyncStatusSynced})
+}
+
+func TestMemorySyncEmitsOnceOnlyAfterNilError(t *testing.T) {
+	var events []hooks.Event
+	d := hooks.New()
+	if err := d.Register("sync", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameMemorySyncCompleted); err != nil {
+		t.Fatal(err)
+	}
+	r := NewMemoryWithHooks("test", false, d)
+	workspace := t.TempDir()
+	result, err := r.Sync(context.Background(), config.Options{ProjectDir: workspace, ProjectLocal: true})
+	if err != nil || result.Status != memory.SyncStatusUnavailable || len(events) != 1 {
+		t.Fatalf("sync result=%+v err=%v events=%d", result, err, len(events))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.Sync(ctx, config.Options{ProjectDir: workspace}); err == nil || len(events) != 1 {
+		t.Fatalf("errored sync emitted: err=%v events=%d", err, len(events))
+	}
+}
+
+func TestMemorySyncEmptyProjectDirUsesCanonicalWorkingDirectory(t *testing.T) {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := canonicalInvocationWorkspace(workingDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProject, err := memory.StableProjectID(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []hooks.Event
+	d := hooks.New()
+	if err := d.Register("sync", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameMemorySyncCompleted); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewMemoryWithHooks("test", false, d).Sync(context.Background(), config.Options{ProjectLocal: true})
+	if err != nil || result.Status != memory.SyncStatusUnavailable || len(events) != 1 || events[0].Subject().ID() != wantProject {
+		t.Fatalf("sync result=%+v err=%v events=%d wantProject=%q", result, err, len(events), wantProject)
+	}
+}
+
+func TestCanonicalInvocationWorkspaceCanonicalizesRelativeAndSymlinkPaths(t *testing.T) {
+	workspace := t.TempDir()
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(workingDirectory, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromRelative, err := canonicalInvocationWorkspace(relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromAbsolute, err := canonicalInvocationWorkspace(workspace)
+	if err != nil || fromRelative != fromAbsolute {
+		t.Fatalf("relative=%q absolute=%q err=%v", fromRelative, fromAbsolute, err)
+	}
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(workspace, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	fromLink, err := canonicalInvocationWorkspace(link)
+	if err != nil || fromLink != fromAbsolute {
+		t.Fatalf("link=%q absolute=%q err=%v", fromLink, fromAbsolute, err)
 	}
 }

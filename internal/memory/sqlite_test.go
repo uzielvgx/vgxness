@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -101,6 +102,41 @@ func TestHealthError_PreservesExpiredContext(t *testing.T) {
 	defer cancel()
 	err = healthError(ctx, "health check unavailable")
 	testutil.Require(t, errors.Is(err, context.DeadlineExceeded), "expected deadline, got %v", err)
+}
+
+func TestStableProjectID_IsPureAndMatchesResolveProject(t *testing.T) {
+	workspace := filepath.Join(string(filepath.Separator), "work", "example")
+	wantDigest := sha256.Sum256([]byte(workspace))
+	want := "example-" + fmt.Sprintf("%x", wantDigest[:6])
+	got, err := StableProjectID(workspace)
+	if err != nil || got != want {
+		t.Fatalf("StableProjectID() = %q, %v; want %q", got, err, want)
+	}
+	long := strings.Repeat("x", 244)
+	longWorkspace := filepath.Join(string(filepath.Separator), "work", long)
+	got, err = StableProjectID(longWorkspace)
+	separator := strings.LastIndex(got, "-")
+	if err != nil || separator < 0 || len([]rune(got[:separator])) != 243 || len(got[separator+1:]) != 12 {
+		t.Fatalf("long StableProjectID() = %q, %v", got, err)
+	}
+	for _, invalid := range []string{"", "relative", ".", string(filepath.Separator), workspace + string(filepath.Separator) + ".."} {
+		if _, err := StableProjectID(invalid); !errors.Is(err, ErrInvalid) {
+			t.Errorf("StableProjectID(%q) error = %v, want ErrInvalid", invalid, err)
+		}
+	}
+
+	store := openTestStore(t)
+	root := t.TempDir()
+	resolvedWorkspace := filepath.Join(root, "example")
+	testutil.NoError(t, os.Mkdir(resolvedWorkspace, 0o700))
+	resolved, err := store.ResolveProject(context.Background(), resolvedWorkspace)
+	testutil.NoError(t, err)
+	canonical, err := filepath.EvalSymlinks(resolvedWorkspace)
+	testutil.NoError(t, err)
+	stable, err := StableProjectID(config.CanonicalizeExistingPathCase(canonical))
+	if err != nil || resolved != stable {
+		t.Fatalf("ResolveProject() = %q; StableProjectID() = %q, %v", resolved, stable, err)
+	}
 }
 
 func TestResolveProject_AdoptsLegacyOnceAndSeparatesSameNamedWorkspaces(t *testing.T) {

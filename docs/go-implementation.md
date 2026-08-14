@@ -11,6 +11,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/tui` | Keyboard-first storage, memory, and confirmation-gated setup UI. |
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
 | `internal/memory` | SQLite/FTS5 schema v11, canonical workspace identity, semantic memory, structured SDD repository, migrations, and retained legacy importer. The schema is shared storage infrastructure; semantic memory, structured SDD records, and OpenSpec projections remain distinct. |
+| `internal/hooks` | Internal-only best-effort lifecycle observation. Completed memory synchronization can emit synchronous invocation-correlation events for the effective canonical invocation workspace (empty project directory means current working directory; explicit paths are absolute, clean, symlink-resolved, and case-normalized); listeners can block, and global single-flight drops concurrent or reentrant events. There is no queue, retry, replay, persistence, or crash durability. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
 | `internal/providers/opencode` | Manager v46, 14 other model-bound agents (including `general` v6, verifier v4, and reviewers v3), model-plan manifest, exact historical plugin v1–v10 and provider-skill v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 42-file, 18-skill catalog includes `sdd-lifecycle`, loaded only after explicit SDD acceptance. |
 | `internal/providers/codex` | Standalone Codex lifecycle for `AGENTS.md` and 14 delegated profiles, with exact `low`, `medium`, `high`, and `ultra` model-plan projections while preserving user-owned `config.toml`. |
@@ -28,7 +29,7 @@ Compatibility execution packages and commands are not delivered. There is no Go 
 - OpenCode integration generation does not execute engineering work.
 - Setup composes self-installation, integration, and a narrow OpenCode prober.
 - Read-only inspection never creates, migrates, or repairs storage.
-- MCP operations are filesystem-free for OpenSpec projection.
+- MCP operations are filesystem-free for OpenSpec projection. Lifecycle observation does not expand MCP or provider boundaries, and it does not expose synchronization data scope.
 
 ## OpenCode handshake
 
