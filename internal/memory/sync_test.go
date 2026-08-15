@@ -38,6 +38,76 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 	}
 }
 
+func TestBackfillSyncProjectQueuesLegacyObservationsWithoutMutatingThem(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	item, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "legacy", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.NoError(t, err)
+	before := item
+	result, err := store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.NoError(t, err)
+	testutil.Require(t, result.SchemaVersion == 1 && result.Observations == 1 && result.Projects == 1, "result=%+v", result)
+	after, err := store.Get(context.Background(), item.ID, "project", ScopeProject)
+	testutil.Require(t, err == nil && after.Content == before.Content && after.CreatedAt.Equal(before.CreatedAt) && after.UpdatedAt.Equal(before.UpdatedAt), "before=%+v after=%+v err=%v", before, after, err)
+	again, err := store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.Require(t, err == nil && again.Queued == 0, "again=%+v err=%v", again, err)
+}
+
+func TestBackfillSyncProjectLimitAndExistingOutboxCollision(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	for _, content := range []string{"one", "two"} {
+		_, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: content, State: StateActive, Provenance: Provenance{Producer: "test"}})
+		testutil.NoError(t, err)
+	}
+	first, err := store.BackfillSyncProject(context.Background(), "project", 1)
+	testutil.Require(t, err == nil && first.Queued == 1 && first.Remaining && first.Limit == 1, "first=%+v err=%v", first, err)
+	_, err = store.db.Exec(`UPDATE sync_outbox SET payload='{}' WHERE record_kind='project' AND record_id='project'`)
+	testutil.NoError(t, err)
+	_, err = store.BackfillSyncProject(context.Background(), "project", 1)
+	testutil.Require(t, errors.Is(err, ErrConflict), "collision error=%v", err)
+}
+
+func TestBackfillSyncProjectConcurrentCallsDoNotDuplicateOutbox(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	_, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "concurrent", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.NoError(t, err)
+	results := make(chan SyncBackfillResult, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			result, err := store.BackfillSyncProject(context.Background(), "project", 100)
+			results <- result
+			errs <- err
+		}()
+	}
+	queued := 0
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		queued += (<-results).Queued
+	}
+	var outbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.Require(t, queued == 2 && outbox == 2, "queued=%d outbox=%d", queued, outbox)
+}
+
+func TestBackfillSyncProjectSkipsTombstonedObservation(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	item, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "deleted", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_tombstones(history_id,seq,record_kind,record_id,canonical_version,payload_version,provenance,deleted_at) VALUES('550e8400-e29b-41d4-a716-446655440099',1,'observation',?,1,1,CAST('{}' AS BLOB),1)`, item.ID)
+	testutil.NoError(t, err)
+	result, err := store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.Require(t, err == nil && result.Observations == 0 && result.Projects == 1, "result=%+v err=%v", result, err)
+	var queued int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE record_id=?`, item.ID).Scan(&queued))
+	testutil.Require(t, queued == 0, "resurrected outbox=%d", queued)
+}
+
 func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	db, err := sql.Open("sqlite", path)

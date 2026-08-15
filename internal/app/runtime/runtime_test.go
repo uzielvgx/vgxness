@@ -156,6 +156,63 @@ func TestMemoryConfigureSyncStoresCredentialBeforeActivatingProfileAndStatusIsLo
 	}
 }
 
+func TestMemoryConfigureSyncCredentialFileDoesNotUseOrPersistKeyring(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("credential files are unsupported on Windows")
+	}
+	root := t.TempDir()
+	bearer := "vgx1.550e8400-e29b-41d4-a716-446655440000.secret"
+	credentialFile := filepath.Join(t.TempDir(), "credential")
+	if err := os.WriteFile(credentialFile, []byte(bearer+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewMemory("cli", false)
+	runtime.putSecret = func(string, string) error { t.Fatal("put keyring"); return nil }
+	runtime.deleteSecret = func(string) error { t.Fatal("delete keyring"); return nil }
+	status, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root, CredentialFile: credentialFile}, "https://sync.example.test", "550e8400-e29b-41d4-a716-446655440000", "")
+	if err != nil || !status.Configured || status.Credential != memory.SyncCredentialAvailable {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	store, err := openStoreRead(context.Background(), config.Options{StorageRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, found, err := store.GetSyncProfile(context.Background())
+	store.Close()
+	if err != nil || !found || profile.CredentialRef != "secret://keychain/sync/file" || strings.Contains(profile.CredentialRef, credentialFile) || strings.Contains(profile.CredentialRef, bearer) {
+		t.Fatalf("profile=%+v found=%t err=%v", profile, found, err)
+	}
+	status, err = runtime.SyncStatus(context.Background(), config.Options{StorageRoot: root, CredentialFile: credentialFile})
+	if err != nil || status.Credential != memory.SyncCredentialAvailable {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+}
+
+func TestMemoryConfigureSyncCredentialFileRejectsKeyringProfileWithoutSideEffects(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("credential files are unsupported on Windows")
+	}
+	root := t.TempDir()
+	device := "550e8400-e29b-41d4-a716-446655440000"
+	runtime := enrollmentRuntime(map[string]string{})
+	if _, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, "vgx1."+device+".keyring"); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "credential")
+	if err := os.WriteFile(file, []byte("vgx1."+device+".file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime.putSecret = func(string, string) error { t.Fatal("put keyring"); return nil }
+	runtime.deleteSecret = func(string) error { t.Fatal("delete keyring"); return nil }
+	_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root, CredentialFile: file}, "https://sync.example.test", device, "")
+	if !errors.Is(err, memory.ErrConflict) {
+		t.Fatalf("error=%v", err)
+	}
+	if profile := syncEnrollmentProfile(t, root); profile.CredentialRef == "secret://keychain/sync/file" {
+		t.Fatalf("profile mutated=%+v", profile)
+	}
+}
+
 func TestMemorySyncStatusForAbsentProfileDoesNotReadCredential(t *testing.T) {
 	reads := 0
 	runtime := NewMemory("cli", false)

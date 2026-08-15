@@ -77,6 +77,39 @@ vgxness memory sync configure \
 The command reads the bearer from standard input; enter or pipe it directly
 without placing it in an environment variable or command argument.
 
+On Linux and macOS, an explicitly requested current-user-owned credential file
+may be used instead of the desktop keyring:
+
+```sh
+vgxness memory sync configure --credential-file /absolute/private/bearer --endpoint https://sync.example.test --device-id 550e8400-e29b-41d4-a716-446655440000
+vgxness memory sync status --credential-file /absolute/private/bearer
+vgxness memory sync --credential-file /absolute/private/bearer
+```
+
+The file must be an absolute regular file, not a symlink (nor beneath a
+symlink), owned by the current user, with no group or other permissions, and
+contain one bearer line with an optional final LF or CRLF. The path and bearer
+are never persisted. Each later `status` or `sync` invocation must explicitly
+provide the file again. Credential files are unsupported on Windows; omit the
+flag there to use the default keyring. Same-user filesystem races cannot be
+made atomically host-enforced, so the command rechecks the opened descriptor
+and fails closed when its identity or metadata changes.
+
+For pre-existing local data, queue records before the first remote sync with a
+workspace-scoped, local-only operation:
+
+```sh
+vgxness memory sync backfill --workspace /absolute/workspace --limit 100 --json
+vgxness memory sync --credential-file /absolute/private/bearer
+```
+
+Backfill sends no network request and reads no credential. It deterministically
+queues only unsynced records for that resolved project, preserves observation
+content, timestamps, and versions, skips tombstoned records, detects queue
+identity collisions, and is safe to run again. `--limit` defaults to 100 and
+accepts 1 through 1000; JSON reports `remaining=true` when another invocation
+is needed.
+
 The command validates the HTTPS endpoint, device ID, and bearer locally. A
 context-cancellable cross-process lock serializes enrollment. It derives two
 deterministic keyring slots from canonical local storage identity, stores the

@@ -39,6 +39,13 @@ Sync enrollment uses a bounded durable previous-credential reference marker to
 finish interrupted keyring cleanup on the next enrollment; it never stores a
 bearer in SQLite.
 
+An explicit Linux/macOS `memory sync --credential-file /absolute/private/file`
+mode is available for headless use. The file is revalidated on every use and is
+never stored; see [sync enrollment](sync.md#local-enrollment-and-status) for
+ownership, permissions, and Windows limitations. For existing project data,
+run `memory sync backfill --workspace /absolute/workspace` before the first
+sync. Backfill is local-only, bounded, and idempotent.
+
 The default database is `~/.vgxness/memory.db`. Explicit `--storage-root` and
 `--project-local` modes use isolated databases. The OpenCode integration exposes
 both domains through the [MCP-only integration](opencode-integration.md); MCP

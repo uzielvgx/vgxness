@@ -47,6 +47,17 @@ type Observation struct {
 	References  []string
 }
 
+// SyncBackfillResult describes a local-only, idempotent sync queue backfill.
+type SyncBackfillResult struct {
+	SchemaVersion int  `json:"schemaVersion"`
+	Limit         int  `json:"limit"`
+	Remaining     bool `json:"remaining"`
+	Projects      int  `json:"projects"`
+	Sessions      int  `json:"sessions"`
+	Observations  int  `json:"observations"`
+	Queued        int  `json:"queued"`
+}
+
 type Search struct {
 	Query, Project string
 	TopicKey       string

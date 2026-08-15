@@ -20,6 +20,138 @@ import (
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
+// BackfillSyncProject explicitly queues legacy local records for one project.
+// It does not contact a remote, mutate records, or change their sync versions.
+func (s *Store) BackfillSyncProject(ctx context.Context, project string, limit int) (SyncBackfillResult, error) {
+	if project == "" || limit < 1 || limit > 1000 {
+		return SyncBackfillResult{}, fmt.Errorf("%w: project", ErrInvalid)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SyncBackfillResult{}, writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	result := SyncBackfillResult{SchemaVersion: 1, Limit: limit}
+	queued := 0
+	var version int64
+	if err := tx.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, project).Scan(&version); errors.Is(err, sql.ErrNoRows) {
+		return result, nil
+	} else if err != nil || version < 0 {
+		return SyncBackfillResult{}, writeError(ctx, err)
+	}
+	if version == 0 && queued < limit {
+		mutation := syncservice.Mutation{MutationID: backfillMutationID("project", project), RecordID: project, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: project}}
+		inserted, err := s.enqueueBackfillMutation(ctx, tx, mutation)
+		if err != nil {
+			return SyncBackfillResult{}, err
+		}
+		if inserted {
+			queued++
+			result.Projects++
+			result.Queued++
+		}
+	}
+	sessions, err := tx.QueryContext(ctx, `SELECT id,sync_version FROM sessions WHERE project_id=? ORDER BY id`, project)
+	if err != nil {
+		return SyncBackfillResult{}, writeError(ctx, err)
+	}
+	defer sessions.Close()
+	for sessions.Next() {
+		if queued >= limit {
+			result.Remaining = true
+			break
+		}
+		var id string
+		var sessionVersion int64
+		if err := sessions.Scan(&id, &sessionVersion); err != nil || sessionVersion < 0 {
+			return SyncBackfillResult{}, writeError(ctx, err)
+		}
+		if sessionVersion != 0 {
+			continue
+		}
+		mutation := syncservice.Mutation{MutationID: backfillMutationID("session", id), RecordID: id, RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: id, ProjectID: project}}
+		inserted, err := s.enqueueBackfillMutation(ctx, tx, mutation)
+		if err != nil {
+			return SyncBackfillResult{}, err
+		}
+		if inserted {
+			queued++
+			result.Sessions++
+			result.Queued++
+		}
+	}
+	if err := sessions.Err(); err != nil {
+		return SyncBackfillResult{}, writeError(ctx, err)
+	}
+	rows, err := tx.QueryContext(ctx, observationSelect+` WHERE o.project_id=? AND NOT EXISTS(SELECT 1 FROM sync_tombstones t WHERE t.record_kind='observation' AND t.record_id=o.id) ORDER BY o.id`, project)
+	if err != nil {
+		return SyncBackfillResult{}, writeError(ctx, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if queued >= limit {
+			result.Remaining = true
+			break
+		}
+		item, err := scanObservation(rows)
+		if err != nil {
+			return SyncBackfillResult{}, err
+		}
+		var observationVersion int64
+		if err := tx.QueryRowContext(ctx, `SELECT sync_version FROM observations WHERE id=?`, item.ID).Scan(&observationVersion); err != nil || observationVersion < 0 {
+			return SyncBackfillResult{}, writeError(ctx, err)
+		}
+		if observationVersion != 0 {
+			continue
+		}
+		snapshot := syncObservation(item)
+		mutation := syncservice.Mutation{MutationID: backfillMutationID("observation", item.ID), RecordID: item.ID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, BaseVersion: 0, Observation: &snapshot}
+		inserted, err := s.enqueueBackfillMutation(ctx, tx, mutation)
+		if err != nil {
+			return SyncBackfillResult{}, err
+		}
+		if inserted {
+			queued++
+			result.Observations++
+			result.Queued++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return SyncBackfillResult{}, writeError(ctx, err)
+	}
+	return result, commit(ctx, tx)
+}
+
+func backfillMutationID(kind, id string) string {
+	sum := sha256.Sum256([]byte("vgxness/sync-backfill/v1\x00" + kind + "\x00" + id))
+	b := sum[:16]
+	b[6] = b[6]&0x0f | 0x50
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func (s *Store) enqueueBackfillMutation(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation) (bool, error) {
+	var id sql.NullString
+	var payload []byte
+	err := tx.QueryRowContext(ctx, `SELECT mutation_id,payload FROM sync_outbox WHERE record_kind=? AND record_id=? AND mutation_kind='create' AND base_version=0 ORDER BY id LIMIT 1`, mutation.RecordKind, mutation.RecordID).Scan(&id, &payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = s.enqueueSyncOutbox(ctx, tx, mutation)
+		return err == nil, err
+	}
+	if err != nil {
+		return false, writeError(ctx, err)
+	}
+	if !id.Valid || !canonicalUUIDPattern.MatchString(id.String) || len(payload) == 0 {
+		return false, fmt.Errorf("%w: invalid sync outbox payload", ErrCorrupt)
+	}
+	mutation.MutationID = id.String
+	expected, err := json.Marshal(mutation)
+	if err != nil || !bytes.Equal(payload, expected) {
+		return false, fmt.Errorf("%w: sync backfill identity", ErrConflict)
+	}
+	return false, nil
+}
+
 const (
 	maxSyncPayloadBytes = 1 << 20
 	maxDueSyncOutbox    = 16

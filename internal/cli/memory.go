@@ -26,6 +26,7 @@ type MemoryRuntime interface {
 	Sync(context.Context, config.Options) (memory.SyncResult, error)
 	ConfigureSync(context.Context, config.Options, string, string, string) (memory.SyncConfigurationStatus, error)
 	SyncStatus(context.Context, config.Options) (memory.SyncConfigurationStatus, error)
+	BackfillSyncProject(context.Context, config.Options, string, int) (memory.SyncBackfillResult, error)
 }
 
 type memoryInput struct {
@@ -56,6 +57,8 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 				return runMemorySyncConfigure(ctx, args[2:], stdin, stdout, stderr, runtime)
 			case "status":
 				return runMemorySyncStatus(ctx, args[2:], stdout, stderr, runtime)
+			case "backfill":
+				return runMemorySyncBackfill(ctx, args[2:], stdout, stderr, runtime)
 			default:
 				if !strings.HasPrefix(args[1], "-") {
 					return memoryFailure(stderr, memory.ErrInvalid)
@@ -67,6 +70,7 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		var opts config.Options
 		var jsonOutput bool
 		flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+		flags.StringVar(&opts.CredentialFile, "credential-file", "", "absolute credential file")
 		flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
 		flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
@@ -100,6 +104,7 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	flags.IntVar(&limit, "limit", 0, "search limit")
 	var opts config.Options
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.StringVar(&opts.CredentialFile, "credential-file", "", "absolute credential file")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || (inputPath != "") == stdinSource {
 		return memoryFailure(stderr, memory.ErrInvalid)
@@ -207,6 +212,7 @@ func runMemorySyncConfigure(ctx context.Context, args []string, stdin io.Reader,
 	flags.StringVar(&endpoint, "endpoint", "", "sync endpoint")
 	flags.StringVar(&deviceID, "device-id", "", "sync device ID")
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.StringVar(&opts.CredentialFile, "credential-file", "", "absolute credential file")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || opts.ProjectLocal {
 		return memoryFailure(stderr, memory.ErrInvalid)
@@ -219,9 +225,13 @@ func runMemorySyncConfigure(ctx context.Context, args []string, stdin io.Reader,
 	if _, err := memory.ValidateSyncProfile(memory.SyncProfile{Enabled: true, Endpoint: endpoint, DeviceID: deviceID, CredentialRef: "secret://keychain/sync/pending"}); err != nil {
 		return memoryFailure(stderr, memory.ErrInvalid)
 	}
-	bearer, err := syncBearer(stdin)
-	if err != nil {
-		return memoryFailure(stderr, memory.ErrInvalid)
+	bearer := ""
+	if opts.CredentialFile == "" {
+		var err error
+		bearer, err = syncBearer(stdin)
+		if err != nil {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
 	}
 	status, err := runtime.ConfigureSync(ctx, opts, endpoint, deviceID, bearer)
 	if err != nil {
@@ -254,6 +264,7 @@ func runMemorySyncStatus(ctx context.Context, args []string, stdout, stderr io.W
 	var opts config.Options
 	var jsonOutput bool
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.StringVar(&opts.CredentialFile, "credential-file", "", "absolute credential file")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
 	flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
@@ -270,6 +281,36 @@ func runMemorySyncStatus(ctx context.Context, args []string, stdout, stderr io.W
 		}{SchemaVersion: 1, SyncConfigurationStatus: status})
 	} else {
 		fmt.Fprintf(stdout, "configured=%t\nenabled=%t\ncredential=%s\n", status.Configured, status.Enabled, status.Credential)
+	}
+	return 0
+}
+
+func runMemorySyncBackfill(ctx context.Context, args []string, stdout, stderr io.Writer, runtime MemoryRuntime) int {
+	flags := flag.NewFlagSet("sync backfill", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var opts config.Options
+	var workspace string
+	var jsonOutput bool
+	var limit int
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.StringVar(&workspace, "workspace", "", "workspace")
+	flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
+	flags.IntVar(&limit, "limit", 100, "maximum records")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || workspace == "" || limit < 1 || limit > 1000 {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	absolute, err := filepath.Abs(workspace)
+	if err != nil {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	result, err := runtime.BackfillSyncProject(ctx, opts, filepath.Clean(absolute), limit)
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	if jsonOutput {
+		_ = json.NewEncoder(stdout).Encode(result)
+	} else {
+		fmt.Fprintf(stdout, "schema_version=%d\nlimit=%d\nremaining=%t\nprojects=%d\nsessions=%d\nobservations=%d\nqueued=%d\n", result.SchemaVersion, result.Limit, result.Remaining, result.Projects, result.Sessions, result.Observations, result.Queued)
 	}
 	return 0
 }

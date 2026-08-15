@@ -9,6 +9,7 @@ import (
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/inspection"
+	"github.com/vgxness/vgxness/internal/secrets"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -16,6 +17,11 @@ type fakeInspector struct {
 	result inspection.Result
 	err    error
 	calls  int
+}
+
+func TestFailureClassifiesUnsupportedCredentialFiles(t *testing.T) {
+	code, message := failure(secrets.ErrUnsupported)
+	testutil.Require(t, code == 1 && message == "unavailable: credential files are unsupported on this platform", "code=%d message=%q", code, message)
 }
 
 func runBasicCLI(ctx context.Context, args []string, stdout, stderr *bytes.Buffer, inspector Inspector) int {

@@ -28,6 +28,8 @@ const (
 
 var canonicalBearer = regexp.MustCompile(`^vgx1\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.([A-Za-z0-9_-]{1,128})$`)
 
+const credentialFileReference = "secret://keychain/sync/file"
+
 // Memory adapts memory services to the CLI and TUI runtime contracts.
 type Memory struct {
 	producer               string
@@ -191,12 +193,11 @@ func (runtime Memory) sync(ctx context.Context, opts config.Options) (memory.Syn
 	if !profile.Enabled {
 		return memory.SyncResult{Status: memory.SyncStatusDisabled}, nil
 	}
-	getCredential := runtime.credential
-	if getCredential == nil {
-		getCredential = secrets.System().Get
-	}
-	credential, err := getCredential(profile.CredentialRef)
+	credential, err := runtime.syncCredential(opts, profile.CredentialRef)
 	if err != nil {
+		if errors.Is(err, secrets.ErrUnsupported) {
+			return result, err
+		}
 		if errors.Is(err, secrets.ErrMissing) {
 			return memory.SyncResult{Status: memory.SyncStatusCredentialMissing}, nil
 		}
@@ -225,11 +226,28 @@ func validBearer(value, deviceID string) bool {
 	return match != nil && match[1] == strings.ToLower(deviceID)
 }
 
+func (runtime Memory) syncCredential(opts config.Options, reference string) (string, error) {
+	if opts.CredentialFile != "" && reference == credentialFileReference {
+		return secrets.ReadCredentialFile(opts.CredentialFile)
+	}
+	if opts.CredentialFile != "" || reference == credentialFileReference {
+		return "", secrets.ErrMissing
+	}
+	get := runtime.credential
+	if get == nil {
+		get = secrets.System().Get
+	}
+	return get(reference)
+}
+
 // ConfigureSync stores a bearer in the keyring before activating its profile.
 // It validates entirely locally and never contacts the remote endpoint.
 func (runtime Memory) ConfigureSync(ctx context.Context, opts config.Options, endpoint, deviceID, bearer string) (memory.SyncConfigurationStatus, error) {
 	if runtime.readOnly || opts.ProjectLocal {
 		return memory.SyncConfigurationStatus{}, memory.ErrInvalid
+	}
+	if opts.CredentialFile != "" {
+		return runtime.configureSyncFile(ctx, opts, endpoint, deviceID)
 	}
 	profile, err := memory.ValidateSyncProfile(memory.SyncProfile{Enabled: true, Endpoint: endpoint, DeviceID: deviceID, CredentialRef: "secret://keychain/sync/pending"})
 	if err != nil || !validBearer(bearer, profile.DeviceID) {
@@ -331,6 +349,47 @@ func (runtime Memory) ConfigureSync(ctx context.Context, opts config.Options, en
 	return status, closeErr
 }
 
+// configureSyncFile validates the explicitly supplied file and stores only a
+// fixed marker; neither its path nor its bearer is persisted or sent anywhere.
+func (runtime Memory) configureSyncFile(ctx context.Context, opts config.Options, endpoint, deviceID string) (memory.SyncConfigurationStatus, error) {
+	profile, err := memory.ValidateSyncProfile(memory.SyncProfile{Enabled: true, Endpoint: endpoint, DeviceID: deviceID, CredentialRef: credentialFileReference})
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, memory.ErrInvalid
+	}
+	bearer, err := secrets.ReadCredentialFile(opts.CredentialFile)
+	if errors.Is(err, secrets.ErrUnsupported) {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	if err != nil || !validBearer(bearer, profile.DeviceID) {
+		return memory.SyncConfigurationStatus{}, memory.ErrInvalid
+	}
+	paths, err := config.Prepare(ctx, opts)
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	release, err := acquireSyncEnrollmentLock(ctx, paths.Database)
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	defer release()
+	store, err := memory.Open(ctx, paths.Database, nil)
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	defer store.Close()
+	previous, found, err := store.GetSyncProfile(ctx)
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	if found && (previous.CredentialRef != profile.CredentialRef || previous.PreviousCredentialRef != "") {
+		return memory.SyncConfigurationStatus{}, memory.ErrConflict
+	}
+	if _, err := store.ConfigureSyncProfile(ctx, profile); err != nil {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	return memory.SyncConfigurationStatus{Configured: true, Enabled: true, Credential: memory.SyncCredentialAvailable}, nil
+}
+
 func validSyncRecoveryMarker(active, previous, first, second string) bool {
 	return active == first && previous == second || active == second && previous == first
 }
@@ -378,11 +437,10 @@ func (runtime Memory) SyncStatus(ctx context.Context, opts config.Options) (memo
 		return status, err
 	}
 	status.Configured, status.Enabled = true, profile.Enabled
-	get := runtime.credential
-	if get == nil {
-		get = secrets.System().Get
+	credential, err := runtime.syncCredential(opts, profile.CredentialRef)
+	if errors.Is(err, secrets.ErrUnsupported) {
+		return status, err
 	}
-	credential, err := get(profile.CredentialRef)
 	switch {
 	case err == nil && validBearer(credential, profile.DeviceID):
 		status.Credential = memory.SyncCredentialAvailable
@@ -394,6 +452,21 @@ func (runtime Memory) SyncStatus(ctx context.Context, opts config.Options) (memo
 		status.Credential = memory.SyncCredentialUnavailable
 	}
 	return status, nil
+}
+
+// BackfillSyncProject queues unsynced local records for one resolved workspace.
+// It is local-only and deliberately does not load credentials.
+func (runtime Memory) BackfillSyncProject(ctx context.Context, opts config.Options, workspace string, limit int) (memory.SyncBackfillResult, error) {
+	if runtime.readOnly || opts.ProjectLocal || workspace == "" || limit < 1 || limit > 1000 {
+		return memory.SyncBackfillResult{}, memory.ErrInvalid
+	}
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.SyncBackfillResult, error) {
+		project, err := store.ResolveProject(ctx, workspace)
+		if err != nil {
+			return memory.SyncBackfillResult{}, err
+		}
+		return store.BackfillSyncProject(ctx, project, limit)
+	})
 }
 
 type syncRemote struct {

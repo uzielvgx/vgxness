@@ -14,6 +14,7 @@ import (
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/mcp"
 	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/vgxness/vgxness/internal/secrets"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 	"github.com/vgxness/vgxness/internal/skills"
@@ -162,6 +163,8 @@ func failure(err error) (int, string) {
 		return 130, "cancelled: operation cancelled"
 	case errors.Is(err, memory.ErrInvalid):
 		return 2, "invalid: memory request is invalid"
+	case errors.Is(err, secrets.ErrUnsupported):
+		return 1, "unavailable: credential files are unsupported on this platform"
 	case errors.Is(err, memory.ErrConflict):
 		return 1, "conflict: memory already exists"
 	case errors.Is(err, memory.ErrNotFound):
