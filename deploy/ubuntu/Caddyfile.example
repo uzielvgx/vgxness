@@ -1,5 +1,0 @@
-# Replace SYNC_PUBLIC_HOSTNAME before loading this file. Keep the daemon private.
-https://SYNC_PUBLIC_HOSTNAME {
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:8787
-}

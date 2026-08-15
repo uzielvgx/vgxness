@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +13,6 @@ import (
 func TestUbuntuDeployPackageContract(t *testing.T) {
 	repository := repositoryRoot(t)
 	assets := map[string][]string{
-		"deploy/ubuntu/Caddyfile.example": {
-			"https://SYNC_PUBLIC_HOSTNAME {", "reverse_proxy 127.0.0.1:8787",
-		},
 		"deploy/ubuntu/vgxness-syncd.service": {
 			"User=vgxness-syncd", "EnvironmentFile=/etc/vgxness-syncd/syncd.env",
 			"ExecStart=/opt/vgxness-syncd/current/vgxness-syncd serve --listen 127.0.0.1:8787",
@@ -54,7 +52,7 @@ func TestUbuntuDeployPackageContract(t *testing.T) {
 		},
 		"deploy/ubuntu/README.md": {
 			"Ubuntu 24.04", "authorized root operator", "DBA/maintenance approval", "0600", "systemd-analyze verify",
-			"caddy validate", "systemctl daemon-reload", "systemctl reload caddy", "systemctl restart vgxness-syncd",
+			"systemctl daemon-reload", "systemctl restart vgxness-syncd",
 			"is-active", "ss -ltn", "401", "Preflight", "Abort", "Blast radius", "Restore", "Rollback", "Escalation",
 			"[A-Za-z0-9._~-]", ">=32", "/opt/vgxness-syncd/current/vgxness-syncd", "vgxness_syncd_backup",
 			"--single-transaction", "--role=vgxness_syncd", "device issue", "device revoke", "/v1/sync/capabilities",
@@ -71,32 +69,39 @@ func TestUbuntuDeployPackageContract(t *testing.T) {
 			"set -eu", "umask 077", "/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin",
 			"/usr/bin/pg_dump", "--file=- > INVESTIGATION_VERIFIED.pgd", "/usr/bin/pg_restore", "< current.pgd",
 			"systemctl enable --now vgxness-syncd-backup.timer", "timer remains stopped",
-			"systemctl enable --now caddy", "systemctl is-active caddy", "https://SYNC_PUBLIC_HOSTNAME/healthz", "%{http_code}", "= 401",
-			"dedicated Caddy host configuration", "merge only the VGXNESS site block", "Do not overwrite a shared /etc/caddy/Caddyfile",
+			"http://127.0.0.1:8787/v1/sync/capabilities", "%{http_code}", "= 401", "does not configure public ingress",
+			"Do not use the native Ubuntu package as a containerized Nginx Proxy Manager upstream", "repository Docker deployment", "syncd joins the verified external Nginx Proxy Manager network", "Mere Nginx Proxy Manager network attachment cannot reach host loopback", "external ingress must remain stopped",
+			"## Legacy Caddy retirement (upgrade only)", "inspection proves a prior VGXNESS Caddy route is installed", "never an initial-install action", "exact recorded ownership/revision", "Never delete a shared Caddyfile", "unrelated sites", "no longer routes to 127.0.0.1:8787", "inspection/validation/controlled-reload gates",
 		},
 	}
-	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "vgxness-syncd-backup.service"), "ExecStart=/usr/bin/flock",
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "vgxness-syncd-backup.service"), "ExecStart=/usr/bin/flock", "\nNoNewPrivileges=",
 		"sha256sum .current.pgd.tmp",
 		".current.pgd.sha256.tmp",
 		"mv -T -- .current.pgd.tmp current.pgd",
 		"mv -T -- .current.pgd.sha256.tmp current.pgd.sha256")
 	assertMinOccurrences(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"),
 		"test \"$CURRENT_SYSTEM_IDENTIFIER\" = \"$EXPECTED_SYSTEM_IDENTIFIER\"", 3)
-	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "```sh\n# Run this block as root",
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "```sh\n# Run this block as root", "\n```",
 		"exec 9>/var/lib/vgxness-syncd-backup/backup.lock",
 		"flock -n 9",
 		"sha256sum --check current.pgd.sha256",
 		"dropdb --host=/var/run/postgresql")
-	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "```sh\n# Run this block as root",
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "```sh\n# Run this block as root", "\n```",
 		"set -eu", "umask 077", "flock -n 9", "dropdb --host=/var/run/postgresql", "systemctl is-active vgxness-syncd",
-		"systemctl enable --now caddy", "systemctl is-active caddy", "https://SYNC_PUBLIC_HOSTNAME/healthz", "%{http_code}", "systemctl enable --now vgxness-syncd-backup.timer")
-	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "## Immutable update and rollback",
+		"http://127.0.0.1:8787/v1/sync/capabilities", "systemctl enable --now vgxness-syncd-backup.timer")
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "## Immutable update and rollback", "\n## Backup and restore",
 		"APPROVED_RELEASE_SHA256",
 		"readlink -f /opt/vgxness-syncd/current",
 		"sha256sum /opt/vgxness-syncd/current/vgxness-syncd")
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "## Install, validation, and smoke", "\n## Immutable update and rollback",
+		"systemctl is-active vgxness-syncd", "%{http_code}", "http://127.0.0.1:8787/v1/sync/capabilities", "systemctl enable --now vgxness-syncd-backup.timer")
+	assertExcludesOutsideSection(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "## Legacy Caddy retirement (upgrade only)", "\n## Backup and restore", "Caddy")
 	makefile, err := os.ReadFile(filepath.Join(repository, "Makefile"))
 	if err != nil || !strings.Contains(string(makefile), "TestCleanCheckoutSetupAndNativeSDD|TestUbuntuDeployPackageContract") {
 		t.Error("Makefile verify target does not select the Ubuntu deployment contract")
+	}
+	if _, err := os.Stat(filepath.Join(repository, "deploy", "ubuntu", "Caddyfile.example")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("deploy/ubuntu/Caddyfile.example must be absent, got %v", err)
 	}
 	for relative, required := range assets {
 		data, err := os.ReadFile(filepath.Join(repository, filepath.FromSlash(relative)))
@@ -135,7 +140,29 @@ func assertMinOccurrences(t *testing.T, path, want string, minimum int) {
 	}
 }
 
-func assertSectionOrdered(t *testing.T, path, section string, parts ...string) {
+func assertExcludesOutsideSection(t *testing.T, path, section, endDelimiter, forbidden string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	start := strings.Index(text, section)
+	if start < 0 {
+		t.Errorf("%s is missing section %q", path, section)
+		return
+	}
+	end := strings.Index(text[start:], endDelimiter)
+	if end < 0 {
+		t.Errorf("%s is missing section end delimiter %q", path, endDelimiter)
+		return
+	}
+	if strings.Contains(text[:start], forbidden) || strings.Contains(text[start+end:], forbidden) {
+		t.Errorf("%s contains %q outside %q", path, forbidden, section)
+	}
+}
+
+func assertSectionOrdered(t *testing.T, path, section, endDelimiter string, parts ...string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -146,9 +173,16 @@ func assertSectionOrdered(t *testing.T, path, section string, parts ...string) {
 		t.Errorf("%s is missing section %q", path, section)
 		return
 	}
+	sectionText := string(data)[sectionOffset:]
+	endOffset := strings.Index(sectionText, endDelimiter)
+	if endOffset < 0 {
+		t.Errorf("%s is missing section end delimiter %q", path, endDelimiter)
+		return
+	}
+	sectionText = sectionText[:endOffset]
 	last := -1
 	for _, part := range parts {
-		position := strings.Index(string(data)[sectionOffset:], part)
+		position := strings.Index(sectionText, part)
 		if position < 0 || position <= last {
 			t.Errorf("%s does not order %q after its predecessor in %q", path, part, section)
 		}
@@ -180,10 +214,8 @@ func forbiddenDeployText(relative string) []string {
 		return []string{"ExecStart=/bin/sh -", "sha256sum .current.pgd.tmp |", "rm -rf", "find ", "postgres://", "User=vgxness-syncd\n", "Group=vgxness-syncd\n"}
 	case "deploy/ubuntu/vgxness-syncd.service":
 		return []string{"0.0.0.0", "Authorization=", "/usr/local/bin/vgxness-syncd"}
-	case "deploy/ubuntu/Caddyfile.example":
-		return []string{"0.0.0.0", "Authorization"}
 	case "deploy/ubuntu/README.md":
-		return []string{"does not install packages, create accounts, contact a host", "\ndropdb --force ", "\ncreatedb --owner=", "\npg_restore --exit-on-error", "sha256sum .current.pgd.tmp |"}
+		return []string{"does not install packages, create accounts, contact a host", "\ndropdb --force ", "\ncreatedb --owner=", "\npg_restore --exit-on-error", "sha256sum .current.pgd.tmp |", "/healthz", "https://SYNC_PUBLIC_HOSTNAME", "systemctl enable --now caddy"}
 	default:
 		return nil
 	}
