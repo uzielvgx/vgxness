@@ -142,7 +142,7 @@ func TestGoCIWorkflowContract(t *testing.T) {
 			"GOOS=windows GOARCH=amd64 go test -tags=e2e -count=1 -run '^$' -exec=/usr/bin/true ./internal/e2e",
 			"go test -count=1 ./...",
 			"go build -trimpath -o vgxness ./cmd/vgxness", "./vgxness version",
-			"go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/providers/...",
+			"go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/selfinstall ./internal/providers/...",
 		} {
 			if !strings.Contains(workflow, command) {
 				t.Errorf("workflow missing gate %q", command)
@@ -171,6 +171,9 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		}
 		if strings.Contains(workflow, "macos-14") {
 			t.Error("Go CI must not use the deprecated macos-14 runner")
+		}
+		if !strings.Contains(workflow, "go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/selfinstall ./internal/providers/...") {
+			t.Error("Darwin native package command must include self-install coverage")
 		}
 	})
 }

@@ -113,6 +113,29 @@ func TestWindowsSelfInstallLifecycle(t *testing.T) {
 		"rollback_available": "false",
 		"changed":            "true",
 	})
+	gcPreview := selfInstallArgs(t, environment, repository, launcher, []string{"gc", "preview", "--bin-dir", binDirectory, "--data-dir", dataDirectory})
+	gcPreview.require(t, map[string]string{
+		"state":               "installed",
+		"gc_candidate_count":  "1",
+		"gc_candidate_sha256": secondSHA,
+		"gc_retained_count":   "1",
+		"gc_retained_sha256":  firstSHA,
+		"changed":             "false",
+	})
+	plan := gcPreview.values["gc_plan_sha256"]
+	if len(plan) != 64 {
+		t.Fatalf("invalid GC plan: %q\n%s", plan, gcPreview.raw)
+	}
+	gcApply := selfInstallArgs(t, environment, repository, launcher, []string{"gc", "apply", "--plan-sha256", plan, "--bin-dir", binDirectory, "--data-dir", dataDirectory})
+	gcApply.require(t, map[string]string{"state": "installed", "gc_deleted_count": "1", "gc_deleted_sha256": secondSHA, "changed": "true"})
+	if _, err := os.Stat(filepath.Join(dataDirectory, "versions", firstSHA, "vgxness.exe")); err != nil {
+		t.Fatalf("active version missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDirectory, "versions", secondSHA)); !os.IsNotExist(err) {
+		t.Fatalf("inactive version remains: %v", err)
+	}
+	gcRecover := selfInstallArgs(t, environment, repository, launcher, []string{"gc", "recover", "--bin-dir", binDirectory, "--data-dir", dataDirectory})
+	gcRecover.require(t, map[string]string{"state": "installed", "gc_recovered_count": "0", "changed": "false"})
 	finalStatus := selfInstall(t, environment, repository, launcher, "status", binDirectory, dataDirectory)
 	finalStatus.require(t, map[string]string{
 		"state":              "installed",
@@ -132,7 +155,12 @@ type selfInstallResult struct {
 
 func selfInstall(t *testing.T, environment []string, directory, executable, action, binDirectory, dataDirectory string) selfInstallResult {
 	t.Helper()
-	output := run(t, environment, directory, executable, "self", action, "--bin-dir", binDirectory, "--data-dir", dataDirectory)
+	return selfInstallArgs(t, environment, directory, executable, []string{action, "--bin-dir", binDirectory, "--data-dir", dataDirectory})
+}
+
+func selfInstallArgs(t *testing.T, environment []string, directory, executable string, args []string) selfInstallResult {
+	t.Helper()
+	output := run(t, environment, directory, executable, append([]string{"self"}, args...)...)
 	result := selfInstallResult{raw: output, values: make(map[string]string)}
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		key, value, ok := strings.Cut(strings.TrimSuffix(line, "\r"), "=")

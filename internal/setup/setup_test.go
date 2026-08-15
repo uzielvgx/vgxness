@@ -43,6 +43,15 @@ func (fake *fakeInstaller) Rollback(ctx context.Context, _ selfinstall.Options) 
 	fake.rollbackCtxErr = ctx.Err()
 	return fake.rollbackResult, fake.rollbackErr
 }
+func (*fakeInstaller) GCPreview(context.Context, selfinstall.Options) (selfinstall.GCResult, error) {
+	return selfinstall.GCResult{}, errors.New("unexpected self GC preview")
+}
+func (*fakeInstaller) GCApply(context.Context, selfinstall.Options, string) (selfinstall.GCResult, error) {
+	return selfinstall.GCResult{}, errors.New("unexpected self GC apply")
+}
+func (*fakeInstaller) GCRecover(context.Context, selfinstall.Options) (selfinstall.GCResult, error) {
+	return selfinstall.GCResult{}, errors.New("unexpected self GC recover")
+}
 
 type fakeIntegration struct {
 	previewResult integration.Result
