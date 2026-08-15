@@ -23,7 +23,7 @@ var reOpenFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReOpenFile")
 // publishRootDirectoryNoReplace renames through handles opened beneath root,
 // so a replacement of root.Name() cannot redirect the operation.
 func publishRootDirectoryNoReplace(root *os.Root, source, destination string) error {
-	parent, err := root.Open(".")
+	parent, err := root.Open(filepath.Dir(destination))
 	if err != nil {
 		return err
 	}
@@ -38,7 +38,7 @@ func publishRootDirectoryNoReplace(root *os.Root, source, destination string) er
 		return err
 	}
 	defer windows.CloseHandle(handle)
-	name, err := windows.UTF16FromString(filepath.FromSlash(destination))
+	name, err := windows.UTF16FromString(filepath.Base(destination))
 	if err != nil {
 		return err
 	}
