@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,6 +61,42 @@ func TestDockerDeployPackageContract(t *testing.T) {
 	makefile, err := os.ReadFile(filepath.Join(repository, "Makefile"))
 	if err != nil || !strings.Contains(string(makefile), "TestDockerDeployPackageContract") {
 		t.Error("Makefile verify target does not select the Docker deployment contract")
+	}
+}
+
+func TestPostgresInitPasswordReaderIsNounsetSafe(t *testing.T) {
+	repository := repositoryRoot(t)
+	init, err := os.ReadFile(filepath.Join(repository, "deploy", "docker", "postgres-init.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(init), "IFS= read -r value") {
+		t.Fatal("postgres password reader uses the BusyBox-unsafe IFS= read form")
+	}
+	start := strings.Index(string(init), "password()")
+	end := strings.Index(string(init), "\nvalid()")
+	if start < 0 || end < 0 {
+		t.Fatal("postgres password reader is missing")
+	}
+	reader := string(init)[start:end]
+	for name, contents := range map[string]string{
+		"newline":          "correct-horse-battery-staple\n",
+		"no-final-newline": "correct-horse-battery-staple",
+	} {
+		t.Run(name, func(t *testing.T) {
+			secret := filepath.Join(t.TempDir(), "password")
+			if err := os.WriteFile(secret, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("sh", "-eu", "-c", reader+"\npassword \"$1\"", "postgres-init-reader", secret)
+			output, err := command.Output()
+			if err != nil {
+				t.Fatalf("password reader failed under sh -eu: %v", err)
+			}
+			if got, want := string(output), strings.TrimSuffix(contents, "\n"); got != want {
+				t.Errorf("password reader output = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

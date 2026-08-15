@@ -1,7 +1,12 @@
 #!/bin/sh
 set -eu
 
-password() { IFS= read -r value < "$1" || [ -n "$value" ]; printf '%s' "$value"; }
+password() (
+	IFS=
+	value=
+	read -r value < "$1" || [ -n "$value" ]
+	printf '%s' "$value"
+)
 valid() { case "$1" in *[!A-Za-z0-9._~-]*|'') return 1;; esac; [ "${#1}" -ge 32 ]; }
 admin_password="$(password /run/secrets/postgres_admin_password)"
 app_password="$(password /run/secrets/syncd_password)"
