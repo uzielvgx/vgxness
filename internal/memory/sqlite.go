@@ -385,12 +385,13 @@ func (s *Store) syncSchemaHealthy(ctx context.Context) bool {
 		}
 	}
 	profileSQL, ok := s.schemaSQL(ctx, "table", "sync_profiles")
-	if !ok || !s.schemaColumns(ctx, "sync_profiles", "singleton", "enabled", "endpoint", "device_id", "credential_ref", "created_at", "updated_at") || !schemaHas(profileSQL,
+	if !ok || !s.schemaColumns(ctx, "sync_profiles", "singleton", "enabled", "endpoint", "device_id", "credential_ref", "created_at", "updated_at", "previous_credential_ref") || !schemaHas(profileSQL,
 		"singleton integer primary key check (singleton = 1)",
 		"enabled integer not null check (enabled in (0, 1))",
 		"endpoint text not null check (length(endpoint) between 1 and 2048)",
 		"device_id text not null check (length(device_id) = 36)",
 		"credential_ref text not null check (length(credential_ref) between 10 and 512)",
+		"previous_credential_ref text null check (previous_credential_ref is null or length(previous_credential_ref) between 10 and 512)",
 		"created_at integer not null check (created_at > 0)",
 		"updated_at integer not null check (updated_at >= created_at)") {
 		return false

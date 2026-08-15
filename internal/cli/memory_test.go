@@ -15,14 +15,18 @@ import (
 )
 
 type fakeMemoryRuntime struct {
-	result  memory.Entry
-	items   []memory.Entry
-	recall  memory.Recall
-	recent  memory.Recent
-	project string
-	err     error
-	calls   int
-	sync    memory.SyncResult
+	result   memory.Entry
+	items    []memory.Entry
+	recall   memory.Recall
+	recent   memory.Recent
+	project  string
+	err      error
+	calls    int
+	sync     memory.SyncResult
+	status   memory.SyncConfigurationStatus
+	endpoint string
+	deviceID string
+	bearer   string
 }
 
 func (f *fakeMemoryRuntime) Remember(context.Context, config.Options, memory.Remember) (memory.Entry, error) {
@@ -59,6 +63,18 @@ func (f *fakeMemoryRuntime) Recent(_ context.Context, _ config.Options, request 
 func (f *fakeMemoryRuntime) Sync(context.Context, config.Options) (memory.SyncResult, error) {
 	f.calls++
 	return f.sync, f.err
+}
+func (f *fakeMemoryRuntime) ConfigureSync(_ context.Context, _ config.Options, endpoint, deviceID, bearer string) (memory.SyncConfigurationStatus, error) {
+	f.calls++
+	f.endpoint, f.deviceID, f.bearer = endpoint, deviceID, bearer
+	return memory.SyncConfigurationStatus{Configured: true, Enabled: true, Credential: memory.SyncCredentialAvailable}, f.err
+}
+func (f *fakeMemoryRuntime) SyncStatus(context.Context, config.Options) (memory.SyncConfigurationStatus, error) {
+	f.calls++
+	if f.status == (memory.SyncConfigurationStatus{}) {
+		f.status.Credential = memory.SyncCredentialNotConfigured
+	}
+	return f.status, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
@@ -178,4 +194,46 @@ func TestMemoryCLI_SyncUsesNoInputAndRendersTokenFreeResult(t *testing.T) {
 	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusSynced, Pushed: 1}}
 	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"status":"synced"`) && strings.Contains(out, `"pushed":1`) && !strings.Contains(out, "vgx1."), "sync json: code=%d out=%q stderr=%q", code, out, stderr)
+}
+
+func TestMemoryCLI_SyncConfigureAndStatusAreStrictAndTokenFree(t *testing.T) {
+	bearer := "vgx1.550e8400-e29b-41d4-a716-446655440000.secret"
+	runtime := &fakeMemoryRuntime{}
+	code, out, stderr := runMemoryTest([]string{"memory", "sync", "configure", "--endpoint", "https://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000"}, bearer+"\n", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, "configured=true") && runtime.endpoint == "https://sync.example.test" && runtime.deviceID == "550e8400-e29b-41d4-a716-446655440000" && runtime.bearer == bearer && !strings.Contains(out, bearer), "configure: code=%d calls=%d out=%q stderr=%q", code, runtime.calls, out, stderr)
+
+	runtime = &fakeMemoryRuntime{}
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "configure", "--endpoint", "https://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000"}, bearer+"\r\n", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.bearer == bearer, "CRLF configure: code=%d bearer=%q stderr=%q", code, runtime.bearer, stderr)
+
+	runtime = &fakeMemoryRuntime{}
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "configure", "--endpoint", "https://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000"}, bearer, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.bearer == bearer, "exact configure: code=%d bearer=%q stderr=%q", code, runtime.bearer, stderr)
+
+	for _, args := range [][]string{
+		{"memory", "sync", "configure", "--endpoint", "https://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000", "--bearer", bearer},
+		{"memory", "sync", "configure", "--endpoint", "http://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000"},
+		{"memory", "sync", "configure", "--endpoint", "https://sync.example.test", "--device-id", "not-a-device"},
+	} {
+		runtime = &fakeMemoryRuntime{}
+		code, out, stderr = runMemoryTest(args, bearer, runtime)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == 0 && !strings.Contains(stderr, bearer), "invalid configure: code=%d calls=%d out=%q stderr=%q", code, runtime.calls, out, stderr)
+	}
+	for _, input := range []string{"", strings.Repeat("x", maxSyncBearerBytes+1)} {
+		runtime = &fakeMemoryRuntime{}
+		code, out, stderr = runMemoryTest([]string{"memory", "sync", "configure", "--endpoint", "https://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000"}, input, runtime)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == 0 && !strings.Contains(stderr, bearer), "invalid stdin: code=%d calls=%d out=%q stderr=%q", code, runtime.calls, out, stderr)
+	}
+	for _, input := range []string{bearer + "\n\n", bearer + "\r", bearer + "\r\nx"} {
+		runtime = &fakeMemoryRuntime{}
+		code, out, stderr = runMemoryTest([]string{"memory", "sync", "configure", "--endpoint", "https://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000"}, input, runtime)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == 0 && !strings.Contains(stderr, bearer), "invalid line ending: code=%d calls=%d stderr=%q", code, runtime.calls, stderr)
+	}
+	runtime = &fakeMemoryRuntime{}
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "unexpected"}, "", runtime)
+	testutil.Require(t, code == 2 && out == "" && runtime.calls == 0, "unknown sync subcommand: code=%d calls=%d stderr=%q", code, runtime.calls, stderr)
+
+	runtime = &fakeMemoryRuntime{}
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "status", "--json"}, bearer, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"configured":false`) && !strings.Contains(out, bearer), "status: code=%d calls=%d out=%q stderr=%q", code, runtime.calls, out, stderr)
 }
