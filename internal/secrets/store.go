@@ -13,6 +13,7 @@ var (
 	ErrMissing     = errors.New("secret missing")
 	ErrUnavailable = errors.New("secret store unavailable")
 	ErrInvalid     = errors.New("invalid secret reference")
+	ErrUnsupported = errors.New("secret operation unsupported")
 )
 
 // Backend is injectable so callers never depend directly on a platform keyring.

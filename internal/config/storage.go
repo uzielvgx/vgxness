@@ -14,10 +14,11 @@ import (
 var ErrInvalid = errors.New("invalid")
 
 type Options struct {
-	StorageRoot  string
-	ProjectDir   string
-	ProjectLocal bool
-	HomeDir      string
+	StorageRoot    string
+	CredentialFile string
+	ProjectDir     string
+	ProjectLocal   bool
+	HomeDir        string
 }
 
 type Paths struct {

@@ -27,6 +27,8 @@ type fakeMemoryRuntime struct {
 	endpoint string
 	deviceID string
 	bearer   string
+	opts     config.Options
+	backfill memory.SyncBackfillResult
 }
 
 func (f *fakeMemoryRuntime) Remember(context.Context, config.Options, memory.Remember) (memory.Entry, error) {
@@ -64,10 +66,17 @@ func (f *fakeMemoryRuntime) Sync(context.Context, config.Options) (memory.SyncRe
 	f.calls++
 	return f.sync, f.err
 }
-func (f *fakeMemoryRuntime) ConfigureSync(_ context.Context, _ config.Options, endpoint, deviceID, bearer string) (memory.SyncConfigurationStatus, error) {
+func (f *fakeMemoryRuntime) ConfigureSync(_ context.Context, opts config.Options, endpoint, deviceID, bearer string) (memory.SyncConfigurationStatus, error) {
 	f.calls++
+	f.opts = opts
 	f.endpoint, f.deviceID, f.bearer = endpoint, deviceID, bearer
 	return memory.SyncConfigurationStatus{Configured: true, Enabled: true, Credential: memory.SyncCredentialAvailable}, f.err
+}
+
+func TestMemoryCLI_SyncConfigurePassesCredentialFile(t *testing.T) {
+	runtime := &fakeMemoryRuntime{}
+	code, _, stderr := runMemoryTest([]string{"memory", "sync", "configure", "--credential-file", "/absolute/private/bearer", "--endpoint", "https://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000"}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.opts.CredentialFile == "/absolute/private/bearer" && runtime.bearer == "", "code=%d stderr=%q opts=%+v bearer=%q", code, stderr, runtime.opts, runtime.bearer)
 }
 func (f *fakeMemoryRuntime) SyncStatus(context.Context, config.Options) (memory.SyncConfigurationStatus, error) {
 	f.calls++
@@ -75,6 +84,10 @@ func (f *fakeMemoryRuntime) SyncStatus(context.Context, config.Options) (memory.
 		f.status.Credential = memory.SyncCredentialNotConfigured
 	}
 	return f.status, f.err
+}
+func (f *fakeMemoryRuntime) BackfillSyncProject(context.Context, config.Options, string, int) (memory.SyncBackfillResult, error) {
+	f.calls++
+	return f.backfill, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
