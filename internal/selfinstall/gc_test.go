@@ -1236,14 +1236,26 @@ func TestGCRecoverRejectsReplacedLockBeforeEveryMutationClass(t *testing.T) {
 func TestGCRecoverRejectsReplacedRootBeforeMutation(t *testing.T) {
 	service, options, candidate, stage := gcStagedRecovery(t)
 	evidenceDir := options.DataDir + ".replaced"
+	var renameErr error
 	service.beforeGCRecoveryMutation = func() error {
-		if err := os.Rename(options.DataDir, evidenceDir); err != nil {
-			return err
+		renameErr = os.Rename(options.DataDir, evidenceDir)
+		if renameErr != nil {
+			return renameErr
 		}
 		return os.Mkdir(options.DataDir, 0o700)
 	}
 	if _, err := service.GCRecover(context.Background(), options); !errors.Is(err, ErrGCRecovery) {
 		t.Fatalf("recover error=%v", err)
+	}
+	if runtime.GOOS == "windows" {
+		if renameErr == nil {
+			t.Fatal("Windows lock allowed data directory replacement")
+		}
+		assertGCRecoveryEvidence(t, options.DataDir, stage, candidate)
+		return
+	}
+	if renameErr != nil {
+		t.Fatalf("replace data directory: %v", renameErr)
 	}
 	assertGCRecoveryEvidence(t, evidenceDir, stage, candidate)
 }

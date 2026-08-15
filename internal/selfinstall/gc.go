@@ -302,7 +302,7 @@ func gcInventory(ctx context.Context, root *os.Root, dataDir string, manifestRaw
 }
 
 func gcPlanSHA256(dataDir string, manifestRaw []byte, manifest launcher.Manifest, candidates []string) string {
-	dataHash := sha256.Sum256([]byte(filepath.Clean(dataDir)))
+	dataHash := sha256.Sum256([]byte(filepath.ToSlash(filepath.Clean(dataDir))))
 	manifestHash := sha256.Sum256(manifestRaw)
 	previous := manifest.PreviousSHA256
 	if previous == "" {
