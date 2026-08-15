@@ -1,0 +1,17 @@
+-- Run locally through psql as the PostgreSQL administrator.
+-- This grants the daemon only its own database; do not use a superuser DSN.
+\set ON_ERROR_STOP on
+CREATE ROLE vgxness_syncd LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
+CREATE ROLE vgxness_syncd_backup LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
+CREATE DATABASE vgxness_sync OWNER vgxness_syncd;
+REVOKE ALL ON DATABASE vgxness_sync FROM PUBLIC;
+\password vgxness_syncd
+\password vgxness_syncd_backup
+\connect vgxness_sync
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT CONNECT ON DATABASE vgxness_sync TO vgxness_syncd_backup;
+GRANT USAGE ON SCHEMA public TO vgxness_syncd_backup;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO vgxness_syncd_backup;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO vgxness_syncd_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE vgxness_syncd IN SCHEMA public GRANT SELECT ON TABLES TO vgxness_syncd_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE vgxness_syncd IN SCHEMA public GRANT SELECT ON SEQUENCES TO vgxness_syncd_backup;

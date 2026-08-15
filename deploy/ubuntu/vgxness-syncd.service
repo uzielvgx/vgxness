@@ -1,0 +1,32 @@
+[Unit]
+Description=VGXNESS synchronization daemon
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=vgxness-syncd
+Group=vgxness-syncd
+EnvironmentFile=/etc/vgxness-syncd/syncd.env
+ExecStart=/opt/vgxness-syncd/current/vgxness-syncd serve --listen 127.0.0.1:8787
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vgxness-syncd
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

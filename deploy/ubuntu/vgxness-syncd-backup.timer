@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily VGXNESS PostgreSQL backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=vgxness-syncd-backup.service
+
+[Install]
+WantedBy=timers.target
