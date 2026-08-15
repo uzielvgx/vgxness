@@ -146,6 +146,12 @@ func terminalSafe(value string) string {
 
 func failure(err error) (int, string) {
 	switch {
+	case errors.Is(err, selfinstall.ErrNoInstallation):
+		return 1, "not_found: no managed self-installation is available"
+	case errors.Is(err, selfinstall.ErrStaleGCPlan):
+		return 1, "conflict: self-install garbage-collection plan is stale; rerun `vgxness self gc preview`"
+	case errors.Is(err, selfinstall.ErrGCRecovery):
+		return 1, "recovery: self-install garbage collection is incomplete; run `vgxness self gc recover` without deleting retained evidence"
 	case errors.Is(err, integration.ErrRecovery):
 		return 1, "recovery: integration rollback failed; inspect managed artifacts and backups"
 	case errors.Is(err, skills.ErrRecovery):

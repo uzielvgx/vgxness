@@ -369,6 +369,15 @@ func (f *recoveryInstaller) Status(context.Context, selfinstall.Options) (selfin
 func (f *recoveryInstaller) Rollback(context.Context, selfinstall.Options) (selfinstall.Result, error) {
 	return f.status, nil
 }
+func (f *recoveryInstaller) GCPreview(context.Context, selfinstall.Options) (selfinstall.GCResult, error) {
+	return selfinstall.GCResult{}, errors.New("unexpected self GC preview")
+}
+func (f *recoveryInstaller) GCApply(context.Context, selfinstall.Options, string) (selfinstall.GCResult, error) {
+	return selfinstall.GCResult{}, errors.New("unexpected self GC apply")
+}
+func (f *recoveryInstaller) GCRecover(context.Context, selfinstall.Options) (selfinstall.GCResult, error) {
+	return selfinstall.GCResult{}, errors.New("unexpected self GC recover")
+}
 
 type recoveryBackups struct {
 	options        opencodebackup.Options

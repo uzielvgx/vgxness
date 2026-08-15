@@ -20,11 +20,14 @@ import (
 )
 
 var (
-	ErrInvalid    = errors.New("invalid self-install request")
-	ErrConflict   = errors.New("self-install conflicts with existing content")
-	ErrDrift      = errors.New("managed self-install has drifted")
-	ErrNoRollback = errors.New("no previous managed version is available")
-	ErrRecovery   = errors.New("self-install recovery is required")
+	ErrInvalid        = errors.New("invalid self-install request")
+	ErrConflict       = errors.New("self-install conflicts with existing content")
+	ErrDrift          = errors.New("managed self-install has drifted")
+	ErrNoRollback     = errors.New("no previous managed version is available")
+	ErrRecovery       = errors.New("self-install recovery is required")
+	ErrNoInstallation = errors.New("no managed self-install is available")
+	ErrStaleGCPlan    = errors.New("self-install garbage collection plan is stale")
+	ErrGCRecovery     = errors.Join(ErrRecovery, errors.New("self-install garbage collection recovery is required"))
 )
 
 type State string
@@ -60,22 +63,37 @@ type Runtime interface {
 	Install(context.Context, Options) (Result, error)
 	Status(context.Context, Options) (Result, error)
 	Rollback(context.Context, Options) (Result, error)
+	GCPreview(context.Context, Options) (GCResult, error)
+	GCApply(context.Context, Options, string) (GCResult, error)
+	GCRecover(context.Context, Options) (GCResult, error)
 }
 
 type Config struct {
-	SourceExecutable     string
-	Now                  func() time.Time
-	afterManifestPublish func() error // package-test fault injection
-	afterManifestMove    func() error // package-test fault injection
-	afterAnchorsOpen     func() error // package-test fault injection
+	SourceExecutable          string
+	Now                       func() time.Time
+	afterManifestPublish      func() error        // package-test fault injection
+	afterManifestMove         func() error        // package-test fault injection
+	afterAnchorsOpen          func() error        // package-test fault injection
+	afterGCJournal            func(gcState) error // package-test fault injection
+	afterGCPreflight          func() error        // package-test synchronization
+	afterGCDeleteOpened       func() error        // package-test synchronization
+	afterGCSemanticValidation func() error        // package-test synchronization
+	beforeGCRecoveryMutation  func() error        // package-test synchronization
+	gcSync                    func(string, *os.Root) error
 }
 
 type Service struct {
-	source               string
-	now                  func() time.Time
-	afterManifestPublish func() error
-	afterManifestMove    func() error
-	afterAnchorsOpen     func() error
+	source                    string
+	now                       func() time.Time
+	afterManifestPublish      func() error
+	afterManifestMove         func() error
+	afterAnchorsOpen          func() error
+	afterGCJournal            func(gcState) error
+	afterGCPreflight          func() error
+	afterGCDeleteOpened       func() error
+	afterGCSemanticValidation func() error
+	beforeGCRecoveryMutation  func() error
+	gcSync                    func(string, *os.Root) error
 }
 
 type paths struct {
@@ -168,7 +186,7 @@ func New(config Config) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{source: source, now: now, afterManifestPublish: config.afterManifestPublish, afterManifestMove: config.afterManifestMove, afterAnchorsOpen: config.afterAnchorsOpen}
+	return &Service{source: source, now: now, afterManifestPublish: config.afterManifestPublish, afterManifestMove: config.afterManifestMove, afterAnchorsOpen: config.afterAnchorsOpen, afterGCJournal: config.afterGCJournal, afterGCPreflight: config.afterGCPreflight, afterGCDeleteOpened: config.afterGCDeleteOpened, afterGCSemanticValidation: config.afterGCSemanticValidation, beforeGCRecoveryMutation: config.beforeGCRecoveryMutation, gcSync: config.gcSync}
 }
 
 func (service *Service) Preview(ctx context.Context, options Options) (Result, error) {

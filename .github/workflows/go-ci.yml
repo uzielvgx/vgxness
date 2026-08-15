@@ -276,7 +276,7 @@ jobs:
           go build -trimpath -o vgxness ./cmd/vgxness
           ./vgxness version
       - name: Test native filesystem and runtime packages
-        run: go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/providers/...
+        run: go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/selfinstall ./internal/providers/...
 
   quality:
     name: quality
