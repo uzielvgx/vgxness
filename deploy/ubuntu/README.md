@@ -3,22 +3,21 @@
 Status: **proposed operator runbook**, not observed deployment evidence. Only an
 authorized root operator with DBA/maintenance approval may execute it. It does
 not establish DNS/TLS or perform any action by itself. These files do not execute actions by themselves; the authorized operator executes the reviewed steps, including explicitly approved account creation where this runbook calls for it.
-The intended boundary is Caddy on public HTTPS to `127.0.0.1:8787`; PostgreSQL
-and the daemon stay local. Never publish 8787 or PostgreSQL.
+This native package keeps PostgreSQL and the daemon local; it does not configure
+public ingress. Never publish 8787 or PostgreSQL. Do not use the native Ubuntu package as a containerized Nginx Proxy Manager upstream. Use the repository Docker deployment, where syncd joins the verified external Nginx Proxy Manager network. Mere Nginx Proxy Manager network attachment cannot reach host loopback; do not blindly open a host port or bind the daemon to 0.0.0.0 as a workaround.
 
 ## Preflight and abort
 
 Before any write, the authorized root operator records these read-only checks:
 
 ```sh
-systemctl is-active vgxness-syncd caddy postgresql
+systemctl is-active vgxness-syncd postgresql
 ss -ltn '( sport = :8787 )'
 getent passwd vgxness-syncd
 getent group vgxness-syncd
 getent passwd vgxness-syncd-backup
 getent group vgxness-syncd-backup
 systemd-analyze verify STAGED_UNIT_DIRECTORY/vgxness-syncd.service STAGED_UNIT_DIRECTORY/vgxness-syncd-backup.service STAGED_UNIT_DIRECTORY/vgxness-syncd-backup.timer
-caddy validate --config STAGED_CADDYFILE
 ```
 
 Expected observations are known recorded unit states, either no listener or a
@@ -26,8 +25,7 @@ listener only on `127.0.0.1:8787`, a known current target/checksum, and zero
 validation errors for the staged candidate. On an initial install, the
 installed unit/configuration/current targets are expected absent and must not
 be verified as if installed; on update they must exactly match the recorded
-revision. The operator selects `/etc/caddy/Caddyfile` as the primary Caddy
-configuration and must confirm that choice locally. Abort on any missing tool,
+revision. Abort on any missing tool,
 validation error, public listener, unrecorded current target, or existing
 unknown target in `/opt/vgxness-syncd`, `/etc/vgxness-syncd`,
 `/etc/vgxness-syncd-backup`, or `/var/lib/vgxness-syncd-backup`. Do not delete
@@ -43,7 +41,7 @@ predecessor.
 
 For an initial install, each intended target must be absent or explicitly
 approved as an exact prior revision. Preserve root-owned copies and checksums
-of the prior units, Caddy configuration, and env-file metadata before change;
+of the prior units and env-file metadata before change;
 re-check their paths, owners, modes, and checksums immediately before use.
 
 ## Database and protected configuration
@@ -98,29 +96,26 @@ diagnostic log.
 
 ## Install, validation, and smoke
 
-Install the Caddy site as a dedicated Caddy host configuration where the local
-Caddy installation supports includes. Otherwise, merge only the VGXNESS site block from the reviewed example into the existing primary configuration. Do not overwrite a shared /etc/caddy/Caddyfile; preserve unrelated sites and validate
-the resulting complete configuration before reload. Copy the reviewed unit
-examples, replace only `SYNC_PUBLIC_HOSTNAME`, then run:
+Copy the reviewed unit examples, then run these loopback-only checks. This
+package does not configure public ingress; its owner separately validates any
+external proxy after the native daemon is healthy.
 
 ```sh
 systemd-analyze verify /etc/systemd/system/vgxness-syncd.service /etc/systemd/system/vgxness-syncd-backup.service /etc/systemd/system/vgxness-syncd-backup.timer
-caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload
-systemctl reload caddy
 systemctl enable --now vgxness-syncd
-systemctl enable --now vgxness-syncd-backup.timer
-systemctl is-active vgxness-syncd caddy vgxness-syncd-backup.timer
+systemctl is-active vgxness-syncd
 ss -ltn '( sport = :8787 )'
-curl -i http://127.0.0.1:8787/v1/sync/capabilities
-curl -i https://SYNC_PUBLIC_HOSTNAME/v1/sync/capabilities
+test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8787/v1/sync/capabilities)" = 401
+systemctl enable --now vgxness-syncd-backup.timer
+systemctl is-active vgxness-syncd vgxness-syncd-backup.timer
 ```
 
 Expected smoke observations are active units, only the literal loopback
-listener, and `401` for both unauthenticated HTTP requests. Do not supply a
-bearer to smoke tests. Abort on any other status, any public listener, or a
-failed validation; restore the recorded root-owned configuration revision and
-known predecessor before retrying.
+listener, and `401` for the unauthenticated local capabilities request. Do not
+supply a bearer to smoke tests. Abort on any other status or public listener;
+restore the recorded root-owned unit/env revision and known predecessor before
+retrying.
 
 ## Immutable update and rollback
 
@@ -144,7 +139,7 @@ Both results must exactly match the reviewed
 restarting the daemon.
 
 Rollback to the verified predecessor symlink target plus preserved root-owned
-unit/Caddy/env revisions is allowed only when the recorded migration ledger
+unit/env revisions is allowed only when the recorded migration ledger
 shows that the predecessor is compatible with the current PostgreSQL schema.
 Do not roll PostgreSQL backward and never claim a predecessor will run on an
 advanced schema. If the ledger is absent, advanced, or incompatible, stop
@@ -152,6 +147,32 @@ ingress and the daemon; use an approved database recovery/forward-fix path
 instead. If a compatible rollback restart or smoke fails, leave the new target
 inactive, restore the predecessor only if still compatible, and keep redacted
 evidence for escalation.
+
+## Legacy Caddy retirement (upgrade only)
+
+This section applies only when inspection proves a prior VGXNESS Caddy route is installed and is never an initial-install action. For an upgrade from a prior VGXNESS route, first detect the
+installed route and require exact recorded ownership/revision for the site
+block and every configuration file it references. If ownership, hostname,
+revision, or block boundaries are ambiguous, abort and escalate; do not edit a
+shared configuration by inference.
+
+Preserve and read back the full shared configuration, its owner/mode, and its
+checksum before an authorized operator disables or removes only the exact
+recorded VGXNESS site/block. Never delete a shared Caddyfile or unrelated
+sites. Validate the full remaining configuration, then reload it safely only
+after validation succeeds. Verify the former public hostname no longer routes to 127.0.0.1:8787; if it still does, stop and escalate rather than opening a
+host port or changing the daemon listener. The following inspection/validation/controlled-reload gates execute only after exact owned site removal:
+
+```sh
+systemctl is-active caddy || true
+sha256sum /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile
+systemctl reload caddy
+```
+
+Do not disable the shared service when it hosts unrelated sites. Retain the
+preserved exact revision for recovery, and restore it only with the shared
+configuration owner's approval.
 
 ## Backup and restore
 
@@ -217,20 +238,18 @@ test "$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin 
 /usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/pg_restore --host=/var/run/postgresql --port=5432 --username=postgres --exit-on-error --single-transaction --no-owner --role=vgxness_syncd --dbname=vgxness_sync < current.pgd
 systemctl restart vgxness-syncd
 systemctl is-active vgxness-syncd
-systemctl enable --now caddy
-systemctl is-active caddy
-curl --fail --silent --show-error https://SYNC_PUBLIC_HOSTNAME/healthz
-test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://SYNC_PUBLIC_HOSTNAME/v1/sync/capabilities)" = 401
+test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8787/v1/sync/capabilities)" = 401
 systemctl enable --now vgxness-syncd-backup.timer
 ```
 
 The DBA records the exact `system_identifier`, `vgxness_sync` database, and
 `vgxness_syncd` owner/role observations immediately before destructive action,
 and rechecks them before `dropdb`, `createdb`, and `pg_restore`. Verify
-schema/owner/readback before restarting the daemon; only after its health check
-may Caddy be started and its public health/unauthenticated-401 smoke pass. The
-backup timer is re-enabled only after every one of those gates succeeds. On any
-restore failure, keep ingress, daemon, and backup timer stopped: the timer remains stopped until DBA recovery uses the same reviewed local prefix to
+schema/owner/readback before restarting the daemon; its local unauthenticated
+401 gate on `127.0.0.1:8787` must pass before the backup timer is re-enabled.
+No proxy is activated by this restore shell; external ingress must remain stopped until separately validated by its owner. On any restore failure, keep
+external ingress, daemon, and backup timer stopped: the timer remains stopped
+until DBA recovery uses the same reviewed local prefix to
 restore the verified investigation dump. Abort rather than guessing if either
 dump, hash, identity, target, maintenance lock, or explicit approval is absent.
 
