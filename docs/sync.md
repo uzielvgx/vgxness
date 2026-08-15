@@ -13,11 +13,13 @@ endpoint and does not follow credential-bearing redirects.
 
 ## Runtime configuration
 
-The daemon reads `VGXNESS_SYNC_POSTGRES_DSN` and
-`VGXNESS_SYNC_OWNER_ID` when starting the service or managing device
-credentials. Keep the database connection string out of command arguments,
-logs, checked-in files, and proxy configuration. Missing or malformed
-configuration fails closed.
+The daemon reads `VGXNESS_SYNC_POSTGRES_DSN` or the mutually exclusive
+`VGXNESS_SYNC_POSTGRES_DSN_FILE`, plus `VGXNESS_SYNC_OWNER_ID`, when starting
+the service or managing device credentials. The file setting must name an
+absolute, bounded, regular non-symlink file; exactly one final LF or CRLF is removed.
+Keep the database connection string out of command arguments, logs, checked-in
+files, and proxy configuration. Missing or malformed configuration fails
+closed.
 
 Optional admission-limit settings are
 `VGXNESS_SYNC_AUTH_GLOBAL_PER_MINUTE`,
@@ -53,6 +55,10 @@ vgxness-syncd serve
 An explicit `--listen` value must remain a literal loopback IP with a non-zero
 port. Hostnames, wildcard addresses, public or private non-loopback addresses,
 and port zero are rejected before configuration or credentials are read.
+The sole exception is `serve --container-network --listen 0.0.0.0:8787`, which
+is intended for a private Docker network and does not itself enforce Docker
+network isolation. `GET /healthz` is an unauthenticated, bounded liveness
+response for container health checks; it does not disclose database state.
 The retired `--development-allow-insecure-non-loopback` flag rejects `true`;
 explicit `false` remains a no-op only so existing launch commands can migrate.
 
@@ -97,3 +103,6 @@ VGXNESS does not currently provide native TLS termination in `vgxness-syncd`.
 
 For a declarative Ubuntu 24.04 single-host example, see the
 [Ubuntu 24.04 single-VPS deployment package](../deploy/ubuntu/README.md).
+For an additive Docker path behind an existing Nginx Proxy Manager, see the
+[Docker deployment package](../deploy/docker/README.md). Neither package is
+evidence of an observed VPS deployment.

@@ -237,10 +237,14 @@ func TestRunSetupErrorCleansUpOnce(t *testing.T) {
 	}
 	terminal = func(any) bool { return true }
 	getenv = func(name string) string {
-		if name == "VGXNESS_SYNC_POSTGRES_DSN" {
+		switch name {
+		case "VGXNESS_SYNC_POSTGRES_DSN":
 			return "postgres://example"
+		case "VGXNESS_SYNC_OWNER_ID":
+			return "22222222-2222-2222-2222-222222222222"
+		default:
+			return ""
 		}
-		return "22222222-2222-2222-2222-222222222222"
 	}
 	t.Cleanup(func() { setup, terminal, getenv = oldSetup, oldTerminal, oldGetenv })
 	if got := runDevice(context.Background(), []string{"device", "issue", "--name", "laptop"}, strings.NewReader(""), io.Discard, io.Discard); got != 1 {
@@ -420,6 +424,101 @@ func TestServeValidationAllowsOnlyLiteralLoopback(t *testing.T) {
 		if validListenAddress(address) {
 			t.Fatalf("unsafe address accepted: %q", address)
 		}
+	}
+}
+
+func TestServeContainerNetworkFlagAllowsOnlyRequiredWildcard(t *testing.T) {
+	if !validServeListenAddress("0.0.0.0:8787", containerNetworkListener) {
+		t.Fatal("container listener was rejected")
+	}
+	for _, address := range []string{"0.0.0.0:8788", "[::]:8787", "203.0.113.1:8787"} {
+		if validServeListenAddress(address, containerNetworkListener) {
+			t.Fatalf("unsafe container listener accepted: %q", address)
+		}
+	}
+	if validServeListenAddress("0.0.0.0:8787", loopbackListener) {
+		t.Fatal("wildcard listener accepted without container flag")
+	}
+}
+
+func TestConfiguredPostgresDSNFileIsBoundedAndSecretSafe(t *testing.T) {
+	path := t.TempDir() + "/syncd-dsn"
+	const secret = "postgres://secret@example.invalid/vgxness_sync"
+	if err := os.WriteFile(path, []byte(secret+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldGetenv := getenv
+	getenv = func(name string) string {
+		if name == "VGXNESS_SYNC_POSTGRES_DSN_FILE" {
+			return path
+		}
+		return ""
+	}
+	t.Cleanup(func() { getenv = oldGetenv })
+	if got, ok := configuredPostgresDSN(); !ok || got != secret {
+		t.Fatal("file dsn was not accepted exactly")
+	}
+	if err := os.WriteFile(path, []byte(secret+"\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := configuredPostgresDSN(); !ok || got != secret {
+		t.Fatal("CRLF file dsn was not accepted exactly")
+	}
+	getenv = func(name string) string {
+		if name == "VGXNESS_SYNC_POSTGRES_DSN" {
+			return secret
+		}
+		if name == "VGXNESS_SYNC_POSTGRES_DSN_FILE" {
+			return path
+		}
+		return ""
+	}
+	if got, ok := configuredPostgresDSN(); ok || got != "" {
+		t.Fatal("mutually exclusive dsn settings were accepted")
+	}
+}
+
+func TestConfiguredPostgresDSNFileRejectsUnsafePathsWithoutSecretLeak(t *testing.T) {
+	directory := t.TempDir()
+	path := directory + "/syncd-dsn"
+	if err := os.WriteFile(path, []byte("postgres://secret@example.invalid/vgxness_sync"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oversize := directory + "/oversize"
+	if err := os.WriteFile(oversize, make([]byte, maxPostgresDSNFileBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := directory + "/symlink"
+	if err := os.Symlink(path, symlink); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		inline string
+		path   string
+	}{
+		{name: "relative", path: "syncd-dsn"},
+		{name: "symlink", path: symlink},
+		{name: "oversize", path: oversize},
+		{name: "mutually exclusive", inline: "postgres://inline", path: path},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			oldGetenv := getenv
+			getenv = func(name string) string {
+				switch name {
+				case "VGXNESS_SYNC_POSTGRES_DSN":
+					return test.inline
+				case "VGXNESS_SYNC_POSTGRES_DSN_FILE":
+					return test.path
+				default:
+					return ""
+				}
+			}
+			t.Cleanup(func() { getenv = oldGetenv })
+			if dsn, ok := configuredPostgresDSN(); ok || dsn != "" {
+				t.Fatal("unsafe dsn source was accepted")
+			}
+		})
 	}
 }
 

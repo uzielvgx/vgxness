@@ -1,0 +1,8 @@
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/vgxness-syncd/
+!cmd/vgxness-syncd/**
+!internal/
+!internal/**
