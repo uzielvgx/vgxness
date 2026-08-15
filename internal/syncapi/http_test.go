@@ -17,6 +17,16 @@ import (
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
+func TestHandlerHealthzIsUnauthenticatedAndBounded(t *testing.T) {
+	handler := NewSyncServerHandler(&testAuthenticator{}, nil, nil)
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok\n" || recorder.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("health response = %d/%q/%q", recorder.Code, recorder.Body.String(), recorder.Header().Get("Content-Type"))
+	}
+}
+
 func TestHandlerLimitsGlobalAndDevice(t *testing.T) {
 	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
 	entered := make(chan struct{}, 4)

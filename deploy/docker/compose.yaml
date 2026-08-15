@@ -1,0 +1,100 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?set a digest-pinned PostgreSQL image reference}
+    environment:
+      POSTGRES_DB: vgxness_sync
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+    secrets:
+      - postgres_admin_password
+      - syncd_password
+      - backup_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - type: bind
+        source: ${VGXNESS_POSTGRES_INIT:?set an absolute init-script path}
+        target: /docker-entrypoint-initdb.d/10-vgxness-init.sh
+        read_only: true
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vgxness_syncd -d vgxness_sync"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+
+  vgxness-syncd:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        VGXNESS_GO_BUILDER_IMAGE: ${VGXNESS_GO_BUILDER_IMAGE:?set a reviewed Go 1.26 digest reference}
+        VGXNESS_RUNTIME_IMAGE: ${VGXNESS_RUNTIME_IMAGE:?set a reviewed runtime digest reference}
+    image: ${VGXNESS_SYNCD_IMAGE:?set an immutable syncd image reference}
+    command: ["serve", "--container-network", "--listen", "0.0.0.0:8787"]
+    env_file: ${VGXNESS_SYNCD_ENV:?set an absolute syncd.env path}
+    environment:
+      VGXNESS_SYNC_POSTGRES_DSN_FILE: /run/secrets/syncd_dsn
+    secrets:
+      - syncd_dsn
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [proxy, private]
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "/vgxness-syncd", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    user: "65532:65532"
+
+  backup:
+    image: ${POSTGRES_IMAGE:?set a digest-pinned PostgreSQL image reference}
+    profiles: [maintenance]
+    entrypoint: ["/bin/sh", "/opt/vgxness-syncd/backup.sh"]
+    environment:
+      BACKUP_DIR: /backups
+      PGDATABASE: vgxness_sync
+      PGHOST: postgres
+      PGPASSWORD_FILE: /run/secrets/backup_password
+      PGUSER: vgxness_syncd_backup
+    secrets:
+      - backup_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - backup-data:/backups
+      - ./backup.sh:/opt/vgxness-syncd/backup.sh:ro
+    networks: [private]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+secrets:
+  postgres_admin_password:
+    file: ${VGXNESS_POSTGRES_ADMIN_PASSWORD:?set an absolute admin password path}
+  syncd_password:
+    file: ${VGXNESS_SYNCD_PASSWORD:?set an absolute app password path}
+  backup_password:
+    file: ${VGXNESS_BACKUP_PASSWORD:?set an absolute backup password path}
+  syncd_dsn:
+    file: ${VGXNESS_SYNCD_DSN:?set an absolute DSN path}
+
+networks:
+  proxy:
+    external: true
+    name: ${VGXNESS_PROXY_NETWORK:-nginx-proxy-manager_default}
+  private:
+    internal: true
+
+volumes:
+  postgres-data:
+  backup-data:

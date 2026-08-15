@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,14 +27,23 @@ import (
 )
 
 const (
-	compensationTimeout  = 5 * time.Second
-	defaultListenAddress = "127.0.0.1:8787"
+	compensationTimeout     = 5 * time.Second
+	defaultListenAddress    = "127.0.0.1:8787"
+	containerListenAddress  = "0.0.0.0:8787"
+	maxPostgresDSNFileBytes = 16 << 10
 )
 
 type deviceRepository interface {
 	IssueDevice(context.Context, string) (syncpg.DeviceCredential, error)
 	RevokeDevice(context.Context, uuid.UUID) error
 }
+
+type listenMode uint8
+
+const (
+	loopbackListener listenMode = iota
+	containerNetworkListener
+)
 
 var (
 	run       = runCommand
@@ -70,6 +81,9 @@ func runCommand(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	if len(args) > 0 && args[0] == "serve" {
 		return runServe(ctx, args[1:], stderr)
 	}
+	if len(args) == 1 && args[0] == "healthcheck" {
+		return runHealthcheck(ctx)
+	}
 	return runDevice(ctx, args, stdin, stdout, stderr)
 }
 
@@ -77,6 +91,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	listen := flags.String("listen", defaultListenAddress, "listen address")
+	containerNetwork := flags.Bool("container-network", false, "allow only the Docker container listener")
 	legacyAllowInsecure := flags.Bool("development-allow-insecure-non-loopback", false, "retired; true is rejected")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "serve arguments are invalid")
@@ -86,7 +101,11 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "development insecure non-loopback override is retired; explicit false is accepted only for compatibility")
 		return 2
 	}
-	if !validListenAddress(*listen) {
+	mode := loopbackListener
+	if *containerNetwork {
+		mode = containerNetworkListener
+	}
+	if !validServeListenAddress(*listen, mode) {
 		fmt.Fprintln(stderr, "serve requires a literal loopback listen address")
 		return 2
 	}
@@ -202,6 +221,24 @@ func validListenAddress(address string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func validServeListenAddress(address string, mode listenMode) bool {
+	return validListenAddress(address) || mode == containerNetworkListener && address == containerListenAddress
+}
+
+func runHealthcheck(ctx context.Context) int {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8787/healthz", nil)
+	if err != nil {
+		return 1
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return 1
+	}
+	defer response.Body.Close()
+	return map[bool]int{true: 0, false: 1}[response.StatusCode == http.StatusOK]
+}
+
 type repositoryAuthenticator struct{ repository *syncpg.Repository }
 
 type repositoryBackend struct{ repository *syncpg.Repository }
@@ -240,9 +277,10 @@ func (adapter repositoryAuthenticator) Authenticate(ctx context.Context, bearer 
 }
 
 func configuredServeRepository(ctx context.Context) (*syncpg.Repository, func(), bool) {
-	dsn, ownerText := getenv("VGXNESS_SYNC_POSTGRES_DSN"), getenv("VGXNESS_SYNC_OWNER_ID")
+	dsn, dsnOK := configuredPostgresDSN()
+	ownerText := getenv("VGXNESS_SYNC_OWNER_ID")
 	owner, err := uuid.Parse(ownerText)
-	if dsn == "" || err != nil || owner == uuid.Nil || owner.String() != ownerText {
+	if !dsnOK || err != nil || owner == uuid.Nil || owner.String() != ownerText {
 		return nil, nil, false
 	}
 	repository, cleanup, err := setupServe(ctx, dsn, owner)
@@ -344,14 +382,49 @@ func runRevoke(ctx context.Context, args []string, stderr io.Writer) int {
 }
 
 func configuredRepository(ctx context.Context) (deviceRepository, func(), bool) {
-	dsn := getenv("VGXNESS_SYNC_POSTGRES_DSN")
+	dsn, dsnOK := configuredPostgresDSN()
 	ownerText := getenv("VGXNESS_SYNC_OWNER_ID")
 	owner, err := uuid.Parse(ownerText)
-	if dsn == "" || err != nil || owner == uuid.Nil || owner.String() != ownerText {
+	if !dsnOK || err != nil || owner == uuid.Nil || owner.String() != ownerText {
 		return nil, nil, false
 	}
 	repository, cleanup, err := setup(ctx, dsn, owner)
 	return repository, cleanup, err == nil
+}
+
+func configuredPostgresDSN() (string, bool) {
+	inline, path := getenv("VGXNESS_SYNC_POSTGRES_DSN"), getenv("VGXNESS_SYNC_POSTGRES_DSN_FILE")
+	if inline != "" && path != "" {
+		return "", false
+	}
+	if inline != "" {
+		return inline, true
+	}
+	if path == "" || !filepath.IsAbs(path) {
+		return "", false
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > maxPostgresDSNFileBytes {
+		return "", false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || opened.Size() > maxPostgresDSNFileBytes || !os.SameFile(info, opened) {
+		return "", false
+	}
+	data, err := io.ReadAll(io.LimitReader(file, opened.Size()+1))
+	if err != nil || int64(len(data)) != opened.Size() {
+		return "", false
+	}
+	dsn := strings.TrimSuffix(string(data), "\n")
+	if strings.HasSuffix(string(data), "\r\n") {
+		dsn = strings.TrimSuffix(dsn, "\r")
+	}
+	return dsn, dsn != ""
 }
 
 func defaultSetup(ctx context.Context, dsn string, owner uuid.UUID) (deviceRepository, func(), error) {
