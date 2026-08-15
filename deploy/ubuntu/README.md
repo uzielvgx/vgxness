@@ -98,15 +98,17 @@ diagnostic log.
 
 ## Install, validation, and smoke
 
-Copy the reviewed unit examples and the Caddy example to the approved primary
-configuration, replace only `SYNC_PUBLIC_HOSTNAME`, then run:
+Install the Caddy site as a dedicated Caddy host configuration where the local
+Caddy installation supports includes. Otherwise, merge only the VGXNESS site block from the reviewed example into the existing primary configuration. Do not overwrite a shared /etc/caddy/Caddyfile; preserve unrelated sites and validate
+the resulting complete configuration before reload. Copy the reviewed unit
+examples, replace only `SYNC_PUBLIC_HOSTNAME`, then run:
 
 ```sh
 systemd-analyze verify /etc/systemd/system/vgxness-syncd.service /etc/systemd/system/vgxness-syncd-backup.service /etc/systemd/system/vgxness-syncd-backup.timer
 caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload
 systemctl reload caddy
-systemctl restart vgxness-syncd
+systemctl enable --now vgxness-syncd
 systemctl enable --now vgxness-syncd-backup.timer
 systemctl is-active vgxness-syncd caddy vgxness-syncd-backup.timer
 ss -ltn '( sport = :8787 )'
@@ -122,52 +124,115 @@ known predecessor before retrying.
 
 ## Immutable update and rollback
 
-The daemon always executes `/opt/vgxness-syncd/current/vgxness-syncd`. Store a
-reviewed binary under a checksum-named, content-addressed directory such as
-`/opt/vgxness-syncd/versions/SHA256/vgxness-syncd`; an existing target with
-different bytes is an abort, never an overwrite. Verify the staged checksum,
-ownership, and executable mode, retain and verify the predecessor target, then
-atomically switch `current` with a new temporary symlink and `mv -T`. Recheck
-all unchanged configuration target identities before restarting the daemon.
+The daemon always executes `/opt/vgxness-syncd/current/vgxness-syncd`. The
+approved change record must name the exact `APPROVED_RELEASE_SHA256`; it is not
+a value to infer from a downloaded file. Store that reviewed binary only under
+`/opt/vgxness-syncd/versions/APPROVED_RELEASE_SHA256/vgxness-syncd`; an existing
+target with different bytes is an abort, never an overwrite. Before switch,
+verify the staged checksum, ownership, executable mode, and recorded
+predecessor target. Atomically switch `current` with a new temporary symlink
+and `mv -T`, then verify the approved release, not merely that a symlink exists:
 
-Rollback is only the verified predecessor symlink target plus the preserved
-root-owned unit/Caddy/env revisions, followed by `systemctl daemon-reload`,
-`systemctl reload caddy`, and `systemctl restart vgxness-syncd`. Do not roll
-PostgreSQL backward: its schema migration path is forward-only. If restart or
-smoke fails, leave the new target inactive, restore the predecessor, and keep
-redacted evidence for escalation.
+```sh
+readlink -f /opt/vgxness-syncd/current
+sha256sum /opt/vgxness-syncd/current/vgxness-syncd
+```
+
+Both results must exactly match the reviewed
+`/opt/vgxness-syncd/versions/APPROVED_RELEASE_SHA256` path and
+`APPROVED_RELEASE_SHA256`, respectively, before `systemctl restart vgxness-syncd`. Recheck all unchanged configuration target identities before
+restarting the daemon.
+
+Rollback to the verified predecessor symlink target plus preserved root-owned
+unit/Caddy/env revisions is allowed only when the recorded migration ledger
+shows that the predecessor is compatible with the current PostgreSQL schema.
+Do not roll PostgreSQL backward and never claim a predecessor will run on an
+advanced schema. If the ledger is absent, advanced, or incompatible, stop
+ingress and the daemon; use an approved database recovery/forward-fix path
+instead. If a compatible rollback restart or smoke fails, leave the new target
+inactive, restore the predecessor only if still compatible, and keep redacted
+evidence for escalation.
 
 ## Backup and restore
 
 The separate `vgxness-syncd-backup` identity has no daemon state write access.
 Its timer makes one local `current.pgd`: it writes the exact temporary path,
-uses `pg_restore --list`, syncs it, records a `sha256sum`, atomically `mv -T`s
-it to `current.pgd`, then syncs the published file. A failure leaves the prior
-current backup unchanged. External encrypted copy and retention are the
+uses `pg_restore --list`, syncs it, writes and syncs a mode-0600
+`current.pgd.sha256` temporary companion whose recorded filename is the
+relative `current.pgd`, then atomically publishes the dump and companion under
+one lock. A missing or mismatched companion makes restore fail closed. If
+publication has begun but the companion is not yet published, the pair is
+intentionally invalid: stop and require operator recovery; do not claim that a
+prior verified generation always survives. Pre-publication failure preserves the prior verified generation; partial publication fails closed and requires
+operator recovery. Before
+restore, coordinate with the timer: `systemctl disable --now vgxness-syncd-backup.timer`, wait for `vgxness-syncd-backup.service` to be
+inactive, and use `flock -n /var/lib/vgxness-syncd-backup/backup.lock` as the
+reviewed maintenance lock. Do not restore while the lock cannot be acquired.
+Keep file descriptor 9 open for the entire operator shell, through checksum,
+drop/recreate, and restore. External encrypted copy and retention are the
 operator’s responsibility; this package retains no remote copy.
 
 Restore has the blast radius of database `vgxness_sync` and every enrolled
 device. With DBA/maintenance approval: stop ingress and the daemon; make and
-verify an investigation dump; verify the selected dump and hash; then only the
-DBA may drop/recreate exact database `vgxness_sync`. Restore with:
+verify an investigation dump; verify the selected dump and its mode-0600
+SHA-256 companion; then only the DBA may drop/recreate exact database
+`vgxness_sync`. Clear ambient libpq settings and bind every destructive command
+to the reviewed local socket, port, and superuser. Record and recheck the
+PostgreSQL `system_identifier`, database name, and role before drop/recreate
+and restore. Use this reviewed local command prefix, never an ambient DSN or
+service configuration. `env -i PATH=/usr/bin:/bin` clears every ambient libpq
+variable before each PostgreSQL command. Restore only the approved local
+generation in place, so the relative checksum filename is unambiguous:
 
 ```sh
-pg_dump --format=custom --file=INVESTIGATION_VERIFIED.pgd vgxness_sync
-sha256sum INVESTIGATION_VERIFIED.pgd
-pg_restore --list INVESTIGATION_VERIFIED.pgd
-sha256sum SELECTED_VERIFIED_DUMP.pgd
-pg_restore --list SELECTED_VERIFIED_DUMP.pgd
-dropdb --force vgxness_sync
-createdb --owner=vgxness_syncd vgxness_sync
-pg_restore --exit-on-error --single-transaction --no-owner --role=vgxness_syncd --dbname=vgxness_sync SELECTED_VERIFIED_DUMP.pgd
+# Run this block as root in one POSIX shell.
+set -eu
+umask 077
+EXPECTED_SYSTEM_IDENTIFIER="$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT system_identifier FROM pg_control_system();")"
+test -n "$EXPECTED_SYSTEM_IDENTIFIER"
+EXPECTED_DATABASE_OWNER="$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT datdba::regrole FROM pg_database WHERE datname = 'vgxness_sync';")"
+test "$EXPECTED_DATABASE_OWNER" = "vgxness_syncd"
+EXPECTED_ROLE="$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT rolname FROM pg_roles WHERE rolname = 'vgxness_syncd';")"
+test "$EXPECTED_ROLE" = "vgxness_syncd"
+exec 9>/var/lib/vgxness-syncd-backup/backup.lock
+flock -n 9
+/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/pg_dump --host=/var/run/postgresql --port=5432 --username=postgres --dbname=vgxness_sync --format=custom --file=- > INVESTIGATION_VERIFIED.pgd
+/usr/bin/sha256sum INVESTIGATION_VERIFIED.pgd
+/usr/bin/pg_restore --list INVESTIGATION_VERIFIED.pgd
+cd /var/lib/vgxness-syncd-backup
+test "$(stat -c %a current.pgd.sha256)" = 600
+/usr/bin/sha256sum --check current.pgd.sha256
+/usr/bin/pg_restore --list current.pgd
+CURRENT_SYSTEM_IDENTIFIER="$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT system_identifier FROM pg_control_system();")"
+test "$CURRENT_SYSTEM_IDENTIFIER" = "$EXPECTED_SYSTEM_IDENTIFIER"
+test "$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT datdba::regrole FROM pg_database WHERE datname = 'vgxness_sync';")" = "$EXPECTED_DATABASE_OWNER"
+/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/dropdb --host=/var/run/postgresql --port=5432 --username=postgres --force vgxness_sync
+CURRENT_SYSTEM_IDENTIFIER="$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT system_identifier FROM pg_control_system();")"
+test "$CURRENT_SYSTEM_IDENTIFIER" = "$EXPECTED_SYSTEM_IDENTIFIER"
+test "$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT rolname FROM pg_roles WHERE rolname = 'vgxness_syncd';")" = "$EXPECTED_ROLE"
+/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/createdb --host=/var/run/postgresql --port=5432 --username=postgres --owner=vgxness_syncd vgxness_sync
+CURRENT_SYSTEM_IDENTIFIER="$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT system_identifier FROM pg_control_system();")"
+test "$CURRENT_SYSTEM_IDENTIFIER" = "$EXPECTED_SYSTEM_IDENTIFIER"
+test "$(/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/psql --host=/var/run/postgresql --port=5432 --username=postgres --dbname=postgres --tuples-only --no-align -c "SELECT datdba::regrole FROM pg_database WHERE datname = 'vgxness_sync';")" = "vgxness_syncd"
+/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/pg_restore --host=/var/run/postgresql --port=5432 --username=postgres --exit-on-error --single-transaction --no-owner --role=vgxness_syncd --dbname=vgxness_sync < current.pgd
+systemctl restart vgxness-syncd
+systemctl is-active vgxness-syncd
+systemctl enable --now caddy
+systemctl is-active caddy
+curl --fail --silent --show-error https://SYNC_PUBLIC_HOSTNAME/healthz
+test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://SYNC_PUBLIC_HOSTNAME/v1/sync/capabilities)" = 401
+systemctl enable --now vgxness-syncd-backup.timer
 ```
 
-Verify schema/owner/readback before restarting Caddy and the daemon. On any
-restore failure, keep ingress and daemon stopped and restore the verified
-investigation dump with `pg_restore --exit-on-error --single-transaction
---no-owner --role=vgxness_syncd --dbname=vgxness_sync INVESTIGATION_VERIFIED.pgd`.
-Abort rather than guessing if either dump, hash, identity, target, or explicit
-approval is absent.
+The DBA records the exact `system_identifier`, `vgxness_sync` database, and
+`vgxness_syncd` owner/role observations immediately before destructive action,
+and rechecks them before `dropdb`, `createdb`, and `pg_restore`. Verify
+schema/owner/readback before restarting the daemon; only after its health check
+may Caddy be started and its public health/unauthenticated-401 smoke pass. The
+backup timer is re-enabled only after every one of those gates succeeds. On any
+restore failure, keep ingress, daemon, and backup timer stopped: the timer remains stopped until DBA recovery uses the same reviewed local prefix to
+restore the verified investigation dump. Abort rather than guessing if either
+dump, hash, identity, target, maintenance lock, or explicit approval is absent.
 
 ## Device credentials, Blast radius, and Escalation
 

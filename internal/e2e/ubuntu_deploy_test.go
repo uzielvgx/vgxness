@@ -39,10 +39,15 @@ func TestUbuntuDeployPackageContract(t *testing.T) {
 			"User=vgxness-syncd-backup", "Group=vgxness-syncd-backup", "StateDirectory=vgxness-syncd-backup",
 			"StateDirectoryMode=0700", "PGSERVICE=vgxness_sync_backup", "PGSERVICEFILE=/etc/vgxness-syncd-backup/pg_service.conf",
 			"PGPASSFILE=/etc/vgxness-syncd-backup/pgpass", "IPAddressDeny=any", "IPAddressAllow=localhost",
-			"pg_dump --format=custom --no-owner --no-privileges --file=/var/lib/vgxness-syncd-backup/.current.pgd.tmp",
-			"pg_restore --list /var/lib/vgxness-syncd-backup/.current.pgd.tmp", "sync -f /var/lib/vgxness-syncd-backup/.current.pgd.tmp",
-			"sha256sum /var/lib/vgxness-syncd-backup/.current.pgd.tmp", "mv -T -- /var/lib/vgxness-syncd-backup/.current.pgd.tmp /var/lib/vgxness-syncd-backup/current.pgd",
-			"sync -f /var/lib/vgxness-syncd-backup/current.pgd",
+			"pg_dump --format=custom --no-owner --no-privileges --file=.current.pgd.tmp",
+			"pg_restore --list .current.pgd.tmp", "sync -f .current.pgd.tmp",
+			"sha256sum .current.pgd.tmp", "mv -T -- .current.pgd.tmp current.pgd",
+			".current.pgd.sha256.tmp", "current.pgd.sha256", "chmod 0600 .current.pgd.sha256.tmp",
+			"flock --nonblock /var/lib/vgxness-syncd-backup/backup.lock",
+			"ExecStartPre=-/usr/bin/rm -f -- /var/lib/vgxness-syncd-backup/.current.pgd.tmp /var/lib/vgxness-syncd-backup/.current.pgd.sha256.tmp",
+			"cd /var/lib/vgxness-syncd-backup", "sha256sum .current.pgd.tmp", "current.pgd",
+			"sha256sum .current.pgd.tmp > .current.pgd.sha256.tmp", "sed -i \"s|\\\\.current\\\\.pgd\\\\.tmp|current.pgd|\" .current.pgd.sha256.tmp",
+			"sync -f current.pgd",
 		},
 		"deploy/ubuntu/vgxness-syncd-backup.timer": {
 			"OnCalendar=daily", "Persistent=true",
@@ -54,15 +59,41 @@ func TestUbuntuDeployPackageContract(t *testing.T) {
 			"[A-Za-z0-9._~-]", ">=32", "/opt/vgxness-syncd/current/vgxness-syncd", "vgxness_syncd_backup",
 			"--single-transaction", "--role=vgxness_syncd", "device issue", "device revoke", "/v1/sync/capabilities",
 			"getent passwd vgxness-syncd", "getent group vgxness-syncd-backup", "useradd --system", "/usr/sbin/nologin",
-			"root:vgxness-syncd-backup", "0750", "root:vgxness-syncd-backup` and mode `0640", "dropdb --force vgxness_sync",
-			"createdb --owner=vgxness_syncd vgxness_sync", "INVESTIGATION_VERIFIED.pgd", "STAGED_UNIT_DIRECTORY",
+			"root:vgxness-syncd-backup", "0750", "root:vgxness-syncd-backup` and mode `0640", "INVESTIGATION_VERIFIED.pgd", "STAGED_UNIT_DIRECTORY",
 			"files do not execute actions by themselves", "authorized operator executes the reviewed steps",
+			"systemctl enable --now vgxness-syncd", "APPROVED_RELEASE_SHA256", "readlink -f /opt/vgxness-syncd/current",
+			"sha256sum /opt/vgxness-syncd/current/vgxness-syncd", "migration ledger", "approved database recovery/forward-fix",
+			"systemctl disable --now vgxness-syncd-backup.timer", "flock",
+			"env -i PATH=/usr/bin:/bin",
+			"system_identifier", "--host=/var/run/postgresql", "--port=5432", "--username=postgres", "sha256sum --check",
+			"EXPECTED_SYSTEM_IDENTIFIER", "test -n \"$EXPECTED_SYSTEM_IDENTIFIER\"", "cd /var/lib/vgxness-syncd-backup", "sha256sum --check current.pgd.sha256",
+			"exec 9>/var/lib/vgxness-syncd-backup/backup.lock", "flock -n 9", "Pre-publication failure preserves the prior verified generation",
+			"set -eu", "umask 077", "/usr/sbin/runuser --user postgres -- /usr/bin/env -i PATH=/usr/bin:/bin",
+			"/usr/bin/pg_dump", "--file=- > INVESTIGATION_VERIFIED.pgd", "/usr/bin/pg_restore", "< current.pgd",
+			"systemctl enable --now vgxness-syncd-backup.timer", "timer remains stopped",
+			"systemctl enable --now caddy", "systemctl is-active caddy", "https://SYNC_PUBLIC_HOSTNAME/healthz", "%{http_code}", "= 401",
+			"dedicated Caddy host configuration", "merge only the VGXNESS site block", "Do not overwrite a shared /etc/caddy/Caddyfile",
 		},
 	}
-	assertOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "vgxness-syncd-backup.service"),
-		"sync -f /var/lib/vgxness-syncd-backup/.current.pgd.tmp",
-		"mv -T -- /var/lib/vgxness-syncd-backup/.current.pgd.tmp /var/lib/vgxness-syncd-backup/current.pgd",
-		"sync -f /var/lib/vgxness-syncd-backup/current.pgd")
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "vgxness-syncd-backup.service"), "ExecStart=/usr/bin/flock",
+		"sha256sum .current.pgd.tmp",
+		".current.pgd.sha256.tmp",
+		"mv -T -- .current.pgd.tmp current.pgd",
+		"mv -T -- .current.pgd.sha256.tmp current.pgd.sha256")
+	assertMinOccurrences(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"),
+		"test \"$CURRENT_SYSTEM_IDENTIFIER\" = \"$EXPECTED_SYSTEM_IDENTIFIER\"", 3)
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "```sh\n# Run this block as root",
+		"exec 9>/var/lib/vgxness-syncd-backup/backup.lock",
+		"flock -n 9",
+		"sha256sum --check current.pgd.sha256",
+		"dropdb --host=/var/run/postgresql")
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "```sh\n# Run this block as root",
+		"set -eu", "umask 077", "flock -n 9", "dropdb --host=/var/run/postgresql", "systemctl is-active vgxness-syncd",
+		"systemctl enable --now caddy", "systemctl is-active caddy", "https://SYNC_PUBLIC_HOSTNAME/healthz", "%{http_code}", "systemctl enable --now vgxness-syncd-backup.timer")
+	assertSectionOrdered(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "## Immutable update and rollback",
+		"APPROVED_RELEASE_SHA256",
+		"readlink -f /opt/vgxness-syncd/current",
+		"sha256sum /opt/vgxness-syncd/current/vgxness-syncd")
 	makefile, err := os.ReadFile(filepath.Join(repository, "Makefile"))
 	if err != nil || !strings.Contains(string(makefile), "TestCleanCheckoutSetupAndNativeSDD|TestUbuntuDeployPackageContract") {
 		t.Error("Makefile verify target does not select the Ubuntu deployment contract")
@@ -93,6 +124,38 @@ func TestUbuntuDeployPackageContract(t *testing.T) {
 	}
 }
 
+func assertMinOccurrences(t *testing.T, path, want string, minimum int) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(data), want); count < minimum {
+		t.Errorf("%s contains %d occurrences of %q, want at least %d", path, count, want, minimum)
+	}
+}
+
+func assertSectionOrdered(t *testing.T, path, section string, parts ...string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sectionOffset := strings.Index(string(data), section)
+	if sectionOffset < 0 {
+		t.Errorf("%s is missing section %q", path, section)
+		return
+	}
+	last := -1
+	for _, part := range parts {
+		position := strings.Index(string(data)[sectionOffset:], part)
+		if position < 0 || position <= last {
+			t.Errorf("%s does not order %q after its predecessor in %q", path, part, section)
+		}
+		last = position
+	}
+}
+
 func assertOrdered(t *testing.T, path string, parts ...string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -114,13 +177,13 @@ func forbiddenDeployText(relative string) []string {
 	case "deploy/ubuntu/postgresql-bootstrap.sql.example":
 		return []string{"PASSWORD '", "REPLACE_WITH_GENERATED_PASSWORD"}
 	case "deploy/ubuntu/vgxness-syncd-backup.service":
-		return []string{"/bin/sh -", "rm -rf", "find ", "postgres://", "User=vgxness-syncd\n", "Group=vgxness-syncd\n"}
+		return []string{"ExecStart=/bin/sh -", "sha256sum .current.pgd.tmp |", "rm -rf", "find ", "postgres://", "User=vgxness-syncd\n", "Group=vgxness-syncd\n"}
 	case "deploy/ubuntu/vgxness-syncd.service":
 		return []string{"0.0.0.0", "Authorization=", "/usr/local/bin/vgxness-syncd"}
 	case "deploy/ubuntu/Caddyfile.example":
 		return []string{"0.0.0.0", "Authorization"}
 	case "deploy/ubuntu/README.md":
-		return []string{"does not install packages, create accounts, contact a host"}
+		return []string{"does not install packages, create accounts, contact a host", "\ndropdb --force ", "\ncreatedb --owner=", "\npg_restore --exit-on-error", "sha256sum .current.pgd.tmp |"}
 	default:
 		return nil
 	}

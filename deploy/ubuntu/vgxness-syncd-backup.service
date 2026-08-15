@@ -13,13 +13,8 @@ Environment=PGSERVICE=vgxness_sync_backup
 Environment=PGSERVICEFILE=/etc/vgxness-syncd-backup/pg_service.conf
 Environment=PGPASSFILE=/etc/vgxness-syncd-backup/pgpass
 UMask=0077
-ExecStartPre=-/usr/bin/rm -f -- /var/lib/vgxness-syncd-backup/.current.pgd.tmp
-ExecStart=/usr/bin/pg_dump --format=custom --no-owner --no-privileges --file=/var/lib/vgxness-syncd-backup/.current.pgd.tmp
-ExecStart=/usr/bin/pg_restore --list /var/lib/vgxness-syncd-backup/.current.pgd.tmp
-ExecStart=/usr/bin/sync -f /var/lib/vgxness-syncd-backup/.current.pgd.tmp
-ExecStart=/usr/bin/sha256sum /var/lib/vgxness-syncd-backup/.current.pgd.tmp
-ExecStart=/usr/bin/mv -T -- /var/lib/vgxness-syncd-backup/.current.pgd.tmp /var/lib/vgxness-syncd-backup/current.pgd
-ExecStart=/usr/bin/sync -f /var/lib/vgxness-syncd-backup/current.pgd
+ExecStartPre=-/usr/bin/rm -f -- /var/lib/vgxness-syncd-backup/.current.pgd.tmp /var/lib/vgxness-syncd-backup/.current.pgd.sha256.tmp
+ExecStart=/usr/bin/flock --nonblock /var/lib/vgxness-syncd-backup/backup.lock /usr/bin/sh -ec 'cd /var/lib/vgxness-syncd-backup; /usr/bin/pg_dump --format=custom --no-owner --no-privileges --file=.current.pgd.tmp; /usr/bin/pg_restore --list .current.pgd.tmp; /usr/bin/sync -f .current.pgd.tmp; /usr/bin/sha256sum .current.pgd.tmp > .current.pgd.sha256.tmp; /usr/bin/sed -i "s|\\.current\\.pgd\\.tmp|current.pgd|" .current.pgd.sha256.tmp; /usr/bin/chmod 0600 .current.pgd.sha256.tmp; /usr/bin/sync -f .current.pgd.sha256.tmp; /usr/bin/mv -T -- .current.pgd.tmp current.pgd; /usr/bin/sync -f current.pgd; /usr/bin/mv -T -- .current.pgd.sha256.tmp current.pgd.sha256; /usr/bin/sync -f current.pgd.sha256'
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
