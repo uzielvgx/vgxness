@@ -1,0 +1,3 @@
+# Copy as /etc/vgxness-syncd-backup/pgpass and replace only the final placeholder.
+# PostgreSQL requires this file to be mode 0600 or it will ignore it.
+127.0.0.1:5432:vgxness_sync:vgxness_syncd_backup:REPLACE_WITH_GENERATED_PASSWORD

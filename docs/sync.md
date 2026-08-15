@@ -94,3 +94,6 @@ For remote synchronization, the deployment owner is responsible for TLS
 certificate lifecycle, proxy access controls, request-size preservation,
 timeouts, logging redaction, and forwarding only to the loopback listener.
 VGXNESS does not currently provide native TLS termination in `vgxness-syncd`.
+
+For a declarative Ubuntu 24.04 single-host example, see the
+[Ubuntu 24.04 single-VPS deployment package](../deploy/ubuntu/README.md).

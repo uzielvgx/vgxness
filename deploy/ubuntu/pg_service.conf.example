@@ -1,0 +1,7 @@
+# Non-secret backup libpq service definition. Copy as /etc/vgxness-syncd-backup/pg_service.conf.
+[vgxness_sync_backup]
+host=127.0.0.1
+port=5432
+dbname=vgxness_sync
+user=vgxness_syncd_backup
+sslmode=disable
