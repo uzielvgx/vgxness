@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -23,6 +24,8 @@ type MemoryRuntime interface {
 	Forget(context.Context, config.Options, memory.Forget) (memory.Entry, error)
 	ResolveProject(context.Context, config.Options, string) (string, error)
 	Sync(context.Context, config.Options) (memory.SyncResult, error)
+	ConfigureSync(context.Context, config.Options, string, string, string) (memory.SyncConfigurationStatus, error)
+	SyncStatus(context.Context, config.Options) (memory.SyncConfigurationStatus, error)
 }
 
 type memoryInput struct {
@@ -47,6 +50,18 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	}
 	verb := args[0]
 	if verb == "sync" {
+		if len(args) > 1 {
+			switch args[1] {
+			case "configure":
+				return runMemorySyncConfigure(ctx, args[2:], stdin, stdout, stderr, runtime)
+			case "status":
+				return runMemorySyncStatus(ctx, args[2:], stdout, stderr, runtime)
+			default:
+				if !strings.HasPrefix(args[1], "-") {
+					return memoryFailure(stderr, memory.ErrInvalid)
+				}
+			}
+		}
 		flags := flag.NewFlagSet(verb, flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
 		var opts config.Options
@@ -179,6 +194,83 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		}
 	}
 	_, _ = io.Copy(stdout, &output)
+	return 0
+}
+
+const maxSyncBearerBytes = 512
+
+func runMemorySyncConfigure(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
+	flags := flag.NewFlagSet("sync configure", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var opts config.Options
+	var endpoint, deviceID string
+	flags.StringVar(&endpoint, "endpoint", "", "sync endpoint")
+	flags.StringVar(&deviceID, "device-id", "", "sync device ID")
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || opts.ProjectLocal {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	seen := map[string]bool{}
+	flags.Visit(func(value *flag.Flag) { seen[value.Name] = true })
+	if !seen["endpoint"] || !seen["device-id"] {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	if _, err := memory.ValidateSyncProfile(memory.SyncProfile{Enabled: true, Endpoint: endpoint, DeviceID: deviceID, CredentialRef: "secret://keychain/sync/pending"}); err != nil {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	bearer, err := syncBearer(stdin)
+	if err != nil {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	status, err := runtime.ConfigureSync(ctx, opts, endpoint, deviceID, bearer)
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	fmt.Fprintf(stdout, "configured=%t\nenabled=%t\ncredential=%s\n", status.Configured, status.Enabled, status.Credential)
+	return 0
+}
+
+func syncBearer(stdin io.Reader) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(stdin, maxSyncBearerBytes+3))
+	if err != nil || len(data) == 0 || len(data) > maxSyncBearerBytes+2 {
+		return "", memory.ErrInvalid
+	}
+	value := string(data)
+	if strings.HasSuffix(value, "\r\n") {
+		value = strings.TrimSuffix(value, "\r\n")
+	} else {
+		value = strings.TrimSuffix(value, "\n")
+	}
+	if len(value) == 0 || len(value) > maxSyncBearerBytes || strings.ContainsAny(value, "\r\n") {
+		return "", memory.ErrInvalid
+	}
+	return value, nil
+}
+
+func runMemorySyncStatus(ctx context.Context, args []string, stdout, stderr io.Writer, runtime MemoryRuntime) int {
+	flags := flag.NewFlagSet("sync status", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var opts config.Options
+	var jsonOutput bool
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
+	flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	status, err := runtime.SyncStatus(ctx, opts)
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	if jsonOutput {
+		_ = json.NewEncoder(stdout).Encode(struct {
+			SchemaVersion int `json:"schemaVersion"`
+			memory.SyncConfigurationStatus
+		}{SchemaVersion: 1, SyncConfigurationStatus: status})
+	} else {
+		fmt.Fprintf(stdout, "configured=%t\nenabled=%t\ncredential=%s\n", status.Configured, status.Enabled, status.Credential)
+	}
 	return 0
 }
 

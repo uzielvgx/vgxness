@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +96,294 @@ func TestMemorySyncProfileAndCredentialStatesAvoidNetwork(t *testing.T) {
 			t.Fatalf("credential error %v = %+v credentials=%d requests=%d", credentialErr, result, credentials, requests)
 		}
 	}
+}
+
+func TestMemoryConfigureSyncStoresCredentialBeforeActivatingProfileAndStatusIsLocal(t *testing.T) {
+	root := t.TempDir()
+	bearer := "vgx1.550e8400-e29b-41d4-a716-446655440000.secret"
+	values := map[string]string{}
+	runtime := NewMemory("cli", false)
+	runtime.putSecret = func(reference, value string) error {
+		values[reference] = value
+		return nil
+	}
+	runtime.deleteSecret = func(reference string) error {
+		delete(values, reference)
+		return nil
+	}
+	runtime.credential = func(reference string) (string, error) {
+		value, found := values[reference]
+		if !found {
+			return "", secrets.ErrMissing
+		}
+		return value, nil
+	}
+	runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) {
+		t.Fatal("configure/status made a network request")
+		return nil, nil
+	})
+
+	status, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "HTTPS://Sync.Example.Test:443", "550E8400-E29B-41D4-A716-446655440000", bearer)
+	if err != nil || !status.Configured || !status.Enabled || status.Credential != memory.SyncCredentialAvailable || len(values) != 1 {
+		t.Fatalf("configure status=%+v err=%v values=%v", status, err, values)
+	}
+	store, err := openStoreRead(context.Background(), config.Options{StorageRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, found, err := store.GetSyncProfile(context.Background())
+	store.Close()
+	if err != nil || !found || !profile.Enabled || values[profile.CredentialRef] != bearer || profile.CredentialRef == bearer {
+		t.Fatalf("profile=%+v found=%t err=%v", profile, found, err)
+	}
+	status, err = runtime.SyncStatus(context.Background(), config.Options{StorageRoot: root})
+	if err != nil || !status.Configured || !status.Enabled || status.Credential != memory.SyncCredentialAvailable {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	updated := "vgx1.550e8400-e29b-41d4-a716-446655440000.updated"
+	status, err = runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://other.example.test", profile.DeviceID, updated)
+	if err != nil || !status.Configured || len(values) != 1 || values[profile.CredentialRef] == updated {
+		t.Fatalf("reconfigure status=%+v err=%v values=%v", status, err, values)
+	}
+	store, err = openStoreRead(context.Background(), config.Options{StorageRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedProfile, found, err := store.GetSyncProfile(context.Background())
+	store.Close()
+	if err != nil || !found || updatedProfile.CredentialRef == profile.CredentialRef || values[updatedProfile.CredentialRef] != updated || updatedProfile.Endpoint != "https://other.example.test" {
+		t.Fatalf("updated profile=%+v found=%t err=%v", updatedProfile, found, err)
+	}
+}
+
+func TestMemorySyncStatusForAbsentProfileDoesNotReadCredential(t *testing.T) {
+	reads := 0
+	runtime := NewMemory("cli", false)
+	runtime.credential = func(string) (string, error) {
+		reads++
+		return "", nil
+	}
+	status, err := runtime.SyncStatus(context.Background(), config.Options{StorageRoot: t.TempDir()})
+	if err != nil || status.Configured || status.Enabled || status.Credential != memory.SyncCredentialNotConfigured || reads != 0 {
+		t.Fatalf("status=%+v err=%v reads=%d", status, err, reads)
+	}
+}
+
+func TestMemoryConfigureSyncDoesNotStoreCredentialWhenProfileCannotBeOpened(t *testing.T) {
+	root := t.TempDir()
+	blocked := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deleted := 0
+	runtime := NewMemory("cli", false)
+	runtime.putSecret = func(string, string) error { return nil }
+	runtime.deleteSecret = func(string) error { deleted++; return nil }
+	_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: blocked}, "https://sync.example.test", "550e8400-e29b-41d4-a716-446655440000", "vgx1.550e8400-e29b-41d4-a716-446655440000.secret")
+	if err == nil || deleted != 0 {
+		t.Fatalf("configure error=%v deleted=%d", err, deleted)
+	}
+}
+
+func TestMemoryConfigureSyncCompensatesByMutationOutcome(t *testing.T) {
+	const deviceID = "550e8400-e29b-41d4-a716-446655440000"
+	const first = "vgx1.550e8400-e29b-41d4-a716-446655440000.first"
+	const second = "vgx1.550e8400-e29b-41d4-a716-446655440000.second"
+	newRuntime := func(values map[string]string) Memory {
+		runtime := NewMemory("cli", false)
+		runtime.putSecret = func(reference, value string) error { values[reference] = value; return nil }
+		runtime.deleteSecret = func(reference string) error { delete(values, reference); return nil }
+		runtime.credential = func(reference string) (string, error) {
+			value, found := values[reference]
+			if !found {
+				return "", secrets.ErrMissing
+			}
+			return value, nil
+		}
+		return runtime
+	}
+	t.Run("first enrollment deletes credential", func(t *testing.T) {
+		values := map[string]string{}
+		runtime := newRuntime(values)
+		runtime.configureProfile = func(context.Context, *memory.Store, memory.SyncProfile) (memory.SyncProfile, error) {
+			return memory.SyncProfile{}, errors.New("mutation failed")
+		}
+		_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: t.TempDir()}, "https://sync.example.test", deviceID, first)
+		if err == nil || len(values) != 0 {
+			t.Fatalf("err=%v values=%v", err, values)
+		}
+	})
+	t.Run("reconfigure restores existing credential", func(t *testing.T) {
+		root, values := t.TempDir(), map[string]string{}
+		runtime := newRuntime(values)
+		if _, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", deviceID, first); err != nil {
+			t.Fatal(err)
+		}
+		store, err := openStoreRead(context.Background(), config.Options{StorageRoot: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		profile, found, err := store.GetSyncProfile(context.Background())
+		store.Close()
+		if err != nil || !found {
+			t.Fatalf("profile=%+v found=%t err=%v", profile, found, err)
+		}
+		runtime.configureProfile = func(context.Context, *memory.Store, memory.SyncProfile) (memory.SyncProfile, error) {
+			return memory.SyncProfile{}, errors.New("mutation failed")
+		}
+		_, err = runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://other.example.test", deviceID, second)
+		if err == nil || len(values) != 1 || values[profile.CredentialRef] != first {
+			t.Fatalf("err=%v values=%v", err, values)
+		}
+	})
+	t.Run("existing credential is not read before slot switch", func(t *testing.T) {
+		root, values := t.TempDir(), map[string]string{}
+		runtime := newRuntime(values)
+		if _, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", deviceID, first); err != nil {
+			t.Fatal(err)
+		}
+		reads := 0
+		runtime.credential = func(string) (string, error) { return "", secrets.ErrUnavailable }
+		runtime.credential = func(string) (string, error) { reads++; return "", secrets.ErrUnavailable }
+		_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://other.example.test", deviceID, second)
+		if err != nil || reads != 0 {
+			t.Fatalf("err=%v reads=%d", err, reads)
+		}
+	})
+	t.Run("compensation failure is redacted", func(t *testing.T) {
+		values := map[string]string{}
+		runtime := newRuntime(values)
+		mutationErr := errors.New("mutation failed")
+		compensationErr := errors.New("delete failure")
+		runtime.configureProfile = func(context.Context, *memory.Store, memory.SyncProfile) (memory.SyncProfile, error) {
+			return memory.SyncProfile{}, mutationErr
+		}
+		deletes := 0
+		runtime.deleteSecret = func(string) error {
+			deletes++
+			if deletes == 2 {
+				return compensationErr
+			}
+			return nil
+		}
+		_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: t.TempDir()}, "https://sync.example.test", deviceID, first)
+		if err == nil || !errors.Is(err, mutationErr) || !errors.Is(err, compensationErr) || !strings.Contains(err.Error(), "compensation failed") || strings.Contains(err.Error(), first) {
+			t.Fatalf("err=%v", err)
+		}
+	})
+	t.Run("post-commit close retains new credential", func(t *testing.T) {
+		root, values := t.TempDir(), map[string]string{}
+		runtime := newRuntime(values)
+		runtime.closeStore = func(store *memory.Store) error {
+			if err := store.Close(); err != nil {
+				return err
+			}
+			return errors.New("close failed")
+		}
+		status, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", deviceID, first)
+		if err == nil || !status.Configured || len(values) != 1 || strings.Contains(err.Error(), first) {
+			t.Fatalf("status=%+v err=%v values=%v", status, err, values)
+		}
+		store, openErr := openStoreRead(context.Background(), config.Options{StorageRoot: root})
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		profile, found, profileErr := store.GetSyncProfile(context.Background())
+		store.Close()
+		if profileErr != nil || !found || values[profile.CredentialRef] != first {
+			t.Fatalf("profile=%+v found=%t err=%v values=%v", profile, found, profileErr, values)
+		}
+	})
+	t.Run("put failure closes without mutation", func(t *testing.T) {
+		root, values := t.TempDir(), map[string]string{}
+		runtime := newRuntime(values)
+		putErr := errors.New("put failure")
+		closed := 0
+		runtime.putSecret = func(string, string) error { return putErr }
+		runtime.closeStore = func(store *memory.Store) error { closed++; return store.Close() }
+		_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", deviceID, first)
+		if !errors.Is(err, putErr) || closed != 1 || strings.Contains(err.Error(), first) || len(values) != 0 {
+			t.Fatalf("err=%v closed=%d values=%v", err, closed, values)
+		}
+		store, openErr := openStoreRead(context.Background(), config.Options{StorageRoot: root})
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		_, found, profileErr := store.GetSyncProfile(context.Background())
+		store.Close()
+		if profileErr != nil || found {
+			t.Fatalf("found=%t err=%v", found, profileErr)
+		}
+	})
+}
+
+func TestMemoryConfigureSyncPreservesLegacyAndRejectsForgedRecoveryMarker(t *testing.T) {
+	const device = "550e8400-e29b-41d4-a716-446655440000"
+	token := "vgx1." + device + ".token"
+	t.Run("legacy retained", func(t *testing.T) {
+		root, values := t.TempDir(), map[string]string{"secret://keychain/legacy": "legacy"}
+		paths, err := config.Prepare(context.Background(), config.Options{StorageRoot: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := memory.Open(context.Background(), paths.Database, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = store.ConfigureSyncProfile(context.Background(), memory.SyncProfile{Enabled: true, Endpoint: "https://sync.example.test", DeviceID: device, CredentialRef: "secret://keychain/legacy"})
+		store.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime := NewMemory("cli", false)
+		runtime.putSecret = func(ref, value string) error { values[ref] = value; return nil }
+		runtime.deleteSecret = func(ref string) error { delete(values, ref); return nil }
+		_, err = runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, token)
+		profile := syncProfileForTest(t, root)
+		if err != nil || values["secret://keychain/legacy"] != "legacy" || profile.PreviousCredentialRef != "" || profile.CredentialRef == "secret://keychain/legacy" {
+			t.Fatalf("err=%v profile=%+v values=%v", err, profile, values)
+		}
+	})
+	t.Run("forged marker fails before delete", func(t *testing.T) {
+		root, values := t.TempDir(), map[string]string{}
+		runtime := NewMemory("cli", false)
+		runtime.putSecret = func(ref, value string) error { values[ref] = value; return nil }
+		runtime.deleteSecret = func(ref string) error { delete(values, ref); return nil }
+		if _, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, token); err != nil {
+			t.Fatal(err)
+		}
+		profile := syncProfileForTest(t, root)
+		store, err := memory.Open(context.Background(), filepath.Join(root, "memory.db"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		profile.PreviousCredentialRef = "secret://keychain/forged"
+		_, err = store.ConfigureSyncProfile(context.Background(), profile)
+		store.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		deletes := 0
+		runtime.deleteSecret = func(string) error { deletes++; return nil }
+		_, err = runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, token)
+		if !errors.Is(err, memory.ErrCorrupt) || deletes != 0 {
+			t.Fatalf("err=%v deletes=%d", err, deletes)
+		}
+	})
+}
+
+func syncProfileForTest(t *testing.T, root string) memory.SyncProfile {
+	t.Helper()
+	store, err := openStoreRead(context.Background(), config.Options{StorageRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profile, found, err := store.GetSyncProfile(context.Background())
+	if err != nil || !found {
+		t.Fatalf("profile=%+v found=%t err=%v", profile, found, err)
+	}
+	return profile
 }
 
 type roundTripper func(*http.Request) (*http.Response, error)

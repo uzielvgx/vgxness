@@ -26,14 +26,18 @@ and removes its FTS row. The observation row and relationships remain available
 to `Get` for durable history and persisted-data compatibility, while normal
 `Recall` cannot return forgotten content.
 
-## Schema v11 domains
+## Schema v12 domains
 
-**Implemented:** SQLite schema v11 keeps semantic observations, references,
+**Implemented:** SQLite schema v12 keeps semantic observations, references,
 sessions, and FTS rows isolated from structured SDD changes, artifacts,
 immutable revisions, input bindings, idempotency records, and OpenSpec projection
 evidence. Both domains share canonical workspace/project identity and the same
 transactional database, but SDD content never appears in semantic recall and a
 semantic observation is never treated as an SDD artifact.
+
+Sync enrollment uses a bounded durable previous-credential reference marker to
+finish interrupted keyring cleanup on the next enrollment; it never stores a
+bearer in SQLite.
 
 The default database is `~/.vgxness/memory.db`. Explicit `--storage-root` and
 `--project-local` modes use isolated databases. The OpenCode integration exposes
@@ -43,11 +47,11 @@ execution authority.
 
 ## Upgrade migration caveat
 
-**Implemented:** A read-only database open cannot migrate an older supported schema to v11.
+**Implemented:** A read-only database open cannot migrate an older supported schema to v12.
 Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
 another read operation may therefore report a migration/storage failure. Run one
 write-capable memory or SDD operation to open the database and atomically apply
-v11, then rerun the read-only command. Do not delete or recreate the database;
+v12, then rerun the read-only command. Do not delete or recreate the database;
 the existing data is the migration source and remains authoritative.
 
 Older project-level `memory.db` files are a separate compatibility case. The

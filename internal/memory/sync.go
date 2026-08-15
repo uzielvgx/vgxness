@@ -35,12 +35,31 @@ var (
 )
 
 type SyncProfile struct {
-	Enabled       bool
-	Endpoint      string
-	DeviceID      string
-	CredentialRef string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	Enabled               bool
+	Endpoint              string
+	DeviceID              string
+	CredentialRef         string
+	PreviousCredentialRef string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
+// SyncCredentialStatus is a token-free description of credential availability.
+type SyncCredentialStatus string
+
+const (
+	SyncCredentialNotConfigured SyncCredentialStatus = "not_configured"
+	SyncCredentialAvailable     SyncCredentialStatus = "available"
+	SyncCredentialMissing       SyncCredentialStatus = "missing"
+	SyncCredentialUnavailable   SyncCredentialStatus = "unavailable"
+	SyncCredentialInvalid       SyncCredentialStatus = "invalid"
+)
+
+// SyncConfigurationStatus is a read-only, token-free local enrollment summary.
+type SyncConfigurationStatus struct {
+	Configured bool                 `json:"configured"`
+	Enabled    bool                 `json:"enabled"`
+	Credential SyncCredentialStatus `json:"credential"`
 }
 
 // SyncStatus is a token-free summary of one bounded foreground synchronization.
@@ -791,7 +810,7 @@ func (s *Store) ConfigureSyncProfile(ctx context.Context, profile SyncProfile) (
 	}
 	var enabled int
 	var created, updated int64
-	err = s.db.QueryRowContext(ctx, `INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,?,?,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET enabled=excluded.enabled,endpoint=excluded.endpoint,device_id=excluded.device_id,credential_ref=excluded.credential_ref,updated_at=excluded.updated_at RETURNING enabled,endpoint,device_id,credential_ref,created_at,updated_at`, boolInt(profile.Enabled), profile.Endpoint, profile.DeviceID, profile.CredentialRef, now, now).Scan(&enabled, &profile.Endpoint, &profile.DeviceID, &profile.CredentialRef, &created, &updated)
+	err = s.db.QueryRowContext(ctx, `INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,previous_credential_ref,created_at,updated_at) VALUES(1,?,?,?,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET enabled=excluded.enabled,endpoint=excluded.endpoint,device_id=excluded.device_id,credential_ref=excluded.credential_ref,previous_credential_ref=excluded.previous_credential_ref,updated_at=excluded.updated_at RETURNING enabled,endpoint,device_id,credential_ref,COALESCE(previous_credential_ref,''),created_at,updated_at`, boolInt(profile.Enabled), profile.Endpoint, profile.DeviceID, profile.CredentialRef, nullSyncCredentialRef(profile.PreviousCredentialRef), now, now).Scan(&enabled, &profile.Endpoint, &profile.DeviceID, &profile.CredentialRef, &profile.PreviousCredentialRef, &created, &updated)
 	if err != nil {
 		return SyncProfile{}, writeError(ctx, err)
 	}
@@ -810,7 +829,7 @@ func (s *Store) GetSyncProfile(ctx context.Context) (SyncProfile, bool, error) {
 	var profile SyncProfile
 	var enabled int
 	var created, updated int64
-	err := s.db.QueryRowContext(ctx, `SELECT enabled,endpoint,device_id,credential_ref,created_at,updated_at FROM sync_profiles WHERE singleton=1`).Scan(&enabled, &profile.Endpoint, &profile.DeviceID, &profile.CredentialRef, &created, &updated)
+	err := s.db.QueryRowContext(ctx, `SELECT enabled,endpoint,device_id,credential_ref,COALESCE(previous_credential_ref,''),created_at,updated_at FROM sync_profiles WHERE singleton=1`).Scan(&enabled, &profile.Endpoint, &profile.DeviceID, &profile.CredentialRef, &profile.PreviousCredentialRef, &created, &updated)
 	if err == sql.ErrNoRows {
 		return SyncProfile{}, false, nil
 	}
@@ -2236,7 +2255,27 @@ func validateSyncProfile(profile SyncProfile) (SyncProfile, error) {
 		return SyncProfile{}, fmt.Errorf("%w: invalid sync profile", ErrInvalid)
 	}
 	profile.CredentialRef = credentialRef
+	if profile.PreviousCredentialRef != "" {
+		previous, err := normalizeCredentialReference(profile.PreviousCredentialRef)
+		if err != nil || previous == profile.CredentialRef {
+			return SyncProfile{}, fmt.Errorf("%w: invalid sync profile", ErrInvalid)
+		}
+		profile.PreviousCredentialRef = previous
+	}
 	return profile, nil
+}
+
+func nullSyncCredentialRef(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// ValidateSyncProfile normalizes a profile using the same checks enforced by
+// durable profile storage. It never persists the profile or reads credentials.
+func ValidateSyncProfile(profile SyncProfile) (SyncProfile, error) {
+	return validateSyncProfile(profile)
 }
 
 func normalizeCredentialReference(value string) (string, error) {

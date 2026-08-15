@@ -56,6 +56,38 @@ and port zero are rejected before configuration or credentials are read.
 The retired `--development-allow-insecure-non-loopback` flag rejects `true`;
 explicit `false` remains a no-op only so existing launch commands can migrate.
 
+## Local enrollment and status
+
+Enroll a local client without putting a bearer in command arguments,
+environment variables, or the SQLite database. Supply the bearer only on
+standard input:
+
+```sh
+vgxness memory sync configure \
+  --endpoint https://sync.example.test \
+  --device-id 550e8400-e29b-41d4-a716-446655440000
+```
+
+The command reads the bearer from standard input; enter or pipe it directly
+without placing it in an environment variable or command argument.
+
+The command validates the HTTPS endpoint, device ID, and bearer locally. A
+context-cancellable cross-process lock serializes enrollment. It derives two
+deterministic keyring slots from canonical local storage identity, stores the
+bearer only in the inactive slot, then transactionally switches the SQLite
+profile. Keyring and SQLite are not one atomic transaction: failed persistence
+removes that inactive slot and leaves the prior active credential unchanged.
+Schema v12 records only the opposite deterministic slot as a recovery marker;
+on the next enrollment it compensates or completes cleanup. Cleanup failure
+leaves the marker and blocks further enrollment rather than guessing. Legacy
+credential references are never made markers or auto-deleted; migration leaves
+them retained. No step contacts the remote service.
+
+`vgxness memory sync status [--json]` is also local and read-only. It reports
+whether a profile is configured and whether its keyring credential is
+available, missing, unavailable, or invalid; it never prints the bearer or the
+recovery marker, and it never contacts the remote service.
+
 ## Remote deployment boundary
 
 For remote synchronization, the deployment owner is responsible for TLS

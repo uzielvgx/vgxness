@@ -30,12 +30,26 @@ var canonicalBearer = regexp.MustCompile(`^vgx1\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][
 
 // Memory adapts memory services to the CLI and TUI runtime contracts.
 type Memory struct {
-	producer   string
-	readOnly   bool
-	transport  http.RoundTripper
-	credential func(string) (string, error)
-	hooks      hooks.Emitter
+	producer               string
+	readOnly               bool
+	transport              http.RoundTripper
+	credential             func(string) (string, error)
+	putSecret              func(string, string) error
+	deleteSecret           func(string) error
+	configureProfile       func(context.Context, *memory.Store, memory.SyncProfile) (memory.SyncProfile, error)
+	closeStore             func(*memory.Store) error
+	afterSyncCredentialPut func() error
+	afterSyncProfileCommit func() error
+	hooks                  hooks.Emitter
 }
+
+type syncEnrollmentFailure struct{ cause error }
+
+func (failure syncEnrollmentFailure) Error() string {
+	return "sync profile was not activated; credential compensation failed"
+}
+
+func (failure syncEnrollmentFailure) Unwrap() error { return failure.cause }
 
 // NewMemory creates a memory runtime with the supplied producer and access mode.
 func NewMemory(producer string, readOnly bool) Memory {
@@ -44,7 +58,8 @@ func NewMemory(producer string, readOnly bool) Memory {
 
 // NewMemoryWithHooks adds best-effort lifecycle observation to a memory runtime.
 func NewMemoryWithHooks(producer string, readOnly bool, emitter hooks.Emitter) Memory {
-	return Memory{producer: producer, readOnly: readOnly, transport: http.DefaultTransport, credential: secrets.System().Get, hooks: emitter}
+	store := secrets.System()
+	return Memory{producer: producer, readOnly: readOnly, transport: http.DefaultTransport, credential: store.Get, putSecret: store.Put, deleteSecret: store.Delete, hooks: emitter}
 }
 
 func (runtime Memory) Remember(ctx context.Context, opts config.Options, request memory.Remember) (memory.Entry, error) {
@@ -208,6 +223,177 @@ func (runtime Memory) sync(ctx context.Context, opts config.Options) (memory.Syn
 func validBearer(value, deviceID string) bool {
 	match := canonicalBearer.FindStringSubmatch(value)
 	return match != nil && match[1] == strings.ToLower(deviceID)
+}
+
+// ConfigureSync stores a bearer in the keyring before activating its profile.
+// It validates entirely locally and never contacts the remote endpoint.
+func (runtime Memory) ConfigureSync(ctx context.Context, opts config.Options, endpoint, deviceID, bearer string) (memory.SyncConfigurationStatus, error) {
+	if runtime.readOnly || opts.ProjectLocal {
+		return memory.SyncConfigurationStatus{}, memory.ErrInvalid
+	}
+	profile, err := memory.ValidateSyncProfile(memory.SyncProfile{Enabled: true, Endpoint: endpoint, DeviceID: deviceID, CredentialRef: "secret://keychain/sync/pending"})
+	if err != nil || !validBearer(bearer, profile.DeviceID) {
+		return memory.SyncConfigurationStatus{}, memory.ErrInvalid
+	}
+	paths, err := config.Prepare(ctx, opts)
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	release, err := acquireSyncEnrollmentLock(ctx, paths.Database)
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	defer release()
+	store, err := memory.Open(ctx, paths.Database, nil)
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, err
+	}
+	close := runtime.closeStore
+	if close == nil {
+		close = func(store *memory.Store) error { return store.Close() }
+	}
+	previous, found, err := store.GetSyncProfile(ctx)
+	if err != nil {
+		return memory.SyncConfigurationStatus{}, errors.Join(err, close(store))
+	}
+	firstRef, secondRef := syncEnrollmentCredentialRefs(paths.Database)
+	put := runtime.putSecret
+	if put == nil {
+		put = secrets.System().Put
+	}
+	remove := runtime.deleteSecret
+	if remove == nil {
+		remove = secrets.System().Delete
+	}
+	configure := runtime.configureProfile
+	if configure == nil {
+		configure = func(ctx context.Context, store *memory.Store, profile memory.SyncProfile) (memory.SyncProfile, error) {
+			return store.ConfigureSyncProfile(ctx, profile)
+		}
+	}
+	if found && previous.PreviousCredentialRef != "" {
+		if !validSyncRecoveryMarker(previous.CredentialRef, previous.PreviousCredentialRef, firstRef, secondRef) {
+			return memory.SyncConfigurationStatus{}, errors.Join(memory.ErrCorrupt, close(store))
+		}
+		if err := reconcileSyncEnrollment(ctx, store, previous, remove, configure); err != nil {
+			return memory.SyncConfigurationStatus{}, errors.Join(err, close(store))
+		}
+		previous, found, err = store.GetSyncProfile(ctx)
+		if err != nil {
+			return memory.SyncConfigurationStatus{}, errors.Join(err, close(store))
+		}
+	}
+	inactive := firstRef
+	if found && previous.CredentialRef == firstRef {
+		inactive = secondRef
+	}
+	if err := deleteSyncCredential(remove, inactive); err != nil {
+		return memory.SyncConfigurationStatus{}, errors.Join(err, close(store))
+	}
+	profile.CredentialRef = inactive
+	priorWasSlot := found && (previous.CredentialRef == firstRef || previous.CredentialRef == secondRef)
+	if priorWasSlot {
+		profile.PreviousCredentialRef = previous.CredentialRef
+	}
+	if err := put(profile.CredentialRef, bearer); err != nil {
+		return memory.SyncConfigurationStatus{}, errors.Join(err, close(store))
+	}
+	if runtime.afterSyncCredentialPut != nil {
+		if err := runtime.afterSyncCredentialPut(); err != nil {
+			return memory.SyncConfigurationStatus{}, errors.Join(err, close(store))
+		}
+	}
+	configured, mutationErr := configure(ctx, store, profile)
+	if mutationErr != nil {
+		compensationErr := deleteSyncCredential(remove, profile.CredentialRef)
+		closeErr := close(store)
+		if compensationErr != nil {
+			return memory.SyncConfigurationStatus{}, syncEnrollmentFailure{cause: errors.Join(mutationErr, compensationErr, closeErr)}
+		}
+		return memory.SyncConfigurationStatus{}, errors.Join(mutationErr, closeErr)
+	}
+	if runtime.afterSyncProfileCommit != nil {
+		if err := runtime.afterSyncProfileCommit(); err != nil {
+			return memory.SyncConfigurationStatus{Configured: true, Enabled: configured.Enabled, Credential: memory.SyncCredentialAvailable}, errors.Join(err, close(store))
+		}
+	}
+	if priorWasSlot {
+		if err := deleteSyncCredential(remove, previous.CredentialRef); err != nil {
+			return memory.SyncConfigurationStatus{Configured: true, Enabled: configured.Enabled, Credential: memory.SyncCredentialAvailable}, errors.Join(err, close(store))
+		}
+		configured.PreviousCredentialRef = ""
+		if _, err := configure(ctx, store, configured); err != nil {
+			return memory.SyncConfigurationStatus{Configured: true, Enabled: configured.Enabled, Credential: memory.SyncCredentialAvailable}, errors.Join(err, close(store))
+		}
+	}
+	closeErr := close(store)
+	status := memory.SyncConfigurationStatus{Configured: true, Enabled: configured.Enabled, Credential: memory.SyncCredentialAvailable}
+	return status, closeErr
+}
+
+func validSyncRecoveryMarker(active, previous, first, second string) bool {
+	return active == first && previous == second || active == second && previous == first
+}
+
+func deleteSyncCredential(remove func(string) error, reference string) error {
+	err := remove(reference)
+	if errors.Is(err, secrets.ErrMissing) {
+		return nil
+	}
+	return err
+}
+
+func reconcileSyncEnrollment(ctx context.Context, store *memory.Store, profile memory.SyncProfile, remove func(string) error, configure func(context.Context, *memory.Store, memory.SyncProfile) (memory.SyncProfile, error)) error {
+	if err := deleteSyncCredential(remove, profile.PreviousCredentialRef); err != nil {
+		return err
+	}
+	profile.PreviousCredentialRef = ""
+	_, err := configure(ctx, store, profile)
+	return err
+}
+
+// SyncStatus reports local enrollment state without opening a network connection
+// or returning a credential value.
+func (runtime Memory) SyncStatus(ctx context.Context, opts config.Options) (memory.SyncConfigurationStatus, error) {
+	status := memory.SyncConfigurationStatus{Credential: memory.SyncCredentialNotConfigured}
+	if opts.ProjectLocal {
+		return status, nil
+	}
+	paths, err := config.PathsFor(opts)
+	if err != nil {
+		return status, err
+	}
+	if _, err := os.Stat(paths.Database); errors.Is(err, os.ErrNotExist) {
+		return status, nil
+	} else if err != nil {
+		return status, err
+	}
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return status, err
+	}
+	defer store.Close()
+	profile, found, err := store.GetSyncProfile(ctx)
+	if err != nil || !found {
+		return status, err
+	}
+	status.Configured, status.Enabled = true, profile.Enabled
+	get := runtime.credential
+	if get == nil {
+		get = secrets.System().Get
+	}
+	credential, err := get(profile.CredentialRef)
+	switch {
+	case err == nil && validBearer(credential, profile.DeviceID):
+		status.Credential = memory.SyncCredentialAvailable
+	case err == nil:
+		status.Credential = memory.SyncCredentialInvalid
+	case errors.Is(err, secrets.ErrMissing):
+		status.Credential = memory.SyncCredentialMissing
+	default:
+		status.Credential = memory.SyncCredentialUnavailable
+	}
+	return status, nil
 }
 
 type syncRemote struct {
