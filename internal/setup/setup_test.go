@@ -267,7 +267,7 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 	if !strings.Contains(plan.Steps[2].Title, "plugin y la skill") || !strings.Contains(plan.Steps[2].Explanation, "v1-v10") || !strings.Contains(plan.Steps[2].Explanation, "vgxness.ts") || !strings.Contains(plan.Steps[2].Explanation, "vgxness-autonomous-stacked-pr") {
 		t.Fatalf("step 3 does not identify safe legacy retirement: %#v", plan.Steps[2])
 	}
-	if !strings.Contains(plan.Steps[3].Title, "artefactos del proveedor") || !strings.Contains(plan.Steps[3].Explanation, "15 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[4].Explanation, "18 skills y 42 archivos") || !strings.Contains(plan.Steps[4].Explanation, "end-to-end-testing y sdd-lifecycle") || !strings.Contains(plan.Steps[4].Explanation, "no pertenecen a OpenCode") {
+	if !strings.Contains(plan.Steps[3].Title, "artefactos del proveedor") || !strings.Contains(plan.Steps[3].Explanation, "15 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[4].Explanation, "19 skills y 47 archivos") || !strings.Contains(plan.Steps[4].Explanation, "memory-sync y sdd-lifecycle") || !strings.Contains(plan.Steps[4].Explanation, "no pertenecen a OpenCode") {
 		t.Fatalf("steps 4-5 do not describe model and provider ownership accurately: step4=%#v step5=%#v", plan.Steps[3], plan.Steps[4])
 	}
 }

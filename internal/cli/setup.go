@@ -150,7 +150,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	if result.Integration.RetainedPredecessorCount != 0 {
 		fmt.Fprintf(stdout, "Recuperación retenida: %d anclas en %s\n", result.Integration.RetainedPredecessorCount, terminalSafe(result.Integration.RetainedPredecessorPath))
 	}
-	fmt.Fprintf(stdout, "Paso 5: catálogo global de %d archivos skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + sdd-lifecycle verificado en %s\n", result.Plan.Skills.FileCount, terminalSafe(result.Plan.Skills.Path))
+	fmt.Fprintf(stdout, "Paso 5: catálogo global de %d archivos skills-creator + stacked-pr + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + memory-sync + sdd-lifecycle verificado en %s\n", result.Plan.Skills.FileCount, terminalSafe(result.Plan.Skills.Path))
 	fmt.Fprintf(stdout, "Paso 6: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
 	if result.Integration.RetainedPredecessorCount == 0 {
 		fmt.Fprintln(stdout, "Paso 7: no fue necesaria recuperación.")

@@ -169,12 +169,17 @@ func bundledCatalog() (catalog, error) {
 	if err != nil {
 		return catalog{}, err
 	}
+	memorySync := skillDefinition{name: "memory-sync", source: "memory-sync"}
+	memorySync.files, err = bundledFiles(memorySync.source)
+	if err != nil {
+		return catalog{}, err
+	}
 	sddLifecycle := skillDefinition{name: "sdd-lifecycle", source: "sdd-lifecycle"}
 	sddLifecycle.files, err = bundledFiles(sddLifecycle.source)
 	if err != nil {
 		return catalog{}, err
 	}
-	return catalog{definitions: []skillDefinition{creator, stackedPR, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary, documentationStrategy, productRequirements, softwareArchitectureDocs, userDocumentation, apiDocumentation, qualityTestDocumentation, operationsRunbooks, governanceComplianceDocs, releaseLifecycleDocs, endToEndTesting, sddLifecycle}}, nil
+	return catalog{definitions: []skillDefinition{creator, stackedPR, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary, documentationStrategy, productRequirements, softwareArchitectureDocs, userDocumentation, apiDocumentation, qualityTestDocumentation, operationsRunbooks, governanceComplianceDocs, releaseLifecycleDocs, endToEndTesting, memorySync, sddLifecycle}}, nil
 }
 
 func validSkillName(name string) bool {
