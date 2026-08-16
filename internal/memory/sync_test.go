@@ -32,7 +32,7 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 14, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 15, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
@@ -125,7 +125,7 @@ func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 14, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 15, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var outbox, claims int
@@ -207,7 +207,7 @@ func TestSyncOutboxClaimsConstraintsCascadeAndHealth(t *testing.T) {
 func TestSyncOutboxClaimsMigrationFreshSchema(t *testing.T) {
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 14, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 15, "health=%d err=%v", version, err)
 	var table, index string
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='table' AND name='sync_outbox_claims'`).Scan(&table))
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='index' AND name='sync_outbox_claims_lease_idx'`).Scan(&index))
@@ -230,7 +230,7 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 14, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 15, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var count int
@@ -1138,6 +1138,174 @@ func TestTranslateSyncMutationsUsesDeterministicPortableIDs(t *testing.T) {
 	testutil.Require(t, errors.Is(err, ErrCorrupt), "tampered session err=%v", err)
 }
 
+func TestAdoptSyncPortableIdentityRetainsInboundWireID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store := openPath(t, path)
+	ctx := context.Background()
+	portableProject, wireID := "550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440302"
+	deviceA, deviceB := "550e8400-e29b-41d4-a716-446655440099", "550e8400-e29b-41d4-a716-446655440098"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES('550e8400-e29b-41d4-a716-446655440001','local','hash','test','now'); INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440099','secret://keychain/sync/test',1,1)`)
+	testutil.NoError(t, err)
+	local, err := store.AdoptSyncPortableIdentity(ctx, portableProject, "local", syncservice.RecordKindSession, wireID)
+	testutil.NoError(t, err)
+	testutil.NoError(t, store.Close())
+	store = openPath(t, path)
+	defer store.Close()
+	_, err = store.db.Exec(`UPDATE sync_profiles SET device_id=?`, deviceB)
+	testutil.NoError(t, err)
+	again, err := store.AdoptSyncPortableIdentity(ctx, portableProject, "local", syncservice.RecordKindSession, wireID)
+	testutil.Require(t, err == nil && again == local, "local=%q again=%q err=%v", local, again, err)
+	got, found, err := store.LocalSyncPortableIdentity(ctx, portableProject, syncservice.RecordKindSession, wireID)
+	testutil.Require(t, err == nil && found && got == local, "local=%q got=%q found=%t err=%v", local, got, found, err)
+	var origin, adopter string
+	testutil.NoError(t, store.db.QueryRow(`SELECT i.origin_device_id,a.adopting_device_id FROM sync_portable_identities i JOIN sync_portable_identity_adoptions a USING(portable_project_id,record_kind,local_id)`).Scan(&origin, &adopter))
+	_, err = store.db.Exec(`INSERT INTO sessions(id,project_id,sync_version) VALUES(?, 'local', 0)`, local)
+	testutil.NoError(t, err)
+	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440303", RecordID: local, RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: local, ProjectID: "local"}}
+	translated, err := store.TranslateSyncMutations(ctx, portableProject, "local", []syncservice.Mutation{mutation})
+	testutil.Require(t, err == nil && origin == deviceA && adopter == deviceA && len(translated) == 1 && translated[0].RecordID == wireID, "translated=%+v origin=%q adopter=%q err=%v", translated, origin, adopter, err)
+}
+
+func TestAdoptSyncPortableIdentityFailsClosedAndIsIdempotent(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	wire := "550e8400-e29b-41d4-a716-446655440302"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local',0),('other',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?); INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440099','secret://keychain/sync/test',1,1)`, project, "local", "hash", "test", "now")
+	testutil.NoError(t, err)
+	local, err := store.AdoptSyncPortableIdentity(ctx, project, "local", syncservice.RecordKindObservation, wire)
+	again, retryErr := store.AdoptSyncPortableIdentity(ctx, project, "local", syncservice.RecordKindObservation, wire)
+	testutil.Require(t, err == nil && retryErr == nil && local == again, "local=%q again=%q errors=%v/%v", local, again, err, retryErr)
+	_, err = store.AdoptSyncPortableIdentity(ctx, project, "other", syncservice.RecordKindObservation, wire)
+	testutil.Require(t, errors.Is(err, ErrConflict), "cross-project err=%v", err)
+	_, err = store.db.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE sync_portable_identity_adoptions SET portable_id='550e8400-e29b-41d4-a716-446655440303'; PRAGMA ignore_check_constraints=OFF`)
+	testutil.NoError(t, err)
+	_, _, err = store.LocalSyncPortableIdentity(ctx, project, syncservice.RecordKindObservation, wire)
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "tampered adoption err=%v", err)
+}
+
+func TestAdoptSyncPortableIdentityRejectsCollisionsAndDeviceMismatch(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	projectA, projectB, wire := "550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002", "550e8400-e29b-41d4-a716-446655440302"
+	deviceA, deviceB := "550e8400-e29b-41d4-a716-446655440099", "550e8400-e29b-41d4-a716-446655440098"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local-a',0),('local-b',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?),(?,?,?,?,?); INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test',?,'secret://keychain/sync/test',1,1)`, projectA, "local-a", "hash-a", "test", "now", projectB, "local-b", "hash-b", "test", "now", deviceA)
+	testutil.NoError(t, err)
+	local := adoptedSyncLocalID(syncservice.RecordKindSession, wire)
+	_, err = store.db.Exec(`INSERT INTO sessions(id,project_id,sync_version) VALUES(?,'local-a',0)`, local)
+	testutil.NoError(t, err)
+	_, err = store.AdoptSyncPortableIdentity(context.Background(), projectA, "local-a", syncservice.RecordKindSession, wire)
+	testutil.Require(t, errors.Is(err, ErrConflict), "local collision err=%v", err)
+	var mappings, adoptions int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&mappings))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identity_adoptions`).Scan(&adoptions))
+	testutil.Require(t, mappings == 0 && adoptions == 0, "partial local collision rows=%d/%d", mappings, adoptions)
+	_, err = store.AdoptSyncPortableIdentity(context.Background(), projectA, "local-a", syncservice.RecordKindSession, wire)
+	testutil.Require(t, errors.Is(err, ErrConflict), "occupied retry err=%v", err)
+	_, err = store.db.Exec(`DELETE FROM sessions WHERE id=?`, local)
+	testutil.NoError(t, err)
+	_, err = store.AdoptSyncPortableIdentity(context.Background(), projectA, "local-a", syncservice.RecordKindSession, wire)
+	testutil.NoError(t, err)
+	_, err = store.AdoptSyncPortableIdentity(context.Background(), projectB, "local-b", syncservice.RecordKindSession, wire)
+	testutil.Require(t, errors.Is(err, ErrConflict), "cross-project wire err=%v", err)
+	_, err = store.AdoptSyncPortableIdentity(context.Background(), projectA, "local-a", syncservice.RecordKindObservation, wire)
+	testutil.Require(t, errors.Is(err, ErrConflict), "cross-kind wire err=%v", err)
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&mappings))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identity_adoptions`).Scan(&adoptions))
+	testutil.Require(t, mappings == 1 && adoptions == 1, "partial wire collision rows=%d/%d", mappings, adoptions)
+	_, err = store.db.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE sync_portable_identity_adoptions SET adopting_device_id=?; PRAGMA ignore_check_constraints=OFF`, deviceB)
+	testutil.NoError(t, err)
+	_, _, err = store.LocalSyncPortableIdentity(context.Background(), projectA, syncservice.RecordKindSession, wire)
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "device mismatch err=%v", err)
+}
+
+func TestAdoptSyncPortableIdentityRejectsInvalidProfileWithoutWrites(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		mutate func(t *testing.T, store *Store)
+		want   error
+	}{
+		{"absent", func(t *testing.T, store *Store) {
+			_, err := store.db.Exec(`DELETE FROM sync_profiles`)
+			testutil.NoError(t, err)
+		}, ErrNotFound},
+		{"disabled", func(t *testing.T, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_profiles SET enabled=0`)
+			testutil.NoError(t, err)
+		}, ErrConflict},
+		{"invalid enabled", func(t *testing.T, store *Store) {
+			_, err := store.db.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE sync_profiles SET enabled=2; PRAGMA ignore_check_constraints=OFF`)
+			testutil.NoError(t, err)
+		}, ErrCorrupt},
+		{"endpoint", func(t *testing.T, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_profiles SET endpoint='http://example.test'`)
+			testutil.NoError(t, err)
+		}, ErrCorrupt},
+		{"credential", func(t *testing.T, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_profiles SET credential_ref='not-a-reference'`)
+			testutil.NoError(t, err)
+		}, ErrCorrupt},
+		{"previous credential", func(t *testing.T, store *Store) {
+			_, err := store.db.Exec(`UPDATE sync_profiles SET previous_credential_ref='not-a-reference'`)
+			testutil.NoError(t, err)
+		}, ErrCorrupt},
+		{"timestamps", func(t *testing.T, store *Store) {
+			_, err := store.db.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE sync_profiles SET updated_at=0; PRAGMA ignore_check_constraints=OFF`)
+			testutil.NoError(t, err)
+		}, ErrCorrupt},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			project := "550e8400-e29b-41d4-a716-446655440001"
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES('550e8400-e29b-41d4-a716-446655440001','local','hash','test','now'); INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440099','secret://keychain/sync/test',1,1)`)
+			testutil.NoError(t, err)
+			scenario.mutate(t, store)
+			_, err = store.AdoptSyncPortableIdentity(context.Background(), project, "local", syncservice.RecordKindSession, "550e8400-e29b-41d4-a716-446655440302")
+			var mappings, adoptions int
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&mappings))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identity_adoptions`).Scan(&adoptions))
+			testutil.Require(t, errors.Is(err, scenario.want) && mappings == 0 && adoptions == 0, "err=%v rows=%d/%d", err, mappings, adoptions)
+		})
+	}
+}
+
+func TestAdoptSyncPortableIdentityTwoHandleRace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	first := openPath(t, path)
+	defer first.Close()
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	wire := "550e8400-e29b-41d4-a716-446655440302"
+	_, err := first.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?); INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440099','secret://keychain/sync/test',1,1)`, project, "local", "hash", "test", "now")
+	testutil.NoError(t, err)
+	second := openPath(t, path)
+	defer second.Close()
+	start := make(chan struct{})
+	results := make(chan struct {
+		local string
+		err   error
+	}, 2)
+	for _, candidate := range []*Store{first, second} {
+		go func(candidate *Store) {
+			<-start
+			local, err := candidate.AdoptSyncPortableIdentity(context.Background(), project, "local", syncservice.RecordKindSession, wire)
+			results <- struct {
+				local string
+				err   error
+			}{local, err}
+		}(candidate)
+	}
+	close(start)
+	left, right := <-results, <-results
+	var mappings, adoptions int
+	var origin, adopter string
+	testutil.NoError(t, first.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&mappings))
+	testutil.NoError(t, first.db.QueryRow(`SELECT count(*) FROM sync_portable_identity_adoptions`).Scan(&adoptions))
+	testutil.NoError(t, first.db.QueryRow(`SELECT i.origin_device_id,a.adopting_device_id FROM sync_portable_identities i JOIN sync_portable_identity_adoptions a USING(portable_project_id,record_kind,local_id)`).Scan(&origin, &adopter))
+	testutil.Require(t, left.err == nil && right.err == nil && left.local == right.local && mappings == 1 && adoptions == 1 && origin == adopter, "left=%+v right=%+v mappings=%d adoptions=%d origin=%q adopter=%q", left, right, mappings, adoptions, origin, adopter)
+}
+
 func TestTranslateSyncMutationTombstoneRequiresRetainedIdentity(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
@@ -1168,8 +1336,13 @@ func TestTranslateSyncMutationTombstoneRequiresRetainedIdentity(t *testing.T) {
 	var retained string
 	testutil.NoError(t, store.db.QueryRow(`SELECT portable_id FROM sync_portable_identities WHERE portable_project_id=?`, project).Scan(&retained))
 	testutil.Require(t, retained == "550e8400-e29b-41d4-a716-446655440098", "portable overwritten=%q", retained)
+	var mappingsBefore, adoptionsBefore, mappingsAfter, adoptionsAfter int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&mappingsBefore))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identity_adoptions`).Scan(&adoptionsBefore))
 	_, err = store.TranslateSyncMutations(ctx, project, "project", []syncservice.Mutation{{MutationID: "550e8400-e29b-41d4-a716-446655440305", RecordID: "missing", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: fixedTime}}})
-	testutil.Require(t, errors.Is(err, ErrNotFound), "err=%v", err)
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&mappingsAfter))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identity_adoptions`).Scan(&adoptionsAfter))
+	testutil.Require(t, errors.Is(err, ErrNotFound) && mappingsBefore == mappingsAfter && adoptionsBefore == adoptionsAfter, "err=%v mappings=%d/%d adoptions=%d/%d", err, mappingsBefore, mappingsAfter, adoptionsBefore, adoptionsAfter)
 }
 
 func TestTranslateSyncMutationsScopesSameLocalIDByPortableProject(t *testing.T) {
@@ -1784,7 +1957,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 14 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 15 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {

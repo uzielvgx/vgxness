@@ -51,6 +51,9 @@ var schemaV13 string
 //go:embed migrations/014_sync_portable_identities.sql
 var schemaV14 string
 
+//go:embed migrations/015_sync_portable_identity_adoptions.sql
+var schemaV15 string
+
 type migration struct {
 	version                     int
 	sql                         string
@@ -72,6 +75,7 @@ var migrations = []migration{
 	{version: 12, sql: schemaV12},
 	{version: 13, sql: schemaV13},
 	{version: 14, sql: schemaV14},
+	{version: 15, sql: schemaV15},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
