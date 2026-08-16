@@ -14,3 +14,7 @@ owner-global, so this slice deliberately performs no pull/bootstrap and never
 advances the global cursor. The result describes push-only completion.
 The typed result mode is `project_push_only`; it means only this bounded local
 project push was attempted, never bidirectional completion.
+
+## Portable wire identities
+
+Project-scoped push translates a claimed mutation only at the outbound transport boundary. The stored outbox payload, local record IDs, mutation IDs, and base versions remain unchanged. A durable mapping derives portable session and observation UUIDs from the portable project marker plus the local kind and ID; tombstones require the retained observation mapping. `resolve` mutations are unsupported and fail before any remote call. Pull and bootstrap identity translation remain future work.

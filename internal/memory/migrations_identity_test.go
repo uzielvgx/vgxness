@@ -33,11 +33,20 @@ func TestProjectIdentityMigrationFromV12Fixture(t *testing.T) {
 	testutil.NoError(t, store.Close())
 	db, err := sql.Open("sqlite", path)
 	testutil.NoError(t, err)
-	_, err = db.Exec(`DROP TABLE portable_project_identities; PRAGMA user_version=12`)
+	_, err = db.Exec(`DROP TABLE sync_portable_identities; DROP TABLE portable_project_identities; PRAGMA user_version=12`)
 	testutil.NoError(t, err)
 	testutil.NoError(t, db.Close())
 	store = openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 13, "version=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 14, "version=%d err=%v", version, err)
+}
+
+func TestHealthRejectsWeakenedSyncPortableIdentitySchema(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	_, err := store.db.Exec(`DROP INDEX sync_portable_identities_inverse_idx`)
+	testutil.NoError(t, err)
+	_, err = store.Health(context.Background())
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "Health() error=%v", err)
 }

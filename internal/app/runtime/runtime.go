@@ -271,7 +271,7 @@ func (runtime Memory) sync(ctx context.Context, opts config.Options) (memory.Syn
 		return memory.SyncResult{Status: memory.SyncStatusUnavailable}, nil
 	}
 	remote := syncRemote{client: client, credential: credential}
-	return runForegroundProjectSync(ctx, store, remote, projectID)
+	return runForegroundProjectSync(ctx, store, remote, projectID, portableID)
 }
 
 func validBearer(value, deviceID string) bool {
@@ -564,25 +564,16 @@ type foregroundStore interface {
 
 type foregroundProjectStore interface {
 	ClaimDueSyncOutboxForProject(context.Context, time.Duration, int, string) ([]memory.SyncOutboxClaim, error)
+	TranslateSyncMutations(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error)
 	ApplySyncPushResult(context.Context, string, string, syncservice.Result) error
 	MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error
 }
 
 // runForegroundProjectSync pushes one locally bound project's outbox only.
 // Owner-global pull cursors and bootstrap state are intentionally untouched.
-func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore, remote foregroundRemote, project string) (memory.SyncResult, error) {
+func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore, remote foregroundRemote, project, portableProject string) (memory.SyncResult, error) {
 	result := memory.SyncResult{Mode: memory.SyncModeProjectPushOnly, Status: memory.SyncStatusSynced}
-	capabilityCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
-	err := remote.Capabilities(capabilityCtx)
-	cancel()
-	if err != nil {
-		if ctx.Err() != nil {
-			result.Status = memory.SyncStatusPartial
-			return result, ctx.Err()
-		}
-		result.Status = syncStatusForError(err)
-		return result, nil
-	}
+	capabilitiesChecked := false
 	for batch := 0; batch < foregroundSyncBatches; batch++ {
 		claims, err := store.ClaimDueSyncOutboxForProject(ctx, foregroundSyncLease, 16, project)
 		if err != nil {
@@ -596,6 +587,28 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 		mutations := make([]syncservice.Mutation, len(claims))
 		for index := range claims {
 			mutations[index] = claims[index].Mutation
+		}
+		mutations, err = store.TranslateSyncMutations(ctx, portableProject, project, mutations)
+		if err != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, err
+		}
+		if !capabilitiesChecked {
+			capabilityCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+			err = remote.Capabilities(capabilityCtx)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					result.Status = memory.SyncStatusPartial
+					return result, ctx.Err()
+				}
+				result.Status = syncStatusForError(err)
+				if result.Status == memory.SyncStatusUnreachable && !markClaimsRetry(ctx, store, claims, &result) {
+					result.Status = memory.SyncStatusPartial
+				}
+				return result, nil
+			}
+			capabilitiesChecked = true
 		}
 		pushCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
 		results, pushErr := remote.Push(pushCtx, mutations)
