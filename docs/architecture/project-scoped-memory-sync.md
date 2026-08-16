@@ -9,12 +9,18 @@ one existing local project with both a strict marker and its persisted portable
 binding. The check precedes every remote capability, discovery, push, or pull
 call. The foreground operation claims and sends only outbox rows related to
 that project (project, sessions, and observations); other projects' rows and
-their conflict state remain untouched. Protocol history and cursors are
-owner-global, so this slice deliberately performs no pull/bootstrap and never
-advances the global cursor. The result describes push-only completion.
-The typed result mode is `project_push_only`; it means only this bounded local
-project push was attempted, never bidirectional completion.
+their conflict state remain untouched. After its successful (including empty)
+push phase, it discovers the owner history, reads only that portable project's
+durable cursor, and pulls bounded sparse pages using the exact portable
+selector. Each page is applied atomically before the next cursor is requested,
+so a retry resumes at the last committed page. Push rejections and conflicts
+block the pull phase.
+
+Project cursors and inbox rows are separate from owner-global pull state: this
+flow never calls global pull/bootstrap or reads or advances `sync_cursor`.
+The typed result mode is `project_bidirectional`; it means this bounded local
+project push and pull were attempted without synchronizing other projects.
 
 ## Portable wire identities
 
-Project-scoped push translates a claimed mutation only at the outbound transport boundary. The stored outbox payload, local record IDs, mutation IDs, and base versions remain unchanged. Ordinary mappings derive outbound portable session and observation UUIDs from the portable project marker plus the local kind and ID; tombstones require the retained observation mapping. An adopted mapping takes precedence and reuses its exact received inbound wire UUID, with adopting-device/time provenance. The inbound foundation does not pull or materialize records, support reference-before-target dependencies, advance cursors, or change runtime/API behavior. `resolve` mutations are unsupported and fail before any remote call. Pull and bootstrap identity translation remain future work.
+Project-scoped push translates a claimed mutation only at the outbound transport boundary. The stored outbox payload, local record IDs, mutation IDs, and base versions remain unchanged. Ordinary mappings derive outbound portable session and observation UUIDs from the portable project marker plus the local kind and ID; tombstones require the retained observation mapping. An adopted mapping takes precedence and reuses its exact received inbound wire UUID, with adopting-device/time provenance. Project pull materializes records through those portable identity mappings. It does not support reference-before-target dependencies, global bootstrap, or global cursor advancement. `resolve` mutations are unsupported and fail before any remote call.

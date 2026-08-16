@@ -16,6 +16,7 @@ import (
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/secrets"
+	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncclient"
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
@@ -536,6 +537,11 @@ func (remote syncRemote) Pull(ctx context.Context, cursor syncservice.Cursor, li
 	return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: page.HistoryID, Position: page.Position, Watermark: page.Watermark}, HasMore: page.HasMore, Changes: page.Changes}, err
 }
 
+func (remote syncRemote) PullProject(ctx context.Context, cursor syncservice.Cursor, project string, limit int) (syncservice.PullPage, error) {
+	page, err := remote.client.PullProject(ctx, remote.credential, cursor, project, limit)
+	return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: page.HistoryID, Position: page.Position, Watermark: page.Watermark}, HasMore: page.HasMore, Changes: page.Changes}, err
+}
+
 func (remote syncRemote) Push(ctx context.Context, mutations []syncservice.Mutation) ([]syncservice.Result, error) {
 	return remote.client.Push(ctx, remote.credential, mutations)
 }
@@ -549,6 +555,7 @@ type foregroundRemote interface {
 	memory.BootstrapRemote
 	Capabilities(context.Context) error
 	Push(context.Context, []syncservice.Mutation) ([]syncservice.Result, error)
+	PullProject(context.Context, syncservice.Cursor, string, int) (syncservice.PullPage, error)
 }
 
 type foregroundStore interface {
@@ -567,12 +574,18 @@ type foregroundProjectStore interface {
 	TranslateSyncMutations(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error)
 	ApplySyncPushResult(context.Context, string, string, syncservice.Result) error
 	MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error
+	ProjectPullCursor(context.Context, string, string) (syncservice.Cursor, error)
+	ApplyProjectPulledPage(context.Context, string, string, syncservice.PullPage) error
 }
 
-// runForegroundProjectSync pushes one locally bound project's outbox only.
-// Owner-global pull cursors and bootstrap state are intentionally untouched.
+// runForegroundProjectSync synchronizes one locally bound project without
+// touching owner-global pull cursors or bootstrap state.
 func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore, remote foregroundRemote, project, portableProject string) (memory.SyncResult, error) {
-	result := memory.SyncResult{Mode: memory.SyncModeProjectPushOnly, Status: memory.SyncStatusSynced}
+	result := memory.SyncResult{Mode: memory.SyncModeProjectBidirectional, Status: memory.SyncStatusSynced}
+	if err := ctx.Err(); err != nil {
+		result.Status = memory.SyncStatusPartial
+		return result, err
+	}
 	capabilitiesChecked := false
 	for batch := 0; batch < foregroundSyncBatches; batch++ {
 		claims, err := store.ClaimDueSyncOutboxForProject(ctx, foregroundSyncLease, 16, project)
@@ -581,7 +594,7 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 			return result, err
 		}
 		if len(claims) == 0 {
-			return result, nil
+			return runForegroundProjectPull(ctx, store, remote, project, portableProject, result)
 		}
 		result.Batches++
 		mutations := make([]syncservice.Mutation, len(claims))
@@ -673,6 +686,68 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 		if blocking {
 			return result, nil
 		}
+	}
+	result.Status = memory.SyncStatusPartial
+	return result, nil
+}
+
+func runForegroundProjectPull(ctx context.Context, store foregroundProjectStore, remote foregroundRemote, project, portableProject string, result memory.SyncResult) (memory.SyncResult, error) {
+	if err := ctx.Err(); err != nil {
+		result.Status = memory.SyncStatusPartial
+		return result, err
+	}
+	discoverCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+	discovery, err := remote.Discover(discoverCtx)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, ctx.Err()
+		}
+		result.Status = syncStatusForError(err)
+		return result, nil
+	}
+	if syncservice.ValidateDiscovery(discovery) != nil {
+		result.Status = memory.SyncStatusIncompatible
+		return result, nil
+	}
+	cursor, err := store.ProjectPullCursor(ctx, portableProject, discovery.HistoryID)
+	if err != nil {
+		result.Status = memory.SyncStatusPartial
+		return result, err
+	}
+	for pull := 0; pull < foregroundSyncBatches; pull++ {
+		if err := ctx.Err(); err != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, err
+		}
+		pullCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+		page, pullErr := remote.PullProject(pullCtx, cursor, portableProject, syncapi.DefaultPullLimit)
+		cancel()
+		if pullErr != nil {
+			if ctx.Err() != nil {
+				result.Status = memory.SyncStatusPartial
+				return result, ctx.Err()
+			}
+			result.Status = syncStatusForError(pullErr)
+			return result, nil
+		}
+		if page.HasMore && page.Cursor.Position <= cursor.Position {
+			result.Status = memory.SyncStatusPartial
+			return result, nil
+		}
+		if err = store.ApplyProjectPulledPage(ctx, portableProject, project, page); err != nil {
+			if ctx.Err() != nil {
+				result.Status = memory.SyncStatusPartial
+				return result, ctx.Err()
+			}
+			result.Status = memory.SyncStatusPartial
+			return result, err
+		}
+		if !page.HasMore {
+			return result, nil
+		}
+		cursor = page.Cursor
 	}
 	result.Status = memory.SyncStatusPartial
 	return result, nil
