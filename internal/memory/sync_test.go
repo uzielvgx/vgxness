@@ -1082,6 +1082,41 @@ func TestClaimDueSyncOutboxLeasesOldestAndRotatesExpiredToken(t *testing.T) {
 	testutil.Require(t, err == nil && len(rotated) == 1 && string(rotatedPayload) == string(firstPayload) && rotated[0].ClaimToken != claims[0].ClaimToken && rotated[0].FirstClaimToken == claims[0].ClaimToken && rotated[0].FirstClaimedAt.Equal(fixedTime), "rotated=%+v err=%v", rotated, err)
 }
 
+func TestClaimDueSyncOutboxForProjectDoesNotLeaseOtherProjectRelations(t *testing.T) {
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	ctx := context.Background()
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('a',0),('b',0);
+		INSERT INTO sessions(id,project_id,sync_version) VALUES('a-session','a',0),('b-session','b',0);
+		INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES
+		('a-observation','a','project','learning','a','test','active',?,?,0),
+		('b-observation','b','project','learning','b','test','active',?,?,0)`, fixedTime.UnixNano(), fixedTime.UnixNano(), fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	mutations := []syncservice.Mutation{
+		syncMutation("550e8400-e29b-41d4-a716-446655440301", "a"),
+		{MutationID: "550e8400-e29b-41d4-a716-446655440302", RecordID: "a-session", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "a-session", ProjectID: "a"}},
+		pulledObservationMutation("a-observation", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "a", nil),
+		syncMutation("550e8400-e29b-41d4-a716-446655440304", "b"),
+		{MutationID: "550e8400-e29b-41d4-a716-446655440305", RecordID: "b-session", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "b-session", ProjectID: "b"}},
+		pulledObservationMutation("b-observation", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "b", nil),
+	}
+	mutations[2].MutationID = "550e8400-e29b-41d4-a716-446655440303"
+	mutations[2].Observation.ProjectID = "a"
+	mutations[5].MutationID = "550e8400-e29b-41d4-a716-446655440306"
+	mutations[5].Observation.ProjectID = "b"
+	for _, mutation := range mutations {
+		enqueueMutation(t, store, mutation)
+	}
+	claims, err := store.ClaimDueSyncOutboxForProject(ctx, time.Minute, 16, "a")
+	testutil.Require(t, err == nil && len(claims) == 3, "claims=%+v err=%v", claims, err)
+	for _, claim := range claims {
+		testutil.Require(t, claim.Mutation.RecordID != "b" && claim.Mutation.RecordID != "b-session" && claim.Mutation.RecordID != "b-observation", "claimed project b mutation=%+v", claim)
+	}
+	var bClaims int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox_claims c JOIN sync_outbox o ON o.mutation_id=c.mutation_id WHERE o.record_id IN ('b','b-session','b-observation')`).Scan(&bClaims))
+	testutil.Require(t, bClaims == 0, "project b claims=%d", bClaims)
+}
+
 func TestClaimDueSyncOutboxCannotBePreemptedByCallerClock(t *testing.T) {
 	store := openTestStore(t)
 	store.now = func() time.Time { return fixedTime }

@@ -740,6 +740,27 @@ func (s *Store) PortableProjectID(ctx context.Context, workspace string) (string
 	return id, true, nil
 }
 
+// BoundPortableProject resolves the local project explicitly bound to a
+// portable marker for one canonical workspace. It never creates a project.
+func (s *Store) BoundPortableProject(ctx context.Context, workspace, portableID string) (string, bool, error) {
+	if !projectIDPattern.MatchString(portableID) {
+		return "", false, fmt.Errorf("%w: portable project identity", ErrInvalid)
+	}
+	hash, err := portableWorkspaceHash(workspace)
+	if err != nil {
+		return "", false, err
+	}
+	var projectID string
+	err = s.db.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE workspace_hash=? AND portable_id=?`, hash, portableID).Scan(&projectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, writeError(ctx, err)
+	}
+	return projectID, true, nil
+}
+
 func portableWorkspaceHash(workspace string) (string, error) {
 	abs, err := filepath.Abs(workspace)
 	if err != nil {

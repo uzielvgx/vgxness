@@ -86,6 +86,44 @@ func TestMemorySyncFailsClosedBeforeSecretsOrTransport(t *testing.T) {
 	}
 }
 
+func TestMemorySyncRejectsUnboundOrMalformedWorkspaceBeforeRemote(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	store, err := openStore(context.Background(), config.Options{StorageRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ConfigureSyncProfile(context.Background(), memory.SyncProfile{Enabled: true, Endpoint: "https://sync.example.test", DeviceID: "550e8400-e29b-41d4-a716-446655440000", CredentialRef: "secret://keychain/sync"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	runtime := NewMemory("cli", false)
+	runtime.credential = func(string) (string, error) { return "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", nil }
+	runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("unexpected remote call")
+	})
+	for _, malformed := range []bool{false, true} {
+		if malformed {
+			if err := os.Mkdir(filepath.Join(workspace, ".vgxness"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(workspace, ".vgxness", "project-id"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := runtime.Sync(context.Background(), config.Options{StorageRoot: root, ProjectDir: workspace})
+		if err != nil || result.Status != memory.SyncStatusUnavailable || requests != 0 {
+			t.Fatalf("malformed=%t result=%+v err=%v requests=%d", malformed, result, err, requests)
+		}
+		if malformed {
+			break
+		}
+	}
+}
+
 func TestMemorySyncProfileAndCredentialStatesAvoidNetwork(t *testing.T) {
 	root := t.TempDir()
 	setup := func(profile *memory.SyncProfile) {
@@ -602,6 +640,67 @@ func TestRunForegroundSyncPushesAfterResolutionPull(t *testing.T) {
 	}
 }
 
+func TestRunForegroundProjectSyncIsPushOnlyForSelectedProject(t *testing.T) {
+	claims := []memory.SyncOutboxClaim{
+		{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440401", RecordID: "a", RecordKind: syncservice.RecordKindProject}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440402"},
+		{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440403", RecordID: "a-observation", RecordKind: syncservice.RecordKindObservation}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440404"},
+	}
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims, nil}}
+	remote := &testForegroundRemote{disposition: syncservice.DispositionAccepted}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a")
+	if err != nil || result.Mode != memory.SyncModeProjectPushOnly || result.Status != memory.SyncStatusSynced || result.Pushed != 2 || result.Batches != 1 || store.project != "project-a" || remote.pushes != 1 || remote.discovers != 0 || remote.pulls != 0 || len(remote.sent) != 2 || remote.sent[0].RecordID == "b" {
+		t.Fatalf("result=%+v err=%v project=%q remote=%+v", result, err, store.project, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncCancellationAndRetryableBatchSemantics(t *testing.T) {
+	claims := []memory.SyncOutboxClaim{
+		{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440411"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440412"},
+		{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440413"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440414"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelStore := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}}
+	cancelRemote := &testForegroundRemote{disposition: syncservice.DispositionAccepted, cancelPush: cancel}
+	result, err := runForegroundProjectSync(ctx, cancelStore, cancelRemote, "project-a")
+	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusPartial || result.Mode != memory.SyncModeProjectPushOnly || cancelStore.retries != 0 {
+		t.Fatalf("cancel result=%+v err=%v retries=%d", result, err, cancelStore.retries)
+	}
+	applyCtx, cancelApply := context.WithCancel(context.Background())
+	applyStore := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}, applyErr: func() error { cancelApply(); return context.Canceled }}
+	result, err = runForegroundProjectSync(applyCtx, applyStore, &testForegroundRemote{disposition: syncservice.DispositionAccepted}, "project-a")
+	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusPartial || applyStore.retries != 0 {
+		t.Fatalf("apply cancel result=%+v err=%v retries=%d", result, err, applyStore.retries)
+	}
+
+	retryStore := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims, nil}}
+	retryRemote := &testForegroundRemote{retryable: true}
+	result, err = runForegroundProjectSync(context.Background(), retryStore, retryRemote, "project-a")
+	if err != nil || result.Status != memory.SyncStatusPartial || result.Retried != 2 || result.Rejected != 0 || retryStore.applied != 2 {
+		t.Fatalf("retry result=%+v err=%v applied=%d", result, err, retryStore.applied)
+	}
+}
+
+func TestRunForegroundProjectSyncTransportRetryPersistence(t *testing.T) {
+	claims := []memory.SyncOutboxClaim{{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440421"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440422"}}
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}, retryErr: errors.New("storage")}
+	result, err := runForegroundProjectSync(context.Background(), store, &testForegroundRemote{pushErr: syncclient.ErrUnavailable}, "project-a")
+	if err != nil || result.Status != memory.SyncStatusPartial || store.retries != 1 {
+		t.Fatalf("retry persistence result=%+v err=%v retries=%d", result, err, store.retries)
+	}
+	store = &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}}
+	result, err = runForegroundProjectSync(context.Background(), store, &testForegroundRemote{pushErr: syncclient.ErrUnauthorized}, "project-a")
+	if err != nil || result.Status != memory.SyncStatusUnauthorized || store.retries != 0 {
+		t.Fatalf("unauthorized result=%+v err=%v retries=%d", result, err, store.retries)
+	}
+}
+
+func TestMemorySyncPreflightResultIsProjectPushOnly(t *testing.T) {
+	result, err := NewMemory("cli", false).Sync(context.Background(), config.Options{StorageRoot: t.TempDir(), ProjectLocal: true})
+	if err != nil || result.Mode != memory.SyncModeProjectPushOnly || result.Status != memory.SyncStatusUnavailable {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func batchStore(t *testing.T, count int) *memory.Store {
 	t.Helper()
 	store := newForegroundStore(t)
@@ -627,6 +726,33 @@ type orderedStore struct {
 	queue            memory.SyncQueueSummary
 	queues           []memory.SyncQueueSummary
 	resolutionErr    error
+}
+
+type projectForegroundStore struct {
+	claims   [][]memory.SyncOutboxClaim
+	project  string
+	applied  int
+	retries  int
+	applyErr func() error
+	retryErr error
+}
+
+func (store *projectForegroundStore) ClaimDueSyncOutboxForProject(_ context.Context, _ time.Duration, _ int, project string) ([]memory.SyncOutboxClaim, error) {
+	store.project = project
+	claims := store.claims[0]
+	store.claims = store.claims[1:]
+	return claims, nil
+}
+func (store *projectForegroundStore) ApplySyncPushResult(context.Context, string, string, syncservice.Result) error {
+	store.applied++
+	if store.applyErr != nil {
+		return store.applyErr()
+	}
+	return nil
+}
+func (store *projectForegroundStore) MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error {
+	store.retries++
+	return store.retryErr
 }
 
 func (store *orderedStore) ClaimDueSyncOutbox(context.Context, time.Duration, int) ([]memory.SyncOutboxClaim, error) {
@@ -697,6 +823,8 @@ type testForegroundRemote struct {
 	capabilities  int
 	pushes        int
 	discovers     int
+	pulls         int
+	sent          []syncservice.Mutation
 }
 
 func (remote *testForegroundRemote) Capabilities(context.Context) error {
@@ -708,10 +836,12 @@ func (remote *testForegroundRemote) Discover(context.Context) (syncservice.Disco
 	return syncservice.Discovery{ProtocolVersion: 1, HistoryID: "550e8400-e29b-41d4-a716-446655440010", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, nil
 }
 func (remote *testForegroundRemote) Pull(_ context.Context, cursor syncservice.Cursor, _ int) (syncservice.PullPage, error) {
+	remote.pulls++
 	return syncservice.PullPage{Cursor: cursor}, nil
 }
 func (remote *testForegroundRemote) Push(_ context.Context, mutations []syncservice.Mutation) ([]syncservice.Result, error) {
 	remote.pushes++
+	remote.sent = append(remote.sent, mutations...)
 	if remote.cancelPush != nil {
 		remote.cancelPush()
 		return nil, context.Canceled

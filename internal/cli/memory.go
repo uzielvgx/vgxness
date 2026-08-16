@@ -75,6 +75,7 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		var jsonOutput bool
 		flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
 		flags.StringVar(&opts.CredentialFile, "credential-file", "", "absolute credential file")
+		flags.StringVar(&opts.ProjectDir, "workspace", "", "workspace whose bound project is synchronized")
 		flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
 		flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
@@ -90,6 +91,9 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 				Result        memory.SyncResult `json:"result"`
 			}{SchemaVersion: 1, Result: result})
 		} else {
+			if result.Mode != "" {
+				fmt.Fprintf(stdout, "mode=%s\n", result.Mode)
+			}
 			fmt.Fprintf(stdout, "status=%s\npushed=%d\npreviously_accepted=%d\nrejected=%d\nretried=%d\nconflicts=%d\nbatches=%d\n", result.Status, result.Pushed, result.PreviouslyAccepted, result.Rejected, result.Retried, result.Conflicts, result.Batches)
 		}
 		return 0
