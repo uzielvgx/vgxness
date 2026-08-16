@@ -423,6 +423,7 @@ type testSyncBackend struct {
 	deviceID    uuid.UUID
 	items       []syncservice.Mutation
 	cursor      syncservice.Cursor
+	projectID   string
 	limit       int
 	pushErr     error
 	pullErr     error
@@ -453,6 +454,13 @@ func (backend *testSyncBackend) Pull(_ context.Context, deviceID uuid.UUID, curs
 	backend.pulls++
 	backend.deviceID, backend.cursor, backend.limit = deviceID, cursor, limit
 	return backend.page, backend.pullErr
+}
+
+func (backend *testSyncBackend) PullProject(ctx context.Context, deviceID uuid.UUID, cursor syncservice.Cursor, projectID string, limit int) (syncservice.PullPage, error) {
+	backend.mu.Lock()
+	backend.projectID = projectID
+	backend.mu.Unlock()
+	return backend.Pull(ctx, deviceID, cursor, limit)
 }
 
 func (backend *testSyncBackend) Discover(_ context.Context, deviceID uuid.UUID) (syncservice.Discovery, error) {
@@ -525,6 +533,41 @@ func TestPullRejectsNoncanonicalHistoryIDWithoutBackendEffects(t *testing.T) {
 	NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest || backend.pulls != 0 {
 		t.Fatalf("status/pulls = %d/%d, want 400/0", recorder.Code, backend.pulls)
+	}
+}
+
+func TestProjectPullUsesSelectorAndAllowsSparsePage(t *testing.T) {
+	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	change := syncservice.Change{Sequence: 3, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: uuid.NewString(), RecordID: projectID, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: projectID}}}
+	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
+	backend := &testSyncBackend{page: syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history.String(), Position: 5, Watermark: 5}, Changes: []syncservice.Change{change}}}
+	request := httptest.NewRequest(http.MethodGet, "/v1/sync/pull?history_id="+history.String()+"&after=0&project_id="+projectID, nil)
+	request.Header.Set("Authorization", "Bearer "+testBearer)
+	request.Header.Set("Accept", MediaType)
+	recorder := httptest.NewRecorder()
+	NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || backend.projectID != projectID || backend.cursor.Position != 0 {
+		t.Fatalf("status/project/cursor = %d/%q/%+v", recorder.Code, backend.projectID, backend.cursor)
+	}
+	var response PullResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || response.ProjectID != projectID || response.Position != 5 || len(response.Changes) != 1 || response.Changes[0].Sequence != 3 {
+		t.Fatalf("response = %s, err=%v", recorder.Body, err)
+	}
+}
+
+func TestProjectPullRejectsInvalidSelectorWithoutBackendEffects(t *testing.T) {
+	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	for _, projectID := range []string{"", "project-1", "550E8400-E29B-41D4-A716-446655440001"} {
+		backend := &testSyncBackend{}
+		request := httptest.NewRequest(http.MethodGet, "/v1/sync/pull?history_id="+history.String()+"&after=0&project_id="+projectID, nil)
+		request.Header.Set("Authorization", "Bearer "+testBearer)
+		request.Header.Set("Accept", MediaType)
+		recorder := httptest.NewRecorder()
+		NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil).ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest || backend.pulls != 0 {
+			t.Fatalf("selector %q status/pulls = %d/%d", projectID, recorder.Code, backend.pulls)
+		}
 	}
 }
 

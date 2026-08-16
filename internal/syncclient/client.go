@@ -69,7 +69,23 @@ func (client *Client) Discover(ctx context.Context, credential string) (syncserv
 }
 
 func (client *Client) Pull(ctx context.Context, credential string, cursor syncservice.Cursor, limit int) (syncapi.PullResponse, error) {
+	return client.pull(ctx, credential, cursor, "", limit)
+}
+
+// PullProject retrieves sparse history for one portable project identity.
+func (client *Client) PullProject(ctx context.Context, credential string, cursor syncservice.Cursor, projectID string, limit int) (syncapi.PullResponse, error) {
+	if projectID == "" {
+		return syncapi.PullResponse{}, ErrInvalidInput
+	}
+	return client.pull(ctx, credential, cursor, projectID, limit)
+}
+
+func (client *Client) pull(ctx context.Context, credential string, cursor syncservice.Cursor, projectID string, limit int) (syncapi.PullResponse, error) {
 	if err := syncservice.ValidateCursor(cursor); err != nil || limit < 1 || limit > syncapi.MaxPullLimit {
+		return syncapi.PullResponse{}, ErrInvalidInput
+	}
+	request := syncapi.PullRequest{ProtocolVersion: syncapi.ProtocolVersion, Cursor: cursor, ProjectID: projectID, Limit: limit}
+	if syncapi.ValidatePullRequest(&request) != nil {
 		return syncapi.PullResponse{}, ErrInvalidInput
 	}
 	q := url.Values{"history_id": {cursor.HistoryID}, "after": {"0"}}
@@ -77,6 +93,9 @@ func (client *Client) Pull(ctx context.Context, credential string, cursor syncse
 	q.Set("limit", strconv.Itoa(limit))
 	if cursor.Watermark > 0 {
 		q.Set("watermark", strconv.FormatInt(cursor.Watermark, 10))
+	}
+	if projectID != "" {
+		q.Set("project_id", projectID)
 	}
 	var value syncapi.PullResponse
 	if err := client.get(ctx, "/v1/sync/pull", q, credential, syncapi.MaxPullResponseBytes, func(body []byte) error {
@@ -86,7 +105,7 @@ func (client *Client) Pull(ctx context.Context, credential string, cursor syncse
 	}); err != nil {
 		return value, err
 	}
-	if !pullMatches(syncapi.PullRequest{ProtocolVersion: syncapi.ProtocolVersion, Cursor: cursor, Limit: limit}, value) {
+	if !pullMatches(request, value) {
 		return syncapi.PullResponse{}, ErrRemote
 	}
 	return value, nil
@@ -281,16 +300,19 @@ func validCredential(value string) bool {
 }
 
 func pullMatches(request syncapi.PullRequest, response syncapi.PullResponse) bool {
-	if response.HistoryID != request.Cursor.HistoryID || response.Position < request.Cursor.Position || len(response.Changes) > request.Limit || request.Cursor.Watermark != 0 && response.Watermark != request.Cursor.Watermark {
+	if response.HistoryID != request.Cursor.HistoryID || response.ProjectID != request.ProjectID || response.Position < request.Cursor.Position || len(response.Changes) > request.Limit || request.Cursor.Watermark != 0 && response.Watermark != request.Cursor.Watermark {
 		return false
 	}
 	if len(response.Changes) == 0 {
-		return response.Position == request.Cursor.Position && !response.HasMore
+		return !response.HasMore && (request.ProjectID == "" && response.Position == request.Cursor.Position || request.ProjectID != "" && response.Position == response.Watermark)
 	}
+	previous := request.Cursor.Position
 	for index, change := range response.Changes {
-		if change.Sequence != request.Cursor.Position+int64(index)+1 {
+		if request.ProjectID == "" && change.Sequence != request.Cursor.Position+int64(index)+1 || request.ProjectID != "" && (change.Sequence <= previous || syncapi.ValidateProjectPullChange(change, request.ProjectID) != nil) {
 			return false
 		}
+		previous = change.Sequence
 	}
-	return response.Position == response.Changes[len(response.Changes)-1].Sequence
+	last := response.Changes[len(response.Changes)-1].Sequence
+	return request.ProjectID == "" && response.Position == last || request.ProjectID != "" && response.HasMore && response.Position == last || request.ProjectID != "" && !response.HasMore && response.Position == response.Watermark
 }
