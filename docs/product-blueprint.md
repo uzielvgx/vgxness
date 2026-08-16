@@ -20,7 +20,7 @@ Current delivery policy is manager v46 with global `stacked-pr` v3. The manager 
 | Default-agent selection | 1 | OpenCode default manager selection. |
 | Restoration metadata | 1 | Prior default-agent restoration state. |
 
-The separate global portable catalog contains 42 files across 18 skills, including `sdd-lifecycle`; it is not an OpenCode artifact or uninstall target.
+The separate global portable catalog contains 47 files across 19 skills, including `memory-sync` and `sdd-lifecycle`; it is not an OpenCode artifact or uninstall target.
 
 ## Memory and SDD
 

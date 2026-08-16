@@ -20,7 +20,7 @@ La política actual de entrega usa manager v46 con `stacked-pr` v3 global. El ma
 | Selección de agente predeterminado | 1 | Selección del manager predeterminado. |
 | Metadatos de restauración | 1 | Estado de restauración del agente previo. |
 
-El catálogo portable global separado contiene 42 archivos y 18 skills, incluido `sdd-lifecycle`; no es artefacto de OpenCode ni destino de desinstalación.
+El catálogo portable global separado contiene 47 archivos y 19 skills, incluidos `memory-sync` y `sdd-lifecycle`; no es artefacto de OpenCode ni destino de desinstalación.
 
 ## Memoria y SDD
 
