@@ -8,6 +8,7 @@ import (
 	"math"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
 
@@ -41,6 +42,7 @@ type PushResponse struct {
 type PullRequest struct {
 	ProtocolVersion int                `json:"protocol_version"`
 	Cursor          syncservice.Cursor `json:"cursor"`
+	ProjectID       string             `json:"project_id,omitempty"`
 	Limit           int                `json:"limit,omitempty"`
 }
 
@@ -49,6 +51,7 @@ type PullChange = syncservice.Change
 type PullResponse struct {
 	ProtocolVersion int          `json:"protocol_version"`
 	HistoryID       string       `json:"history_id"`
+	ProjectID       string       `json:"project_id,omitempty"`
 	Position        int64        `json:"position"`
 	Watermark       int64        `json:"watermark,omitempty"`
 	HasMore         bool         `json:"has_more"`
@@ -214,6 +217,9 @@ func ValidatePullRequest(request *PullRequest) error {
 	if err := syncservice.ValidateCursor(request.Cursor); err != nil {
 		return err
 	}
+	if request.ProjectID != "" && !validProjectID(request.ProjectID) {
+		return ErrInvalidRequest
+	}
 	if request.Cursor.Watermark < 0 || request.Cursor.Watermark > 0 && request.Cursor.Watermark < request.Cursor.Position {
 		return syncservice.ErrInvalidCursor
 	}
@@ -224,6 +230,7 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 	var envelope struct {
 		ProtocolVersion int               `json:"protocol_version"`
 		HistoryID       string            `json:"history_id"`
+		ProjectID       string            `json:"project_id,omitempty"`
 		Position        int64             `json:"position"`
 		Watermark       int64             `json:"watermark,omitempty"`
 		HasMore         bool              `json:"has_more"`
@@ -235,7 +242,7 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 	if len(body) == 0 || !utf8.Valid(body) || jsonDepth(body) > MaxJSONDepth || json.Unmarshal(body, &envelope) != nil {
 		return PullResponse{}, ErrInvalidRequest
 	}
-	response := PullResponse{ProtocolVersion: envelope.ProtocolVersion, HistoryID: envelope.HistoryID, Position: envelope.Position, Watermark: envelope.Watermark, HasMore: envelope.HasMore, Changes: make([]syncservice.Change, len(envelope.Changes))}
+	response := PullResponse{ProtocolVersion: envelope.ProtocolVersion, HistoryID: envelope.HistoryID, ProjectID: envelope.ProjectID, Position: envelope.Position, Watermark: envelope.Watermark, HasMore: envelope.HasMore, Changes: make([]syncservice.Change, len(envelope.Changes))}
 	for index, raw := range envelope.Changes {
 		if err := decodePullChange(raw, &response.Changes[index]); err != nil {
 			return PullResponse{}, ErrInvalidRequest
@@ -258,12 +265,21 @@ func DecodePullResponse(body []byte) (PullResponse, error) {
 	}
 	var previous int64
 	for _, change := range response.Changes {
-		if change.Sequence <= previous || previous > 0 && change.Sequence != previous+1 || change.CanonicalVersion < 1 || response.Watermark > 0 && change.Sequence > response.Watermark || syncservice.ValidateMutation(change.Mutation) != nil || syncservice.ValidateChangeEnvelope(change) != nil || syncservice.VerifyChangeHash(change) != nil {
+		if change.Sequence <= previous || response.ProjectID == "" && previous > 0 && change.Sequence != previous+1 || change.CanonicalVersion < 1 || response.Watermark > 0 && change.Sequence > response.Watermark || syncservice.ValidateMutation(change.Mutation) != nil || syncservice.ValidateChangeEnvelope(change) != nil || syncservice.VerifyChangeHash(change) != nil || response.ProjectID != "" && ValidateProjectPullChange(change, response.ProjectID) != nil {
 			return PullResponse{}, ErrInvalidRequest
 		}
 		previous = change.Sequence
 	}
-	if previous > 0 && previous != response.Position {
+	if response.ProjectID == "" && previous > 0 && previous != response.Position {
+		return PullResponse{}, ErrInvalidRequest
+	}
+	if response.ProjectID != "" && !validProjectID(response.ProjectID) {
+		return PullResponse{}, ErrInvalidRequest
+	}
+	if response.ProjectID != "" && (response.HasMore && (previous == 0 || response.Position != previous) || !response.HasMore && response.Position != response.Watermark) {
+		return PullResponse{}, ErrInvalidRequest
+	}
+	if response.ProjectID != "" && (len(response.Changes) != 0 || response.Position > 0 || response.HasMore) && response.Watermark <= 0 {
 		return PullResponse{}, ErrInvalidRequest
 	}
 	return response, nil
@@ -274,6 +290,7 @@ func DecodeStrictPullResponse(body []byte) (PullResponse, error) {
 	var envelope struct {
 		ProtocolVersion *int              `json:"protocol_version"`
 		HistoryID       *string           `json:"history_id"`
+		ProjectID       *string           `json:"project_id,omitempty"`
 		Position        *int64            `json:"position"`
 		Watermark       *int64            `json:"watermark,omitempty"`
 		HasMore         *bool             `json:"has_more"`
@@ -286,6 +303,41 @@ func DecodeStrictPullResponse(body []byte) (PullResponse, error) {
 		return PullResponse{}, ErrInvalidRequest
 	}
 	return DecodePullResponse(body)
+}
+
+func validProjectID(value string) bool {
+	id, err := uuid.Parse(value)
+	return err == nil && id != uuid.Nil && id.String() == value && id.Variant() == uuid.RFC4122 && id.Version() >= 1 && id.Version() <= 5
+}
+
+// ValidateProjectPullChange binds payload-bearing changes to a project pull.
+// Tombstones carry no project payload; repository history establishes that link.
+func ValidateProjectPullChange(change syncservice.Change, projectID string) error {
+	if !validProjectID(projectID) {
+		return ErrInvalidRequest
+	}
+	m := change.Mutation
+	switch {
+	case m.Project != nil:
+		if m.Project.ID == projectID {
+			return nil
+		}
+	case m.Session != nil:
+		if m.Session.ProjectID == projectID {
+			return nil
+		}
+	case m.Observation != nil:
+		if m.Observation.ProjectID == projectID {
+			return nil
+		}
+	case m.Resolution != nil && m.Resolution.Observation != nil:
+		if m.Resolution.Observation.ProjectID == projectID {
+			return nil
+		}
+	case m.Tombstone != nil:
+		return nil
+	}
+	return ErrInvalidRequest
 }
 
 func decodePullChange(body []byte, change *syncservice.Change) error {

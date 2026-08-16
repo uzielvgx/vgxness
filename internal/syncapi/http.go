@@ -44,6 +44,11 @@ type SyncBackend interface {
 	Discover(context.Context, uuid.UUID) (syncservice.Discovery, error)
 }
 
+// ProjectPullBackend provides sparse owner history for one project.
+type ProjectPullBackend interface {
+	PullProject(context.Context, uuid.UUID, syncservice.Cursor, string, int) (syncservice.PullPage, error)
+}
+
 // CapabilitiesResponse is the v1 capabilities representation.
 type CapabilitiesResponse struct {
 	ProtocolVersion int      `json:"protocol_version"`
@@ -268,7 +273,14 @@ func (handler *handler) servePull(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusBadRequest, CodeFor(err), false, handler.observer)
 		return
 	}
-	page, err := handler.backend.Pull(request.Context(), identity.DeviceID, pull.Cursor, pull.Limit)
+	var page syncservice.PullPage
+	if pull.ProjectID == "" {
+		page, err = handler.backend.Pull(request.Context(), identity.DeviceID, pull.Cursor, pull.Limit)
+	} else if backend, ok := handler.backend.(ProjectPullBackend); ok {
+		page, err = backend.PullProject(request.Context(), identity.DeviceID, pull.Cursor, pull.ProjectID, pull.Limit)
+	} else {
+		err = ErrInvalidRequest
+	}
 	if errors.Is(err, ErrUnauthenticated) {
 		writeError(writer, http.StatusUnauthorized, ErrorUnauthorized, true, handler.observer)
 		return
@@ -277,7 +289,7 @@ func (handler *handler) servePull(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
 		return
 	}
-	response := PullResponse{ProtocolVersion: ProtocolVersion, HistoryID: page.Cursor.HistoryID, Position: page.Cursor.Position, Watermark: page.Cursor.Watermark, HasMore: page.HasMore, Changes: page.Changes}
+	response := PullResponse{ProtocolVersion: ProtocolVersion, HistoryID: page.Cursor.HistoryID, ProjectID: pull.ProjectID, Position: page.Cursor.Position, Watermark: page.Cursor.Watermark, HasMore: page.HasMore, Changes: page.Changes}
 	body, responseErr := json.Marshal(response)
 	if responseErr != nil || len(body)+1 > MaxPullResponseBytes {
 		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
@@ -296,7 +308,7 @@ func pullQuery(request *http.Request) (PullRequest, error) {
 		return PullRequest{}, ErrInvalidRequest
 	}
 	for key, values := range query {
-		if key != "history_id" && key != "after" && key != "limit" && key != "watermark" || len(values) != 1 {
+		if key != "history_id" && key != "after" && key != "limit" && key != "watermark" && key != "project_id" || len(values) != 1 {
 			return PullRequest{}, ErrInvalidRequest
 		}
 	}
@@ -331,6 +343,12 @@ func pullQuery(request *http.Request) (PullRequest, error) {
 		}
 		requestValue.Limit = int(limit)
 	}
+	if values, ok := query["project_id"]; ok {
+		if values[0] == "" {
+			return PullRequest{}, ErrInvalidRequest
+		}
+		requestValue.ProjectID = values[0]
+	}
 	if err := ValidatePullRequest(&requestValue); err != nil {
 		return PullRequest{}, err
 	}
@@ -345,19 +363,20 @@ func validatePullPage(request PullRequest, page syncservice.PullPage) error {
 		return ErrInvalidRequest
 	}
 	if len(page.Changes) == 0 {
-		if page.Cursor.Position != request.Cursor.Position || page.HasMore {
+		if page.HasMore || request.ProjectID == "" && page.Cursor.Position != request.Cursor.Position || request.ProjectID != "" && page.Cursor.Position != page.Cursor.Watermark {
 			return ErrInvalidRequest
 		}
 		return nil
 	}
 	expected := request.Cursor.Position + 1
 	for _, change := range page.Changes {
-		if change.Sequence != expected || syncservice.VerifyChangeHash(change) != nil {
+		if change.Sequence < expected || syncservice.VerifyChangeHash(change) != nil || request.ProjectID != "" && ValidateProjectPullChange(change, request.ProjectID) != nil {
 			return ErrInvalidRequest
 		}
-		expected++
+		expected = change.Sequence + 1
 	}
-	if page.Cursor.Position != page.Changes[len(page.Changes)-1].Sequence {
+	last := page.Changes[len(page.Changes)-1].Sequence
+	if request.ProjectID == "" && page.Cursor.Position != last || request.ProjectID != "" && page.HasMore && page.Cursor.Position != last || request.ProjectID != "" && !page.HasMore && page.Cursor.Position != page.Cursor.Watermark {
 		return ErrInvalidRequest
 	}
 	return nil
