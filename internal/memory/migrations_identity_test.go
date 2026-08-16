@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/syncservice"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -33,13 +34,13 @@ func TestProjectIdentityMigrationFromV12Fixture(t *testing.T) {
 	testutil.NoError(t, store.Close())
 	db, err := sql.Open("sqlite", path)
 	testutil.NoError(t, err)
-	_, err = db.Exec(`DROP TABLE sync_portable_identities; DROP TABLE portable_project_identities; PRAGMA user_version=12`)
+	_, err = db.Exec(`DROP TABLE sync_portable_identity_adoptions; DROP TABLE sync_portable_identities; DROP TABLE portable_project_identities; PRAGMA user_version=12`)
 	testutil.NoError(t, err)
 	testutil.NoError(t, db.Close())
 	store = openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 14, "version=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 15, "version=%d err=%v", version, err)
 }
 
 func TestHealthRejectsWeakenedSyncPortableIdentitySchema(t *testing.T) {
@@ -49,4 +50,40 @@ func TestHealthRejectsWeakenedSyncPortableIdentitySchema(t *testing.T) {
 	testutil.NoError(t, err)
 	_, err = store.Health(context.Background())
 	testutil.Require(t, errors.Is(err, ErrCorrupt), "Health() error=%v", err)
+}
+
+func TestHealthRejectsWeakenedSyncPortableIdentityAdoptionSchema(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	_, err := store.db.Exec(`DROP TABLE sync_portable_identity_adoptions`)
+	testutil.NoError(t, err)
+	_, err = store.Health(context.Background())
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "Health() error=%v", err)
+}
+
+func TestSyncPortableIdentityAdoptionMigrationFromV14PreservesMappings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store := openPath(t, path)
+	project, local := "550e8400-e29b-41d4-a716-446655440001", "existing"
+	wire := portableSyncUUID(project, string("session"), local)
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local',0); INSERT INTO sessions(id,project_id,sync_version) VALUES('existing','local',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES('550e8400-e29b-41d4-a716-446655440001','local','hash','test','now'); INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440099','secret://keychain/sync/test',1,1)`)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_portable_identities(portable_project_id,record_kind,local_id,portable_id,origin_device_id,created_at) VALUES(?,'session',?,?,?,1)`, project, local, wire, "550e8400-e29b-41d4-a716-446655440099")
+	testutil.NoError(t, err)
+	testutil.NoError(t, store.Close())
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(`DROP TABLE sync_portable_identity_adoptions; PRAGMA user_version=14`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+	store = openPath(t, path)
+	defer store.Close()
+	version, err := store.Health(context.Background())
+	var mappings, adoptions int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&mappings))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identity_adoptions`).Scan(&adoptions))
+	inverse, found, inverseErr := store.LocalSyncPortableIdentity(context.Background(), project, "session", wire)
+	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440303", RecordID: local, RecordKind: "session", Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: local, ProjectID: "local"}}
+	translated, translateErr := store.TranslateSyncMutations(context.Background(), project, "local", []syncservice.Mutation{mutation})
+	testutil.Require(t, err == nil && version == 15 && mappings == 1 && adoptions == 0 && inverseErr == nil && found && inverse == local && translateErr == nil && len(translated) == 1 && translated[0].RecordID == wire, "version=%d mappings=%d adoptions=%d inverse=%q/%t/%v translated=%+v err=%v", version, mappings, adoptions, inverse, found, inverseErr, translated, err)
 }

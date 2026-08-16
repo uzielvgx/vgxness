@@ -26,9 +26,9 @@ and removes its FTS row. The observation row and relationships remain available
 to `Get` for durable history and persisted-data compatibility, while normal
 `Recall` cannot return forgotten content.
 
-## Schema v14 domains
+## Schema v15 domains
 
-**Implemented:** SQLite schema v14 keeps semantic observations, references,
+**Implemented:** SQLite schema v15 keeps semantic observations, references,
 sessions, and FTS rows isolated from structured SDD changes, artifacts,
 immutable revisions, input bindings, idempotency records, and OpenSpec projection
 evidence. Both domains share canonical workspace/project identity and the same
@@ -64,11 +64,11 @@ execution authority.
 
 ## Upgrade migration caveat
 
-**Implemented:** A read-only database open cannot migrate an older supported schema to v14.
+**Implemented:** A read-only database open cannot migrate an older supported schema to v15.
 Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
 another read operation may therefore report a migration/storage failure. Run one
 write-capable memory or SDD operation to open the database and atomically apply
-v14, then rerun the read-only command. Do not delete or recreate the database;
+v15, then rerun the read-only command. Do not delete or recreate the database;
 the existing data is the migration source and remains authoritative.
 
 Older project-level `memory.db` files are a separate compatibility case. The
@@ -86,4 +86,4 @@ persistent semantic-memory authority.
 
 ## Project sync identity
 
-During outbound project-scoped push, VGXNESS sends deterministic portable record IDs while retaining local memory IDs and outbox bytes unchanged. `resolve` is not transported; pull/bootstrap translation is deferred.
+During outbound project-scoped push, ordinary mappings send deterministic portable record IDs while retaining local memory IDs and outbox bytes unchanged. Adopted mappings take precedence and resend their exact inbound wire ID. The schema records that adoption provenance, but does not pull, materialize records, or support reference-before-target translation. `resolve` is not transported; pull/bootstrap translation is deferred.
