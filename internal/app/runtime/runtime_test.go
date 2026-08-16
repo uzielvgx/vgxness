@@ -647,9 +647,72 @@ func TestRunForegroundProjectSyncIsPushOnlyForSelectedProject(t *testing.T) {
 	}
 	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims, nil}}
 	remote := &testForegroundRemote{disposition: syncservice.DispositionAccepted}
-	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a")
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
 	if err != nil || result.Mode != memory.SyncModeProjectPushOnly || result.Status != memory.SyncStatusSynced || result.Pushed != 2 || result.Batches != 1 || store.project != "project-a" || remote.pushes != 1 || remote.discovers != 0 || remote.pulls != 0 || len(remote.sent) != 2 || remote.sent[0].RecordID == "b" {
 		t.Fatalf("result=%+v err=%v project=%q remote=%+v", result, err, store.project, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncPushesWireCopyAndAppliesOriginalClaim(t *testing.T) {
+	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440451", RecordID: "local", RecordKind: syncservice.RecordKindProject, Project: &syncservice.Project{ID: "local"}}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440452"}
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{claim}, nil}, translate: func(_ context.Context, _ string, _ string, mutations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+		mutations[0].RecordID, mutations[0].Project.ID = "portable", "portable"
+		return mutations, nil
+	}}
+	remote := &testForegroundRemote{disposition: syncservice.DispositionAccepted}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "local", "550e8400-e29b-41d4-a716-446655440001")
+	if err != nil || result.Pushed != 1 || len(remote.sent) != 1 || remote.sent[0].RecordID != "portable" || store.appliedID != "550e8400-e29b-41d4-a716-446655440451" || claim.Mutation.RecordID != "local" {
+		t.Fatalf("result=%+v err=%v sent=%+v applied=%q claim=%+v", result, err, remote.sent, store.appliedID, claim)
+	}
+}
+
+func TestRunForegroundProjectSyncTranslationFailureDoesNotContactRemote(t *testing.T) {
+	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440453"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440454"}
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{claim}}, translate: func(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error) {
+		return nil, memory.ErrInvalid
+	}}
+	remote := &testForegroundRemote{}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+	if !errors.Is(err, memory.ErrInvalid) || result.Status != memory.SyncStatusPartial || remote.capabilities != 0 || remote.pushes != 0 || remote.discovers != 0 || remote.pulls != 0 {
+		t.Fatalf("result=%+v err=%v remote=%+v", result, err, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncCapabilityFailureRetriesClaim(t *testing.T) {
+	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440455"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440456"}
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{claim}}, translate: func(_ context.Context, _ string, _ string, mutations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+		return mutations, nil
+	}}
+	remote := &testForegroundRemote{capabilityErr: syncclient.ErrUnavailable}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+	if err != nil || result.Status != memory.SyncStatusUnreachable || store.retries != 1 || remote.pushes != 0 {
+		t.Fatalf("result=%+v err=%v retries=%d remote=%+v", result, err, store.retries, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncCapabilityFailureRetryClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		remote   error
+		retryErr error
+		status   memory.SyncStatus
+		retries  int
+	}{
+		{"unavailable", syncclient.ErrUnavailable, nil, memory.SyncStatusUnreachable, 1},
+		{"retry persistence", syncclient.ErrUnavailable, errors.New("store"), memory.SyncStatusPartial, 1},
+		{"unauthorized", syncclient.ErrUnauthorized, nil, memory.SyncStatusUnauthorized, 0},
+		{"remote", syncclient.ErrRemote, nil, memory.SyncStatusIncompatible, 0},
+		{"discovery", syncclient.ErrDiscoveryUnsupported, nil, memory.SyncStatusIncompatible, 0},
+		{"generic", errors.New("generic"), nil, memory.SyncStatusUnavailable, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440457"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440458"}
+			store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{claim}}, retryErr: tc.retryErr}
+			result, err := runForegroundProjectSync(context.Background(), store, &testForegroundRemote{capabilityErr: tc.remote}, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+			if err != nil || result.Status != tc.status || store.retries != tc.retries {
+				t.Fatalf("result=%+v err=%v retries=%d", result, err, store.retries)
+			}
+		})
 	}
 }
 
@@ -661,20 +724,20 @@ func TestRunForegroundProjectSyncCancellationAndRetryableBatchSemantics(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelStore := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}}
 	cancelRemote := &testForegroundRemote{disposition: syncservice.DispositionAccepted, cancelPush: cancel}
-	result, err := runForegroundProjectSync(ctx, cancelStore, cancelRemote, "project-a")
+	result, err := runForegroundProjectSync(ctx, cancelStore, cancelRemote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
 	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusPartial || result.Mode != memory.SyncModeProjectPushOnly || cancelStore.retries != 0 {
 		t.Fatalf("cancel result=%+v err=%v retries=%d", result, err, cancelStore.retries)
 	}
 	applyCtx, cancelApply := context.WithCancel(context.Background())
 	applyStore := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}, applyErr: func() error { cancelApply(); return context.Canceled }}
-	result, err = runForegroundProjectSync(applyCtx, applyStore, &testForegroundRemote{disposition: syncservice.DispositionAccepted}, "project-a")
+	result, err = runForegroundProjectSync(applyCtx, applyStore, &testForegroundRemote{disposition: syncservice.DispositionAccepted}, "project-a", "550e8400-e29b-41d4-a716-446655440001")
 	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusPartial || applyStore.retries != 0 {
 		t.Fatalf("apply cancel result=%+v err=%v retries=%d", result, err, applyStore.retries)
 	}
 
 	retryStore := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims, nil}}
 	retryRemote := &testForegroundRemote{retryable: true}
-	result, err = runForegroundProjectSync(context.Background(), retryStore, retryRemote, "project-a")
+	result, err = runForegroundProjectSync(context.Background(), retryStore, retryRemote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
 	if err != nil || result.Status != memory.SyncStatusPartial || result.Retried != 2 || result.Rejected != 0 || retryStore.applied != 2 {
 		t.Fatalf("retry result=%+v err=%v applied=%d", result, err, retryStore.applied)
 	}
@@ -683,12 +746,12 @@ func TestRunForegroundProjectSyncCancellationAndRetryableBatchSemantics(t *testi
 func TestRunForegroundProjectSyncTransportRetryPersistence(t *testing.T) {
 	claims := []memory.SyncOutboxClaim{{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440421"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440422"}}
 	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}, retryErr: errors.New("storage")}
-	result, err := runForegroundProjectSync(context.Background(), store, &testForegroundRemote{pushErr: syncclient.ErrUnavailable}, "project-a")
+	result, err := runForegroundProjectSync(context.Background(), store, &testForegroundRemote{pushErr: syncclient.ErrUnavailable}, "project-a", "550e8400-e29b-41d4-a716-446655440001")
 	if err != nil || result.Status != memory.SyncStatusPartial || store.retries != 1 {
 		t.Fatalf("retry persistence result=%+v err=%v retries=%d", result, err, store.retries)
 	}
 	store = &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}}
-	result, err = runForegroundProjectSync(context.Background(), store, &testForegroundRemote{pushErr: syncclient.ErrUnauthorized}, "project-a")
+	result, err = runForegroundProjectSync(context.Background(), store, &testForegroundRemote{pushErr: syncclient.ErrUnauthorized}, "project-a", "550e8400-e29b-41d4-a716-446655440001")
 	if err != nil || result.Status != memory.SyncStatusUnauthorized || store.retries != 0 {
 		t.Fatalf("unauthorized result=%+v err=%v retries=%d", result, err, store.retries)
 	}
@@ -729,12 +792,14 @@ type orderedStore struct {
 }
 
 type projectForegroundStore struct {
-	claims   [][]memory.SyncOutboxClaim
-	project  string
-	applied  int
-	retries  int
-	applyErr func() error
-	retryErr error
+	claims    [][]memory.SyncOutboxClaim
+	project   string
+	applied   int
+	retries   int
+	applyErr  func() error
+	retryErr  error
+	translate func(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error)
+	appliedID string
 }
 
 func (store *projectForegroundStore) ClaimDueSyncOutboxForProject(_ context.Context, _ time.Duration, _ int, project string) ([]memory.SyncOutboxClaim, error) {
@@ -743,12 +808,19 @@ func (store *projectForegroundStore) ClaimDueSyncOutboxForProject(_ context.Cont
 	store.claims = store.claims[1:]
 	return claims, nil
 }
-func (store *projectForegroundStore) ApplySyncPushResult(context.Context, string, string, syncservice.Result) error {
+func (store *projectForegroundStore) ApplySyncPushResult(_ context.Context, id string, _ string, _ syncservice.Result) error {
 	store.applied++
+	store.appliedID = id
 	if store.applyErr != nil {
 		return store.applyErr()
 	}
 	return nil
+}
+func (store *projectForegroundStore) TranslateSyncMutations(ctx context.Context, project, localProject string, mutations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+	if store.translate == nil {
+		return mutations, nil
+	}
+	return store.translate(ctx, project, localProject, mutations)
 }
 func (store *projectForegroundStore) MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error {
 	store.retries++

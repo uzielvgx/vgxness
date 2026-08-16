@@ -343,6 +343,263 @@ type SyncOutboxClaim struct {
 	LeaseUntil      time.Time
 }
 
+// TranslateSyncMutations creates a wire-only portable identity view. It never
+// changes claimed mutations, outbox payload bytes, or local identifiers.
+func (s *Store) TranslateSyncMutations(ctx context.Context, portableProjectID, expectedLocalProject string, mutations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+	if !projectIDPattern.MatchString(portableProjectID) || expectedLocalProject == "" {
+		return nil, fmt.Errorf("%w: portable project identity", ErrInvalid)
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	defer conn.Close()
+	for attempt := 0; ; attempt++ {
+		if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err == nil {
+			break
+		}
+		if err = waitForSQLite(ctx, attempt, err); err != nil {
+			return nil, writeError(ctx, err)
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var boundProject string
+	err = conn.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProjectID).Scan(&boundProject)
+	if errors.Is(err, sql.ErrNoRows) || boundProject != expectedLocalProject {
+		return nil, fmt.Errorf("%w: portable project identity binding", ErrConflict)
+	}
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	var device string
+	if err := conn.QueryRowContext(ctx, `SELECT device_id FROM sync_profiles WHERE singleton=1`).Scan(&device); err != nil || !canonicalUUIDPattern.MatchString(device) {
+		return nil, fmt.Errorf("%w: sync portable identity device", ErrCorrupt)
+	}
+	translated := make([]syncservice.Mutation, len(mutations))
+	for i, mutation := range mutations {
+		copy := cloneSyncMutation(mutation)
+		if err := s.translateSyncMutation(ctx, conn, portableProjectID, expectedLocalProject, device, &copy); err != nil {
+			return nil, err
+		}
+		if err := syncservice.ValidateMutation(copy); err != nil {
+			return nil, fmt.Errorf("%w: translated mutation", ErrInvalid)
+		}
+		translated[i] = copy
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return nil, writeError(ctx, err)
+	}
+	committed = true
+	return translated, nil
+}
+
+func cloneSyncMutation(m syncservice.Mutation) syncservice.Mutation {
+	copy := m
+	if m.Project != nil {
+		value := *m.Project
+		copy.Project = &value
+	}
+	if m.Session != nil {
+		value := *m.Session
+		copy.Session = &value
+	}
+	if m.Observation != nil {
+		value := *m.Observation
+		value.References = append([]string(nil), m.Observation.References...)
+		copy.Observation = &value
+	}
+	if m.Tombstone != nil {
+		value := *m.Tombstone
+		copy.Tombstone = &value
+	}
+	if m.Resolution != nil {
+		value := *m.Resolution
+		value.ConflictIDs = append([]string(nil), m.Resolution.ConflictIDs...)
+		if m.Resolution.Observation != nil {
+			observation := *m.Resolution.Observation
+			observation.References = append([]string(nil), m.Resolution.Observation.References...)
+			value.Observation = &observation
+		}
+		copy.Resolution = &value
+	}
+	return copy
+}
+
+type syncSQL interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Store) translateSyncMutation(ctx context.Context, tx syncSQL, project, expectedLocalProject, device string, mutation *syncservice.Mutation) error {
+	if mutation.Kind == syncservice.MutationResolve {
+		return fmt.Errorf("%w: sync portable identity resolve", ErrInvalid)
+	}
+	mapID := func(kind syncservice.RecordKind, local string) (string, error) {
+		return s.ensureSyncPortableIdentity(ctx, tx, project, kind, local, device)
+	}
+	switch mutation.RecordKind {
+	case syncservice.RecordKindProject:
+		if mutation.RecordID != expectedLocalProject || mutation.Project == nil || mutation.Project.ID != expectedLocalProject {
+			return fmt.Errorf("%w: project mutation", ErrCorrupt)
+		}
+		mutation.RecordID, mutation.Project.ID = project, project
+	case syncservice.RecordKindSession:
+		if mutation.Session == nil || mutation.Session.ID != mutation.RecordID || mutation.Session.ProjectID != expectedLocalProject || !s.localSyncRecordBelongsToProject(ctx, tx, syncservice.RecordKindSession, mutation.RecordID, expectedLocalProject) {
+			return fmt.Errorf("%w: session mutation", ErrCorrupt)
+		}
+		id, err := mapID(syncservice.RecordKindSession, mutation.RecordID)
+		if err != nil {
+			return err
+		}
+		mutation.RecordID, mutation.Session.ID, mutation.Session.ProjectID = id, id, project
+	case syncservice.RecordKindObservation:
+		localID := mutation.RecordID
+		var id string
+		var err error
+		if mutation.Kind == syncservice.MutationTombstone {
+			id, err = s.findSyncPortableIdentity(ctx, tx, project, syncservice.RecordKindObservation, localID)
+		} else {
+			id, err = mapID(syncservice.RecordKindObservation, localID)
+		}
+		if err != nil {
+			return err
+		}
+		mutation.RecordID = id
+		if mutation.Observation != nil {
+			if mutation.Observation.ID != localID || mutation.Observation.ProjectID != expectedLocalProject || !s.localSyncRecordBelongsToProject(ctx, tx, syncservice.RecordKindObservation, localID, expectedLocalProject) {
+				return fmt.Errorf("%w: observation mutation", ErrCorrupt)
+			}
+			mutation.Observation.ID, mutation.Observation.ProjectID = id, project
+			if mutation.Observation.SessionID != "" {
+				if !s.localSyncRecordBelongsToProject(ctx, tx, syncservice.RecordKindSession, mutation.Observation.SessionID, expectedLocalProject) {
+					return fmt.Errorf("%w: observation session", ErrConflict)
+				}
+				mapped, err := mapID(syncservice.RecordKindSession, mutation.Observation.SessionID)
+				if err != nil {
+					return err
+				}
+				mutation.Observation.SessionID = mapped
+			}
+			for i, reference := range mutation.Observation.References {
+				if !s.localSyncRecordBelongsToProject(ctx, tx, syncservice.RecordKindObservation, reference, expectedLocalProject) {
+					return fmt.Errorf("%w: observation reference", ErrConflict)
+				}
+				mapped, err := mapID(syncservice.RecordKindObservation, reference)
+				if err != nil {
+					return err
+				}
+				mutation.Observation.References[i] = mapped
+			}
+		}
+	default:
+		return fmt.Errorf("%w: sync portable identity kind", ErrInvalid)
+	}
+	return nil
+}
+
+func (s *Store) localSyncRecordBelongsToProject(ctx context.Context, tx syncSQL, kind syncservice.RecordKind, id, project string) bool {
+	table := ""
+	switch kind {
+	case syncservice.RecordKindSession:
+		table = "sessions"
+	case syncservice.RecordKindObservation:
+		table = "observations"
+	default:
+		return false
+	}
+	var found string
+	return tx.QueryRowContext(ctx, `SELECT project_id FROM `+table+` WHERE id=?`, id).Scan(&found) == nil && found == project
+}
+
+func (s *Store) findSyncPortableIdentity(ctx context.Context, tx syncSQL, project string, kind syncservice.RecordKind, local string) (string, error) {
+	if len([]byte(local)) == 0 || len([]byte(local)) > 1024 {
+		return "", fmt.Errorf("%w: sync portable identity", ErrInvalid)
+	}
+	var portable, origin string
+	err := tx.QueryRowContext(ctx, `SELECT portable_id,origin_device_id FROM sync_portable_identities WHERE portable_project_id=? AND record_kind=? AND local_id=?`, project, kind, local).Scan(&portable, &origin)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("%w: sync portable identity unavailable", ErrNotFound)
+	}
+	if err != nil {
+		return "", writeError(ctx, err)
+	}
+	if !canonicalUUIDPattern.MatchString(portable) || !canonicalUUIDPattern.MatchString(origin) || portable != portableSyncUUID(project, string(kind), local) {
+		return "", fmt.Errorf("%w: sync portable identity", ErrCorrupt)
+	}
+	return portable, nil
+}
+
+func (s *Store) ensureSyncPortableIdentity(ctx context.Context, tx syncSQL, project string, kind syncservice.RecordKind, local, device string) (string, error) {
+	if len([]byte(local)) == 0 || len([]byte(local)) > 1024 || (kind != syncservice.RecordKindSession && kind != syncservice.RecordKindObservation) {
+		return "", fmt.Errorf("%w: sync portable identity", ErrInvalid)
+	}
+	want := portableSyncUUID(project, string(kind), local)
+	var existing, origin string
+	err := tx.QueryRowContext(ctx, `SELECT portable_id,origin_device_id FROM sync_portable_identities WHERE portable_project_id=? AND record_kind=? AND local_id=?`, project, kind, local).Scan(&existing, &origin)
+	if err == nil {
+		if !canonicalUUIDPattern.MatchString(origin) {
+			return "", fmt.Errorf("%w: sync portable identity", ErrCorrupt)
+		}
+		if existing != want {
+			return "", fmt.Errorf("%w: sync portable identity collision", ErrConflict)
+		}
+		return existing, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", writeError(ctx, err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO sync_portable_identities(portable_project_id,record_kind,local_id,portable_id,origin_device_id,created_at) VALUES(?,?,?,?,?,?)`, project, kind, local, want, device, s.now().UTC().UnixNano())
+	if err != nil {
+		return "", conflictOrWrite(ctx, err)
+	}
+	err = tx.QueryRowContext(ctx, `SELECT portable_id,origin_device_id FROM sync_portable_identities WHERE portable_project_id=? AND record_kind=? AND local_id=?`, project, kind, local).Scan(&existing, &origin)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("%w: sync portable identity collision", ErrConflict)
+		}
+		return "", writeError(ctx, err)
+	}
+	if !canonicalUUIDPattern.MatchString(origin) {
+		return "", fmt.Errorf("%w: sync portable identity", ErrCorrupt)
+	}
+	if !canonicalUUIDPattern.MatchString(existing) || existing != want {
+		return "", fmt.Errorf("%w: sync portable identity collision", ErrConflict)
+	}
+	return existing, nil
+}
+
+func portableSyncUUID(project, kind, local string) string {
+	sum := sha256.Sum256([]byte("vgxness/sync-portable-identity/v1\x00" + project + "\x00" + kind + "\x00" + local))
+	b := sum[:16]
+	b[6] = b[6]&0x0f | 0x50
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// LocalSyncPortableIdentity supports future inverse wire-to-local resolution.
+func (s *Store) LocalSyncPortableIdentity(ctx context.Context, project string, kind syncservice.RecordKind, portableID string) (string, bool, error) {
+	if !projectIDPattern.MatchString(project) || !canonicalUUIDPattern.MatchString(portableID) || (kind != syncservice.RecordKindSession && kind != syncservice.RecordKindObservation) {
+		return "", false, fmt.Errorf("%w: sync portable identity", ErrInvalid)
+	}
+	var local, origin string
+	err := s.db.QueryRowContext(ctx, `SELECT local_id,origin_device_id FROM sync_portable_identities WHERE portable_project_id=? AND record_kind=? AND portable_id=?`, project, kind, portableID).Scan(&local, &origin)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, writeError(ctx, err)
+	}
+	if len([]byte(local)) == 0 || len([]byte(local)) > 1024 || !canonicalUUIDPattern.MatchString(origin) || portableSyncUUID(project, string(kind), local) != portableID {
+		return "", false, fmt.Errorf("%w: sync portable identity", ErrCorrupt)
+	}
+	return local, true, nil
+}
+
 // BootstrapCheckpoint is the durable, caller-owned progress marker for a pull.
 type BootstrapCheckpoint struct {
 	HistoryID string `json:"history_id"`

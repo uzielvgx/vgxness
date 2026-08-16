@@ -33,7 +33,7 @@ Each change stores a `memory`, `openspec`, or `hybrid` backend and an `automatic
 
 | Backend | Canonical content |
 | --- | --- |
-| `memory` | Structured SDD revision bodies in SQLite schema v13; they remain distinct from semantic-memory records and OpenSpec projections. |
+| `memory` | Structured SDD revision bodies in SQLite schema v14; they remain distinct from semantic-memory records and OpenSpec projections. |
 | `openspec` | Managed files under `openspec/changes/<safe-change-id>/`; SQLite stores identity, digest, bindings, and projection evidence. |
 | `hybrid` | SQLite revision content is canonical; OpenSpec is a deterministic projection. |
 

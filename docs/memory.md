@@ -26,9 +26,9 @@ and removes its FTS row. The observation row and relationships remain available
 to `Get` for durable history and persisted-data compatibility, while normal
 `Recall` cannot return forgotten content.
 
-## Schema v13 domains
+## Schema v14 domains
 
-**Implemented:** SQLite schema v13 keeps semantic observations, references,
+**Implemented:** SQLite schema v14 keeps semantic observations, references,
 sessions, and FTS rows isolated from structured SDD changes, artifacts,
 immutable revisions, input bindings, idempotency records, and OpenSpec projection
 evidence. Both domains share canonical workspace/project identity and the same
@@ -64,11 +64,11 @@ execution authority.
 
 ## Upgrade migration caveat
 
-**Implemented:** A read-only database open cannot migrate an older supported schema to v13.
+**Implemented:** A read-only database open cannot migrate an older supported schema to v14.
 Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
 another read operation may therefore report a migration/storage failure. Run one
 write-capable memory or SDD operation to open the database and atomically apply
-v13, then rerun the read-only command. Do not delete or recreate the database;
+v14, then rerun the read-only command. Do not delete or recreate the database;
 the existing data is the migration source and remains authoritative.
 
 Older project-level `memory.db` files are a separate compatibility case. The
@@ -83,3 +83,7 @@ Engram is not part of the active architecture. Startup, `vgxness status`,
 OpenCode setup, and normal memory operations do not install, probe, invoke,
 import, require, or synchronize it. The owned `MemoryStore` is the sole
 persistent semantic-memory authority.
+
+## Project sync identity
+
+During outbound project-scoped push, VGXNESS sends deterministic portable record IDs while retaining local memory IDs and outbox bytes unchanged. `resolve` is not transported; pull/bootstrap translation is deferred.
