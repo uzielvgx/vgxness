@@ -1,0 +1,3 @@
+# Portable project identity
+`.vgxness/project-id` is strict UTF-8 JSON (v1 `format`, project `kind`, UUID); finals are regular non-symlinks and malformed finals fail closed. Init only publishes/binds portable identity: it never selects/rekeys local projects, sessions, observations, sync state, or normal path/root resolution.
+It uses no-replace write/file-sync/close plus parent sync where supported; Windows directory durability is unsupported. Preserve, hash, and inspect a malformed final; only with operator confirmation and no conflicting prior binding may it be quarantined, then rerun init; same-UID TOCTOU is unrecovered.

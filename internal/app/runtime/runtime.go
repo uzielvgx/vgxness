@@ -123,6 +123,40 @@ func (runtime Memory) ResolveProject(ctx context.Context, opts config.Options, w
 	return withWritableStore(ctx, opts, func(store *memory.Store) (string, error) { return store.ResolveProject(ctx, workspace) })
 }
 
+// InitializeProject publishes a portable marker and binds it to the existing
+// local project. It intentionally never rekeys local data or sync artifacts.
+func (runtime Memory) InitializeProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
+	if runtime.readOnly {
+		return "", memory.ErrInvalid
+	}
+	workspace, err := canonicalInvocationWorkspace(workspace)
+	if err != nil {
+		return "", memory.ErrInvalid
+	}
+	return withWritableStore(ctx, opts, func(store *memory.Store) (string, error) {
+		if _, err := store.ResolveProject(ctx, workspace); err != nil {
+			return "", err
+		}
+		known, found, err := store.PortableProjectID(ctx, workspace)
+		if err != nil {
+			return "", err
+		}
+		var id string
+		if found {
+			id, _, err = memory.EnsureProjectID(workspace, known)
+		} else {
+			id, _, err = memory.InitializeProjectID(workspace)
+		}
+		if err != nil {
+			return "", err
+		}
+		if err := store.BindPortableProjectID(ctx, workspace, id); err != nil {
+			return "", err
+		}
+		return id, nil
+	})
+}
+
 // Sync performs a bounded, foreground synchronization without exposing credentials.
 func (runtime Memory) Sync(ctx context.Context, opts config.Options) (memory.SyncResult, error) {
 	result, err := runtime.sync(ctx, opts)

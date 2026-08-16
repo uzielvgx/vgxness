@@ -45,6 +45,9 @@ var schemaV11 string
 //go:embed migrations/012_sync_enrollment_recovery.sql
 var schemaV12 string
 
+//go:embed migrations/013_project_identities.sql
+var schemaV13 string
+
 type migration struct {
 	version                     int
 	sql                         string
@@ -64,6 +67,7 @@ var migrations = []migration{
 	{version: 10, sql: schemaV10},
 	{version: 11, sql: schemaV11, requiresForeignKeysDisabled: true},
 	{version: 12, sql: schemaV12},
+	{version: 13, sql: schemaV13},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {

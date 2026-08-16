@@ -55,6 +55,13 @@ func (f *fakeMemoryRuntime) ResolveProject(context.Context, config.Options, stri
 	}
 	return f.project, f.err
 }
+func (f *fakeMemoryRuntime) InitializeProject(context.Context, config.Options, string) (string, error) {
+	f.calls++
+	if f.project == "" {
+		return "initialized-project", f.err
+	}
+	return f.project, f.err
+}
 
 func (f *fakeMemoryRuntime) Recent(_ context.Context, _ config.Options, request memory.Recent) ([]memory.Entry, error) {
 	f.calls++
@@ -77,6 +84,13 @@ func TestMemoryCLI_SyncConfigurePassesCredentialFile(t *testing.T) {
 	runtime := &fakeMemoryRuntime{}
 	code, _, stderr := runMemoryTest([]string{"memory", "sync", "configure", "--credential-file", "/absolute/private/bearer", "--endpoint", "https://sync.example.test", "--device-id", "550e8400-e29b-41d4-a716-446655440000"}, "", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.opts.CredentialFile == "/absolute/private/bearer" && runtime.bearer == "", "code=%d stderr=%q opts=%+v bearer=%q", code, stderr, runtime.opts, runtime.bearer)
+}
+
+func TestMemoryCLI_ProjectInit(t *testing.T) {
+	runtime := &fakeMemoryRuntime{project: "550e8400-e29b-41d4-a716-446655440000"}
+	workspace := t.TempDir()
+	code, out, stderr := runMemoryTest([]string{"memory", "project", "init", "--workspace", workspace}, "", runtime)
+	testutil.Require(t, code == 0 && out == "project=550e8400-e29b-41d4-a716-446655440000\n" && stderr == "" && runtime.calls == 1, "code=%d out=%q stderr=%q calls=%d", code, out, stderr, runtime.calls)
 }
 func (f *fakeMemoryRuntime) SyncStatus(context.Context, config.Options) (memory.SyncConfigurationStatus, error) {
 	f.calls++
