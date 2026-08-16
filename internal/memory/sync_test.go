@@ -32,7 +32,7 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 15, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 16, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
@@ -125,7 +125,7 @@ func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 15, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 16, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var outbox, claims int
@@ -207,7 +207,7 @@ func TestSyncOutboxClaimsConstraintsCascadeAndHealth(t *testing.T) {
 func TestSyncOutboxClaimsMigrationFreshSchema(t *testing.T) {
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 15, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 16, "health=%d err=%v", version, err)
 	var table, index string
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='table' AND name='sync_outbox_claims'`).Scan(&table))
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='index' AND name='sync_outbox_claims_lease_idx'`).Scan(&index))
@@ -230,7 +230,7 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 15, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 16, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var count int
@@ -1166,6 +1166,110 @@ func TestAdoptSyncPortableIdentityRetainsInboundWireID(t *testing.T) {
 	testutil.Require(t, err == nil && origin == deviceA && adopter == deviceA && len(translated) == 1 && translated[0].RecordID == wireID, "translated=%+v origin=%q adopter=%q err=%v", translated, origin, adopter, err)
 }
 
+func TestApplyProjectPulledPageIsolatedAndIdempotent(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	store.now = func() time.Time { return fixedTime }
+	const history = "550e8400-e29b-41d4-a716-446655440350"
+	const projectA = "550e8400-e29b-41d4-a716-446655440351"
+	const projectB = "550e8400-e29b-41d4-a716-446655440352"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local-a',0),('local-b',0);
+		INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?),(?,?,?,?,?);
+		INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440399','secret://keychain/sync/test',1,1)`, projectA, "local-a", "hash-a", "test", "now", projectB, "local-b", "hash-b", "test", "now")
+	testutil.NoError(t, err)
+	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440353", RecordID: "550e8400-e29b-41d4-a716-446655440354", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "550e8400-e29b-41d4-a716-446655440354", ProjectID: projectA}}
+	change := pulledChange(t, 7, 1, mutation)
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 7, Watermark: 7}, Changes: []syncservice.Change{change}}
+	testutil.NoError(t, validateProjectPulledPage(projectA, page))
+	testutil.NoError(t, store.ApplyProjectPulledPage(context.Background(), projectA, "local-a", page))
+	testutil.NoError(t, store.ApplyProjectPulledPage(context.Background(), projectA, "local-a", page))
+	var sessions, inbox, position, otherCursor int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sessions WHERE project_id='local-a'`).Scan(&sessions))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, projectA).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_project_cursor WHERE portable_project_id=?`, projectA).Scan(&position))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor WHERE portable_project_id=?`, projectB).Scan(&otherCursor))
+	testutil.Require(t, sessions == 1 && inbox == 1 && position == 7 && otherCursor == 0, "sessions=%d inbox=%d position=%d other=%d", sessions, inbox, position, otherCursor)
+}
+
+func TestApplyProjectPulledPageEmptyEOFPersistsAndRolloverAdvances(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	const history = "550e8400-e29b-41d4-a716-446655440357"
+	const project = "550e8400-e29b-41d4-a716-446655440358"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local',0);
+		INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?);
+		INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440399','secret://keychain/sync/test',1,1)`, project, "local", "hash", "test", "now")
+	testutil.NoError(t, err)
+	empty := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history}}
+	testutil.NoError(t, store.ApplyProjectPulledPage(context.Background(), project, "local", empty))
+	testutil.NoError(t, store.ApplyProjectPulledPage(context.Background(), project, "local", empty))
+	var position, watermark, cursors int
+	testutil.NoError(t, store.db.QueryRow(`SELECT position,watermark FROM sync_project_cursor WHERE portable_project_id=?`, project).Scan(&position, &watermark))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor WHERE portable_project_id=?`, project).Scan(&cursors))
+	testutil.Require(t, position == 0 && watermark == 0 && cursors == 1, "cursor=%d/%d rows=%d", position, watermark, cursors)
+
+	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440359", RecordID: "550e8400-e29b-41d4-a716-44665544035a", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "550e8400-e29b-41d4-a716-44665544035a", ProjectID: project}}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, mutation)}}
+	testutil.NoError(t, store.ApplyProjectPulledPage(context.Background(), project, "local", page))
+	testutil.NoError(t, store.db.QueryRow(`SELECT position,watermark FROM sync_project_cursor WHERE portable_project_id=?`, project).Scan(&position, &watermark))
+	testutil.Require(t, position == 1 && watermark == 1, "cursor=%d/%d", position, watermark)
+}
+
+func TestApplyProjectPulledPageRollsBackAndRejectsForeignPayload(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	store.now = func() time.Time { return fixedTime }
+	const history = "550e8400-e29b-41d4-a716-446655440360"
+	const project = "550e8400-e29b-41d4-a716-446655440361"
+	const foreign = "550e8400-e29b-41d4-a716-446655440362"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?); INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440399','secret://keychain/sync/test',1,1)`, project, "local", "hash", "test", "now")
+	testutil.NoError(t, err)
+	session := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440363", RecordID: "550e8400-e29b-41d4-a716-446655440364", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "550e8400-e29b-41d4-a716-446655440364", ProjectID: project}}
+	observation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440365", RecordID: "550e8400-e29b-41d4-a716-446655440366", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, Observation: &syncservice.Observation{ID: "550e8400-e29b-41d4-a716-446655440366", ProjectID: project, Scope: "project", Type: "note", Content: "content", References: []string{"550e8400-e29b-41d4-a716-446655440367"}, Provenance: syncservice.Provenance{Producer: "test"}, Lifecycle: syncservice.LifecycleActive, Review: syncservice.ReviewClear, CreatedAt: fixedTime, UpdatedAt: fixedTime}}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{pulledChange(t, 1, 1, session), pulledChange(t, 2, 1, observation)}}
+	err = store.ApplyProjectPulledPage(context.Background(), project, "local", page)
+	var sessions, identities, inbox, cursor int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sessions`).Scan(&sessions))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&identities))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor`).Scan(&cursor))
+	testutil.Require(t, errors.Is(err, ErrConflict) && sessions == 0 && identities == 0 && inbox == 0 && cursor == 0, "err=%v rows=%d/%d/%d/%d", err, sessions, identities, inbox, cursor)
+	foreignMutation := session
+	foreignMutation.Session = &syncservice.Session{ID: foreignMutation.RecordID, ProjectID: foreign}
+	foreignPage := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, foreignMutation)}}
+	testutil.Require(t, errors.Is(store.ApplyProjectPulledPage(context.Background(), project, "local", foreignPage), ErrInvalid), "foreign project accepted")
+}
+
+func TestApplyProjectPulledPageRejectsCorruptCrossProjectMappedTombstone(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	const history = "550e8400-e29b-41d4-a716-44665544036a"
+	const projectA = "550e8400-e29b-41d4-a716-44665544036b"
+	const projectB = "550e8400-e29b-41d4-a716-44665544036c"
+	const local = "foreign-observation"
+	device := "550e8400-e29b-41d4-a716-446655440399"
+	wire := portableSyncUUID(projectA, string(syncservice.RecordKindObservation), local)
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local-a',0),('local-b',0)`)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES(?, 'local-b','project','note','x','test','active',1,1,1)`, local)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?),(?,?,?,?,?)`, projectA, "local-a", "hash-a", "test", "now", projectB, "local-b", "hash-b", "test", "now")
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test',?,'secret://keychain/sync/test',1,1)`, device)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_portable_identities(portable_project_id,record_kind,local_id,portable_id,origin_device_id,created_at) VALUES(?,?,?,?,?,1)`, projectA, "observation", local, wire, device)
+	testutil.NoError(t, err)
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{specialChange(t, 1, 2, syncservice.ChangeDispositionAccepted, "", syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-44665544036e", RecordID: wire, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{ProjectID: projectA, DeletedAt: fixedTime}})}}
+	err = store.ApplyProjectPulledPage(context.Background(), projectA, "local-a", page)
+	var state string
+	var identities, inbox, cursor int
+	testutil.NoError(t, store.db.QueryRow(`SELECT state FROM observations WHERE id=?`, local).Scan(&state))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_portable_identities`).Scan(&identities))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox`).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor`).Scan(&cursor))
+	testutil.Require(t, errors.Is(err, ErrCorrupt) && state == "active" && identities == 1 && inbox == 0 && cursor == 0, "err=%v state=%q rows=%d/%d/%d", err, state, identities, inbox, cursor)
+}
+
 func TestAdoptSyncPortableIdentityFailsClosedAndIsIdempotent(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
@@ -1957,7 +2061,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 15 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 16 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {

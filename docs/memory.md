@@ -26,9 +26,9 @@ and removes its FTS row. The observation row and relationships remain available
 to `Get` for durable history and persisted-data compatibility, while normal
 `Recall` cannot return forgotten content.
 
-## Schema v15 domains
+## Schema v16 domains
 
-**Implemented:** SQLite schema v15 keeps semantic observations, references,
+**Implemented:** SQLite schema v16 keeps semantic observations, references,
 sessions, and FTS rows isolated from structured SDD changes, artifacts,
 immutable revisions, input bindings, idempotency records, and OpenSpec projection
 evidence. Both domains share canonical workspace/project identity and the same
@@ -64,11 +64,11 @@ execution authority.
 
 ## Upgrade migration caveat
 
-**Implemented:** A read-only database open cannot migrate an older supported schema to v15.
+**Implemented:** A read-only database open cannot migrate an older supported schema to v16.
 Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
 another read operation may therefore report a migration/storage failure. Run one
 write-capable memory or SDD operation to open the database and atomically apply
-v15, then rerun the read-only command. Do not delete or recreate the database;
+v16, then rerun the read-only command. Do not delete or recreate the database;
 the existing data is the migration source and remains authoritative.
 
 Older project-level `memory.db` files are a separate compatibility case. The

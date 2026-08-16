@@ -73,7 +73,7 @@ VGXNESS's SQLite/FTS5 `MemoryStore` is the only persistent memory authority. MCP
 
 The default database is `~/.vgxness/memory.db`. Records remain isolated by canonical workspace binding, project, scope, topic, type, state, session, provenance, and references.
 
-The current SQLite schema v15 contains separate structured SDD tables; it does not make SDD content semantic memory or turn OpenSpec projections into canonical SQLite content. Immediately after a binary upgrade from an older supported schema, read-only opens cannot migrate: `status`, `doctor`, `setup opencode --status`, and read tools may report a storage/migration failure until one write-capable memory or SDD operation opens the database and atomically applies v15. Do not delete the database. Run the write-capable operation and rerun status; see [Native memory](memory.md#upgrade-migration-caveat).
+The current SQLite schema v16 contains separate structured SDD tables; it does not make SDD content semantic memory or turn OpenSpec projections into canonical SQLite content. Immediately after a binary upgrade from an older supported schema, read-only opens cannot migrate: `status`, `doctor`, `setup opencode --status`, and read tools may report a storage/migration failure until one write-capable memory or SDD operation opens the database and atomically applies v16. Do not delete the database. Run the write-capable operation and rerun status; see [Native memory](memory.md#upgrade-migration-caveat).
 
 Memory access is explicit through MCP tools:
 

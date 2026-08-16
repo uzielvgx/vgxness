@@ -34,13 +34,31 @@ func TestProjectIdentityMigrationFromV12Fixture(t *testing.T) {
 	testutil.NoError(t, store.Close())
 	db, err := sql.Open("sqlite", path)
 	testutil.NoError(t, err)
-	_, err = db.Exec(`DROP TABLE sync_portable_identity_adoptions; DROP TABLE sync_portable_identities; DROP TABLE portable_project_identities; PRAGMA user_version=12`)
+	_, err = db.Exec(`DROP TABLE sync_project_inbox; DROP TABLE sync_project_cursor; DROP TABLE sync_portable_identity_adoptions; DROP TABLE sync_portable_identities; DROP TABLE portable_project_identities; PRAGMA user_version=12`)
 	testutil.NoError(t, err)
 	testutil.NoError(t, db.Close())
 	store = openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 15, "version=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 16, "version=%d err=%v", version, err)
+}
+
+func TestProjectCursorMigrationFromV15Fixture(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store := openPath(t, path)
+	testutil.NoError(t, store.Close())
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(`DROP TABLE sync_project_inbox; DROP TABLE sync_project_cursor; PRAGMA user_version=15`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+	store = openPath(t, path)
+	defer store.Close()
+	version, err := store.Health(context.Background())
+	var cursor, inbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor`).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox`).Scan(&inbox))
+	testutil.Require(t, err == nil && version == 16 && cursor == 0 && inbox == 0, "version=%d cursor=%d inbox=%d err=%v", version, cursor, inbox, err)
 }
 
 func TestHealthRejectsWeakenedSyncPortableIdentitySchema(t *testing.T) {
@@ -85,5 +103,5 @@ func TestSyncPortableIdentityAdoptionMigrationFromV14PreservesMappings(t *testin
 	inverse, found, inverseErr := store.LocalSyncPortableIdentity(context.Background(), project, "session", wire)
 	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440303", RecordID: local, RecordKind: "session", Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: local, ProjectID: "local"}}
 	translated, translateErr := store.TranslateSyncMutations(context.Background(), project, "local", []syncservice.Mutation{mutation})
-	testutil.Require(t, err == nil && version == 15 && mappings == 1 && adoptions == 0 && inverseErr == nil && found && inverse == local && translateErr == nil && len(translated) == 1 && translated[0].RecordID == wire, "version=%d mappings=%d adoptions=%d inverse=%q/%t/%v translated=%+v err=%v", version, mappings, adoptions, inverse, found, inverseErr, translated, err)
+	testutil.Require(t, err == nil && version == 16 && mappings == 1 && adoptions == 0 && inverseErr == nil && found && inverse == local && translateErr == nil && len(translated) == 1 && translated[0].RecordID == wire, "version=%d mappings=%d adoptions=%d inverse=%q/%t/%v translated=%+v err=%v", version, mappings, adoptions, inverse, found, inverseErr, translated, err)
 }
