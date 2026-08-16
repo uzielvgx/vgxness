@@ -212,6 +212,21 @@ func TestCanonicalChangeHashV2SpecialEnvelope(t *testing.T) {
 	}
 }
 
+func TestCanonicalChangeHashBindsTombstoneProject(t *testing.T) {
+	version := 2
+	change := Change{Sequence: 1, CanonicalVersion: 1, HashVersion: &version, ChangeDisposition: ChangeDispositionAccepted, Mutation: validMutation(MutationTombstone)}
+	change.Mutation.Observation = nil
+	change.Mutation.Tombstone = &Tombstone{DeletedAt: time.Now().UTC(), ProjectID: "project-1"}
+	change.ChangeHash, _ = CanonicalChangeHash(change)
+	tampered := change
+	tombstone := *change.Mutation.Tombstone
+	tombstone.ProjectID = "project-2"
+	tampered.Mutation.Tombstone = &tombstone
+	if VerifyChangeHash(tampered) == nil {
+		t.Fatal("accepted tombstone with a re-bound project")
+	}
+}
+
 func TestVerifyChangeHashRejectsTamperedOrUnsupportedV2(t *testing.T) {
 	change := Change{Sequence: 1, CanonicalVersion: 1, Mutation: Mutation{MutationID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91", RecordID: "project", RecordKind: RecordKindProject, Kind: MutationCreate, Project: &Project{ID: "project"}}}
 	special := change

@@ -78,6 +78,7 @@ type Resolution struct {
 
 type Tombstone struct {
 	DeletedAt time.Time `json:"deleted_at"`
+	ProjectID string    `json:"project_id,omitempty"`
 }
 
 type Mutation struct {

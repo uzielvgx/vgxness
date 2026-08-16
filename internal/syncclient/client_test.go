@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/vgxness/vgxness/internal/syncapi"
@@ -115,6 +116,71 @@ func TestPullUsesExactContinuationRequestAndClosesBody(t *testing.T) {
 	}))
 	if page, err := client.Pull(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 5}, 3); err != nil || page.Position != 3 || !reader.closed {
 		t.Fatalf("page=%+v err=%v closed=%v", page, err, reader.closed)
+	}
+}
+
+func TestPullProjectBindsSelectorAndAcceptsSparseEOF(t *testing.T) {
+	history := uuid.NewString()
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	change := syncservice.Change{Sequence: 3, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: uuid.NewString(), RecordID: projectID, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: projectID}}}
+	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
+	body, _ := json.Marshal(syncapi.PullResponse{ProtocolVersion: 1, HistoryID: history, ProjectID: projectID, Position: 5, Watermark: 5, Changes: []syncservice.Change{change}})
+	client, _ := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		if request.URL.RawQuery != "after=0&history_id="+history+"&limit=1&project_id="+projectID {
+			t.Fatalf("query = %q", request.URL.RawQuery)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	}))
+	if page, err := client.PullProject(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, projectID, 1); err != nil || page.Position != 5 {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+}
+
+func TestPullProjectRejectsTamperedSelectorOrPosition(t *testing.T) {
+	history := uuid.NewString()
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	change := syncservice.Change{Sequence: 3, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: uuid.NewString(), RecordID: projectID, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: projectID}}}
+	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
+	for _, response := range []syncapi.PullResponse{
+		{ProtocolVersion: 1, HistoryID: history, Position: 3, Watermark: 5, HasMore: true, Changes: []syncservice.Change{change}},
+		{ProtocolVersion: 1, HistoryID: history, ProjectID: "550e8400-e29b-41d4-a716-446655440002", Position: 3, Watermark: 5, HasMore: true, Changes: []syncservice.Change{change}},
+		{ProtocolVersion: 1, HistoryID: history, ProjectID: projectID, Position: 4, Watermark: 5, HasMore: true, Changes: []syncservice.Change{change}},
+	} {
+		body, _ := json.Marshal(response)
+		client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+		}))
+		if _, err := client.PullProject(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, projectID, 1); !errors.Is(err, ErrRemote) {
+			t.Fatalf("error = %v, want %v", err, ErrRemote)
+		}
+	}
+}
+
+func TestPullProjectRejectsRehashedForeignTombstone(t *testing.T) {
+	history := uuid.NewString()
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	hashVersion := 2
+	change := syncservice.Change{
+		Sequence: 3, CanonicalVersion: 1, HashVersion: &hashVersion, ChangeDisposition: syncservice.ChangeDispositionAccepted,
+		Mutation: syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "observation", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: time.Now().UTC(), ProjectID: "550e8400-e29b-41d4-a716-446655440002"}},
+	}
+	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
+	body, _ := json.Marshal(syncapi.PullResponse{ProtocolVersion: 1, HistoryID: history, ProjectID: projectID, Position: 5, Watermark: 5, Changes: []syncservice.Change{change}})
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	}))
+	if _, err := client.PullProject(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, projectID, 1); !errors.Is(err, ErrRemote) {
+		t.Fatalf("error = %v, want %v", err, ErrRemote)
+	}
+}
+
+func TestPullProjectRejectsEmptySelector(t *testing.T) {
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		t.Fatal("sent empty project pull")
+		return nil, nil
+	}))
+	if _, err := client.PullProject(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: uuid.NewString()}, "", 1); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidInput)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRequestDecodingBoundsAndIdentityFields(t *testing.T) {
@@ -126,6 +127,78 @@ func TestPullAndResponseProtocolFoundations(t *testing.T) {
 	}
 	if _, e := DecodePullResponse([]byte(`{"protocol_version":2,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"has_more":false}`)); CodeFor(e) != ErrorUnsupportedVersion {
 		t.Fatal("response version")
+	}
+}
+
+func TestPullRequestAcceptsPortableProjectSelector(t *testing.T) {
+	request := PullRequest{ProtocolVersion: ProtocolVersion, Cursor: syncservice.Cursor{HistoryID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91"}, ProjectID: "550e8400-e29b-41d4-a716-446655440001"}
+	if err := ValidatePullRequest(&request); err != nil {
+		t.Fatalf("ValidatePullRequest() = %v", err)
+	}
+}
+
+func TestPullRequestRejectsInvalidProjectSelector(t *testing.T) {
+	for _, projectID := range []string{"project-1", "550E8400-E29B-41D4-A716-446655440001", "550e8400-e29b-01d4-a716-446655440001"} {
+		request := PullRequest{ProtocolVersion: ProtocolVersion, Cursor: syncservice.Cursor{HistoryID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91"}, ProjectID: projectID}
+		if err := ValidatePullRequest(&request); err == nil {
+			t.Fatalf("accepted invalid project selector %q", projectID)
+		}
+	}
+}
+
+func TestDecodePullResponseRejectsTamperedSparsePosition(t *testing.T) {
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	body := []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","project_id":"` + projectID + `","position":4,"watermark":5,"has_more":true,"changes":[` + pullProjectChange(3) + `]}`)
+	if _, err := DecodePullResponse(body); err == nil {
+		t.Fatal("accepted sparse page with tampered position")
+	}
+}
+
+func TestProjectPullResponseRequiresWatermarkAndMatchingPayload(t *testing.T) {
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	change := pullProjectChangeValue(1)
+	change.Mutation.RecordID, change.Mutation.Project.ID = projectID, projectID
+	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
+	encoded, _ := json.Marshal(change)
+	for _, body := range [][]byte{
+		[]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","project_id":"` + projectID + `","position":1,"has_more":false,"changes":[` + string(encoded) + `]}`),
+		[]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","project_id":"` + projectID + `","position":1,"watermark":0,"has_more":false,"changes":[` + string(encoded) + `]}`),
+	} {
+		if _, err := DecodePullResponse(body); err == nil {
+			t.Fatal("accepted project page without fixed watermark")
+		}
+	}
+	other := "550e8400-e29b-41d4-a716-446655440002"
+	now := time.Now().UTC()
+	wrong := []syncservice.Change{
+		{Sequence: 1, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91", RecordID: other, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: other}}},
+		{Sequence: 1, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91", RecordID: "session", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "session", ProjectID: other}}},
+		{Sequence: 1, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91", RecordID: "observation", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, Observation: &syncservice.Observation{ID: "observation", ProjectID: other, Scope: "project", Type: "note", Content: "content", Provenance: syncservice.Provenance{Producer: "test"}, Lifecycle: syncservice.LifecycleActive, Review: syncservice.ReviewClear, CreatedAt: now, UpdatedAt: now}}},
+	}
+	for _, change := range wrong {
+		change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
+		encoded, _ = json.Marshal(change)
+		body := []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","project_id":"` + projectID + `","position":1,"watermark":1,"has_more":false,"changes":[` + string(encoded) + `]}`)
+		if _, err := DecodePullResponse(body); err == nil {
+			t.Fatal("accepted wrong-project payload")
+		}
+	}
+}
+
+func TestProjectPullResponseRejectsUnboundTombstone(t *testing.T) {
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	for _, tombstoneProjectID := range []string{"", "not-a-project-id", "550e8400-e29b-41d4-a716-446655440002"} {
+		hashVersion := 2
+		change := syncservice.Change{
+			Sequence: 1, CanonicalVersion: 1, HashVersion: &hashVersion, ChangeDisposition: syncservice.ChangeDispositionAccepted,
+			Mutation: syncservice.Mutation{MutationID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91", RecordID: "observation", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: time.Now().UTC(), ProjectID: tombstoneProjectID}},
+		}
+		change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
+		encoded, _ := json.Marshal(change)
+		body := []byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","project_id":"` + projectID + `","position":1,"watermark":1,"has_more":false,"changes":[` + string(encoded) + `]}`)
+		if _, err := DecodePullResponse(body); err == nil {
+			t.Fatalf("accepted project tombstone bound to %q", tombstoneProjectID)
+		}
 	}
 }
 func TestProtocolConstantsAndSafeCodes(t *testing.T) {

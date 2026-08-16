@@ -839,6 +839,51 @@ func TestRepositoryPullWatermarkAndResolveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRepositoryPullProjectFiltersSparseHistory(t *testing.T) {
+	ctx, repo, conn, device, otherDevice := conflictRepository(t)
+	one, two, absent := "550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002", "550e8400-e29b-41d4-a716-446655440003"
+	oneObservation, twoObservation := mutationObservation("one-observation", one, "one-session", nil, 0), mutationObservation("two-observation", two, "", nil, 0)
+	for _, mutation := range []syncservice.Mutation{
+		mutationProject(one, 0), mutationProject(two, 0), mutationSession("one-session", one, 0), oneObservation, twoObservation,
+	} {
+		mustNoError(t, pushAccepted(ctx, repo, device, mutation))
+	}
+	oneUpdate, twoUpdate := updateObservation(oneObservation, 1, "one canonical"), updateObservation(twoObservation, 1, "two canonical")
+	mustNoError(t, pushAccepted(ctx, repo, device, oneUpdate))
+	if got, err := repo.Push(ctx, otherDevice, []syncservice.Mutation{updateObservation(oneObservation, 1, "one conflict")}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("one conflict = %+v, %v", got, err)
+	}
+	mustNoError(t, pushAccepted(ctx, repo, device, syncservice.Mutation{MutationID: uuid.NewString(), RecordID: oneObservation.RecordID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 2, Tombstone: &syncservice.Tombstone{DeletedAt: time.Now().UTC()}}))
+	mustNoError(t, pushAccepted(ctx, repo, device, twoUpdate))
+	if got, err := repo.Push(ctx, otherDevice, []syncservice.Mutation{updateObservation(twoObservation, 1, "two conflict")}); err != nil || got[0].Disposition != syncservice.DispositionConflict {
+		t.Fatalf("two conflict = %+v, %v", got, err)
+	}
+	mustNoError(t, pushAccepted(ctx, repo, device, syncservice.Mutation{MutationID: uuid.NewString(), RecordID: twoObservation.RecordID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 2, Tombstone: &syncservice.Tombstone{DeletedAt: time.Now().UTC()}}))
+	if _, err := conn.Exec(ctx, "UPDATE observations SET project_id=$1,session_id=NULL WHERE id=$2", two, oneObservation.RecordID); err != nil {
+		t.Fatal(err)
+	}
+	page, err := repo.PullProject(ctx, device, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, one, 2)
+	mustNoError(t, err)
+	if !page.HasMore || page.Cursor.Position != 3 || len(page.Changes) != 2 || page.Changes[0].Sequence != 1 || page.Changes[1].Sequence != 3 {
+		t.Fatalf("first page = %+v", page)
+	}
+	page, err = repo.PullProject(ctx, device, page.Cursor, one, 2)
+	mustNoError(t, err)
+	if !page.HasMore || page.Cursor.Position != 6 || len(page.Changes) != 2 || page.Changes[0].Sequence != 4 || page.Changes[1].Sequence != 6 {
+		t.Fatalf("second page = %+v", page)
+	}
+	page, err = repo.PullProject(ctx, device, page.Cursor, one, 2)
+	mustNoError(t, err)
+	if page.HasMore || page.Cursor.Position != 11 || page.Cursor.Watermark != 11 || len(page.Changes) != 2 || page.Changes[0].Sequence != 7 || page.Changes[0].ChangeDisposition != syncservice.ChangeDispositionConflict || page.Changes[1].Sequence != 8 || page.Changes[1].Mutation.Kind != syncservice.MutationTombstone || page.Changes[1].Mutation.Tombstone.ProjectID != one {
+		t.Fatalf("EOF page = %+v", page)
+	}
+	empty, err := repo.PullProject(ctx, device, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, absent, 2)
+	mustNoError(t, err)
+	if empty.HasMore || empty.Cursor.Position != 11 || empty.Cursor.Watermark != 11 || len(empty.Changes) != 0 {
+		t.Fatalf("empty EOF page = %+v", empty)
+	}
+}
+
 func TestPullRejectsInvalidSpecialBackendChange(t *testing.T) {
 	ctx, repo, conn, first, second := conflictRepository(t)
 	target := mutationObservation("target", "project", "", nil, 0)
@@ -1077,7 +1122,7 @@ func TestPullMutationRejectsTimestampOutsideDuration(t *testing.T) {
 	databaseTime := time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)
 	snapshot, err := json.Marshal(syncservice.Tombstone{DeletedAt: deletedAt})
 	mustNoError(t, err)
-	if _, ok := pullMutation(string(syncservice.RecordKindObservation), "target", string(syncservice.MutationTombstone), uuid.New(), 1, nil, snapshot, &databaseTime); ok {
+	if _, ok := pullMutation(string(syncservice.RecordKindObservation), "target", string(syncservice.MutationTombstone), uuid.New(), 1, nil, snapshot, nil, &databaseTime); ok {
 		t.Fatal("overflowed tombstone timestamp accepted")
 	}
 }

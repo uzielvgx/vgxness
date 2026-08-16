@@ -194,6 +194,18 @@ func (r *Repository) Push(ctx context.Context, deviceID uuid.UUID, mutations []s
 
 // Pull returns an immutable, owner-scoped prefix of synchronized history.
 func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncservice.Cursor, limit int) (syncservice.PullPage, error) {
+	return r.pull(ctx, deviceID, cursor, "", limit)
+}
+
+// PullProject returns sparse history for a single portable project identity.
+func (r *Repository) PullProject(ctx context.Context, deviceID uuid.UUID, cursor syncservice.Cursor, projectID string, limit int) (syncservice.PullPage, error) {
+	if !validProjectID(projectID) {
+		return syncservice.PullPage{}, ErrRepository
+	}
+	return r.pull(ctx, deviceID, cursor, projectID, limit)
+}
+
+func (r *Repository) pull(ctx context.Context, deviceID uuid.UUID, cursor syncservice.Cursor, projectID string, limit int) (syncservice.PullPage, error) {
 	if deviceID == uuid.Nil || limit < 1 || limit > 25 || syncservice.ValidateCursor(cursor) != nil {
 		return syncservice.PullPage{}, ErrRepository
 	}
@@ -237,40 +249,59 @@ func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncse
 	if watermark < cursor.Position || watermark > head {
 		return syncservice.PullPage{}, ErrRepository
 	}
+	if projectID != "" {
+		var missingMembership bool
+		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+table("changes")+` c
+			JOIN `+table("mutations")+` m ON m.owner_id=c.owner_id AND m.device_id=c.mutation_device_id AND m.mutation_id=c.mutation_id AND m.record_id=c.record_id AND m.disposition=c.change_kind
+			JOIN `+table("record_versions")+` v ON v.owner_id=c.owner_id AND v.id=c.version_id
+			LEFT JOIN LATERAL (SELECT snapshot FROM `+table("record_versions")+` previous WHERE previous.owner_id=c.owner_id AND previous.record_kind=c.record_kind AND previous.record_id=c.record_id AND previous.record_version=m.base_version AND previous.disposition='accepted' ORDER BY previous.id DESC LIMIT 1) previous ON m.kind='tombstone'
+			WHERE c.owner_id=$1 AND c.seq>$2 AND c.seq<=$3 AND ((c.record_kind='project' AND v.snapshot->>'id' IS NULL) OR (c.record_kind='session' AND v.snapshot->>'project_id' IS NULL) OR (c.record_kind='observation' AND CASE WHEN m.kind='tombstone' THEN previous.snapshot->>'project_id' IS NULL ELSE v.snapshot->>'project_id' IS NULL END)))`, r.ownerID, cursor.Position, watermark).Scan(&missingMembership)
+		if err != nil || missingMembership {
+			return syncservice.PullPage{}, ErrRepository
+		}
+	}
+	whereProject := ""
+	args := []any{r.ownerID, cursor.Position, watermark, limit + 1}
+	if projectID != "" {
+		whereProject = ` AND ((c.record_kind='project' AND v.snapshot->>'id'=$5)
+			OR (c.record_kind='session' AND v.snapshot->>'project_id'=$5)
+			OR (c.record_kind='observation' AND CASE WHEN m.kind='tombstone' THEN previous.snapshot->>'project_id'=$5 ELSE v.snapshot->>'project_id'=$5 END))`
+		args = append(args, projectID)
+	}
 	rows, err := tx.Query(ctx, `SELECT c.seq, c.record_kind, c.record_id, c.canonical_version, c.change_kind,
-		m.mutation_id, m.kind, m.base_version, m.resolution_conflict_ids, v.snapshot, t.deleted_at, f.conflict_ids
+		m.mutation_id, m.kind, m.base_version, m.resolution_conflict_ids, v.snapshot, previous.snapshot, t.deleted_at, f.conflict_ids
 		FROM `+table("changes")+` c
 		JOIN `+table("mutations")+` m ON m.owner_id=c.owner_id AND m.device_id=c.mutation_device_id AND m.mutation_id=c.mutation_id AND m.record_id=c.record_id AND m.canonical_seq=c.seq AND m.canonical_version=c.canonical_version AND m.disposition=c.change_kind
 		JOIN `+table("record_versions")+` v ON v.owner_id=c.owner_id AND v.id=c.version_id AND v.record_kind=c.record_kind AND v.record_id=c.record_id AND v.source_device_id=c.mutation_device_id AND v.source_mutation_id=c.mutation_id AND v.disposition=c.change_kind AND ((c.change_kind='conflict' AND v.record_version=m.base_version+1 AND v.base_version=m.base_version) OR (c.change_kind='accepted' AND v.base_version=m.base_version AND v.record_version=m.base_version+1 AND v.record_version=c.canonical_version))
+		LEFT JOIN LATERAL (SELECT snapshot FROM `+table("record_versions")+` previous WHERE previous.owner_id=c.owner_id AND previous.record_kind=c.record_kind AND previous.record_id=c.record_id AND previous.record_version=m.base_version AND previous.disposition='accepted' ORDER BY previous.id DESC LIMIT 1) previous ON m.kind='tombstone'
 		LEFT JOIN `+table("tombstones")+` t ON t.owner_id=c.owner_id AND t.version_id=c.version_id AND t.record_kind=c.record_kind AND t.record_id=c.record_id
 		LEFT JOIN LATERAL (SELECT array_agg(conflict_id) AS conflict_ids FROM `+table("observation_conflicts")+` f WHERE f.owner_id=c.owner_id AND f.created_seq=c.seq AND f.observation_id=c.record_id AND f.competing_version_id=c.version_id AND f.canonical_version=c.canonical_version) f ON true
-		WHERE c.owner_id=$1 AND c.seq>$2 AND c.seq<=$3 ORDER BY c.seq LIMIT $4`, r.ownerID, cursor.Position, watermark, limit+1)
+		WHERE c.owner_id=$1 AND c.seq>$2 AND c.seq<=$3`+whereProject+` ORDER BY c.seq LIMIT $4`, args...)
 	if err != nil {
 		return syncservice.PullPage{}, repositoryError(ctx)
 	}
 	defer rows.Close()
 	changes := make([]syncservice.Change, 0, limit)
 	hasMore := false
-	expected := cursor.Position + 1
 	remaining := syncservice.MaxPullResponseBytes - 4<<10
 	for rows.Next() {
 		var sequence, version, base int64
 		var recordKind, recordID, kind, changeKind string
 		var mutationID uuid.UUID
 		var conflictIDs, createdConflictIDs []uuid.UUID
-		var snapshot []byte
+		var snapshot, previousSnapshot []byte
 		var deletedAt *time.Time
-		if err := rows.Scan(&sequence, &recordKind, &recordID, &version, &changeKind, &mutationID, &kind, &base, &conflictIDs, &snapshot, &deletedAt, &createdConflictIDs); err != nil {
+		if err := rows.Scan(&sequence, &recordKind, &recordID, &version, &changeKind, &mutationID, &kind, &base, &conflictIDs, &snapshot, &previousSnapshot, &deletedAt, &createdConflictIDs); err != nil {
 			return syncservice.PullPage{}, repositoryError(ctx)
 		}
-		if sequence != expected {
+		if projectID == "" && sequence != cursor.Position+int64(len(changes))+1 {
 			return syncservice.PullPage{}, ErrRepository
 		}
 		if len(changes) == limit {
 			hasMore = true
 			break
 		}
-		mutation, ok := pullMutation(recordKind, recordID, kind, mutationID, base, conflictIDs, snapshot, deletedAt)
+		mutation, ok := pullMutation(recordKind, recordID, kind, mutationID, base, conflictIDs, snapshot, previousSnapshot, deletedAt)
 		if !ok || version < 1 || syncservice.ValidateMutation(mutation) != nil {
 			return syncservice.PullPage{}, ErrRepository
 		}
@@ -305,18 +336,20 @@ func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncse
 		}
 		remaining -= len(encoded)
 		changes = append(changes, change)
-		expected++
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return syncservice.PullPage{}, repositoryError(ctx)
 	}
-	if !hasMore && expected-1 != watermark {
+	if projectID == "" && !hasMore && cursor.Position+int64(len(changes)) != watermark {
 		return syncservice.PullPage{}, ErrRepository
 	}
 	position := cursor.Position
 	if len(changes) != 0 {
 		position = changes[len(changes)-1].Sequence
+	}
+	if projectID != "" && !hasMore {
+		position = watermark
 	}
 	if err := commitRepository(ctx, tx); err != nil {
 		return syncservice.PullPage{}, err
@@ -324,15 +357,25 @@ func (r *Repository) Pull(ctx context.Context, deviceID uuid.UUID, cursor syncse
 	return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: state.HistoryID.String(), Position: position, Watermark: watermark}, HasMore: hasMore, Changes: changes}, nil
 }
 
+func validProjectID(value string) bool {
+	id, err := uuid.Parse(value)
+	return err == nil && id != uuid.Nil && id.String() == value && id.Variant() == uuid.RFC4122 && id.Version() >= 1 && id.Version() <= 5
+}
+
 func hashVersion(value int) *int { return &value }
 
-func pullMutation(recordKind, recordID, kind string, mutationID uuid.UUID, base int64, conflictIDs []uuid.UUID, snapshot []byte, deletedAt *time.Time) (syncservice.Mutation, bool) {
+func pullMutation(recordKind, recordID, kind string, mutationID uuid.UUID, base int64, conflictIDs []uuid.UUID, snapshot, previousSnapshot []byte, deletedAt *time.Time) (syncservice.Mutation, bool) {
 	m := syncservice.Mutation{MutationID: mutationID.String(), RecordID: recordID, RecordKind: syncservice.RecordKind(recordKind), Kind: syncservice.MutationKind(kind), BaseVersion: base}
 	switch m.Kind {
 	case syncservice.MutationTombstone:
 		if deletedAt == nil || json.Unmarshal(snapshot, &m.Tombstone) != nil || m.Tombstone == nil || !timestampsWithinMicrosecond(m.Tombstone.DeletedAt, *deletedAt) {
 			return syncservice.Mutation{}, false
 		}
+		var predecessor syncservice.Observation
+		if json.Unmarshal(previousSnapshot, &predecessor) != nil || predecessor.ProjectID == "" {
+			return syncservice.Mutation{}, false
+		}
+		m.Tombstone.ProjectID = predecessor.ProjectID
 	case syncservice.MutationResolve:
 		if len(conflictIDs) == 0 || json.Unmarshal(snapshot, &m.Observation) != nil || m.Observation == nil {
 			return syncservice.Mutation{}, false
