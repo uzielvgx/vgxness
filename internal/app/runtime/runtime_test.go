@@ -640,7 +640,112 @@ func TestRunForegroundSyncPushesAfterResolutionPull(t *testing.T) {
 	}
 }
 
-func TestRunForegroundProjectSyncIsPushOnlyForSelectedProject(t *testing.T) {
+func TestRunForegroundProjectSyncPullsSelectedProjectAfterEmptyPush(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	history := "550e8400-e29b-41d4-a716-446655440010"
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pullCursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 4}}
+	remote := &testForegroundRemote{pages: []syncservice.PullPage{
+		{Cursor: syncservice.Cursor{HistoryID: history, Position: 4, Watermark: 4}, Changes: []syncservice.Change{}},
+	}}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", project)
+	if err != nil || result.Status != memory.SyncStatusSynced || remote.discovers != 1 || remote.projectPulls != 1 || remote.projectIDs[0] != project || remote.cursors[0].Position != 2 || len(store.pages) != 1 || store.pages[0].Cursor.Position != 4 || remote.pulls != 0 {
+		t.Fatalf("result=%+v err=%v store=%+v remote=%+v", result, err, store, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncPullsPagesAndRetriesFromCommittedCursor(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	history := "550e8400-e29b-41d4-a716-446655440010"
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pullCursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 4}}
+	remote := &testForegroundRemote{pages: []syncservice.PullPage{
+		{Cursor: syncservice.Cursor{HistoryID: history, Position: 3, Watermark: 4}, HasMore: true},
+		{Cursor: syncservice.Cursor{HistoryID: history, Position: 4, Watermark: 4}},
+	}}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", project)
+	if err != nil || result.Status != memory.SyncStatusSynced || remote.projectPulls != 2 || remote.cursors[0].Position != 2 || remote.cursors[1].Position != 3 || store.pullCursor.Position != 4 {
+		t.Fatalf("result=%+v err=%v store=%+v remote=%+v", result, err, store, remote)
+	}
+
+	store.applyPageErr = memory.ErrConflict
+	store.claims = [][]memory.SyncOutboxClaim{nil}
+	remote = &testForegroundRemote{pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 4, Watermark: 4}}}}
+	result, err = runForegroundProjectSync(context.Background(), store, remote, "project-a", project)
+	if !errors.Is(err, memory.ErrConflict) || result.Status != memory.SyncStatusPartial || store.pullCursor.Position != 4 || remote.projectPulls != 1 {
+		t.Fatalf("apply result=%+v err=%v store=%+v remote=%+v", result, err, store, remote)
+	}
+	store.applyPageErr = nil
+	store.claims = [][]memory.SyncOutboxClaim{nil}
+	remote = &testForegroundRemote{pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 4, Watermark: 4}}}}
+	result, err = runForegroundProjectSync(context.Background(), store, remote, "project-a", project)
+	if err != nil || result.Status != memory.SyncStatusSynced || remote.cursors[0].Position != 4 {
+		t.Fatalf("retry result=%+v err=%v remote=%+v", result, err, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncDoesNotPullAfterBlockingPush(t *testing.T) {
+	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440411"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440412"}
+	for _, disposition := range []syncservice.Disposition{syncservice.DispositionRejected, syncservice.DispositionConflict} {
+		store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{claim}}}
+		remote := &testForegroundRemote{disposition: disposition}
+		result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+		if err != nil || remote.discovers != 0 || remote.projectPulls != 0 {
+			t.Fatalf("disposition=%q result=%+v err=%v remote=%+v", disposition, result, err, remote)
+		}
+	}
+}
+
+func TestRunForegroundProjectSyncPullCancellationReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pullCursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-446655440010"}}
+	remote := &testForegroundRemote{cancelPull: cancel}
+	result, err := runForegroundProjectSync(ctx, store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusPartial || remote.projectPulls != 1 {
+		t.Fatalf("result=%+v err=%v remote=%+v", result, err, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncPullPreflightAndRemoteFailures(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	history := "550e8400-e29b-41d4-a716-446655440010"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pullCursor: syncservice.Cursor{HistoryID: history}}
+	remote := &testForegroundRemote{}
+	result, err := runForegroundProjectSync(ctx, store, remote, "project-a", project)
+	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusPartial || remote.discovers != 0 || remote.projectPulls != 0 {
+		t.Fatalf("cancel result=%+v err=%v remote=%+v", result, err, remote)
+	}
+	for _, tc := range []struct {
+		name   string
+		remote *testForegroundRemote
+		status memory.SyncStatus
+	}{
+		{"discover unavailable", &testForegroundRemote{discoverErr: syncclient.ErrUnavailable}, memory.SyncStatusUnreachable},
+		{"discover invalid", &testForegroundRemote{invalidDiscovery: true}, memory.SyncStatusIncompatible},
+		{"pull unavailable", &testForegroundRemote{projectPullErr: syncclient.ErrUnavailable}, memory.SyncStatusUnreachable},
+		{"pull remote", &testForegroundRemote{projectPullErr: syncclient.ErrRemote}, memory.SyncStatusIncompatible},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pullCursor: syncservice.Cursor{HistoryID: history}}
+			result, err := runForegroundProjectSync(context.Background(), store, tc.remote, "project-a", project)
+			if err != nil || result.Status != tc.status || len(store.pages) != 0 {
+				t.Fatalf("result=%+v err=%v store=%+v", result, err, store)
+			}
+		})
+	}
+}
+
+func TestRunForegroundProjectSyncRejectsNonProgressingPullPage(t *testing.T) {
+	history := "550e8400-e29b-41d4-a716-446655440010"
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pullCursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 4}}
+	remote := &testForegroundRemote{pages: []syncservice.PullPage{{Cursor: store.pullCursor, HasMore: true}}}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+	if err != nil || result.Status != memory.SyncStatusPartial || len(store.pages) != 0 || store.pullCursor.Position != 2 {
+		t.Fatalf("result=%+v err=%v store=%+v", result, err, store)
+	}
+}
+
+func TestRunForegroundProjectSyncUsesOnlySelectedProject(t *testing.T) {
 	claims := []memory.SyncOutboxClaim{
 		{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440401", RecordID: "a", RecordKind: syncservice.RecordKindProject}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440402"},
 		{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440403", RecordID: "a-observation", RecordKind: syncservice.RecordKindObservation}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440404"},
@@ -648,7 +753,7 @@ func TestRunForegroundProjectSyncIsPushOnlyForSelectedProject(t *testing.T) {
 	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims, nil}}
 	remote := &testForegroundRemote{disposition: syncservice.DispositionAccepted}
 	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
-	if err != nil || result.Mode != memory.SyncModeProjectPushOnly || result.Status != memory.SyncStatusSynced || result.Pushed != 2 || result.Batches != 1 || store.project != "project-a" || remote.pushes != 1 || remote.discovers != 0 || remote.pulls != 0 || len(remote.sent) != 2 || remote.sent[0].RecordID == "b" {
+	if err != nil || result.Mode != memory.SyncModeProjectBidirectional || result.Status != memory.SyncStatusSynced || result.Pushed != 2 || result.Batches != 1 || store.project != "project-a" || remote.pushes != 1 || remote.discovers != 1 || remote.projectPulls != 1 || remote.pulls != 0 || len(remote.sent) != 2 || remote.sent[0].RecordID == "b" {
 		t.Fatalf("result=%+v err=%v project=%q remote=%+v", result, err, store.project, remote)
 	}
 }
@@ -725,7 +830,7 @@ func TestRunForegroundProjectSyncCancellationAndRetryableBatchSemantics(t *testi
 	cancelStore := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{claims}}
 	cancelRemote := &testForegroundRemote{disposition: syncservice.DispositionAccepted, cancelPush: cancel}
 	result, err := runForegroundProjectSync(ctx, cancelStore, cancelRemote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
-	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusPartial || result.Mode != memory.SyncModeProjectPushOnly || cancelStore.retries != 0 {
+	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusPartial || result.Mode != memory.SyncModeProjectBidirectional || cancelStore.retries != 0 {
 		t.Fatalf("cancel result=%+v err=%v retries=%d", result, err, cancelStore.retries)
 	}
 	applyCtx, cancelApply := context.WithCancel(context.Background())
@@ -792,14 +897,30 @@ type orderedStore struct {
 }
 
 type projectForegroundStore struct {
-	claims    [][]memory.SyncOutboxClaim
-	project   string
-	applied   int
-	retries   int
-	applyErr  func() error
-	retryErr  error
-	translate func(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error)
-	appliedID string
+	claims       [][]memory.SyncOutboxClaim
+	project      string
+	applied      int
+	retries      int
+	applyErr     func() error
+	retryErr     error
+	translate    func(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error)
+	appliedID    string
+	pullCursor   syncservice.Cursor
+	pullErr      error
+	applyPageErr error
+	pages        []syncservice.PullPage
+}
+
+func (store *projectForegroundStore) ProjectPullCursor(context.Context, string, string) (syncservice.Cursor, error) {
+	return store.pullCursor, store.pullErr
+}
+func (store *projectForegroundStore) ApplyProjectPulledPage(_ context.Context, _ string, _ string, page syncservice.PullPage) error {
+	store.pages = append(store.pages, page)
+	if store.applyPageErr != nil {
+		return store.applyPageErr
+	}
+	store.pullCursor = page.Cursor
+	return nil
 }
 
 func (store *projectForegroundStore) ClaimDueSyncOutboxForProject(_ context.Context, _ time.Duration, _ int, project string) ([]memory.SyncOutboxClaim, error) {
@@ -887,16 +1008,24 @@ func newForegroundStore(t *testing.T) *memory.Store {
 }
 
 type testForegroundRemote struct {
-	disposition   syncservice.Disposition
-	retryable     bool
-	capabilityErr error
-	pushErr       error
-	cancelPush    func()
-	capabilities  int
-	pushes        int
-	discovers     int
-	pulls         int
-	sent          []syncservice.Mutation
+	disposition      syncservice.Disposition
+	retryable        bool
+	capabilityErr    error
+	discoverErr      error
+	projectPullErr   error
+	invalidDiscovery bool
+	pushErr          error
+	cancelPush       func()
+	cancelPull       func()
+	capabilities     int
+	pushes           int
+	discovers        int
+	pulls            int
+	projectPulls     int
+	projectIDs       []string
+	cursors          []syncservice.Cursor
+	pages            []syncservice.PullPage
+	sent             []syncservice.Mutation
 }
 
 func (remote *testForegroundRemote) Capabilities(context.Context) error {
@@ -905,11 +1034,35 @@ func (remote *testForegroundRemote) Capabilities(context.Context) error {
 }
 func (remote *testForegroundRemote) Discover(context.Context) (syncservice.Discovery, error) {
 	remote.discovers++
+	if remote.discoverErr != nil {
+		return syncservice.Discovery{}, remote.discoverErr
+	}
+	if remote.invalidDiscovery {
+		return syncservice.Discovery{}, nil
+	}
 	return syncservice.Discovery{ProtocolVersion: 1, HistoryID: "550e8400-e29b-41d4-a716-446655440010", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, nil
 }
 func (remote *testForegroundRemote) Pull(_ context.Context, cursor syncservice.Cursor, _ int) (syncservice.PullPage, error) {
 	remote.pulls++
 	return syncservice.PullPage{Cursor: cursor}, nil
+}
+func (remote *testForegroundRemote) PullProject(_ context.Context, cursor syncservice.Cursor, project string, _ int) (syncservice.PullPage, error) {
+	remote.projectPulls++
+	remote.projectIDs = append(remote.projectIDs, project)
+	remote.cursors = append(remote.cursors, cursor)
+	if remote.cancelPull != nil {
+		remote.cancelPull()
+		return syncservice.PullPage{}, context.Canceled
+	}
+	if remote.projectPullErr != nil {
+		return syncservice.PullPage{}, remote.projectPullErr
+	}
+	if len(remote.pages) == 0 {
+		return syncservice.PullPage{Cursor: cursor}, nil
+	}
+	page := remote.pages[0]
+	remote.pages = remote.pages[1:]
+	return page, nil
 }
 func (remote *testForegroundRemote) Push(_ context.Context, mutations []syncservice.Mutation) ([]syncservice.Result, error) {
 	remote.pushes++

@@ -220,6 +220,9 @@ const (
 	// SyncModeProjectPushOnly reports project-scoped foreground push without
 	// owner-global pull, bootstrap, conflict recovery, or cursor advancement.
 	SyncModeProjectPushOnly SyncMode = "project_push_only"
+	// SyncModeProjectBidirectional reports project-scoped foreground push and
+	// pull without touching owner-global sync state.
+	SyncModeProjectBidirectional SyncMode = "project_bidirectional"
 )
 
 // SyncResult contains only durable outcome counts; it never carries a credential.
@@ -2066,6 +2069,32 @@ func (s *Store) ApplyProjectPulledPage(ctx context.Context, portableProject, loc
 	return commit(ctx, tx)
 }
 
+// ProjectPullCursor returns the durable cursor for one portable project and
+// history. It never reads or updates the owner-global sync cursor.
+func (s *Store) ProjectPullCursor(ctx context.Context, portableProject, historyID string) (syncservice.Cursor, error) {
+	if s == nil || ctx == nil || !projectIDPattern.MatchString(portableProject) || !canonicalUUIDPattern.MatchString(historyID) {
+		return syncservice.Cursor{}, fmt.Errorf("%w: project pull cursor", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return syncservice.Cursor{}, err
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return syncservice.Cursor{}, writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	position, watermark, err := projectPulledCursor(ctx, tx, portableProject, historyID)
+	if err != nil {
+		return syncservice.Cursor{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return syncservice.Cursor{}, writeError(ctx, err)
+	}
+	return syncservice.Cursor{HistoryID: historyID, Position: position, Watermark: watermark}, nil
+}
+
 func validateProjectPulledPage(project string, page syncservice.PullPage) error {
 	if !projectIDPattern.MatchString(project) || !canonicalUUIDPattern.MatchString(page.Cursor.HistoryID) || page.Cursor.Position < 0 || page.Cursor.Watermark < 0 || page.Cursor.Position > page.Cursor.Watermark || page.HasMore != (page.Cursor.Position < page.Cursor.Watermark) {
 		return ErrInvalid
@@ -2094,8 +2123,7 @@ func projectPulledCursor(ctx context.Context, tx *sql.Tx, project, history strin
 	var position, watermark, updated int64
 	err := tx.QueryRowContext(ctx, `SELECT history_id,position,watermark,updated_at,typeof(history_id),typeof(position),typeof(watermark),typeof(updated_at) FROM sync_project_cursor WHERE portable_project_id=?`, project).Scan(&storedHistory, &position, &watermark, &updated, &historyType, &positionType, &watermarkType, &updatedType)
 	if errors.Is(err, sql.ErrNoRows) {
-		var count int
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, project).Scan(&count); err != nil || count != 0 {
+		if err = validateProjectPulledInbox(ctx, tx, project, history, 0); err != nil {
 			return 0, 0, fmt.Errorf("%w: project cursor inbox", ErrCorrupt)
 		}
 		return 0, 0, nil
@@ -2103,7 +2131,27 @@ func projectPulledCursor(ctx context.Context, tx *sql.Tx, project, history strin
 	if err != nil || historyType != "text" || positionType != "integer" || watermarkType != "integer" || updatedType != "integer" || !canonicalUUIDPattern.MatchString(storedHistory) || storedHistory != history || position < 0 || watermark < position || !validStoredSyncTime(updated, time.Unix(0, updated)) {
 		return 0, 0, fmt.Errorf("%w: project pulled cursor", ErrCorrupt)
 	}
+	if err = validateProjectPulledInbox(ctx, tx, project, history, position); err != nil {
+		return 0, 0, fmt.Errorf("%w: project cursor inbox", ErrCorrupt)
+	}
 	return position, watermark, nil
+}
+
+func validateProjectPulledInbox(ctx context.Context, tx *sql.Tx, project, history string, position int64) error {
+	rows, err := tx.QueryContext(ctx, `SELECT portable_project_id,history_id,seq,change_hash,applied_at,typeof(portable_project_id),typeof(history_id),typeof(seq),typeof(change_hash),typeof(applied_at) FROM sync_project_inbox WHERE portable_project_id=?`, project)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var storedProject, storedHistory, projectType, historyType, sequenceType, hashType, appliedType string
+		var sequence, applied int64
+		var hash []byte
+		if err = rows.Scan(&storedProject, &storedHistory, &sequence, &hash, &applied, &projectType, &historyType, &sequenceType, &hashType, &appliedType); err != nil || projectType != "text" || historyType != "text" || sequenceType != "integer" || hashType != "blob" || appliedType != "integer" || storedProject != project || storedHistory != history || sequence < 1 || sequence > position || len(hash) != sha256.Size || !validStoredSyncTime(applied, time.Unix(0, applied)) {
+			return ErrCorrupt
+		}
+	}
+	return rows.Err()
 }
 
 func projectPulledInboxRow(ctx context.Context, tx *sql.Tx, project, history string, sequence int64) ([]byte, error) {
@@ -2232,7 +2280,17 @@ func (s *Store) mapProjectPulledChange(ctx context.Context, tx *sql.Tx, portable
 func (s *Store) applyProjectPulledMutation(ctx context.Context, tx *sql.Tx, history string, change syncservice.Change) error {
 	if change.Mutation.RecordKind == syncservice.RecordKindProject && change.Mutation.Kind == syncservice.MutationCreate {
 		var version int64
-		if err := tx.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, change.Mutation.RecordID).Scan(&version); err != nil || version != 0 || change.Mutation.BaseVersion != 0 || change.CanonicalVersion != 1 {
+		if err := tx.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, change.Mutation.RecordID).Scan(&version); err != nil || change.Mutation.BaseVersion != 0 || change.CanonicalVersion != 1 {
+			return fmt.Errorf("%w: project pulled identity", ErrConflict)
+		}
+		if version == 1 {
+			own, err := ownPulledReceipt(ctx, tx, change)
+			if err != nil || !own {
+				return fmt.Errorf("%w: project pulled identity", ErrConflict)
+			}
+			return nil
+		}
+		if version != 0 {
 			return fmt.Errorf("%w: project pulled identity", ErrConflict)
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE projects SET sync_version=1 WHERE id=?`, change.Mutation.RecordID)
