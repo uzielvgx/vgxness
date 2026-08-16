@@ -23,6 +23,7 @@ type MemoryRuntime interface {
 	Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error)
 	Forget(context.Context, config.Options, memory.Forget) (memory.Entry, error)
 	ResolveProject(context.Context, config.Options, string) (string, error)
+	InitializeProject(context.Context, config.Options, string) (string, error)
 	Sync(context.Context, config.Options) (memory.SyncResult, error)
 	ConfigureSync(context.Context, config.Options, string, string, string) (memory.SyncConfigurationStatus, error)
 	SyncStatus(context.Context, config.Options) (memory.SyncConfigurationStatus, error)
@@ -45,11 +46,14 @@ type memoryInput struct {
 }
 
 func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
-	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync") || runtime == nil {
+	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync" && args[0] != "project") || runtime == nil {
 		fmt.Fprintln(stderr, "invalid: unsupported memory operation")
 		return 2
 	}
 	verb := args[0]
+	if verb == "project" {
+		return runMemoryProjectInit(ctx, args[1:], stdout, stderr, runtime)
+	}
 	if verb == "sync" {
 		if len(args) > 1 {
 			switch args[1] {
@@ -199,6 +203,33 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		}
 	}
 	_, _ = io.Copy(stdout, &output)
+	return 0
+}
+
+func runMemoryProjectInit(ctx context.Context, args []string, stdout, stderr io.Writer, runtime MemoryRuntime) int {
+	if len(args) == 0 || args[0] != "init" {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	flags := flag.NewFlagSet("memory project init", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var workspace string
+	var opts config.Options
+	flags.StringVar(&workspace, "workspace", "", "workspace that receives the project identity marker")
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || workspace == "" {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	absolute, err := filepath.Abs(workspace)
+	if err != nil {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	opts.ProjectDir = filepath.Clean(absolute)
+	id, err := runtime.InitializeProject(ctx, opts, opts.ProjectDir)
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	fmt.Fprintf(stdout, "project=%s\n", id)
 	return 0
 }
 

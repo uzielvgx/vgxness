@@ -29,6 +29,48 @@ func TestMemoryReadOnlyResolveProjectDoesNotCreateAbsentStore(t *testing.T) {
 	}
 }
 
+func TestMemoryInitializeProjectBindsMarkerWithoutRekeyingLocalProject(t *testing.T) {
+	workspace, storage := t.TempDir(), t.TempDir()
+	runtime := NewMemory("cli", false)
+	store, err := openStore(context.Background(), config.Options{StorageRoot: storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := store.ResolveProject(context.Background(), workspace)
+	store.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := runtime.InitializeProject(context.Background(), config.Options{StorageRoot: storage}, workspace)
+	if err != nil {
+		t.Fatalf("initialize project: %v", err)
+	}
+	marker, present, err := memory.ReadProjectID(workspace)
+	if err != nil || !present || marker != id {
+		t.Fatalf("marker=%q present=%t err=%v want=%q", marker, present, err, id)
+	}
+	store, err = openStore(context.Background(), config.Options{StorageRoot: storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	resolved, err := store.ResolveProject(context.Background(), workspace)
+	if err != nil || resolved != legacy {
+		t.Fatalf("normal resolution=%q err=%v; want legacy local project %q", resolved, err, legacy)
+	}
+	repeated, err := runtime.InitializeProject(context.Background(), config.Options{StorageRoot: storage}, workspace)
+	if err != nil || repeated != id {
+		t.Fatalf("repeat=%q err=%v want=%q", repeated, err, id)
+	}
+	if err := os.Remove(filepath.Join(workspace, ".vgxness", "project-id")); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := runtime.InitializeProject(context.Background(), config.Options{StorageRoot: storage}, workspace)
+	if err != nil || recovered != id {
+		t.Fatalf("recovered=%q err=%v want=%q", recovered, err, id)
+	}
+}
+
 func TestMemorySyncFailsClosedBeforeSecretsOrTransport(t *testing.T) {
 	storageRoot := filepath.Join(t.TempDir(), "project-local")
 	credentials, requests := 0, 0

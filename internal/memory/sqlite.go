@@ -341,11 +341,14 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims')`).Scan(&probe); err != nil || probe != 20 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','portable_project_identities','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims')`).Scan(&probe); err != nil || probe != 21 {
 		if contextErr := cancelled(ctx); contextErr != nil {
 			return 0, contextErr
 		}
 		return 0, fmt.Errorf("%w: required schema unavailable", ErrCorrupt)
+	}
+	if !s.portableProjectIdentitySchemaHealthy(ctx) {
+		return 0, fmt.Errorf("%w: portable project identity schema unavailable", ErrCorrupt)
 	}
 	if !s.syncSchemaHealthy(ctx) {
 		if err := cancelled(ctx); err != nil {
@@ -363,6 +366,14 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 		return 0, healthError(ctx, "FTS5 unavailable")
 	}
 	return version, nil
+}
+
+func (s *Store) portableProjectIdentitySchemaHealthy(ctx context.Context) bool {
+	if table, ok := s.schemaSQL(ctx, "table", "portable_project_identities"); !ok || normalizeSchemaSQL(table) != normalizeSchemaSQL(strings.Split(schemaV13, ";")[0]) || !s.schemaColumns(ctx, "portable_project_identities", "portable_id", "project_id", "workspace_hash", "source", "bound_at") {
+		return false
+	}
+	index, ok := s.schemaSQL(ctx, "index", "portable_project_identities_project_id_idx")
+	return ok && normalizeSchemaSQL(index) == normalizeSchemaSQL(strings.Split(schemaV13, ";")[1]) && s.schemaIndexColumns(ctx, "portable_project_identities_project_id_idx", "project_id")
 }
 
 func healthError(ctx context.Context, message string) error {
@@ -674,6 +685,72 @@ func (s *Store) ResolveProject(ctx context.Context, workspace string) (string, e
 	}
 	committed = true
 	return projectID, nil
+}
+
+// BindPortableProjectID records explicit, local provenance for a published
+// marker. It never changes the legacy project ID or any data that references it.
+func (s *Store) BindPortableProjectID(ctx context.Context, workspace, portableID string) error {
+	if s.readOnly || !projectIDPattern.MatchString(portableID) {
+		return fmt.Errorf("%w: portable project identity", ErrInvalid)
+	}
+	localID, err := s.ResolveProject(ctx, workspace)
+	if err != nil {
+		return err
+	}
+	hash, err := portableWorkspaceHash(workspace)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	var existingPortable, existingProject string
+	err = tx.QueryRowContext(ctx, `SELECT portable_id, project_id FROM portable_project_identities WHERE portable_id=? OR workspace_hash=? LIMIT 1`, portableID, hash).Scan(&existingPortable, &existingProject)
+	if err == nil {
+		if existingPortable != portableID || existingProject != localID {
+			return fmt.Errorf("%w: portable project identity binding", ErrConflict)
+		}
+		return commit(ctx, tx)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return writeError(ctx, err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?)`, portableID, localID, hash, "explicit-init", s.now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return conflictOrWrite(ctx, err)
+	}
+	return commit(ctx, tx)
+}
+
+func (s *Store) PortableProjectID(ctx context.Context, workspace string) (string, bool, error) {
+	hash, err := portableWorkspaceHash(workspace)
+	if err != nil {
+		return "", false, err
+	}
+	var id string
+	err = s.db.QueryRowContext(ctx, `SELECT portable_id FROM portable_project_identities WHERE workspace_hash=?`, hash).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, writeError(ctx, err)
+	}
+	return id, true, nil
+}
+
+func portableWorkspaceHash(workspace string) (string, error) {
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid workspace", ErrInvalid)
+	}
+	abs, err = filepath.EvalSymlinks(filepath.Clean(abs))
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid workspace", ErrInvalid)
+	}
+	digest := sha256.Sum256([]byte(config.CanonicalizeExistingPathCase(abs)))
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func (s *Store) Save(ctx context.Context, item Observation) (Observation, error) {
