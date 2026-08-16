@@ -160,6 +160,9 @@ func (runtime Memory) InitializeProject(ctx context.Context, opts config.Options
 // Sync performs a bounded, foreground synchronization without exposing credentials.
 func (runtime Memory) Sync(ctx context.Context, opts config.Options) (memory.SyncResult, error) {
 	result, err := runtime.sync(ctx, opts)
+	if result.Mode == "" {
+		result.Mode = memory.SyncModeProjectPushOnly
+	}
 	if err == nil {
 		runtime.emitMemorySync(ctx, opts.ProjectDir, result)
 	}
@@ -251,8 +254,24 @@ func (runtime Memory) sync(ctx context.Context, opts config.Options) (memory.Syn
 	if err != nil {
 		return memory.SyncResult{Status: memory.SyncStatusInvalid}, nil
 	}
+	workspace, err := canonicalInvocationWorkspace(opts.ProjectDir)
+	if err != nil {
+		return memory.SyncResult{Status: memory.SyncStatusInvalid}, nil
+	}
+	portableID, present, err := memory.ReadProjectID(workspace)
+	if err != nil || !present {
+		return memory.SyncResult{Status: memory.SyncStatusUnavailable}, nil
+	}
+	projectID, bound, err := store.BoundPortableProject(ctx, workspace, portableID)
+	if err != nil || !bound {
+		return memory.SyncResult{Status: memory.SyncStatusUnavailable}, nil
+	}
+	resolved, err := store.ResolveProject(ctx, workspace)
+	if err != nil || resolved != projectID {
+		return memory.SyncResult{Status: memory.SyncStatusUnavailable}, nil
+	}
 	remote := syncRemote{client: client, credential: credential}
-	return runForegroundSync(ctx, store, remote)
+	return runForegroundProjectSync(ctx, store, remote, projectID)
 }
 
 func validBearer(value, deviceID string) bool {
@@ -543,6 +562,109 @@ type foregroundStore interface {
 	SyncQueueSummary(context.Context) (memory.SyncQueueSummary, error)
 }
 
+type foregroundProjectStore interface {
+	ClaimDueSyncOutboxForProject(context.Context, time.Duration, int, string) ([]memory.SyncOutboxClaim, error)
+	ApplySyncPushResult(context.Context, string, string, syncservice.Result) error
+	MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error
+}
+
+// runForegroundProjectSync pushes one locally bound project's outbox only.
+// Owner-global pull cursors and bootstrap state are intentionally untouched.
+func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore, remote foregroundRemote, project string) (memory.SyncResult, error) {
+	result := memory.SyncResult{Mode: memory.SyncModeProjectPushOnly, Status: memory.SyncStatusSynced}
+	capabilityCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+	err := remote.Capabilities(capabilityCtx)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, ctx.Err()
+		}
+		result.Status = syncStatusForError(err)
+		return result, nil
+	}
+	for batch := 0; batch < foregroundSyncBatches; batch++ {
+		claims, err := store.ClaimDueSyncOutboxForProject(ctx, foregroundSyncLease, 16, project)
+		if err != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, err
+		}
+		if len(claims) == 0 {
+			return result, nil
+		}
+		result.Batches++
+		mutations := make([]syncservice.Mutation, len(claims))
+		for index := range claims {
+			mutations[index] = claims[index].Mutation
+		}
+		pushCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+		results, pushErr := remote.Push(pushCtx, mutations)
+		cancel()
+		if pushErr != nil {
+			if ctx.Err() != nil {
+				result.Status = memory.SyncStatusPartial
+				return result, ctx.Err()
+			}
+			if errors.Is(pushErr, syncclient.ErrUnauthorized) {
+				result.Status = memory.SyncStatusUnauthorized
+			} else if markClaimsRetry(ctx, store, claims, &result) {
+				result.Status = memory.SyncStatusUnreachable
+			} else {
+				result.Status = memory.SyncStatusPartial
+			}
+			return result, nil
+		}
+		if len(results) != len(claims) {
+			markClaimsRetry(ctx, store, claims, &result)
+			result.Status = memory.SyncStatusPartial
+			return result, nil
+		}
+		blocking := false
+		for index, pushResult := range results {
+			claim := claims[index]
+			if pushResult.MutationID != claim.Mutation.MutationID {
+				markClaimsRetry(ctx, store, claims[index:], &result)
+				result.Status = memory.SyncStatusPartial
+				return result, nil
+			}
+			if err := store.ApplySyncPushResult(ctx, claim.Mutation.MutationID, claim.ClaimToken, pushResult); err != nil {
+				if ctx.Err() != nil {
+					result.Status = memory.SyncStatusPartial
+					return result, ctx.Err()
+				}
+				markClaimsRetry(ctx, store, claims[index:], &result)
+				result.Status = memory.SyncStatusPartial
+				return result, nil
+			}
+			switch pushResult.Disposition {
+			case syncservice.DispositionAccepted:
+				result.Pushed++
+			case syncservice.DispositionPreviouslyAccepted:
+				result.Pushed++
+				result.PreviouslyAccepted++
+			case syncservice.DispositionRejected:
+				if pushResult.Retryable {
+					result.Retried++
+					result.Status = memory.SyncStatusPartial
+				} else {
+					result.Rejected++
+					result.Status = memory.SyncStatusRejected
+				}
+				blocking = true
+			case syncservice.DispositionConflict:
+				result.Conflicts++
+				result.Status = memory.SyncStatusConflict
+				blocking = true
+			}
+		}
+		if blocking {
+			return result, nil
+		}
+	}
+	result.Status = memory.SyncStatusPartial
+	return result, nil
+}
+
 func runForegroundSync(ctx context.Context, store foregroundStore, remote foregroundRemote) (memory.SyncResult, error) {
 	result := memory.SyncResult{Status: memory.SyncStatusSynced}
 	capabilityCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
@@ -731,7 +853,11 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 	return result, nil
 }
 
-func markClaimsRetry(ctx context.Context, store foregroundStore, claims []memory.SyncOutboxClaim, result *memory.SyncResult) bool {
+type foregroundRetryStore interface {
+	MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error
+}
+
+func markClaimsRetry(ctx context.Context, store foregroundRetryStore, claims []memory.SyncOutboxClaim, result *memory.SyncResult) bool {
 	allMarked := true
 	for _, claim := range claims {
 		if err := store.MarkSyncOutboxRetry(ctx, claim.Mutation.MutationID, claim.ClaimToken, time.Now().UTC().Add(time.Second), "transport"); err == nil {

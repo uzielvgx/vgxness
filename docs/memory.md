@@ -46,6 +46,16 @@ ownership, permissions, and Windows limitations. For existing project data,
 run `memory sync backfill --workspace /absolute/workspace` before the first
 sync. Backfill is local-only, bounded, and idempotent.
 
+Foreground sync is explicitly project-scoped: use `memory sync --workspace
+/absolute/workspace`. The workspace must already have a valid
+`.vgxness/project-id` marker and matching local portable binding created by
+`memory project init`; otherwise sync fails closed before any remote call. This
+mode pushes only that project's project, session, and observation mutations. It
+does not pull remote history, bootstrap, resolve conflicts, or advance the
+owner-global cursor, so it is not bidirectional synchronization.
+Its result mode is `project_push_only`, including when the bounded push reports
+an unavailable, rejected, conflict, or partial outcome.
+
 The default database is `~/.vgxness/memory.db`. Explicit `--storage-root` and
 `--project-local` modes use isolated databases. The OpenCode integration exposes
 both domains through the [MCP-only integration](opencode-integration.md); MCP

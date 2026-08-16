@@ -69,8 +69,9 @@ func (f *fakeMemoryRuntime) Recent(_ context.Context, _ config.Options, request 
 	return f.items, f.err
 }
 
-func (f *fakeMemoryRuntime) Sync(context.Context, config.Options) (memory.SyncResult, error) {
+func (f *fakeMemoryRuntime) Sync(_ context.Context, opts config.Options) (memory.SyncResult, error) {
 	f.calls++
+	f.opts = opts
 	return f.sync, f.err
 }
 func (f *fakeMemoryRuntime) ConfigureSync(_ context.Context, opts config.Options, endpoint, deviceID, bearer string) (memory.SyncConfigurationStatus, error) {
@@ -221,6 +222,27 @@ func TestMemoryCLI_SyncUsesNoInputAndRendersTokenFreeResult(t *testing.T) {
 	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusSynced, Pushed: 1}}
 	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"status":"synced"`) && strings.Contains(out, `"pushed":1`) && !strings.Contains(out, "vgx1."), "sync json: code=%d out=%q stderr=%q", code, out, stderr)
+
+	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectPushOnly, Status: memory.SyncStatusSynced, Pushed: 1}}
+	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_push_only\nstatus=synced\n"), "project mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"mode":"project_push_only"`), "project mode json output: code=%d out=%q stderr=%q", code, out, stderr)
+
+	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectPushOnly, Status: memory.SyncStatusUnavailable}}
+	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_push_only\nstatus=unavailable\n"), "preflight mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
+}
+
+func TestMemoryCLI_SyncPropagatesWorkspaceSelector(t *testing.T) {
+	workspace := t.TempDir()
+	runtime := &fakeMemoryRuntime{}
+	code, _, stderr := runMemoryTest([]string{"memory", "sync", "--workspace", workspace}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && runtime.opts.ProjectDir == workspace, "code=%d stderr=%q calls=%d projectDir=%q", code, stderr, runtime.calls, runtime.opts.ProjectDir)
+
+	runtime = &fakeMemoryRuntime{}
+	code, _, _ = runMemoryTest([]string{"memory", "sync", "--workspace", workspace, "unexpected"}, "", runtime)
+	testutil.Require(t, code == 2 && runtime.calls == 0, "invalid selector invocation: code=%d calls=%d", code, runtime.calls)
 }
 
 func TestMemoryCLI_SyncConfigureAndStatusAreStrictAndTokenFree(t *testing.T) {

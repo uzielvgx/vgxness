@@ -213,8 +213,18 @@ const (
 	SyncStatusSynced                SyncStatus = "synced"
 )
 
+// SyncMode identifies the operation boundary that produced a sync result.
+type SyncMode string
+
+const (
+	// SyncModeProjectPushOnly reports project-scoped foreground push without
+	// owner-global pull, bootstrap, conflict recovery, or cursor advancement.
+	SyncModeProjectPushOnly SyncMode = "project_push_only"
+)
+
 // SyncResult contains only durable outcome counts; it never carries a credential.
 type SyncResult struct {
+	Mode               SyncMode   `json:"mode,omitempty"`
 	Status             SyncStatus `json:"status"`
 	Pushed             int        `json:"pushed"`
 	PreviouslyAccepted int        `json:"previouslyAccepted"`
@@ -1026,6 +1036,20 @@ func (s *Store) DueSyncOutbox(ctx context.Context, due time.Time) ([]SyncOutboxD
 
 // ClaimDueSyncOutbox atomically leases eligible oldest mutations per record.
 func (s *Store) ClaimDueSyncOutbox(ctx context.Context, lease time.Duration, limit int) ([]SyncOutboxClaim, error) {
+	return s.claimDueSyncOutbox(ctx, lease, limit, "")
+}
+
+// ClaimDueSyncOutboxForProject leases only mutations owned by project. It
+// preserves the existing mutation bytes and identifiers while isolating other
+// projects' pending work.
+func (s *Store) ClaimDueSyncOutboxForProject(ctx context.Context, lease time.Duration, limit int, project string) ([]SyncOutboxClaim, error) {
+	if project == "" {
+		return nil, fmt.Errorf("%w: sync project", ErrInvalid)
+	}
+	return s.claimDueSyncOutbox(ctx, lease, limit, project)
+}
+
+func (s *Store) claimDueSyncOutbox(ctx context.Context, lease time.Duration, limit int, project string) ([]SyncOutboxClaim, error) {
 	if err := cancelled(ctx); err != nil {
 		return nil, err
 	}
@@ -1052,13 +1076,20 @@ func (s *Store) ClaimDueSyncOutbox(ctx context.Context, lease time.Duration, lim
 			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
 		}
 	}()
-	rows, err := conn.QueryContext(ctx, `SELECT o.mutation_id,o.record_kind,o.record_id,o.mutation_kind,o.base_version,o.payload_version,o.payload,o.state,o.attempts,o.last_error_code,o.next_attempt_at,o.created_at,o.updated_at
+	query := `SELECT o.mutation_id,o.record_kind,o.record_id,o.mutation_kind,o.base_version,o.payload_version,o.payload,o.state,o.attempts,o.last_error_code,o.next_attempt_at,o.created_at,o.updated_at
 		FROM sync_outbox o LEFT JOIN sync_outbox_claims c ON c.mutation_id=o.mutation_id
 		WHERE o.next_attempt_at<=? AND (c.mutation_id IS NULL OR c.lease_until<=?)
 		AND NOT EXISTS (SELECT 1 FROM sync_outbox p WHERE p.record_kind=o.record_kind AND p.record_id=o.record_id AND (p.created_at<o.created_at OR p.created_at=o.created_at AND p.id<o.id))
 		AND NOT EXISTS (SELECT 1 FROM sync_conflicts f WHERE f.status='unresolved' AND f.record_kind=o.record_kind AND f.record_id=o.record_id)
-		AND o.base_version=CASE o.record_kind WHEN 'project' THEN COALESCE((SELECT sync_version FROM projects WHERE id=o.record_id),-1) WHEN 'session' THEN COALESCE((SELECT sync_version FROM sessions WHERE id=o.record_id),-1) WHEN 'observation' THEN COALESCE((SELECT sync_version FROM observations WHERE id=o.record_id),-1) ELSE -1 END
-		ORDER BY o.created_at,o.id LIMIT ?`, nowNanos, nowNanos, limit)
+		AND o.base_version=CASE o.record_kind WHEN 'project' THEN COALESCE((SELECT sync_version FROM projects WHERE id=o.record_id),-1) WHEN 'session' THEN COALESCE((SELECT sync_version FROM sessions WHERE id=o.record_id),-1) WHEN 'observation' THEN COALESCE((SELECT sync_version FROM observations WHERE id=o.record_id),-1) ELSE -1 END`
+	args := []any{nowNanos, nowNanos}
+	if project != "" {
+		query += ` AND (o.record_kind='project' AND o.record_id=? OR o.record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.record_id AND s.project_id=?) OR o.record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=o.record_id AND n.project_id=?))`
+		args = append(args, project, project, project)
+	}
+	query += ` ORDER BY o.created_at,o.id LIMIT ?`
+	args = append(args, limit)
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, writeError(ctx, err)
 	}
