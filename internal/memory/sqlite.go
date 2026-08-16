@@ -341,7 +341,7 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','portable_project_identities','sync_portable_identities','sync_portable_identity_adoptions','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims')`).Scan(&probe); err != nil || probe != 23 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','portable_project_identities','sync_portable_identities','sync_portable_identity_adoptions','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims','sync_project_cursor','sync_project_inbox')`).Scan(&probe); err != nil || probe != 25 {
 		if contextErr := cancelled(ctx); contextErr != nil {
 			return 0, contextErr
 		}
@@ -358,6 +358,9 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	}
 	if !s.syncPortableIdentitySchemaHealthy(ctx) {
 		return 0, fmt.Errorf("%w: sync portable identity schema unavailable", ErrCorrupt)
+	}
+	if !s.syncProjectCursorSchemaHealthy(ctx) {
+		return 0, fmt.Errorf("%w: sync project cursor schema unavailable", ErrCorrupt)
 	}
 	if !s.syncPortableIdentityAdoptionSchemaHealthy(ctx) {
 		return 0, fmt.Errorf("%w: sync portable identity adoption schema unavailable", ErrCorrupt)
@@ -386,6 +389,20 @@ func (s *Store) syncPortableIdentitySchemaHealthy(ctx context.Context) bool {
 	}
 	index, ok := s.schemaSQL(ctx, "index", "sync_portable_identities_inverse_idx")
 	return ok && normalizeSchemaSQL(index) == normalizeSchemaSQL(strings.Split(schemaV14, ";")[1]) && s.schemaIndexColumns(ctx, "sync_portable_identities_inverse_idx", "portable_project_id", "record_kind", "portable_id")
+}
+
+func (s *Store) syncProjectCursorSchemaHealthy(ctx context.Context) bool {
+	normalizeV16 := func(value string) string { return strings.ReplaceAll(normalizeSchemaSQL(value), "if not exists ", "") }
+	cursor, ok := s.schemaSQL(ctx, "table", "sync_project_cursor")
+	if !ok || normalizeV16(cursor) != normalizeV16(strings.Split(schemaV16, ";")[0]) || !s.schemaColumns(ctx, "sync_project_cursor", "portable_project_id", "history_id", "position", "watermark", "updated_at") {
+		return false
+	}
+	inbox, ok := s.schemaSQL(ctx, "table", "sync_project_inbox")
+	if !ok || normalizeV16(inbox) != normalizeV16(strings.Split(schemaV16, ";")[1]) || !s.schemaColumns(ctx, "sync_project_inbox", "portable_project_id", "history_id", "seq", "change_hash", "applied_at") {
+		return false
+	}
+	index, ok := s.schemaSQL(ctx, "index", "sync_project_inbox_cursor_idx")
+	return ok && normalizeV16(index) == normalizeV16(strings.Split(schemaV16, ";")[2]) && s.schemaIndexColumns(ctx, "sync_project_inbox_cursor_idx", "portable_project_id", "history_id", "seq")
 }
 
 func (s *Store) portableProjectIdentitySchemaHealthy(ctx context.Context) bool {

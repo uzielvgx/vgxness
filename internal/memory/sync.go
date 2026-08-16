@@ -2004,6 +2004,243 @@ func (s *Store) ApplyPulledChange(ctx context.Context, historyID string, change 
 	return s.ApplyPulledPage(ctx, syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: historyID, Position: change.Sequence, Watermark: change.Sequence}, Changes: []syncservice.Change{change}}, nil)
 }
 
+// ApplyProjectPulledPage atomically materializes one sparse, portable-project
+// pull page. Its cursor and inbox are intentionally separate from global pull
+// state, because project pages omit unrelated history positions.
+func (s *Store) ApplyProjectPulledPage(ctx context.Context, portableProject, localProject string, page syncservice.PullPage) error {
+	if s == nil || s.readOnly || !projectIDPattern.MatchString(portableProject) || localProject == "" || validateProjectPulledPage(portableProject, page) != nil {
+		return fmt.Errorf("%w: project pulled page", ErrInvalid)
+	}
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	var bound string
+	err = tx.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProject).Scan(&bound)
+	if errors.Is(err, sql.ErrNoRows) || bound != localProject {
+		return fmt.Errorf("%w: portable project identity binding", ErrConflict)
+	}
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	if err = pulledProject(ctx, tx, localProject); err != nil {
+		return err
+	}
+	position, watermark, err := projectPulledCursor(ctx, tx, portableProject, page.Cursor.HistoryID)
+	if err != nil {
+		return err
+	}
+	if page.Cursor.Position < position || (position < watermark && watermark != page.Cursor.Watermark) || (position == watermark && page.Cursor.Watermark < watermark) {
+		return fmt.Errorf("%w: project pulled cursor", ErrConflict)
+	}
+	for _, change := range page.Changes {
+		hash, _ := hex.DecodeString(change.ChangeHash)
+		if change.Sequence <= position {
+			stored, rowErr := projectPulledInboxRow(ctx, tx, portableProject, page.Cursor.HistoryID, change.Sequence)
+			if rowErr != nil || !bytes.Equal(stored, hash) {
+				return fmt.Errorf("%w: project pulled replay", ErrCorrupt)
+			}
+			continue
+		}
+		mapped, mapErr := s.mapProjectPulledChange(ctx, tx, portableProject, localProject, change)
+		if mapErr != nil {
+			return mapErr
+		}
+		if err = s.applyProjectPulledMutation(ctx, tx, page.Cursor.HistoryID, mapped); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO sync_project_inbox(portable_project_id,history_id,seq,change_hash,applied_at) VALUES(?,?,?,?,?)`, portableProject, page.Cursor.HistoryID, change.Sequence, hash, now); err != nil {
+			return writeError(ctx, err)
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sync_project_cursor(portable_project_id,history_id,position,watermark,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(portable_project_id) DO UPDATE SET history_id=excluded.history_id,position=excluded.position,watermark=excluded.watermark,updated_at=excluded.updated_at`, portableProject, page.Cursor.HistoryID, page.Cursor.Position, page.Cursor.Watermark, now); err != nil {
+		return writeError(ctx, err)
+	}
+	return commit(ctx, tx)
+}
+
+func validateProjectPulledPage(project string, page syncservice.PullPage) error {
+	if !projectIDPattern.MatchString(project) || !canonicalUUIDPattern.MatchString(page.Cursor.HistoryID) || page.Cursor.Position < 0 || page.Cursor.Watermark < 0 || page.Cursor.Position > page.Cursor.Watermark || page.HasMore != (page.Cursor.Position < page.Cursor.Watermark) {
+		return ErrInvalid
+	}
+	if len(page.Changes) == 0 {
+		if page.HasMore || page.Cursor.Position != page.Cursor.Watermark {
+			return ErrInvalid
+		}
+		return nil
+	}
+	if page.Changes[len(page.Changes)-1].Sequence != page.Cursor.Position {
+		return ErrInvalid
+	}
+	previous := int64(0)
+	for _, change := range page.Changes {
+		if change.Sequence <= previous || change.Sequence > page.Cursor.Watermark || !validPulledChange(change) || syncapi.ValidateProjectPullChange(change, project) != nil {
+			return ErrInvalid
+		}
+		previous = change.Sequence
+	}
+	return nil
+}
+
+func projectPulledCursor(ctx context.Context, tx *sql.Tx, project, history string) (int64, int64, error) {
+	var storedHistory, historyType, positionType, watermarkType, updatedType string
+	var position, watermark, updated int64
+	err := tx.QueryRowContext(ctx, `SELECT history_id,position,watermark,updated_at,typeof(history_id),typeof(position),typeof(watermark),typeof(updated_at) FROM sync_project_cursor WHERE portable_project_id=?`, project).Scan(&storedHistory, &position, &watermark, &updated, &historyType, &positionType, &watermarkType, &updatedType)
+	if errors.Is(err, sql.ErrNoRows) {
+		var count int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, project).Scan(&count); err != nil || count != 0 {
+			return 0, 0, fmt.Errorf("%w: project cursor inbox", ErrCorrupt)
+		}
+		return 0, 0, nil
+	}
+	if err != nil || historyType != "text" || positionType != "integer" || watermarkType != "integer" || updatedType != "integer" || !canonicalUUIDPattern.MatchString(storedHistory) || storedHistory != history || position < 0 || watermark < position || !validStoredSyncTime(updated, time.Unix(0, updated)) {
+		return 0, 0, fmt.Errorf("%w: project pulled cursor", ErrCorrupt)
+	}
+	return position, watermark, nil
+}
+
+func projectPulledInboxRow(ctx context.Context, tx *sql.Tx, project, history string, sequence int64) ([]byte, error) {
+	var hash []byte
+	var storedProject, storedHistory string
+	var storedSequence int64
+	err := tx.QueryRowContext(ctx, `SELECT portable_project_id,history_id,seq,change_hash FROM sync_project_inbox WHERE portable_project_id=? AND history_id=? AND seq=?`, project, history, sequence).Scan(&storedProject, &storedHistory, &storedSequence, &hash)
+	if err != nil || storedProject != project || storedHistory != history || storedSequence != sequence || len(hash) != sha256.Size {
+		return nil, fmt.Errorf("%w: project cursor inbox", ErrCorrupt)
+	}
+	return hash, nil
+}
+
+func (s *Store) mapProjectPulledChange(ctx context.Context, tx *sql.Tx, portableProject, localProject string, change syncservice.Change) (syncservice.Change, error) {
+	mapped := change
+	mapped.Mutation = cloneSyncMutation(change.Mutation)
+	m := &mapped.Mutation
+	mapExisting := func(kind syncservice.RecordKind, wire string) (string, error) {
+		var local, origin string
+		err := tx.QueryRowContext(ctx, `SELECT local_id,origin_device_id FROM sync_portable_identities WHERE portable_project_id=? AND record_kind=? AND portable_id=?`, portableProject, kind, wire).Scan(&local, &origin)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("%w: project portable identity", ErrConflict)
+		}
+		if err != nil {
+			return "", writeError(ctx, err)
+		}
+		if len([]byte(local)) == 0 || len([]byte(local)) > 1024 || !canonicalUUIDPattern.MatchString(origin) {
+			return "", fmt.Errorf("%w: project portable identity", ErrCorrupt)
+		}
+		portable, err := s.validSyncPortableIdentity(ctx, tx, portableProject, kind, local, wire, origin)
+		if err != nil || portable != wire {
+			if err != nil {
+				return "", err
+			}
+			return "", fmt.Errorf("%w: project portable identity", ErrCorrupt)
+		}
+		if !s.localSyncRecordBelongsToProject(ctx, tx, kind, local, localProject) {
+			return "", fmt.Errorf("%w: project portable identity", ErrCorrupt)
+		}
+		return local, nil
+	}
+	adopt := func(kind syncservice.RecordKind, wire string) (string, error) {
+		local, err := mapExisting(kind, wire)
+		if err == nil {
+			return local, nil
+		}
+		if !errors.Is(err, ErrConflict) {
+			return "", err
+		}
+		profile, found, err := readStoredSyncProfile(ctx, tx)
+		if err != nil || !found || !profile.Enabled {
+			return "", fmt.Errorf("%w: sync profile", ErrConflict)
+		}
+		local = adoptedSyncLocalID(kind, wire)
+		_, err = tx.ExecContext(ctx, `INSERT INTO sync_portable_identities(portable_project_id,record_kind,local_id,portable_id,origin_device_id,created_at) VALUES(?,?,?,?,?,?)`, portableProject, kind, local, wire, profile.DeviceID, s.now().UTC().UnixNano())
+		if err != nil {
+			return "", conflictOrWrite(ctx, err)
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO sync_portable_identity_adoptions(portable_project_id,record_kind,local_id,portable_id,adopting_device_id,adopted_at) VALUES(?,?,?,?,?,?)`, portableProject, kind, local, wire, profile.DeviceID, s.now().UTC().UnixNano())
+		if err != nil {
+			return "", conflictOrWrite(ctx, err)
+		}
+		return local, nil
+	}
+	switch m.RecordKind {
+	case syncservice.RecordKindProject:
+		m.RecordID, m.Project.ID = localProject, localProject
+	case syncservice.RecordKindSession:
+		local, err := adopt(syncservice.RecordKindSession, m.RecordID)
+		if err != nil {
+			return mapped, err
+		}
+		m.RecordID, m.Session.ID, m.Session.ProjectID = local, local, localProject
+	case syncservice.RecordKindObservation:
+		mapRecord := adopt
+		if m.Kind == syncservice.MutationTombstone || m.Kind == syncservice.MutationResolve {
+			mapRecord = mapExisting
+		}
+		local, err := mapRecord(syncservice.RecordKindObservation, m.RecordID)
+		if err != nil {
+			return mapped, err
+		}
+		m.RecordID = local
+		if m.Observation != nil {
+			m.Observation.ID, m.Observation.ProjectID = local, localProject
+			if m.Observation.SessionID != "" {
+				session, err := mapExisting(syncservice.RecordKindSession, m.Observation.SessionID)
+				if err != nil {
+					return mapped, err
+				}
+				m.Observation.SessionID = session
+			}
+			for i, wire := range m.Observation.References {
+				localRef, err := mapExisting(syncservice.RecordKindObservation, wire)
+				if err != nil {
+					return mapped, err
+				}
+				m.Observation.References[i] = localRef
+			}
+		}
+		if m.Tombstone != nil {
+			m.Tombstone.ProjectID = localProject
+		}
+		if m.Resolution != nil && m.Resolution.Observation != nil {
+			winner := m.Resolution.Observation
+			winner.ID, winner.ProjectID = local, localProject
+			if winner.SessionID != "" {
+				session, err := mapExisting(syncservice.RecordKindSession, winner.SessionID)
+				if err != nil {
+					return mapped, err
+				}
+				winner.SessionID = session
+			}
+			for i, wire := range winner.References {
+				localRef, err := mapExisting(syncservice.RecordKindObservation, wire)
+				if err != nil {
+					return mapped, err
+				}
+				winner.References[i] = localRef
+			}
+		}
+	}
+	return mapped, nil
+}
+
+func (s *Store) applyProjectPulledMutation(ctx context.Context, tx *sql.Tx, history string, change syncservice.Change) error {
+	if change.Mutation.RecordKind == syncservice.RecordKindProject && change.Mutation.Kind == syncservice.MutationCreate {
+		var version int64
+		if err := tx.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, change.Mutation.RecordID).Scan(&version); err != nil || version != 0 || change.Mutation.BaseVersion != 0 || change.CanonicalVersion != 1 {
+			return fmt.Errorf("%w: project pulled identity", ErrConflict)
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE projects SET sync_version=1 WHERE id=?`, change.Mutation.RecordID)
+		return writeError(ctx, err)
+	}
+	return s.applyPulledMutation(ctx, tx, history, change)
+}
+
 // ApplyPulledPage validates a page before opening SQLite, then commits its
 // materialization, inbox entries, cursor, and optional checkpoint together.
 func (s *Store) ApplyPulledPage(ctx context.Context, page syncservice.PullPage, checkpoint *BootstrapCheckpoint) error {
