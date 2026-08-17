@@ -48,7 +48,7 @@ func TestMemoryFacadePersistsAndReadsEntries(t *testing.T) {
 func TestMemorySyncShortCircuitsWhenCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err := NewMemory("test", false).Sync(ctx, config.Options{StorageRoot: t.TempDir()})
+	result, err := NewMemory("test", false).Sync(ctx, config.Options{StorageRoot: t.TempDir(), ProjectDir: t.TempDir()})
 	if !errors.Is(err, context.Canceled) || result.Status != memory.SyncStatusUnavailable {
 		t.Fatalf("cancelled sync = %+v, %v", result, err)
 	}
@@ -60,8 +60,8 @@ func TestMemorySyncShortCircuitsProjectLocalAndReadOnly(t *testing.T) {
 		opts     config.Options
 		readOnly bool
 	}{
-		{name: "project local", opts: config.Options{StorageRoot: t.TempDir(), ProjectLocal: true}},
-		{name: "read only", opts: config.Options{StorageRoot: t.TempDir()}, readOnly: true},
+		{name: "project local", opts: config.Options{StorageRoot: t.TempDir(), ProjectDir: t.TempDir(), ProjectLocal: true}},
+		{name: "read only", opts: config.Options{StorageRoot: t.TempDir(), ProjectDir: t.TempDir()}, readOnly: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
@@ -77,7 +77,7 @@ func TestMemorySyncShortCircuitsProjectLocalAndReadOnly(t *testing.T) {
 
 func TestMemorySyncClassifiesCredentialAndProfileValidationFailures(t *testing.T) {
 	root := t.TempDir()
-	opts := config.Options{StorageRoot: root}
+	opts := config.Options{StorageRoot: root, ProjectDir: t.TempDir()}
 	store, err := openStore(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)

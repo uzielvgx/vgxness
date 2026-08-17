@@ -84,6 +84,9 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
 			return memoryFailure(stderr, memory.ErrInvalid)
 		}
+		if opts.ProjectDir == "" || !filepath.IsAbs(opts.ProjectDir) {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
 		result, err := runtime.Sync(ctx, opts)
 		if err != nil {
 			return memoryFailure(stderr, err)

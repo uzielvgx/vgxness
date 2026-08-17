@@ -4,7 +4,7 @@ description: Safely configure, diagnose, backfill, and foreground-sync VGXNESS c
 license: MIT
 compatibility: OpenCode and Codex
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   provenance: "VGXNESS portable global skill"
 ---
 
@@ -17,8 +17,8 @@ Synchronize VGXNESS client memory without exposing private memory or credentials
 ## Inputs and preconditions
 
 - Establish the absolute storage root before any operation. Do not infer a workspace or storage root from the current directory.
-- `configure`, `status`, and foreground `sync` are storage-root-wide: runtime has one profile and no workspace filter. `backfill` alone is named-workspace scoped.
-- A workspace-only request does not authorize foreground sync unless the selected storage root is confirmed dedicated to that workspace. Otherwise require explicit authorization for the whole storage root and disclose that all eligible queued records there may transmit. Incomplete requests still stop.
+- `configure` and `status` are storage-root-wide: runtime has one profile. Foreground `sync` requires an explicit absolute `--workspace`; `backfill` is also named-workspace scoped.
+- Foreground sync requires an explicit absolute `--workspace`; CLI and runtime enforce this selector. Runtime automatically validates the workspace's strict marker/binding before any remote call; the agent does not inspect the marker or invent a separate probe. Sync transfers or pulls only that project's eligible records and cursor, never other projects in the same storage root. A named-workspace request authorizes that exact foreground action; no dedicated-root or whole-root authorization is required.
 - Endpoint and device ID are configure inputs only. Existing enrolled foreground sync uses the stored profile plus `status`; do not require or invent endpoint/device values for it.
 - Start with local `status` as the read-only preflight. Read [the client workflow](references/client-workflow.md) before any command or when interpreting its result.
 - If `status` checks credential availability, use it only with explicit current authorization for that named workspace's credential-status check; it remains local and token-free.
@@ -31,7 +31,7 @@ Synchronize VGXNESS client memory without exposing private memory or credentials
 - Keyring is the default credential store. Configure it only through an approved secure stdin path outside model-visible text. A credential file is allowed only on Linux or macOS; pass its approved absolute path without reading its contents after metadata controls. Windows credential-file mode is unsupported.
 - For a file-enrolled profile, preserve `--credential-file <absolute-credential-file>` on configure, every status, and every foreground sync. For keyring profiles, use the forms without that flag.
 - Credential denial applies to configure and foreground sync. It does not apply to credential-free local backfill; status reports local profile and credential state without exposing a bearer.
-- A foreground `sync` can push private data or pull remote data. A workspace-only request authorizes it only when its storage root is confirmed dedicated; otherwise the user must explicitly authorize the whole storage root and its eligible queued records.
+- A foreground `sync` can push private data or pull remote data, but only for the explicitly named workspace after strict marker/binding validation. Run it once with no retry.
 - Backfill is local-only, credential-free, and idempotent. It queues existing unsynced records without changing them and never contacts a remote.
 - Report only token-free statuses and counts. Do not disclose memory contents, endpoint credentials, bearer-derived identifiers, or remote payloads.
 - Do not run `syncd serve`, issue or revoke devices, operate PostgreSQL/TLS/DNS/proxies, deploy, back up, implement the protocol, perform generic memory CRUD, or enter an SDD lifecycle.
@@ -40,7 +40,7 @@ Synchronize VGXNESS client memory without exposing private memory or credentials
 
 ### 1. Diagnose safely
 
-1. Confirm the absolute storage root and requested action. For `backfill`, also confirm its named workspace. For foreground sync, determine whether the root is confirmed dedicated to the named workspace; otherwise require whole-root authorization and disclose the eligible queued-record scope.
+1. Confirm the absolute storage root and requested action. For `backfill` and foreground sync, also confirm the named absolute workspace. Runtime validates the foreground workspace marker/binding automatically.
 2. Run the token-free status preflight and classify the result. Do not repair missing credentials, configuration, or network reachability by guessing.
 3. If status is absent, disabled, invalid, or credential-unavailable, explain the blocked prerequisite. Stop before foreground sync.
 
@@ -59,7 +59,7 @@ Synchronize VGXNESS client memory without exposing private memory or credentials
 
 ### 4. Foreground synchronization
 
-1. Rerun status immediately before sync. A workspace-only request proceeds only when the selected root is confirmed dedicated; otherwise require explicit whole-storage-root authorization and disclose that all eligible queued records may transmit.
+1. Rerun status immediately before sync. Runtime then validates the named workspace's strict marker/binding automatically before any remote call.
 2. Run one foreground sync. Do not enable or operate a background daemon.
 3. Read back the result and status. Treat `synced` with zero counts as a valid no-op; report only status and counts. For partial, rejected, conflict, unauthorized, unavailable, unreachable, incompatible, or credential statuses, stop and report the token-free status.
 
@@ -67,7 +67,7 @@ Synchronize VGXNESS client memory without exposing private memory or credentials
 
 ### External effect gate
 
-`status` is storage-root-wide but local; `backfill` is named-workspace scoped and local. `configure` writes the root-wide enrollment and uses a credential; `sync` may transmit every eligible queued record in that root. Do not treat a workspace-only request as whole-root authorization unless the root is confirmed dedicated. Do not cross from diagnosis or backfill into another external-effect path without a request for that action.
+`status` is storage-root-wide but local; `backfill` is named-workspace scoped and local. `configure` writes the root-wide enrollment and uses a credential; `sync` requires CLI and runtime-enforced explicit absolute `--workspace`, automatic marker/binding validation, and may transfer only that project's eligible records and cursor. Never sync other projects in the same root. The shared storage-root cross-process lock serializes configure, sync, and repair. Do not cross from diagnosis or backfill into another external-effect path without a request for that action.
 
 ### Platform gate
 
@@ -87,10 +87,12 @@ Use the keyring default on supported hosts. Credential-file mode is only an expl
 
 ## Output contract
 
-Provide the storage root, named workspace only when backfill or a dedicated-root claim is relevant, requested action, authorization decision, eligible queued-record scope for foreground sync, token-free preflight/result/readback statuses and counts, and blocked prerequisites or unverified limits. Never include a bearer, credential contents, memory content, or raw remote response.
+Provide the storage root, named workspace for backfill and foreground sync, requested action, marker/binding validation, project-only eligible-record scope for foreground sync, token-free preflight/result/readback statuses and counts, and blocked prerequisites or unverified limits. Never include a bearer, credential contents, memory content, or raw remote response.
 
 ## Failure and escalation
 
-- Missing or invalid storage-root scope, backfill workspace, configure endpoint/device, credential mechanism, whole-root authorization, or safe platform support: stop and identify only the missing prerequisite.
+- Missing or invalid storage-root scope, foreground/backfill workspace, strict marker/binding, configure endpoint/device, credential mechanism, or safe platform support: stop and identify only the missing prerequisite.
+- Repair is local-only and requires independent confirmation that the remote is absent; never use it as a retry or remote recovery path.
+- An invalid or unavailable foreground result stops the run. If interrupted or its result is unknown, do not retry or repair; run only matching token-free status, report the unknown outcome, and escalate.
 - A non-success status is evidence, not an instruction to retry, change configuration, or disclose more data. Preserve local state and escalate to the authorized owner.
 - Route server, device, infrastructure, deployment, backup, protocol, CRUD, and SDD requests to their accountable workflows.

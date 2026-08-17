@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,7 +225,26 @@ func TestMemorySyncEmitsOnceOnlyAfterNilError(t *testing.T) {
 	}
 }
 
-func TestMemorySyncEmptyProjectDirUsesCanonicalWorkingDirectory(t *testing.T) {
+func TestMemorySyncRejectsMissingOrRelativeWorkspaceBeforeEffects(t *testing.T) {
+	for _, workspace := range []string{"", "relative"} {
+		t.Run(workspace, func(t *testing.T) {
+			var events []hooks.Event
+			d := hooks.New()
+			if err := d.Register("sync", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameMemorySyncCompleted); err != nil {
+				t.Fatal(err)
+			}
+			credentialCalls := 0
+			r := NewMemoryWithHooks("test", false, d)
+			r.credential = func(string) (string, error) { credentialCalls++; return "", nil }
+			result, err := r.Sync(context.Background(), config.Options{StorageRoot: t.TempDir(), ProjectDir: workspace})
+			if !errors.Is(err, memory.ErrInvalid) || result.Status != memory.SyncStatusUnavailable || len(events) != 0 || credentialCalls != 0 {
+				t.Fatalf("workspace=%q result=%+v err=%v events=%d credentialCalls=%d", workspace, result, err, len(events), credentialCalls)
+			}
+		})
+	}
+}
+
+func TestMemorySyncAbsoluteWorkspaceEmitsCompleted(t *testing.T) {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +262,7 @@ func TestMemorySyncEmptyProjectDirUsesCanonicalWorkingDirectory(t *testing.T) {
 	if err := d.Register("sync", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameMemorySyncCompleted); err != nil {
 		t.Fatal(err)
 	}
-	result, err := NewMemoryWithHooks("test", false, d).Sync(context.Background(), config.Options{ProjectLocal: true})
+	result, err := NewMemoryWithHooks("test", false, d).Sync(context.Background(), config.Options{ProjectDir: workingDirectory, ProjectLocal: true})
 	if err != nil || result.Status != memory.SyncStatusUnavailable || len(events) != 1 || events[0].Subject().ID() != wantProject {
 		t.Fatalf("sync result=%+v err=%v events=%d wantProject=%q", result, err, len(events), wantProject)
 	}

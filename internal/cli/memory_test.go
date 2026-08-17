@@ -231,32 +231,33 @@ func TestMemoryCLI_UnsupportedOperationsNeverOpenOrMutateStorage(t *testing.T) {
 }
 
 func TestMemoryCLI_SyncUsesNoInputAndRendersTokenFreeResult(t *testing.T) {
+	workspace := t.TempDir()
 	runtime := &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusPartial, Pushed: 2, Retried: 1, Batches: 1}}
-	code, out, stderr := runMemoryTest([]string{"memory", "sync"}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
+	code, out, stderr := runMemoryTest([]string{"memory", "sync", "--workspace", workspace}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && out == "status=partial\npushed=2\npreviously_accepted=0\nrejected=0\nretried=1\nconflicts=0\nbatches=1\n" && !strings.Contains(out, "vgx1."), "sync output: code=%d calls=%d out=%q stderr=%q", code, runtime.calls, out, stderr)
 
 	runtime = &fakeMemoryRuntime{err: context.Canceled}
-	code, out, _ = runMemoryTest([]string{"memory", "sync"}, "", runtime)
+	code, out, _ = runMemoryTest([]string{"memory", "sync", "--workspace", workspace}, "", runtime)
 	testutil.Require(t, code == 130 && out == "" && runtime.calls == 1, "sync cancellation: code=%d calls=%d out=%q", code, runtime.calls, out)
 
 	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusSynced, Pushed: 1}}
-	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--workspace", workspace, "--json"}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"status":"synced"`) && strings.Contains(out, `"pushed":1`) && !strings.Contains(out, "vgx1."), "sync json: code=%d out=%q stderr=%q", code, out, stderr)
 
 	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectBidirectional, Status: memory.SyncStatusSynced, Pushed: 1}}
-	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "", runtime)
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--workspace", workspace}, "", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_bidirectional\nstatus=synced\n"), "project mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
-	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "", runtime)
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--workspace", workspace, "--json"}, "", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"mode":"project_bidirectional"`), "project mode json output: code=%d out=%q stderr=%q", code, out, stderr)
 
 	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectBidirectional, Status: memory.SyncStatusUnavailable}}
-	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "", runtime)
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--workspace", workspace}, "", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_bidirectional\nstatus=unavailable\n"), "preflight mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
 
 	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusUnreachable, FailureOperation: "capabilities", FailureClass: "http_status", FailureHTTPStatus: 503}}
-	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "bearer-secret https://private.example/v1/sync/pull?project_id=project-secret raw-error", runtime)
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--workspace", workspace}, "bearer-secret https://private.example/v1/sync/pull?project_id=project-secret raw-error", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, "failure_operation=capabilities\n") && strings.Contains(out, "failure_class=http_status\n") && strings.Contains(out, "failure_http_status=503\n") && !strings.Contains(out, "bearer-secret") && !strings.Contains(out, "private.example") && !strings.Contains(out, "project-secret") && !strings.Contains(out, "raw-error"), "diagnostic plain output: %q", out)
-	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "", runtime)
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--workspace", workspace, "--json"}, "", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"failureOperation":"capabilities"`) && strings.Contains(out, `"failureClass":"http_status"`) && strings.Contains(out, `"failureHttpStatus":503`) && !strings.Contains(out, "project-secret"), "diagnostic JSON output: %q", out)
 }
 
@@ -269,6 +270,12 @@ func TestMemoryCLI_SyncPropagatesWorkspaceSelector(t *testing.T) {
 	runtime = &fakeMemoryRuntime{}
 	code, _, _ = runMemoryTest([]string{"memory", "sync", "--workspace", workspace, "unexpected"}, "", runtime)
 	testutil.Require(t, code == 2 && runtime.calls == 0, "invalid selector invocation: code=%d calls=%d", code, runtime.calls)
+
+	for _, args := range [][]string{{"memory", "sync"}, {"memory", "sync", "--workspace", "relative"}} {
+		runtime = &fakeMemoryRuntime{}
+		code, out, stderr := runMemoryTest(args, "", runtime)
+		testutil.Require(t, code == 2 && out == "" && stderr != "" && runtime.calls == 0, "args=%q code=%d out=%q stderr=%q calls=%d", args, code, out, stderr, runtime.calls)
+	}
 }
 
 func TestMemoryCLI_SyncConfigureAndStatusAreStrictAndTokenFree(t *testing.T) {
