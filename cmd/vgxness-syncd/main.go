@@ -253,6 +253,11 @@ func (adapter repositoryBackend) Pull(ctx context.Context, deviceID uuid.UUID, c
 	return page, repositoryBackendError(err)
 }
 
+func (adapter repositoryBackend) PullProject(ctx context.Context, deviceID uuid.UUID, cursor syncservice.Cursor, projectID string, limit int) (syncservice.PullPage, error) {
+	page, err := adapter.repository.PullProject(ctx, deviceID, cursor, projectID, limit)
+	return page, repositoryBackendError(err)
+}
+
 func (adapter repositoryBackend) Discover(ctx context.Context, deviceID uuid.UUID) (syncservice.Discovery, error) {
 	discovery, err := adapter.repository.Discover(ctx, deviceID)
 	return discovery, repositoryBackendError(err)
