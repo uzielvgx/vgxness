@@ -592,6 +592,13 @@ func TestRepositoryBackendMapsUnauthenticated(t *testing.T) {
 	}
 }
 
+func TestRepositoryBackendImplementsProjectPullBackend(t *testing.T) {
+	var backend syncapi.ProjectPullBackend = repositoryBackend{}
+	if backend == nil {
+		t.Fatal("repository backend does not implement project pull backend")
+	}
+}
+
 func TestLifecycleRequestReturnsRawSuccessfulBody(t *testing.T) {
 	const bearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	want := []byte(strings.Repeat("x", lifecycleResponseBodyLimit+1) + bearer)
