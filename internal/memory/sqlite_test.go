@@ -68,7 +68,7 @@ func TestMemoryRuntime_LiteralV1UpgradeRestartPreservesDataAndTitles(t *testing.
 		testutil.Require(t, err == nil && got.ID == id && got.Title == title && (id != "old" || got.Content == "literal old token"), "get %s: %+v %v", id, got, err)
 	}
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 16, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 17, "health=%d %v", version, err)
 }
 
 func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
@@ -76,7 +76,7 @@ func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
 	store := openPath(t, path)
 	mustSave(t, store, observation("obs-1", "project-a", "restart token"))
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 16, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 17, "health=%d %v", version, err)
 	_ = store.Close()
 	store = openPath(t, path)
 	defer store.Close()
@@ -365,7 +365,7 @@ func TestSyncEnrollmentRecoveryMigrationAndMislabeledSchema(t *testing.T) {
 	store = openPath(t, path)
 	profile, found, err := store.GetSyncProfile(context.Background())
 	version, healthErr := store.Health(context.Background())
-	testutil.Require(t, err == nil && found && profile.CredentialRef == "secret://keychain/legacy" && profile.PreviousCredentialRef == "" && healthErr == nil && version == 16, "profile=%+v found=%t errors=%v/%v version=%d", profile, found, err, healthErr, version)
+	testutil.Require(t, err == nil && found && profile.CredentialRef == "secret://keychain/legacy" && profile.PreviousCredentialRef == "" && healthErr == nil && version == 17, "profile=%+v found=%t errors=%v/%v version=%d", profile, found, err, healthErr, version)
 	testutil.NoError(t, store.Close())
 	db, err = sql.Open("sqlite", path)
 	testutil.NoError(t, err)
@@ -622,7 +622,7 @@ func TestOpen_V10ToV11RestoresForeignKeysAfterRestart(t *testing.T) {
 	var id, projectID, idempotencyKey, title, backend, interactionMode, modelPlan, phase, status string
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT id,project_id,idempotency_key,title,backend,interaction_mode,model_plan,phase,status,state_version,created_at,updated_at FROM sdd_changes WHERE id='change-v10'`).Scan(&id, &projectID, &idempotencyKey, &title, &backend, &interactionMode, &modelPlan, &phase, &status, &stateVersion, &createdAt, &updatedAt))
-	testutil.Require(t, version == 16 && id == "change-v10" && projectID == "project-v10" && idempotencyKey == "key-v10" && title == "V10 change" && backend == "memory" && interactionMode == "automatic" && modelPlan == "high" && phase == "explore" && status == "active" && stateVersion == 7 && createdAt == 100 && updatedAt == 200, "migration did not preserve V10 change: version=%d id=%q project=%q key=%q title=%q backend=%q mode=%q plan=%q phase=%q status=%q state=%d created=%d updated=%d", version, id, projectID, idempotencyKey, title, backend, interactionMode, modelPlan, phase, status, stateVersion, createdAt, updatedAt)
+	testutil.Require(t, version == 17 && id == "change-v10" && projectID == "project-v10" && idempotencyKey == "key-v10" && title == "V10 change" && backend == "memory" && interactionMode == "automatic" && modelPlan == "high" && phase == "explore" && status == "active" && stateVersion == 7 && createdAt == 100 && updatedAt == 200, "migration did not preserve V10 change: version=%d id=%q project=%q key=%q title=%q backend=%q mode=%q plan=%q phase=%q status=%q state=%d created=%d updated=%d", version, id, projectID, idempotencyKey, title, backend, interactionMode, modelPlan, phase, status, stateVersion, createdAt, updatedAt)
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
 	testutil.Require(t, foreignKeys == 1, "foreign_keys=%d after restart", foreignKeys)
 	_, err = store.db.Exec(`INSERT INTO sdd_changes(id,project_id,idempotency_key,title,backend,interaction_mode,model_plan,phase,status,state_version,created_at,updated_at) VALUES('invalid','missing','key','title','memory','automatic','ultra','explore','active',1,1,1)`)
@@ -831,7 +831,7 @@ func TestEnvironmentIsolation_NoAmbientHomeOrNetwork(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 16, "isolated health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 17, "isolated health=%d %v", version, err)
 }
 
 // durableStorageSnapshot hashes durable SQLite state. Read-only SQLite may
@@ -878,7 +878,7 @@ func healthWithoutDurableMutation(t *testing.T, path string) (int, error) {
 func TestHealthFile_HealthyDatabaseWithoutMutation(t *testing.T) {
 	path := migratedPath(t)
 	version, err := healthWithoutDurableMutation(t, path)
-	testutil.Require(t, err == nil && version == 16, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 17, "health=%d err=%v", version, err)
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	version, err = HealthFile(context.Background(), missing)
 	testutil.Require(t, err == nil && version == 0, "missing health=%d err=%v", version, err)
@@ -893,7 +893,7 @@ func TestHealthFile_SeesCommittedWALState(t *testing.T) {
 	mustSave(t, store, observation("wal-observation", "project-a", "WAL health token"))
 
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, err == nil && version == 16, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 17, "health=%d err=%v", version, err)
 }
 
 func TestSQLiteReadURI_IsReadOnly(t *testing.T) {
@@ -977,7 +977,7 @@ func TestOpen_ConcurrentFreshProcesses(t *testing.T) {
 		testutil.NoError(t, command.Wait())
 	}
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, err == nil && version == 16, "concurrent health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 17, "concurrent health=%d err=%v", version, err)
 }
 
 func TestOpen_MigrationRetryBoundAndCancellation(t *testing.T) {

@@ -58,6 +58,13 @@ type SyncBackfillResult struct {
 	Queued        int  `json:"queued"`
 }
 
+// syncProjectRepairResult reports only local repair state and queue count.
+type syncProjectRepairResult struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	Status        string `json:"status"`
+	Queued        int    `json:"queued"`
+}
+
 type Search struct {
 	Query, Project string
 	TopicKey       string

@@ -122,6 +122,97 @@ func (s *Store) BackfillSyncProject(ctx context.Context, project string, limit i
 	return result, commit(ctx, tx)
 }
 
+// repairBoundProjectCreate records one operator-confirmed, local-only repair
+// for a portable project that is absent remotely. It never resets local state
+// or reads credentials; a later ordinary foreground sync sends the new create.
+func (s *Store) repairBoundProjectCreate(ctx context.Context, portableProject, localProject string, remoteAbsent bool) (syncProjectRepairResult, error) {
+	if s == nil || s.readOnly || !remoteAbsent || !projectIDPattern.MatchString(portableProject) || localProject == "" {
+		return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return syncProjectRepairResult{}, err
+	}
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return syncProjectRepairResult{}, fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return syncProjectRepairResult{}, writeError(ctx, err)
+	}
+	defer conn.Close()
+	for attempt := 0; ; attempt++ {
+		if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err == nil {
+			break
+		}
+		if err = waitForSQLite(ctx, attempt, err); err != nil {
+			return syncProjectRepairResult{}, writeError(ctx, err)
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var status, existingLocal string
+	err = conn.QueryRowContext(ctx, `SELECT status,local_project_id FROM sync_project_repairs WHERE portable_project_id=?`, portableProject).Scan(&status, &existingLocal)
+	if err == nil {
+		if existingLocal != localProject || (status != "pending" && status != "completed" && status != "rejected") {
+			return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrConflict)
+		}
+		if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+			return syncProjectRepairResult{}, writeError(ctx, err)
+		}
+		committed = true
+		return syncProjectRepairResult{SchemaVersion: 1, Status: status}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return syncProjectRepairResult{}, writeError(ctx, err)
+	}
+	var bound string
+	err = conn.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProject).Scan(&bound)
+	if errors.Is(err, sql.ErrNoRows) || bound != localProject {
+		return syncProjectRepairResult{}, fmt.Errorf("%w: portable project identity binding", ErrConflict)
+	}
+	if err != nil {
+		return syncProjectRepairResult{}, writeError(ctx, err)
+	}
+	var version, originals int64
+	if err = conn.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, localProject).Scan(&version); err != nil || version != 1 {
+		if errors.Is(err, sql.ErrNoRows) {
+			return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrConflict)
+		}
+		return syncProjectRepairResult{}, writeError(ctx, err)
+	}
+	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_push_results WHERE disposition='accepted' AND retryable=0 AND record_kind='project' AND record_id=? AND mutation_kind='create' AND base_version=0 AND canonical_version=1`, localProject).Scan(&originals); err != nil {
+		return syncProjectRepairResult{}, writeError(ctx, err)
+	}
+	if originals != 1 {
+		return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair receipt", ErrConflict)
+	}
+	var original string
+	if err = conn.QueryRowContext(ctx, `SELECT mutation_id FROM sync_push_results WHERE disposition='accepted' AND retryable=0 AND record_kind='project' AND record_id=? AND mutation_kind='create' AND base_version=0 AND canonical_version=1`, localProject).Scan(&original); err != nil || !canonicalUUIDPattern.MatchString(original) {
+		return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair receipt", ErrCorrupt)
+	}
+	id, err := newSyncUUID()
+	if err != nil {
+		return syncProjectRepairResult{}, writeError(ctx, err)
+	}
+	mutation := syncservice.Mutation{MutationID: id, RecordID: localProject, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: localProject}}
+	if _, err = s.enqueueSyncOutbox(ctx, conn, mutation); err != nil {
+		return syncProjectRepairResult{}, err
+	}
+	if _, err = conn.ExecContext(ctx, `INSERT INTO sync_project_repairs(portable_project_id,local_project_id,original_mutation_id,repair_mutation_id,status,terminal_code,created_at,completed_at) VALUES(?,?,?,?, 'pending','',?,NULL)`, portableProject, localProject, original, id, now); err != nil {
+		return syncProjectRepairResult{}, conflictOrWrite(ctx, err)
+	}
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return syncProjectRepairResult{}, writeError(ctx, err)
+	}
+	committed = true
+	return syncProjectRepairResult{SchemaVersion: 1, Status: "pending", Queued: 1}, nil
+}
+
 func backfillMutationID(kind, id string) string {
 	sum := sha256.Sum256([]byte("vgxness/sync-backfill/v1\x00" + kind + "\x00" + id))
 	b := sum[:16]
@@ -1456,18 +1547,23 @@ func (s *Store) claimDueSyncOutbox(ctx context.Context, lease time.Duration, lim
 			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
 		}
 	}()
-	query := `SELECT o.mutation_id,o.record_kind,o.record_id,o.mutation_kind,o.base_version,o.payload_version,o.payload,o.state,o.attempts,o.last_error_code,o.next_attempt_at,o.created_at,o.updated_at
+	repairPriority := `EXISTS(SELECT 1 FROM pending_project_repairs r WHERE r.repair_mutation_id=o.mutation_id)`
+	query := `WITH pending_project_repairs AS (
+		SELECT r.repair_mutation_id FROM sync_project_repairs r JOIN sync_outbox q ON q.mutation_id=r.repair_mutation_id
+		WHERE r.status='pending' AND q.record_kind='project' AND q.mutation_kind='create' AND q.base_version=0 AND q.record_id=r.local_project_id
+	)
+	SELECT o.mutation_id,o.record_kind,o.record_id,o.mutation_kind,o.base_version,o.payload_version,o.payload,o.state,o.attempts,o.last_error_code,o.next_attempt_at,o.created_at,o.updated_at
 		FROM sync_outbox o LEFT JOIN sync_outbox_claims c ON c.mutation_id=o.mutation_id
 		WHERE o.next_attempt_at<=? AND (c.mutation_id IS NULL OR c.lease_until<=?)
-		AND NOT EXISTS (SELECT 1 FROM sync_outbox p WHERE p.record_kind=o.record_kind AND p.record_id=o.record_id AND (p.created_at<o.created_at OR p.created_at=o.created_at AND p.id<o.id))
+		AND (` + repairPriority + ` OR NOT EXISTS (SELECT 1 FROM sync_outbox p WHERE p.record_kind=o.record_kind AND p.record_id=o.record_id AND (p.created_at<o.created_at OR p.created_at=o.created_at AND p.id<o.id)))
 		AND NOT EXISTS (SELECT 1 FROM sync_conflicts f WHERE f.status='unresolved' AND f.record_kind=o.record_kind AND f.record_id=o.record_id)
-		AND o.base_version=CASE o.record_kind WHEN 'project' THEN COALESCE((SELECT sync_version FROM projects WHERE id=o.record_id),-1) WHEN 'session' THEN COALESCE((SELECT sync_version FROM sessions WHERE id=o.record_id),-1) WHEN 'observation' THEN COALESCE((SELECT sync_version FROM observations WHERE id=o.record_id),-1) ELSE -1 END`
+		AND (` + repairPriority + ` OR o.base_version=CASE o.record_kind WHEN 'project' THEN COALESCE((SELECT sync_version FROM projects WHERE id=o.record_id),-1) WHEN 'session' THEN COALESCE((SELECT sync_version FROM sessions WHERE id=o.record_id),-1) WHEN 'observation' THEN COALESCE((SELECT sync_version FROM observations WHERE id=o.record_id),-1) ELSE -1 END)`
 	args := []any{nowNanos, nowNanos}
 	if project != "" {
 		query += ` AND (o.record_kind='project' AND o.record_id=? OR o.record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.record_id AND s.project_id=?) OR o.record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=o.record_id AND n.project_id=?))`
 		args = append(args, project, project, project)
 	}
-	query += ` ORDER BY o.created_at,o.id LIMIT ?`
+	query += ` ORDER BY CASE WHEN ` + repairPriority + ` THEN 0 ELSE 1 END,o.created_at,o.id LIMIT ?`
 	args = append(args, limit)
 	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1619,7 +1715,16 @@ func (s *Store) ApplySyncPushResult(ctx context.Context, mutationID, claimToken 
 	if err = claimMatches(ctx, tx, mutationID, claimToken, nanos); err != nil {
 		return err
 	}
-	if err = applyResultVersion(ctx, tx, entry.Mutation, result); err != nil {
+	repair, err := syncProjectRepairForMutation(ctx, tx, entry.Mutation)
+	if err != nil {
+		return err
+	}
+	if repair {
+		err = applyProjectRepairResultVersion(ctx, tx, entry.Mutation, result)
+	} else {
+		err = applyResultVersion(ctx, tx, entry.Mutation, result)
+	}
+	if err != nil {
 		return err
 	}
 	hash, err := syncMutationHash(entry.Mutation)
@@ -1628,6 +1733,11 @@ func (s *Store) ApplySyncPushResult(ctx context.Context, mutationID, claimToken 
 	}
 	if err = insertSyncReceipt(ctx, tx, entry.Mutation, result, hash, nanos); err != nil {
 		return err
+	}
+	if repair {
+		if err = completeProjectRepair(ctx, tx, entry.Mutation.MutationID, result, nanos); err != nil {
+			return err
+		}
 	}
 	if result.Disposition == syncservice.DispositionAccepted || result.Disposition == syncservice.DispositionPreviouslyAccepted {
 		if err = s.rebaseFollowingSyncOutbox(ctx, tx, entry.Mutation, result.Version); err != nil {
@@ -1638,6 +1748,64 @@ func (s *Store) ApplySyncPushResult(ctx context.Context, mutationID, claimToken 
 		return writeError(ctx, err)
 	}
 	return commit(ctx, tx)
+}
+
+func syncProjectRepairForMutation(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation) (bool, error) {
+	if mutation.RecordKind != syncservice.RecordKindProject || mutation.Kind != syncservice.MutationCreate || mutation.BaseVersion != 0 {
+		return false, nil
+	}
+	var local, status string
+	err := tx.QueryRowContext(ctx, `SELECT local_project_id,status FROM sync_project_repairs WHERE repair_mutation_id=?`, mutation.MutationID).Scan(&local, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, writeError(ctx, err)
+	}
+	if local != mutation.RecordID || status != "pending" {
+		return false, fmt.Errorf("%w: project sync repair", ErrCorrupt)
+	}
+	return true, nil
+}
+
+func applyProjectRepairResultVersion(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation, result syncservice.Result) error {
+	if result.Disposition == syncservice.DispositionRejected || result.Disposition == syncservice.DispositionConflict {
+		return nil
+	}
+	if result.Disposition != syncservice.DispositionAccepted && result.Disposition != syncservice.DispositionPreviouslyAccepted || result.Version != 1 {
+		return fmt.Errorf("%w: invalid project sync repair result", ErrInvalid)
+	}
+	var version int64
+	if err := tx.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, mutation.RecordID).Scan(&version); err != nil {
+		return writeError(ctx, err)
+	}
+	if version != 1 {
+		return fmt.Errorf("%w: project sync repair version", ErrConflict)
+	}
+	return nil
+}
+
+func completeProjectRepair(ctx context.Context, tx *sql.Tx, mutationID string, result syncservice.Result, now int64) error {
+	status, code := "completed", ""
+	if result.Disposition == syncservice.DispositionRejected || result.Disposition == syncservice.DispositionConflict {
+		status = "rejected"
+		code = result.Code
+		if code == "" {
+			code = string(result.Disposition)
+		}
+	}
+	updated, err := tx.ExecContext(ctx, `UPDATE sync_project_repairs SET status=?,terminal_code=?,completed_at=? WHERE repair_mutation_id=? AND status='pending'`, status, code, now, mutationID)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	n, err := updated.RowsAffected()
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	if n != 1 {
+		return fmt.Errorf("%w: project sync repair", ErrConflict)
+	}
+	return nil
 }
 
 func (s *Store) validateRetryClaim(ctx context.Context, mutationID, claimToken string, now time.Time) error {
@@ -1846,7 +2014,7 @@ func (s *Store) rebaseFollowingSyncOutbox(ctx context.Context, tx *sql.Tx, compl
 }
 
 // enqueueSyncOutbox is intentionally transaction-bound for a future local-write integration.
-func (s *Store) enqueueSyncOutbox(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation) (syncservice.Mutation, error) {
+func (s *Store) enqueueSyncOutbox(ctx context.Context, tx syncSQL, mutation syncservice.Mutation) (syncservice.Mutation, error) {
 	if err := cancelled(ctx); err != nil {
 		return syncservice.Mutation{}, err
 	}
@@ -1870,7 +2038,7 @@ func (s *Store) enqueueSyncOutbox(ctx context.Context, tx *sql.Tx, mutation sync
 	return mutation, s.insertSyncOutbox(ctx, tx, mutation, payload)
 }
 
-func (s *Store) insertSyncOutbox(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation, payload []byte) error {
+func (s *Store) insertSyncOutbox(ctx context.Context, tx syncSQL, mutation syncservice.Mutation, payload []byte) error {
 	now := s.now().UTC().Round(0)
 	nanos, ok := syncUnixNano(now)
 	if !ok {

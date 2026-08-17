@@ -341,7 +341,7 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','portable_project_identities','sync_portable_identities','sync_portable_identity_adoptions','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims','sync_project_cursor','sync_project_inbox')`).Scan(&probe); err != nil || probe != 25 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','portable_project_identities','sync_portable_identities','sync_portable_identity_adoptions','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims','sync_project_cursor','sync_project_inbox','sync_project_repairs')`).Scan(&probe); err != nil || probe != 26 {
 		if contextErr := cancelled(ctx); contextErr != nil {
 			return 0, contextErr
 		}
@@ -362,6 +362,9 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if !s.syncProjectCursorSchemaHealthy(ctx) {
 		return 0, fmt.Errorf("%w: sync project cursor schema unavailable", ErrCorrupt)
 	}
+	if !s.syncProjectRepairSchemaHealthy(ctx) {
+		return 0, fmt.Errorf("%w: sync project repair schema unavailable", ErrCorrupt)
+	}
 	if !s.syncPortableIdentityAdoptionSchemaHealthy(ctx) {
 		return 0, fmt.Errorf("%w: sync portable identity adoption schema unavailable", ErrCorrupt)
 	}
@@ -375,6 +378,16 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 		return 0, healthError(ctx, "FTS5 unavailable")
 	}
 	return version, nil
+}
+
+func (s *Store) syncProjectRepairSchemaHealthy(ctx context.Context) bool {
+	normalizeV17 := func(value string) string { return strings.ReplaceAll(normalizeSchemaSQL(value), "if not exists ", "") }
+	table, ok := s.schemaSQL(ctx, "table", "sync_project_repairs")
+	if !ok || normalizeV17(table) != normalizeV17(strings.Split(schemaV17, ";")[0]) || !s.schemaColumns(ctx, "sync_project_repairs", "portable_project_id", "local_project_id", "original_mutation_id", "repair_mutation_id", "status", "terminal_code", "created_at", "completed_at") {
+		return false
+	}
+	index, ok := s.schemaSQL(ctx, "index", "sync_project_repairs_pending_idx")
+	return ok && normalizeV17(index) == normalizeV17(strings.Split(schemaV17, ";")[1]) && s.schemaIndexColumns(ctx, "sync_project_repairs_pending_idx", "status", "repair_mutation_id")
 }
 
 func (s *Store) syncPortableIdentityAdoptionSchemaHealthy(ctx context.Context) bool {
