@@ -4,6 +4,12 @@ It uses no-replace write/file-sync/close plus parent sync where supported; Windo
 
 ## Foreground sync boundary
 
+A pending operator-confirmed project-create repair blocks foreground remote
+work and every pull-apply transaction before local mutation; repair is local,
+then ordinary foreground sync sends it. Configure, sync, and repair share the
+storage-root lock; pending repair makes global claim/pull conservative, while
+separately invoked exact-bound project flows proceed serially under that lock.
+
 `memory sync --workspace <workspace>` canonicalizes the selector and requires
 one existing local project with both a strict marker and its persisted portable
 binding. The check precedes every remote capability, discovery, push, or pull

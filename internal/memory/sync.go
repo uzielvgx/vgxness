@@ -122,23 +122,23 @@ func (s *Store) BackfillSyncProject(ctx context.Context, project string, limit i
 	return result, commit(ctx, tx)
 }
 
-// repairBoundProjectCreate records one operator-confirmed, local-only repair
+// RepairBoundProjectCreate records one operator-confirmed, local-only repair
 // for a portable project that is absent remotely. It never resets local state
 // or reads credentials; a later ordinary foreground sync sends the new create.
-func (s *Store) repairBoundProjectCreate(ctx context.Context, portableProject, localProject string, remoteAbsent bool) (syncProjectRepairResult, error) {
-	if s == nil || s.readOnly || !remoteAbsent || !projectIDPattern.MatchString(portableProject) || localProject == "" {
-		return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrInvalid)
+func (s *Store) RepairBoundProjectCreate(ctx context.Context, portableProject, localProject string, confirmedRemoteAbsent bool) (SyncProjectRepairResult, error) {
+	if s == nil || s.readOnly || !confirmedRemoteAbsent || !projectIDPattern.MatchString(portableProject) || localProject == "" {
+		return SyncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrInvalid)
 	}
 	if err := cancelled(ctx); err != nil {
-		return syncProjectRepairResult{}, err
+		return SyncProjectRepairResult{}, err
 	}
 	now, ok := syncUnixNano(s.now().UTC().Round(0))
 	if !ok {
-		return syncProjectRepairResult{}, fmt.Errorf("%w: invalid clock", ErrCorrupt)
+		return SyncProjectRepairResult{}, fmt.Errorf("%w: invalid clock", ErrCorrupt)
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return syncProjectRepairResult{}, writeError(ctx, err)
+		return SyncProjectRepairResult{}, writeError(ctx, err)
 	}
 	defer conn.Close()
 	for attempt := 0; ; attempt++ {
@@ -146,7 +146,7 @@ func (s *Store) repairBoundProjectCreate(ctx context.Context, portableProject, l
 			break
 		}
 		if err = waitForSQLite(ctx, attempt, err); err != nil {
-			return syncProjectRepairResult{}, writeError(ctx, err)
+			return SyncProjectRepairResult{}, writeError(ctx, err)
 		}
 	}
 	committed := false
@@ -159,58 +159,179 @@ func (s *Store) repairBoundProjectCreate(ctx context.Context, portableProject, l
 	err = conn.QueryRowContext(ctx, `SELECT status,local_project_id FROM sync_project_repairs WHERE portable_project_id=?`, portableProject).Scan(&status, &existingLocal)
 	if err == nil {
 		if existingLocal != localProject || (status != "pending" && status != "completed" && status != "rejected") {
-			return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrConflict)
+			return SyncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrConflict)
 		}
 		if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
-			return syncProjectRepairResult{}, writeError(ctx, err)
+			return SyncProjectRepairResult{}, writeError(ctx, err)
 		}
 		committed = true
-		return syncProjectRepairResult{SchemaVersion: 1, Status: status}, nil
+		return SyncProjectRepairResult{SchemaVersion: 1, Status: status}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return syncProjectRepairResult{}, writeError(ctx, err)
+		return SyncProjectRepairResult{}, writeError(ctx, err)
 	}
 	var bound string
 	err = conn.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProject).Scan(&bound)
 	if errors.Is(err, sql.ErrNoRows) || bound != localProject {
-		return syncProjectRepairResult{}, fmt.Errorf("%w: portable project identity binding", ErrConflict)
+		return SyncProjectRepairResult{}, fmt.Errorf("%w: portable project identity binding", ErrConflict)
 	}
 	if err != nil {
-		return syncProjectRepairResult{}, writeError(ctx, err)
+		return SyncProjectRepairResult{}, writeError(ctx, err)
 	}
 	var version, originals int64
 	if err = conn.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, localProject).Scan(&version); err != nil || version != 1 {
 		if errors.Is(err, sql.ErrNoRows) {
-			return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrConflict)
+			return SyncProjectRepairResult{}, fmt.Errorf("%w: project sync repair", ErrConflict)
 		}
-		return syncProjectRepairResult{}, writeError(ctx, err)
+		return SyncProjectRepairResult{}, writeError(ctx, err)
 	}
 	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_push_results WHERE disposition='accepted' AND retryable=0 AND record_kind='project' AND record_id=? AND mutation_kind='create' AND base_version=0 AND canonical_version=1`, localProject).Scan(&originals); err != nil {
-		return syncProjectRepairResult{}, writeError(ctx, err)
+		return SyncProjectRepairResult{}, writeError(ctx, err)
 	}
 	if originals != 1 {
-		return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair receipt", ErrConflict)
+		return SyncProjectRepairResult{}, fmt.Errorf("%w: project sync repair receipt", ErrConflict)
+	}
+	var activeClaims int
+	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox o JOIN sync_outbox_claims c ON c.mutation_id=o.mutation_id WHERE c.lease_until>? AND (o.record_kind='project' AND o.record_id=? OR o.record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.record_id AND s.project_id=?) OR o.record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=o.record_id AND n.project_id=?))`, now, localProject, localProject, localProject).Scan(&activeClaims); err != nil {
+		return SyncProjectRepairResult{}, writeError(ctx, err)
+	}
+	if activeClaims != 0 {
+		return SyncProjectRepairResult{}, fmt.Errorf("%w: active project sync claim", ErrConflict)
 	}
 	var original string
 	if err = conn.QueryRowContext(ctx, `SELECT mutation_id FROM sync_push_results WHERE disposition='accepted' AND retryable=0 AND record_kind='project' AND record_id=? AND mutation_kind='create' AND base_version=0 AND canonical_version=1`, localProject).Scan(&original); err != nil || !canonicalUUIDPattern.MatchString(original) {
-		return syncProjectRepairResult{}, fmt.Errorf("%w: project sync repair receipt", ErrCorrupt)
+		return SyncProjectRepairResult{}, fmt.Errorf("%w: project sync repair receipt", ErrCorrupt)
 	}
 	id, err := newSyncUUID()
 	if err != nil {
-		return syncProjectRepairResult{}, writeError(ctx, err)
+		return SyncProjectRepairResult{}, writeError(ctx, err)
 	}
 	mutation := syncservice.Mutation{MutationID: id, RecordID: localProject, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: localProject}}
 	if _, err = s.enqueueSyncOutbox(ctx, conn, mutation); err != nil {
-		return syncProjectRepairResult{}, err
+		return SyncProjectRepairResult{}, err
 	}
 	if _, err = conn.ExecContext(ctx, `INSERT INTO sync_project_repairs(portable_project_id,local_project_id,original_mutation_id,repair_mutation_id,status,terminal_code,created_at,completed_at) VALUES(?,?,?,?, 'pending','',?,NULL)`, portableProject, localProject, original, id, now); err != nil {
-		return syncProjectRepairResult{}, conflictOrWrite(ctx, err)
+		return SyncProjectRepairResult{}, conflictOrWrite(ctx, err)
 	}
 	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return syncProjectRepairResult{}, writeError(ctx, err)
+		return SyncProjectRepairResult{}, writeError(ctx, err)
 	}
 	committed = true
-	return syncProjectRepairResult{SchemaVersion: 1, Status: "pending", Queued: 1}, nil
+	return SyncProjectRepairResult{SchemaVersion: 1, Status: "pending", Queued: 1}, nil
+}
+
+func pendingProjectRepairBarrier(ctx context.Context, tx *sql.Tx) error {
+	var pending int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_repairs WHERE status='pending'`).Scan(&pending); err != nil {
+		return writeError(ctx, err)
+	}
+	if pending != 0 {
+		return fmt.Errorf("%w: project repair is pending", ErrSyncProjectRepairPending)
+	}
+	return nil
+}
+
+func pendingProjectRepairForMutation(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation) error {
+	var project string
+	err := tx.QueryRowContext(ctx, `SELECT CASE ? WHEN 'project' THEN ? WHEN 'session' THEN (SELECT project_id FROM sessions WHERE id=?) WHEN 'observation' THEN (SELECT project_id FROM observations WHERE id=?) END`, mutation.RecordKind, mutation.RecordID, mutation.RecordID, mutation.RecordID).Scan(&project)
+	if err != nil || project == "" {
+		return fmt.Errorf("%w: sync mutation project", ErrCorrupt)
+	}
+	var pending int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_repairs WHERE status='pending' AND local_project_id=?`, project).Scan(&pending); err != nil {
+		return writeError(ctx, err)
+	}
+	if pending != 0 {
+		return fmt.Errorf("%w: project repair is pending", ErrSyncProjectRepairPending)
+	}
+	return nil
+}
+
+func (s *Store) pendingProjectRepairPreflight(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	if err = pendingProjectRepairBarrier(ctx, tx); err != nil {
+		return err
+	}
+	return commit(ctx, tx)
+}
+
+func pendingProjectRepairForProject(ctx context.Context, tx *sql.Tx, portableProject, localProject string) error {
+	var bound string
+	err := tx.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProject).Scan(&bound)
+	if errors.Is(err, sql.ErrNoRows) || bound != localProject {
+		return fmt.Errorf("%w: portable project identity binding", ErrConflict)
+	}
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	var status string
+	err = tx.QueryRowContext(ctx, `SELECT status FROM sync_project_repairs WHERE portable_project_id=? AND local_project_id=?`, portableProject, localProject).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	if status == "pending" {
+		return fmt.Errorf("%w: project repair is pending", ErrSyncProjectRepairPending)
+	}
+	if status != "completed" && status != "rejected" {
+		return fmt.Errorf("%w: project sync repair", ErrCorrupt)
+	}
+	return nil
+}
+
+// PendingProjectRepair fails closed only while the exact bound repair is pending.
+func (s *Store) PendingProjectRepair(ctx context.Context, portableProject, localProject string) error {
+	mutationID, err := s.PendingProjectRepairMutation(ctx, portableProject, localProject)
+	if err != nil {
+		return err
+	}
+	if mutationID != "" {
+		return fmt.Errorf("%w: project repair is pending", ErrSyncProjectRepairPending)
+	}
+	return nil
+}
+
+// PendingProjectRepairMutation returns only the exact pending replacement
+// create for a strict portable/local binding; terminal and absent repairs yield
+// an empty ID.
+func (s *Store) PendingProjectRepairMutation(ctx context.Context, portableProject, localProject string) (string, error) {
+	if s == nil || !projectIDPattern.MatchString(portableProject) || localProject == "" {
+		return "", fmt.Errorf("%w: project sync repair", ErrInvalid)
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return "", writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	var bound string
+	err = tx.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProject).Scan(&bound)
+	if errors.Is(err, sql.ErrNoRows) || bound != localProject {
+		return "", fmt.Errorf("%w: portable project identity binding", ErrConflict)
+	}
+	if err != nil {
+		return "", writeError(ctx, err)
+	}
+	var mutationID, status string
+	err = tx.QueryRowContext(ctx, `SELECT repair_mutation_id,status FROM sync_project_repairs WHERE portable_project_id=? AND local_project_id=?`, portableProject, localProject).Scan(&mutationID, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", commit(ctx, tx)
+	}
+	if err != nil {
+		return "", writeError(ctx, err)
+	}
+	if status == "pending" && canonicalUUIDPattern.MatchString(mutationID) {
+		return mutationID, commit(ctx, tx)
+	}
+	if status != "completed" && status != "rejected" {
+		return "", fmt.Errorf("%w: project sync repair", ErrCorrupt)
+	}
+	return "", commit(ctx, tx)
 }
 
 func backfillMutationID(kind, id string) string {
@@ -308,9 +429,6 @@ const (
 type SyncMode string
 
 const (
-	// SyncModeProjectPushOnly reports project-scoped foreground push without
-	// owner-global pull, bootstrap, conflict recovery, or cursor advancement.
-	SyncModeProjectPushOnly SyncMode = "project_push_only"
 	// SyncModeProjectBidirectional reports project-scoped foreground push and
 	// pull without touching owner-global sync state.
 	SyncModeProjectBidirectional SyncMode = "project_bidirectional"
@@ -853,6 +971,9 @@ func (s *Store) BootstrapSync(ctx context.Context, remote BootstrapRemote) error
 	if err := cancelled(ctx); err != nil {
 		return err
 	}
+	if err := s.pendingProjectRepairPreflight(ctx); err != nil {
+		return err
+	}
 	if _, err := s.bootstrapState(ctx); err != nil {
 		return err
 	}
@@ -879,6 +1000,9 @@ func (s *Store) BootstrapSync(ctx context.Context, remote BootstrapRemote) error
 		if state.checkpoint != nil {
 			cursor.Position = state.checkpoint.Position
 			cursor.Watermark = state.checkpoint.Watermark
+		}
+		if err = s.pendingProjectRepairPreflight(ctx); err != nil {
+			return err
 		}
 		page, err := remote.Pull(ctx, cursor, syncapi.DefaultPullLimit)
 		if err != nil {
@@ -920,6 +1044,9 @@ func (s *Store) BootstrapOwnConflict(ctx context.Context, remote BootstrapRemote
 	if err := cancelled(ctx); err != nil {
 		return err
 	}
+	if err := s.pendingProjectRepairPreflight(ctx); err != nil {
+		return err
+	}
 	sequence, err := s.ownConflictReceiptSequence(ctx, mutationID)
 	if err != nil {
 		return err
@@ -938,6 +1065,9 @@ func (s *Store) BootstrapOwnConflict(ctx context.Context, remote BootstrapRemote
 		}
 		if cursor.Position >= sequence {
 			return fmt.Errorf("%w: own conflict history", ErrConflict)
+		}
+		if err = s.pendingProjectRepairPreflight(ctx); err != nil {
+			return err
 		}
 		page, err := remote.Pull(ctx, cursor, syncapi.DefaultPullLimit)
 		if err != nil {
@@ -989,6 +1119,9 @@ func (s *Store) PullConflictResolutions(ctx context.Context, remote BootstrapRem
 	if err := cancelled(ctx); err != nil {
 		return err
 	}
+	if err := s.pendingProjectRepairPreflight(ctx); err != nil {
+		return err
+	}
 	discovery, err := remote.Discover(ctx)
 	if err != nil {
 		return err
@@ -998,6 +1131,9 @@ func (s *Store) PullConflictResolutions(ctx context.Context, remote BootstrapRem
 	}
 	cursor, err := s.conflictResolutionCursor(ctx, discovery.HistoryID)
 	if err != nil {
+		return err
+	}
+	if err = s.pendingProjectRepairPreflight(ctx); err != nil {
 		return err
 	}
 	page, err := remote.Pull(ctx, cursor, syncapi.DefaultPullLimit)
@@ -1137,6 +1273,9 @@ func (s *Store) applyOwnConflictPage(ctx context.Context, page syncservice.PullP
 		return writeError(ctx, err)
 	}
 	defer tx.Rollback()
+	if err = pendingProjectRepairBarrier(ctx, tx); err != nil {
+		return err
+	}
 	epoch, err := syncDataVersion(ctx, tx)
 	if err != nil {
 		s.syncInbox.known = false
@@ -1562,6 +1701,10 @@ func (s *Store) claimDueSyncOutbox(ctx context.Context, lease time.Duration, lim
 	if project != "" {
 		query += ` AND (o.record_kind='project' AND o.record_id=? OR o.record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.record_id AND s.project_id=?) OR o.record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=o.record_id AND n.project_id=?))`
 		args = append(args, project, project, project)
+		query += ` AND (NOT EXISTS (SELECT 1 FROM sync_project_repairs r WHERE r.status='pending' AND r.local_project_id=?) OR EXISTS (SELECT 1 FROM sync_project_repairs r WHERE r.status='pending' AND r.local_project_id=? AND r.repair_mutation_id=o.mutation_id))`
+		args = append(args, project, project)
+	} else {
+		query += ` AND (NOT EXISTS (SELECT 1 FROM sync_project_repairs WHERE status='pending') OR ` + repairPriority + `)`
 	}
 	query += ` ORDER BY CASE WHEN ` + repairPriority + ` THEN 0 ELSE 1 END,o.created_at,o.id LIMIT ?`
 	args = append(args, limit)
@@ -1625,7 +1768,31 @@ func (s *Store) RenewSyncOutboxClaim(ctx context.Context, mutationID, claimToken
 	if !ok || until < nowNanos {
 		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE sync_outbox_claims SET lease_until=? WHERE mutation_id=? AND claim_token=? AND lease_until>? AND lease_until<?`, until, mutationID, claimToken, nowNanos, until)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	entry, found, err := syncOutboxForResult(ctx, tx, mutationID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
+	}
+	if err = claimMatches(ctx, tx, mutationID, claimToken, nowNanos); err != nil {
+		return err
+	}
+	repair, err := syncProjectRepairForMutation(ctx, tx, entry.Mutation)
+	if err != nil {
+		return err
+	}
+	if !repair {
+		if err = pendingProjectRepairForMutation(ctx, tx, entry.Mutation); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE sync_outbox_claims SET lease_until=? WHERE mutation_id=? AND claim_token=? AND lease_until>? AND lease_until<?`, until, mutationID, claimToken, nowNanos, until)
 	if err != nil {
 		return writeError(ctx, err)
 	}
@@ -1636,7 +1803,7 @@ func (s *Store) RenewSyncOutboxClaim(ctx context.Context, mutationID, claimToken
 	if changed != 1 {
 		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
 	}
-	return nil
+	return commit(ctx, tx)
 }
 
 // MarkSyncOutboxRetry makes a currently claimed entry eligible for a later retry.
@@ -1659,6 +1826,25 @@ func (s *Store) markSyncOutboxRetry(ctx context.Context, mutationID, claimToken 
 		return writeError(ctx, err)
 	}
 	defer tx.Rollback()
+	entry, found, err := syncOutboxForResult(ctx, tx, mutationID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
+	}
+	if err = claimMatches(ctx, tx, mutationID, claimToken, nowNanos); err != nil {
+		return err
+	}
+	repair, err := syncProjectRepairForMutation(ctx, tx, entry.Mutation)
+	if err != nil {
+		return err
+	}
+	if !repair {
+		if err = pendingProjectRepairForMutation(ctx, tx, entry.Mutation); err != nil {
+			return err
+		}
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE sync_outbox SET state='retry',attempts=attempts+1,next_attempt_at=?,last_error_code=?,updated_at=? WHERE mutation_id=? AND EXISTS (SELECT 1 FROM sync_outbox_claims WHERE mutation_id=? AND claim_token=? AND lease_until>? AND claimed_at<=?)`, nextNanos, code, nowNanos, mutationID, mutationID, claimToken, nowNanos, nowNanos)
 	if err != nil {
 		return writeError(ctx, err)
@@ -1690,9 +1876,6 @@ func (s *Store) ApplySyncPushResult(ctx context.Context, mutationID, claimToken 
 	}
 	if result.Retryable {
 		now := s.now().UTC().Round(0)
-		if err := s.validateRetryClaim(ctx, mutationID, claimToken, now); err != nil {
-			return err
-		}
 		return s.markSyncOutboxRetry(ctx, mutationID, claimToken, now, result.Code, now)
 	}
 	now := s.now().UTC().Round(0)
@@ -1718,6 +1901,11 @@ func (s *Store) ApplySyncPushResult(ctx context.Context, mutationID, claimToken 
 	repair, err := syncProjectRepairForMutation(ctx, tx, entry.Mutation)
 	if err != nil {
 		return err
+	}
+	if !repair {
+		if err = pendingProjectRepairForMutation(ctx, tx, entry.Mutation); err != nil {
+			return err
+		}
 	}
 	if repair {
 		err = applyProjectRepairResultVersion(ctx, tx, entry.Mutation, result)
@@ -2196,13 +2384,8 @@ func (s *Store) ApplyProjectPulledPage(ctx context.Context, portableProject, loc
 		return writeError(ctx, err)
 	}
 	defer tx.Rollback()
-	var bound string
-	err = tx.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProject).Scan(&bound)
-	if errors.Is(err, sql.ErrNoRows) || bound != localProject {
-		return fmt.Errorf("%w: portable project identity binding", ErrConflict)
-	}
-	if err != nil {
-		return writeError(ctx, err)
+	if err = pendingProjectRepairForProject(ctx, tx, portableProject, localProject); err != nil {
+		return err
 	}
 	if err = pulledProject(ctx, tx, localProject); err != nil {
 		return err
@@ -2496,6 +2679,9 @@ func (s *Store) applyPulledPage(ctx context.Context, page syncservice.PullPage, 
 		return writeError(ctx, err)
 	}
 	defer tx.Rollback()
+	if err = pendingProjectRepairBarrier(ctx, tx); err != nil {
+		return err
+	}
 	epoch, err := syncDataVersion(ctx, tx)
 	if err != nil {
 		s.syncInbox.known = false

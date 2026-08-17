@@ -29,6 +29,18 @@ type fakeMemoryRuntime struct {
 	bearer   string
 	opts     config.Options
 	backfill memory.SyncBackfillResult
+	repair   memory.SyncProjectRepairResult
+}
+
+func TestMemorySyncRepairProjectRequiresExactConfirmationAndEmitsOnlyResult(t *testing.T) {
+	runtime := &fakeMemoryRuntime{}
+	workspace := t.TempDir()
+	for _, args := range [][]string{{"memory", "sync", "repair-project", "--workspace", workspace, "--json"}, {"memory", "sync", "repair-project", "--workspace", "relative", "--confirm-remote-absent", "--json"}} {
+		code, out, stderr := runMemoryTest(args, "", runtime)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == 0 && stderr != "", "args=%q code=%d out=%q stderr=%q", args, code, out, stderr)
+	}
+	code, out, stderr := runMemoryTest([]string{"memory", "sync", "repair-project", "--workspace", workspace, "--confirm-remote-absent", "--json"}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"status":"pending"`) && !strings.Contains(out, "credential"), "code=%d out=%q stderr=%q", code, out, stderr)
 }
 
 func (f *fakeMemoryRuntime) Remember(context.Context, config.Options, memory.Remember) (memory.Entry, error) {
@@ -103,6 +115,14 @@ func (f *fakeMemoryRuntime) SyncStatus(context.Context, config.Options) (memory.
 func (f *fakeMemoryRuntime) BackfillSyncProject(context.Context, config.Options, string, int) (memory.SyncBackfillResult, error) {
 	f.calls++
 	return f.backfill, f.err
+}
+func (f *fakeMemoryRuntime) RepairSyncProject(_ context.Context, opts config.Options, _ string, _ bool) (memory.SyncProjectRepairResult, error) {
+	f.calls++
+	f.opts = opts
+	if f.repair == (memory.SyncProjectRepairResult{}) {
+		f.repair = memory.SyncProjectRepairResult{SchemaVersion: 1, Status: "pending", Queued: 1}
+	}
+	return f.repair, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
@@ -223,15 +243,15 @@ func TestMemoryCLI_SyncUsesNoInputAndRendersTokenFreeResult(t *testing.T) {
 	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"status":"synced"`) && strings.Contains(out, `"pushed":1`) && !strings.Contains(out, "vgx1."), "sync json: code=%d out=%q stderr=%q", code, out, stderr)
 
-	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectPushOnly, Status: memory.SyncStatusSynced, Pushed: 1}}
+	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectBidirectional, Status: memory.SyncStatusSynced, Pushed: 1}}
 	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "", runtime)
-	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_push_only\nstatus=synced\n"), "project mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
+	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_bidirectional\nstatus=synced\n"), "project mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
 	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "", runtime)
-	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"mode":"project_push_only"`), "project mode json output: code=%d out=%q stderr=%q", code, out, stderr)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"mode":"project_bidirectional"`), "project mode json output: code=%d out=%q stderr=%q", code, out, stderr)
 
-	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectPushOnly, Status: memory.SyncStatusUnavailable}}
+	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectBidirectional, Status: memory.SyncStatusUnavailable}}
 	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "", runtime)
-	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_push_only\nstatus=unavailable\n"), "preflight mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
+	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_bidirectional\nstatus=unavailable\n"), "preflight mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
 
 	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusUnreachable, FailureOperation: "capabilities", FailureClass: "http_status", FailureHTTPStatus: 503}}
 	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "bearer-secret https://private.example/v1/sync/pull?project_id=project-secret raw-error", runtime)

@@ -46,21 +46,16 @@ ownership, permissions, and Windows limitations. For existing project data,
 run `memory sync backfill --workspace /absolute/workspace` before the first
 sync. Backfill is local-only, bounded, and idempotent.
 
-Schema v17 includes dormant storage foundations for a future project-create
-repair workflow. This slice exposes no operator command and performs no repair
-network action; the migration preserves existing local sync state. Deployment,
-installation, and activation remain blocked until the activation slice lands
-and passes verification.
+Schema v17 supports `memory sync repair-project --workspace /absolute/workspace --confirm-remote-absent --json` after an operator confirms a previously accepted project is absent remotely. Repair is local-only and queues one replacement create; ordinary foreground sync sends it. Configure changes enrollment only; project sync is bidirectional; pending repair makes global claim/pull conservative while other exact-bound project flows remain serially independent under the shared storage-root lock.
 
 Foreground sync is explicitly project-scoped: use `memory sync --workspace
 /absolute/workspace`. The workspace must already have a valid
 `.vgxness/project-id` marker and matching local portable binding created by
 `memory project init`; otherwise sync fails closed before any remote call. This
-mode pushes only that project's project, session, and observation mutations. It
-does not pull remote history, bootstrap, resolve conflicts, or advance the
-owner-global cursor, so it is not bidirectional synchronization.
-Its result mode is `project_push_only`, including when the bounded push reports
-an unavailable, rejected, conflict, or partial outcome.
+mode pushes only that project's project, session, and observation mutations,
+then pulls only that portable project's history using its separate project
+cursor. It never bootstraps, resolves global conflicts, or reads or advances
+the owner-global cursor. Its result mode is `project_bidirectional`.
 
 The default database is `~/.vgxness/memory.db`. Explicit `--storage-root` and
 `--project-local` modes use isolated databases. The OpenCode integration exposes
@@ -92,4 +87,4 @@ persistent semantic-memory authority.
 
 ## Project sync identity
 
-During outbound project-scoped push, ordinary mappings send deterministic portable record IDs while retaining local memory IDs and outbox bytes unchanged. Adopted mappings take precedence and resend their exact inbound wire ID. The schema records that adoption provenance, but does not pull, materialize records, or support reference-before-target translation. `resolve` is not transported; pull/bootstrap translation is deferred.
+During outbound project-scoped push, ordinary mappings send deterministic portable record IDs while retaining local memory IDs and outbox bytes unchanged. Adopted mappings take precedence and resend their exact inbound wire ID. The schema records that adoption provenance; project-scoped pull materializes supported project history, while reference-before-target translation and `resolve` transport remain unsupported.
