@@ -52,6 +52,9 @@ func publishRootDirectoryNoReplace(root *os.Root, source, destination string) er
 	err = windows.NtSetInformationFile(handle, &status, &buffer[0], uint32(size), windows.FileRenameInformation)
 	runtime.KeepAlive(destinationParent)
 	runtime.KeepAlive(sourceParent)
+	if err == windows.STATUS_OBJECT_NAME_COLLISION || err == windows.STATUS_OBJECT_NAME_EXISTS || err == windows.ERROR_FILE_EXISTS || err == windows.ERROR_ALREADY_EXISTS {
+		return os.ErrExist
+	}
 	return err
 }
 
