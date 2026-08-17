@@ -28,6 +28,37 @@ func TestHealthRejectsWeakenedPortableBindingSchema(t *testing.T) {
 	_, err = store.Health(context.Background())
 	testutil.Require(t, errors.Is(err, ErrCorrupt), "Health() error=%v", err)
 }
+
+func TestRepairProjectSchemaHealth(t *testing.T) {
+	for _, statement := range []string{`DROP TABLE sync_project_repairs`, `DROP INDEX sync_project_repairs_pending_idx`} {
+		t.Run(statement, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			_, err := store.db.Exec(statement)
+			testutil.NoError(t, err)
+			_, err = store.Health(context.Background())
+			testutil.Require(t, errors.Is(err, ErrCorrupt), "Health() error=%v", err)
+		})
+	}
+}
+
+func TestProjectRepairMigrationFromV16PreservesMemory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store := openPath(t, path)
+	_, err := store.Save(context.Background(), Observation{ID: "existing", Project: "project", Scope: ScopeProject, Type: "learning", Content: "preserved", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.NoError(t, err)
+	testutil.NoError(t, store.Close())
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	_, err = db.Exec(`DROP INDEX sync_project_repairs_pending_idx; DROP TABLE sync_project_repairs; PRAGMA user_version=16`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+	store = openPath(t, path)
+	defer store.Close()
+	version, err := store.Health(context.Background())
+	item, itemErr := store.Get(context.Background(), "existing", "project", ScopeProject)
+	testutil.Require(t, err == nil && version == 17 && itemErr == nil && item.Content == "preserved", "version=%d err=%v item=%+v itemErr=%v", version, err, item, itemErr)
+}
 func TestProjectIdentityMigrationFromV12Fixture(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	store := openPath(t, path)
@@ -40,7 +71,7 @@ func TestProjectIdentityMigrationFromV12Fixture(t *testing.T) {
 	store = openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 16, "version=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 17, "version=%d err=%v", version, err)
 }
 
 func TestProjectCursorMigrationFromV15Fixture(t *testing.T) {
@@ -58,7 +89,7 @@ func TestProjectCursorMigrationFromV15Fixture(t *testing.T) {
 	var cursor, inbox int
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor`).Scan(&cursor))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox`).Scan(&inbox))
-	testutil.Require(t, err == nil && version == 16 && cursor == 0 && inbox == 0, "version=%d cursor=%d inbox=%d err=%v", version, cursor, inbox, err)
+	testutil.Require(t, err == nil && version == 17 && cursor == 0 && inbox == 0, "version=%d cursor=%d inbox=%d err=%v", version, cursor, inbox, err)
 }
 
 func TestHealthRejectsWeakenedSyncPortableIdentitySchema(t *testing.T) {
@@ -103,5 +134,5 @@ func TestSyncPortableIdentityAdoptionMigrationFromV14PreservesMappings(t *testin
 	inverse, found, inverseErr := store.LocalSyncPortableIdentity(context.Background(), project, "session", wire)
 	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440303", RecordID: local, RecordKind: "session", Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: local, ProjectID: "local"}}
 	translated, translateErr := store.TranslateSyncMutations(context.Background(), project, "local", []syncservice.Mutation{mutation})
-	testutil.Require(t, err == nil && version == 16 && mappings == 1 && adoptions == 0 && inverseErr == nil && found && inverse == local && translateErr == nil && len(translated) == 1 && translated[0].RecordID == wire, "version=%d mappings=%d adoptions=%d inverse=%q/%t/%v translated=%+v err=%v", version, mappings, adoptions, inverse, found, inverseErr, translated, err)
+	testutil.Require(t, err == nil && version == 17 && mappings == 1 && adoptions == 0 && inverseErr == nil && found && inverse == local && translateErr == nil && len(translated) == 1 && translated[0].RecordID == wire, "version=%d mappings=%d adoptions=%d inverse=%q/%t/%v translated=%+v err=%v", version, mappings, adoptions, inverse, found, inverseErr, translated, err)
 }

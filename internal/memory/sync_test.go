@@ -32,7 +32,7 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 16, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 17, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
@@ -109,6 +109,176 @@ func TestBackfillSyncProjectSkipsTombstonedObservation(t *testing.T) {
 	testutil.Require(t, queued == 0, "resurrected outbox=%d", queued)
 }
 
+func TestRepairBoundProjectCreateRequeuesOnlyAcceptedMissingProject(t *testing.T) {
+	store, project, portable, original := seededProjectRepair(t, 1, 1)
+	result, err := store.repairBoundProjectCreate(context.Background(), portable, project, true)
+	testutil.Require(t, err == nil && result.Status == "pending" && result.Queued == 1, "result=%+v err=%v", result, err)
+	claims, err := store.ClaimDueSyncOutboxForProject(context.Background(), time.Minute, 16, project)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.Kind == syncservice.MutationCreate && claims[0].Mutation.BaseVersion == 0, "claims=%+v err=%v", claims, err)
+	sequence := int64(2)
+	err = store.ApplySyncPushResult(context.Background(), claims[0].Mutation.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: claims[0].Mutation.MutationID, Disposition: syncservice.DispositionAccepted, Version: 1, Sequence: &sequence})
+	var version, receipts int
+	var status string
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id=?`, project).Scan(&version))
+	testutil.NoError(t, store.db.QueryRow(`SELECT status FROM sync_project_repairs WHERE portable_project_id=?`, portable).Scan(&status))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_push_results WHERE record_id=?`, project).Scan(&receipts))
+	testutil.Require(t, err == nil && version == 1 && status == "completed" && receipts == 2, "apply=%v version=%d status=%s receipts=%d", err, version, status, receipts)
+	var repair string
+	testutil.NoError(t, store.db.QueryRow(`SELECT repair_mutation_id FROM sync_project_repairs WHERE portable_project_id=?`, portable).Scan(&repair))
+	testutil.Require(t, repair != original, "repair reused original mutation id %q", repair)
+}
+
+func seededProjectRepair(t *testing.T, version, accepted int64) (*Store, string, string, string) {
+	t.Helper()
+	store := openTestStore(t)
+	project, portable := "project", "550e8400-e29b-41d4-a716-446655440300"
+	original := "550e8400-e29b-41d4-a716-446655440301"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES(?,?)`, project, version)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,'test','now')`, portable, project, "hash")
+	testutil.NoError(t, err)
+	for sequence := int64(1); sequence <= accepted; sequence++ {
+		id := original
+		if sequence == 2 {
+			id = "550e8400-e29b-41d4-a716-446655440302"
+		}
+		_, err = store.db.Exec(`INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at) VALUES(?,'accepted',0,'',?,1,'project',?,'create',0,zeroblob(32),?)`, id, sequence, project, fixedTime.UnixNano())
+		testutil.NoError(t, err)
+	}
+	return store, project, portable, original
+}
+
+func TestRepairBoundProjectCreateFailsClosedWithoutWrites(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		setup  func(*Store, string, string) error
+		id     string
+		local  string
+		absent bool
+	}{
+		{"remote absence not confirmed", nil, "550e8400-e29b-41d4-a716-446655440300", "project", false},
+		{"invalid portable", nil, "invalid", "project", true},
+		{"binding mismatch", nil, "550e8400-e29b-41d4-a716-446655440300", "other", true},
+		{"wrong version", func(s *Store, _, _ string) error {
+			_, err := s.db.Exec(`UPDATE projects SET sync_version=2`)
+			return err
+		}, "550e8400-e29b-41d4-a716-446655440300", "project", true},
+		{"no accepted receipt", func(s *Store, _, _ string) error { _, err := s.db.Exec(`DELETE FROM sync_push_results`); return err }, "550e8400-e29b-41d4-a716-446655440300", "project", true},
+		{"two accepted receipts", nil, "550e8400-e29b-41d4-a716-446655440300", "project", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			accepted := int64(1)
+			if tc.name == "two accepted receipts" {
+				accepted = 2
+			}
+			store, project, portable, _ := seededProjectRepair(t, 1, accepted)
+			if tc.setup != nil {
+				testutil.NoError(t, tc.setup(store, project, portable))
+			}
+			id, local := tc.id, tc.local
+			if id == "" {
+				id, local = portable, project
+			}
+			_, err := store.repairBoundProjectCreate(ctx, id, local, tc.absent)
+			var repairs, outbox int
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_repairs`).Scan(&repairs))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+			testutil.Require(t, err != nil && repairs == 0 && outbox == 0, "err=%v repairs=%d outbox=%d", err, repairs, outbox)
+		})
+	}
+}
+
+func TestRepairBoundProjectCreateIsIdempotentConcurrentAndPreservesLocalRecords(t *testing.T) {
+	store, project, portable, _ := seededProjectRepair(t, 1, 1)
+	_, err := store.db.Exec(`INSERT INTO sessions(id,project_id,sync_version) VALUES('session',?,1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('observation',?,'project','learning','content','test','active',?,?,1)`, project, project, fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	results := make(chan syncProjectRepairResult, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			result, callErr := store.repairBoundProjectCreate(context.Background(), portable, project, true)
+			results <- result
+			errs <- callErr
+		}()
+	}
+	queued := 0
+	for range 2 {
+		err = <-errs
+		testutil.NoError(t, err)
+		queued += (<-results).Queued
+	}
+	again, err := store.repairBoundProjectCreate(context.Background(), portable, project, true)
+	var repairs, outbox, version, sessions, observations, receipts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_repairs`).Scan(&repairs))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id=?`, project).Scan(&version))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id='session' AND sync_version=1`).Scan(&sessions))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations WHERE id='observation' AND sync_version=1`).Scan(&observations))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_push_results`).Scan(&receipts))
+	testutil.Require(t, err == nil && again.Queued == 0 && queued == 1 && repairs == 1 && outbox == 1 && version == 1 && sessions == 1 && observations == 1 && receipts == 1, "again=%+v queued=%d repairs=%d outbox=%d version=%d sessions=%d observations=%d receipts=%d", again, queued, repairs, outbox, version, sessions, observations, receipts)
+}
+
+func enqueueRepairDependent(t *testing.T, store *Store, project string) string {
+	t.Helper()
+	id := "550e8400-e29b-41d4-a716-446655440303"
+	_, err := store.db.Exec(`INSERT INTO sessions(id,project_id,sync_version) VALUES(?,?,0)`, id, project)
+	testutil.NoError(t, err)
+	tx, err := store.db.BeginTx(context.Background(), nil)
+	testutil.NoError(t, err)
+	_, err = store.enqueueSyncOutbox(context.Background(), tx, syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440304", RecordID: id, RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, BaseVersion: 0, Session: &syncservice.Session{ID: id, ProjectID: project}})
+	testutil.NoError(t, err)
+	testutil.NoError(t, tx.Commit())
+	return id
+}
+
+func TestRepairBoundProjectCreateClaimsBeforeDependentsAndSettlesTerminalResults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		disposition syncservice.Disposition
+		code        string
+		wantStatus  string
+	}{
+		{"accepted", syncservice.DispositionAccepted, "", "completed"},
+		{"previously accepted", syncservice.DispositionPreviouslyAccepted, "", "completed"},
+		{"rejected", syncservice.DispositionRejected, "remote_absent", "rejected"},
+		{"conflict", syncservice.DispositionConflict, "", "rejected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, project, portable, _ := seededProjectRepair(t, 1, 1)
+			_, err := store.repairBoundProjectCreate(context.Background(), portable, project, true)
+			testutil.NoError(t, err)
+			dependent := enqueueRepairDependent(t, store, project)
+			claims, err := store.ClaimDueSyncOutboxForProject(context.Background(), time.Minute, 1, project)
+			testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == project, "claims=%+v err=%v", claims, err)
+			result := syncservice.Result{MutationID: claims[0].Mutation.MutationID, Disposition: tc.disposition, Code: tc.code}
+			if tc.disposition == syncservice.DispositionRejected {
+				result.Version = 0
+			} else {
+				sequence := int64(2)
+				result.Version, result.Sequence = 1, &sequence
+			}
+			err = store.ApplySyncPushResult(context.Background(), claims[0].Mutation.MutationID, claims[0].ClaimToken, result)
+			var version, receipts, repairOutbox, dependentOutbox int
+			var status, diagnostic string
+			testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id=?`, project).Scan(&version))
+			testutil.NoError(t, store.db.QueryRow(`SELECT status,terminal_code FROM sync_project_repairs WHERE portable_project_id=?`, portable).Scan(&status, &diagnostic))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_push_results`).Scan(&receipts))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE record_id=?`, project).Scan(&repairOutbox))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE record_id=?`, dependent).Scan(&dependentOutbox))
+			repeat, repeatErr := store.repairBoundProjectCreate(context.Background(), portable, project, true)
+			wantDiagnostic := ""
+			if tc.wantStatus == "rejected" {
+				wantDiagnostic = tc.code
+				if wantDiagnostic == "" {
+					wantDiagnostic = string(tc.disposition)
+				}
+			}
+			testutil.Require(t, err == nil && version == 1 && status == tc.wantStatus && diagnostic == wantDiagnostic && receipts == 2 && repairOutbox == 0 && dependentOutbox == 1 && repeatErr == nil && repeat.Queued == 0 && repeat.Status == tc.wantStatus, "apply=%v version=%d status=%q diagnostic=%q receipts=%d repair=%d dependent=%d repeat=%+v/%v", err, version, status, diagnostic, receipts, repairOutbox, dependentOutbox, repeat, repeatErr)
+		})
+	}
+}
+
 func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	db, err := sql.Open("sqlite", path)
@@ -125,7 +295,7 @@ func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 16, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 17, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var outbox, claims int
@@ -207,7 +377,7 @@ func TestSyncOutboxClaimsConstraintsCascadeAndHealth(t *testing.T) {
 func TestSyncOutboxClaimsMigrationFreshSchema(t *testing.T) {
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 16, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 17, "health=%d err=%v", version, err)
 	var table, index string
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='table' AND name='sync_outbox_claims'`).Scan(&table))
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='index' AND name='sync_outbox_claims_lease_idx'`).Scan(&index))
@@ -230,7 +400,7 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 16, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 17, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var count int
@@ -2126,7 +2296,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 16 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 17 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {

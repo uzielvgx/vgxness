@@ -26,9 +26,9 @@ and removes its FTS row. The observation row and relationships remain available
 to `Get` for durable history and persisted-data compatibility, while normal
 `Recall` cannot return forgotten content.
 
-## Schema v16 domains
+## Schema v17 domains
 
-**Implemented:** SQLite schema v16 keeps semantic observations, references,
+**Implemented:** SQLite schema v17 keeps semantic observations, references,
 sessions, and FTS rows isolated from structured SDD changes, artifacts,
 immutable revisions, input bindings, idempotency records, and OpenSpec projection
 evidence. Both domains share canonical workspace/project identity and the same
@@ -45,6 +45,12 @@ never stored; see [sync enrollment](sync.md#local-enrollment-and-status) for
 ownership, permissions, and Windows limitations. For existing project data,
 run `memory sync backfill --workspace /absolute/workspace` before the first
 sync. Backfill is local-only, bounded, and idempotent.
+
+Schema v17 includes dormant storage foundations for a future project-create
+repair workflow. This slice exposes no operator command and performs no repair
+network action; the migration preserves existing local sync state. Deployment,
+installation, and activation remain blocked until the activation slice lands
+and passes verification.
 
 Foreground sync is explicitly project-scoped: use `memory sync --workspace
 /absolute/workspace`. The workspace must already have a valid
@@ -64,11 +70,11 @@ execution authority.
 
 ## Upgrade migration caveat
 
-**Implemented:** A read-only database open cannot migrate an older supported schema to v16.
+**Implemented:** A read-only database open cannot migrate an older supported schema to v17.
 Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
 another read operation may therefore report a migration/storage failure. Run one
 write-capable memory or SDD operation to open the database and atomically apply
-v16, then rerun the read-only command. Do not delete or recreate the database;
+v17, then rerun the read-only command. Do not delete or recreate the database;
 the existing data is the migration source and remains authoritative.
 
 Older project-level `memory.db` files are a separate compatibility case. The

@@ -338,6 +338,35 @@ func TestRepositoryPushPersistsCanonicalHistory(t *testing.T) {
 	}
 }
 
+func TestRepositoryPushAcceptsProjectBeforeDependentInSingleBatch(t *testing.T) {
+	ctx, conn := context.Background(), testConn(t)
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := NewRepository(conn, uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.EnsureOwner(ctx); err != nil {
+		t.Fatal(err)
+	}
+	device, err := repo.IssueDevice(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := mutationProject("project", 0)
+	observation := mutationObservation("observation", "project", "", nil, 0)
+	results, err := repo.Push(ctx, device.ID, []syncservice.Mutation{project, observation})
+	if err != nil || len(results) != 2 {
+		t.Fatalf("Push() = %+v, %v", results, err)
+	}
+	for index, result := range results {
+		if result.Disposition != syncservice.DispositionAccepted || result.Version != 1 || result.Sequence == nil || *result.Sequence != int64(index+1) {
+			t.Fatalf("result[%d] = %+v", index, result)
+		}
+	}
+}
+
 func TestRepositoryPushReplaysAndRejectsWithoutEffects(t *testing.T) {
 	ctx, conn := context.Background(), testConn(t)
 	if err := Migrate(ctx, conn); err != nil {
