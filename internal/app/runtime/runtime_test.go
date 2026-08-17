@@ -77,7 +77,7 @@ func TestMemorySyncFailsClosedBeforeSecretsOrTransport(t *testing.T) {
 	runtime := NewMemory("cli", false)
 	runtime.credential = func(string) (string, error) { credentials++; return "", nil }
 	runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) { requests++; return nil, errors.New("unexpected request") })
-	result, err := runtime.Sync(context.Background(), config.Options{StorageRoot: storageRoot, ProjectLocal: true})
+	result, err := runtime.Sync(context.Background(), config.Options{StorageRoot: storageRoot, ProjectDir: t.TempDir(), ProjectLocal: true})
 	if err != nil || result.Status != memory.SyncStatusUnavailable || credentials != 0 || requests != 0 {
 		t.Fatalf("project-local sync = %+v, %v; credentials=%d requests=%d", result, err, credentials, requests)
 	}
@@ -144,7 +144,7 @@ func TestMemorySyncProfileAndCredentialStatesAvoidNetwork(t *testing.T) {
 		runtime := NewMemory("cli", false)
 		runtime.credential = func(string) (string, error) { credentials++; return credential, credentialErr }
 		runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) { requests++; return nil, errors.New("unexpected request") })
-		result, err := runtime.Sync(context.Background(), config.Options{StorageRoot: root})
+		result, err := runtime.Sync(context.Background(), config.Options{StorageRoot: root, ProjectDir: t.TempDir()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -946,7 +946,7 @@ func TestRunForegroundProjectSyncTransportRetryPersistence(t *testing.T) {
 }
 
 func TestMemorySyncPreflightResultIsProjectBidirectional(t *testing.T) {
-	result, err := NewMemory("cli", false).Sync(context.Background(), config.Options{StorageRoot: t.TempDir(), ProjectLocal: true})
+	result, err := NewMemory("cli", false).Sync(context.Background(), config.Options{StorageRoot: t.TempDir(), ProjectDir: t.TempDir(), ProjectLocal: true})
 	if err != nil || result.Mode != memory.SyncModeProjectBidirectional || result.Status != memory.SyncStatusUnavailable {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -954,7 +954,7 @@ func TestMemorySyncPreflightResultIsProjectBidirectional(t *testing.T) {
 
 func TestMemorySyncAndRepairWaitForEnrollmentLock(t *testing.T) {
 	storage, workspace := t.TempDir(), t.TempDir()
-	opts := config.Options{StorageRoot: storage}
+	opts := config.Options{StorageRoot: storage, ProjectDir: workspace}
 	paths, err := config.Prepare(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)

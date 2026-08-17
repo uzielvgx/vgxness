@@ -160,6 +160,9 @@ func (runtime Memory) InitializeProject(ctx context.Context, opts config.Options
 
 // Sync performs a bounded, foreground synchronization without exposing credentials.
 func (runtime Memory) Sync(ctx context.Context, opts config.Options) (memory.SyncResult, error) {
+	if opts.ProjectDir == "" || !filepath.IsAbs(opts.ProjectDir) {
+		return memory.SyncResult{Status: memory.SyncStatusUnavailable}, memory.ErrInvalid
+	}
 	if !opts.ProjectLocal && !runtime.readOnly {
 		paths, err := config.Prepare(ctx, opts)
 		if err != nil {

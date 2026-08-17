@@ -152,7 +152,7 @@ func TestBundledMemorySyncDefinesClientOnlyFailClosedContract(t *testing.T) {
 		t.Fatalf("definition=%+v", definition)
 	}
 	skill := string(definition.files["SKILL.md"])
-	for _, required := range []string{"name: memory-sync", "<!-- managed-by: vgxness; artifact: global-skill/memory-sync; version: 1 -->", "status", "backfill", "foreground", "storage-root-wide", "one profile", "no workspace filter", "confirmed dedicated", "all eligible queued records", "Endpoint and device ID are configure inputs only", "agent/model never reads or exposes a bearer", "Runtime reads stdin, keyring, or credential file", "credential-free", "keyring", "credential file", "Windows", "fail closed", "syncd serve", "SDD"} {
+	for _, required := range []string{"name: memory-sync", "<!-- managed-by: vgxness; artifact: global-skill/memory-sync; version: 1 -->", "status", "backfill", "foreground", "storage-root-wide", "one profile", "explicit absolute `--workspace`", "CLI and runtime enforce", "Runtime automatically validates", "agent does not inspect the marker", "strict marker/binding", "only that project's eligible records and cursor", "never other projects", "cross-process lock serializes configure, sync, and repair", "If interrupted or its result is unknown, do not retry or repair", "Endpoint and device ID are configure inputs only", "agent/model never reads or exposes a bearer", "Runtime reads stdin, keyring, or credential file", "credential-free", "keyring", "credential file", "Windows", "fail closed", "syncd serve", "SDD"} {
 		if !bytes.Contains([]byte(skill), []byte(required)) {
 			t.Errorf("memory-sync missing %q", required)
 		}
@@ -165,13 +165,17 @@ func TestBundledMemorySyncDefinesClientOnlyFailClosedContract(t *testing.T) {
 	reference := string(definition.files["references/client-workflow.md"])
 	for _, required := range []string{
 		"vgxness memory sync status --storage-root <absolute-storage-root> --credential-file <absolute-credential-file> --json",
-		"vgxness memory sync --storage-root <absolute-storage-root> --credential-file <absolute-credential-file> --json",
+		"vgxness memory sync --storage-root <absolute-storage-root> --workspace <absolute-workspace> --credential-file <absolute-credential-file> --json",
 		"absolute regular current-user-owned",
 		"no final/ancestor symlink",
 		"no group/other permissions",
 		"conditional post-configuration status",
-		"storage-root-wide",
-		"all eligible queued records",
+		"strict marker/binding",
+		"only that project's eligible records and cursor",
+		"CLI and runtime enforce",
+		"agent does not inspect the marker",
+		"cross-process lock serializes configure, sync, and repair",
+		"If interrupted or its result is unknown, do not retry or repair",
 	} {
 		if !bytes.Contains([]byte(reference), []byte(required)) {
 			t.Errorf("memory-sync client workflow missing %q", required)
