@@ -553,6 +553,12 @@ func TestRunForegroundSyncCapabilityAndTransportFailuresDoNotBootstrap(t *testin
 	if err != nil || result.Status != memory.SyncStatusUnauthorized || remote.pushes != 0 || remote.discovers != 0 {
 		t.Fatalf("capability result=%+v err=%v remote=%+v", result, err, remote)
 	}
+	store = newForegroundStore(t)
+	remote = &testForegroundRemote{capabilityErr: syncclient.NewDiagnosticError(syncclient.OperationCapabilities, syncclient.ErrorClassHTTPStatus, 503, syncclient.ErrUnavailable)}
+	result, err = runForegroundSync(context.Background(), store, remote)
+	if err != nil || result.Status != memory.SyncStatusUnreachable || result.FailureOperation != string(syncclient.OperationCapabilities) || result.FailureClass != string(syncclient.ErrorClassHTTPStatus) || result.FailureHTTPStatus != 503 || remote.pushes != 0 {
+		t.Fatalf("legacy capability result=%+v err=%v remote=%+v", result, err, remote)
+	}
 
 	store = newForegroundStore(t)
 	remote = &testForegroundRemote{pushErr: syncclient.ErrUnavailable}
@@ -792,6 +798,29 @@ func TestRunForegroundProjectSyncCapabilityFailureRetriesClaim(t *testing.T) {
 	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
 	if err != nil || result.Status != memory.SyncStatusUnreachable || store.retries != 1 || remote.pushes != 0 {
 		t.Fatalf("result=%+v err=%v retries=%d remote=%+v", result, err, store.retries, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncPropagatesSanitizedDiagnostics(t *testing.T) {
+	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440455"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440456"}
+	capabilityErr := syncclient.NewDiagnosticError(syncclient.OperationCapabilities, syncclient.ErrorClassHTTPStatus, 503, syncclient.ErrUnavailable)
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{claim}}}
+	result, err := runForegroundProjectSync(context.Background(), store, &testForegroundRemote{capabilityErr: capabilityErr}, "project-secret", "550e8400-e29b-41d4-a716-446655440001")
+	if err != nil || result.FailureOperation != string(syncclient.OperationCapabilities) || result.FailureClass != string(syncclient.ErrorClassHTTPStatus) || result.FailureHTTPStatus != 503 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+
+	pullErr := syncclient.NewDiagnosticError(syncclient.OperationProjectPull, syncclient.ErrorClassResponseInvalid, 200, syncclient.ErrRemote)
+	result, err = runForegroundProjectSync(context.Background(), &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}}, &testForegroundRemote{projectPullErr: pullErr}, "project-secret", "550e8400-e29b-41d4-a716-446655440001")
+	if err != nil || result.FailureOperation != string(syncclient.OperationProjectPull) || result.FailureClass != string(syncclient.ErrorClassResponseInvalid) || result.FailureHTTPStatus != 200 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+
+	remoteErr := syncclient.NewDiagnosticError(syncclient.OperationCapabilities, syncclient.ErrorClassTransport, 200, syncclient.ErrRemote)
+	store = &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{claim}}}
+	result, err = runForegroundProjectSync(context.Background(), store, &testForegroundRemote{capabilityErr: remoteErr}, "project-secret", "550e8400-e29b-41d4-a716-446655440001")
+	if err != nil || result.Status != memory.SyncStatusIncompatible || result.Retried != 0 || store.retries != 0 || result.FailureClass != string(syncclient.ErrorClassTransport) || result.FailureHTTPStatus != 200 {
+		t.Fatalf("result=%+v err=%v retries=%d", result, err, store.retries)
 	}
 }
 

@@ -95,6 +95,15 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 				fmt.Fprintf(stdout, "mode=%s\n", result.Mode)
 			}
 			fmt.Fprintf(stdout, "status=%s\npushed=%d\npreviously_accepted=%d\nrejected=%d\nretried=%d\nconflicts=%d\nbatches=%d\n", result.Status, result.Pushed, result.PreviouslyAccepted, result.Rejected, result.Retried, result.Conflicts, result.Batches)
+			if result.FailureOperation != "" {
+				fmt.Fprintf(stdout, "failure_operation=%s\n", result.FailureOperation)
+			}
+			if result.FailureClass != "" {
+				fmt.Fprintf(stdout, "failure_class=%s\n", result.FailureClass)
+			}
+			if result.FailureHTTPStatus != 0 {
+				fmt.Fprintf(stdout, "failure_http_status=%d\n", result.FailureHTTPStatus)
+			}
 		}
 		return 0
 	}

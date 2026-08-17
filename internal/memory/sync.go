@@ -235,6 +235,9 @@ type SyncResult struct {
 	Retried            int        `json:"retried"`
 	Conflicts          int        `json:"conflicts"`
 	Batches            int        `json:"batches"`
+	FailureOperation   string     `json:"failureOperation,omitempty"`
+	FailureHTTPStatus  int        `json:"failureHttpStatus,omitempty"`
+	FailureClass       string     `json:"failureClass,omitempty"`
 }
 
 // SyncQueueSummary reports whether durable local work blocks ordinary bootstrap.
