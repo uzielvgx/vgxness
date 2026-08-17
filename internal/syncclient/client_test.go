@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,10 @@ func (r *interruptedReader) Read(p []byte) (int, error) {
 	p[0] = '{'
 	return 1, nil
 }
+
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
 
 type testDoer func(*http.Request) (*http.Response, error)
 
@@ -220,6 +225,99 @@ func TestClientRejectsUnsafeResponsesWithoutSecrets(t *testing.T) {
 	}
 }
 
+func TestDiagnosticErrorsAreSanitizedAndPreserveSentinels(t *testing.T) {
+	const credential = "bearer-secret"
+	const private = "https://private.example/v1/sync/pull?project_id=project-secret&body=private"
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	for _, tc := range []struct {
+		name       string
+		invoke     func(*Client) error
+		want       error
+		operation  Operation
+		class      ErrorClass
+		httpStatus int
+		response   func() (*http.Response, error)
+	}{
+		{"transport", func(client *Client) error {
+			_, err := client.Capabilities(context.Background(), credential)
+			return err
+		}, ErrUnavailable, OperationCapabilities, ErrorClassTransport, 0, func() (*http.Response, error) { return nil, errors.New(private) }},
+		{"unavailable", func(client *Client) error {
+			_, err := client.Capabilities(context.Background(), credential)
+			return err
+		}, ErrUnavailable, OperationCapabilities, ErrorClassHTTPStatus, http.StatusServiceUnavailable, func() (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(private))}, nil
+		}},
+		{"unauthorized", func(client *Client) error {
+			_, err := client.Capabilities(context.Background(), credential)
+			return err
+		}, ErrUnauthorized, OperationCapabilities, ErrorClassAuthentication, http.StatusUnauthorized, func() (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(private))}, nil
+		}},
+		{"malformed project pull", func(client *Client) error {
+			_, err := client.PullProject(context.Background(), credential, syncservice.Cursor{HistoryID: "123e4567-e89b-12d3-a456-426614174000"}, projectID, 1)
+			return err
+		}, ErrRemote, OperationProjectPull, ErrorClassResponseInvalid, http.StatusOK, func() (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","project_id":"550e8400-e29b-41d4-a716-446655440001","position":0,"watermark":0,"has_more":true}`))}, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := New("https://private.example", testDoer(func(*http.Request) (*http.Response, error) { return tc.response() }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = tc.invoke(client)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("errors.Is(%v) = false", tc.want)
+			}
+			diagnostic, ok := DiagnosticFrom(err)
+			if !ok || diagnostic.Operation != tc.operation || diagnostic.Class != tc.class || diagnostic.HTTPStatus != tc.httpStatus {
+				t.Fatalf("diagnostic=%+v ok=%v", diagnostic, ok)
+			}
+			encoded, marshalErr := json.Marshal(diagnostic)
+			if marshalErr != nil || strings.Contains(string(encoded), credential) || strings.Contains(string(encoded), "private.example") || strings.Contains(string(encoded), projectID) || strings.Contains(string(encoded), "body=") || strings.Contains(err.Error(), credential) || strings.Contains(err.Error(), private) {
+				t.Fatalf("diagnostic=%s err=%v", encoded, err)
+			}
+		})
+	}
+	if _, ok := DiagnosticFrom(NewDiagnosticError(Operation("https://private.example/raw"), ErrorClassTransport, 0, ErrUnavailable)); ok {
+		t.Fatal("accepted a non-allowlisted operation")
+	}
+}
+
+func TestDiagnosticRejectsForgedStateAndCanonicalizesCause(t *testing.T) {
+	secret := "Bearer secret https://private.example/v1/sync/pull?project_id=project-secret body=private"
+	forged := &diagnosticError{operation: Operation(secret), class: ErrorClass(secret), status: 2000, cause: errors.New(secret)}
+	if _, ok := DiagnosticFrom(forged); ok {
+		t.Fatal("accepted forged diagnostic state")
+	}
+	err := NewDiagnosticError(OperationCapabilities, ErrorClassTransport, 0, fmt.Errorf("wrapped: %w: %s", ErrUnavailable, secret))
+	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), secret) || strings.Contains(errors.Unwrap(err).Error(), secret) {
+		t.Fatalf("error chain leaked secret: %v", err)
+	}
+	diagnostic, ok := DiagnosticFrom(err)
+	if !ok {
+		t.Fatal("missing diagnostic")
+	}
+	diagnostic.Operation = Operation(secret)
+	diagnostic.Class = ErrorClass(secret)
+	diagnostic.HTTPStatus = 2000
+	if reread, ok := DiagnosticFrom(err); !ok || reread.Operation != OperationCapabilities || reread.Class != ErrorClassTransport || reread.HTTPStatus != 0 {
+		t.Fatalf("diagnostic mutated: %+v ok=%v", reread, ok)
+	}
+}
+
+func TestGetReadFailureRemainsRemoteWithTransportDiagnostic(t *testing.T) {
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(failingReader{err: errors.New("private body")})}, nil
+	}))
+	_, err := client.Capabilities(context.Background(), "secret-credential")
+	diagnostic, ok := DiagnosticFrom(err)
+	if !errors.Is(err, ErrRemote) || !ok || diagnostic.Class != ErrorClassTransport || diagnostic.HTTPStatus != http.StatusOK {
+		t.Fatalf("err=%v diagnostic=%+v ok=%v", err, diagnostic, ok)
+	}
+}
+
 func TestClientRejectsInvalidEndpointAndCredential(t *testing.T) {
 	for _, endpoint := range []string{"http://sync.example", "https://u@sync.example", "https://sync.example?q=1", "https://sync.example#x", "https://sync.example/path", "https:opaque"} {
 		if _, err := New(endpoint, testDoer(func(*http.Request) (*http.Response, error) { t.Fatal("called"); return nil, nil })); !errors.Is(err, ErrInvalidEndpoint) {
@@ -396,7 +494,7 @@ func TestGetRejectsNilDecoderWithoutPanic(t *testing.T) {
 		t.Fatal("request sent with nil decoder")
 		return nil, nil
 	}))
-	if err := client.get(context.Background(), "/v1/sync/capabilities", nil, "secret-credential", syncapi.MaxBodyBytes, nil); !errors.Is(err, ErrInvalidInput) {
+	if err := client.get(context.Background(), OperationCapabilities, "/v1/sync/capabilities", nil, "secret-credential", syncapi.MaxBodyBytes, nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("error=%v", err)
 	}
 }

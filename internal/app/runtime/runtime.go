@@ -616,6 +616,7 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 					return result, ctx.Err()
 				}
 				result.Status = syncStatusForError(err)
+				setSyncDiagnostic(&result, err)
 				if result.Status == memory.SyncStatusUnreachable && !markClaimsRetry(ctx, store, claims, &result) {
 					result.Status = memory.SyncStatusPartial
 				}
@@ -638,6 +639,7 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 			} else {
 				result.Status = memory.SyncStatusPartial
 			}
+			setSyncDiagnostic(&result, pushErr)
 			return result, nil
 		}
 		if len(results) != len(claims) {
@@ -705,6 +707,7 @@ func runForegroundProjectPull(ctx context.Context, store foregroundProjectStore,
 			return result, ctx.Err()
 		}
 		result.Status = syncStatusForError(err)
+		setSyncDiagnostic(&result, err)
 		return result, nil
 	}
 	if syncservice.ValidateDiscovery(discovery) != nil {
@@ -730,6 +733,7 @@ func runForegroundProjectPull(ctx context.Context, store foregroundProjectStore,
 				return result, ctx.Err()
 			}
 			result.Status = syncStatusForError(pullErr)
+			setSyncDiagnostic(&result, pullErr)
 			return result, nil
 		}
 		if page.HasMore && page.Cursor.Position <= cursor.Position {
@@ -764,6 +768,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 			return result, ctx.Err()
 		}
 		result.Status = syncStatusForError(err)
+		setSyncDiagnostic(&result, err)
 		return result, nil
 	}
 	ids, err := store.PendingOwnConflictReceipts(ctx)
@@ -780,6 +785,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 				return result, ctx.Err()
 			}
 			result.Status = memory.SyncStatusPartial
+			setSyncDiagnostic(&result, err)
 			return result, nil
 		}
 		result.Conflicts++
@@ -815,6 +821,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 					} else {
 						result.Status = memory.SyncStatusPartial
 					}
+					setSyncDiagnostic(&result, err)
 					return result, nil
 				}
 				continue
@@ -831,6 +838,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 					return result, ctx.Err()
 				}
 				result.Status = syncStatusForError(err)
+				setSyncDiagnostic(&result, err)
 				return result, nil
 			}
 			return result, nil
@@ -850,6 +858,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 			}
 			if errors.Is(pushErr, syncclient.ErrUnauthorized) {
 				result.Status = memory.SyncStatusUnauthorized
+				setSyncDiagnostic(&result, pushErr)
 				return result, nil
 			}
 			if markClaimsRetry(ctx, store, claims, &result) {
@@ -857,6 +866,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 			} else {
 				result.Status = memory.SyncStatusPartial
 			}
+			setSyncDiagnostic(&result, pushErr)
 			return result, nil
 		}
 		if len(results) != len(claims) {
@@ -875,6 +885,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 			if err := store.ApplySyncPushResult(ctx, claim.Mutation.MutationID, claim.ClaimToken, pushResult); err != nil {
 				if ctx.Err() != nil {
 					result.Status = memory.SyncStatusPartial
+					setSyncDiagnostic(&result, err)
 					return result, ctx.Err()
 				}
 				markClaimsRetry(ctx, store, claims[index:], &result)
@@ -908,6 +919,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 						return result, ctx.Err()
 					}
 					result.Status = memory.SyncStatusPartial
+					setSyncDiagnostic(&result, err)
 				}
 				blocking = true
 			}
@@ -937,6 +949,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 			return result, ctx.Err()
 		}
 		result.Status = syncStatusForError(err)
+		setSyncDiagnostic(&result, err)
 	}
 	return result, nil
 }
@@ -971,6 +984,19 @@ func syncStatusForError(err error) memory.SyncStatus {
 		return memory.SyncStatusConflict
 	}
 	return memory.SyncStatusUnavailable
+}
+
+func setSyncDiagnostic(result *memory.SyncResult, err error) {
+	if result == nil || err == nil {
+		return
+	}
+	diagnostic, ok := syncclient.DiagnosticFrom(err)
+	if !ok {
+		return
+	}
+	result.FailureOperation = string(diagnostic.Operation)
+	result.FailureClass = string(diagnostic.Class)
+	result.FailureHTTPStatus = diagnostic.HTTPStatus
 }
 
 func (runtime Memory) producerName() string {

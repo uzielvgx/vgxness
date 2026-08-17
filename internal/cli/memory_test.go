@@ -232,6 +232,12 @@ func TestMemoryCLI_SyncUsesNoInputAndRendersTokenFreeResult(t *testing.T) {
 	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Mode: memory.SyncModeProjectPushOnly, Status: memory.SyncStatusUnavailable}}
 	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "", runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.HasPrefix(out, "mode=project_push_only\nstatus=unavailable\n"), "preflight mode plain output: code=%d out=%q stderr=%q", code, out, stderr)
+
+	runtime = &fakeMemoryRuntime{sync: memory.SyncResult{Status: memory.SyncStatusUnreachable, FailureOperation: "capabilities", FailureClass: "http_status", FailureHTTPStatus: 503}}
+	code, out, stderr = runMemoryTest([]string{"memory", "sync"}, "bearer-secret https://private.example/v1/sync/pull?project_id=project-secret raw-error", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, "failure_operation=capabilities\n") && strings.Contains(out, "failure_class=http_status\n") && strings.Contains(out, "failure_http_status=503\n") && !strings.Contains(out, "bearer-secret") && !strings.Contains(out, "private.example") && !strings.Contains(out, "project-secret") && !strings.Contains(out, "raw-error"), "diagnostic plain output: %q", out)
+	code, out, stderr = runMemoryTest([]string{"memory", "sync", "--json"}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"failureOperation":"capabilities"`) && strings.Contains(out, `"failureClass":"http_status"`) && strings.Contains(out, `"failureHttpStatus":503`) && !strings.Contains(out, "project-secret"), "diagnostic JSON output: %q", out)
 }
 
 func TestMemoryCLI_SyncPropagatesWorkspaceSelector(t *testing.T) {

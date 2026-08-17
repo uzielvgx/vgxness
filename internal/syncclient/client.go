@@ -27,6 +27,106 @@ var (
 	errNilTransportResponse = errors.New("sync client nil transport response")
 )
 
+// Operation is a stable, allowlisted sync capability identifier.
+type Operation string
+
+const (
+	OperationCapabilities     Operation = "capabilities"
+	OperationPush             Operation = "push"
+	OperationProjectDiscovery Operation = "project_discovery"
+	OperationPull             Operation = "pull"
+	OperationProjectPull      Operation = "project_pull"
+)
+
+// ErrorClass is a stable, allowlisted category that never includes remote data.
+type ErrorClass string
+
+const (
+	ErrorClassTransport       ErrorClass = "transport"
+	ErrorClassHTTPStatus      ErrorClass = "http_status"
+	ErrorClassResponseInvalid ErrorClass = "response_invalid"
+	ErrorClassAuthentication  ErrorClass = "authentication"
+	ErrorClassContext         ErrorClass = "context"
+)
+
+// Diagnostic contains only stable, privacy-safe client failure metadata.
+type Diagnostic struct {
+	Operation  Operation  `json:"operation"`
+	HTTPStatus int        `json:"httpStatus,omitempty"`
+	Class      ErrorClass `json:"class"`
+}
+
+// diagnosticError is private so its state cannot be forged outside this package.
+type diagnosticError struct {
+	operation Operation
+	status    int
+	class     ErrorClass
+	cause     error
+}
+
+func (err *diagnosticError) Error() string {
+	if err.status != 0 {
+		return "sync client " + string(err.operation) + " " + string(err.class) + " status=" + strconv.Itoa(err.status)
+	}
+	return "sync client " + string(err.operation) + " " + string(err.class)
+}
+func (err *diagnosticError) Unwrap() error { return err.cause }
+
+// NewDiagnosticError creates a sanitized error that preserves an allowlisted sentinel.
+func NewDiagnosticError(operation Operation, class ErrorClass, status int, cause error) error {
+	canonical := canonicalCause(cause)
+	if !validOperation(operation) || !validErrorClass(class) || status < 0 || status > 999 || canonical == nil {
+		return canonical
+	}
+	return &diagnosticError{operation: operation, class: class, status: status, cause: canonical}
+}
+
+// DiagnosticFrom extracts a validated copy of sanitized metadata from an error chain.
+func DiagnosticFrom(err error) (Diagnostic, bool) {
+	var diagnostic *diagnosticError
+	if !errors.As(err, &diagnostic) || diagnostic == nil || !validOperation(diagnostic.operation) || !validErrorClass(diagnostic.class) || diagnostic.status < 0 || diagnostic.status > 999 || canonicalCause(diagnostic.cause) == nil {
+		return Diagnostic{}, false
+	}
+	return Diagnostic{Operation: diagnostic.operation, Class: diagnostic.class, HTTPStatus: diagnostic.status}, true
+}
+
+func canonicalCause(cause error) error {
+	switch {
+	case errors.Is(cause, context.Canceled):
+		return context.Canceled
+	case errors.Is(cause, context.DeadlineExceeded):
+		return context.DeadlineExceeded
+	case errors.Is(cause, ErrUnauthorized):
+		return ErrUnauthorized
+	case errors.Is(cause, ErrUnavailable):
+		return ErrUnavailable
+	case errors.Is(cause, ErrDiscoveryUnsupported):
+		return ErrDiscoveryUnsupported
+	case errors.Is(cause, ErrRemote):
+		return ErrRemote
+	default:
+		return nil
+	}
+}
+
+func validOperation(operation Operation) bool {
+	switch operation {
+	case OperationCapabilities, OperationPush, OperationProjectDiscovery, OperationPull, OperationProjectPull:
+		return true
+	default:
+		return false
+	}
+}
+
+func validErrorClass(class ErrorClass) bool {
+	switch class {
+	case ErrorClassTransport, ErrorClassHTTPStatus, ErrorClassResponseInvalid, ErrorClassAuthentication, ErrorClassContext:
+		return true
+	default:
+		return false
+	}
+}
+
 type Client struct {
 	endpoint   *url.URL
 	httpClient *http.Client
@@ -55,7 +155,7 @@ func New(endpoint string, transport http.RoundTripper) (*Client, error) {
 
 func (client *Client) Discover(ctx context.Context, credential string) (syncservice.Discovery, error) {
 	var value syncservice.Discovery
-	if err := client.get(ctx, "/v1/sync/discovery", nil, credential, syncapi.MaxBodyBytes, func(body []byte) error {
+	if err := client.get(ctx, OperationProjectDiscovery, "/v1/sync/discovery", nil, credential, syncapi.MaxBodyBytes, func(body []byte) error {
 		decoded, err := syncapi.DecodeDiscoveryResponse(body)
 		value = decoded
 		return err
@@ -63,13 +163,13 @@ func (client *Client) Discover(ctx context.Context, credential string) (syncserv
 		return value, err
 	}
 	if err := syncservice.ValidateDiscovery(value); err != nil {
-		return syncservice.Discovery{}, ErrRemote
+		return syncservice.Discovery{}, NewDiagnosticError(OperationProjectDiscovery, ErrorClassResponseInvalid, 0, ErrRemote)
 	}
 	return value, nil
 }
 
 func (client *Client) Pull(ctx context.Context, credential string, cursor syncservice.Cursor, limit int) (syncapi.PullResponse, error) {
-	return client.pull(ctx, credential, cursor, "", limit)
+	return client.pull(ctx, credential, cursor, "", limit, OperationPull)
 }
 
 // PullProject retrieves sparse history for one portable project identity.
@@ -77,10 +177,10 @@ func (client *Client) PullProject(ctx context.Context, credential string, cursor
 	if projectID == "" {
 		return syncapi.PullResponse{}, ErrInvalidInput
 	}
-	return client.pull(ctx, credential, cursor, projectID, limit)
+	return client.pull(ctx, credential, cursor, projectID, limit, OperationProjectPull)
 }
 
-func (client *Client) pull(ctx context.Context, credential string, cursor syncservice.Cursor, projectID string, limit int) (syncapi.PullResponse, error) {
+func (client *Client) pull(ctx context.Context, credential string, cursor syncservice.Cursor, projectID string, limit int, operation Operation) (syncapi.PullResponse, error) {
 	if err := syncservice.ValidateCursor(cursor); err != nil || limit < 1 || limit > syncapi.MaxPullLimit {
 		return syncapi.PullResponse{}, ErrInvalidInput
 	}
@@ -98,7 +198,7 @@ func (client *Client) pull(ctx context.Context, credential string, cursor syncse
 		q.Set("project_id", projectID)
 	}
 	var value syncapi.PullResponse
-	if err := client.get(ctx, "/v1/sync/pull", q, credential, syncapi.MaxPullResponseBytes, func(body []byte) error {
+	if err := client.get(ctx, operation, "/v1/sync/pull", q, credential, syncapi.MaxPullResponseBytes, func(body []byte) error {
 		decoded, err := syncapi.DecodeStrictPullResponse(body)
 		value = decoded
 		return err
@@ -106,7 +206,7 @@ func (client *Client) pull(ctx context.Context, credential string, cursor syncse
 		return value, err
 	}
 	if !pullMatches(request, value) {
-		return syncapi.PullResponse{}, ErrRemote
+		return syncapi.PullResponse{}, NewDiagnosticError(operation, ErrorClassResponseInvalid, 0, ErrRemote)
 	}
 	return value, nil
 }
@@ -114,7 +214,7 @@ func (client *Client) pull(ctx context.Context, credential string, cursor syncse
 // Capabilities discovers the remote protocol before sending mutations.
 func (client *Client) Capabilities(ctx context.Context, credential string) (syncapi.CapabilitiesResponse, error) {
 	var value syncapi.CapabilitiesResponse
-	if err := client.get(ctx, "/v1/sync/capabilities", nil, credential, syncapi.MaxBodyBytes, func(body []byte) error {
+	if err := client.get(ctx, OperationCapabilities, "/v1/sync/capabilities", nil, credential, syncapi.MaxBodyBytes, func(body []byte) error {
 		decoded, err := syncapi.DecodeCapabilitiesResponse(body)
 		value = decoded
 		return err
@@ -122,15 +222,15 @@ func (client *Client) Capabilities(ctx context.Context, credential string) (sync
 		return value, err
 	}
 	if value.ProtocolVersion != syncapi.ProtocolVersion || len(value.Capabilities) == 0 || len(value.Capabilities) > 64 {
-		return syncapi.CapabilitiesResponse{}, ErrRemote
+		return syncapi.CapabilitiesResponse{}, NewDiagnosticError(OperationCapabilities, ErrorClassResponseInvalid, 0, ErrRemote)
 	}
 	seen := make(map[string]struct{}, len(value.Capabilities))
 	for _, capability := range value.Capabilities {
 		if capability == "" || len(capability) > 64 {
-			return syncapi.CapabilitiesResponse{}, ErrRemote
+			return syncapi.CapabilitiesResponse{}, NewDiagnosticError(OperationCapabilities, ErrorClassResponseInvalid, 0, ErrRemote)
 		}
 		if _, exists := seen[capability]; exists {
-			return syncapi.CapabilitiesResponse{}, ErrRemote
+			return syncapi.CapabilitiesResponse{}, NewDiagnosticError(OperationCapabilities, ErrorClassResponseInvalid, 0, ErrRemote)
 		}
 		seen[capability] = struct{}{}
 	}
@@ -140,7 +240,7 @@ func (client *Client) Capabilities(ctx context.Context, credential string) (sync
 // Push sends no more than one protocol batch and retries only one transient failure.
 func (client *Client) Push(ctx context.Context, credential string, items []syncservice.Mutation) ([]syncservice.Result, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, NewDiagnosticError(OperationPush, ErrorClassContext, 0, err)
 	}
 	request := syncapi.PushRequest{ProtocolVersion: syncapi.ProtocolVersion, Items: items}
 	if !validCredential(credential) || syncapi.ValidatePushRequest(request) != nil {
@@ -152,14 +252,14 @@ func (client *Client) Push(ctx context.Context, credential string, items []syncs
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, NewDiagnosticError(OperationPush, ErrorClassContext, 0, err)
 		}
 		results, retry, err := client.pushOnce(ctx, credential, request, body)
 		if err == nil || !retry || attempt == 1 {
 			return results, err
 		}
 	}
-	return nil, ErrRemote
+	return nil, NewDiagnosticError(OperationPush, ErrorClassResponseInvalid, 0, ErrRemote)
 }
 
 func (client *Client) pushOnce(ctx context.Context, credential string, push syncapi.PushRequest, body []byte) ([]syncservice.Result, bool, error) {
@@ -177,56 +277,55 @@ func (client *Client) pushOnce(ctx context.Context, credential string, push sync
 		defer response.Body.Close()
 	}
 	if err := contextError(ctx, doErr); err != nil {
-		return nil, false, err
+		return nil, false, NewDiagnosticError(OperationPush, ErrorClassContext, 0, err)
 	}
 	if doErr != nil {
 		if errors.Is(doErr, errNilTransportResponse) {
-			return nil, false, ErrRemote
+			return nil, false, NewDiagnosticError(OperationPush, ErrorClassResponseInvalid, 0, ErrRemote)
 		}
-		return nil, true, ErrUnavailable
+		return nil, true, NewDiagnosticError(OperationPush, ErrorClassTransport, 0, ErrUnavailable)
 	}
 	if response == nil {
-		return nil, false, ErrRemote
+		return nil, false, NewDiagnosticError(OperationPush, ErrorClassResponseInvalid, 0, ErrRemote)
 	}
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized:
-		return nil, false, ErrUnauthorized
+		return nil, false, NewDiagnosticError(OperationPush, ErrorClassAuthentication, response.StatusCode, ErrUnauthorized)
 	case http.StatusServiceUnavailable:
-		return nil, true, ErrUnavailable
+		return nil, true, NewDiagnosticError(OperationPush, ErrorClassHTTPStatus, response.StatusCode, ErrUnavailable)
 	default:
-		return nil, false, ErrRemote
+		return nil, false, NewDiagnosticError(OperationPush, ErrorClassHTTPStatus, response.StatusCode, ErrRemote)
 	}
 	if response.Body == nil {
-		return nil, false, ErrRemote
+		return nil, false, NewDiagnosticError(OperationPush, ErrorClassResponseInvalid, response.StatusCode, ErrRemote)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, syncapi.MaxBodyBytes+1))
 	if contextErr := contextError(ctx, err); contextErr != nil {
-		return nil, false, contextErr
+		return nil, false, NewDiagnosticError(OperationPush, ErrorClassContext, response.StatusCode, contextErr)
 	}
 	if err != nil {
-		return nil, true, ErrUnavailable
+		return nil, true, NewDiagnosticError(OperationPush, ErrorClassTransport, response.StatusCode, ErrUnavailable)
 	}
 	if len(data) > syncapi.MaxBodyBytes || len(response.Header.Values("Content-Type")) != 1 || response.Header.Get("Content-Type") != mediaType {
-		return nil, false, ErrRemote
+		return nil, false, NewDiagnosticError(OperationPush, ErrorClassResponseInvalid, response.StatusCode, ErrRemote)
 	}
 	reply, err := syncapi.DecodePushResponse(data)
 	if err != nil || syncapi.ValidatePushResponse(push, reply) != nil {
-		return nil, false, ErrRemote
+		return nil, false, NewDiagnosticError(OperationPush, ErrorClassResponseInvalid, response.StatusCode, ErrRemote)
 	}
 	return reply.Results, false, nil
 }
 
-func (client *Client) get(ctx context.Context, path string, query url.Values, credential string, limit int64, decode func([]byte) error) error {
+func (client *Client) get(ctx context.Context, operation Operation, path string, query url.Values, credential string, limit int64, decode func([]byte) error) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return NewDiagnosticError(operation, ErrorClassContext, 0, err)
 	}
 	if !validCredential(credential) || decode == nil {
 		return ErrInvalidInput
 	}
 	u := *client.endpoint
-	u.Path = path
-	u.RawQuery = query.Encode()
+	u.Path, u.RawQuery = path, query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return ErrInvalidEndpoint
@@ -238,38 +337,41 @@ func (client *Client) get(ctx context.Context, path string, query url.Values, cr
 		defer response.Body.Close()
 	}
 	if err := contextError(ctx, doErr); err != nil {
-		return err
+		return NewDiagnosticError(operation, ErrorClassContext, 0, err)
 	}
 	if doErr != nil {
 		if errors.Is(doErr, errNilTransportResponse) {
-			return ErrRemote
+			return NewDiagnosticError(operation, ErrorClassResponseInvalid, 0, ErrRemote)
 		}
-		return ErrUnavailable
+		return NewDiagnosticError(operation, ErrorClassTransport, 0, ErrUnavailable)
 	}
 	if response == nil {
-		return ErrRemote
+		return NewDiagnosticError(operation, ErrorClassResponseInvalid, 0, ErrRemote)
 	}
 	if response.StatusCode == http.StatusNotFound && path == "/v1/sync/discovery" {
-		return ErrDiscoveryUnsupported
+		return NewDiagnosticError(operation, ErrorClassHTTPStatus, response.StatusCode, ErrDiscoveryUnsupported)
 	}
 	if response.StatusCode == http.StatusUnauthorized {
-		return ErrUnauthorized
+		return NewDiagnosticError(operation, ErrorClassAuthentication, response.StatusCode, ErrUnauthorized)
 	}
 	if response.StatusCode == http.StatusServiceUnavailable {
-		return ErrUnavailable
+		return NewDiagnosticError(operation, ErrorClassHTTPStatus, response.StatusCode, ErrUnavailable)
 	}
 	if response.StatusCode != http.StatusOK {
-		return ErrRemote
+		return NewDiagnosticError(operation, ErrorClassHTTPStatus, response.StatusCode, ErrRemote)
 	}
 	if response.Body == nil {
-		return ErrRemote
+		return NewDiagnosticError(operation, ErrorClassResponseInvalid, response.StatusCode, ErrRemote)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if contextErr := contextError(ctx, err); contextErr != nil {
-		return contextErr
+		return NewDiagnosticError(operation, ErrorClassContext, response.StatusCode, contextErr)
 	}
-	if err != nil || int64(len(body)) > limit || len(response.Header.Values("Content-Type")) != 1 || response.Header.Get("Content-Type") != mediaType || decode(body) != nil {
-		return ErrRemote
+	if err != nil {
+		return NewDiagnosticError(operation, ErrorClassTransport, response.StatusCode, ErrRemote)
+	}
+	if int64(len(body)) > limit || len(response.Header.Values("Content-Type")) != 1 || response.Header.Get("Content-Type") != mediaType || decode(body) != nil {
+		return NewDiagnosticError(operation, ErrorClassResponseInvalid, response.StatusCode, ErrRemote)
 	}
 	return nil
 }
