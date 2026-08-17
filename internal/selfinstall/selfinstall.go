@@ -37,6 +37,7 @@ const (
 	StateInstalled       State = "installed"
 	StateDrifted         State = "drifted"
 	StateRecoveryPending State = "recovery_pending"
+	manifestConflictFile       = ".manifest-recovery-conflict"
 )
 
 type Options struct {
@@ -72,7 +73,16 @@ type Config struct {
 	SourceExecutable          string
 	Now                       func() time.Time
 	afterManifestPublish      func() error        // package-test fault injection
+	afterManifestPrecheck     func() error        // package-test fault injection
+	beforeManifestMove        func(string) error  // package-test fault injection
+	afterManifestBackupSample func(string) error  // package-test fault injection
 	afterManifestMove         func() error        // package-test fault injection
+	afterRecoveryReadSample   func(string) error  // package-test fault injection
+	afterRecoveryJournalRead  func() error        // package-test fault injection
+	beforeRecoveryArchive     func(string) error  // package-test fault injection
+	afterRecoveryArchive      func() error        // package-test fault injection
+	afterRecoveryBackupCheck  func(string) error  // package-test fault injection
+	afterRecoveryManifestMake func() error        // package-test fault injection
 	afterAnchorsOpen          func() error        // package-test fault injection
 	afterGCJournal            func(gcState) error // package-test fault injection
 	afterGCPreflight          func() error        // package-test synchronization
@@ -86,7 +96,16 @@ type Service struct {
 	source                    string
 	now                       func() time.Time
 	afterManifestPublish      func() error
+	afterManifestPrecheck     func() error
+	beforeManifestMove        func(string) error
+	afterManifestBackupSample func(string) error
 	afterManifestMove         func() error
+	afterRecoveryReadSample   func(string) error
+	afterRecoveryJournalRead  func() error
+	beforeRecoveryArchive     func(string) error
+	afterRecoveryArchive      func() error
+	afterRecoveryBackupCheck  func(string) error
+	afterRecoveryManifestMake func() error
 	afterAnchorsOpen          func() error
 	afterGCJournal            func(gcState) error
 	afterGCPreflight          func() error
@@ -94,6 +113,19 @@ type Service struct {
 	afterGCSemanticValidation func() error
 	beforeGCRecoveryMutation  func() error
 	gcSync                    func(string, *os.Root) error
+}
+
+type recoveryHooks struct {
+	afterReadSample   func(string) error
+	afterJournalRead  func() error
+	beforeArchive     func(string) error
+	afterArchive      func() error
+	afterBackupCheck  func(string) error
+	afterManifestMake func() error
+}
+
+func (service *Service) recoveryHooks() recoveryHooks {
+	return recoveryHooks{afterReadSample: service.afterRecoveryReadSample, afterJournalRead: service.afterRecoveryJournalRead, beforeArchive: service.beforeRecoveryArchive, afterArchive: service.afterRecoveryArchive, afterBackupCheck: service.afterRecoveryBackupCheck, afterManifestMake: service.afterRecoveryManifestMake}
 }
 
 type paths struct {
@@ -186,7 +218,7 @@ func New(config Config) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{source: source, now: now, afterManifestPublish: config.afterManifestPublish, afterManifestMove: config.afterManifestMove, afterAnchorsOpen: config.afterAnchorsOpen, afterGCJournal: config.afterGCJournal, afterGCPreflight: config.afterGCPreflight, afterGCDeleteOpened: config.afterGCDeleteOpened, afterGCSemanticValidation: config.afterGCSemanticValidation, beforeGCRecoveryMutation: config.beforeGCRecoveryMutation, gcSync: config.gcSync}
+	return &Service{source: source, now: now, afterManifestPublish: config.afterManifestPublish, afterManifestPrecheck: config.afterManifestPrecheck, beforeManifestMove: config.beforeManifestMove, afterManifestBackupSample: config.afterManifestBackupSample, afterManifestMove: config.afterManifestMove, afterRecoveryReadSample: config.afterRecoveryReadSample, afterRecoveryJournalRead: config.afterRecoveryJournalRead, beforeRecoveryArchive: config.beforeRecoveryArchive, afterRecoveryArchive: config.afterRecoveryArchive, afterRecoveryBackupCheck: config.afterRecoveryBackupCheck, afterRecoveryManifestMake: config.afterRecoveryManifestMake, afterAnchorsOpen: config.afterAnchorsOpen, afterGCJournal: config.afterGCJournal, afterGCPreflight: config.afterGCPreflight, afterGCDeleteOpened: config.afterGCDeleteOpened, afterGCSemanticValidation: config.afterGCSemanticValidation, beforeGCRecoveryMutation: config.beforeGCRecoveryMutation, gcSync: config.gcSync}
 }
 
 func (service *Service) Preview(ctx context.Context, options Options) (Result, error) {
@@ -234,7 +266,7 @@ func (service *Service) Install(ctx context.Context, options Options) (Result, e
 		return Result{}, err
 	}
 	defer lock.release()
-	if result, err := recoverManifestRoot(anchors, initial.paths); err != nil {
+	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks()); err != nil {
 		return result, err
 	}
 	current := initial
@@ -323,7 +355,7 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	}
 	defer lock.release()
 	current := initial
-	if result, err := recoverManifestRoot(anchors, initial.paths); err != nil {
+	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks()); err != nil {
 		return result, err
 	}
 	if !anchorsStillNamed(anchors, initial.paths) {
@@ -651,6 +683,48 @@ func readRegularRoot(root *os.Root, name string, maximum int64) ([]byte, error) 
 	return data, nil
 }
 
+// readMovedRegularRoot binds the predecessor's sampled path, opened file, and
+// final path to the pre-move inode before its bytes may authorize publication.
+func readMovedRegularRoot(root *os.Root, name string, maximum int64, expected os.FileInfo, afterSample func(string) error) ([]byte, error) {
+	data, _, err := readStableRegularRootWithExpected(root, name, maximum, expected, afterSample)
+	return data, err
+}
+
+func readStableRegularRoot(root *os.Root, name string, maximum int64, afterSample func(string) error) ([]byte, error) {
+	data, _, err := readStableRegularRootWithExpected(root, name, maximum, nil, afterSample)
+	return data, err
+}
+
+func readStableRegularRootWithExpected(root *os.Root, name string, maximum int64, expected os.FileInfo, afterSample func(string) error) ([]byte, os.FileInfo, error) {
+	sampled, err := root.Lstat(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if afterSample != nil {
+		if err := afterSample(name); err != nil {
+			return nil, nil, err
+		}
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || sampled.Mode()&os.ModeSymlink != 0 || !sampled.Mode().IsRegular() || opened.Mode()&os.ModeSymlink != 0 || !opened.Mode().IsRegular() || opened.Size() < 1 || opened.Size() > maximum || expected != nil && !os.SameFile(expected, opened) || !os.SameFile(sampled, opened) {
+		return nil, nil, ErrDrift
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil || int64(len(data)) > maximum {
+		return nil, nil, ErrDrift
+	}
+	named, err := root.Lstat(name)
+	if err != nil || named.Mode()&os.ModeSymlink != 0 || !named.Mode().IsRegular() || !os.SameFile(opened, named) {
+		return nil, nil, ErrDrift
+	}
+	return data, opened, nil
+}
+
 func fileSHA256Root(root *os.Root, name string) (string, error) {
 	data, err := readRegularRoot(root, name, launcher.MaxBinarySize)
 	if err != nil {
@@ -777,8 +851,13 @@ func writeRootFile(root *os.Root, name string, data []byte, mode os.FileMode) er
 	if err != nil {
 		return err
 	}
-	if err := root.Chmod(name, mode); err == nil {
-		_, err = file.Write(data)
+	err = file.Chmod(mode)
+	if err == nil {
+		var written int
+		written, err = file.Write(data)
+		if err == nil && written != len(data) {
+			err = io.ErrShortWrite
+		}
 	}
 	if err == nil {
 		err = file.Sync()
@@ -806,6 +885,21 @@ func writeRecoveryRoot(root *os.Root, recovery manifestRecovery) error {
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("%w: recovery evidence already exists", ErrRecovery)
 		}
+		return err
+	}
+	return syncRoot(root)
+}
+
+func markManifestRecoveryConflict(root *os.Root) error {
+	temporary, err := rootTemporaryName(".manifest-recovery-conflict-")
+	if err != nil {
+		return err
+	}
+	defer root.Remove(temporary)
+	if err := writeRootFile(root, temporary, []byte("conflict\n"), 0o600); err != nil {
+		return err
+	}
+	if err := root.Link(temporary, manifestConflictFile); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	return syncRoot(root)
@@ -860,13 +954,52 @@ func (service *Service) writeManifestRoot(ctx context.Context, anchors installAn
 	if err != nil || !os.SameFile(before, currentInfo) {
 		return errors.Join(ErrRecovery, ErrConflict)
 	}
-	if err := anchors.bin.Rename(manifestName, recovery.Backup); err != nil {
+	if service.afterManifestPrecheck != nil {
+		if err := service.afterManifestPrecheck(); err != nil {
+			return fmt.Errorf("%w: manifest precheck: %v", ErrRecovery, err)
+		}
+	}
+	if service.beforeManifestMove != nil {
+		if err := service.beforeManifestMove(recovery.Backup); err != nil {
+			return fmt.Errorf("%w: prepare manifest predecessor move: %v", ErrRecovery, err)
+		}
+	}
+	if err := publishRootDirectoryNoReplace(anchors.bin, manifestName, recovery.Backup); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return errors.Join(ErrRecovery, ErrConflict)
+		}
 		return fmt.Errorf("%w: retain manifest predecessor: %v", ErrRecovery, err)
 	}
 	if service.afterManifestMove != nil {
 		if err := service.afterManifestMove(); err != nil {
 			return fmt.Errorf("%w: manifest predecessor moved: %v", ErrRecovery, err)
 		}
+	}
+	backup, backupErr := readMovedRegularRoot(anchors.bin, recovery.Backup, 64<<10, before, service.afterManifestBackupSample)
+	if backupErr != nil || !bytes.Equal(backup, expected) {
+		conflict := errors.Join(ErrRecovery, ErrConflict)
+		if err := markManifestRecoveryConflict(anchors.data); err != nil {
+			return fmt.Errorf("%w: record manifest replacement conflict: %v", conflict, err)
+		}
+		if _, err := anchors.bin.Lstat(recovery.Backup); err == nil {
+			if linkErr := anchors.bin.Link(recovery.Backup, manifestName); linkErr == nil {
+				if syncErr := syncRoot(anchors.bin); syncErr != nil {
+					return fmt.Errorf("%w: restore foreign manifest predecessor: %v", conflict, syncErr)
+				}
+			} else if !errors.Is(linkErr, os.ErrExist) {
+				return fmt.Errorf("%w: restore foreign manifest predecessor without overwrite: %v", conflict, linkErr)
+			}
+		}
+		return conflict
+	}
+	if _, err := anchors.bin.Lstat(manifestName); err == nil {
+		conflict := errors.Join(ErrRecovery, ErrConflict)
+		if err := markManifestRecoveryConflict(anchors.data); err != nil {
+			return fmt.Errorf("%w: record manifest replacement conflict: %v", conflict, err)
+		}
+		return conflict
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: inspect manifest after predecessor move: %v", ErrRecovery, err)
 	}
 	if err := anchors.bin.Link(temporary, manifestName); err != nil {
 		return fmt.Errorf("%w: publish manifest without overwrite: %v", ErrRecovery, err)
@@ -886,12 +1019,12 @@ func (service *Service) finishManifestPublishRoot(ctx context.Context, anchors i
 	if err := syncRoot(anchors.bin); err != nil {
 		return fmt.Errorf("%w: manifest published; sync failed: %v", ErrRecovery, err)
 	}
-	_, err := recoverManifestRoot(anchors, target)
+	_, err := recoverManifestRoot(anchors, target, service.recoveryHooks())
 	return err
 }
 
-func recoverManifestRoot(anchors installAnchors, target paths) (Result, error) {
-	data, err := readRegularRoot(anchors.data, ".manifest-recovery.json", 256<<10)
+func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHooks) (Result, error) {
+	data, journalInfo, err := readStableRegularRootWithExpected(anchors.data, ".manifest-recovery.json", 256<<10, nil, hooks.afterReadSample)
 	if errors.Is(err, os.ErrNotExist) {
 		return Result{}, nil
 	}
@@ -902,6 +1035,16 @@ func recoverManifestRoot(anchors installAnchors, target paths) (Result, error) {
 	var recovery manifestRecovery
 	if err := json.Unmarshal(data, &recovery); err != nil || recovery.Manifest != target.manifest || len(recovery.Published) == 0 {
 		return result, fmt.Errorf("%w: invalid recovery evidence", ErrRecovery)
+	}
+	if hooks.afterJournalRead != nil {
+		if err := hooks.afterJournalRead(); err != nil {
+			return result, fmt.Errorf("%w: recovery journal read: %v", ErrRecovery, err)
+		}
+	}
+	if _, err := readRegularRoot(anchors.data, manifestConflictFile, 4<<10); err == nil {
+		return result, errors.Join(ErrRecovery, ErrConflict)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return result, fmt.Errorf("%w: read manifest replacement conflict: %v", ErrRecovery, err)
 	}
 	backup := recovery.Backup
 	if backup != "" && filepath.IsAbs(backup) {
@@ -917,45 +1060,101 @@ func recoverManifestRoot(anchors installAnchors, target paths) (Result, error) {
 		return result, fmt.Errorf("%w: invalid recovery evidence", ErrRecovery)
 	}
 	manifestName := filepath.Base(target.manifest)
-	current, err := readRegularRoot(anchors.bin, manifestName, 64<<10)
+	current, err := readStableRegularRoot(anchors.bin, manifestName, 64<<10, hooks.afterReadSample)
 	if errors.Is(err, os.ErrNotExist) && backup != "" {
-		previous, backupErr := readRegularRoot(anchors.bin, backup, 64<<10)
+		previous, backupErr := readStableRegularRoot(anchors.bin, backup, 64<<10, hooks.afterReadSample)
 		if backupErr != nil || !bytes.Equal(previous, recovery.Expected) {
-			return result, fmt.Errorf("%w: manifest predecessor retained at %q", ErrRecovery, recovery.Backup)
+			classification := ErrRecovery
+			if backupErr == nil || !errors.Is(backupErr, os.ErrNotExist) {
+				classification = errors.Join(ErrRecovery, ErrConflict)
+			}
+			return result, fmt.Errorf("%w: manifest predecessor retained at %q", classification, recovery.Backup)
 		}
-		if linkErr := anchors.bin.Link(backup, manifestName); linkErr != nil {
-			return result, fmt.Errorf("%w: restore manifest predecessor without overwrite: %v", ErrRecovery, linkErr)
+		if hooks.afterBackupCheck != nil {
+			if err := hooks.afterBackupCheck(backup); err != nil {
+				return result, fmt.Errorf("%w: recovery backup check: %v", ErrRecovery, err)
+			}
+		}
+		if err := writeRootFile(anchors.bin, manifestName, recovery.Expected, 0o600); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return result, errors.Join(ErrRecovery, ErrConflict)
+			}
+			return result, fmt.Errorf("%w: write manifest restoration: %v", ErrRecovery, err)
 		}
 		if syncErr := syncRoot(anchors.bin); syncErr != nil {
 			return result, fmt.Errorf("%w: sync restored manifest predecessor: %v", ErrRecovery, syncErr)
 		}
-		current, err = previous, nil
+		if hooks.afterManifestMake != nil {
+			if err := hooks.afterManifestMake(); err != nil {
+				return result, fmt.Errorf("%w: manifest restoration created: %v", ErrRecovery, err)
+			}
+		}
+		current, err = readStableRegularRoot(anchors.bin, manifestName, 64<<10, hooks.afterReadSample)
+		if err != nil || !bytes.Equal(current, recovery.Expected) {
+			return result, errors.Join(ErrRecovery, ErrConflict)
+		}
 	}
 	if err != nil || (!bytes.Equal(current, recovery.Published) && !bytes.Equal(current, recovery.Expected)) {
 		return result, fmt.Errorf("%w: manifest changed while publication was pending", ErrRecovery)
 	}
 	if backup != "" {
-		previous, err := readRegularRoot(anchors.bin, backup, 64<<10)
+		previous, err := readStableRegularRoot(anchors.bin, backup, 64<<10, hooks.afterReadSample)
 		if err == nil && !bytes.Equal(previous, recovery.Expected) {
-			return result, fmt.Errorf("%w: manifest predecessor retained at %q", ErrRecovery, recovery.Backup)
+			return result, fmt.Errorf("%w: manifest predecessor retained at %q", errors.Join(ErrRecovery, ErrConflict), recovery.Backup)
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return result, fmt.Errorf("%w: inspect manifest predecessor at %q: %v", ErrRecovery, recovery.Backup, err)
-		}
-		if err == nil {
-			if err := anchors.bin.Remove(backup); err != nil {
-				return result, fmt.Errorf("%w: retain predecessor cleanup: %v", ErrRecovery, err)
-			}
-		}
-		if err := syncRoot(anchors.bin); err != nil {
-			return result, fmt.Errorf("%w: retain predecessor cleanup: %v", ErrRecovery, err)
+			return result, fmt.Errorf("%w: inspect manifest predecessor at %q: %v", errors.Join(ErrRecovery, ErrConflict), recovery.Backup, err)
 		}
 	}
-	if err := anchors.data.Remove(".manifest-recovery.json"); err != nil {
-		return result, fmt.Errorf("%w: remove recovery evidence: %v", ErrRecovery, err)
+	archive, err := rootTemporaryName(".manifest-recovery-archive-")
+	if err != nil {
+		return result, fmt.Errorf("%w: create recovery archive: %v", ErrRecovery, err)
+	}
+	if hooks.beforeArchive != nil {
+		if err := hooks.beforeArchive(archive); err != nil {
+			return result, fmt.Errorf("%w: prepare recovery archive: %v", ErrRecovery, err)
+		}
+	}
+	current, err = readStableRegularRoot(anchors.bin, manifestName, 64<<10, hooks.afterReadSample)
+	if err != nil || (!bytes.Equal(current, recovery.Published) && !bytes.Equal(current, recovery.Expected)) {
+		return result, errors.Join(ErrRecovery, ErrConflict)
+	}
+	if backup != "" {
+		previous, backupErr := readStableRegularRoot(anchors.bin, backup, 64<<10, hooks.afterReadSample)
+		if backupErr == nil && !bytes.Equal(previous, recovery.Expected) || backupErr != nil && !errors.Is(backupErr, os.ErrNotExist) {
+			return result, errors.Join(ErrRecovery, ErrConflict)
+		}
+	}
+	if err := publishRootDirectoryNoReplace(anchors.data, ".manifest-recovery.json", archive); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return result, errors.Join(ErrRecovery, ErrConflict)
+		}
+		return result, fmt.Errorf("%w: archive recovery evidence: %v", ErrRecovery, err)
 	}
 	if err := syncRoot(anchors.data); err != nil {
-		return result, fmt.Errorf("%w: sync recovery cleanup: %v", ErrRecovery, err)
+		return result, fmt.Errorf("%w: sync recovery archive: %v", ErrRecovery, err)
+	}
+	archived, archiveErr := readMovedRegularRoot(anchors.data, archive, 256<<10, journalInfo, nil)
+	if archiveErr != nil || !bytes.Equal(archived, data) {
+		conflict := errors.Join(ErrRecovery, ErrConflict)
+		if _, err := anchors.data.Lstat(archive); err == nil {
+			if linkErr := anchors.data.Link(archive, ".manifest-recovery.json"); linkErr == nil {
+				if syncErr := syncRoot(anchors.data); syncErr != nil {
+					return result, fmt.Errorf("%w: restore foreign recovery evidence: %v", conflict, syncErr)
+				}
+			} else if !errors.Is(linkErr, os.ErrExist) {
+				return result, fmt.Errorf("%w: restore foreign recovery evidence without overwrite: %v", conflict, linkErr)
+			}
+		}
+		if err := markManifestRecoveryConflict(anchors.data); err != nil {
+			return result, fmt.Errorf("%w: record recovery evidence conflict: %v", conflict, err)
+		}
+		return result, conflict
+	}
+	if hooks.afterArchive != nil {
+		if err := hooks.afterArchive(); err != nil {
+			return result, fmt.Errorf("%w: recovery evidence archived: %v", ErrRecovery, err)
+		}
 	}
 	return Result{}, nil
 }
