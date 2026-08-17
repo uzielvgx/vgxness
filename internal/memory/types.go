@@ -11,6 +11,9 @@ var (
 	ErrNotFound  = errors.New("not_found")
 	ErrMigration = errors.New("migration")
 	ErrCorrupt   = errors.New("corrupt")
+	// ErrSyncProjectRepairPending prevents pull materialization until the
+	// operator-confirmed project-create repair reaches a terminal state.
+	ErrSyncProjectRepairPending = errors.New("sync_project_repair_pending")
 )
 
 type Scope string
@@ -58,8 +61,8 @@ type SyncBackfillResult struct {
 	Queued        int  `json:"queued"`
 }
 
-// syncProjectRepairResult reports only local repair state and queue count.
-type syncProjectRepairResult struct {
+// SyncProjectRepairResult reports only local repair state and queue count.
+type SyncProjectRepairResult struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	Status        string `json:"status"`
 	Queued        int    `json:"queued"`

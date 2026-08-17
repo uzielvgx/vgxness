@@ -110,8 +110,12 @@ identity collisions, and is safe to run again. `--limit` defaults to 100 and
 accepts 1 through 1000; JSON reports `remaining=true` when another invocation
 is needed.
 
-The command validates the HTTPS endpoint, device ID, and bearer locally. A
-context-cancellable cross-process lock serializes enrollment. It derives two
+## Project-create repair
+
+After independently confirming remote absence, run `memory sync repair-project --workspace /absolute/workspace --confirm-remote-absent --json`, then ordinary `memory sync --workspace /absolute/workspace`. The exact confirmation is mandatory; repair reads no credential, makes no network call, and requires the strict marker/binding. Pending repair blocks that project's and global pull application; completion or rejection restores it. Configure, foreground sync, and repair share the context-cancellable storage-root lock; global claim/pull is conservative during pending repair, but other exact-bound projects may proceed serially.
+
+`memory sync configure` validates the HTTPS endpoint, device ID, and bearer
+locally. A context-cancellable cross-process lock serializes enrollment. It derives two
 deterministic keyring slots from canonical local storage identity, stores the
 bearer only in the inactive slot, then transactionally switches the SQLite
 profile. Keyring and SQLite are not one atomic transaction: failed persistence

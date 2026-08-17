@@ -160,9 +160,20 @@ func (runtime Memory) InitializeProject(ctx context.Context, opts config.Options
 
 // Sync performs a bounded, foreground synchronization without exposing credentials.
 func (runtime Memory) Sync(ctx context.Context, opts config.Options) (memory.SyncResult, error) {
+	if !opts.ProjectLocal && !runtime.readOnly {
+		paths, err := config.Prepare(ctx, opts)
+		if err != nil {
+			return memory.SyncResult{Status: memory.SyncStatusUnavailable}, err
+		}
+		release, err := acquireSyncEnrollmentLock(ctx, paths.Database)
+		if err != nil {
+			return memory.SyncResult{Status: memory.SyncStatusUnavailable}, err
+		}
+		defer release()
+	}
 	result, err := runtime.sync(ctx, opts)
 	if result.Mode == "" {
-		result.Mode = memory.SyncModeProjectPushOnly
+		result.Mode = memory.SyncModeProjectBidirectional
 	}
 	if err == nil {
 		runtime.emitMemorySync(ctx, opts.ProjectDir, result)
@@ -523,6 +534,42 @@ func (runtime Memory) BackfillSyncProject(ctx context.Context, opts config.Optio
 	})
 }
 
+// RepairSyncProject queues a confirmed local project-create repair without
+// loading credentials or contacting the synchronization service.
+func (runtime Memory) RepairSyncProject(ctx context.Context, opts config.Options, workspace string, confirmedRemoteAbsent bool) (memory.SyncProjectRepairResult, error) {
+	if runtime.readOnly || opts.ProjectLocal || !filepath.IsAbs(workspace) || !confirmedRemoteAbsent {
+		return memory.SyncProjectRepairResult{}, memory.ErrInvalid
+	}
+	canonical, err := canonicalInvocationWorkspace(workspace)
+	if err != nil {
+		return memory.SyncProjectRepairResult{}, memory.ErrInvalid
+	}
+	paths, err := config.Prepare(ctx, opts)
+	if err != nil {
+		return memory.SyncProjectRepairResult{}, err
+	}
+	release, err := acquireSyncEnrollmentLock(ctx, paths.Database)
+	if err != nil {
+		return memory.SyncProjectRepairResult{}, err
+	}
+	defer release()
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.SyncProjectRepairResult, error) {
+		portable, present, err := memory.ReadProjectID(canonical)
+		if err != nil || !present {
+			return memory.SyncProjectRepairResult{}, memory.ErrInvalid
+		}
+		project, bound, err := store.BoundPortableProject(ctx, canonical, portable)
+		if err != nil || !bound {
+			return memory.SyncProjectRepairResult{}, memory.ErrConflict
+		}
+		resolved, err := store.ResolveProject(ctx, canonical)
+		if err != nil || resolved != project {
+			return memory.SyncProjectRepairResult{}, memory.ErrConflict
+		}
+		return store.RepairBoundProjectCreate(ctx, portable, project, confirmedRemoteAbsent)
+	})
+}
+
 type syncRemote struct {
 	client     *syncclient.Client
 	credential string
@@ -570,6 +617,8 @@ type foregroundStore interface {
 }
 
 type foregroundProjectStore interface {
+	PendingProjectRepair(context.Context, string, string) error
+	PendingProjectRepairMutation(context.Context, string, string) (string, error)
 	ClaimDueSyncOutboxForProject(context.Context, time.Duration, int, string) ([]memory.SyncOutboxClaim, error)
 	TranslateSyncMutations(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error)
 	ApplySyncPushResult(context.Context, string, string, syncservice.Result) error
@@ -588,8 +637,33 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 	}
 	capabilitiesChecked := false
 	for batch := 0; batch < foregroundSyncBatches; batch++ {
+		repairMutationID, err := store.PendingProjectRepairMutation(ctx, portableProject, project)
+		if err != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, err
+		}
 		claims, err := store.ClaimDueSyncOutboxForProject(ctx, foregroundSyncLease, 16, project)
 		if err != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, err
+		}
+		if repairMutationID != "" {
+			if len(claims) != 1 || claims[0].Mutation.MutationID != repairMutationID {
+				result.Status = memory.SyncStatusPartial
+				return result, memory.ErrSyncProjectRepairPending
+			}
+		}
+		ensureRepairIdentity := func() error {
+			current, err := store.PendingProjectRepairMutation(ctx, portableProject, project)
+			if err != nil {
+				return err
+			}
+			if current != repairMutationID {
+				return memory.ErrSyncProjectRepairPending
+			}
+			return nil
+		}
+		if err := ensureRepairIdentity(); err != nil {
 			result.Status = memory.SyncStatusPartial
 			return result, err
 		}
@@ -607,6 +681,10 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 			return result, err
 		}
 		if !capabilitiesChecked {
+			if err := ensureRepairIdentity(); err != nil {
+				result.Status = memory.SyncStatusPartial
+				return result, err
+			}
 			capabilityCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
 			err = remote.Capabilities(capabilityCtx)
 			cancel()
@@ -623,6 +701,10 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 				return result, nil
 			}
 			capabilitiesChecked = true
+		}
+		if err := ensureRepairIdentity(); err != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, err
 		}
 		pushCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
 		results, pushErr := remote.Push(pushCtx, mutations)
@@ -698,6 +780,10 @@ func runForegroundProjectPull(ctx context.Context, store foregroundProjectStore,
 		result.Status = memory.SyncStatusPartial
 		return result, err
 	}
+	if err := store.PendingProjectRepair(ctx, portableProject, project); err != nil {
+		result.Status = memory.SyncStatusPartial
+		return result, err
+	}
 	discoverCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
 	discovery, err := remote.Discover(discoverCtx)
 	cancel()
@@ -721,6 +807,10 @@ func runForegroundProjectPull(ctx context.Context, store foregroundProjectStore,
 	}
 	for pull := 0; pull < foregroundSyncBatches; pull++ {
 		if err := ctx.Err(); err != nil {
+			result.Status = memory.SyncStatusPartial
+			return result, err
+		}
+		if err := store.PendingProjectRepair(ctx, portableProject, project); err != nil {
 			result.Status = memory.SyncStatusPartial
 			return result, err
 		}

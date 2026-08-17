@@ -700,6 +700,60 @@ func TestRunForegroundProjectSyncDoesNotPullAfterBlockingPush(t *testing.T) {
 	}
 }
 
+func TestRunForegroundProjectSyncFailsClosedBeforeRemoteWhenRepairPending(t *testing.T) {
+	store := &projectForegroundStore{pendingErr: memory.ErrSyncProjectRepairPending}
+	remote := &testForegroundRemote{}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+	if !errors.Is(err, memory.ErrSyncProjectRepairPending) || result.Status != memory.SyncStatusPartial || remote.discovers != 0 || remote.projectPulls != 0 || remote.pushes != 0 {
+		t.Fatalf("result=%+v err=%v remote=%+v", result, err, remote)
+	}
+}
+
+func TestRunForegroundProjectPullRechecksPendingRepairBeforeDiscoverAndPull(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pendingErrs: []error{nil, nil, memory.ErrSyncProjectRepairPending}}
+	remote := &testForegroundRemote{}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", project)
+	if !errors.Is(err, memory.ErrSyncProjectRepairPending) || result.Status != memory.SyncStatusPartial || remote.discovers != 0 || remote.projectPulls != 0 {
+		t.Fatalf("before discover result=%+v err=%v remote=%+v", result, err, remote)
+	}
+	store = &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pendingErrs: []error{nil, nil, nil, memory.ErrSyncProjectRepairPending}}
+	remote = &testForegroundRemote{}
+	result, err = runForegroundProjectSync(context.Background(), store, remote, "project-a", project)
+	if !errors.Is(err, memory.ErrSyncProjectRepairPending) || result.Status != memory.SyncStatusPartial || remote.discovers != 1 || remote.projectPulls != 0 {
+		t.Fatalf("before pull result=%+v err=%v remote=%+v", result, err, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncSendsOnlyPendingRepairBeforePull(t *testing.T) {
+	repair := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440419"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440420"}
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{repair}, nil}, repairMutationIDs: []string{repair.Mutation.MutationID, repair.Mutation.MutationID, repair.Mutation.MutationID, repair.Mutation.MutationID, ""}}
+	remote := &testForegroundRemote{disposition: syncservice.DispositionAccepted}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+	if err != nil || result.Status != memory.SyncStatusSynced || remote.pushes != 1 || len(remote.sent) != 1 || remote.sent[0].MutationID != repair.Mutation.MutationID || remote.discovers != 1 || remote.projectPulls != 1 {
+		t.Fatalf("result=%+v err=%v remote=%+v", result, err, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncDoesNotCallRemoteWhenRepairChangesAfterClaim(t *testing.T) {
+	repair := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440422"}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440423"}
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{repair}}, repairMutationIDs: []string{repair.Mutation.MutationID, ""}}
+	remote := &testForegroundRemote{}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+	if !errors.Is(err, memory.ErrSyncProjectRepairPending) || result.Status != memory.SyncStatusPartial || remote.capabilities != 0 || remote.pushes != 0 || remote.discovers != 0 || remote.projectPulls != 0 {
+		t.Fatalf("result=%+v err=%v remote=%+v", result, err, remote)
+	}
+}
+
+func TestRunForegroundProjectSyncDoesNotCallRemoteWhenPendingRepairIsUnclaimable(t *testing.T) {
+	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, repairMutationIDs: []string{"550e8400-e29b-41d4-a716-446655440421"}}
+	remote := &testForegroundRemote{}
+	result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", "550e8400-e29b-41d4-a716-446655440001")
+	if !errors.Is(err, memory.ErrSyncProjectRepairPending) || result.Status != memory.SyncStatusPartial || remote.pushes != 0 || remote.discovers != 0 || remote.projectPulls != 0 {
+		t.Fatalf("result=%+v err=%v remote=%+v", result, err, remote)
+	}
+}
+
 func TestRunForegroundProjectSyncPullCancellationReturnsContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pullCursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-446655440010"}}
@@ -891,10 +945,40 @@ func TestRunForegroundProjectSyncTransportRetryPersistence(t *testing.T) {
 	}
 }
 
-func TestMemorySyncPreflightResultIsProjectPushOnly(t *testing.T) {
+func TestMemorySyncPreflightResultIsProjectBidirectional(t *testing.T) {
 	result, err := NewMemory("cli", false).Sync(context.Background(), config.Options{StorageRoot: t.TempDir(), ProjectLocal: true})
-	if err != nil || result.Mode != memory.SyncModeProjectPushOnly || result.Status != memory.SyncStatusUnavailable {
+	if err != nil || result.Mode != memory.SyncModeProjectBidirectional || result.Status != memory.SyncStatusUnavailable {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestMemorySyncAndRepairWaitForEnrollmentLock(t *testing.T) {
+	storage, workspace := t.TempDir(), t.TempDir()
+	opts := config.Options{StorageRoot: storage}
+	paths, err := config.Prepare(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := acquireSyncEnrollmentLock(context.Background(), paths.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	runtime := NewMemory("cli", false)
+	for name, call := range map[string]func(context.Context) error{
+		"sync": func(ctx context.Context) error { _, err := runtime.Sync(ctx, opts); return err },
+		"repair": func(ctx context.Context) error {
+			_, err := runtime.RepairSyncProject(ctx, opts, workspace, true)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			if err := call(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("err=%v", err)
+			}
+		})
 	}
 }
 
@@ -926,18 +1010,44 @@ type orderedStore struct {
 }
 
 type projectForegroundStore struct {
-	claims       [][]memory.SyncOutboxClaim
-	project      string
-	applied      int
-	retries      int
-	applyErr     func() error
-	retryErr     error
-	translate    func(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error)
-	appliedID    string
-	pullCursor   syncservice.Cursor
-	pullErr      error
-	applyPageErr error
-	pages        []syncservice.PullPage
+	claims            [][]memory.SyncOutboxClaim
+	project           string
+	applied           int
+	retries           int
+	applyErr          func() error
+	retryErr          error
+	translate         func(context.Context, string, string, []syncservice.Mutation) ([]syncservice.Mutation, error)
+	appliedID         string
+	pullCursor        syncservice.Cursor
+	pullErr           error
+	applyPageErr      error
+	pages             []syncservice.PullPage
+	pendingErr        error
+	pendingErrs       []error
+	repairMutationIDs []string
+}
+
+func (store *projectForegroundStore) PendingProjectRepair(context.Context, string, string) error {
+	if len(store.pendingErrs) != 0 {
+		err := store.pendingErrs[0]
+		store.pendingErrs = store.pendingErrs[1:]
+		return err
+	}
+	return store.pendingErr
+}
+
+func (store *projectForegroundStore) PendingProjectRepairMutation(context.Context, string, string) (string, error) {
+	if len(store.repairMutationIDs) != 0 {
+		id := store.repairMutationIDs[0]
+		store.repairMutationIDs = store.repairMutationIDs[1:]
+		return id, nil
+	}
+	if len(store.pendingErrs) != 0 {
+		err := store.pendingErrs[0]
+		store.pendingErrs = store.pendingErrs[1:]
+		return "", err
+	}
+	return "", store.pendingErr
 }
 
 func (store *projectForegroundStore) ProjectPullCursor(context.Context, string, string) (syncservice.Cursor, error) {

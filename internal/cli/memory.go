@@ -28,6 +28,7 @@ type MemoryRuntime interface {
 	ConfigureSync(context.Context, config.Options, string, string, string) (memory.SyncConfigurationStatus, error)
 	SyncStatus(context.Context, config.Options) (memory.SyncConfigurationStatus, error)
 	BackfillSyncProject(context.Context, config.Options, string, int) (memory.SyncBackfillResult, error)
+	RepairSyncProject(context.Context, config.Options, string, bool) (memory.SyncProjectRepairResult, error)
 }
 
 type memoryInput struct {
@@ -63,6 +64,8 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 				return runMemorySyncStatus(ctx, args[2:], stdout, stderr, runtime)
 			case "backfill":
 				return runMemorySyncBackfill(ctx, args[2:], stdout, stderr, runtime)
+			case "repair-project":
+				return runMemorySyncRepairProject(ctx, args[2:], stdout, stderr, runtime)
 			default:
 				if !strings.HasPrefix(args[1], "-") {
 					return memoryFailure(stderr, memory.ErrInvalid)
@@ -355,6 +358,31 @@ func runMemorySyncBackfill(ctx context.Context, args []string, stdout, stderr io
 		_ = json.NewEncoder(stdout).Encode(result)
 	} else {
 		fmt.Fprintf(stdout, "schema_version=%d\nlimit=%d\nremaining=%t\nprojects=%d\nsessions=%d\nobservations=%d\nqueued=%d\n", result.SchemaVersion, result.Limit, result.Remaining, result.Projects, result.Sessions, result.Observations, result.Queued)
+	}
+	return 0
+}
+
+func runMemorySyncRepairProject(ctx context.Context, args []string, stdout, stderr io.Writer, runtime MemoryRuntime) int {
+	flags := flag.NewFlagSet("sync repair-project", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var opts config.Options
+	var workspace string
+	var confirmed, jsonOutput bool
+	flags.StringVar(&workspace, "workspace", "", "absolute workspace")
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.BoolVar(&confirmed, "confirm-remote-absent", false, "confirm the remote project is absent")
+	flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || !filepath.IsAbs(workspace) || !confirmed {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	result, err := runtime.RepairSyncProject(ctx, opts, filepath.Clean(workspace), confirmed)
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	if jsonOutput {
+		_ = json.NewEncoder(stdout).Encode(result)
+	} else {
+		fmt.Fprintf(stdout, "schema_version=%d\nstatus=%s\nqueued=%d\n", result.SchemaVersion, result.Status, result.Queued)
 	}
 	return 0
 }
