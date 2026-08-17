@@ -14,6 +14,23 @@ import (
 	"github.com/vgxness/vgxness/internal/launcher"
 )
 
+func statOpenFile(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := file.Stat()
+	closeErr := file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	return info
+}
+
 func TestPreviewIsNonMutating(t *testing.T) {
 	root := t.TempDir()
 	source := writeSource(t, root, "source-v1", "vgxness-v1")
@@ -554,10 +571,7 @@ func TestInstallPreservesByteIdenticalManifestReplacement(t *testing.T) {
 	if err := os.WriteFile(foreignPath, expected, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	foreignInfo, err := os.Lstat(foreignPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	foreignInfo := statOpenFile(t, foreignPath)
 	second := writeSource(t, root, "source-v2", "vgxness-v2")
 	service := New(Config{SourceExecutable: second, afterManifestPrecheck: func() error {
 		return os.Rename(foreignPath, installed.ManifestPath)
@@ -597,10 +611,7 @@ func TestInstallRejectsBackupReplacedAfterIdentitySampling(t *testing.T) {
 	if err := os.WriteFile(foreignPath, expected, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	foreignInfo, err := os.Lstat(foreignPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	foreignInfo := statOpenFile(t, foreignPath)
 	second := writeSource(t, root, "source-v2", "vgxness-v2")
 	service := New(Config{SourceExecutable: second, afterManifestBackupSample: func(backup string) error {
 		return os.Rename(foreignPath, filepath.Join(options.BinDir, backup))
