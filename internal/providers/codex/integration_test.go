@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -12,23 +13,74 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
-func TestKnownPackagesRecognizeActiveV6ForEveryPlan(t *testing.T) {
+func TestKnownPackagesRecognizeActiveV6AndV7ForEveryPlan(t *testing.T) {
 	known, err := knownPackages()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+		v7, err := renderActiveV7("v0.0.0", plan)
+		if err != nil {
+			t.Fatal(err)
+		}
 		v6, err := renderActiveV6("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
 		}
-		found := false
+		foundV6, foundV7 := false, false
 		for _, pkg := range known {
-			found = found || pkg.SHA256 == v6.SHA256
+			foundV6 = foundV6 || pkg.SHA256 == v6.SHA256
+			foundV7 = foundV7 || pkg.SHA256 == v7.SHA256
 		}
-		if !found {
-			t.Errorf("known packages omit active v6 %s", plan)
+		if !foundV6 || !foundV7 {
+			t.Errorf("known packages omit predecessor for %s: v6=%v v7=%v", plan, foundV6, foundV7)
 		}
+	}
+}
+
+func TestIntegrationReinstallsCurrentAndV7WhenManagerArtifactIsMissing(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		pkg  func(string, sdd.Plan) (Package, error)
+	}{
+		{name: "current", pkg: RenderPlan},
+		{name: "v7", pkg: renderActiveV7},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "codex")
+			pkg, err := test.pkg("v0.0.0", sdd.PlanMedium)
+			require(t, err == nil)
+			writePackage(t, root, pkg)
+			require(t, os.Remove(filepath.Join(root, "AGENTS.md")) == nil)
+
+			result, err := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium})
+			if err != nil || result.State != integration.StateInstalled || !result.Changed {
+				t.Fatalf("Reinstall(%s missing AGENTS.md) = %+v, %v", test.name, result, err)
+			}
+			current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+			require(t, err == nil)
+			body, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+			if err != nil || !bytes.Equal(body, artifact(t, current, "AGENTS.md").Bytes) {
+				t.Fatalf("Reinstall(%s) did not publish current manager: %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestPartialCandidateCollapseRejectsConflictingPresentBytes(t *testing.T) {
+	current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	require(t, err == nil)
+	v7, err := renderActiveV7("v0.0.0", sdd.PlanMedium)
+	require(t, err == nil)
+	partial := func(pkg Package) partialCandidate {
+		state := inspection{result: integration.Result{State: integration.StatePartial}, artifacts: make([]inspectedArtifact, len(pkg.Artifacts))}
+		for index, item := range pkg.Artifacts {
+			state.artifacts[index] = inspectedArtifact{artifact: item, present: item.Path == "AGENTS.md", exact: item.Path == "AGENTS.md"}
+		}
+		return partialCandidate{state: state, pkg: pkg}
+	}
+	if _, _, err := collapsePartialCandidates([]partialCandidate{partial(current), partial(v7)}, current); !errors.Is(err, integration.ErrConflict) {
+		t.Fatalf("conflicting present manager bytes error=%v, want conflict", err)
 	}
 }
 

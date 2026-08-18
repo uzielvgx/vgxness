@@ -1622,7 +1622,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 47"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 48"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -1688,6 +1688,8 @@ func TestUpgradeArtifactRollbackRestoresOnlyUnchangedReplacement(t *testing.T) {
 func TestIntegrationRecoversExactManagerPredecessorWithoutManifest(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	v47, err := previousV47ModelPlanBundle(current)
+	testutil.NoError(t, err)
 	v45, err := previousV45ModelPlanBundle(current)
 	testutil.NoError(t, err)
 	v42, err := previousManagerModelPlanBundleV42(current)
@@ -1703,6 +1705,7 @@ func TestIntegrationRecoversExactManagerPredecessorWithoutManifest(t *testing.T)
 		manager     []byte
 		recoverable bool
 	}{
+		{"v47", v47.agents[managerAgentName], true},
 		{"v45", v45.agents[managerAgentName], true},
 		{"v42", v42.agents[managerAgentName], true},
 		{"v41", v41.agents[managerAgentName], true},
@@ -1964,7 +1967,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 47",
+		"artifact: opencode-agent/vgxness-manager; version: 48",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native engineering partner",
 		"sole orchestration and SDD lifecycle authority",
@@ -1987,8 +1990,8 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"Never launch the same task twice",
 		"unavailable, missing, or stale",
 		"the delegated worker continues with native reads and search without blocking",
-		"Do not claim recent memory is injected automatically.",
-		"call vgxness_memory_recent when bounded recent context is absent or material to the task",
+		"Search with vgxness_memory_search using all-term matching first; retry with any-term matching only when all-term results are insufficient.",
+		"Call vgxness_memory_recent only for an explicit recent-work, session, or compaction-recovery request; never use it as a routine first action.",
 		"Zero lenses", "One dominant lens", "Four lenses",
 		"severe inferential findings", "one batch", "one correction transaction and one scoped validation",
 		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
@@ -3141,6 +3144,70 @@ func TestIntegrationV3InstallStatusChangeAndUninstall(t *testing.T) {
 
 	removed, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
 	testutil.Require(t, err == nil && removed.State == integration.StateAbsent && removed.Changed, "removed=%+v err=%v", removed, err)
+}
+
+func TestIntegrationUpgradesExactV47SchemaV2AndV3WithoutOverrides(t *testing.T) {
+	builders := map[string]func() (modelPlanBundle, error){
+		"schema-v2": func() (modelPlanBundle, error) { return buildModelPlanBundleV2(schemaV2TestConfig(t)) },
+		"schema-v3": func() (modelPlanBundle, error) {
+			return buildModelPlanBundleV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()})
+		},
+	}
+	for schema, build := range builders {
+		for _, operation := range []struct {
+			name string
+			call func(*Integration, context.Context, integration.Options) (integration.Result, error)
+		}{
+			{name: "install", call: (*Integration).Install},
+			{name: "reinstall", call: (*Integration).Reinstall},
+		} {
+			t.Run(schema+"/"+operation.name, func(t *testing.T) {
+				current, err := build()
+				testutil.NoError(t, err)
+				v47, err := previousV47ModelPlanBundle(current)
+				testutil.NoError(t, err)
+				root := filepath.Join(t.TempDir(), "opencode")
+				writeModelPlanBundleFixture(t, root, v47)
+				options := integration.Options{ConfigDir: root}
+				service := NewIntegration()
+				preview, previewErr := service.Preview(context.Background(), options)
+				result, operationErr := operation.call(service, context.Background(), options)
+				manager, managerErr := os.ReadFile(filepath.Join(root, "agents", managerAgentName))
+				manifest, manifestErr := os.ReadFile(filepath.Join(root, "vgxness", modelPlanManifestName))
+				testutil.Require(t,
+					previewErr == nil && preview.State == integration.StatePartial && preview.Changed &&
+						operationErr == nil && result.State == integration.StateInstalled && result.Changed &&
+						managerErr == nil && bytes.Equal(manager, current.agents[managerAgentName]) &&
+						manifestErr == nil && bytes.Equal(manifest, current.manifest),
+					"preview=%+v previewErr=%v result=%+v operationErr=%v managerErr=%v manifestErr=%v", preview, previewErr, result, operationErr, managerErr, manifestErr,
+				)
+			})
+		}
+		t.Run(schema+"/mutated-manifest", func(t *testing.T) {
+			current, err := build()
+			testutil.NoError(t, err)
+			v47, err := previousV47ModelPlanBundle(current)
+			testutil.NoError(t, err)
+			root := filepath.Join(t.TempDir(), "opencode")
+			writeModelPlanBundleFixture(t, root, v47)
+			mutated := mutateManifestDigest(t, v47, managerAgentName)
+			manifestPath := filepath.Join(root, "vgxness", modelPlanManifestName)
+			testutil.NoError(t, os.WriteFile(manifestPath, mutated, 0o600))
+			_, previewErr := NewIntegration().Preview(context.Background(), integration.Options{ConfigDir: root})
+			readback, readErr := os.ReadFile(manifestPath)
+			testutil.Require(t, errors.Is(previewErr, integration.ErrDrift) && readErr == nil && bytes.Equal(readback, mutated), "previewErr=%v readErr=%v", previewErr, readErr)
+		})
+	}
+}
+
+func writeModelPlanBundleFixture(t *testing.T, root string, bundle modelPlanBundle) {
+	t.Helper()
+	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
+	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
+	for name, content := range bundle.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), bundle.manifest, 0o600))
 }
 
 func TestIntegrationV3RejectsIncompleteAssignmentsBeforeWrites(t *testing.T) {
