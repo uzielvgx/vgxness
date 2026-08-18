@@ -2,7 +2,10 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"os"
@@ -571,6 +574,196 @@ func (runtime Memory) RepairSyncProject(ctx context.Context, opts config.Options
 		}
 		return store.RepairBoundProjectCreate(ctx, portable, project, confirmedRemoteAbsent)
 	})
+}
+
+// TransitionSyncProject backs up and resumes one strict-bound project reseed or
+// rejoin. A durable intent fixes the backup path before any local transition
+// mutation, so a failed prepare cannot cause a later retry to create another.
+func (runtime Memory) TransitionSyncProject(ctx context.Context, opts config.Options, workspace string, mode memory.SyncProjectTransitionMode) (memory.SyncProjectTransitionResult, error) {
+	if runtime.readOnly || opts.ProjectLocal || !filepath.IsAbs(workspace) || (mode != memory.SyncProjectTransitionReseedSource && mode != memory.SyncProjectTransitionRejoinMerge) {
+		return memory.SyncProjectTransitionResult{}, memory.ErrInvalid
+	}
+	workspace, err := canonicalInvocationWorkspace(workspace)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, memory.ErrInvalid
+	}
+	paths, err := config.Prepare(ctx, opts)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	release, err := acquireSyncEnrollmentLock(ctx, paths.Database)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	defer release()
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	defer store.Close()
+	portable, present, err := memory.ReadProjectID(workspace)
+	if err != nil || !present {
+		return memory.SyncProjectTransitionResult{}, memory.ErrInvalid
+	}
+	project, bound, err := store.BoundPortableProject(ctx, workspace, portable)
+	if err != nil || !bound {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	if resolved, err := store.ResolveProject(ctx, workspace); err != nil || resolved != project {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	profile, found, err := store.GetSyncProfile(ctx)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	if !found || !profile.Enabled {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	credential, err := runtime.syncCredential(opts, profile.CredentialRef)
+	if err != nil || !validBearer(credential, profile.DeviceID) {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	transport := runtime.transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client, err := syncclient.New(profile.Endpoint, transport)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	return runSyncProjectTransition(ctx, store, syncRemote{client: client, credential: credential}, paths.Database, portable, project, mode, syncProjectBackupOps{create: memory.CreateSQLiteBackup, verify: memory.VerifySQLiteBackup, digest: memory.SQLiteBackupSHA256})
+}
+
+type syncProjectTransitionStore interface {
+	foregroundProjectStore
+	SyncProjectTransition(context.Context, string, string) (memory.SyncProjectTransitionResult, bool, error)
+	EnsureSyncProjectBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, string) (memory.SyncProjectBackupIntent, error)
+	SealSyncProjectBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, memory.SyncProjectBackupIntent, []byte) (memory.SyncProjectBackupIntent, error)
+	PrepareSyncProjectTransitionWithBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, bool, memory.SyncProjectBackupIntent) (memory.SyncProjectTransitionResult, error)
+	FinalizeSyncProjectTransition(context.Context, string, string) (memory.SyncProjectTransitionResult, error)
+}
+
+type syncProjectBackupOps struct {
+	create func(context.Context, string, string) error
+	verify func(context.Context, string, string) error
+	digest func(context.Context, string) ([]byte, error)
+}
+
+func runSyncProjectTransition(ctx context.Context, store syncProjectTransitionStore, remote foregroundRemote, database, portableProject, project string, mode memory.SyncProjectTransitionMode, backupOps syncProjectBackupOps) (memory.SyncProjectTransitionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	transition, active, err := store.SyncProjectTransition(ctx, portableProject, project)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	if active && transition.Mode != mode {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	if !active {
+		if mode == memory.SyncProjectTransitionReseedSource {
+			if err := probeEmptyProject(ctx, remote, portableProject); err != nil {
+				return memory.SyncProjectTransitionResult{}, err
+			}
+		}
+		backupPath, err := newSyncProjectBackupPath(database)
+		if err != nil {
+			return memory.SyncProjectTransitionResult{}, err
+		}
+		intent, err := store.EnsureSyncProjectBackupIntent(ctx, portableProject, project, mode, backupPath)
+		if err != nil {
+			return memory.SyncProjectTransitionResult{}, err
+		}
+		if intent.BackupPath == "" { // Store never returns this; retain a fail-closed guard for alternate implementations.
+			return memory.SyncProjectTransitionResult{}, memory.ErrCorrupt
+		}
+		if _, backupErr := os.Lstat(intent.BackupPath); backupErr == nil {
+			if len(intent.BackupSHA256) == 0 {
+				return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+			}
+			err = backupOps.verify(ctx, database, intent.BackupPath)
+			if err == nil {
+				var digest []byte
+				digest, err = backupOps.digest(ctx, intent.BackupPath)
+				if err == nil && !bytes.Equal(digest, intent.BackupSHA256) {
+					err = memory.ErrConflict
+				}
+			}
+		} else if os.IsNotExist(backupErr) {
+			err = backupOps.create(ctx, database, intent.BackupPath)
+			if err == nil {
+				var digest []byte
+				digest, err = backupOps.digest(ctx, intent.BackupPath)
+				if err == nil {
+					intent, err = store.SealSyncProjectBackupIntent(ctx, portableProject, project, mode, intent, digest)
+				}
+			}
+		} else {
+			err = backupErr
+		}
+		if err != nil {
+			return memory.SyncProjectTransitionResult{}, err
+		}
+		transition, err = store.PrepareSyncProjectTransitionWithBackupIntent(ctx, portableProject, project, mode, mode == memory.SyncProjectTransitionReseedSource, intent)
+		if err != nil {
+			return memory.SyncProjectTransitionResult{}, err
+		}
+	}
+	if transition.Status == memory.SyncProjectTransitionCompleted {
+		return transition, nil
+	}
+	if transition.Status == memory.SyncProjectTransitionPulling {
+		result, err := runForegroundProjectPull(ctx, store, remote, project, portableProject, memory.SyncResult{Mode: memory.SyncModeProjectBidirectional, Status: memory.SyncStatusSynced})
+		if err != nil {
+			return memory.SyncProjectTransitionResult{}, err
+		}
+		if result.Status != memory.SyncStatusSynced {
+			return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+		}
+		transition, err = store.FinalizeSyncProjectTransition(ctx, portableProject, project)
+		if err != nil || transition.Status == memory.SyncProjectTransitionCompleted {
+			return transition, err
+		}
+	}
+	result, err := runForegroundProjectSync(ctx, store, remote, project, portableProject)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	if result.Status != memory.SyncStatusSynced {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	return store.FinalizeSyncProjectTransition(ctx, portableProject, project)
+}
+
+// probeEmptyProject accepts only the exact, single-page empty project result.
+func probeEmptyProject(ctx context.Context, remote foregroundRemote, portableProject string) error {
+	discoverCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+	discovery, err := remote.Discover(discoverCtx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if syncservice.ValidateDiscovery(discovery) != nil {
+		return memory.ErrConflict
+	}
+	pullCtx, cancel := context.WithTimeout(ctx, foregroundSyncTimeout)
+	page, err := remote.PullProject(pullCtx, syncservice.Cursor{HistoryID: discovery.HistoryID}, portableProject, syncapi.DefaultPullLimit)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if page.HasMore || len(page.Changes) != 0 || page.Cursor.HistoryID != discovery.HistoryID || page.Cursor.Position != 0 || page.Cursor.Watermark != 0 {
+		return memory.ErrConflict
+	}
+	return nil
+}
+
+func newSyncProjectBackupPath(database string) (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(database), ".sync-project-backup-"+hex.EncodeToString(bytes)+".sqlite"), nil
 }
 
 type syncRemote struct {
