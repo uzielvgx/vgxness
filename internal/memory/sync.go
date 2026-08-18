@@ -3386,6 +3386,9 @@ func (s *Store) ProjectPullCursor(ctx context.Context, portableProject, historyI
 	if err != nil {
 		return syncservice.Cursor{}, err
 	}
+	if position == watermark {
+		watermark = 0
+	}
 	if err = tx.Commit(); err != nil {
 		return syncservice.Cursor{}, writeError(ctx, err)
 	}

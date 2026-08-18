@@ -888,6 +888,27 @@ func TestRunSyncProjectTransitionFreshReseedPublishesWithoutPreFinalize(t *testi
 	}
 }
 
+func TestRunSyncProjectTransitionPublishingRejoinPullsPostWatermarkEchoes(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	history := "550e8400-e29b-41d4-a716-446655440010"
+	publishing := memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPublishing}
+	echo := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440011", RecordID: "550e8400-e29b-41d4-a716-446655440012", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "550e8400-e29b-41d4-a716-446655440012", ProjectID: project}}
+	store := &transitionTestStore{
+		active:          true,
+		transition:      publishing,
+		finalizeResults: []memory.SyncProjectTransitionResult{publishing, {Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionCompleted}},
+		projectForegroundStore: projectForegroundStore{
+			claims:     [][]memory.SyncOutboxClaim{{}},
+			pullCursor: syncservice.Cursor{HistoryID: history, Position: 5},
+		},
+	}
+	remote := &testForegroundRemote{pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 6, Watermark: 6}, Changes: []syncservice.Change{{Sequence: 6, CanonicalVersion: 1, Mutation: echo}}}}}
+	result, err := runSyncProjectTransition(context.Background(), store, remote, "", project, "project", memory.SyncProjectTransitionRejoinMerge, testBackupOps())
+	if err != nil || result.Status != memory.SyncProjectTransitionCompleted || store.finalizes != 2 || remote.projectPulls != 1 || len(remote.cursors) != 1 || remote.cursors[0] != (syncservice.Cursor{HistoryID: history, Position: 5}) || len(store.pages) != 1 || store.pages[0].Cursor.Position != 6 {
+		t.Fatalf("result=%+v err=%v finalizes=%d cursors=%+v pages=%+v", result, err, store.finalizes, remote.cursors, store.pages)
+	}
+}
+
 func TestRunForegroundProjectPullRechecksPendingRepairBeforeDiscoverAndPull(t *testing.T) {
 	project := "550e8400-e29b-41d4-a716-446655440001"
 	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pendingErrs: []error{nil, nil, memory.ErrSyncProjectRepairPending}}

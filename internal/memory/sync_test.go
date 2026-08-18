@@ -2102,6 +2102,14 @@ func TestProjectPullCursorIsProjectScopedAndFailsClosed(t *testing.T) {
 	testutil.NoError(t, err)
 	cursor, err := store.ProjectPullCursor(context.Background(), project, history)
 	testutil.Require(t, err == nil && cursor == (syncservice.Cursor{HistoryID: history, Position: 4, Watermark: 9}), "cursor=%+v err=%v", cursor, err)
+	_, err = store.db.Exec(`UPDATE sync_project_cursor SET position=9 WHERE portable_project_id=?`, project)
+	testutil.NoError(t, err)
+	cursor, err = store.ProjectPullCursor(context.Background(), project, history)
+	var storedWatermark int
+	testutil.NoError(t, store.db.QueryRow(`SELECT watermark FROM sync_project_cursor WHERE portable_project_id=?`, project).Scan(&storedWatermark))
+	testutil.Require(t, err == nil && cursor == (syncservice.Cursor{HistoryID: history, Position: 9}) && storedWatermark == 9, "completed cursor=%+v stored_watermark=%d err=%v", cursor, storedWatermark, err)
+	_, err = store.db.Exec(`UPDATE sync_project_cursor SET position=4 WHERE portable_project_id=?`, project)
+	testutil.NoError(t, err)
 	var global int
 	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor WHERE singleton=1`).Scan(&global))
 	testutil.Require(t, global == 77, "global cursor=%d", global)
