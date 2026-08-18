@@ -35,6 +35,15 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	if len(tools.Tools) != 2 || tools.Tools[0].Name != "memory_recent" || tools.Tools[1].Name != "memory_search" {
 		t.Fatalf("listed tools = %+v", tools.Tools)
 	}
+	searchSchema := tools.Tools[1].InputSchema.(map[string]any)
+	if additional, ok := searchSchema["additionalProperties"].(bool); !ok || additional {
+		t.Fatalf("memory_search additionalProperties = %#v, want false", searchSchema["additionalProperties"])
+	}
+	searchProperties := searchSchema["properties"].(map[string]any)
+	matchMode := searchProperties["match_mode"].(map[string]any)
+	if got := matchMode["enum"]; !sameAnyStrings(got, []string{"all", "any"}) {
+		t.Fatalf("memory_search match_mode enum = %#v", got)
+	}
 	for _, tool := range tools.Tools {
 		if tool.Name == "memory_get" || tool.Name == "memory_sync" || isMutationTool(tool.Name) {
 			t.Fatalf("normal mode exposed protected tool %q", tool.Name)
@@ -47,8 +56,27 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	if result.IsError || backend.recall.Project != "project-1" {
 		t.Fatalf("CallTool() result = %+v, request = %+v", result, backend.recall)
 	}
-	if !backend.recall.MatchAny || backend.recall.Query != "alpha and beta" {
+	if backend.recall.MatchAny || backend.recall.Query != "alpha and beta" {
 		t.Fatalf("memory_search request = %+v", backend.recall)
+	}
+	result, err = session.CallTool(ctx, &sdk.CallToolParams{Name: "memory_search", Arguments: map[string]any{"query": "alpha beta", "match_mode": "any"}})
+	if err != nil || result.IsError {
+		t.Fatalf("CallTool(match_mode:any) result = %+v, error = %v", result, err)
+	}
+	if backend.recallCalls != 2 || !backend.recall.MatchAny {
+		t.Fatalf("CallTool(match_mode:any) calls = %d, request = %+v", backend.recallCalls, backend.recall)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"invalid match mode": {"query": "alpha beta", "match_mode": "phrase"},
+		"unknown field":      {"query": "alpha beta", "unexpected": true},
+	} {
+		rejected, rejectedErr := session.CallTool(ctx, &sdk.CallToolParams{Name: "memory_search", Arguments: arguments})
+		if rejectedErr == nil && (rejected == nil || !rejected.IsError) {
+			t.Errorf("%s input was accepted: result=%+v error=%v", name, rejected, rejectedErr)
+		}
+		if backend.recallCalls != 2 {
+			t.Fatalf("%s input reached Recall: calls=%d", name, backend.recallCalls)
+		}
 	}
 	for _, name := range append([]string{"memory_get"}, mutationToolNames...) {
 		protected, protectedErr := session.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: map[string]any{"id": "entry-1"}})
@@ -58,6 +86,42 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	}
 	if backend.getCalls != 0 || backend.rememberCalls != 0 || backend.forgetCalls != 0 {
 		t.Fatalf("normal mode reached protected memory backend: get=%d save=%d forget=%d", backend.getCalls, backend.rememberCalls, backend.forgetCalls)
+	}
+}
+
+func TestSearchMatchModeControlsRecallAndRejectsInvalidBeforeBackend(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		matchMode string
+		matchAny  bool
+		wantErr   error
+	}{
+		{name: "omitted uses all"},
+		{name: "all", matchMode: "all"},
+		{name: "any", matchMode: "any", matchAny: true},
+		{name: "invalid", matchMode: "phrase", wantErr: ErrInvalidInput},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeReader{project: "project-1"}
+			server, err := newWithReader(context.Background(), "/workspace", backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = server.search(context.Background(), searchInput{Query: "alpha beta", MatchMode: test.matchMode})
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("search() error = %v, want %v", err, test.wantErr)
+			}
+			wantCalls := 1
+			if test.wantErr != nil {
+				wantCalls = 0
+			}
+			if backend.recallCalls != wantCalls {
+				t.Fatalf("Recall calls = %d, want %d", backend.recallCalls, wantCalls)
+			}
+			if test.wantErr == nil && backend.recall.MatchAny != test.matchAny {
+				t.Fatalf("Recall MatchAny = %v, want %v", backend.recall.MatchAny, test.matchAny)
+			}
+		})
 	}
 }
 
@@ -459,18 +523,18 @@ func TestServerSanitizesUnavailableStorage(t *testing.T) {
 }
 
 type fakeReader struct {
-	project                              string
-	workspace                            string
-	recent                               memory.Recent
-	recall                               memory.Recall
-	recentErr                            error
-	recallErr                            error
-	entry                                memory.Entry
-	remember                             memory.Remember
-	lookup                               memory.Lookup
-	forget                               memory.Forget
-	getErr                               error
-	getCalls, rememberCalls, forgetCalls int
+	project                                           string
+	workspace                                         string
+	recent                                            memory.Recent
+	recall                                            memory.Recall
+	recentErr                                         error
+	recallErr                                         error
+	entry                                             memory.Entry
+	remember                                          memory.Remember
+	lookup                                            memory.Lookup
+	forget                                            memory.Forget
+	getErr                                            error
+	recallCalls, getCalls, rememberCalls, forgetCalls int
 }
 
 type fakeSDDReader struct {
@@ -570,8 +634,22 @@ func (reader *fakeReader) Recent(_ context.Context, request memory.Recent) ([]me
 }
 
 func (reader *fakeReader) Recall(_ context.Context, request memory.Recall) ([]memory.Entry, error) {
+	reader.recallCalls++
 	reader.recall = request
 	return nil, reader.recallErr
+}
+
+func sameAnyStrings(value any, want []string) bool {
+	items, ok := value.([]any)
+	if !ok || len(items) != len(want) {
+		return false
+	}
+	for index, item := range items {
+		if item != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (reader *fakeReader) Get(_ context.Context, request memory.Lookup) (memory.Entry, error) {

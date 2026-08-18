@@ -32,6 +32,10 @@ type inspection struct {
 	result    integration.Result
 	artifacts []inspectedArtifact
 }
+type partialCandidate struct {
+	state inspection
+	pkg   Package
+}
 
 func NewIntegration() *Integration { return &Integration{} }
 func (s *Integration) openRoot(ctx context.Context, options integration.Options, create bool) (*Root, error) {
@@ -78,6 +82,11 @@ func knownPackages() ([]Package, error) {
 			return nil, err
 		}
 		packages = append(packages, v6)
+		v7, err := renderActiveV7("v0.0.0", plan)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, v7)
 		pkg, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			return nil, err
@@ -152,10 +161,7 @@ func inspectKnown(ctx context.Context, root *Root, preferred Package) (inspectio
 	if err != nil {
 		return inspection{}, Package{}, err
 	}
-	partial := make([]struct {
-		state inspection
-		pkg   Package
-	}, 0, len(packages))
+	partial := make([]partialCandidate, 0, len(packages))
 	for _, pkg := range packages {
 		state, err := inspectRoot(ctx, root, pkg)
 		if err != nil {
@@ -165,20 +171,65 @@ func inspectKnown(ctx context.Context, root *Root, preferred Package) (inspectio
 			return state, pkg, nil
 		}
 		if state.result.State == integration.StatePartial {
-			partial = append(partial, struct {
-				state inspection
-				pkg   Package
-			}{state: state, pkg: pkg})
+			partial = append(partial, partialCandidate{state: state, pkg: pkg})
 		}
 	}
 	if len(partial) == 1 {
 		return partial[0].state, partial[0].pkg, nil
 	}
 	if len(partial) > 1 {
-		return inspection{}, Package{}, conflict("ambiguous managed Codex package")
+		return collapsePartialCandidates(partial, preferred)
 	}
 	state, err := inspectRoot(ctx, root, preferred)
 	return state, preferred, err
+}
+
+func collapsePartialCandidates(candidates []partialCandidate, preferred Package) (inspection, Package, error) {
+	present := make(map[string]bool)
+	for _, candidate := range candidates {
+		for _, artifact := range candidate.state.artifacts {
+			present[artifact.artifact.Path] = present[artifact.artifact.Path] || artifact.present
+		}
+	}
+	expected := make(map[string][]byte)
+	for _, candidate := range candidates {
+		for _, artifact := range candidate.pkg.Artifacts {
+			if prior, ok := expected[artifact.Path]; ok && !bytes.Equal(prior, artifact.Bytes) {
+				if present[artifact.Path] {
+					return inspection{}, Package{}, conflict("ambiguous managed Codex package")
+				}
+				continue
+			}
+			expected[artifact.Path] = artifact.Bytes
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate.pkg.SHA256 == preferred.SHA256 {
+			return candidate.state, candidate.pkg, nil
+		}
+	}
+	current := -1
+	for index, candidate := range candidates {
+		if packageUsesManager(candidate.pkg, activeManagerInstructions()) {
+			if current != -1 {
+				return inspection{}, Package{}, conflict("ambiguous managed Codex package")
+			}
+			current = index
+		}
+	}
+	if current != -1 {
+		return candidates[current].state, candidates[current].pkg, nil
+	}
+	return inspection{}, Package{}, conflict("ambiguous managed Codex package")
+}
+
+func packageUsesManager(pkg Package, manager string) bool {
+	for _, artifact := range pkg.Artifacts {
+		if artifact.Path == "AGENTS.md" {
+			return bytes.Equal(artifact.Bytes, []byte(manager))
+		}
+	}
+	return false
 }
 
 func (s *Integration) inspect(ctx context.Context, options integration.Options) (inspection, error) {

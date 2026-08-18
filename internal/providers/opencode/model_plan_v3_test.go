@@ -342,8 +342,42 @@ func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(predecessors) == 0 || artifactSHA256(predecessors[0]) != artifactSHA256(v46.agents[managerAgentName]) {
+	if len(predecessors) < 2 || artifactSHA256(predecessors[1]) != artifactSHA256(v46.agents[managerAgentName]) {
 		t.Fatal("manifestless predecessor recognition lacks exact v46 manager")
+	}
+}
+
+func TestV47ManagerPredecessorHasFrozenSHA256(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v47, err := previousV47ModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := artifactSHA256(v47.agents[managerAgentName]), "dcfeebcada320417e5e059dff19cfc74d7b5813167bf73a34a105805ac99f4a5"; got != want {
+		t.Fatalf("manager v47 SHA-256 = %s, want %s", got, want)
+	}
+}
+
+func TestSchemaV3ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
+	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
+	current, err := buildModelPlanBundleV3(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v47, err := previousV47ModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, recognized, err := parseInstalledModelPlanManifest(v47.manifest)
+	if err != nil || !bytes.Equal(recognized.manifest, v47.manifest) {
+		t.Fatalf("v47 schema-v3 manifest rejected: err=%v", err)
+	}
+	mutated := mutateManifestDigest(t, v47, managerAgentName)
+	if _, _, err := parseInstalledModelPlanManifest(mutated); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("mutated v47 schema-v3 manifest error=%v, want drift", err)
 	}
 }
 
@@ -361,10 +395,11 @@ func TestModelBoundV3V46ManagerPredecessorIsExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, err := bindManagerTemplate(canonicalManagerPrompt, "artifact: opencode-agent/vgxness-manager; version: 46", assignments[managerAgentName])
+	current, err := bindManager(assignments[managerAgentName])
 	if err != nil {
 		t.Fatal(err)
 	}
+	expected := []byte(legacyManagerPrompt(string(current)))
 	predecessors, err := modelBoundAgentPredecessorsV3(plan)
 	if err != nil {
 		t.Fatal(err)

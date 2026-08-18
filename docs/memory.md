@@ -12,9 +12,11 @@ schema version 1, rejects unknown and duplicate fields, accepts at most 64 KiB,
 and rejects conflicting flag/payload sources. After decoding, adapters construct
 native Go values (`memory.Remember`, `memory.Recall`, `memory.Recent`,
 `memory.Lookup`, and `memory.Forget`). Internal application calls use those
-values directly. The `memory search` boundary accepts `matchAny`; OpenCode sets
-it to `true`, while native recall keeps its existing all-term default for other
-callers.
+values directly. MCP `memory_search` accepts optional `match_mode`: omitted or
+`all` keeps all-term matching, while `any` enables any-term matching. Invalid
+values fail before recall. Managed OpenCode and Codex managers search with `all`
+first and retry with `any` only when the first results are insufficient. The CLI
+continues to expose its native `matchAny` field.
 
 `memory recent` resolves the canonical project from `--workspace`. It returns
 active project-scope observations by default, ordered by most recently updated

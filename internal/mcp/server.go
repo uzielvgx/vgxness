@@ -246,7 +246,21 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 	server.server = sdk.NewServer(&sdk.Implementation{Name: "vgxness-memory", Version: "0.1.0"}, nil)
 	annotations := &sdk.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
 	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_recent", Description: "Read recent project memory entries. This tool never writes data.", Annotations: annotations}, server.callRecent)
-	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_search", Description: "Search project memory entries. This tool never writes data.", Annotations: annotations}, server.callSearch)
+	sdk.AddTool(server.server, &sdk.Tool{
+		Name:        "memory_search",
+		Description: "Search project memory entries. This tool never writes data.",
+		Annotations: annotations,
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"query":      map[string]any{"type": "string"},
+				"limit":      map[string]any{"type": "integer"},
+				"match_mode": map[string]any{"type": "string", "enum": []string{"all", "any"}},
+			},
+			"required": []string{"query"},
+		},
+	}, server.callSearch)
 	if full {
 		writeAnnotations := &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(false)}
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations}, server.callGet)
@@ -282,8 +296,9 @@ type recentInput struct {
 }
 
 type searchInput struct {
-	Query string `json:"query" jsonschema:"required"`
-	Limit int    `json:"limit,omitempty"`
+	Query     string `json:"query" jsonschema:"required"`
+	Limit     int    `json:"limit,omitempty"`
+	MatchMode string `json:"match_mode,omitempty"`
 }
 
 type getInput struct {
@@ -638,7 +653,15 @@ func (server *Server) search(ctx context.Context, input searchInput) (result, er
 	if strings.TrimSpace(input.Query) == "" || input.Limit < 0 || input.Limit > maxLimit {
 		return result{}, ErrInvalidInput
 	}
-	entries, err := server.reader.Recall(ctx, memory.Recall{Query: input.Query, Project: server.project, Scope: memory.ScopeProject, Limit: input.Limit, MatchAny: true})
+	matchAny := false
+	switch input.MatchMode {
+	case "", "all":
+	case "any":
+		matchAny = true
+	default:
+		return result{}, ErrInvalidInput
+	}
+	entries, err := server.reader.Recall(ctx, memory.Recall{Query: input.Query, Project: server.project, Scope: memory.ScopeProject, Limit: input.Limit, MatchAny: matchAny})
 	return shapeResult(ctx, entries, err)
 }
 

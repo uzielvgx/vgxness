@@ -10,7 +10,7 @@ The wizard explains and verifies the complete OpenCode setup before changing any
 6. Read back all managed identities and perform the live OpenCode handshake.
 7. Report recovery guidance if any step fails.
 
-The resulting 18 OpenCode artifacts are 15 agents, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v46; managed `general` v6, verifier v4, and five reviewers v3; `explore`; and six SDD profiles. `vgxness mcp --full` exposes five memory and 13 SDD tools. Official setup publishes the global 47-file, 19-skill catalog including `memory-sync`; only exact historical `vgxness.ts` v1-v10 plugin and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable, while modified, malformed, foreign, unknown, or newer bytes block without removal. OpenCode uninstall does not own global skills.
+The resulting 18 OpenCode artifacts are 15 agents, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v48; managed `general` v6, verifier v4, and five reviewers v3; `explore`; and six SDD profiles. Exact manager v47 and older supported identities can be upgraded, while modified or unknown bytes remain drift. `vgxness mcp --full` exposes five memory and 13 SDD tools. Official setup publishes the global 47-file, 19-skill catalog including `memory-sync`; only exact historical `vgxness.ts` v1-v10 plugin and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable, while modified, malformed, foreign, unknown, or newer bytes block without removal. OpenCode uninstall does not own global skills.
 
 ## Commands
 

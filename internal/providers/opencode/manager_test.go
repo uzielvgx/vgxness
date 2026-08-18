@@ -23,7 +23,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 47",
+		"artifact: opencode-agent/vgxness-manager; version: 48",
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
 		"managed global portable catalog",
@@ -67,11 +67,11 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 }
 
-func TestV46UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
+func TestV48UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	for _, required := range []string{"version: 47", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
+	for _, required := range []string{"version: 48", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
 		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
 			t.Errorf("manager missing compact protocol %q", required)
 		}
@@ -186,7 +186,7 @@ func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 	prompt := string(bundle.agents[managerAgentName])
 	t.Logf("manager prompt bytes=%d newlines=%d", len(prompt), strings.Count(prompt, "\n"))
 
-	// Current v46 preserves the fixed generated-prompt budget.
+	// Current manager preserves the fixed generated-prompt budget.
 	const maxManagerPromptBytes = 15_000
 	const maxManagerPromptLines = 105
 	if bytes := len(prompt); bytes > maxManagerPromptBytes {
@@ -406,12 +406,12 @@ func TestManagerRetainsAuthorityWhileBroadProfilesDenyDurableMutations(t *testin
 	}
 }
 
-func TestV46RoutesDirectSingleReadAndKeepsFullAssuranceExceptions(t *testing.T) {
+func TestV48RoutesDirectSingleReadAndKeepsFullAssuranceExceptions(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 47",
+		"artifact: opencode-agent/vgxness-manager; version: 48",
 		"Directly answer a repository read-only informational request only when the user names an exact local file or asks for the standard root README, one read suffices, and no search, graph traversal, cross-file inference, architecture/flow analysis, or diagnosis is needed.",
 		"Otherwise use Explore; implementations remain delegated to managed general.",
 		"For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`.",
@@ -419,21 +419,31 @@ func TestV46RoutesDirectSingleReadAndKeepsFullAssuranceExceptions(t *testing.T) 
 		"A second task call for the same goal requires an explicit blocker, new evidence, correction, or independent assurance; resume the same child where applicable and send only the delta.",
 	} {
 		if !strings.Contains(manager, required) {
-			t.Errorf("manager v46 missing %q", required)
+			t.Errorf("manager v48 missing %q", required)
 		}
 	}
 }
 
-func TestManagerUsesRecentMemoryOnlyWhenBoundedContextIsAbsentOrMaterial(t *testing.T) {
+func TestManagerUsesIntentTriggeredMemoryWithAllThenAnyFallback(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"Do not claim recent memory is injected automatically.",
-		"call vgxness_memory_recent when bounded recent context is absent or material to the task",
+		"Use VGXNESS memory only when the request indicates prior project context may matter.",
+		"Search with vgxness_memory_search using all-term matching first; retry with any-term matching only when all-term results are insufficient.",
+		"Inspect bounded previews, then call vgxness_memory_get with an exact ID only for relevant full content.",
+		"Call vgxness_memory_recent only for an explicit recent-work, session, or compaction-recovery request; never use it as a routine first action.",
+		"Before vgxness_memory_save, confirm the memory is durable and evidence-backed, and reuse a stable topic for the same subject.",
+		"Never save secrets, personal data, transient state, raw logs, or transcripts.",
+		"Call vgxness_memory_forget only on an explicit user request.",
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("manager missing memory contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{"when bounded recent context is absent or material to the task", "recent as the first project-context action"} {
+		if strings.Contains(manager, forbidden) {
+			t.Errorf("manager retains routine recent-first policy %q", forbidden)
 		}
 	}
 }
