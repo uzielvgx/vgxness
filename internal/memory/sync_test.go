@@ -271,6 +271,203 @@ func TestPrepareSyncProjectRejoinSnapshotsThenAcceptsEquivalentRemoteCreate(t *t
 	testutil.Require(t, outbox == 2, "merged local outbox=%d", outbox)
 }
 
+func TestSyncProjectRejoinQueuesUnseenObservationPrerequisitesFirst(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	_, err := store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES
+		('z-prerequisite','project','project','learning','prerequisite','test','active',?,?,1),
+		('a-dependent','project','project','learning','dependent','test','active',?,?,1);
+		INSERT INTO observation_refs(observation_id,target_id) VALUES('a-dependent','z-prerequisite')`, fixedTime.UnixNano(), fixedTime.UnixNano(), fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	_, err = store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	project := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-4466554403a1", RecordID: portable, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: portable}}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-4466554403a0", Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, project)}}
+	testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "project", page))
+	result, err := store.FinalizeSyncProjectTransition(ctx, portable, "project")
+	testutil.Require(t, err == nil && result.Queued == 4, "result=%+v err=%v", result, err)
+	rows, err := store.db.Query(`SELECT record_id FROM sync_outbox WHERE record_kind='observation' ORDER BY created_at,id`)
+	testutil.NoError(t, err)
+	defer rows.Close()
+	var observations []string
+	for rows.Next() {
+		var id string
+		testutil.NoError(t, rows.Scan(&id))
+		observations = append(observations, id)
+	}
+	testutil.NoError(t, rows.Err())
+	positions := map[string]int{}
+	for index, id := range observations {
+		positions[id] = index
+	}
+	testutil.Require(t, positions["z-prerequisite"] < positions["a-dependent"], "observation order=%v", observations)
+}
+
+func TestProjectTransitionObservationPrerequisitesFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup string
+	}{
+		{name: "cycle", setup: `INSERT INTO projects(id,sync_version) VALUES('project',1);
+			INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES
+			('a','project','project','learning','a','test','active',1,1,1),('b','project','project','learning','b','test','active',1,1,1);
+			INSERT INTO observation_refs(observation_id,target_id) VALUES('a','b'),('b','a')`},
+		{name: "cross project", setup: `INSERT INTO projects(id,sync_version) VALUES('project',1),('other',1);
+			INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES
+			('a','project','project','learning','a','test','active',1,1,1),('b','other','project','learning','b','test','active',1,1,1);
+			INSERT INTO observation_refs(observation_id,target_id) VALUES('a','b')`},
+		{name: "missing", setup: `INSERT INTO projects(id,sync_version) VALUES('project',1);
+			INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES
+			('a','project','project','learning','a','test','active',1,1,1);
+			PRAGMA foreign_keys=OFF;
+			INSERT INTO observation_refs(observation_id,target_id) VALUES('a','missing');
+			PRAGMA foreign_keys=ON`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			_, err := store.db.Exec(tc.setup)
+			testutil.NoError(t, err)
+			var before string
+			testutil.NoError(t, store.db.QueryRow(`SELECT group_concat(id || ':' || content, ','), (SELECT count(*) FROM observation_refs) FROM observations`).Scan(&before, new(int)))
+			conn, connErr := store.db.Conn(context.Background())
+			testutil.NoError(t, connErr)
+			_, err = projectTransitionMutations(context.Background(), conn, "project")
+			testutil.NoError(t, conn.Close())
+			testutil.Require(t, errors.Is(err, ErrConflict), "err=%v", err)
+			var after string
+			var refs, outbox int
+			testutil.NoError(t, store.db.QueryRow(`SELECT group_concat(id || ':' || content, ','), (SELECT count(*) FROM observation_refs), (SELECT count(*) FROM sync_outbox) FROM observations`).Scan(&after, &refs, &outbox))
+			testutil.Require(t, after == before && refs > 0 && outbox == 0, "before=%q after=%q refs=%d outbox=%d", before, after, refs, outbox)
+		})
+	}
+}
+
+func TestFinalizeSyncProjectRejoinRecoversRejectedObservationsOnceInDependencyOrder(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	_, err := store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES
+		('z-prerequisite','project','project','learning','prerequisite','test','active',?,?,1),
+		('a-dependent','project','project','learning','dependent','test','active',?,?,1);
+		INSERT INTO observation_refs(observation_id,target_id) VALUES('a-dependent','z-prerequisite')`, fixedTime.UnixNano(), fixedTime.UnixNano(), fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	preparePublishingRejoin(t, store, portable)
+	firstPrerequisite := rejectQueuedTransitionObservation(t, store, "z-prerequisite", "invalid_prerequisite")
+	firstDependent := rejectQueuedTransitionObservation(t, store, "a-dependent", "invalid_prerequisite")
+	result, err := store.FinalizeSyncProjectTransition(context.Background(), portable, "project")
+	testutil.Require(t, err == nil && result.Status == SyncProjectTransitionPublishing && result.Queued == 2 && result.Observations == 2, "result=%+v err=%v", result, err)
+	rows, err := store.db.Query(`SELECT mutation_id,record_id FROM sync_outbox WHERE record_id IN ('z-prerequisite','a-dependent') ORDER BY created_at,id`)
+	testutil.NoError(t, err)
+	defer rows.Close()
+	var ids, records []string
+	for rows.Next() {
+		var id, record string
+		testutil.NoError(t, rows.Scan(&id, &record))
+		ids, records = append(ids, id), append(records, record)
+	}
+	testutil.NoError(t, rows.Err())
+	var receipts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_push_results WHERE mutation_id IN (?,?)`, firstPrerequisite, firstDependent).Scan(&receipts))
+	testutil.Require(t, len(ids) == 2 && records[0] == "z-prerequisite" && records[1] == "a-dependent" && ids[0] != firstPrerequisite && ids[1] != firstDependent && receipts == 2, "ids=%v records=%v receipts=%d", ids, records, receipts)
+	again, err := store.FinalizeSyncProjectTransition(context.Background(), portable, "project")
+	testutil.Require(t, err == nil && again.Queued == 0, "again=%+v err=%v", again, err)
+}
+
+func TestFinalizeSyncProjectRejoinSecondInvalidPrerequisiteRejectionFailsClosed(t *testing.T) {
+	store, portable := seededRecoverablePublishingRejoin(t, false)
+	defer store.Close()
+	first := rejectQueuedTransitionObservation(t, store, "observation", "invalid_prerequisite")
+	result, err := store.FinalizeSyncProjectTransition(context.Background(), portable, "project")
+	testutil.Require(t, err == nil && result.Queued == 1, "first recovery=%+v err=%v", result, err)
+	second := rejectQueuedTransitionObservation(t, store, "observation", "invalid_prerequisite")
+	_, err = store.FinalizeSyncProjectTransition(context.Background(), portable, "project")
+	var outbox, receipts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE record_id='observation'`).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_push_results WHERE record_id='observation'`).Scan(&receipts))
+	testutil.Require(t, errors.Is(err, ErrConflict) && first != second && outbox == 0 && receipts == 2, "err=%v ids=%q/%q outbox=%d receipts=%d", err, first, second, outbox, receipts)
+}
+
+func TestFinalizeSyncProjectRejoinRecoveryValidationFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		session bool
+		mutate  func(*Store, string)
+	}{
+		{name: "other code", mutate: func(store *Store, _ string) {
+			rejectQueuedTransitionObservation(t, store, "observation", "invalid_input")
+		}},
+		{name: "receipt hash", mutate: func(store *Store, _ string) {
+			id := rejectQueuedTransitionObservation(t, store, "observation", "invalid_prerequisite")
+			_, err := store.db.Exec(`UPDATE sync_push_results SET mutation_hash=zeroblob(32) WHERE mutation_id=?`, id)
+			testutil.NoError(t, err)
+		}},
+		{name: "receipt base", mutate: func(store *Store, _ string) {
+			id := rejectQueuedTransitionObservation(t, store, "observation", "invalid_prerequisite")
+			_, err := store.db.Exec(`UPDATE sync_push_results SET base_version=1 WHERE mutation_id=?`, id)
+			testutil.NoError(t, err)
+		}},
+		{name: "sync version", mutate: func(store *Store, _ string) {
+			rejectQueuedTransitionObservation(t, store, "observation", "invalid_prerequisite")
+			_, err := store.db.Exec(`UPDATE observations SET sync_version=1 WHERE id='observation'`)
+			testutil.NoError(t, err)
+		}},
+		{name: "session prerequisite", session: true, mutate: func(store *Store, _ string) {
+			rejectQueuedTransitionObservation(t, store, "observation", "invalid_prerequisite")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, portable := seededRecoverablePublishingRejoin(t, tc.session)
+			defer store.Close()
+			tc.mutate(store, portable)
+			_, err := store.FinalizeSyncProjectTransition(context.Background(), portable, "project")
+			var outbox int
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE record_id='observation'`).Scan(&outbox))
+			testutil.Require(t, errors.Is(err, ErrConflict) && outbox == 0, "err=%v outbox=%d", err, outbox)
+		})
+	}
+}
+
+func seededRecoverablePublishingRejoin(t *testing.T, session bool) (*Store, string) {
+	t.Helper()
+	store, portable := seededSyncProjectTransition(t)
+	if session {
+		_, err := store.db.Exec(`UPDATE observations SET session_id='session' WHERE id='observation'`)
+		testutil.NoError(t, err)
+	}
+	preparePublishingRejoin(t, store, portable)
+	return store, portable
+}
+
+func preparePublishingRejoin(t *testing.T, store *Store, portable string) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	project := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-4466554403a1", RecordID: portable, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: portable}}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-4466554403a0", Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, project)}}
+	testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "project", page))
+	result, err := store.FinalizeSyncProjectTransition(ctx, portable, "project")
+	testutil.Require(t, err == nil && result.Status == SyncProjectTransitionPublishing, "result=%+v err=%v", result, err)
+	if _, err = store.db.Exec(`DELETE FROM sync_outbox WHERE record_kind='session'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func rejectQueuedTransitionObservation(t *testing.T, store *Store, record, code string) string {
+	t.Helper()
+	var mutationID string
+	var payload []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT mutation_id,payload FROM sync_outbox WHERE record_kind='observation' AND record_id=? AND mutation_kind='create'`, record).Scan(&mutationID, &payload))
+	var mutation syncservice.Mutation
+	testutil.NoError(t, json.Unmarshal(payload, &mutation))
+	hash, err := syncMutationHash(mutation)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at) VALUES(?,'rejected',0,?,NULL,0,'observation',?,'create',0,?,?); DELETE FROM sync_outbox WHERE mutation_id=?`, mutationID, code, record, hash, fixedTime.UnixNano(), mutationID)
+	testutil.NoError(t, err)
+	return mutationID
+}
+
 func TestSyncProjectRejoinRejectsDivergentRemoteCreateAtomically(t *testing.T) {
 	store, portable := seededSyncProjectTransition(t)
 	defer store.Close()
@@ -1678,6 +1875,84 @@ func TestClaimDueSyncOutboxLeasesOldestAndRotatesExpiredToken(t *testing.T) {
 	firstPayload, _ := json.Marshal(claims[0].Mutation)
 	rotatedPayload, _ := json.Marshal(rotated[0].Mutation)
 	testutil.Require(t, err == nil && len(rotated) == 1 && string(rotatedPayload) == string(firstPayload) && rotated[0].ClaimToken != claims[0].ClaimToken && rotated[0].FirstClaimToken == claims[0].ClaimToken && rotated[0].FirstClaimedAt.Equal(fixedTime), "rotated=%+v err=%v", rotated, err)
+}
+
+func TestClaimDueSyncOutboxRequiresAcknowledgedObservationPrerequisitesAcrossBatches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	store, concurrent := openPath(t, path), openPath(t, path)
+	defer store.Close()
+	defer concurrent.Close()
+	store.now = func() time.Time { return fixedTime }
+	concurrent.now = func() time.Time { return fixedTime }
+	ctx := context.Background()
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1)`)
+	testutil.NoError(t, err)
+	const count = 17
+	for index := 0; index < count; index++ {
+		id := fmt.Sprintf("observation-%02d", index)
+		_, err = store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES(?,'project','project','learning',?,'test','active',?,?,0)`, id, id, fixedTime.UnixNano(), fixedTime.UnixNano())
+		testutil.NoError(t, err)
+		if index > 0 {
+			_, err = store.db.Exec(`INSERT INTO observation_refs(observation_id,target_id) VALUES(?,?)`, id, fmt.Sprintf("observation-%02d", index-1))
+			testutil.NoError(t, err)
+		}
+	}
+	for index := count - 1; index >= 0; index-- {
+		id := fmt.Sprintf("observation-%02d", index)
+		var references []string
+		if index > 0 {
+			references = []string{fmt.Sprintf("observation-%02d", index-1)}
+		}
+		mutation := pulledObservationMutation(id, syncservice.MutationCreate, 0, syncservice.LifecycleActive, id, references)
+		mutation.MutationID = fmt.Sprintf("550e8400-e29b-41d4-a716-%012d", count-index)
+		enqueueMutation(t, store, mutation)
+	}
+	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == "observation-00", "initial claims=%+v err=%v", claims, err)
+	blocked, err := concurrent.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	testutil.Require(t, err == nil && len(blocked) == 0, "unacknowledged concurrent claims=%+v err=%v", blocked, err)
+	_, err = store.db.Exec(`UPDATE observations SET sync_version=1 WHERE id='observation-00'`)
+	testutil.NoError(t, err)
+	claims, err = concurrent.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == "observation-01", "acknowledged claims=%+v err=%v", claims, err)
+	blocked, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	testutil.Require(t, err == nil && len(blocked) == 0, "second unacknowledged claims=%+v err=%v", blocked, err)
+	_, err = store.db.Exec(`UPDATE observations SET sync_version=1 WHERE id='observation-01'`)
+	testutil.NoError(t, err)
+	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == "observation-02", "second acknowledged claims=%+v err=%v", claims, err)
+}
+
+func TestClaimDueSyncOutboxFailsClosedForInvalidObservationPrerequisites(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup string
+		ref   string
+	}{
+		{name: "missing", setup: `INSERT INTO projects(id,sync_version) VALUES('project',1)`, ref: "missing"},
+		{name: "cross project", setup: `INSERT INTO projects(id,sync_version) VALUES('project',1),('other',1);
+			INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('target','other','project','learning','target','test','active',1,1,1)`, ref: "target"},
+		{name: "unqueued unsynced", setup: `INSERT INTO projects(id,sync_version) VALUES('project',1);
+			INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('target','project','project','learning','target','test','active',1,1,0)`, ref: "target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			store.now = func() time.Time { return fixedTime }
+			_, err := store.db.Exec(tc.setup)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('dependent','project','project','learning','dependent','test','active',?,?,0)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+			testutil.NoError(t, err)
+			mutation := pulledObservationMutation("dependent", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "dependent", []string{tc.ref})
+			mutation.MutationID = "550e8400-e29b-41d4-a716-446655440099"
+			enqueueMutation(t, store, mutation)
+			claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+			var outbox, leases int
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox_claims`).Scan(&leases))
+			testutil.Require(t, errors.Is(err, ErrConflict) && len(claims) == 0 && outbox == 1 && leases == 0, "claims=%+v err=%v outbox=%d leases=%d", claims, err, outbox, leases)
+		})
+	}
 }
 
 func TestClaimDueSyncOutboxForProjectDoesNotLeaseOtherProjectRelations(t *testing.T) {
