@@ -5,17 +5,18 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"unsafe"
 
 	"github.com/vgxness/vgxness/internal/testutil"
 	"golang.org/x/sys/windows"
 )
 
 func TestCreateSQLiteBackupAcceptsPermissiveWindowsParent(t *testing.T) {
-	root := t.TempDir()
-	makeWindowsParentPermissive(t, root)
+	root := createPermissiveWindowsParent(t)
 	database, backup := filepath.Join(root, "memory.db"), filepath.Join(root, "backup.sqlite")
 	store, err := Open(context.Background(), database, nil)
 	testutil.NoError(t, err)
@@ -53,31 +54,16 @@ func TestVerifyPrivateSQLiteBackupOutputRejectsTamperedDACL(t *testing.T) {
 	testutil.Require(t, errors.Is(verifyPrivateSQLiteBackupOutput(file), ErrCorrupt), "tampered DACL accepted")
 }
 
-func makeWindowsParentPermissive(t *testing.T, path string) {
+func createPermissiveWindowsParent(t *testing.T) string {
 	t.Helper()
-	world, err := windows.CreateWellKnownSid(windows.WinWorldSid)
+	user, err := currentProcessUserSID()
 	testutil.NoError(t, err)
-	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
-		AccessPermissions: windows.GENERIC_ALL,
-		AccessMode:        windows.SET_ACCESS,
-		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-		Trustee: windows.TRUSTEE{
-			TrusteeForm:  windows.TRUSTEE_IS_SID,
-			TrusteeType:  windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
-			TrusteeValue: windows.TrusteeValueFromSID(world),
-		},
-	}}, nil)
+	descriptor, err := windows.SecurityDescriptorFromString(fmt.Sprintf("D:P(A;OICI;GA;;;WD)(A;OICI;GA;;;%s)", user.String()))
 	testutil.NoError(t, err)
-	handle, err := windows.CreateFile(
-		windows.StringToUTF16Ptr(path), windows.WRITE_DAC,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0,
-	)
-	testutil.NoError(t, err)
-	defer windows.CloseHandle(handle)
-	testutil.NoError(t, windows.SetSecurityInfo(
-		handle, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION,
-		nil, nil, acl, nil,
+	path := filepath.Join(t.TempDir(), "permissive")
+	testutil.NoError(t, windows.CreateDirectory(
+		windows.StringToUTF16Ptr(path),
+		&windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: descriptor},
 	))
+	return path
 }
