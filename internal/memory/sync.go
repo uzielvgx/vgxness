@@ -2,6 +2,7 @@ package memory
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -494,6 +495,7 @@ func projectTransitionMutations(ctx context.Context, query projectTransitionSQL,
 	if err != nil {
 		return nil, writeError(ctx, err)
 	}
+	var observations []syncservice.Mutation
 	for rows.Next() {
 		item, scanErr := scanObservation(rows)
 		if scanErr != nil {
@@ -506,14 +508,78 @@ func projectTransitionMutations(ctx context.Context, query projectTransitionSQL,
 			return nil, writeError(ctx, err)
 		}
 		snapshot := syncObservation(item)
-		mutations = append(mutations, syncservice.Mutation{RecordID: item.ID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, Observation: &snapshot})
+		observations = append(observations, syncservice.Mutation{RecordID: item.ID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, Observation: &snapshot})
 	}
 	if err = rows.Err(); err != nil {
 		_ = rows.Close()
 		return nil, writeError(ctx, err)
 	}
 	_ = rows.Close()
-	return mutations, nil
+	ordered, err := orderProjectTransitionObservations(observations)
+	if err != nil {
+		return nil, err
+	}
+	return append(mutations, ordered...), nil
+}
+
+func orderProjectTransitionObservations(observations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+	byID := make(map[string]int, len(observations))
+	for index, mutation := range observations {
+		if mutation.Observation == nil || mutation.RecordID == "" || mutation.Observation.ID != mutation.RecordID {
+			return nil, fmt.Errorf("%w: project sync transition observation", ErrCorrupt)
+		}
+		if _, duplicate := byID[mutation.RecordID]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate project sync transition observation", ErrCorrupt)
+		}
+		byID[mutation.RecordID] = index
+	}
+	indegree := make([]int, len(observations))
+	dependents := make([][]int, len(observations))
+	for index, mutation := range observations {
+		for _, reference := range mutation.Observation.References {
+			dependency, present := byID[reference]
+			if !present {
+				return nil, fmt.Errorf("%w: project sync transition observation prerequisite", ErrConflict)
+			}
+			indegree[index]++
+			dependents[dependency] = append(dependents[dependency], index)
+		}
+	}
+	ready := make(observationTransitionHeap, 0, len(observations))
+	for index, dependencies := range indegree {
+		if dependencies == 0 {
+			heap.Push(&ready, index)
+		}
+	}
+	ordered := make([]syncservice.Mutation, 0, len(observations))
+	for ready.Len() != 0 {
+		index := heap.Pop(&ready).(int)
+		ordered = append(ordered, observations[index])
+		for _, dependent := range dependents[index] {
+			indegree[dependent]--
+			if indegree[dependent] == 0 {
+				heap.Push(&ready, dependent)
+			}
+		}
+	}
+	if len(ordered) != len(observations) {
+		return nil, fmt.Errorf("%w: cyclic project sync transition observation prerequisites", ErrConflict)
+	}
+	return ordered, nil
+}
+
+type observationTransitionHeap []int
+
+func (h observationTransitionHeap) Len() int           { return len(h) }
+func (h observationTransitionHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h observationTransitionHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *observationTransitionHeap) Push(value any)    { *h = append(*h, value.(int)) }
+func (h *observationTransitionHeap) Pop() any {
+	old := *h
+	last := len(old) - 1
+	value := old[last]
+	*h = old[:last]
+	return value
 }
 
 func projectTransitionMutationHash(mutation syncservice.Mutation) ([]byte, error) {
@@ -646,14 +712,19 @@ func (s *Store) FinalizeSyncProjectTransition(ctx context.Context, portableProje
 			id   string
 			hash []byte
 		}
-		var unseen []unseenRecord
+		unseen := make(map[string]unseenRecord)
 		for rows.Next() {
 			var record unseenRecord
 			if queryErr = rows.Scan(&record.kind, &record.id, &record.hash); queryErr != nil || len(record.hash) != sha256.Size {
 				_ = rows.Close()
 				return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition snapshot", ErrCorrupt)
 			}
-			unseen = append(unseen, record)
+			key := string(record.kind) + "\x00" + record.id
+			if _, duplicate := unseen[key]; duplicate {
+				_ = rows.Close()
+				return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition snapshot", ErrCorrupt)
+			}
+			unseen[key] = record
 		}
 		if queryErr = rows.Err(); queryErr != nil {
 			_ = rows.Close()
@@ -664,14 +735,11 @@ func (s *Store) FinalizeSyncProjectTransition(ctx context.Context, portableProje
 		if currentErr != nil {
 			return SyncProjectTransitionResult{}, currentErr
 		}
-		byRecord := make(map[string]syncservice.Mutation, len(current))
 		for _, mutation := range current {
-			byRecord[string(mutation.RecordKind)+"\x00"+mutation.RecordID] = mutation
-		}
-		for _, record := range unseen {
-			mutation, present := byRecord[string(record.kind)+"\x00"+record.id]
+			key := string(mutation.RecordKind) + "\x00" + mutation.RecordID
+			record, present := unseen[key]
 			if !present {
-				return SyncProjectTransitionResult{}, fmt.Errorf("%w: local transition record changed", ErrConflict)
+				continue
 			}
 			hash, hashErr := projectTransitionMutationHash(mutation)
 			if hashErr != nil || !bytes.Equal(hash, record.hash) {
@@ -694,11 +762,20 @@ func (s *Store) FinalizeSyncProjectTransition(ctx context.Context, portableProje
 			}
 			projectTransitionCount(&result, record.kind)
 			result.Queued++
+			delete(unseen, key)
+		}
+		if len(unseen) != 0 {
+			return SyncProjectTransitionResult{}, fmt.Errorf("%w: local transition record changed", ErrConflict)
 		}
 		status = SyncProjectTransitionPublishing
 		result.Status = status
 		if _, err = conn.ExecContext(ctx, `UPDATE sync_project_transitions SET status='publishing' WHERE portable_project_id=? AND status='pulling'`, portableProject); err != nil {
 			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+	}
+	if status == SyncProjectTransitionPublishing && result.Mode == SyncProjectTransitionRejoinMerge {
+		if err = s.recoverRejectedProjectTransitionObservations(ctx, conn, portableProject, localProject, &result); err != nil {
+			return SyncProjectTransitionResult{}, err
 		}
 	}
 	var pending, unseen int
@@ -719,6 +796,121 @@ func (s *Store) FinalizeSyncProjectTransition(ctx context.Context, portableProje
 	}
 	committed = true
 	return result, nil
+}
+
+func (s *Store) recoverRejectedProjectTransitionObservations(ctx context.Context, conn *sql.Conn, portableProject, localProject string, result *SyncProjectTransitionResult) error {
+	rows, err := conn.QueryContext(ctx, `SELECT r.local_id,r.payload_hash FROM sync_project_transition_records r
+		WHERE r.portable_project_id=? AND r.record_kind='observation' AND r.seen_remote=0
+		AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.record_kind='observation' AND o.record_id=r.local_id)
+		ORDER BY r.local_id`, portableProject)
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	candidates := make(map[string][]byte)
+	for rows.Next() {
+		var id string
+		var hash []byte
+		if err = rows.Scan(&id, &hash); err != nil || id == "" || len(hash) != sha256.Size {
+			_ = rows.Close()
+			return fmt.Errorf("%w: project sync transition recovery snapshot", ErrCorrupt)
+		}
+		if _, duplicate := candidates[id]; duplicate {
+			_ = rows.Close()
+			return fmt.Errorf("%w: project sync transition recovery snapshot", ErrCorrupt)
+		}
+		candidates[id] = append([]byte(nil), hash...)
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return writeError(ctx, err)
+	}
+	_ = rows.Close()
+	if len(candidates) == 0 {
+		return nil
+	}
+	current, err := projectTransitionMutations(ctx, conn, localProject)
+	if err != nil {
+		return err
+	}
+	for _, mutation := range current {
+		snapshotHash, recoverable := candidates[mutation.RecordID]
+		if mutation.RecordKind != syncservice.RecordKindObservation || !recoverable {
+			continue
+		}
+		if mutation.Kind != syncservice.MutationCreate || mutation.BaseVersion != 0 || mutation.Observation == nil || mutation.Observation.ProjectID != localProject {
+			return fmt.Errorf("%w: project sync transition recovery observation", ErrConflict)
+		}
+		hash, hashErr := projectTransitionMutationHash(mutation)
+		if hashErr != nil || !bytes.Equal(hash, snapshotHash) {
+			return fmt.Errorf("%w: project sync transition recovery snapshot", ErrConflict)
+		}
+		var receipts, accepted int
+		if err = conn.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(CASE WHEN disposition IN ('accepted','previously_accepted') THEN 1 ELSE 0 END),0)
+			FROM sync_push_results WHERE record_kind='observation' AND record_id=? AND mutation_kind='create'`, mutation.RecordID).Scan(&receipts, &accepted); err != nil {
+			return writeError(ctx, err)
+		}
+		if accepted != 0 {
+			delete(candidates, mutation.RecordID)
+			continue
+		}
+		if receipts != 1 {
+			return fmt.Errorf("%w: project sync transition recovery receipt count", ErrConflict)
+		}
+		var receiptID, disposition, code string
+		var retryable, canonical, base int64
+		var sequence sql.NullInt64
+		var receiptHash []byte
+		if err = conn.QueryRowContext(ctx, `SELECT mutation_id,disposition,retryable,code,sequence,canonical_version,base_version,mutation_hash
+			FROM sync_push_results WHERE record_kind='observation' AND record_id=? AND mutation_kind='create'`, mutation.RecordID).Scan(&receiptID, &disposition, &retryable, &code, &sequence, &canonical, &base, &receiptHash); err != nil {
+			return writeError(ctx, err)
+		}
+		if !canonicalUUIDPattern.MatchString(receiptID) || disposition != string(syncservice.DispositionRejected) || retryable != 0 || code != "invalid_prerequisite" || sequence.Valid || canonical != 0 || base != 0 || len(receiptHash) != sha256.Size {
+			return fmt.Errorf("%w: project sync transition recovery receipt", ErrConflict)
+		}
+		receiptMutation := mutation
+		receiptMutation.MutationID = receiptID
+		expectedReceiptHash, hashErr := syncMutationHash(receiptMutation)
+		if hashErr != nil || !bytes.Equal(expectedReceiptHash, receiptHash) {
+			return fmt.Errorf("%w: project sync transition recovery receipt", ErrConflict)
+		}
+		var version int64
+		if err = conn.QueryRowContext(ctx, `SELECT sync_version FROM observations WHERE id=? AND project_id=?`, mutation.RecordID, localProject).Scan(&version); err != nil || version != 0 {
+			return fmt.Errorf("%w: project sync transition recovery observation version", ErrConflict)
+		}
+		if mutation.Observation.SessionID != "" {
+			var sessionVersion int64
+			if err = conn.QueryRowContext(ctx, `SELECT sync_version FROM sessions WHERE id=? AND project_id=?`, mutation.Observation.SessionID, localProject).Scan(&sessionVersion); err != nil || sessionVersion <= 0 {
+				return fmt.Errorf("%w: project sync transition recovery session prerequisite", ErrConflict)
+			}
+		}
+		for _, reference := range mutation.Observation.References {
+			var referenceProject string
+			var referenceVersion int64
+			if err = conn.QueryRowContext(ctx, `SELECT project_id,sync_version FROM observations WHERE id=?`, reference).Scan(&referenceProject, &referenceVersion); err != nil || referenceProject != localProject || referenceVersion < 0 {
+				return fmt.Errorf("%w: project sync transition recovery observation prerequisite", ErrConflict)
+			}
+			if referenceVersion == 0 {
+				var queued int
+				if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox WHERE record_kind='observation' AND record_id=? AND mutation_kind='create' AND base_version=0`, reference).Scan(&queued); err != nil {
+					return writeError(ctx, err)
+				}
+				if queued != 1 {
+					return fmt.Errorf("%w: project sync transition recovery observation prerequisite", ErrConflict)
+				}
+			}
+		}
+		mutation.MutationID = ""
+		if _, err = s.enqueueSyncOutbox(ctx, conn, mutation); err != nil {
+			return err
+		}
+		result.Observations++
+		result.Queued++
+		delete(candidates, mutation.RecordID)
+	}
+	if len(candidates) != 0 {
+		return fmt.Errorf("%w: project sync transition recovery observation", ErrConflict)
+	}
+	return nil
 }
 
 // RepairBoundProjectCreate records one operator-confirmed, local-only repair
@@ -2317,7 +2509,14 @@ func (s *Store) claimDueSyncOutbox(ctx context.Context, lease time.Duration, lim
 		WHERE o.next_attempt_at<=? AND (c.mutation_id IS NULL OR c.lease_until<=?)
 		AND (` + repairPriority + ` OR NOT EXISTS (SELECT 1 FROM sync_outbox p WHERE p.record_kind=o.record_kind AND p.record_id=o.record_id AND (p.created_at<o.created_at OR p.created_at=o.created_at AND p.id<o.id)))
 		AND NOT EXISTS (SELECT 1 FROM sync_conflicts f WHERE f.status='unresolved' AND f.record_kind=o.record_kind AND f.record_id=o.record_id)
-		AND (` + repairPriority + ` OR o.base_version=CASE o.record_kind WHEN 'project' THEN COALESCE((SELECT sync_version FROM projects WHERE id=o.record_id),-1) WHEN 'session' THEN COALESCE((SELECT sync_version FROM sessions WHERE id=o.record_id),-1) WHEN 'observation' THEN COALESCE((SELECT sync_version FROM observations WHERE id=o.record_id),-1) ELSE -1 END)`
+		AND (` + repairPriority + ` OR o.base_version=CASE o.record_kind WHEN 'project' THEN COALESCE((SELECT sync_version FROM projects WHERE id=o.record_id),-1) WHEN 'session' THEN COALESCE((SELECT sync_version FROM sessions WHERE id=o.record_id),-1) WHEN 'observation' THEN COALESCE((SELECT sync_version FROM observations WHERE id=o.record_id),-1) ELSE -1 END)
+		AND (o.record_kind<>'observation' OR o.mutation_kind<>'create' OR NOT EXISTS (
+			SELECT 1 FROM observation_refs r
+			JOIN observations source ON source.id=o.record_id
+			JOIN observations target ON target.id=r.target_id AND target.project_id=source.project_id
+			WHERE r.observation_id=o.record_id AND target.sync_version=0
+			AND EXISTS (SELECT 1 FROM sync_outbox prerequisite WHERE prerequisite.record_kind='observation' AND prerequisite.record_id=r.target_id AND prerequisite.mutation_kind='create')
+		))`
 	args := []any{nowNanos, nowNanos}
 	if project != "" {
 		query += ` AND (o.record_kind='project' AND o.record_id=? OR o.record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.record_id AND s.project_id=?) OR o.record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=o.record_id AND n.project_id=?))`
@@ -2333,8 +2532,7 @@ func (s *Store) claimDueSyncOutbox(ctx context.Context, lease time.Duration, lim
 	if err != nil {
 		return nil, writeError(ctx, err)
 	}
-	defer rows.Close()
-	claims := make([]SyncOutboxClaim, 0, limit)
+	entries := make([]SyncOutboxEntry, 0, limit)
 	for rows.Next() {
 		var id, recordKind, recordID, kind, state, code string
 		var base, payloadVersion, attempts, next, created, updated int64
@@ -2346,9 +2544,25 @@ func (s *Store) claimDueSyncOutbox(ctx context.Context, lease time.Duration, lim
 		if err != nil {
 			return nil, err
 		}
-		token, err := newSyncUUID()
-		if err != nil {
-			return nil, writeError(ctx, err)
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, writeError(ctx, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, writeError(ctx, err)
+	}
+	entries, err = claimableSyncOutboxEntries(ctx, conn, entries)
+	if err != nil {
+		return nil, err
+	}
+	claims := make([]SyncOutboxClaim, 0, len(entries))
+	for _, entry := range entries {
+		id := entry.Mutation.MutationID
+		token, tokenErr := newSyncUUID()
+		if tokenErr != nil {
+			return nil, writeError(ctx, tokenErr)
 		}
 		var firstToken, currentToken string
 		var firstClaimed, claimed, leaseUntil int64
@@ -2365,14 +2579,58 @@ func (s *Store) claimDueSyncOutbox(ctx context.Context, lease time.Duration, lim
 		}
 		claims = append(claims, claim)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, writeError(ctx, err)
-	}
 	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return nil, writeError(ctx, err)
 	}
 	committed = true
 	return claims, nil
+}
+
+func claimableSyncOutboxEntries(ctx context.Context, conn *sql.Conn, entries []SyncOutboxEntry) ([]SyncOutboxEntry, error) {
+	ready := make([]SyncOutboxEntry, 0, len(entries))
+	for _, entry := range entries {
+		mutation := entry.Mutation
+		if mutation.RecordKind != syncservice.RecordKindObservation || mutation.Kind != syncservice.MutationCreate {
+			ready = append(ready, entry)
+			continue
+		}
+		if mutation.Observation == nil {
+			return nil, fmt.Errorf("%w: observation sync prerequisite", ErrCorrupt)
+		}
+		available := true
+		for _, reference := range mutation.Observation.References {
+			var project string
+			var version int64
+			err := conn.QueryRowContext(ctx, `SELECT project_id,sync_version FROM observations WHERE id=?`, reference).Scan(&project, &version)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("%w: missing observation sync prerequisite", ErrConflict)
+			}
+			if err != nil {
+				return nil, writeError(ctx, err)
+			}
+			if project != mutation.Observation.ProjectID {
+				return nil, fmt.Errorf("%w: observation sync prerequisite crosses project", ErrConflict)
+			}
+			if version < 0 {
+				return nil, fmt.Errorf("%w: observation sync prerequisite version", ErrCorrupt)
+			}
+			if version > 0 {
+				continue
+			}
+			var queued int
+			if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox WHERE record_kind='observation' AND record_id=? AND mutation_kind='create'`, reference).Scan(&queued); err != nil {
+				return nil, writeError(ctx, err)
+			}
+			if queued == 0 {
+				return nil, fmt.Errorf("%w: unsynced observation prerequisite has no create", ErrConflict)
+			}
+			available = false
+		}
+		if available {
+			ready = append(ready, entry)
+		}
+	}
+	return ready, nil
 }
 
 // RenewSyncOutboxClaim extends a current, unexpired lease without changing proof.

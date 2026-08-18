@@ -821,8 +821,13 @@ func TestRunSyncProjectTransitionFailsClosedForInvalidIntentAndIncompleteSync(t 
 	} {
 		t.Run("incomplete "+name+" never finalizes", func(t *testing.T) {
 			store := &transitionTestStore{active: true, transition: test.transition, projectForegroundStore: test.store}
+			expectedFinalizes := 0
+			if test.transition.Status == memory.SyncProjectTransitionPublishing && test.transition.Mode == memory.SyncProjectTransitionRejoinMerge {
+				store.finalizeResults = []memory.SyncProjectTransitionResult{test.transition}
+				expectedFinalizes = 1
+			}
 			_, err := runSyncProjectTransition(context.Background(), store, test.remote, "", project, "project", test.transition.Mode, testBackupOps())
-			if !errors.Is(err, memory.ErrConflict) || store.finalizes != 0 {
+			if !errors.Is(err, memory.ErrConflict) || store.finalizes != expectedFinalizes {
 				t.Fatalf("err=%v finalizes=%d", err, store.finalizes)
 			}
 		})
@@ -836,6 +841,51 @@ func TestRunSyncProjectTransitionFailsClosedForInvalidIntentAndIncompleteSync(t 
 			t.Fatalf("err=%v ensures=%d", err, store.ensureCalls)
 		}
 	})
+}
+
+func TestRunSyncProjectTransitionRecoversBeforePublishingResume(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440002", RecordID: "observation", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, Observation: &syncservice.Observation{ID: "observation", ProjectID: "project"}}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440003"}
+	publishing := memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPublishing}
+	store := &transitionTestStore{
+		active:          true,
+		transition:      publishing,
+		finalizeResults: []memory.SyncProjectTransitionResult{publishing, {Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionCompleted}},
+		recoveredClaims: [][]memory.SyncOutboxClaim{{claim}, {}},
+	}
+	remote := &testForegroundRemote{disposition: syncservice.DispositionAccepted}
+	result, err := runSyncProjectTransition(context.Background(), store, remote, "", project, "project", memory.SyncProjectTransitionRejoinMerge, testBackupOps())
+	if err != nil || result.Status != memory.SyncProjectTransitionCompleted || store.finalizes != 2 || remote.pushes != 1 || store.applied != 1 {
+		t.Fatalf("result=%+v err=%v finalizes=%d remote=%+v applied=%d", result, err, store.finalizes, remote, store.applied)
+	}
+}
+
+func TestRunSyncProjectTransitionFreshReseedPublishesWithoutPreFinalize(t *testing.T) {
+	root := t.TempDir()
+	database, backup := filepath.Join(root, "memory.db"), filepath.Join(root, "backup.sqlite")
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	history := "550e8400-e29b-41d4-a716-446655440010"
+	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440002", RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440003"}
+	store := &transitionTestStore{
+		intent:        memory.SyncProjectBackupIntent{IntentID: "intent", BackupPath: backup},
+		prepareResult: memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionReseedSource, Status: memory.SyncProjectTransitionPublishing},
+		projectForegroundStore: projectForegroundStore{
+			claims:     [][]memory.SyncOutboxClaim{{claim}, {}},
+			pullCursor: syncservice.Cursor{HistoryID: history},
+		},
+	}
+	ops := syncProjectBackupOps{
+		create: func(_ context.Context, _ string, path string) error {
+			return os.WriteFile(path, []byte("backup"), 0o600)
+		},
+		verify: func(context.Context, string, string) error { return nil },
+		digest: func(context.Context, string) ([]byte, error) { return make([]byte, 32), nil },
+	}
+	remote := &testForegroundRemote{disposition: syncservice.DispositionAccepted}
+	result, err := runSyncProjectTransition(context.Background(), store, remote, database, project, "project", memory.SyncProjectTransitionReseedSource, ops)
+	if err != nil || result.Status != memory.SyncProjectTransitionCompleted || store.prepareCalls != 1 || store.finalizes != 1 || remote.pushes != 1 {
+		t.Fatalf("result=%+v err=%v prepares=%d finalizes=%d pushes=%d", result, err, store.prepareCalls, store.finalizes, remote.pushes)
+	}
 }
 
 func TestRunForegroundProjectPullRechecksPendingRepairBeforeDiscoverAndPull(t *testing.T) {
@@ -1218,15 +1268,18 @@ func (store *projectForegroundStore) MarkSyncOutboxRetry(context.Context, string
 
 type transitionTestStore struct {
 	projectForegroundStore
-	transition   memory.SyncProjectTransitionResult
-	active       bool
-	intent       memory.SyncProjectBackupIntent
-	prepareErr   error
-	ensureCalls  int
-	backupPaths  []string
-	finalizes    int
-	seals        int
-	prepareCalls int
+	transition      memory.SyncProjectTransitionResult
+	active          bool
+	intent          memory.SyncProjectBackupIntent
+	prepareErr      error
+	prepareResult   memory.SyncProjectTransitionResult
+	ensureCalls     int
+	backupPaths     []string
+	finalizes       int
+	finalizeResults []memory.SyncProjectTransitionResult
+	recoveredClaims [][]memory.SyncOutboxClaim
+	seals           int
+	prepareCalls    int
 }
 
 func testBackupOps() syncProjectBackupOps {
@@ -1252,7 +1305,7 @@ func (store *transitionTestStore) EnsureSyncProjectBackupIntent(_ context.Contex
 
 func (store *transitionTestStore) PrepareSyncProjectTransitionWithBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, bool, memory.SyncProjectBackupIntent) (memory.SyncProjectTransitionResult, error) {
 	store.prepareCalls++
-	return memory.SyncProjectTransitionResult{}, store.prepareErr
+	return store.prepareResult, store.prepareErr
 }
 
 func (store *transitionTestStore) SealSyncProjectBackupIntent(_ context.Context, _ string, _ string, _ memory.SyncProjectTransitionMode, intent memory.SyncProjectBackupIntent, digest []byte) (memory.SyncProjectBackupIntent, error) {
@@ -1264,6 +1317,14 @@ func (store *transitionTestStore) SealSyncProjectBackupIntent(_ context.Context,
 
 func (store *transitionTestStore) FinalizeSyncProjectTransition(context.Context, string, string) (memory.SyncProjectTransitionResult, error) {
 	store.finalizes++
+	if store.finalizes == 1 && store.recoveredClaims != nil {
+		store.claims = store.recoveredClaims
+	}
+	if len(store.finalizeResults) != 0 {
+		result := store.finalizeResults[0]
+		store.finalizeResults = store.finalizeResults[1:]
+		return result, nil
+	}
 	return memory.SyncProjectTransitionResult{Status: memory.SyncProjectTransitionCompleted}, nil
 }
 

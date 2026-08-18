@@ -731,6 +731,11 @@ func runSyncProjectTransition(ctx context.Context, store syncProjectTransitionSt
 		if err != nil || transition.Status == memory.SyncProjectTransitionCompleted {
 			return transition, err
 		}
+	} else if transition.Status == memory.SyncProjectTransitionPublishing && transition.Mode == memory.SyncProjectTransitionRejoinMerge {
+		transition, err = store.FinalizeSyncProjectTransition(ctx, portableProject, project)
+		if err != nil || transition.Status == memory.SyncProjectTransitionCompleted {
+			return transition, err
+		}
 	}
 	result, err := runForegroundProjectSync(ctx, store, remote, project, portableProject)
 	if err != nil {
