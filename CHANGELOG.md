@@ -4,6 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Recognizes exact accepted or previously accepted project-pull echoes from durable push receipts after portable-ID mapping, preserving local project, session, and observation create/update state while atomically advancing the project inbox and cursor; receipt mismatches, foreign creates, conflicts, and active transitions retain fail-closed handling.
 - Repairs stale, never-attempted backfill create payloads with a transactional compare-and-swap while preserving mutation identity; never-attempted requires no claim history, and claimed, attempted, retrying, malformed, or concurrently changed queue rows remain rejected.
 - Aligns OpenCode manager v48 and generated Codex manager v8 on intent-triggered VGXNESS memory: search all terms first with any-term fallback only when needed, retrieve exact IDs after preview, reserve recent recall for explicit recovery/history requests, and preserve exact v47/v7 predecessor upgrades while protecting drift.
 - Preserves cancellation and deadline identities during storage inspection, aligns documentation with SQLite schema v19, bounds sync authentication and failed-audit retention, and makes self-install manifest activation explicitly recoverable without overwriting concurrent content.
