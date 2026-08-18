@@ -13,12 +13,20 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
-func TestKnownPackagesRecognizeActiveV6AndV7ForEveryPlan(t *testing.T) {
+func TestKnownPackagesOrderCurrentThenV8ForEveryPlanAndRetainOlderPredecessors(t *testing.T) {
 	known, err := knownPackages()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+		current, err := RenderPlan("v0.0.0", plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v8, err := renderActiveV8("v0.0.0", plan)
+		if err != nil {
+			t.Fatal(err)
+		}
 		v7, err := renderActiveV7("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
@@ -27,14 +35,59 @@ func TestKnownPackagesRecognizeActiveV6AndV7ForEveryPlan(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		foundV6, foundV7 := false, false
-		for _, pkg := range known {
+		foundV6, foundV7, currentIndex, v8Index := false, false, -1, -1
+		for index, pkg := range known {
 			foundV6 = foundV6 || pkg.SHA256 == v6.SHA256
 			foundV7 = foundV7 || pkg.SHA256 == v7.SHA256
+			if pkg.SHA256 == current.SHA256 {
+				currentIndex = index
+			}
+			if pkg.SHA256 == v8.SHA256 {
+				v8Index = index
+			}
 		}
-		if !foundV6 || !foundV7 {
-			t.Errorf("known packages omit predecessor for %s: v6=%v v7=%v", plan, foundV6, foundV7)
+		if !foundV6 || !foundV7 || currentIndex < 0 || v8Index != currentIndex+1 {
+			t.Errorf("known packages order for %s: current=%d v8=%d v7=%v v6=%v", plan, currentIndex, v8Index, foundV7, foundV6)
 		}
+	}
+}
+
+func TestActiveV8LifecycleStatusUpgradeUninstallAndDrift(t *testing.T) {
+	plan := sdd.PlanMedium
+	v8, err := renderActiveV8("v0.0.0", plan)
+	require(t, err == nil)
+	for _, test := range []struct {
+		name string
+		run  func(*testing.T, string, *Integration)
+	}{
+		{"status", func(t *testing.T, root string, service *Integration) {
+			result, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
+			require(t, err == nil && result.State == integration.StateInstalled && result.ArtifactSHA256 == v8.SHA256)
+		}},
+		{"upgrade", func(t *testing.T, root string, service *Integration) {
+			result, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
+			require(t, err == nil && result.State == integration.StateInstalled && result.Changed && result.ArtifactSHA256 != v8.SHA256)
+		}},
+		{"uninstall", func(t *testing.T, root string, service *Integration) {
+			result, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
+			require(t, err == nil && result.State == integration.StateAbsent && result.Changed)
+		}},
+		{"modified bytes drift", func(t *testing.T, root string, service *Integration) {
+			path := filepath.Join(root, "AGENTS.md")
+			body, err := os.ReadFile(path)
+			require(t, err == nil)
+			require(t, os.WriteFile(path, append(body, []byte("\nmodified\n")...), 0o600) == nil)
+			status, statusErr := service.Status(context.Background(), integration.Options{ConfigDir: root})
+			_, reinstallErr := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
+			_, uninstallErr := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
+			require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(reinstallErr, integration.ErrDrift) && errors.Is(uninstallErr, integration.ErrDrift))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "codex")
+			writePackage(t, root, v8)
+			test.run(t, root, NewIntegration())
+		})
 	}
 }
 

@@ -342,7 +342,7 @@ func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(predecessors) < 2 || artifactSHA256(predecessors[1]) != artifactSHA256(v46.agents[managerAgentName]) {
+	if len(predecessors) < 3 || artifactSHA256(predecessors[2]) != artifactSHA256(v46.agents[managerAgentName]) {
 		t.Fatal("manifestless predecessor recognition lacks exact v46 manager")
 	}
 }

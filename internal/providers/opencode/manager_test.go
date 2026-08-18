@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
@@ -23,7 +24,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 48",
+		"artifact: opencode-agent/vgxness-manager; version: 49",
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
 		"managed global portable catalog",
@@ -67,18 +68,18 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 }
 
-func TestV48UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
+func TestV49UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	for _, required := range []string{"version: 48", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
+	for _, required := range []string{"version: 49", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
 		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
 			t.Errorf("manager missing compact protocol %q", required)
 		}
 	}
 	v45, err := previousV45ModelPlanBundle(current)
 	testutil.NoError(t, err)
-	if got, minimum := len(predecessorBundlesMust(t, current)), (len(managerPredecessorsMust(t, current))+1)*2*3; got < minimum-2 {
+	if got, minimum := len(predecessorBundlesMust(t, current)), len(managerPredecessorsMust(t, current))*2*3; got < minimum {
 		t.Fatalf("predecessor bundles=%d, want at least %d", got, minimum)
 	}
 	if !bytes.Contains(v45.agents[managerAgentName], []byte("artifact: opencode-agent/vgxness-manager; version: 45")) ||
@@ -197,7 +198,7 @@ func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 	}
 	for _, required := range []string{
 		"Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery.",
-		"sole orchestration and SDD lifecycle authority",
+		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",
 		"Briefly disclose material assumptions.",
 		"A task override applies only to the current request and never changes the project default.",
 		"Treat an answer as a session decision and do not ask it again.",
@@ -292,10 +293,10 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"Handle direct, bounded, non-repository/read-only informational questions yourself.",
-		"Delegate repository questions and diagnosis-only work to Explore.",
-		"Use managed general as the delegated implementation worker for clear authorized implementation, including necessary diagnosis, edits, and developmental checks.",
-		"Reserve Explore -> General for genuine ambiguity needing separation.",
+		"Apply the shared adaptive execution contract below before acting.",
+		"Use Explore only for complex repository evidence or diagnosis that materially benefits from read-only separation.",
+		"Use managed general as the delegated implementation worker for clear authorized repository implementation, including necessary diagnosis, edits, and developmental checks",
+		"reserve Explore -> General for genuine ambiguity.",
 		"Avoid repeating child source exploration. Direct source inspection is exceptional for contradictory or missing evidence, candidate-identity mismatch, or severe findings; exact diff, path, status, and command evidence inspection remains mandatory.",
 		"Route structural CodeGraph work to the delegated worker and use one bounded codegraph_explore query before broad reads or search where applicable.",
 		"If CodeGraph is unavailable, missing, or stale, the delegated worker continues with native reads and search without blocking; it reads any specifically reported stale files directly.",
@@ -406,14 +407,14 @@ func TestManagerRetainsAuthorityWhileBroadProfilesDenyDurableMutations(t *testin
 	}
 }
 
-func TestV48RoutesDirectSingleReadAndKeepsFullAssuranceExceptions(t *testing.T) {
+func TestV49RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 48",
-		"Directly answer a repository read-only informational request only when the user names an exact local file or asks for the standard root README, one read suffices, and no search, graph traversal, cross-file inference, architecture/flow analysis, or diagnosis is needed.",
-		"Otherwise use Explore; implementations remain delegated to managed general.",
+		"artifact: opencode-agent/vgxness-manager; version: 49",
+		"bounded simple exact reads use at most three total tool attempts and no delegation or todo",
+		"complex evidence research may use at most one read-only delegation",
 		"For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`.",
 		"Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs.",
 		"A second task call for the same goal requires an explicit blocker, new evidence, correction, or independent assurance; resume the same child where applicable and send only the delta.",
@@ -429,7 +430,7 @@ func TestManagerUsesIntentTriggeredMemoryWithAllThenAnyFallback(t *testing.T) {
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"Use VGXNESS memory only when the request indicates prior project context may matter.",
+		"Recall from VGXNESS memory only when the request indicates prior project context may matter.",
 		"Search with vgxness_memory_search using all-term matching first; retry with any-term matching only when all-term results are insufficient.",
 		"Inspect bounded previews, then call vgxness_memory_get with an exact ID only for relevant full content.",
 		"Call vgxness_memory_recent only for an explicit recent-work, session, or compaction-recovery request; never use it as a routine first action.",
@@ -463,5 +464,31 @@ func TestGeneralV6UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 		if !strings.Contains(general, required) {
 			t.Errorf("general v6 missing %q", required)
 		}
+	}
+}
+
+func TestV49ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV48(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manager := string(bundle.agents[managerAgentName])
+	for _, required := range []string{
+		"artifact: opencode-agent/vgxness-manager; version: 49",
+		"adaptive general-purpose partner",
+		"When the engineering route activates",
+		orchestration.ContractPolicy,
+		orchestration.ContractBudgetPolicy,
+	} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("manager v49 missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"Use todowrite for multiple meaningful steps", "Load every clearly applicable native skill", "sole orchestration and SDD lifecycle authority"} {
+		if strings.Contains(manager, forbidden) {
+			t.Errorf("manager v49 retains unconditional ceremony %q", forbidden)
+		}
+	}
+	predecessors := managerPredecessorsMust(t, bundle)
+	if len(predecessors) == 0 || !bytes.Contains(predecessors[0], []byte("artifact: opencode-agent/vgxness-manager; version: 48")) || !bytes.Contains(predecessors[0], []byte(currentManagerMemoryPolicy)) {
+		t.Fatal("exact v48 predecessor with intent-triggered memory semantics is not first")
 	}
 }

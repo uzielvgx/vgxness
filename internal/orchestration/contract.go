@@ -10,8 +10,16 @@ import (
 // ContractIdentity binds provider projections to this shared policy.
 const ContractIdentity = "vgxness-orchestration/v1"
 
-// ContractPolicy is embedded verbatim in each installed manager artifact.
-const ContractPolicy = "Canonical routing: accepted SDD, authorized implementation, direct bounded information, otherwise Explore. Structural Evidence Capsule: identity, query, source, revision, digest, paths, symbols, call path, stale, contradicted; reuse only a matching valid capsule, otherwise direct inspection. Review depth: zero passive docs/images, one ordinary, four hot paths."
+const (
+	// ContractBudgetPolicy is the canonical tools/delegations projection.
+	ContractBudgetPolicy = "Canonical budgets: direct 0 tools/0 delegations; assisted simple 3 tools/0 delegations and complex 3 tools/1 delegation; action 6 tools/0 delegations; engineering 12 tools/2 delegations; assured 16 tools/2 delegations."
+
+	// ContractPolicy is embedded verbatim in each installed manager artifact.
+	ContractPolicy = "Adaptive contract: silently classify domain, operation, side effect, complexity, and risk without tools or delegation, choose the least-cost route. Direct: conversation, writing, translation, summarization, brainstorming, and no-effect planning use zero execution tools, skills, todos, delegation, or review. Assisted: bounded simple exact reads use at most three total tool attempts and no delegation or todo; complex evidence research may use at most one read-only delegation. Action, engineering, and assured routes retain existing authorization, readback, General, Explore, TDD, freeze, verifier, review, and delivery guarantees. " + ContractBudgetPolicy + " All execution tool and delegation attempts, including failures and retries, count against budget; halt and report before the next attempt would exceed it, with no silent escalation. These are prompt-level instructions, not runtime enforcement. Load a skill only when its specialized workflow materially improves quality, safety, or verification. Use a todo only when execution state or user-visible tracking benefits, not merely because an answer has several steps. Memory is orthogonal: intent-triggered recall rules remain unchanged; after any route, autonomously save only durable, evidence-backed, safely assessed project decisions, preferences, constraints, or learnings using at most one memory tool; never save transient state, logs, secrets, or personal data, require engineering ceremony, or automatically cloud-sync."
+
+	// PreviousContractPolicy reconstructs the exact v48/v8 provider artifacts.
+	PreviousContractPolicy = "Canonical routing: accepted SDD, authorized implementation, direct bounded information, otherwise Explore. Structural Evidence Capsule: identity, query, source, revision, digest, paths, symbols, call path, stale, contradicted; reuse only a matching valid capsule, otherwise direct inspection. Review depth: zero passive docs/images, one ordinary, four hot paths."
+)
 
 type Route string
 

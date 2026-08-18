@@ -1622,7 +1622,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 48"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 49"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -1967,17 +1967,17 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 48",
+		"artifact: opencode-agent/vgxness-manager; version: 49",
 		"model: openai/gpt-5.6-sol", "variant: high",
-		"user's OpenCode-native engineering partner",
-		"sole orchestration and SDD lifecycle authority",
+		"user's OpenCode-native adaptive general-purpose partner",
+		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",
 		`permission:
   "*": allow`,
 		"Manager, managed general, and verifier have global tool permission",
 		"Use managed general as the delegated implementation worker",
 		"Use vgxness-verifier for independent final executable validation",
 		"relevant native skill names",
-		"Load every clearly applicable native skill through the skill tool",
+		"Load a native skill through the skill tool only when its specialized workflow materially improves quality, safety, or verification",
 		"use one bounded codegraph_explore query",
 		"Exact source, Git diff, and observed command output remain candidate evidence",
 		"VGXNESS memory is context only",

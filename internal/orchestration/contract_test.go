@@ -27,6 +27,35 @@ func TestCanonicalRoutingOrder(t *testing.T) {
 	}
 }
 
+func TestContractPolicyProjectsAdaptiveExecutionAndOrthogonalMemory(t *testing.T) {
+	for _, required := range []string{
+		"silently classify domain, operation, side effect, complexity, and risk without tools or delegation",
+		"conversation, writing, translation, summarization, brainstorming, and no-effect planning use zero execution tools, skills, todos, delegation, or review",
+		"bounded simple exact reads use at most three total tool attempts and no delegation or todo",
+		"complex evidence research may use at most one read-only delegation",
+		"including failures and retries",
+		"halt and report before the next attempt would exceed it, with no silent escalation",
+		"prompt-level instructions, not runtime enforcement",
+		"Load a skill only when its specialized workflow materially improves quality, safety, or verification",
+		"Use a todo only when execution state or user-visible tracking benefits",
+		"intent-triggered recall rules remain unchanged",
+		"at most one memory tool",
+		"never save transient state, logs, secrets, or personal data",
+		"automatically cloud-sync",
+	} {
+		if !strings.Contains(ContractPolicy, required) {
+			t.Errorf("adaptive contract missing %q", required)
+		}
+	}
+}
+
+func TestContractPolicyProjectsCanonicalNumericBudgets(t *testing.T) {
+	const want = "Canonical budgets: direct 0 tools/0 delegations; assisted simple 3 tools/0 delegations and complex 3 tools/1 delegation; action 6 tools/0 delegations; engineering 12 tools/2 delegations; assured 16 tools/2 delegations."
+	if ContractBudgetPolicy != want || !strings.Contains(ContractPolicy, want) {
+		t.Fatalf("numeric budget projection differs\npolicy: %q\ncontract: %q", ContractBudgetPolicy, ContractPolicy)
+	}
+}
+
 func TestStructuralEvidenceReuseFallsBackWhenUnsafe(t *testing.T) {
 	valid := StructuralEvidence{Contract: ContractIdentity, Query: "flow", Revision: "abc", Digest: strings.Repeat("a", 64), Source: "codegraph", Paths: []string{"a.go"}, Symbols: []string{"Run"}, CallPath: []string{"Run->Check"}}
 	if !valid.ReusableFor("flow", "abc", strings.Repeat("a", 64)) || valid.FallbackRequired("flow", "abc", strings.Repeat("a", 64)) {
