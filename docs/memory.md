@@ -26,9 +26,9 @@ and removes its FTS row. The observation row and relationships remain available
 to `Get` for durable history and persisted-data compatibility, while normal
 `Recall` cannot return forgotten content.
 
-## Schema v17 domains
+## Schema v18 domains
 
-**Implemented:** SQLite schema v17 keeps semantic observations, references,
+**Implemented:** SQLite schema v18 keeps semantic observations, references,
 sessions, and FTS rows isolated from structured SDD changes, artifacts,
 immutable revisions, input bindings, idempotency records, and OpenSpec projection
 evidence. Both domains share canonical workspace/project identity and the same
@@ -46,7 +46,7 @@ ownership, permissions, and Windows limitations. For existing project data,
 run `memory sync backfill --workspace /absolute/workspace` before the first
 sync. Backfill is local-only, bounded, and idempotent.
 
-Schema v17 supports `memory sync repair-project --workspace /absolute/workspace --confirm-remote-absent --json` after an operator confirms a previously accepted project is absent remotely. Repair is local-only and queues one replacement create; ordinary foreground sync sends it. Configure changes enrollment only; project sync is bidirectional; pending repair makes global claim/pull conservative while other exact-bound project flows remain serially independent under the shared storage-root lock.
+Schema v18 retains `memory sync repair-project --workspace /absolute/workspace --confirm-remote-absent --json` and adds durable project transition snapshots used by the reseed/rejoin workflow. Repair is local-only and queues one replacement create; ordinary foreground sync sends it. Configure changes enrollment only; project sync is bidirectional; pending repair makes global claim/pull conservative while other exact-bound project flows remain serially independent under the shared storage-root lock.
 
 Foreground sync is explicitly project-scoped: use `memory sync --workspace
 /absolute/workspace`. The workspace must already have a valid
@@ -65,11 +65,11 @@ execution authority.
 
 ## Upgrade migration caveat
 
-**Implemented:** A read-only database open cannot migrate an older supported schema to v17.
+**Implemented:** A read-only database open cannot migrate an older supported schema to v18.
 Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
 another read operation may therefore report a migration/storage failure. Run one
 write-capable memory or SDD operation to open the database and atomically apply
-v17, then rerun the read-only command. Do not delete or recreate the database;
+v18, then rerun the read-only command. Do not delete or recreate the database;
 the existing data is the migration source and remains authoritative.
 
 Older project-level `memory.db` files are a separate compatibility case. The

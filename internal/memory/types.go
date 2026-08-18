@@ -68,6 +68,30 @@ type SyncProjectRepairResult struct {
 	Queued        int    `json:"queued"`
 }
 
+type SyncProjectTransitionMode string
+
+const (
+	SyncProjectTransitionReseedSource SyncProjectTransitionMode = "reseed_source"
+	SyncProjectTransitionRejoinMerge  SyncProjectTransitionMode = "rejoin_merge"
+)
+
+const (
+	SyncProjectTransitionPulling    = "pulling"
+	SyncProjectTransitionPublishing = "publishing"
+	SyncProjectTransitionCompleted  = "completed"
+)
+
+// SyncProjectTransitionResult reports only local transition state and counts.
+type SyncProjectTransitionResult struct {
+	SchemaVersion int                       `json:"schemaVersion"`
+	Mode          SyncProjectTransitionMode `json:"mode"`
+	Status        string                    `json:"status"`
+	Projects      int                       `json:"projects"`
+	Sessions      int                       `json:"sessions"`
+	Observations  int                       `json:"observations"`
+	Queued        int                       `json:"queued"`
+}
+
 type Search struct {
 	Query, Project string
 	TopicKey       string

@@ -32,7 +32,7 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 17, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 18, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
@@ -107,6 +107,203 @@ func TestBackfillSyncProjectSkipsTombstonedObservation(t *testing.T) {
 	var queued int
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE record_id=?`, item.ID).Scan(&queued))
 	testutil.Require(t, queued == 0, "resurrected outbox=%d", queued)
+}
+
+func TestActiveSyncProjectTransitionBlocksLocalWritesAndBackfill(t *testing.T) {
+	for _, mode := range []SyncProjectTransitionMode{SyncProjectTransitionRejoinMerge, SyncProjectTransitionReseedSource} {
+		t.Run(string(mode), func(t *testing.T) {
+			store, portable := seededSyncProjectTransition(t)
+			defer store.Close()
+			_, err := store.PrepareSyncProjectTransition(context.Background(), portable, "project", mode, mode == SyncProjectTransitionReseedSource)
+			testutil.NoError(t, err)
+
+			item, err := store.Get(context.Background(), "observation", "project", ScopeProject)
+			testutil.NoError(t, err)
+			_, err = store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "blocked", State: StateActive, Provenance: Provenance{Producer: "test"}})
+			testutil.Require(t, errors.Is(err, ErrConflict), "save err=%v", err)
+			item.Content = "changed"
+			_, err = store.Update(context.Background(), item)
+			testutil.Require(t, errors.Is(err, ErrConflict), "update err=%v", err)
+			_, err = store.Forget(context.Background(), item.ID, item.Project, item.Scope)
+			testutil.Require(t, errors.Is(err, ErrConflict), "forget err=%v", err)
+			_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+			testutil.Require(t, errors.Is(err, ErrConflict), "backfill err=%v", err)
+			_, err = store.RepairBoundProjectCreate(context.Background(), portable, "project", true)
+			testutil.Require(t, errors.Is(err, ErrConflict), "repair err=%v", err)
+
+			unchanged, err := store.Get(context.Background(), item.ID, item.Project, item.Scope)
+			testutil.Require(t, err == nil && unchanged.Content == "local" && unchanged.State == StateActive, "item=%+v err=%v", unchanged, err)
+			other, err := store.Save(context.Background(), Observation{Project: "other", Scope: ScopeProject, Type: "learning", Content: "allowed", State: StateActive, Provenance: Provenance{Producer: "test"}})
+			testutil.Require(t, err == nil && other.Project == "other", "other=%+v err=%v", other, err)
+		})
+	}
+}
+
+func TestCompletedSyncProjectTransitionPermitsLocalWrites(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	_, err := store.PrepareSyncProjectTransition(context.Background(), portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`UPDATE sync_project_transitions SET status='completed',completed_at=? WHERE portable_project_id=?`, fixedTime.UnixNano(), portable)
+	testutil.NoError(t, err)
+	item, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "allowed", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.Require(t, err == nil && item.Project == "project", "item=%+v err=%v", item, err)
+}
+
+func TestPrepareSyncProjectTransitionExcludesActiveLocalProject(t *testing.T) {
+	store, firstPortable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	secondPortable := "550e8400-e29b-41d4-a716-446655440391"
+	_, err := store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project','workspace-hash-2','test','now')`, secondPortable)
+	testutil.NoError(t, err)
+
+	_, err = store.PrepareSyncProjectTransition(ctx, firstPortable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	state := func() string {
+		var status string
+		var transitions, outbox, snapshots, cursor, projects, sessions, observations int
+		err := store.db.QueryRow(`SELECT (SELECT status FROM sync_project_transitions WHERE portable_project_id=?), (SELECT count(*) FROM sync_project_transitions), (SELECT count(*) FROM sync_outbox), (SELECT count(*) FROM sync_project_transition_records WHERE portable_project_id=?), (SELECT count(*) FROM sync_project_cursor WHERE portable_project_id=?), (SELECT sync_version FROM projects WHERE id='project'), (SELECT sync_version FROM sessions WHERE id='session'), (SELECT sync_version FROM observations WHERE id='observation')`, firstPortable, firstPortable, firstPortable).Scan(&status, &transitions, &outbox, &snapshots, &cursor, &projects, &sessions, &observations)
+		testutil.NoError(t, err)
+		return fmt.Sprintf("%s/%d/%d/%d/%d/%d/%d/%d", status, transitions, outbox, snapshots, cursor, projects, sessions, observations)
+	}
+	before := state()
+	testutil.Require(t, before == "pulling/1/0/3/0/1/1/1", "before=%s", before)
+
+	_, err = store.PrepareSyncProjectTransition(ctx, secondPortable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.Require(t, errors.Is(err, ErrConflict), "second prepare err=%v", err)
+	testutil.Require(t, state() == before, "state changed from %s to %s", before, state())
+
+	_, err = store.db.Exec(`UPDATE sync_project_transitions SET status='completed',completed_at=? WHERE portable_project_id=?`, fixedTime.UnixNano(), firstPortable)
+	testutil.NoError(t, err)
+	result, err := store.PrepareSyncProjectTransition(ctx, secondPortable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.Require(t, err == nil && result.Status == SyncProjectTransitionPulling, "result=%+v err=%v", result, err)
+}
+
+func TestPrepareSyncProjectReseedRequiresConfirmationAndRequeuesCurrentState(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	_, err := store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, false)
+	testutil.Require(t, errors.Is(err, ErrInvalid), "missing confirmation error=%v", err)
+	result, err := store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.Require(t, err == nil && result.Mode == SyncProjectTransitionReseedSource && result.Status == SyncProjectTransitionPublishing && result.Projects == 1 && result.Sessions == 1 && result.Observations == 1 && result.Queued == 3, "result=%+v err=%v", result, err)
+	var projects, sessions, observations, outbox, snapshots, cursor, inbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id='project'`).Scan(&projects))
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM sessions WHERE id='session'`).Scan(&sessions))
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM observations WHERE id='observation'`).Scan(&observations))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_transition_records WHERE portable_project_id=?`, portable).Scan(&snapshots))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor WHERE portable_project_id=?`, portable).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, portable).Scan(&inbox))
+	testutil.Require(t, projects == 0 && sessions == 0 && observations == 0 && outbox == 3 && snapshots == 3 && cursor == 0 && inbox == 0, "versions=%d/%d/%d outbox=%d snapshots=%d cursor=%d inbox=%d", projects, sessions, observations, outbox, snapshots, cursor, inbox)
+}
+
+func TestPrepareSyncProjectRejoinSnapshotsThenAcceptsEquivalentRemoteCreate(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	result, err := store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.Require(t, err == nil && result.Mode == SyncProjectTransitionRejoinMerge && result.Status == SyncProjectTransitionPulling && result.Queued == 0, "result=%+v err=%v", result, err)
+	var outbox, snapshots int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_transition_records WHERE portable_project_id=?`, portable).Scan(&snapshots))
+	testutil.Require(t, outbox == 0 && snapshots == 3, "outbox=%d snapshots=%d", outbox, snapshots)
+
+	history := "550e8400-e29b-41d4-a716-4466554403a0"
+	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-4466554403a1", RecordID: portable, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: portable}}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, mutation)}}
+	testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "project", page))
+	var seen, version int
+	testutil.NoError(t, store.db.QueryRow(`SELECT seen_remote FROM sync_project_transition_records WHERE portable_project_id=? AND record_kind='project'`, portable).Scan(&seen))
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM projects WHERE id='project'`).Scan(&version))
+	testutil.Require(t, seen == 1 && version == 1, "seen=%d version=%d", seen, version)
+	finalized, err := store.FinalizeSyncProjectTransition(ctx, portable, "project")
+	testutil.Require(t, err == nil && finalized.Status == SyncProjectTransitionPublishing && finalized.Sessions == 1 && finalized.Observations == 1 && finalized.Queued == 2, "finalized=%+v err=%v", finalized, err)
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.Require(t, outbox == 2, "merged local outbox=%d", outbox)
+}
+
+func TestSyncProjectRejoinRejectsDivergentRemoteCreateAtomically(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	_, err := store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	sessionWire := portableSyncUUID(portable, string(syncservice.RecordKindSession), "session")
+	observationWire := portableSyncUUID(portable, string(syncservice.RecordKindObservation), "observation")
+	mutations := []syncservice.Mutation{
+		{MutationID: "550e8400-e29b-41d4-a716-4466554403b1", RecordID: portable, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: portable}},
+		{MutationID: "550e8400-e29b-41d4-a716-4466554403b2", RecordID: sessionWire, RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: sessionWire, ProjectID: portable}},
+		{MutationID: "550e8400-e29b-41d4-a716-4466554403b3", RecordID: observationWire, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, Observation: &syncservice.Observation{ID: observationWire, ProjectID: portable, Scope: "project", Type: "learning", Content: "remote-different", Provenance: syncservice.Provenance{Producer: "test"}, Lifecycle: syncservice.LifecycleActive, Review: syncservice.ReviewClear, CreatedAt: fixedTime, UpdatedAt: fixedTime}},
+	}
+	changes := make([]syncservice.Change, len(mutations))
+	for index := range mutations {
+		changes[index] = pulledChange(t, int64(index+1), 1, mutations[index])
+	}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-4466554403b0", Position: 3, Watermark: 3}, Changes: changes}
+	err = store.ApplyProjectPulledPage(ctx, portable, "project", page)
+	var seen, cursor int
+	var content string
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_transition_records WHERE portable_project_id=? AND seen_remote=1`, portable).Scan(&seen))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor WHERE portable_project_id=?`, portable).Scan(&cursor))
+	testutil.NoError(t, store.db.QueryRow(`SELECT content FROM observations WHERE id='observation'`).Scan(&content))
+	testutil.Require(t, errors.Is(err, ErrConflict) && seen == 0 && cursor == 0 && content == "local", "err=%v seen=%d cursor=%d content=%q", err, seen, cursor, content)
+}
+
+func TestSyncProjectReseedCompletesAfterAcceptedEchoes(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	_, err := store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.NoError(t, err)
+	claims, err := store.ClaimDueSyncOutboxForProject(ctx, time.Minute, 16, "project")
+	testutil.Require(t, err == nil && len(claims) == 3, "claims=%d err=%v", len(claims), err)
+	local := make([]syncservice.Mutation, len(claims))
+	for index := range claims {
+		local[index] = claims[index].Mutation
+		sequence := int64(index + 1)
+		testutil.NoError(t, store.ApplySyncPushResult(ctx, claims[index].Mutation.MutationID, claims[index].ClaimToken, syncservice.Result{MutationID: claims[index].Mutation.MutationID, Disposition: syncservice.DispositionAccepted, Version: 1, Sequence: &sequence}))
+	}
+	wire, err := store.TranslateSyncMutations(ctx, portable, "project", local)
+	testutil.NoError(t, err)
+	changes := make([]syncservice.Change, len(wire))
+	for index := range wire {
+		changes[index] = pulledChange(t, int64(index+1), 1, wire[index])
+	}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-4466554403c0", Position: 3, Watermark: 3}, Changes: changes}
+	testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "project", page))
+	result, err := store.FinalizeSyncProjectTransition(ctx, portable, "project")
+	testutil.Require(t, err == nil && result.Status == SyncProjectTransitionCompleted && result.Queued == 0, "result=%+v err=%v", result, err)
+	var unseen, outbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_transition_records WHERE portable_project_id=? AND seen_remote=0`, portable).Scan(&unseen))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.Require(t, unseen == 0 && outbox == 0, "unseen=%d outbox=%d", unseen, outbox)
+}
+
+func seededSyncProjectTransition(t *testing.T) (*Store, string) {
+	t.Helper()
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	portable := "550e8400-e29b-41d4-a716-446655440390"
+	sessionWire := portableSyncUUID(portable, string(syncservice.RecordKindSession), "session")
+	observationWire := portableSyncUUID(portable, string(syncservice.RecordKindObservation), "observation")
+	testutil.Require(t, len(sessionWire) == 36 && len(observationWire) == 36, "wire lengths=%d/%d values=%q/%q", len(sessionWire), len(observationWire), sessionWire, observationWire)
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1);
+		INSERT INTO sessions(id,project_id,sync_version) VALUES('session','project',1);
+		INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('observation','project','project','learning','local','test','active',?,?,1)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project','workspace-hash','test','now')`, portable)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440399','secret://keychain/sync/test',1,1)`)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_portable_identities(portable_project_id,record_kind,local_id,portable_id,origin_device_id,created_at) VALUES(?,'session','session',?,'550e8400-e29b-41d4-a716-446655440399',?),(?,'observation','observation',?,'550e8400-e29b-41d4-a716-446655440399',?)`, portable, sessionWire, fixedTime.UnixNano(), portable, observationWire, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_project_cursor(portable_project_id,history_id,position,watermark,updated_at) VALUES(?,'550e8400-e29b-41d4-a716-446655440398',1,1,?)`, portable, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_project_inbox(portable_project_id,history_id,seq,change_hash,applied_at) VALUES(?,'550e8400-e29b-41d4-a716-446655440398',1,zeroblob(32),?)`, portable, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	return store, portable
 }
 
 func TestRepairBoundProjectCreateRequeuesOnlyAcceptedMissingProject(t *testing.T) {
@@ -478,7 +675,7 @@ func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 17, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 18, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var outbox, claims int
@@ -560,7 +757,7 @@ func TestSyncOutboxClaimsConstraintsCascadeAndHealth(t *testing.T) {
 func TestSyncOutboxClaimsMigrationFreshSchema(t *testing.T) {
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 17, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 18, "health=%d err=%v", version, err)
 	var table, index string
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='table' AND name='sync_outbox_claims'`).Scan(&table))
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='index' AND name='sync_outbox_claims_lease_idx'`).Scan(&index))
@@ -583,7 +780,7 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 17, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 18, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var count int
@@ -2479,7 +2676,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 17 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 18 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {

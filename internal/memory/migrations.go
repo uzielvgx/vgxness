@@ -60,6 +60,9 @@ var schemaV16 string
 //go:embed migrations/017_sync_project_repairs.sql
 var schemaV17 string
 
+//go:embed migrations/018_sync_project_transitions.sql
+var schemaV18 string
+
 type migration struct {
 	version                     int
 	sql                         string
@@ -84,6 +87,7 @@ var migrations = []migration{
 	{version: 15, sql: schemaV15},
 	{version: 16, sql: schemaV16},
 	{version: 17, sql: schemaV17},
+	{version: 18, sql: schemaV18},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {

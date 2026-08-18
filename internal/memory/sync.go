@@ -39,6 +39,9 @@ func (s *Store) BackfillSyncProject(ctx context.Context, project string, limit i
 	} else if err != nil || version < 0 {
 		return SyncBackfillResult{}, writeError(ctx, err)
 	}
+	if err := activeProjectTransitionForLocalProject(ctx, tx, project); err != nil {
+		return SyncBackfillResult{}, err
+	}
 	if version == 0 && queued < limit {
 		mutation := syncservice.Mutation{MutationID: backfillMutationID("project", project), RecordID: project, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: project}}
 		inserted, err := s.enqueueBackfillMutation(ctx, tx, mutation)
@@ -122,6 +125,388 @@ func (s *Store) BackfillSyncProject(ctx context.Context, project string, limit i
 	return result, commit(ctx, tx)
 }
 
+// PrepareSyncProjectTransition atomically snapshots one bound project and
+// prepares either a source reseed or a pull-first local merge. It is local-only.
+func (s *Store) PrepareSyncProjectTransition(ctx context.Context, portableProject, localProject string, mode SyncProjectTransitionMode, confirmedRemoteEmpty bool) (SyncProjectTransitionResult, error) {
+	result := SyncProjectTransitionResult{SchemaVersion: 1, Mode: mode}
+	if s == nil || s.readOnly || !projectIDPattern.MatchString(portableProject) || localProject == "" || mode != SyncProjectTransitionReseedSource && mode != SyncProjectTransitionRejoinMerge || mode == SyncProjectTransitionReseedSource && !confirmedRemoteEmpty {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return SyncProjectTransitionResult{}, err
+	}
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	defer conn.Close()
+	for attempt := 0; ; attempt++ {
+		if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err == nil {
+			break
+		}
+		if err = waitForSQLite(ctx, attempt, err); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var bound string
+	err = conn.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProject).Scan(&bound)
+	if errors.Is(err, sql.ErrNoRows) || bound != localProject {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: portable project identity binding", ErrConflict)
+	}
+	if err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	if err = activeProjectTransitionForLocalProject(ctx, conn, localProject); err != nil {
+		return SyncProjectTransitionResult{}, err
+	}
+	var pendingRepair int
+	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_repairs WHERE portable_project_id=? AND status='pending'`, portableProject).Scan(&pendingRepair); err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	if pendingRepair != 0 {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: project repair is pending", ErrSyncProjectRepairPending)
+	}
+	var priorStatus string
+	err = conn.QueryRowContext(ctx, `SELECT status FROM sync_project_transitions WHERE portable_project_id=?`, portableProject).Scan(&priorStatus)
+	if err == nil && priorStatus != SyncProjectTransitionCompleted {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition pending", ErrConflict)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	var activeClaims int
+	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox o JOIN sync_outbox_claims c ON c.mutation_id=o.mutation_id WHERE c.lease_until>? AND (o.record_kind='project' AND o.record_id=? OR o.record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.record_id AND s.project_id=?) OR o.record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=o.record_id AND n.project_id=?))`, now, localProject, localProject, localProject).Scan(&activeClaims); err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	if activeClaims != 0 {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: active project sync claim", ErrConflict)
+	}
+	mutations, err := projectTransitionMutations(ctx, conn, localProject)
+	if err != nil {
+		return SyncProjectTransitionResult{}, err
+	}
+	if len(mutations) == 0 || mutations[0].RecordKind != syncservice.RecordKindProject {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition source", ErrConflict)
+	}
+	if priorStatus != "" {
+		if _, err = conn.ExecContext(ctx, `DELETE FROM sync_project_transitions WHERE portable_project_id=?`, portableProject); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+	}
+	status := SyncProjectTransitionPulling
+	if mode == SyncProjectTransitionReseedSource {
+		status = SyncProjectTransitionPublishing
+	}
+	if _, err = conn.ExecContext(ctx, `INSERT INTO sync_project_transitions(portable_project_id,local_project_id,mode,status,created_at,completed_at) VALUES(?,?,?,?,?,NULL)`, portableProject, localProject, mode, status, now); err != nil {
+		return SyncProjectTransitionResult{}, conflictOrWrite(ctx, err)
+	}
+	for _, mutation := range mutations {
+		hash, hashErr := projectTransitionMutationHash(mutation)
+		if hashErr != nil {
+			return SyncProjectTransitionResult{}, hashErr
+		}
+		if _, err = conn.ExecContext(ctx, `INSERT INTO sync_project_transition_records(portable_project_id,record_kind,local_id,payload_hash,seen_remote) VALUES(?,?,?,?,0)`, portableProject, mutation.RecordKind, mutation.RecordID, hash); err != nil {
+			return SyncProjectTransitionResult{}, conflictOrWrite(ctx, err)
+		}
+		projectTransitionCount(&result, mutation.RecordKind)
+	}
+	if err = clearProjectTransitionSyncState(ctx, conn, portableProject, localProject); err != nil {
+		return SyncProjectTransitionResult{}, err
+	}
+	if mode == SyncProjectTransitionReseedSource {
+		if _, err = conn.ExecContext(ctx, `UPDATE projects SET sync_version=0 WHERE id=?; UPDATE sessions SET sync_version=0 WHERE project_id=?; UPDATE observations SET sync_version=0 WHERE project_id=?`, localProject, localProject, localProject); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+		for _, mutation := range mutations {
+			mutation.MutationID = ""
+			if _, err = s.enqueueSyncOutbox(ctx, conn, mutation); err != nil {
+				return SyncProjectTransitionResult{}, err
+			}
+			result.Queued++
+		}
+	}
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	committed = true
+	result.Status = status
+	return result, nil
+}
+
+type projectTransitionSQL interface {
+	syncSQL
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func projectTransitionMutations(ctx context.Context, query projectTransitionSQL, project string) ([]syncservice.Mutation, error) {
+	var version int64
+	if err := query.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, project).Scan(&version); err != nil || version < 0 {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: project sync transition source", ErrConflict)
+		}
+		return nil, writeError(ctx, err)
+	}
+	mutations := []syncservice.Mutation{{RecordID: project, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: project}}}
+	rows, err := query.QueryContext(ctx, `SELECT id,sync_version FROM sessions WHERE project_id=? ORDER BY id`, project)
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id, &version); err != nil || version < 0 {
+			_ = rows.Close()
+			return nil, writeError(ctx, err)
+		}
+		mutations = append(mutations, syncservice.Mutation{RecordID: id, RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: id, ProjectID: project}})
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, writeError(ctx, err)
+	}
+	_ = rows.Close()
+	rows, err = query.QueryContext(ctx, observationSelect+` WHERE o.project_id=? AND NOT EXISTS(SELECT 1 FROM sync_tombstones t WHERE t.record_kind='observation' AND t.record_id=o.id) ORDER BY o.id`, project)
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	for rows.Next() {
+		item, scanErr := scanObservation(rows)
+		if scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
+		}
+		var itemVersion int64
+		if err = query.QueryRowContext(ctx, `SELECT sync_version FROM observations WHERE id=?`, item.ID).Scan(&itemVersion); err != nil || itemVersion < 0 {
+			_ = rows.Close()
+			return nil, writeError(ctx, err)
+		}
+		snapshot := syncObservation(item)
+		mutations = append(mutations, syncservice.Mutation{RecordID: item.ID, RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, Observation: &snapshot})
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, writeError(ctx, err)
+	}
+	_ = rows.Close()
+	return mutations, nil
+}
+
+func projectTransitionMutationHash(mutation syncservice.Mutation) ([]byte, error) {
+	mutation.MutationID = ""
+	payload, err := json.Marshal(mutation)
+	if err != nil || len(payload) == 0 || len(payload) > maxSyncPayloadBytes {
+		return nil, fmt.Errorf("%w: project sync transition snapshot", ErrInvalid)
+	}
+	hash := sha256.Sum256(payload)
+	return hash[:], nil
+}
+
+func projectTransitionCount(result *SyncProjectTransitionResult, kind syncservice.RecordKind) {
+	switch kind {
+	case syncservice.RecordKindProject:
+		result.Projects++
+	case syncservice.RecordKindSession:
+		result.Sessions++
+	case syncservice.RecordKindObservation:
+		result.Observations++
+	}
+}
+
+func clearProjectTransitionSyncState(ctx context.Context, conn *sql.Conn, portableProject, localProject string) error {
+	if _, err := conn.ExecContext(ctx, `DELETE FROM sync_outbox_claims WHERE mutation_id IN (SELECT o.mutation_id FROM sync_outbox o WHERE o.record_kind='project' AND o.record_id=? OR o.record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.record_id AND s.project_id=?) OR o.record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=o.record_id AND n.project_id=?))`, localProject, localProject, localProject); err != nil {
+		return writeError(ctx, err)
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM sync_outbox WHERE record_kind='project' AND record_id=? OR record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=sync_outbox.record_id AND s.project_id=?) OR record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=sync_outbox.record_id AND n.project_id=?)`, localProject, localProject, localProject); err != nil {
+		return writeError(ctx, err)
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM sync_project_repairs WHERE portable_project_id=?`, portableProject); err != nil {
+		return writeError(ctx, err)
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM sync_push_results WHERE record_kind='project' AND record_id=? OR record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=sync_push_results.record_id AND s.project_id=?) OR record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=sync_push_results.record_id AND n.project_id=?)`, localProject, localProject, localProject); err != nil {
+		return writeError(ctx, err)
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM sync_project_inbox WHERE portable_project_id=?; DELETE FROM sync_project_cursor WHERE portable_project_id=?`, portableProject, portableProject); err != nil {
+		return writeError(ctx, err)
+	}
+	return nil
+}
+
+// SyncProjectTransition returns the exact active or completed transition for a
+// strict portable/local binding. It never changes local state.
+func (s *Store) SyncProjectTransition(ctx context.Context, portableProject, localProject string) (SyncProjectTransitionResult, bool, error) {
+	if s == nil || !projectIDPattern.MatchString(portableProject) || localProject == "" {
+		return SyncProjectTransitionResult{}, false, fmt.Errorf("%w: project sync transition", ErrInvalid)
+	}
+	var bound, mode, status string
+	err := s.db.QueryRowContext(ctx, `SELECT local_project_id,mode,status FROM sync_project_transitions WHERE portable_project_id=?`, portableProject).Scan(&bound, &mode, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SyncProjectTransitionResult{}, false, nil
+	}
+	if err != nil {
+		return SyncProjectTransitionResult{}, false, writeError(ctx, err)
+	}
+	if bound != localProject || mode != string(SyncProjectTransitionReseedSource) && mode != string(SyncProjectTransitionRejoinMerge) || status != SyncProjectTransitionPulling && status != SyncProjectTransitionPublishing && status != SyncProjectTransitionCompleted {
+		return SyncProjectTransitionResult{}, false, fmt.Errorf("%w: project sync transition", ErrCorrupt)
+	}
+	return SyncProjectTransitionResult{SchemaVersion: 1, Mode: SyncProjectTransitionMode(mode), Status: status}, true, nil
+}
+
+// FinalizeSyncProjectTransition queues only local snapshots that were absent
+// from a complete remote pull, or completes publishing after every echo lands.
+func (s *Store) FinalizeSyncProjectTransition(ctx context.Context, portableProject, localProject string) (SyncProjectTransitionResult, error) {
+	if s == nil || s.readOnly || !projectIDPattern.MatchString(portableProject) || localProject == "" {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition", ErrInvalid)
+	}
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	defer conn.Close()
+	for attempt := 0; ; attempt++ {
+		if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err == nil {
+			break
+		}
+		if err = waitForSQLite(ctx, attempt, err); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var bound, mode, status string
+	if err = conn.QueryRowContext(ctx, `SELECT local_project_id,mode,status FROM sync_project_transitions WHERE portable_project_id=?`, portableProject).Scan(&bound, &mode, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition", ErrNotFound)
+		}
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	result := SyncProjectTransitionResult{SchemaVersion: 1, Mode: SyncProjectTransitionMode(mode), Status: status}
+	if bound != localProject || result.Mode != SyncProjectTransitionReseedSource && result.Mode != SyncProjectTransitionRejoinMerge {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition", ErrCorrupt)
+	}
+	if status == SyncProjectTransitionCompleted {
+		if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+		committed = true
+		return result, nil
+	}
+	var position, watermark int64
+	if err = conn.QueryRowContext(ctx, `SELECT position,watermark FROM sync_project_cursor WHERE portable_project_id=?`, portableProject).Scan(&position, &watermark); err != nil || position != watermark {
+		if errors.Is(err, sql.ErrNoRows) || err == nil {
+			return SyncProjectTransitionResult{}, fmt.Errorf("%w: incomplete project transition pull", ErrConflict)
+		}
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	if status == SyncProjectTransitionPulling {
+		var projectSeen int
+		if err = conn.QueryRowContext(ctx, `SELECT seen_remote FROM sync_project_transition_records WHERE portable_project_id=? AND record_kind='project' AND local_id=?`, portableProject, localProject).Scan(&projectSeen); err != nil || projectSeen != 1 {
+			return SyncProjectTransitionResult{}, fmt.Errorf("%w: remote project is absent", ErrConflict)
+		}
+		rows, queryErr := conn.QueryContext(ctx, `SELECT record_kind,local_id,payload_hash FROM sync_project_transition_records WHERE portable_project_id=? AND seen_remote=0 ORDER BY CASE record_kind WHEN 'session' THEN 1 WHEN 'observation' THEN 2 ELSE 0 END,local_id`, portableProject)
+		if queryErr != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, queryErr)
+		}
+		type unseenRecord struct {
+			kind syncservice.RecordKind
+			id   string
+			hash []byte
+		}
+		var unseen []unseenRecord
+		for rows.Next() {
+			var record unseenRecord
+			if queryErr = rows.Scan(&record.kind, &record.id, &record.hash); queryErr != nil || len(record.hash) != sha256.Size {
+				_ = rows.Close()
+				return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition snapshot", ErrCorrupt)
+			}
+			unseen = append(unseen, record)
+		}
+		if queryErr = rows.Err(); queryErr != nil {
+			_ = rows.Close()
+			return SyncProjectTransitionResult{}, writeError(ctx, queryErr)
+		}
+		_ = rows.Close()
+		current, currentErr := projectTransitionMutations(ctx, conn, localProject)
+		if currentErr != nil {
+			return SyncProjectTransitionResult{}, currentErr
+		}
+		byRecord := make(map[string]syncservice.Mutation, len(current))
+		for _, mutation := range current {
+			byRecord[string(mutation.RecordKind)+"\x00"+mutation.RecordID] = mutation
+		}
+		for _, record := range unseen {
+			mutation, present := byRecord[string(record.kind)+"\x00"+record.id]
+			if !present {
+				return SyncProjectTransitionResult{}, fmt.Errorf("%w: local transition record changed", ErrConflict)
+			}
+			hash, hashErr := projectTransitionMutationHash(mutation)
+			if hashErr != nil || !bytes.Equal(hash, record.hash) {
+				return SyncProjectTransitionResult{}, fmt.Errorf("%w: local transition record changed", ErrConflict)
+			}
+			switch record.kind {
+			case syncservice.RecordKindSession:
+				_, err = conn.ExecContext(ctx, `UPDATE sessions SET sync_version=0 WHERE id=? AND project_id=?`, record.id, localProject)
+			case syncservice.RecordKindObservation:
+				_, err = conn.ExecContext(ctx, `UPDATE observations SET sync_version=0 WHERE id=? AND project_id=?`, record.id, localProject)
+			default:
+				return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition snapshot", ErrCorrupt)
+			}
+			if err != nil {
+				return SyncProjectTransitionResult{}, writeError(ctx, err)
+			}
+			mutation.MutationID = ""
+			if _, err = s.enqueueSyncOutbox(ctx, conn, mutation); err != nil {
+				return SyncProjectTransitionResult{}, err
+			}
+			projectTransitionCount(&result, record.kind)
+			result.Queued++
+		}
+		status = SyncProjectTransitionPublishing
+		result.Status = status
+		if _, err = conn.ExecContext(ctx, `UPDATE sync_project_transitions SET status='publishing' WHERE portable_project_id=? AND status='pulling'`, portableProject); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+	}
+	var pending, unseen int
+	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox o WHERE o.record_kind='project' AND o.record_id=? OR o.record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.record_id AND s.project_id=?) OR o.record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=o.record_id AND n.project_id=?)`, localProject, localProject, localProject).Scan(&pending); err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_transition_records WHERE portable_project_id=? AND seen_remote=0`, portableProject).Scan(&unseen); err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	if pending == 0 && unseen == 0 {
+		if _, err = conn.ExecContext(ctx, `UPDATE sync_project_transitions SET status='completed',completed_at=? WHERE portable_project_id=? AND status='publishing'`, now, portableProject); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+		result.Status = SyncProjectTransitionCompleted
+	}
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	committed = true
+	return result, nil
+}
+
 // RepairBoundProjectCreate records one operator-confirmed, local-only repair
 // for a portable project that is absent remotely. It never resets local state
 // or reads credentials; a later ordinary foreground sync sends the new create.
@@ -178,6 +563,9 @@ func (s *Store) RepairBoundProjectCreate(ctx context.Context, portableProject, l
 	if err != nil {
 		return SyncProjectRepairResult{}, writeError(ctx, err)
 	}
+	if err = activeProjectTransitionForLocalProject(ctx, conn, localProject); err != nil {
+		return SyncProjectRepairResult{}, err
+	}
 	var version, originals int64
 	if err = conn.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, localProject).Scan(&version); err != nil || version != 1 {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -227,6 +615,21 @@ func pendingProjectRepairBarrier(ctx context.Context, tx *sql.Tx) error {
 	}
 	if pending != 0 {
 		return fmt.Errorf("%w: project repair is pending", ErrSyncProjectRepairPending)
+	}
+	return nil
+}
+
+type projectTransitionQuery interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func activeProjectTransitionForLocalProject(ctx context.Context, query projectTransitionQuery, localProject string) error {
+	var active int
+	if err := query.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_transitions WHERE local_project_id=? AND status IN ('pulling','publishing')`, localProject).Scan(&active); err != nil {
+		return writeError(ctx, err)
+	}
+	if active != 0 {
+		return fmt.Errorf("%w: project sync transition pending", ErrConflict)
 	}
 	return nil
 }
@@ -2278,6 +2681,9 @@ func (s *Store) enqueueLocalWrite(ctx context.Context, tx *sql.Tx, item Observat
 	if err := rejectTombstoned(ctx, tx, item.ID); err != nil {
 		return err
 	}
+	if err := activeProjectTransitionForLocalProject(ctx, tx, item.Project); err != nil {
+		return err
+	}
 	var enabled int
 	err := tx.QueryRowContext(ctx, `SELECT enabled FROM sync_profiles WHERE singleton=1`).Scan(&enabled)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2410,8 +2816,14 @@ func (s *Store) ApplyProjectPulledPage(ctx context.Context, portableProject, loc
 		if mapErr != nil {
 			return mapErr
 		}
-		if err = s.applyProjectPulledMutation(ctx, tx, page.Cursor.HistoryID, mapped); err != nil {
-			return err
+		handled, transitionErr := s.applyProjectTransitionPulledMutation(ctx, tx, portableProject, localProject, mapped)
+		if transitionErr != nil {
+			return transitionErr
+		}
+		if !handled {
+			if err = s.applyProjectPulledMutation(ctx, tx, page.Cursor.HistoryID, mapped); err != nil {
+				return err
+			}
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO sync_project_inbox(portable_project_id,history_id,seq,change_hash,applied_at) VALUES(?,?,?,?,?)`, portableProject, page.Cursor.HistoryID, change.Sequence, hash, now); err != nil {
 			return writeError(ctx, err)
@@ -2421,6 +2833,61 @@ func (s *Store) ApplyProjectPulledPage(ctx context.Context, portableProject, loc
 		return writeError(ctx, err)
 	}
 	return commit(ctx, tx)
+}
+
+func (s *Store) applyProjectTransitionPulledMutation(ctx context.Context, tx *sql.Tx, portableProject, localProject string, change syncservice.Change) (bool, error) {
+	var bound, mode, status string
+	err := tx.QueryRowContext(ctx, `SELECT local_project_id,mode,status FROM sync_project_transitions WHERE portable_project_id=?`, portableProject).Scan(&bound, &mode, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, writeError(ctx, err)
+	}
+	if bound != localProject || mode != string(SyncProjectTransitionReseedSource) && mode != string(SyncProjectTransitionRejoinMerge) || status != SyncProjectTransitionPulling && status != SyncProjectTransitionPublishing && status != SyncProjectTransitionCompleted {
+		return false, fmt.Errorf("%w: project sync transition", ErrCorrupt)
+	}
+	if status == SyncProjectTransitionCompleted {
+		return false, nil
+	}
+	mutation := change.Mutation
+	var expected []byte
+	err = tx.QueryRowContext(ctx, `SELECT payload_hash FROM sync_project_transition_records WHERE portable_project_id=? AND record_kind=? AND local_id=?`, portableProject, mutation.RecordKind, mutation.RecordID).Scan(&expected)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil || len(expected) != sha256.Size {
+		return false, fmt.Errorf("%w: project sync transition snapshot", ErrCorrupt)
+	}
+	actual, err := projectTransitionMutationHash(mutation)
+	if err != nil {
+		return false, err
+	}
+	if mutation.Kind != syncservice.MutationCreate || mutation.BaseVersion != 0 || change.CanonicalVersion != 1 || !bytes.Equal(actual, expected) {
+		return false, fmt.Errorf("%w: project sync transition diverged", ErrConflict)
+	}
+	var result sql.Result
+	switch mutation.RecordKind {
+	case syncservice.RecordKindProject:
+		result, err = tx.ExecContext(ctx, `UPDATE projects SET sync_version=1 WHERE id=?`, mutation.RecordID)
+	case syncservice.RecordKindSession:
+		result, err = tx.ExecContext(ctx, `UPDATE sessions SET sync_version=1 WHERE id=? AND project_id=?`, mutation.RecordID, localProject)
+	case syncservice.RecordKindObservation:
+		result, err = tx.ExecContext(ctx, `UPDATE observations SET sync_version=1 WHERE id=? AND project_id=?`, mutation.RecordID, localProject)
+	default:
+		return false, fmt.Errorf("%w: project sync transition kind", ErrCorrupt)
+	}
+	if err != nil {
+		return false, writeError(ctx, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil || updated != 1 {
+		return false, fmt.Errorf("%w: project sync transition record", ErrConflict)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE sync_project_transition_records SET seen_remote=1 WHERE portable_project_id=? AND record_kind=? AND local_id=?`, portableProject, mutation.RecordKind, mutation.RecordID); err != nil {
+		return false, writeError(ctx, err)
+	}
+	return true, nil
 }
 
 // ProjectPullCursor returns the durable cursor for one portable project and
