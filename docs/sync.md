@@ -110,9 +110,9 @@ identity collisions, and is safe to run again. `--limit` defaults to 100 and
 accepts 1 through 1000; JSON reports `remaining=true` when another invocation
 is needed.
 
-## Project-create repair
+## First-device reseed and device rejoin
 
-After independently confirming remote absence, run `memory sync repair-project --workspace /absolute/workspace --confirm-remote-absent --json`, then ordinary `memory sync --workspace /absolute/workspace`. The exact confirmation is mandatory; repair reads no credential, makes no network call, and requires the strict marker/binding. Pending repair blocks that project's and global pull application; completion or rejection restores it. Configure, foreground sync, and repair share the context-cancellable storage-root lock; global claim/pull is conservative during pending repair, but other exact-bound projects may proceed serially.
+Reset the cloud first. On the Mac/source device, run `vgxness memory sync reseed --workspace /absolute/workspace --confirm-cloud-empty [--json]`; it proceeds only when the cloud is exactly empty. On every subsequent Linux or Windows device, run `vgxness memory sync rejoin --workspace /absolute/workspace --confirm-merge [--json]`. Both commands require the strict project marker/binding, apply only to that project, and never run `git pull`. The confirmation is mode-specific and exact. Retries resume the durable transition; a pending intent blocks that project only. The older `repair-project` command remains a narrow local recovery for an accepted missing-project repair, not the first-device workflow.
 
 `memory sync configure` validates the HTTPS endpoint, device ID, and bearer
 locally. A context-cancellable cross-process lock serializes enrollment. It derives two

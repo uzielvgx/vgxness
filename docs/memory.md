@@ -46,7 +46,7 @@ ownership, permissions, and Windows limitations. For existing project data,
 run `memory sync backfill --workspace /absolute/workspace` before the first
 sync. Backfill is local-only, bounded, and idempotent.
 
-Schema v19 retains `memory sync repair-project --workspace /absolute/workspace --confirm-remote-absent --json`, durable project transition snapshots, and one per-project backup intent. A retry reuses only a sealed, verified same-parent private SQLite backup until preparation atomically consumes it; an unsealed extant backup fails closed and requires operator repair. Repair is local-only and queues one replacement create; ordinary foreground sync sends it.
+Schema v19 retains durable project transition snapshots and one per-project backup intent. For a new cloud, reset it first, then on the Mac/source device run `memory sync reseed --workspace /absolute/workspace --confirm-cloud-empty`; cloud emptiness is checked exactly. Each later Linux or Windows device runs `memory sync rejoin --workspace /absolute/workspace --confirm-merge`. These are per-project operations, never run `git pull`, and retries resume the same transition. A pending intent blocks only that project. A retry reuses a sealed SHA-256-verified backup, or may seal and reuse an extant healthy same-parent private backup only when its embedded intent exactly matches the portable project, local project, mode, intent ID, and random backup path; any different healthy database fails closed without replacement.
 
 Foreground sync is explicitly project-scoped: use `memory sync --workspace
 /absolute/workspace`. The workspace must already have a valid
