@@ -428,6 +428,60 @@ func TestFinalizeSyncProjectRejoinRecoveryValidationFailsClosed(t *testing.T) {
 	}
 }
 
+func TestFinalizeSyncProjectRejoinPublishingAllowsIncompletePullContinuationWithoutMutation(t *testing.T) {
+	store, portable := seededRecoverablePublishingRejoin(t, false)
+	defer store.Close()
+	_, err := store.db.Exec(`UPDATE sync_project_cursor SET watermark=2 WHERE portable_project_id=?`, portable)
+	testutil.NoError(t, err)
+	state := func() string {
+		var status string
+		var position, watermark, outbox, unseen, version int
+		testutil.NoError(t, store.db.QueryRow(`SELECT
+			(SELECT status FROM sync_project_transitions WHERE portable_project_id=?),
+			(SELECT position FROM sync_project_cursor WHERE portable_project_id=?),
+			(SELECT watermark FROM sync_project_cursor WHERE portable_project_id=?),
+			(SELECT count(*) FROM sync_outbox),
+			(SELECT count(*) FROM sync_project_transition_records WHERE portable_project_id=? AND seen_remote=0),
+			(SELECT sync_version FROM observations WHERE id='observation')`, portable, portable, portable, portable).Scan(&status, &position, &watermark, &outbox, &unseen, &version))
+		return fmt.Sprintf("%s/%d/%d/%d/%d/%d", status, position, watermark, outbox, unseen, version)
+	}
+	before := state()
+	result, err := store.FinalizeSyncProjectTransition(context.Background(), portable, "project")
+	testutil.Require(t, err == nil && result.Mode == SyncProjectTransitionRejoinMerge && result.Status == SyncProjectTransitionPublishing && result.Queued == 0 && state() == before, "result=%+v err=%v before=%s after=%s", result, err, before, state())
+}
+
+func TestFinalizeSyncProjectTransitionIncompleteCursorOtherwiseFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Store, string)
+	}{
+		{name: "missing cursor", mutate: func(store *Store, portable string) {
+			_, err := store.db.Exec(`DELETE FROM sync_project_cursor WHERE portable_project_id=?`, portable)
+			testutil.NoError(t, err)
+		}},
+		{name: "invalid cursor", mutate: func(store *Store, portable string) {
+			_, err := store.db.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE sync_project_cursor SET position=3,watermark=2 WHERE portable_project_id=?; PRAGMA ignore_check_constraints=OFF`, portable)
+			testutil.NoError(t, err)
+		}},
+		{name: "pulling rejoin", mutate: func(store *Store, portable string) {
+			_, err := store.db.Exec(`UPDATE sync_project_cursor SET watermark=2 WHERE portable_project_id=?; UPDATE sync_project_transitions SET status='pulling' WHERE portable_project_id=?`, portable, portable)
+			testutil.NoError(t, err)
+		}},
+		{name: "publishing reseed", mutate: func(store *Store, portable string) {
+			_, err := store.db.Exec(`UPDATE sync_project_cursor SET watermark=2 WHERE portable_project_id=?; UPDATE sync_project_transitions SET mode='reseed_source' WHERE portable_project_id=?`, portable, portable)
+			testutil.NoError(t, err)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, portable := seededRecoverablePublishingRejoin(t, false)
+			defer store.Close()
+			tc.mutate(store, portable)
+			_, err := store.FinalizeSyncProjectTransition(context.Background(), portable, "project")
+			testutil.Require(t, errors.Is(err, ErrConflict), "err=%v", err)
+		})
+	}
+}
+
 func seededRecoverablePublishingRejoin(t *testing.T, session bool) (*Store, string) {
 	t.Helper()
 	store, portable := seededSyncProjectTransition(t)

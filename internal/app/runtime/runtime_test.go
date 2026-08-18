@@ -909,6 +909,30 @@ func TestRunSyncProjectTransitionPublishingRejoinPullsPostWatermarkEchoes(t *tes
 	}
 }
 
+func TestRunSyncProjectTransitionPublishingRejoinContinuesIncompleteEchoPages(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	history := "550e8400-e29b-41d4-a716-446655440010"
+	publishing := memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPublishing}
+	store := &transitionTestStore{
+		active:          true,
+		transition:      publishing,
+		finalizeResults: []memory.SyncProjectTransitionResult{publishing, {Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionCompleted}},
+		projectForegroundStore: projectForegroundStore{
+			claims:     [][]memory.SyncOutboxClaim{{}},
+			pullCursor: syncservice.Cursor{HistoryID: history, Position: 174, Watermark: 364},
+		},
+	}
+	remote := &testForegroundRemote{pages: []syncservice.PullPage{
+		{Cursor: syncservice.Cursor{HistoryID: history, Position: 300, Watermark: 364}, HasMore: true},
+		{Cursor: syncservice.Cursor{HistoryID: history, Position: 364, Watermark: 364}},
+	}}
+	result, err := runSyncProjectTransition(context.Background(), store, remote, "", project, "project", memory.SyncProjectTransitionRejoinMerge, testBackupOps())
+	expectedCursors := []syncservice.Cursor{{HistoryID: history, Position: 174, Watermark: 364}, {HistoryID: history, Position: 300, Watermark: 364}}
+	if err != nil || result.Status != memory.SyncProjectTransitionCompleted || store.finalizes != 2 || remote.projectPulls != 2 || len(remote.cursors) != 2 || remote.cursors[0] != expectedCursors[0] || remote.cursors[1] != expectedCursors[1] || len(store.pages) != 2 || store.pages[1].Cursor.Position != 364 {
+		t.Fatalf("result=%+v err=%v finalizes=%d cursors=%+v pages=%+v", result, err, store.finalizes, remote.cursors, store.pages)
+	}
+}
+
 func TestRunForegroundProjectPullRechecksPendingRepairBeforeDiscoverAndPull(t *testing.T) {
 	project := "550e8400-e29b-41d4-a716-446655440001"
 	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pendingErrs: []error{nil, nil, memory.ErrSyncProjectRepairPending}}

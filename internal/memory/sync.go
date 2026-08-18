@@ -691,12 +691,26 @@ func (s *Store) FinalizeSyncProjectTransition(ctx context.Context, portableProje
 		committed = true
 		return result, nil
 	}
-	var position, watermark int64
-	if err = conn.QueryRowContext(ctx, `SELECT position,watermark FROM sync_project_cursor WHERE portable_project_id=?`, portableProject).Scan(&position, &watermark); err != nil || position != watermark {
-		if errors.Is(err, sql.ErrNoRows) || err == nil {
+	var historyID string
+	var position, watermark, cursorUpdated int64
+	if err = conn.QueryRowContext(ctx, `SELECT history_id,position,watermark,updated_at FROM sync_project_cursor WHERE portable_project_id=?`, portableProject).Scan(&historyID, &position, &watermark, &cursorUpdated); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return SyncProjectTransitionResult{}, fmt.Errorf("%w: incomplete project transition pull", ErrConflict)
 		}
 		return SyncProjectTransitionResult{}, writeError(ctx, err)
+	}
+	if !canonicalUUIDPattern.MatchString(historyID) || position < 0 || watermark < 0 || position > watermark || cursorUpdated <= 0 {
+		return SyncProjectTransitionResult{}, fmt.Errorf("%w: invalid project transition pull cursor", ErrConflict)
+	}
+	if position < watermark {
+		if result.Mode != SyncProjectTransitionRejoinMerge || status != SyncProjectTransitionPublishing {
+			return SyncProjectTransitionResult{}, fmt.Errorf("%w: incomplete project transition pull", ErrConflict)
+		}
+		if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+		committed = true
+		return result, nil
 	}
 	if status == SyncProjectTransitionPulling {
 		var projectSeen int
