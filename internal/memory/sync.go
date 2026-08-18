@@ -3627,6 +3627,15 @@ func (s *Store) mapProjectPulledChange(ctx context.Context, tx *sql.Tx, portable
 }
 
 func (s *Store) applyProjectPulledMutation(ctx context.Context, tx *sql.Tx, history string, change syncservice.Change) error {
+	if change.Mutation.Kind == syncservice.MutationCreate || change.Mutation.Kind == syncservice.MutationUpdate {
+		own, err := ownPulledReceipt(ctx, tx, change)
+		if err != nil {
+			return err
+		}
+		if own && change.ChangeDisposition != syncservice.ChangeDispositionConflict {
+			return nil
+		}
+	}
 	if change.Mutation.RecordKind == syncservice.RecordKindProject && change.Mutation.Kind == syncservice.MutationCreate {
 		var version int64
 		if err := tx.QueryRowContext(ctx, `SELECT sync_version FROM projects WHERE id=?`, change.Mutation.RecordID).Scan(&version); err != nil || change.Mutation.BaseVersion != 0 || change.CanonicalVersion != 1 {

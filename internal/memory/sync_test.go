@@ -2395,6 +2395,191 @@ func TestApplyProjectPulledPageAdmitsOwnProjectCreateEchoOnly(t *testing.T) {
 	testutil.Require(t, position == 7, "cursor=%d", position)
 }
 
+type acceptedProjectObservationEcho struct {
+	store    *Store
+	portable string
+	history  string
+	page     syncservice.PullPage
+}
+
+func setupAcceptedProjectObservationEcho(t *testing.T) acceptedProjectObservationEcho {
+	t.Helper()
+	ctx := context.Background()
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	enableSync(t, store)
+	const portable = "550e8400-e29b-41d4-a716-446655440370"
+	const history = "550e8400-e29b-41d4-a716-446655440371"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1)`)
+	testutil.Require(t, err == nil, "insert project: %v", err)
+	_, err = store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','created','test','active',?,?,0)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.Require(t, err == nil, "insert observation: %v", err)
+	_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?)`, portable, "project", "echo-hash", "test", "now")
+	testutil.Require(t, err == nil, "insert project identity: %v", err)
+
+	create := pulledObservationMutation("record", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "created", nil)
+	create.MutationID = "550e8400-e29b-41d4-a716-446655440372"
+	enqueueMutation(t, store, create)
+	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1, "create claims=%+v err=%v", claims, err)
+	translatedCreate, err := store.TranslateSyncMutations(ctx, portable, "project", []syncservice.Mutation{claims[0].Mutation})
+	testutil.Require(t, err == nil, "translate create: %v", err)
+	createSequence := int64(1)
+	err = store.ApplySyncPushResult(ctx, create.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: create.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &createSequence, Version: 1})
+	testutil.Require(t, err == nil, "apply create: %v", err)
+
+	_, err = store.db.Exec(`UPDATE observations SET content='updated' WHERE id='record'`)
+	testutil.Require(t, err == nil, "update observation: %v", err)
+	update := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "updated", nil)
+	update.MutationID = "550e8400-e29b-41d4-a716-446655440373"
+	enqueueMutation(t, store, update)
+	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1, "update claims=%+v err=%v", claims, err)
+	translatedUpdate, err := store.TranslateSyncMutations(ctx, portable, "project", []syncservice.Mutation{claims[0].Mutation})
+	testutil.Require(t, err == nil, "translate update: %v", err)
+	updateSequence := int64(2)
+	err = store.ApplySyncPushResult(ctx, update.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: update.MutationID, Disposition: syncservice.DispositionPreviouslyAccepted, Sequence: &updateSequence, Version: 2})
+	testutil.Require(t, err == nil, "apply update: %v", err)
+
+	return acceptedProjectObservationEcho{
+		store:    store,
+		portable: portable,
+		history:  history,
+		page: syncservice.PullPage{
+			Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2},
+			Changes: []syncservice.Change{
+				pulledChange(t, 1, 1, translatedCreate[0]),
+				pulledChange(t, 2, 2, translatedUpdate[0]),
+			},
+		},
+	}
+}
+
+func TestApplyProjectPulledPageRecognizesAcceptedOwnObservationEchoes(t *testing.T) {
+	fixture := setupAcceptedProjectObservationEcho(t)
+	defer fixture.store.Close()
+	testutil.NoError(t, fixture.store.ApplyProjectPulledPage(context.Background(), fixture.portable, "project", fixture.page))
+	var content string
+	var version, inbox, position int
+	testutil.NoError(t, fixture.store.db.QueryRow(`SELECT content,sync_version FROM observations WHERE id='record'`).Scan(&content, &version))
+	testutil.NoError(t, fixture.store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, fixture.portable).Scan(&inbox))
+	testutil.NoError(t, fixture.store.db.QueryRow(`SELECT position FROM sync_project_cursor WHERE portable_project_id=?`, fixture.portable).Scan(&position))
+	testutil.Require(t, content == "updated" && version == 2 && inbox == 2 && position == 2, "observation=%q/%d inbox=%d position=%d", content, version, inbox, position)
+}
+
+func TestApplyProjectPulledPageOwnObservationEchoReceiptFailsClosed(t *testing.T) {
+	for name, mutate := range map[string]func(*acceptedProjectObservationEcho) error{
+		"missing receipt": func(f *acceptedProjectObservationEcho) error {
+			_, err := f.store.db.Exec(`DELETE FROM sync_push_results WHERE mutation_id=?`, f.page.Changes[0].Mutation.MutationID)
+			return err
+		},
+		"mismatched hash": func(f *acceptedProjectObservationEcho) error {
+			_, err := f.store.db.Exec(`UPDATE sync_push_results SET mutation_hash=zeroblob(32) WHERE mutation_id=?`, f.page.Changes[0].Mutation.MutationID)
+			return err
+		},
+		"mismatched identity": func(f *acceptedProjectObservationEcho) error {
+			_, err := f.store.db.Exec(`UPDATE sync_push_results SET record_id='other' WHERE mutation_id=?`, f.page.Changes[0].Mutation.MutationID)
+			return err
+		},
+		"mismatched version": func(f *acceptedProjectObservationEcho) error {
+			_, err := f.store.db.Exec(`UPDATE sync_push_results SET canonical_version=3 WHERE mutation_id=?`, f.page.Changes[0].Mutation.MutationID)
+			return err
+		},
+		"mismatched sequence": func(f *acceptedProjectObservationEcho) error {
+			_, err := f.store.db.Exec(`UPDATE sync_push_results SET sequence=3 WHERE mutation_id=?`, f.page.Changes[0].Mutation.MutationID)
+			return err
+		},
+		"mismatched disposition": func(f *acceptedProjectObservationEcho) error {
+			_, err := f.store.db.Exec(`UPDATE sync_push_results SET disposition='conflict' WHERE mutation_id=?`, f.page.Changes[0].Mutation.MutationID)
+			return err
+		},
+		"foreign create": func(f *acceptedProjectObservationEcho) error {
+			f.page.Changes[0].Mutation.MutationID = "550e8400-e29b-41d4-a716-446655440374"
+			f.page.Changes[0].ChangeHash, _ = syncservice.CanonicalChangeHash(f.page.Changes[0])
+			return nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := setupAcceptedProjectObservationEcho(t)
+			defer fixture.store.Close()
+			testutil.NoError(t, mutate(&fixture))
+			err := fixture.store.ApplyProjectPulledPage(context.Background(), fixture.portable, "project", fixture.page)
+			var inbox, cursor int
+			testutil.NoError(t, fixture.store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox`).Scan(&inbox))
+			testutil.NoError(t, fixture.store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor`).Scan(&cursor))
+			testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0, "err=%v inbox=%d cursor=%d", err, inbox, cursor)
+		})
+	}
+}
+
+func TestApplyProjectPulledPageOwnObservationConflictStillMaterializes(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	store.now = func() time.Time { return fixedTime }
+	enableSync(t, store)
+	const portable = "550e8400-e29b-41d4-a716-446655440378"
+	const history = "550e8400-e29b-41d4-a716-446655440379"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1)`)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,1)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?)`, portable, "project", "conflict-echo-hash", "test", "now")
+	testutil.NoError(t, err)
+	mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "remote", nil)
+	mutation.MutationID = "550e8400-e29b-41d4-a716-44665544037a"
+	enqueueMutation(t, store, mutation)
+	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
+	translated, err := store.TranslateSyncMutations(ctx, portable, "project", []syncservice.Mutation{claims[0].Mutation})
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`UPDATE observations SET sync_version=2 WHERE id='record'`)
+	testutil.NoError(t, err)
+	sequence := int64(1)
+	testutil.NoError(t, store.ApplySyncPushResult(ctx, mutation.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: mutation.MutationID, Disposition: syncservice.DispositionConflict, Sequence: &sequence, Version: 2}))
+	change := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-44665544037b", translated[0])
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{change}}
+	testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "project", page))
+	var state string
+	var conflicts, inbox, position int
+	testutil.NoError(t, store.db.QueryRow(`SELECT state FROM observations WHERE id='record'`).Scan(&state))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, portable).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_project_cursor WHERE portable_project_id=?`, portable).Scan(&position))
+	testutil.Require(t, state == string(StateNeedsReview) && conflicts == 1 && inbox == 1 && position == 1, "state=%q conflicts=%d inbox=%d position=%d", state, conflicts, inbox, position)
+}
+
+func TestApplyProjectPulledPageRecognizesAcceptedOwnSessionCreateEcho(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	store.now = func() time.Time { return fixedTime }
+	enableSync(t, store)
+	const portable = "550e8400-e29b-41d4-a716-446655440375"
+	const history = "550e8400-e29b-41d4-a716-446655440376"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1);
+		INSERT INTO sessions(id,project_id,sync_version) VALUES('session','project',0);
+		INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?)`, portable, "project", "session-echo-hash", "test", "now")
+	testutil.NoError(t, err)
+	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440377", RecordID: "session", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "session", ProjectID: "project"}}
+	enqueueMutation(t, store, mutation)
+	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
+	translated, err := store.TranslateSyncMutations(ctx, portable, "project", []syncservice.Mutation{claims[0].Mutation})
+	testutil.NoError(t, err)
+	testutil.Require(t, translated[0].Session.ProjectID == portable, "translated session=%+v", translated[0])
+	sequence := int64(1)
+	testutil.NoError(t, store.ApplySyncPushResult(ctx, mutation.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &sequence, Version: 1}))
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, translated[0])}}
+	testutil.Require(t, validateProjectPulledPage(portable, page) == nil, "invalid translated page: %+v", page)
+	testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "project", page))
+	var version, inbox, position int
+	testutil.NoError(t, store.db.QueryRow(`SELECT sync_version FROM sessions WHERE id='session'`).Scan(&version))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, portable).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_project_cursor WHERE portable_project_id=?`, portable).Scan(&position))
+	testutil.Require(t, version == 1 && inbox == 1 && position == 1, "version=%d inbox=%d position=%d", version, inbox, position)
+}
+
 func TestApplyProjectPulledPageRollsBackAndRejectsForeignPayload(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()

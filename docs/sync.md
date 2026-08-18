@@ -114,6 +114,17 @@ claims, retries, attempts, malformed or identity-changed payloads, and
 concurrently changed rows fail closed. `--limit` defaults to 100 and accepts 1
 through 1000; JSON reports `remaining=true` when another invocation is needed.
 
+After a project-scoped push completes, project pull maps portable identities
+back to local identities before consulting the durable push receipt. An exact
+accepted or previously accepted create/update echo for a project, session, or
+observation is already materialized: the local record and version are preserved
+while the project inbox and cursor advance in the same transaction. Mutation
+hash, record identity and kind, mutation kind, base and canonical versions,
+sequence, and disposition must all match the receipt. Missing or mismatched
+receipts and foreign creates still fail closed; matching conflict dispositions
+continue through conflict materialization, and active reseed/rejoin transitions
+retain their snapshot-specific handling.
+
 ## First-device reseed and device rejoin
 
 Reset the cloud first. On the Mac/source device, run `vgxness memory sync reseed --workspace /absolute/workspace --confirm-cloud-empty [--json]`; it proceeds only when the cloud is exactly empty. On every subsequent Linux or Windows device, run `vgxness memory sync rejoin --workspace /absolute/workspace --confirm-merge [--json]`. Both commands require the strict project marker/binding, apply only to that project, and never run `git pull`. The confirmation is mode-specific and exact. Retries resume the durable transition; a pending intent blocks that project only. The older `repair-project` command remains a narrow local recovery for an accepted missing-project repair, not the first-device workflow.
