@@ -4,6 +4,8 @@ It uses no-replace write/file-sync/close plus parent sync where supported; Windo
 
 ## Foreground sync boundary
 
+For a fresh cloud, the source device uses `memory sync reseed --workspace /absolute/workspace --confirm-cloud-empty` after resetting the cloud; exact empty-cloud discovery is required before the source publishes. Additional Linux or Windows devices use `memory sync rejoin --workspace /absolute/workspace --confirm-merge` to pull first and merge. These per-project commands never invoke `git pull`. Their durable backup intent makes retries resume; it blocks only the affected project. An unsealed extant backup is reusable only after normal health/private/same-parent checks and an exact embedded-intent match, so a healthy backup from a different database cannot be adopted.
+
 A pending operator-confirmed project-create repair blocks foreground remote
 work and every pull-apply transaction before local mutation; repair is local,
 then ordinary foreground sync sends it. Configure, sync, and repair share the

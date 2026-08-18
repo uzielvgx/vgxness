@@ -29,6 +29,7 @@ type MemoryRuntime interface {
 	SyncStatus(context.Context, config.Options) (memory.SyncConfigurationStatus, error)
 	BackfillSyncProject(context.Context, config.Options, string, int) (memory.SyncBackfillResult, error)
 	RepairSyncProject(context.Context, config.Options, string, bool) (memory.SyncProjectRepairResult, error)
+	TransitionSyncProject(context.Context, config.Options, string, memory.SyncProjectTransitionMode) (memory.SyncProjectTransitionResult, error)
 }
 
 type memoryInput struct {
@@ -66,6 +67,10 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 				return runMemorySyncBackfill(ctx, args[2:], stdout, stderr, runtime)
 			case "repair-project":
 				return runMemorySyncRepairProject(ctx, args[2:], stdout, stderr, runtime)
+			case "reseed":
+				return runMemorySyncTransition(ctx, args[2:], stdout, stderr, runtime, memory.SyncProjectTransitionReseedSource)
+			case "rejoin":
+				return runMemorySyncTransition(ctx, args[2:], stdout, stderr, runtime, memory.SyncProjectTransitionRejoinMerge)
 			default:
 				if !strings.HasPrefix(args[1], "-") {
 					return memoryFailure(stderr, memory.ErrInvalid)
@@ -388,6 +393,49 @@ func runMemorySyncRepairProject(ctx context.Context, args []string, stdout, stde
 		fmt.Fprintf(stdout, "schema_version=%d\nstatus=%s\nqueued=%d\n", result.SchemaVersion, result.Status, result.Queued)
 	}
 	return 0
+}
+
+func runMemorySyncTransition(ctx context.Context, args []string, stdout, stderr io.Writer, runtime MemoryRuntime, mode memory.SyncProjectTransitionMode) int {
+	flags := flag.NewFlagSet("sync "+string(mode), flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var opts config.Options
+	var workspace string
+	var confirmed, jsonOutput bool
+	confirmation := "confirm-merge"
+	if mode == memory.SyncProjectTransitionReseedSource {
+		confirmation = "confirm-cloud-empty"
+	}
+	flags.StringVar(&workspace, "workspace", "", "absolute workspace")
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.StringVar(&opts.CredentialFile, "credential-file", "", "absolute credential file")
+	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
+	flags.BoolVar(&confirmed, confirmation, false, "confirm this transition mode")
+	flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || !filepath.IsAbs(workspace) || !confirmed || syncTransitionDuplicateFlag(args, "workspace") || syncTransitionDuplicateFlag(args, confirmation) || syncTransitionDuplicateFlag(args, "json") || syncTransitionDuplicateFlag(args, "storage-root") || syncTransitionDuplicateFlag(args, "credential-file") || syncTransitionDuplicateFlag(args, "project-local") {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	result, err := runtime.TransitionSyncProject(ctx, opts, filepath.Clean(workspace), mode)
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	if jsonOutput {
+		_ = json.NewEncoder(stdout).Encode(result)
+	} else {
+		fmt.Fprintf(stdout, "schema_version=%d\nmode=%s\nstatus=%s\nprojects=%d\nsessions=%d\nobservations=%d\nqueued=%d\n", result.SchemaVersion, result.Mode, result.Status, result.Projects, result.Sessions, result.Observations, result.Queued)
+	}
+	return 0
+}
+
+func syncTransitionDuplicateFlag(args []string, name string) bool {
+	count := 0
+	for _, argument := range args {
+		for _, prefix := range []string{"-" + name, "--" + name} {
+			if argument == prefix || strings.HasPrefix(argument, prefix+"=") {
+				count++
+			}
+		}
+	}
+	return count > 1
 }
 
 func decodeMemoryInput(data []byte) (memoryInput, map[string]bool, error) {
