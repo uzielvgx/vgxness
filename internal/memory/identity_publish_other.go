@@ -13,6 +13,18 @@ func privateSQLiteBackupOutput(info os.FileInfo) bool {
 	return info.Mode().IsRegular() && info.Mode().Perm() == 0o600
 }
 
+func openPrivateSQLiteBackupOutput(destination string) (*os.File, error) {
+	return os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+}
+
+func verifyPrivateSQLiteBackupOutput(file *os.File) error {
+	info, err := file.Stat()
+	if err != nil || !privateSQLiteBackupOutput(info) {
+		return fmt.Errorf("%w: backup output", ErrCorrupt)
+	}
+	return nil
+}
+
 func syncProjectMarkerDir(dir string) error {
 	return syncProjectDirectory(dir, "project marker directory")
 }

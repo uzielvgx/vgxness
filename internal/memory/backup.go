@@ -53,12 +53,7 @@ func CreateSQLiteBackup(ctx context.Context, database, destination string) (err 
 	if err = vacuumInto(ctx, db, destination); err != nil {
 		return err
 	}
-	if err = verifyReservedSQLiteBackupOutput(destination, output); err == nil {
-		err = output.Chmod(0o600)
-	}
-	if err == nil {
-		err = verifyReservedSQLiteBackupOutput(destination, output)
-	}
+	err = verifyReservedSQLiteBackupOutput(destination, output)
 	if err != nil {
 		return err
 	}
@@ -95,24 +90,15 @@ func CreateSQLiteBackup(ctx context.Context, database, destination string) (err 
 	return nil
 }
 func reserveSQLiteBackupOutput(destination string) (*os.File, error) {
-	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := openPrivateSQLiteBackupOutput(destination)
 	if err != nil {
 		return nil, fmt.Errorf("%w: backup destination", ErrConflict)
 	}
-	if err = file.Chmod(0o600); err == nil {
-		err = verifyPrivateSQLiteBackupOutput(file)
-	}
+	err = verifyPrivateSQLiteBackupOutput(file)
 	if err != nil {
 		return nil, errors.Join(err, scrubSQLiteBackupOutput(file))
 	}
 	return file, nil
-}
-func verifyPrivateSQLiteBackupOutput(file *os.File) error {
-	info, err := file.Stat()
-	if err != nil || !privateSQLiteBackupOutput(info) {
-		return fmt.Errorf("%w: backup output", ErrCorrupt)
-	}
-	return nil
 }
 func verifyReservedSQLiteBackupOutput(destination string, reserved *os.File) error {
 	reservedInfo, err := reserved.Stat()
@@ -123,7 +109,7 @@ func verifyReservedSQLiteBackupOutput(destination string, reserved *os.File) err
 	if err != nil || !info.Mode().IsRegular() || !os.SameFile(reservedInfo, info) {
 		return fmt.Errorf("%w: backup output", ErrCorrupt)
 	}
-	return nil
+	return verifyPrivateSQLiteBackupOutput(reserved)
 }
 func scrubSQLiteBackupOutput(file *os.File) error {
 	return errors.Join(file.Truncate(0), file.Sync(), file.Close())

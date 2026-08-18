@@ -22,7 +22,7 @@ func TestCreateSQLiteBackupCreatesVerifiedPrivateSnapshot(t *testing.T) {
 	testutil.NoError(t, CreateSQLiteBackup(context.Background(), database, backup))
 	info, err := os.Stat(backup)
 	testutil.NoError(t, err)
-	testutil.Require(t, info.Mode().Perm() == 0o600, "mode=%o", info.Mode().Perm())
+	testutil.Require(t, privateSQLiteBackupOutput(info), "backup=%v", info)
 	db, err := sql.Open("sqlite", backup)
 	testutil.NoError(t, err)
 	defer db.Close()
@@ -51,7 +51,7 @@ func TestCreateSQLiteBackupTerminalCloseErrorIsNotRetryable(t *testing.T) {
 	testutil.Require(t, closes == 1, "close calls=%d", closes)
 	info, err := os.Stat(backup)
 	testutil.NoError(t, err)
-	testutil.Require(t, info.Mode().Perm() == 0o600, "mode=%o", info.Mode().Perm())
+	testutil.Require(t, privateSQLiteBackupOutput(info), "backup=%v", info)
 	version, err := HealthFile(context.Background(), backup)
 	testutil.NoError(t, err)
 	testutil.Require(t, version == migrations[len(migrations)-1].version, "version=%d", version)
@@ -76,6 +76,9 @@ func TestCreateSQLiteBackupVacuumFailureOutputSafety(t *testing.T) {
 	defer func() { vacuumInto = original }()
 	for _, swapped := range []bool{false, true} {
 		t.Run(map[bool]string{false: "partial", true: "swapped"}[swapped], func(t *testing.T) {
+			if swapped && runtime.GOOS == "windows" {
+				t.Skip("Windows cannot rename an open reserved backup output")
+			}
 			root, database, destination := createBackupFixture(t)
 			vacuumInto = func(_ context.Context, _ *sql.DB, path string) error {
 				if !swapped {
@@ -102,6 +105,9 @@ func TestCreateSQLiteBackupVacuumFailureOutputSafety(t *testing.T) {
 	}
 }
 func TestCreateSQLiteBackupRejectsSwapAfterHealthVerification(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot rename an open reserved backup output")
+	}
 	original := healthSQLiteBackup
 	defer func() { healthSQLiteBackup = original }()
 	root, database, destination := createBackupFixture(t)
@@ -186,6 +192,7 @@ func createBackupDatabase(t *testing.T, root string) string {
 	return database
 }
 func createBackupFixture(t *testing.T) (string, string, string) {
-	root := t.TempDir()
+	root, err := filepath.Abs(t.TempDir())
+	testutil.NoError(t, err)
 	return root, createBackupDatabase(t, root), filepath.Join(root, "backup.sqlite")
 }
