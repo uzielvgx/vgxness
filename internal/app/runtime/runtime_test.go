@@ -709,6 +709,135 @@ func TestRunForegroundProjectSyncFailsClosedBeforeRemoteWhenRepairPending(t *tes
 	}
 }
 
+func TestProbeEmptyProjectRequiresExactEmptyPage(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	remote := &testForegroundRemote{}
+	if err := probeEmptyProject(context.Background(), remote, project); err != nil || remote.discovers != 1 || remote.projectPulls != 1 || len(remote.cursors) != 1 || remote.cursors[0].Position != 0 || remote.cursors[0].Watermark != 0 {
+		t.Fatalf("err=%v remote=%+v", err, remote)
+	}
+	remote = &testForegroundRemote{pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-446655440010", Position: 1, Watermark: 1}}}}
+	if err := probeEmptyProject(context.Background(), remote, project); !errors.Is(err, memory.ErrConflict) {
+		t.Fatalf("nonempty probe err=%v", err)
+	}
+}
+
+func TestRunSyncProjectTransitionReusesBackupIntentAfterPrepareFailure(t *testing.T) {
+	root := t.TempDir()
+	database, backup := filepath.Join(root, "memory.db"), filepath.Join(root, "backup.sqlite")
+	creates, verifies := 0, 0
+	backupOps := syncProjectBackupOps{create: func(context.Context, string, string) error {
+		creates++
+		return os.WriteFile(backup, []byte("backup"), 0o600)
+	}, verify: func(context.Context, string, string) error { verifies++; return nil }, digest: func(context.Context, string) ([]byte, error) { return make([]byte, 32), nil }}
+	prepareFailure := errors.New("prepare failure")
+	store := &transitionTestStore{intent: memory.SyncProjectBackupIntent{IntentID: "intent", BackupPath: backup}, prepareErr: prepareFailure}
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err := runSyncProjectTransition(context.Background(), store, &testForegroundRemote{}, database, "550e8400-e29b-41d4-a716-446655440001", "project", memory.SyncProjectTransitionRejoinMerge, backupOps)
+		if !errors.Is(err, prepareFailure) {
+			t.Fatalf("attempt=%d err=%v", attempt, err)
+		}
+	}
+	if creates != 1 || verifies != 1 || len(store.backupPaths) != 2 || store.backupPaths[0] == "" || store.backupPaths[0] != store.backupPaths[1] {
+		t.Fatalf("creates=%d verifies=%d paths=%q", creates, verifies, store.backupPaths)
+	}
+}
+
+func TestRunSyncProjectTransitionRecoversOnlyMatchingUnsealedBackup(t *testing.T) {
+	root := t.TempDir()
+	database, backup := filepath.Join(root, "memory.db"), filepath.Join(root, "backup.sqlite")
+	if err := os.WriteFile(backup, []byte("backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	t.Run("matching embedded intent seals and reuses without a second backup", func(t *testing.T) {
+		creates, embeddedChecks := 0, 0
+		store := &transitionTestStore{intent: memory.SyncProjectBackupIntent{IntentID: "intent", BackupPath: backup}, prepareErr: errors.New("prepare failure")}
+		ops := syncProjectBackupOps{
+			create: func(context.Context, string, string) error { creates++; return nil },
+			verify: func(context.Context, string, string) error { return nil },
+			verifyIntent: func(context.Context, string, string, string, string, memory.SyncProjectTransitionMode, memory.SyncProjectBackupIntent) error {
+				embeddedChecks++
+				return nil
+			},
+			digest: func(context.Context, string) ([]byte, error) { return make([]byte, 32), nil },
+		}
+		_, err := runSyncProjectTransition(context.Background(), store, &testForegroundRemote{}, database, project, "project", memory.SyncProjectTransitionRejoinMerge, ops)
+		if err == nil || creates != 0 || embeddedChecks != 1 || store.seals != 1 || store.prepareCalls != 1 {
+			t.Fatalf("err=%v creates=%d embedded=%d seals=%d prepares=%d", err, creates, embeddedChecks, store.seals, store.prepareCalls)
+		}
+	})
+	t.Run("healthy different database fails closed without replacement", func(t *testing.T) {
+		creates := 0
+		store := &transitionTestStore{intent: memory.SyncProjectBackupIntent{IntentID: "intent", BackupPath: backup}}
+		ops := syncProjectBackupOps{
+			create: func(context.Context, string, string) error { creates++; return nil },
+			verify: func(context.Context, string, string) error { return nil },
+			verifyIntent: func(context.Context, string, string, string, string, memory.SyncProjectTransitionMode, memory.SyncProjectBackupIntent) error {
+				return memory.ErrConflict
+			},
+			digest: func(context.Context, string) ([]byte, error) { return make([]byte, 32), nil },
+		}
+		_, err := runSyncProjectTransition(context.Background(), store, &testForegroundRemote{}, database, project, "project", memory.SyncProjectTransitionRejoinMerge, ops)
+		if !errors.Is(err, memory.ErrConflict) || creates != 0 || store.seals != 0 || store.prepareCalls != 0 {
+			t.Fatalf("err=%v creates=%d seals=%d prepares=%d", err, creates, store.seals, store.prepareCalls)
+		}
+	})
+}
+
+func TestRunSyncProjectTransitionFailsClosedForInvalidIntentAndIncompleteSync(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	t.Run("invalid existing backup creates no replacement backup", func(t *testing.T) {
+		creates := 0
+		root := t.TempDir()
+		backup := filepath.Join(root, "backup.sqlite")
+		if err := os.WriteFile(backup, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		backupOps := syncProjectBackupOps{create: func(context.Context, string, string) error { creates++; return nil }, verify: func(context.Context, string, string) error { return memory.ErrCorrupt }, digest: func(context.Context, string) ([]byte, error) { return nil, memory.ErrCorrupt }}
+		store := &transitionTestStore{intent: memory.SyncProjectBackupIntent{IntentID: "intent", BackupPath: backup, BackupSHA256: make([]byte, 32)}}
+		_, err := runSyncProjectTransition(context.Background(), store, &testForegroundRemote{}, filepath.Join(root, "memory.db"), project, "project", memory.SyncProjectTransitionRejoinMerge, backupOps)
+		if !errors.Is(err, memory.ErrCorrupt) || creates != 0 {
+			t.Fatalf("err=%v creates=%d", err, creates)
+		}
+	})
+	t.Run("completed resumes without remote work and mode conflict fails", func(t *testing.T) {
+		store := &transitionTestStore{active: true, transition: memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionCompleted}}
+		_, err := runSyncProjectTransition(context.Background(), store, &testForegroundRemote{}, "", project, "project", memory.SyncProjectTransitionRejoinMerge, testBackupOps())
+		if err != nil || store.finalizes != 0 {
+			t.Fatalf("err=%v finalizes=%d", err, store.finalizes)
+		}
+		_, err = runSyncProjectTransition(context.Background(), store, &testForegroundRemote{}, "", project, "project", memory.SyncProjectTransitionReseedSource, testBackupOps())
+		if !errors.Is(err, memory.ErrConflict) {
+			t.Fatalf("mode err=%v", err)
+		}
+	})
+	for name, test := range map[string]struct {
+		transition memory.SyncProjectTransitionResult
+		store      projectForegroundStore
+		remote     *testForegroundRemote
+	}{
+		"pull": {memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPulling}, projectForegroundStore{}, &testForegroundRemote{discoverErr: errors.New("offline")}},
+		"push": {memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionReseedSource, Status: memory.SyncProjectTransitionPublishing}, projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440002"}}, ClaimToken: "claim"}}}}, &testForegroundRemote{capabilityErr: errors.New("offline")}},
+	} {
+		t.Run("incomplete "+name+" never finalizes", func(t *testing.T) {
+			store := &transitionTestStore{active: true, transition: test.transition, projectForegroundStore: test.store}
+			_, err := runSyncProjectTransition(context.Background(), store, test.remote, "", project, "project", test.transition.Mode, testBackupOps())
+			if !errors.Is(err, memory.ErrConflict) || store.finalizes != 0 {
+				t.Fatalf("err=%v finalizes=%d", err, store.finalizes)
+			}
+		})
+	}
+	t.Run("pre-cancel does no work", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		store := &transitionTestStore{}
+		_, err := runSyncProjectTransition(ctx, store, &testForegroundRemote{}, "", project, "project", memory.SyncProjectTransitionRejoinMerge, testBackupOps())
+		if !errors.Is(err, context.Canceled) || store.ensureCalls != 0 {
+			t.Fatalf("err=%v ensures=%d", err, store.ensureCalls)
+		}
+	})
+}
+
 func TestRunForegroundProjectPullRechecksPendingRepairBeforeDiscoverAndPull(t *testing.T) {
 	project := "550e8400-e29b-41d4-a716-446655440001"
 	store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, pendingErrs: []error{nil, nil, memory.ErrSyncProjectRepairPending}}
@@ -1085,6 +1214,57 @@ func (store *projectForegroundStore) TranslateSyncMutations(ctx context.Context,
 func (store *projectForegroundStore) MarkSyncOutboxRetry(context.Context, string, string, time.Time, string) error {
 	store.retries++
 	return store.retryErr
+}
+
+type transitionTestStore struct {
+	projectForegroundStore
+	transition   memory.SyncProjectTransitionResult
+	active       bool
+	intent       memory.SyncProjectBackupIntent
+	prepareErr   error
+	ensureCalls  int
+	backupPaths  []string
+	finalizes    int
+	seals        int
+	prepareCalls int
+}
+
+func testBackupOps() syncProjectBackupOps {
+	return syncProjectBackupOps{
+		create: func(context.Context, string, string) error { return memory.ErrCorrupt },
+		verify: func(context.Context, string, string) error { return memory.ErrCorrupt },
+		digest: func(context.Context, string) ([]byte, error) { return nil, memory.ErrCorrupt },
+	}
+}
+
+func (store *transitionTestStore) SyncProjectTransition(context.Context, string, string) (memory.SyncProjectTransitionResult, bool, error) {
+	return store.transition, store.active, nil
+}
+
+func (store *transitionTestStore) EnsureSyncProjectBackupIntent(_ context.Context, _ string, _ string, _ memory.SyncProjectTransitionMode, _ string) (memory.SyncProjectBackupIntent, error) {
+	store.ensureCalls++
+	if store.intent.BackupPath == "" {
+		return store.intent, nil
+	}
+	store.backupPaths = append(store.backupPaths, store.intent.BackupPath)
+	return store.intent, nil
+}
+
+func (store *transitionTestStore) PrepareSyncProjectTransitionWithBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, bool, memory.SyncProjectBackupIntent) (memory.SyncProjectTransitionResult, error) {
+	store.prepareCalls++
+	return memory.SyncProjectTransitionResult{}, store.prepareErr
+}
+
+func (store *transitionTestStore) SealSyncProjectBackupIntent(_ context.Context, _ string, _ string, _ memory.SyncProjectTransitionMode, intent memory.SyncProjectBackupIntent, digest []byte) (memory.SyncProjectBackupIntent, error) {
+	store.seals++
+	intent.BackupSHA256 = append([]byte(nil), digest...)
+	store.intent = intent
+	return intent, nil
+}
+
+func (store *transitionTestStore) FinalizeSyncProjectTransition(context.Context, string, string) (memory.SyncProjectTransitionResult, error) {
+	store.finalizes++
+	return memory.SyncProjectTransitionResult{Status: memory.SyncProjectTransitionCompleted}, nil
 }
 
 func (store *orderedStore) ClaimDueSyncOutbox(context.Context, time.Duration, int) ([]memory.SyncOutboxClaim, error) {
