@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,7 +33,7 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 18, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 19, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
@@ -197,6 +198,52 @@ func TestPrepareSyncProjectReseedRequiresConfirmationAndRequeuesCurrentState(t *
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor WHERE portable_project_id=?`, portable).Scan(&cursor))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, portable).Scan(&inbox))
 	testutil.Require(t, projects == 0 && sessions == 0 && observations == 0 && outbox == 3 && snapshots == 3 && cursor == 0 && inbox == 0, "versions=%d/%d/%d outbox=%d snapshots=%d cursor=%d inbox=%d", projects, sessions, observations, outbox, snapshots, cursor, inbox)
+}
+
+func TestSyncProjectBackupIntentIsStableUntilPrepared(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	backupPath := filepath.Join(t.TempDir(), "memory.db.reseed-backup.sqlite")
+	first, err := store.EnsureSyncProjectBackupIntent(ctx, portable, "project", SyncProjectTransitionReseedSource, backupPath)
+	testutil.NoError(t, err)
+	_, err = store.Save(ctx, Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "blocked", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.Require(t, errors.Is(err, ErrConflict), "save err=%v", err)
+	_, err = store.BackfillSyncProject(ctx, "project", 10)
+	testutil.Require(t, errors.Is(err, ErrConflict), "backfill err=%v", err)
+	_, err = store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.Require(t, errors.Is(err, ErrConflict), "legacy prepare err=%v", err)
+	second, err := store.EnsureSyncProjectBackupIntent(ctx, portable, "project", SyncProjectTransitionReseedSource, filepath.Join(t.TempDir(), "another.sqlite"))
+	testutil.Require(t, err == nil && first.IntentID == second.IntentID && first.BackupPath == second.BackupPath && first.BackupPath == backupPath, "first=%+v second=%+v err=%v", first, second, err)
+	_, err = store.PrepareSyncProjectTransitionWithBackupIntent(ctx, portable, "project", SyncProjectTransitionReseedSource, true, SyncProjectBackupIntent{IntentID: "wrong", BackupPath: first.BackupPath})
+	testutil.Require(t, errors.Is(err, ErrConflict), "prepare err=%v", err)
+	preserved, found, err := store.SyncProjectBackupIntent(ctx, portable, "project", SyncProjectTransitionReseedSource)
+	testutil.Require(t, err == nil && found && preserved.IntentID == first.IntentID && preserved.BackupPath == first.BackupPath && len(preserved.BackupSHA256) == 0, "intent=%+v found=%t err=%v", preserved, found, err)
+	first, err = store.SealSyncProjectBackupIntent(ctx, portable, "project", SyncProjectTransitionReseedSource, first, bytes.Repeat([]byte{1}, 32))
+	testutil.NoError(t, err)
+	_, err = store.PrepareSyncProjectTransitionWithBackupIntent(ctx, portable, "project", SyncProjectTransitionReseedSource, true, first)
+	testutil.NoError(t, err)
+	_, found, err = store.SyncProjectBackupIntent(ctx, portable, "project", SyncProjectTransitionReseedSource)
+	testutil.Require(t, err == nil && !found, "found=%t err=%v", found, err)
+}
+
+func TestVerifySQLiteBackupIntentRequiresExactEmbeddedIntent(t *testing.T) {
+	root := t.TempDir()
+	testutil.NoError(t, os.Chmod(root, 0o700))
+	database, backup := filepath.Join(root, "memory.db"), filepath.Join(root, "backup.sqlite")
+	store := openPath(t, database)
+	defer store.Close()
+	portable := "550e8400-e29b-41d4-a716-446655440391"
+	intent := SyncProjectBackupIntent{IntentID: "sync-project-backup:" + portable, BackupPath: backup}
+	_, err := store.db.Exec(`INSERT INTO sync_project_backup_intents(portable_project_id,local_project_id,mode,intent_id,backup_path,backup_sha256,created_at) VALUES(?,?,?,?,?,?,?)`, portable, "project", SyncProjectTransitionRejoinMerge, intent.IntentID, intent.BackupPath, nil, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	testutil.NoError(t, CreateSQLiteBackup(context.Background(), database, backup))
+	if err := VerifySQLiteBackupIntent(context.Background(), database, backup, portable, "project", SyncProjectTransitionRejoinMerge, intent); err != nil {
+		t.Fatalf("matching embedded intent: %v", err)
+	}
+	if err := VerifySQLiteBackupIntent(context.Background(), database, backup, portable, "different-project", SyncProjectTransitionRejoinMerge, intent); !errors.Is(err, ErrConflict) {
+		t.Fatalf("healthy different database binding accepted: %v", err)
+	}
 }
 
 func TestPrepareSyncProjectRejoinSnapshotsThenAcceptsEquivalentRemoteCreate(t *testing.T) {
@@ -675,7 +722,7 @@ func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 18, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 19, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var outbox, claims int
@@ -757,7 +804,7 @@ func TestSyncOutboxClaimsConstraintsCascadeAndHealth(t *testing.T) {
 func TestSyncOutboxClaimsMigrationFreshSchema(t *testing.T) {
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 18, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 19, "health=%d err=%v", version, err)
 	var table, index string
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='table' AND name='sync_outbox_claims'`).Scan(&table))
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='index' AND name='sync_outbox_claims_lease_idx'`).Scan(&index))
@@ -780,7 +827,7 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 18, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 19, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var count int
@@ -2676,7 +2723,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 18 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 19 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {

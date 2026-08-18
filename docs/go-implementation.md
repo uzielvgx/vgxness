@@ -10,7 +10,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/cli` | `version`, `status`, `doctor`, `memory`, `sdd`, `integrate`, `self`, and `setup` commands. |
 | `internal/tui` | Keyboard-first storage, memory, and confirmation-gated setup UI. |
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
-| `internal/memory` | SQLite/FTS5 schema v18, canonical workspace identity, explicit portable-to-local provenance, semantic memory, structured SDD repository, migrations, and retained legacy importer. Portable metadata is not normal resolution or sync selection. |
+| `internal/memory` | SQLite/FTS5 schema v19, canonical workspace identity, explicit portable-to-local provenance, semantic memory, structured SDD repository, migrations, and retained legacy importer. Portable metadata is not normal resolution or sync selection. |
 | `internal/hooks` | Internal-only best-effort lifecycle observation. Completed memory synchronization can emit synchronous invocation-correlation events for the effective canonical invocation workspace (empty project directory means current working directory; explicit paths are absolute, clean, symlink-resolved, and case-normalized); listeners can block, and global single-flight drops concurrent or reentrant events. There is no queue, retry, replay, persistence, or crash durability. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
 | `internal/providers/opencode` | Manager v46, 14 other model-bound agents (including `general` v6, verifier v4, and reviewers v3), model-plan manifest, exact historical plugin v1–v10 and provider-skill v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 47-file, 19-skill catalog includes `memory-sync` and `sdd-lifecycle`, the latter loaded only after explicit SDD acceptance. |
@@ -37,7 +37,7 @@ Setup validates an absolute existing workspace, resolves `opencode`, and runs a 
 
 ## Storage
 
-The default database is `~/.vgxness/memory.db`. Canonical workspace bindings isolate project data in one schema-v18 SQLite database. Explicit `--storage-root` and `--project-local` options remain isolated alternatives.
+The default database is `~/.vgxness/memory.db`. Canonical workspace bindings isolate project data in one schema-v19 SQLite database. Explicit `--storage-root` and `--project-local` options remain isolated alternatives.
 
 Semantic observations, references, sessions, and FTS rows are separate from SDD changes, revisions, bindings, idempotency keys, and projection records. A read-only open never migrates the database. Existing older project databases are retained; normal startup does not import or delete them.
 

@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -125,9 +127,99 @@ func (s *Store) BackfillSyncProject(ctx context.Context, project string, limit i
 	return result, commit(ctx, tx)
 }
 
+// SyncProjectBackupIntent identifies the private snapshot reserved for a
+// durable sync-project transition.
+type SyncProjectBackupIntent struct {
+	IntentID     string
+	BackupPath   string
+	BackupSHA256 []byte
+}
+
+// VerifySQLiteBackup validates an extant same-parent private SQLite snapshot
+// before a retry reuses the durable backup intent's path.
+func VerifySQLiteBackup(ctx context.Context, database, destination string) error {
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(database) || database != filepath.Clean(database) || !filepath.IsAbs(destination) || destination != filepath.Clean(destination) || database == destination || filepath.Dir(database) != filepath.Dir(destination) || rejectSymlink(database) != nil || rejectSymlink(destination) != nil {
+		return fmt.Errorf("%w: backup paths", ErrInvalid)
+	}
+	parent, err := os.Lstat(filepath.Dir(database))
+	if err != nil || parent.Mode()&os.ModeSymlink != 0 || !parent.IsDir() || !privateSQLiteBackupParent(parent.Mode()) {
+		return fmt.Errorf("%w: backup parent", ErrCorrupt)
+	}
+	backup, err := os.Lstat(destination)
+	if err != nil || !privateSQLiteBackupOutput(backup) {
+		return fmt.Errorf("%w: backup destination", ErrCorrupt)
+	}
+	output, err := os.Open(destination)
+	if err != nil {
+		return fmt.Errorf("%w: backup destination", ErrCorrupt)
+	}
+	defer output.Close()
+	if err := verifyPrivateSQLiteBackupOutput(output); err != nil {
+		return err
+	}
+	version, err := HealthFile(ctx, destination)
+	if err != nil || version != migrations[len(migrations)-1].version {
+		return fmt.Errorf("%w: backup health", ErrCorrupt)
+	}
+	return nil
+}
+
+// VerifySQLiteBackupIntent verifies that an unsealed snapshot contains the
+// exact durable intent which selected it. This permits a retry to seal and
+// reuse the only snapshot produced after intent commit but before its seal;
+// a healthy snapshot from any other database still fails closed.
+func VerifySQLiteBackupIntent(ctx context.Context, database, destination, portableProject, localProject string, mode SyncProjectTransitionMode, intent SyncProjectBackupIntent) error {
+	if err := VerifySQLiteBackup(ctx, database, destination); err != nil {
+		return err
+	}
+	if !projectIDPattern.MatchString(portableProject) || localProject == "" || (mode != SyncProjectTransitionReseedSource && mode != SyncProjectTransitionRejoinMerge) || intent.IntentID == "" || intent.BackupPath != destination {
+		return fmt.Errorf("%w: backup intent", ErrInvalid)
+	}
+	db, err := sql.Open("sqlite", sqliteReadURI(destination))
+	if err != nil {
+		return fmt.Errorf("%w: backup intent", ErrCorrupt)
+	}
+	defer db.Close()
+	var storedID, storedPath, storedLocal, storedMode string
+	err = db.QueryRowContext(ctx, `SELECT intent_id,backup_path,local_project_id,mode FROM sync_project_backup_intents WHERE portable_project_id=?`, portableProject).Scan(&storedID, &storedPath, &storedLocal, &storedMode)
+	if err != nil || storedID != intent.IntentID || storedPath != intent.BackupPath || storedLocal != localProject || storedMode != string(mode) {
+		return fmt.Errorf("%w: backup intent", ErrConflict)
+	}
+	return nil
+}
+
+func SQLiteBackupSHA256(ctx context.Context, path string) ([]byte, error) {
+	if err := cancelled(ctx); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: backup digest", ErrCorrupt)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err = io.Copy(hash, file); err != nil {
+		return nil, err
+	}
+	return hash.Sum(nil), nil
+}
+
 // PrepareSyncProjectTransition atomically snapshots one bound project and
 // prepares either a source reseed or a pull-first local merge. It is local-only.
 func (s *Store) PrepareSyncProjectTransition(ctx context.Context, portableProject, localProject string, mode SyncProjectTransitionMode, confirmedRemoteEmpty bool) (SyncProjectTransitionResult, error) {
+	return s.prepareSyncProjectTransition(ctx, portableProject, localProject, mode, confirmedRemoteEmpty, nil)
+}
+
+// PrepareSyncProjectTransitionWithBackupIntent atomically consumes the exact
+// durable intent only when the local transition becomes durable.
+func (s *Store) PrepareSyncProjectTransitionWithBackupIntent(ctx context.Context, portableProject, localProject string, mode SyncProjectTransitionMode, confirmedRemoteEmpty bool, intent SyncProjectBackupIntent) (SyncProjectTransitionResult, error) {
+	return s.prepareSyncProjectTransition(ctx, portableProject, localProject, mode, confirmedRemoteEmpty, &intent)
+}
+
+func (s *Store) prepareSyncProjectTransition(ctx context.Context, portableProject, localProject string, mode SyncProjectTransitionMode, confirmedRemoteEmpty bool, intent *SyncProjectBackupIntent) (SyncProjectTransitionResult, error) {
 	result := SyncProjectTransitionResult{SchemaVersion: 1, Mode: mode}
 	if s == nil || s.readOnly || !projectIDPattern.MatchString(portableProject) || localProject == "" || mode != SyncProjectTransitionReseedSource && mode != SyncProjectTransitionRejoinMerge || mode == SyncProjectTransitionReseedSource && !confirmedRemoteEmpty {
 		return SyncProjectTransitionResult{}, fmt.Errorf("%w: project sync transition", ErrInvalid)
@@ -168,8 +260,20 @@ func (s *Store) PrepareSyncProjectTransition(ctx context.Context, portableProjec
 	if err != nil {
 		return SyncProjectTransitionResult{}, writeError(ctx, err)
 	}
-	if err = activeProjectTransitionForLocalProject(ctx, conn, localProject); err != nil {
+	exceptPortable := ""
+	if intent != nil {
+		exceptPortable = portableProject
+	}
+	if err = activeProjectTransitionForLocalProjectExceptIntent(ctx, conn, localProject, exceptPortable); err != nil {
 		return SyncProjectTransitionResult{}, err
+	}
+	if intent != nil {
+		var storedID, storedPath, storedLocal, storedMode string
+		var storedDigest []byte
+		err = conn.QueryRowContext(ctx, `SELECT intent_id,backup_path,backup_sha256,local_project_id,mode FROM sync_project_backup_intents WHERE portable_project_id=?`, portableProject).Scan(&storedID, &storedPath, &storedDigest, &storedLocal, &storedMode)
+		if errors.Is(err, sql.ErrNoRows) || err != nil || len(storedDigest) != sha256.Size || !bytes.Equal(storedDigest, intent.BackupSHA256) || storedID != intent.IntentID || storedPath != intent.BackupPath || storedLocal != localProject || storedMode != string(mode) {
+			return SyncProjectTransitionResult{}, fmt.Errorf("%w: project backup intent", ErrConflict)
+		}
 	}
 	var pendingRepair int
 	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_repairs WHERE portable_project_id=? AND status='pending'`, portableProject).Scan(&pendingRepair); err != nil {
@@ -209,6 +313,11 @@ func (s *Store) PrepareSyncProjectTransition(ctx context.Context, portableProjec
 	if mode == SyncProjectTransitionReseedSource {
 		status = SyncProjectTransitionPublishing
 	}
+	if intent != nil {
+		if _, err = conn.ExecContext(ctx, `DELETE FROM sync_project_backup_intents WHERE portable_project_id=? AND intent_id=? AND backup_path=?`, portableProject, intent.IntentID, intent.BackupPath); err != nil {
+			return SyncProjectTransitionResult{}, writeError(ctx, err)
+		}
+	}
 	if _, err = conn.ExecContext(ctx, `INSERT INTO sync_project_transitions(portable_project_id,local_project_id,mode,status,created_at,completed_at) VALUES(?,?,?,?,?,NULL)`, portableProject, localProject, mode, status, now); err != nil {
 		return SyncProjectTransitionResult{}, conflictOrWrite(ctx, err)
 	}
@@ -242,6 +351,111 @@ func (s *Store) PrepareSyncProjectTransition(ctx context.Context, portableProjec
 	}
 	committed = true
 	result.Status = status
+	return result, nil
+}
+
+// EnsureSyncProjectBackupIntent creates one durable backup destination before
+// any local transition mutation. Retried calls return the original identity and
+// path, while binding or mode changes fail closed.
+func (s *Store) EnsureSyncProjectBackupIntent(ctx context.Context, portableProject, localProject string, mode SyncProjectTransitionMode, backupPath string) (SyncProjectBackupIntent, error) {
+	if s == nil || s.readOnly || !projectIDPattern.MatchString(portableProject) || localProject == "" || (mode != SyncProjectTransitionReseedSource && mode != SyncProjectTransitionRejoinMerge) || !filepath.IsAbs(backupPath) || backupPath != filepath.Clean(backupPath) {
+		return SyncProjectBackupIntent{}, fmt.Errorf("%w: project backup intent", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return SyncProjectBackupIntent{}, err
+	}
+	now, ok := syncUnixNano(s.now().UTC().Round(0))
+	if !ok {
+		return SyncProjectBackupIntent{}, fmt.Errorf("%w: invalid clock", ErrCorrupt)
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return SyncProjectBackupIntent{}, writeError(ctx, err)
+	}
+	defer conn.Close()
+	for attempt := 0; ; attempt++ {
+		if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err == nil {
+			break
+		}
+		if err = waitForSQLite(ctx, attempt, err); err != nil {
+			return SyncProjectBackupIntent{}, writeError(ctx, err)
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var bound string
+	if err = conn.QueryRowContext(ctx, `SELECT project_id FROM portable_project_identities WHERE portable_id=?`, portableProject).Scan(&bound); errors.Is(err, sql.ErrNoRows) || bound != localProject {
+		return SyncProjectBackupIntent{}, fmt.Errorf("%w: portable project identity binding", ErrConflict)
+	} else if err != nil {
+		return SyncProjectBackupIntent{}, writeError(ctx, err)
+	}
+	intent := SyncProjectBackupIntent{IntentID: "sync-project-backup:" + portableProject, BackupPath: backupPath}
+	var storedLocal, storedMode string
+	err = conn.QueryRowContext(ctx, `SELECT intent_id,backup_path,backup_sha256,local_project_id,mode FROM sync_project_backup_intents WHERE portable_project_id=?`, portableProject).Scan(&intent.IntentID, &intent.BackupPath, &intent.BackupSHA256, &storedLocal, &storedMode)
+	if err == nil {
+		if storedLocal != localProject || storedMode != string(mode) {
+			return SyncProjectBackupIntent{}, fmt.Errorf("%w: project backup intent", ErrConflict)
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
+		intent.IntentID = "sync-project-backup:" + portableProject
+		intent.BackupPath = backupPath
+		if _, err = conn.ExecContext(ctx, `INSERT INTO sync_project_backup_intents(portable_project_id,local_project_id,mode,intent_id,backup_path,backup_sha256,created_at) VALUES(?,?,?,?,?,?,?)`, portableProject, localProject, mode, intent.IntentID, intent.BackupPath, nil, now); err != nil {
+			return SyncProjectBackupIntent{}, conflictOrWrite(ctx, err)
+		}
+	} else {
+		return SyncProjectBackupIntent{}, writeError(ctx, err)
+	}
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return SyncProjectBackupIntent{}, writeError(ctx, err)
+	}
+	committed = true
+	return intent, nil
+}
+
+// SyncProjectBackupIntent reads the one exact durable intent for a strict
+// project/mode binding without changing local state.
+func (s *Store) SyncProjectBackupIntent(ctx context.Context, portableProject, localProject string, mode SyncProjectTransitionMode) (SyncProjectBackupIntent, bool, error) {
+	if s == nil || !projectIDPattern.MatchString(portableProject) || localProject == "" || (mode != SyncProjectTransitionReseedSource && mode != SyncProjectTransitionRejoinMerge) {
+		return SyncProjectBackupIntent{}, false, fmt.Errorf("%w: project backup intent", ErrInvalid)
+	}
+	var intent SyncProjectBackupIntent
+	var bound, storedMode string
+	err := s.db.QueryRowContext(ctx, `SELECT intent_id,backup_path,backup_sha256,local_project_id,mode FROM sync_project_backup_intents WHERE portable_project_id=?`, portableProject).Scan(&intent.IntentID, &intent.BackupPath, &intent.BackupSHA256, &bound, &storedMode)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SyncProjectBackupIntent{}, false, nil
+	}
+	if err != nil {
+		return SyncProjectBackupIntent{}, false, writeError(ctx, err)
+	}
+	if bound != localProject || storedMode != string(mode) {
+		return SyncProjectBackupIntent{}, false, fmt.Errorf("%w: project backup intent", ErrConflict)
+	}
+	return intent, true, nil
+}
+
+// SealSyncProjectBackupIntent records the exact healthy backup bytes once.
+func (s *Store) SealSyncProjectBackupIntent(ctx context.Context, portableProject, localProject string, mode SyncProjectTransitionMode, intent SyncProjectBackupIntent, digest []byte) (SyncProjectBackupIntent, error) {
+	if s == nil || s.readOnly || len(digest) != sha256.Size || intent.IntentID == "" || intent.BackupPath == "" {
+		return SyncProjectBackupIntent{}, fmt.Errorf("%w: project backup intent", ErrInvalid)
+	}
+	result, found, err := s.SyncProjectBackupIntent(ctx, portableProject, localProject, mode)
+	if err != nil || !found || result.IntentID != intent.IntentID || result.BackupPath != intent.BackupPath {
+		return SyncProjectBackupIntent{}, fmt.Errorf("%w: project backup intent", ErrConflict)
+	}
+	if len(result.BackupSHA256) != 0 && !bytes.Equal(result.BackupSHA256, digest) {
+		return SyncProjectBackupIntent{}, fmt.Errorf("%w: project backup intent", ErrConflict)
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE sync_project_backup_intents SET backup_sha256=? WHERE portable_project_id=? AND backup_sha256 IS NULL`, digest, portableProject)
+	if err != nil {
+		return SyncProjectBackupIntent{}, writeError(ctx, err)
+	}
+	result.BackupSHA256 = append([]byte(nil), digest...)
 	return result, nil
 }
 
@@ -624,8 +838,12 @@ type projectTransitionQuery interface {
 }
 
 func activeProjectTransitionForLocalProject(ctx context.Context, query projectTransitionQuery, localProject string) error {
+	return activeProjectTransitionForLocalProjectExceptIntent(ctx, query, localProject, "")
+}
+
+func activeProjectTransitionForLocalProjectExceptIntent(ctx context.Context, query projectTransitionQuery, localProject, exceptPortable string) error {
 	var active int
-	if err := query.QueryRowContext(ctx, `SELECT count(*) FROM sync_project_transitions WHERE local_project_id=? AND status IN ('pulling','publishing')`, localProject).Scan(&active); err != nil {
+	if err := query.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sync_project_transitions WHERE local_project_id=? AND status IN ('pulling','publishing')) + (SELECT count(*) FROM sync_project_backup_intents WHERE local_project_id=? AND portable_project_id<>?)`, localProject, localProject, exceptPortable).Scan(&active); err != nil {
 		return writeError(ctx, err)
 	}
 	if active != 0 {
