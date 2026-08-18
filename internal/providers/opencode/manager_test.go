@@ -420,7 +420,7 @@ func TestV49RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.T) {
 		"A second task call for the same goal requires an explicit blocker, new evidence, correction, or independent assurance; resume the same child where applicable and send only the delta.",
 	} {
 		if !strings.Contains(manager, required) {
-			t.Errorf("manager v48 missing %q", required)
+			t.Errorf("manager v49 missing %q", required)
 		}
 	}
 }
