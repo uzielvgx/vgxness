@@ -1170,9 +1170,10 @@ func backfillMutationID(kind, id string) string {
 }
 
 func (s *Store) enqueueBackfillMutation(ctx context.Context, tx *sql.Tx, mutation syncservice.Mutation) (bool, error) {
-	var id sql.NullString
+	var rowID, baseVersion, payloadVersion, attempts, nextAttempt, created, updated int64
+	var id, recordKind, recordID, kind, state, lastErrorCode string
 	var payload []byte
-	err := tx.QueryRowContext(ctx, `SELECT mutation_id,payload FROM sync_outbox WHERE record_kind=? AND record_id=? AND mutation_kind='create' AND base_version=0 ORDER BY id LIMIT 1`, mutation.RecordKind, mutation.RecordID).Scan(&id, &payload)
+	err := tx.QueryRowContext(ctx, `SELECT id,mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,state,attempts,last_error_code,next_attempt_at,created_at,updated_at FROM sync_outbox WHERE record_kind=? AND record_id=? AND mutation_kind='create' AND base_version=0 ORDER BY id LIMIT 1`, mutation.RecordKind, mutation.RecordID).Scan(&rowID, &id, &recordKind, &recordID, &kind, &baseVersion, &payloadVersion, &payload, &state, &attempts, &lastErrorCode, &nextAttempt, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		_, err = s.enqueueSyncOutbox(ctx, tx, mutation)
 		return err == nil, err
@@ -1180,13 +1181,47 @@ func (s *Store) enqueueBackfillMutation(ctx context.Context, tx *sql.Tx, mutatio
 	if err != nil {
 		return false, writeError(ctx, err)
 	}
-	if !id.Valid || !canonicalUUIDPattern.MatchString(id.String) || len(payload) == 0 {
+	if rowID < 1 || !canonicalUUIDPattern.MatchString(id) || len(payload) == 0 || len(payload) > maxSyncPayloadBytes {
 		return false, fmt.Errorf("%w: invalid sync outbox payload", ErrCorrupt)
 	}
-	mutation.MutationID = id.String
-	expected, err := json.Marshal(mutation)
-	if err != nil || !bytes.Equal(payload, expected) {
+	if state == string(SyncOutboxRetry) || attempts > 0 {
+		return false, fmt.Errorf("%w: sync backfill was attempted", ErrConflict)
+	}
+	existing, err := decodeSyncOutboxEntry(id, recordKind, recordID, kind, baseVersion, payloadVersion, payload, state, attempts, lastErrorCode, nextAttempt, created, updated)
+	if err != nil {
 		return false, fmt.Errorf("%w: sync backfill identity", ErrConflict)
+	}
+	mutation.MutationID = id
+	if !allowedSyncMutation(mutation) || syncservice.ValidateMutation(mutation) != nil {
+		return false, fmt.Errorf("%w: invalid sync backfill mutation", ErrCorrupt)
+	}
+	expected, err := json.Marshal(mutation)
+	if err != nil || len(expected) > maxSyncPayloadBytes {
+		return false, fmt.Errorf("%w: invalid sync backfill payload", ErrCorrupt)
+	}
+	if bytes.Equal(payload, expected) {
+		return false, nil
+	}
+	var claimHistory int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sync_outbox_claims WHERE mutation_id=?`, id).Scan(&claimHistory); err != nil {
+		return false, writeError(ctx, err)
+	}
+	if claimHistory != 0 {
+		return false, fmt.Errorf("%w: sync backfill was claimed", ErrConflict)
+	}
+	if existing.Mutation.MutationID != mutation.MutationID || existing.Mutation.RecordKind != mutation.RecordKind || existing.Mutation.RecordID != mutation.RecordID || existing.Mutation.Kind != mutation.Kind || existing.Mutation.BaseVersion != mutation.BaseVersion {
+		return false, fmt.Errorf("%w: sync backfill identity", ErrConflict)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE sync_outbox SET payload=? WHERE id=? AND mutation_id=? AND record_kind=? AND record_id=? AND mutation_kind=? AND base_version=? AND payload_version=? AND payload=? AND state=? AND attempts=? AND last_error_code=? AND next_attempt_at=? AND created_at=? AND updated_at=? AND NOT EXISTS (SELECT 1 FROM sync_outbox_claims WHERE mutation_id=?)`, expected, rowID, id, recordKind, recordID, kind, baseVersion, payloadVersion, payload, state, attempts, lastErrorCode, nextAttempt, created, updated, id)
+	if err != nil {
+		return false, writeError(ctx, err)
+	}
+	repaired, err := result.RowsAffected()
+	if err != nil {
+		return false, writeError(ctx, err)
+	}
+	if repaired != 1 {
+		return false, fmt.Errorf("%w: sync backfill changed concurrently", ErrConflict)
 	}
 	return false, nil
 }

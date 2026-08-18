@@ -4,6 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Repairs stale, never-attempted backfill create payloads with a transactional compare-and-swap while preserving mutation identity; never-attempted requires no claim history, and claimed, attempted, retrying, malformed, or concurrently changed queue rows remain rejected.
 - Aligns OpenCode manager v48 and generated Codex manager v8 on intent-triggered VGXNESS memory: search all terms first with any-term fallback only when needed, retrieve exact IDs after preview, reserve recent recall for explicit recovery/history requests, and preserve exact v47/v7 predecessor upgrades while protecting drift.
 - Preserves cancellation and deadline identities during storage inspection, aligns documentation with SQLite schema v19, bounds sync authentication and failed-audit retention, and makes self-install manifest activation explicitly recoverable without overwriting concurrent content.
 - Adds proposed `macos-15` source and release-artifact smoke for `darwin/arm64`; support remains preview until a tag-workflow execution provides native evidence.

@@ -70,6 +70,187 @@ func TestBackfillSyncProjectLimitAndExistingOutboxCollision(t *testing.T) {
 	testutil.Require(t, errors.Is(err, ErrConflict), "collision error=%v", err)
 }
 
+func TestBackfillSyncProjectRepairsUnattemptedStaleCreatePayload(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	item, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "stale", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.NoError(t, err)
+	_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.NoError(t, err)
+
+	var mutationID, recordKind, recordID, mutationKind string
+	var baseVersion, payloadVersion, createdAt, nextAttemptAt int64
+	var stalePayload []byte
+	err = store.db.QueryRow(`SELECT mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,created_at,next_attempt_at FROM sync_outbox WHERE record_kind='observation' AND record_id=?`, item.ID).Scan(&mutationID, &recordKind, &recordID, &mutationKind, &baseVersion, &payloadVersion, &stalePayload, &createdAt, &nextAttemptAt)
+	testutil.NoError(t, err)
+	updatedAt := fixedTime.Add(time.Minute).UnixNano()
+	_, err = store.db.Exec(`UPDATE observations SET content='current',updated_at=? WHERE id=?`, updatedAt, item.ID)
+	testutil.NoError(t, err)
+
+	result, err := store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.Require(t, err == nil && result.Queued == 0, "result=%+v err=%v", result, err)
+	var repairedID, repairedRecordKind, repairedRecordID, repairedMutationKind, content string
+	var repairedBase, repairedPayloadVersion, repairedCreatedAt, repairedNextAttemptAt, recordUpdatedAt, syncVersion int64
+	var repairedPayload []byte
+	err = store.db.QueryRow(`SELECT mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,payload,created_at,next_attempt_at FROM sync_outbox WHERE record_kind='observation' AND record_id=?`, item.ID).Scan(&repairedID, &repairedRecordKind, &repairedRecordID, &repairedMutationKind, &repairedBase, &repairedPayloadVersion, &repairedPayload, &repairedCreatedAt, &repairedNextAttemptAt)
+	testutil.NoError(t, err)
+	testutil.NoError(t, store.db.QueryRow(`SELECT content,updated_at,sync_version FROM observations WHERE id=?`, item.ID).Scan(&content, &recordUpdatedAt, &syncVersion))
+	var repaired syncservice.Mutation
+	testutil.NoError(t, json.Unmarshal(repairedPayload, &repaired))
+	testutil.Require(t, mutationID == repairedID && recordKind == repairedRecordKind && recordID == repairedRecordID && mutationKind == repairedMutationKind && baseVersion == repairedBase && payloadVersion == repairedPayloadVersion, "queue identity changed before=%q/%q/%q/%q/%d/%d after=%q/%q/%q/%q/%d/%d", mutationID, recordKind, recordID, mutationKind, baseVersion, payloadVersion, repairedID, repairedRecordKind, repairedRecordID, repairedMutationKind, repairedBase, repairedPayloadVersion)
+	testutil.Require(t, !bytes.Equal(stalePayload, repairedPayload) && repaired.MutationID == mutationID && repaired.Observation != nil && repaired.Observation.Content == "current", "stale=%s repaired=%+v", stalePayload, repaired)
+	testutil.Require(t, content == "current" && recordUpdatedAt == updatedAt && syncVersion == 0 && repairedCreatedAt == createdAt && repairedNextAttemptAt == nextAttemptAt, "record/timing changed content=%q updated=%d version=%d created=%d next=%d", content, recordUpdatedAt, syncVersion, repairedCreatedAt, repairedNextAttemptAt)
+
+	again, err := store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.Require(t, err == nil && again.Queued == 0, "again=%+v err=%v", again, err)
+}
+
+func TestBackfillSyncProjectDoesNotRepairAttemptedCreatePayload(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		state string
+		tries int
+		code  string
+	}{
+		{name: "pending attempts", state: "pending", tries: 1},
+		{name: "retry", state: "retry", tries: 1, code: "temporary"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			item, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "stale", State: StateActive, Provenance: Provenance{Producer: "test"}})
+			testutil.NoError(t, err)
+			_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+			testutil.NoError(t, err)
+			var before []byte
+			testutil.NoError(t, store.db.QueryRow(`SELECT payload FROM sync_outbox WHERE record_kind='observation' AND record_id=?`, item.ID).Scan(&before))
+			_, err = store.db.Exec(`UPDATE observations SET content='current',updated_at=? WHERE id=?`, fixedTime.Add(time.Minute).UnixNano(), item.ID)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`UPDATE sync_outbox SET state=?,attempts=?,last_error_code=? WHERE record_kind='observation' AND record_id=?`, test.state, test.tries, test.code, item.ID)
+			testutil.NoError(t, err)
+
+			_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+			testutil.Require(t, errors.Is(err, ErrConflict), "error=%v", err)
+			var after []byte
+			var content string
+			testutil.NoError(t, store.db.QueryRow(`SELECT payload FROM sync_outbox WHERE record_kind='observation' AND record_id=?`, item.ID).Scan(&after))
+			testutil.NoError(t, store.db.QueryRow(`SELECT content FROM observations WHERE id=?`, item.ID).Scan(&content))
+			testutil.Require(t, bytes.Equal(before, after) && content == "current", "payload or record changed before=%s after=%s content=%q", before, after, content)
+		})
+	}
+}
+
+func TestBackfillSyncProjectDoesNotRepairClaimedStaleCreatePayload(t *testing.T) {
+	type outboxSnapshot struct {
+		ID, BaseVersion, PayloadVersion, Attempts, NextAttemptAt, CreatedAt, UpdatedAt int64
+		MutationID, RecordKind, RecordID, MutationKind, Payload, State, LastErrorCode  string
+	}
+	type claimSnapshot struct {
+		MutationID, FirstClaimToken, ClaimToken string
+		FirstClaimedAt, ClaimedAt, LeaseUntil   int64
+	}
+	type observationSnapshot struct {
+		Content                string
+		UpdatedAt, SyncVersion int64
+	}
+	for _, test := range []struct {
+		name        string
+		leaseOffset time.Duration
+	}{
+		{name: "active claim", leaseOffset: time.Minute},
+		{name: "expired claim history", leaseOffset: -time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			item, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "stale", State: StateActive, Provenance: Provenance{Producer: "test"}})
+			testutil.NoError(t, err)
+			_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+			testutil.NoError(t, err)
+			updatedAt := fixedTime.Add(time.Minute).UnixNano()
+			_, err = store.db.Exec(`UPDATE observations SET content='current',updated_at=? WHERE id=?`, updatedAt, item.ID)
+			testutil.NoError(t, err)
+
+			var mutationID string
+			testutil.NoError(t, store.db.QueryRow(`SELECT mutation_id FROM sync_outbox WHERE record_kind='observation' AND record_id=?`, item.ID).Scan(&mutationID))
+			_, err = store.db.Exec(`INSERT INTO sync_outbox_claims(mutation_id,first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until) VALUES(?,?,?,?,?,?)`, mutationID, "550e8400-e29b-41d4-a716-446655440121", "550e8400-e29b-41d4-a716-446655440122", fixedTime.Add(-2*time.Minute).UnixNano(), fixedTime.Add(-time.Minute).UnixNano(), fixedTime.Add(test.leaseOffset).UnixNano())
+			testutil.NoError(t, err)
+
+			readOutbox := func() outboxSnapshot {
+				var got outboxSnapshot
+				testutil.NoError(t, store.db.QueryRow(`SELECT id,mutation_id,record_kind,record_id,mutation_kind,base_version,payload_version,CAST(payload AS TEXT),state,attempts,last_error_code,next_attempt_at,created_at,updated_at FROM sync_outbox WHERE mutation_id=?`, mutationID).Scan(&got.ID, &got.MutationID, &got.RecordKind, &got.RecordID, &got.MutationKind, &got.BaseVersion, &got.PayloadVersion, &got.Payload, &got.State, &got.Attempts, &got.LastErrorCode, &got.NextAttemptAt, &got.CreatedAt, &got.UpdatedAt))
+				return got
+			}
+			readClaim := func() claimSnapshot {
+				var got claimSnapshot
+				testutil.NoError(t, store.db.QueryRow(`SELECT mutation_id,first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until FROM sync_outbox_claims WHERE mutation_id=?`, mutationID).Scan(&got.MutationID, &got.FirstClaimToken, &got.ClaimToken, &got.FirstClaimedAt, &got.ClaimedAt, &got.LeaseUntil))
+				return got
+			}
+			readObservation := func() observationSnapshot {
+				var got observationSnapshot
+				testutil.NoError(t, store.db.QueryRow(`SELECT content,updated_at,sync_version FROM observations WHERE id=?`, item.ID).Scan(&got.Content, &got.UpdatedAt, &got.SyncVersion))
+				return got
+			}
+			beforeOutbox, beforeClaim, beforeObservation := readOutbox(), readClaim(), readObservation()
+			var beforeQueueRows int
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&beforeQueueRows))
+
+			_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+			testutil.Require(t, errors.Is(err, ErrConflict), "error=%v", err)
+			afterOutbox, afterClaim, afterObservation := readOutbox(), readClaim(), readObservation()
+			var afterQueueRows int
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&afterQueueRows))
+			testutil.Require(t, beforeOutbox == afterOutbox && beforeClaim == afterClaim && beforeObservation == afterObservation && beforeQueueRows == afterQueueRows, "state changed outbox=%+v/%+v claim=%+v/%+v observation=%+v/%+v queue=%d/%d", beforeOutbox, afterOutbox, beforeClaim, afterClaim, beforeObservation, afterObservation, beforeQueueRows, afterQueueRows)
+		})
+	}
+}
+
+func TestBackfillSyncProjectLeavesByteEqualClaimedCreatePayloadAlone(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	item, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "current", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.NoError(t, err)
+	_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.NoError(t, err)
+	var mutationID string
+	var beforePayload []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT mutation_id,payload FROM sync_outbox WHERE record_kind='observation' AND record_id=?`, item.ID).Scan(&mutationID, &beforePayload))
+	_, err = store.db.Exec(`INSERT INTO sync_outbox_claims(mutation_id,first_claim_token,claim_token,first_claimed_at,claimed_at,lease_until) VALUES(?,?,?,?,?,?)`, mutationID, "550e8400-e29b-41d4-a716-446655440123", "550e8400-e29b-41d4-a716-446655440124", fixedTime.Add(-time.Minute).UnixNano(), fixedTime.UnixNano(), fixedTime.Add(time.Minute).UnixNano())
+	testutil.NoError(t, err)
+
+	result, err := store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.Require(t, err == nil && result.Queued == 0, "result=%+v err=%v", result, err)
+	var afterPayload []byte
+	var claims int
+	testutil.NoError(t, store.db.QueryRow(`SELECT payload FROM sync_outbox WHERE mutation_id=?`, mutationID).Scan(&afterPayload))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox_claims WHERE mutation_id=?`, mutationID).Scan(&claims))
+	testutil.Require(t, bytes.Equal(beforePayload, afterPayload) && claims == 1, "payload or claim history changed before=%s after=%s claims=%d", beforePayload, afterPayload, claims)
+}
+
+func TestBackfillSyncProjectDoesNotRepairDifferingPayloadIdentity(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	_, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "content", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.NoError(t, err)
+	_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.NoError(t, err)
+	var payload []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT payload FROM sync_outbox WHERE record_kind='project' AND record_id='project'`).Scan(&payload))
+	var mutation syncservice.Mutation
+	testutil.NoError(t, json.Unmarshal(payload, &mutation))
+	mutation.MutationID = "550e8400-e29b-41d4-a716-446655440099"
+	different, err := json.Marshal(mutation)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`UPDATE sync_outbox SET payload=? WHERE record_kind='project' AND record_id='project'`, different)
+	testutil.NoError(t, err)
+
+	_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.Require(t, errors.Is(err, ErrConflict), "error=%v", err)
+	var after []byte
+	testutil.NoError(t, store.db.QueryRow(`SELECT payload FROM sync_outbox WHERE record_kind='project' AND record_id='project'`).Scan(&after))
+	testutil.Require(t, bytes.Equal(after, different), "payload changed after identity conflict: %s", after)
+}
+
 func TestBackfillSyncProjectConcurrentCallsDoNotDuplicateOutbox(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()

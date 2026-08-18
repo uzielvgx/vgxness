@@ -106,9 +106,13 @@ vgxness memory sync --credential-file /absolute/private/bearer
 Backfill sends no network request and reads no credential. It deterministically
 queues only unsynced records for that resolved project, preserves observation
 content, timestamps, and versions, skips tombstoned records, detects queue
-identity collisions, and is safe to run again. `--limit` defaults to 100 and
-accepts 1 through 1000; JSON reports `remaining=true` when another invocation
-is needed.
+identity collisions, and is safe to run again. If an existing create contains
+an older but valid record snapshot, backfill replaces only its payload while
+preserving its mutation and queue identity, and only while that exact row is
+still pending with zero attempts and has no claim history. Active or expired
+claims, retries, attempts, malformed or identity-changed payloads, and
+concurrently changed rows fail closed. `--limit` defaults to 100 and accepts 1
+through 1000; JSON reports `remaining=true` when another invocation is needed.
 
 ## First-device reseed and device rejoin
 
