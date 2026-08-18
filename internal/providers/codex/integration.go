@@ -66,33 +66,39 @@ func codexPackage(options integration.Options) (Package, error) {
 }
 
 func knownPackages() ([]Package, error) {
-	legacy, err := renderLegacy("v0.0.0")
-	if err != nil {
-		return nil, err
-	}
-	packages := []Package{legacy}
-	preConsolidation, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
-	if err != nil {
-		return nil, err
-	}
-	packages = append(packages, preConsolidation)
+	packages := make([]Package, 0, 18)
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
-		v6, err := renderActiveV6("v0.0.0", plan)
+		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			return nil, err
 		}
-		packages = append(packages, v6)
+		packages = append(packages, current)
+		v8, err := renderActiveV8("v0.0.0", plan)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, v8)
 		v7, err := renderActiveV7("v0.0.0", plan)
 		if err != nil {
 			return nil, err
 		}
 		packages = append(packages, v7)
-		pkg, err := RenderPlan("v0.0.0", plan)
+		v6, err := renderActiveV6("v0.0.0", plan)
 		if err != nil {
 			return nil, err
 		}
-		packages = append(packages, pkg)
+		packages = append(packages, v6)
 	}
+	preConsolidation, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+	if err != nil {
+		return nil, err
+	}
+	packages = append(packages, preConsolidation)
+	legacy, err := renderLegacy("v0.0.0")
+	if err != nil {
+		return nil, err
+	}
+	packages = append(packages, legacy)
 	return packages, nil
 }
 

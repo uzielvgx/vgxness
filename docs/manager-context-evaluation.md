@@ -6,6 +6,8 @@
 
 The v43 pre-change run used four development and four protected-holdout fresh sessions, with no retries or environment failures. It initially reported blocked solely because of unrelated or unconfirmed untracked presentation artifacts; the user restored a clean workspace before this implementation. That limitation remains part of the record.
 
+The current managed projections are OpenCode manager v49 and Codex manager v9. Deterministic source tests establish that both embed the same provider-neutral adaptive contract and preserve exact v48/v8 predecessors. The contract's classification and tool/delegation budgets are prompt instructions, not runtime broker enforcement. No external holdout, live provider, or NLP classification run was performed for this change; those evaluations remain pending and no behavioral pass rate is claimed.
+
 ## Dataset custody and assets
 
 `internal/providers/opencode/testdata/manager-context-dev-cases.json` is tuning-visible and contains only four recreated, disclosed intent categories: direct, delegated, blocked, and fixture-only edit. It is explicitly non-identical to the hashed original development dataset.

@@ -2,11 +2,11 @@
 
 OpenCode owns 18 managed artifacts: 15 agents, a model-plan manifest, an `opencode.json` default-agent selection, and restoration metadata. The separate global 47-file, 19-skill portable catalog adds `memory-sync` and `sdd-lifecycle`; exact historical `vgxness.ts` v1-v10 plugin bytes and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable, while modified, malformed, foreign, unknown, or newer bytes block without removal.
 
-Current delivery policy is manager v48 and global `stacked-pr` v3. Before branch creation and source writes or a routine delivery announcement, v48 requires clean untracked-inclusive porcelain, repository/base/ref identity, intended paths, an estimate and slice plan, and a deterministic fresh branch; candidate identity, developmental checks, independent verification, and review are post-implementation gates before delivery mutations. A dirty checkout stops writes except for explicitly current-task reauthorized recovery of a verified unpublished local slice. All first publications use only the empty-expectation create-only lease; existing remote branches and PRs remain read-only. Provider v1/v2/v3 bytes are retirement identities only, not activatable skills.
+Current delivery policy is manager v49 and global `stacked-pr` v3. Before branch creation and source writes or a routine delivery announcement, v49 requires clean untracked-inclusive porcelain, repository/base/ref identity, intended paths, an estimate and slice plan, and a deterministic fresh branch; candidate identity, developmental checks, independent verification, and review are post-implementation gates before delivery mutations. A dirty checkout stops writes except for explicitly current-task reauthorized recovery of a verified unpublished local slice. All first publications use only the empty-expectation create-only lease; existing remote branches and PRs remain read-only. Provider v1/v2/v3 bytes are retirement identities only, not activatable skills.
 
 Delivery labels are evidence-only: IMPLEMENTED requires completed workspace changes and observed developmental checks, but not independent verification; VERIFIED requires the exact frozen candidate to pass independent verification and review; DELIVERED requires the exact commit to be published and a new current-task PR created and read back; MERGED requires that PR merge and base containment/readback; INSTALLED additionally requires installation and handshake readback. No later state is inferred.
 
-VGXNESS installs 18 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v48; managed `general` v6; verifier v4; reviewer profiles v3; a read-only `explore` override; and six hidden read-only SDD profiles), one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. There is no installed plugin. The managed MCP launch command is `vgxness mcp --full`; it exposes the full five memory tools and 13 SDD tools read/write set. Read-only managed profiles receive explicit non-mutating allowlists.
+VGXNESS installs 18 OpenCode-managed artifacts: 15 agents (`vgxness-manager` v49; managed `general` v6; verifier v4; reviewer profiles v3; a read-only `explore` override; and six hidden read-only SDD profiles), one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. There is no installed plugin. The managed MCP launch command is `vgxness mcp --full`; it exposes the full five memory tools and 13 SDD tools read/write set. Read-only managed profiles receive explicit non-mutating allowlists.
 
 MCP is local stdio for a trusted OpenCode host. It has no caller identity or session authentication: host tool allowlists, operator permissions, user authorization, and task scope are its authorization boundary. No capability token or additional authentication framework is provided.
 
@@ -61,7 +61,7 @@ Self-install version cleanup is separate from this integration. `vgxness self gc
 
 Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS creates or updates `opencode.json` with `default_agent: "vgxness-manager"`, preserving every unrelated JSON value. It preserves any existing `opencode.jsonc` byte-for-byte. Bounded metadata at `<config-dir>/vgxness/default-agent.json` restores a prior explicit default during uninstall. Model routing remains OpenCode-owned.
 
-Preview and status are read-only. The managed agent catalogue contains manager v48 plus 14 other profiles; `general` is v6, verifier v4, and reviewers v3. Exact manager v47 and all older recognized manager, agent, model-plan, and `vgxness.ts` v1-v10 plugin artifacts remain historical identities; modified or unknown bytes are drift and block replacement. Exact provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal. Uninstall removes only exact provider artifacts and never removes global skills.
+Preview and status are read-only. The managed agent catalogue contains manager v49 plus 14 other profiles; `general` is v6, verifier v4, and reviewers v3. Exact historical manager v48 and all older recognized manager, agent, model-plan, and `vgxness.ts` v1-v10 plugin artifacts remain predecessor identities; modified or unknown bytes are drift and block replacement. Exact provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal. Uninstall removes only exact provider artifacts and never removes global skills.
 
 Installation stages each artifact in a private same-filesystem `0700` directory with a `0600` regular file, then publishes by no-overwrite link. Cleanup verifies the creation identity and exact expected bytes, retaining observed replacements, mutations, or extra staging entries as recovery evidence. This protects observable path replacement and content drift. POSIX provides no atomic compare-content-and-unlink operation against any external same-UID process holding a pre-opened writable descriptor, hostile or accidental; that situation is outside this supported boundary.
 
@@ -75,14 +75,14 @@ The default database is `~/.vgxness/memory.db`. Records remain isolated by canon
 
 The current SQLite schema v19 contains separate structured SDD tables and per-project sync backup intents; it does not make SDD content semantic memory or turn OpenSpec projections into canonical SQLite content. Immediately after a binary upgrade from an older supported schema, read-only opens cannot migrate: `status`, `doctor`, `setup opencode --status`, and read tools may report a storage/migration failure until one write-capable memory or SDD operation opens the database and atomically applies v19. Do not delete the database. Run the write-capable operation and rerun status; see [Native memory](memory.md#upgrade-migration-caveat).
 
-Memory access is explicit through MCP tools. The manager uses it only when the request indicates prior project context may matter:
+Memory access is explicit through MCP tools. Recall is intent-triggered when the request indicates prior project context may matter:
 
 - searches with all-term matching first and retries with any-term matching only when results are insufficient;
 - inspects bounded previews and reads full content only by exact ID after a relevant result;
 - uses recent memory only for explicit recent-work, session, or compaction-recovery requests, never as a routine first action;
-- saves only durable, evidence-backed knowledge;
+- after any route, may autonomously make at most one save only for a durable, evidence-backed, safely assessed project decision, preference, constraint, or learning;
 - reuses stable topic keys for evolving subjects;
-- never stores secrets, personal data, transient progress, raw command output, or full transcripts;
+- never stores secrets, personal data, transient progress, logs, raw command output, or full transcripts, and never adds engineering ceremony or automatic cloud sync;
 - forgets a memory only after an explicit user request.
 
 Reviewers may search and read memory as non-authoritative context. They cannot save or forget. Memory never proves a candidate diff and never overrides exact source, tests, or Git evidence.
@@ -113,7 +113,7 @@ The managed `explore` override uses `codegraph_explore` first for structural evi
 
 ### Adaptive workflow and interaction
 
-The manager chooses the smallest capable native route: direct inline work, read-only exploration, plan-only work, bounded delegated implementation, or optional SDD. File count influences inline versus delegated topology; it does not force ceremony or SDD. TDD, spikes, vertical slices, review, and validation are composable practices within those routes.
+Manager v49 silently classifies domain, operation, side effect, complexity, and risk without tools or delegation, then chooses the least-cost route. Conversation, writing, translation, summarization, brainstorming, and no-effect planning use zero execution tools, skills, todos, delegation, or review. Bounded simple exact reads allow at most three tool attempts and no delegation or todo; complex evidence research may use at most one read-only delegation. Reversible actions preserve authorization and readback; repository engineering preserves General, Explore, TDD, and developmental checks; irreversible or high-risk work preserves freeze, verifier, review, and delivery assurance. Every tool or delegation attempt—including failures and retries—counts, and the manager halts before a further attempt would exceed the selected budget. This is static prompt policy, not runtime enforcement, and no external, NLP, or holdout result is claimed.
 
 Interaction mode is resolved in this order:
 
@@ -135,7 +135,7 @@ TDD is not a universal gate. Documentation, passive assets, generated code, disp
 
 ### Native autonomous stacked pull requests
 
-For an eligible implementation task, manager v48 automatically loads global `stacked-pr`. Its clean pre-write gate—untracked-inclusive porcelain, repository/base/ref identity, intended paths, estimate and slice plan, and a fresh branch—precedes source writes and the routine delivery announcement. The global policy keeps the same sizing, deterministic branch, original-base, and `Depends-On` boundaries.
+For an eligible implementation task, manager v49 automatically loads global `stacked-pr`. Its clean pre-write gate—untracked-inclusive porcelain, repository/base/ref identity, intended paths, estimate and slice plan, and a fresh branch—precedes source writes and the routine delivery announcement. The global policy keeps the same sizing, deterministic branch, original-base, and `Depends-On` boundaries.
 
 After the exact candidate passes freeze, independent verification, and review, a fresh branch, normal commit, first push, and non-draft `gh pr create` need no second routine approval. Current-task merge authorization may land only PRs created by that task, ordinally, with repository-bound head OID matching and the repository's allowed merge-commit method after exact PR/repository/head/base/OID, predecessor, conflict, and required-check readback. Each slice uses an expected base-tip OID: slice 1 reads it from the freshly fetched original base before checks, and each predecessor merge advances it after a fresh base readback; the PR base and live remote base must equal it before checks and immediately before merge. `no merge` is transitive; `local-only`, `no commit`, `no push`, and `no PR` also forbid merge. Any failure, drift, dirty worktree, host/auth or branch-protection ambiguity stops mutations, except the exact bounded, explicitly reauthorized recovery of a verified unpublished local slice. Existing remote branches and PRs remain read-only and never gain retroactive merge or cleanup authority; only that bounded unpublished local-slice recovery is allowed. After verified merged readback and base containment for every slice, the manager may fast-forward the original base from its verified remote-tracking branch. Unless `no cleanup` is set, it may then delete only exact current-delivery local branches proven merged with no open dependent PR; remote delivery branches are left intact, and unrelated branches and worktrees are never touched.
 
@@ -143,7 +143,7 @@ Manager, managed `general`, and verifier use a single global `allow` permission 
 
 ## Health contract
 
-The integration is installed only when manager v48, all other 14 agents (including `general` v6, verifier v4, and reviewers v3), the model-plan manifest, default-agent selection, and restoration metadata match their provider identities exactly. Setup health combines:
+The integration is installed only when manager v49, all other 14 agents (including `general` v6, verifier v4, and reviewers v3), the model-plan manifest, default-agent selection, and restoration metadata match their provider identities exactly. Setup health combines:
 
 1. the permanent VGXNESS launcher is installed and verified;
 2. all 18 OpenCode-managed artifacts are installed without drift: 15 agents, model-plan manifest, default-agent selection, and restoration metadata;
