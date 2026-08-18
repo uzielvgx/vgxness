@@ -742,6 +742,48 @@ func TestRunSyncProjectTransitionReusesBackupIntentAfterPrepareFailure(t *testin
 	}
 }
 
+func TestRunSyncProjectTransitionRecoversOnlyMatchingUnsealedBackup(t *testing.T) {
+	root := t.TempDir()
+	database, backup := filepath.Join(root, "memory.db"), filepath.Join(root, "backup.sqlite")
+	if err := os.WriteFile(backup, []byte("backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	t.Run("matching embedded intent seals and reuses without a second backup", func(t *testing.T) {
+		creates, embeddedChecks := 0, 0
+		store := &transitionTestStore{intent: memory.SyncProjectBackupIntent{IntentID: "intent", BackupPath: backup}, prepareErr: errors.New("prepare failure")}
+		ops := syncProjectBackupOps{
+			create: func(context.Context, string, string) error { creates++; return nil },
+			verify: func(context.Context, string, string) error { return nil },
+			verifyIntent: func(context.Context, string, string, string, string, memory.SyncProjectTransitionMode, memory.SyncProjectBackupIntent) error {
+				embeddedChecks++
+				return nil
+			},
+			digest: func(context.Context, string) ([]byte, error) { return make([]byte, 32), nil },
+		}
+		_, err := runSyncProjectTransition(context.Background(), store, &testForegroundRemote{}, database, project, "project", memory.SyncProjectTransitionRejoinMerge, ops)
+		if err == nil || creates != 0 || embeddedChecks != 1 || store.seals != 1 || store.prepareCalls != 1 {
+			t.Fatalf("err=%v creates=%d embedded=%d seals=%d prepares=%d", err, creates, embeddedChecks, store.seals, store.prepareCalls)
+		}
+	})
+	t.Run("healthy different database fails closed without replacement", func(t *testing.T) {
+		creates := 0
+		store := &transitionTestStore{intent: memory.SyncProjectBackupIntent{IntentID: "intent", BackupPath: backup}}
+		ops := syncProjectBackupOps{
+			create: func(context.Context, string, string) error { creates++; return nil },
+			verify: func(context.Context, string, string) error { return nil },
+			verifyIntent: func(context.Context, string, string, string, string, memory.SyncProjectTransitionMode, memory.SyncProjectBackupIntent) error {
+				return memory.ErrConflict
+			},
+			digest: func(context.Context, string) ([]byte, error) { return make([]byte, 32), nil },
+		}
+		_, err := runSyncProjectTransition(context.Background(), store, &testForegroundRemote{}, database, project, "project", memory.SyncProjectTransitionRejoinMerge, ops)
+		if !errors.Is(err, memory.ErrConflict) || creates != 0 || store.seals != 0 || store.prepareCalls != 0 {
+			t.Fatalf("err=%v creates=%d seals=%d prepares=%d", err, creates, store.seals, store.prepareCalls)
+		}
+	})
+}
+
 func TestRunSyncProjectTransitionFailsClosedForInvalidIntentAndIncompleteSync(t *testing.T) {
 	project := "550e8400-e29b-41d4-a716-446655440001"
 	t.Run("invalid existing backup creates no replacement backup", func(t *testing.T) {
@@ -1176,13 +1218,15 @@ func (store *projectForegroundStore) MarkSyncOutboxRetry(context.Context, string
 
 type transitionTestStore struct {
 	projectForegroundStore
-	transition  memory.SyncProjectTransitionResult
-	active      bool
-	intent      memory.SyncProjectBackupIntent
-	prepareErr  error
-	ensureCalls int
-	backupPaths []string
-	finalizes   int
+	transition   memory.SyncProjectTransitionResult
+	active       bool
+	intent       memory.SyncProjectBackupIntent
+	prepareErr   error
+	ensureCalls  int
+	backupPaths  []string
+	finalizes    int
+	seals        int
+	prepareCalls int
 }
 
 func testBackupOps() syncProjectBackupOps {
@@ -1207,10 +1251,12 @@ func (store *transitionTestStore) EnsureSyncProjectBackupIntent(_ context.Contex
 }
 
 func (store *transitionTestStore) PrepareSyncProjectTransitionWithBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, bool, memory.SyncProjectBackupIntent) (memory.SyncProjectTransitionResult, error) {
+	store.prepareCalls++
 	return memory.SyncProjectTransitionResult{}, store.prepareErr
 }
 
 func (store *transitionTestStore) SealSyncProjectBackupIntent(_ context.Context, _ string, _ string, _ memory.SyncProjectTransitionMode, intent memory.SyncProjectBackupIntent, digest []byte) (memory.SyncProjectBackupIntent, error) {
+	store.seals++
 	intent.BackupSHA256 = append([]byte(nil), digest...)
 	store.intent = intent
 	return intent, nil

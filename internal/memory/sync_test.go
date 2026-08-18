@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -223,6 +224,24 @@ func TestSyncProjectBackupIntentIsStableUntilPrepared(t *testing.T) {
 	testutil.NoError(t, err)
 	_, found, err = store.SyncProjectBackupIntent(ctx, portable, "project", SyncProjectTransitionReseedSource)
 	testutil.Require(t, err == nil && !found, "found=%t err=%v", found, err)
+}
+
+func TestVerifySQLiteBackupIntentRequiresExactEmbeddedIntent(t *testing.T) {
+	root := t.TempDir()
+	testutil.NoError(t, os.Chmod(root, 0o700))
+	database, backup := filepath.Join(root, "memory.db"), filepath.Join(root, "backup.sqlite")
+	store := openPath(t, database)
+	portable := "550e8400-e29b-41d4-a716-446655440391"
+	intent := SyncProjectBackupIntent{IntentID: "sync-project-backup:" + portable, BackupPath: backup}
+	_, err := store.db.Exec(`INSERT INTO sync_project_backup_intents(portable_project_id,local_project_id,mode,intent_id,backup_path,backup_sha256,created_at) VALUES(?,?,?,?,?,?,?)`, portable, "project", SyncProjectTransitionRejoinMerge, intent.IntentID, intent.BackupPath, nil, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	testutil.NoError(t, CreateSQLiteBackup(context.Background(), database, backup))
+	if err := VerifySQLiteBackupIntent(context.Background(), database, backup, portable, "project", SyncProjectTransitionRejoinMerge, intent); err != nil {
+		t.Fatalf("matching embedded intent: %v", err)
+	}
+	if err := VerifySQLiteBackupIntent(context.Background(), database, backup, portable, "different-project", SyncProjectTransitionRejoinMerge, intent); !errors.Is(err, ErrConflict) {
+		t.Fatalf("healthy different database binding accepted: %v", err)
+	}
 }
 
 func TestPrepareSyncProjectRejoinSnapshotsThenAcceptsEquivalentRemoteCreate(t *testing.T) {

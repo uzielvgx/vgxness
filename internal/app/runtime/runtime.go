@@ -631,7 +631,7 @@ func (runtime Memory) TransitionSyncProject(ctx context.Context, opts config.Opt
 	if err != nil {
 		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
 	}
-	return runSyncProjectTransition(ctx, store, syncRemote{client: client, credential: credential}, paths.Database, portable, project, mode, syncProjectBackupOps{create: memory.CreateSQLiteBackup, verify: memory.VerifySQLiteBackup, digest: memory.SQLiteBackupSHA256})
+	return runSyncProjectTransition(ctx, store, syncRemote{client: client, credential: credential}, paths.Database, portable, project, mode, syncProjectBackupOps{create: memory.CreateSQLiteBackup, verify: memory.VerifySQLiteBackup, verifyIntent: memory.VerifySQLiteBackupIntent, digest: memory.SQLiteBackupSHA256})
 }
 
 type syncProjectTransitionStore interface {
@@ -644,9 +644,10 @@ type syncProjectTransitionStore interface {
 }
 
 type syncProjectBackupOps struct {
-	create func(context.Context, string, string) error
-	verify func(context.Context, string, string) error
-	digest func(context.Context, string) ([]byte, error)
+	create       func(context.Context, string, string) error
+	verify       func(context.Context, string, string) error
+	verifyIntent func(context.Context, string, string, string, string, memory.SyncProjectTransitionMode, memory.SyncProjectBackupIntent) error
+	digest       func(context.Context, string) ([]byte, error)
 }
 
 func runSyncProjectTransition(ctx context.Context, store syncProjectTransitionStore, remote foregroundRemote, database, portableProject, project string, mode memory.SyncProjectTransitionMode, backupOps syncProjectBackupOps) (memory.SyncProjectTransitionResult, error) {
@@ -678,14 +679,20 @@ func runSyncProjectTransition(ctx context.Context, store syncProjectTransitionSt
 			return memory.SyncProjectTransitionResult{}, memory.ErrCorrupt
 		}
 		if _, backupErr := os.Lstat(intent.BackupPath); backupErr == nil {
-			if len(intent.BackupSHA256) == 0 {
-				return memory.SyncProjectTransitionResult{}, memory.ErrConflict
-			}
 			err = backupOps.verify(ctx, database, intent.BackupPath)
 			if err == nil {
 				var digest []byte
 				digest, err = backupOps.digest(ctx, intent.BackupPath)
-				if err == nil && !bytes.Equal(digest, intent.BackupSHA256) {
+				if err == nil && len(intent.BackupSHA256) == 0 {
+					if backupOps.verifyIntent == nil {
+						err = memory.ErrCorrupt
+					} else {
+						err = backupOps.verifyIntent(ctx, database, intent.BackupPath, portableProject, project, mode, intent)
+					}
+					if err == nil {
+						intent, err = store.SealSyncProjectBackupIntent(ctx, portableProject, project, mode, intent, digest)
+					}
+				} else if err == nil && !bytes.Equal(digest, intent.BackupSHA256) {
 					err = memory.ErrConflict
 				}
 			}

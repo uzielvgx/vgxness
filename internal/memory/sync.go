@@ -159,6 +159,30 @@ func VerifySQLiteBackup(ctx context.Context, database, destination string) error
 	return nil
 }
 
+// VerifySQLiteBackupIntent verifies that an unsealed snapshot contains the
+// exact durable intent which selected it. This permits a retry to seal and
+// reuse the only snapshot produced after intent commit but before its seal;
+// a healthy snapshot from any other database still fails closed.
+func VerifySQLiteBackupIntent(ctx context.Context, database, destination, portableProject, localProject string, mode SyncProjectTransitionMode, intent SyncProjectBackupIntent) error {
+	if err := VerifySQLiteBackup(ctx, database, destination); err != nil {
+		return err
+	}
+	if !projectIDPattern.MatchString(portableProject) || localProject == "" || (mode != SyncProjectTransitionReseedSource && mode != SyncProjectTransitionRejoinMerge) || intent.IntentID == "" || intent.BackupPath != destination {
+		return fmt.Errorf("%w: backup intent", ErrInvalid)
+	}
+	db, err := sql.Open("sqlite", sqliteReadURI(destination))
+	if err != nil {
+		return fmt.Errorf("%w: backup intent", ErrCorrupt)
+	}
+	defer db.Close()
+	var storedID, storedPath, storedLocal, storedMode string
+	err = db.QueryRowContext(ctx, `SELECT intent_id,backup_path,local_project_id,mode FROM sync_project_backup_intents WHERE portable_project_id=?`, portableProject).Scan(&storedID, &storedPath, &storedLocal, &storedMode)
+	if err != nil || storedID != intent.IntentID || storedPath != intent.BackupPath || storedLocal != localProject || storedMode != string(mode) {
+		return fmt.Errorf("%w: backup intent", ErrConflict)
+	}
+	return nil
+}
+
 func SQLiteBackupSHA256(ctx context.Context, path string) ([]byte, error) {
 	if err := cancelled(ctx); err != nil {
 		return nil, err

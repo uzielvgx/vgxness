@@ -15,21 +15,51 @@ import (
 )
 
 type fakeMemoryRuntime struct {
-	result   memory.Entry
-	items    []memory.Entry
-	recall   memory.Recall
-	recent   memory.Recent
-	project  string
-	err      error
-	calls    int
-	sync     memory.SyncResult
-	status   memory.SyncConfigurationStatus
-	endpoint string
-	deviceID string
-	bearer   string
-	opts     config.Options
-	backfill memory.SyncBackfillResult
-	repair   memory.SyncProjectRepairResult
+	result     memory.Entry
+	items      []memory.Entry
+	recall     memory.Recall
+	recent     memory.Recent
+	project    string
+	err        error
+	calls      int
+	sync       memory.SyncResult
+	status     memory.SyncConfigurationStatus
+	endpoint   string
+	deviceID   string
+	bearer     string
+	opts       config.Options
+	backfill   memory.SyncBackfillResult
+	repair     memory.SyncProjectRepairResult
+	transition memory.SyncProjectTransitionResult
+}
+
+func TestMemorySyncTransitionCommandsRequireExactModeConfirmation(t *testing.T) {
+	workspace := t.TempDir()
+	for _, args := range [][]string{
+		{"memory", "sync", "reseed", "--workspace", workspace},
+		{"memory", "sync", "reseed", "--workspace", workspace, "--confirm-cloud-empty", "--confirm-cloud-empty"},
+		{"memory", "sync", "rejoin", "--workspace", workspace, "--confirm-cloud-empty"},
+		{"memory", "sync", "rejoin", "--workspace", "relative", "--confirm-merge"},
+		{"memory", "sync", "rejoin", "--workspace", workspace, "--confirm-merge", "--unknown"},
+	} {
+		runtime := &fakeMemoryRuntime{}
+		code, out, stderr := runMemoryTest(args, "", runtime)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == 0 && stderr != "", "args=%q code=%d out=%q stderr=%q calls=%d", args, code, out, stderr, runtime.calls)
+	}
+	for _, tc := range []struct {
+		verb, confirmation, mode string
+	}{
+		{"reseed", "--confirm-cloud-empty", string(memory.SyncProjectTransitionReseedSource)},
+		{"rejoin", "--confirm-merge", string(memory.SyncProjectTransitionRejoinMerge)},
+	} {
+		runtime := &fakeMemoryRuntime{transition: memory.SyncProjectTransitionResult{SchemaVersion: 1, Mode: memory.SyncProjectTransitionMode(tc.mode), Status: memory.SyncProjectTransitionPublishing, Projects: 1, Queued: 1}}
+		code, out, stderr := runMemoryTest([]string{"memory", "sync", tc.verb, "--workspace", workspace, tc.confirmation, "--json"}, "", runtime)
+		testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"mode":"`+tc.mode+`"`) && !strings.Contains(out, "credential") && !strings.Contains(out, "backup"), "verb=%s code=%d out=%q stderr=%q calls=%d", tc.verb, code, out, stderr, runtime.calls)
+		runtime = &fakeMemoryRuntime{transition: memory.SyncProjectTransitionResult{SchemaVersion: 1, Mode: memory.SyncProjectTransitionMode(tc.mode), Status: memory.SyncProjectTransitionPublishing, Projects: 1, Queued: 1}}
+		code, out, stderr = runMemoryTest([]string{"memory", "sync", tc.verb, "--workspace", workspace, tc.confirmation}, "", runtime)
+		expected := "schema_version=1\nmode=" + tc.mode + "\nstatus=publishing\nprojects=1\nsessions=0\nobservations=0\nqueued=1\n"
+		testutil.Require(t, code == 0 && stderr == "" && out == expected && runtime.calls == 1, "verb=%s code=%d out=%q stderr=%q calls=%d", tc.verb, code, out, stderr, runtime.calls)
+	}
 }
 
 func TestMemorySyncRepairProjectRequiresExactConfirmationAndEmitsOnlyResult(t *testing.T) {
@@ -123,6 +153,12 @@ func (f *fakeMemoryRuntime) RepairSyncProject(_ context.Context, opts config.Opt
 		f.repair = memory.SyncProjectRepairResult{SchemaVersion: 1, Status: "pending", Queued: 1}
 	}
 	return f.repair, f.err
+}
+
+func (f *fakeMemoryRuntime) TransitionSyncProject(_ context.Context, opts config.Options, _ string, _ memory.SyncProjectTransitionMode) (memory.SyncProjectTransitionResult, error) {
+	f.calls++
+	f.opts = opts
+	return f.transition, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
