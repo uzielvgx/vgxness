@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "target": "provider-neutral adaptive-policy/v1",
+  "partition": "development",
+  "grading": "deterministic-assertions; no-model-self-grading",
+  "evaluation_scope": "policy assertions only; requests are not NLP results",
+  "label_status": "labeled-development",
+  "cases": [
+    {
+      "id": "dev-long-trip-plan", "category": "daily-planning",
+      "request": "Plan a detailed three-week train trip through Japan with a realistic day-by-day outline and packing checklist.",
+      "classification": {"domain":"planning","operation":"plan","complexity":"complex","side_effect":"none","risk":"low"},
+      "expected_policy": {"route":"direct","max_tools":0,"max_delegations":0,"use_todo":false,"authorization":"none","verification":"none","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+    },
+    {
+      "id": "dev-email-draft", "category": "writing",
+      "request": "Draft a thoughtful email declining a speaking invitation while leaving the door open for next year.",
+      "classification": {"domain":"writing","operation":"draft","complexity":"simple","side_effect":"none","risk":"low"},
+      "expected_policy": {"route":"direct","max_tools":0,"max_delegations":0,"use_todo":false,"authorization":"none","verification":"none","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+    },
+    {
+      "id": "dev-durable-preference-save", "category": "durable-memory",
+      "request": "Remember that I prefer concise status updates with decisions listed first.",
+      "classification": {"domain":"conversation","operation":"answer","complexity":"trivial","side_effect":"none","risk":"low"},
+      "memory_intent": "save", "memory_candidate": {"durable":true,"evidence_backed":true,"safety_assessed":true},
+      "expected_policy": {"route":"direct","max_tools":0,"max_delegations":0,"use_todo":false,"authorization":"none","verification":"none","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"},
+      "expected_memory": {"decision":"save","max_tools":1,"autonomous":false,"automatic_cloud_sync":false,"requires_engineering":false}
+    },
+    {
+      "id": "dev-transient-chat-non-save", "category": "transient-memory",
+      "request": "I'm debugging for the next hour; don't remember this temporary context after our chat.",
+      "memory_intent": "none", "memory_candidate": {"transient":true},
+      "expected_memory": {"decision":"reject","max_tools":0,"autonomous":false,"automatic_cloud_sync":false,"requires_engineering":false}
+    },
+    {
+      "id": "dev-knowledge-lookup", "category": "research",
+      "request": "Inspect the supplied product brief and report the stated launch month.",
+      "classification": {"domain":"knowledge","operation":"inspect","complexity":"simple","side_effect":"read","risk":"low"},
+      "expected_policy": {"route":"assisted","max_tools":3,"max_delegations":0,"use_todo":false,"authorization":"none","verification":"targeted","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+    },
+    {
+      "id": "dev-complex-research", "category": "research",
+      "request": "Research and compare the documented accessibility approaches of three major design systems, citing the evidence used.",
+      "classification": {"domain":"knowledge","operation":"inspect","complexity":"complex","side_effect":"read","risk":"low"},
+      "expected_policy": {"route":"assisted","max_tools":3,"max_delegations":1,"use_todo":false,"authorization":"none","verification":"targeted","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+    },
+    {
+      "id": "dev-bounded-repository-read", "category": "repository",
+      "request": "Read the exact Go version declared in go.mod and report only that value.",
+      "classification": {"domain":"repository-engineering","operation":"inspect","complexity":"simple","side_effect":"read","risk":"low"},
+      "expected_policy": {"route":"assisted","max_tools":3,"max_delegations":0,"use_todo":false,"authorization":"none","verification":"targeted","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+    },
+    {
+      "id": "dev-repository-diagnosis", "category": "repository",
+      "request": "Diagnose why the repository's focused orchestration test fails and identify the smallest safe correction without editing files.",
+      "classification": {"domain":"repository-engineering","operation":"inspect","complexity":"complex","side_effect":"read","risk":"medium"},
+      "expected_policy": {"route":"engineering","max_tools":12,"max_delegations":2,"use_todo":true,"authorization":"none","verification":"comprehensive","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+    },
+    {
+      "id": "dev-repository-edit", "category": "repository",
+      "request": "Update the repository parser and its focused regression test, then run the authorized checks.",
+      "classification": {"domain":"repository-engineering","operation":"modify","complexity":"complex","side_effect":"local-write","risk":"medium"},
+      "expected_policy": {"route":"engineering","max_tools":12,"max_delegations":2,"use_todo":true,"authorization":"scoped","verification":"comprehensive","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+    }
+  ]
+}
