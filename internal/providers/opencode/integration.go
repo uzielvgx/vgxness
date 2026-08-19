@@ -1197,17 +1197,20 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		return nil
 	}
-	exploreV2 := previousExploreV2(plan.agents[exploreAgentName])
-	generalV6 := previousGeneralV6(plan.agents[generalAgentName])
-	verifierV4 := previousVerifierV4(plan.agents[verifierAgentName])
-	if len(exploreV2) == 0 || len(generalV6) == 0 || len(verifierV4) == 0 {
+	exploreV3 := previousExploreV3(plan.agents[exploreAgentName])
+	exploreV2 := previousExploreV2(exploreV3)
+	generalV7 := previousGeneralV7(plan.agents[generalAgentName])
+	generalV6 := previousGeneralV6(generalV7)
+	verifierV5 := previousVerifierV5(plan.agents[verifierAgentName])
+	verifierV4 := previousVerifierV4(verifierV5)
+	if len(exploreV3) == 0 || len(exploreV2) == 0 || len(generalV7) == 0 || len(generalV6) == 0 || len(verifierV5) == 0 || len(verifierV4) == 0 {
 		return inspection{}, integration.ErrInvalid
 	}
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: predecessors[managerAgentName], regenerations: regeneration(managerPath)},
-		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{exploreV2, previousExplorePredecessor(exploreV2)}, regenerations: regeneration(explorePath)},
-		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: append(predecessors[generalAgentName], generalV6, previousGeneralPredecessor(generalV6)), regenerations: regeneration(generalPath)},
-		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: append(predecessors[verifierAgentName], verifierV4, previousVerifierPredecessor(verifierV4)), regenerations: regeneration(verifierPath)},
+		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{exploreV3, exploreV2, previousExplorePredecessor(exploreV2)}, regenerations: regeneration(explorePath)},
+		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: append(predecessors[generalAgentName], generalV7, generalV6, previousGeneralPredecessor(generalV6)), regenerations: regeneration(generalPath)},
+		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: append(predecessors[verifierAgentName], verifierV5, verifierV4, previousVerifierPredecessor(verifierV4)), regenerations: regeneration(verifierPath)},
 		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: predecessors[reviewRiskName], regenerations: regeneration(reviewRiskPath)},
 		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: predecessors[reviewReadabilityName], regenerations: regeneration(reviewReadabilityPath)},
 		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", predecessors: predecessors[reviewReliabilityName], regenerations: regeneration(reviewReliabilityPath)},

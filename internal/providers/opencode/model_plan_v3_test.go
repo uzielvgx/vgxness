@@ -385,6 +385,24 @@ func TestSchemaV3ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
 	}
 }
 
+func TestSchemaV3RecognizesImmediateProfileManifest(t *testing.T) {
+	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
+	current, err := buildModelPlanBundleV3(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err := previousActiveProfilesModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recognized, err := parseInstalledModelPlanManifest(predecessor.manifest); err != nil || !bytes.Equal(recognized.manifest, predecessor.manifest) {
+		t.Fatalf("schema-v3 immediate profile manifest rejected: %v", err)
+	}
+	if _, _, err := parseInstalledModelPlanManifest(mutateManifestDigest(t, predecessor, generalAgentName)); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("mutated schema-v3 immediate profile manifest error=%v, want drift", err)
+	}
+}
+
 func TestSchemaV3RecognizesImmediatePromptPredecessorsWithoutNewContext(t *testing.T) {
 	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
 	current, err := buildModelPlanBundleV3(config)

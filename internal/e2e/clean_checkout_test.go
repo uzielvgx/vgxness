@@ -137,9 +137,9 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		err  error
 		want []string
 	}{
-		{"general", generalData, generalErr, []string{"artifact: opencode-agent/general; version: 7", "permission:\n  \"*\": allow", "delegated implementation worker", "Require a Context Capsule v1 for every non-SDD repository mission.", "Echo the accepted contextDigest unchanged in the return."}},
-		{"explore", exploreData, exploreErr, []string{"artifact: opencode-agent/explore; version: 3", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow", "Require a Context Capsule v1 for every non-SDD repository mission.", "Echo the accepted contextDigest unchanged in the return."}},
-		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 5", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission.", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
+		{"general", generalData, generalErr, []string{"artifact: opencode-agent/general; version: 8", "permission:\n  \"*\": allow", "delegated implementation worker", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
+		{"explore", exploreData, exploreErr, []string{"artifact: opencode-agent/explore; version: 4", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
+		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 6", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
 	} {
 		if required.err != nil {
 			t.Fatalf("read installed %s contract: %v", required.name, required.err)

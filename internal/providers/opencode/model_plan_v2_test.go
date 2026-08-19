@@ -29,6 +29,20 @@ func TestSchemaV2ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
 	}
 }
 
+func TestSchemaV2RecognizesImmediateProfileManifest(t *testing.T) {
+	current := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+	predecessor, err := previousActiveProfilesModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recognized, err := parseInstalledModelPlanManifest(predecessor.manifest); err != nil || !bytes.Equal(recognized.manifest, predecessor.manifest) {
+		t.Fatalf("schema-v2 immediate profile manifest rejected: %v", err)
+	}
+	if _, _, err := parseInstalledModelPlanManifest(mutateManifestDigest(t, predecessor, generalAgentName)); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("mutated schema-v2 immediate profile manifest error=%v, want drift", err)
+	}
+}
+
 func TestSchemaV2ImmediatePromptPredecessorKeepsModelBindings(t *testing.T) {
 	for _, current := range []modelPlanBundle{
 		mustBuildModelPlanV2(t, schemaV2TestConfig(t)),
