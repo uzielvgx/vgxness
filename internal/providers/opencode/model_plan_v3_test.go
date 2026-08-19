@@ -342,7 +342,11 @@ func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(predecessors) < 3 || artifactSHA256(predecessors[2]) != artifactSHA256(v46.agents[managerAgentName]) {
+	found := false
+	for _, predecessor := range predecessors {
+		found = found || artifactSHA256(predecessor) == artifactSHA256(v46.agents[managerAgentName])
+	}
+	if !found {
 		t.Fatal("manifestless predecessor recognition lacks exact v46 manager")
 	}
 }
@@ -381,6 +385,38 @@ func TestSchemaV3ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
 	}
 }
 
+func TestSchemaV3RecognizesImmediatePromptPredecessorsWithoutNewContext(t *testing.T) {
+	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
+	current, err := buildModelPlanBundleV3(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	immediate, err := previousV49ModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recognized, err := parseInstalledModelPlanManifest(immediate.manifest); err != nil || !bytes.Equal(recognized.manifest, immediate.manifest) {
+		t.Fatalf("schema-v3 immediate predecessor manifest rejected: %v", err)
+	}
+	for name, marker := range map[string]string{
+		managerAgentName: "artifact: opencode-agent/vgxness-manager; version: 49",
+		generalAgentName: "artifact: opencode-agent/general; version: 6",
+		exploreAgentName: "artifact: opencode-agent/explore; version: 2",
+	} {
+		predecessors, err := modelBoundAgentPredecessorCandidatesV3(*current.resolvedV3, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, candidate := range predecessors {
+			found = found || bytes.Contains(candidate, []byte(marker)) && !bytes.Contains(candidate, []byte("Context Capsule v1"))
+		}
+		if !found {
+			t.Errorf("schema-v3 %s lacks exact immediate predecessor", name)
+		}
+	}
+}
+
 func TestModelBoundV3V46ManagerPredecessorIsExact(t *testing.T) {
 	plan, err := ResolveModelPlanV3(sdd.ModelPlanConfigV3{
 		SchemaVersion: 3,
@@ -399,7 +435,8 @@ func TestModelBoundV3V46ManagerPredecessorIsExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := []byte(legacyManagerPrompt(string(current)))
+	v49 := previousManagerV49(current)
+	expected := []byte(legacyManagerPrompt(string(v49)))
 	predecessors, err := modelBoundAgentPredecessorsV3(plan)
 	if err != nil {
 		t.Fatal(err)

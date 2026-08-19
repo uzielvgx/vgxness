@@ -50,12 +50,30 @@ permission:
 		t.Fatalf("unexpected explore frontmatter:\n%s", got)
 	}
 	for _, contract := range []string{
-		"artifact: opencode-agent/explore; version: 2",
+		"artifact: opencode-agent/explore; version: 3",
 		"Use codegraph_codegraph_explore first",
 		"Do not use shell",
 	} {
 		if strings.Count(string(prompt), contract) != 1 {
 			t.Errorf("explore contract %q count=%d", contract, strings.Count(string(prompt), contract))
+		}
+	}
+}
+
+func TestManagedExploreAgentEchoesAndValidatesContextDigest(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	prompt := string(bundle.agents[exploreAgentName])
+	for _, contract := range []string{
+		"Require a Context Capsule v1 for every non-SDD repository mission",
+		"Manager-attested digest",
+		"Echo the accepted contextDigest unchanged",
+		"require parentContextDigest to equal the previously accepted contextDigest",
+		"Do not independently recompute",
+		"advisory lens name and bounded evidence question",
+	} {
+		if !strings.Contains(prompt, contract) {
+			t.Errorf("explore missing phase-1 context contract %q", contract)
 		}
 	}
 }
@@ -136,6 +154,8 @@ func previousExploreAgent(t *testing.T, current []byte) []byte {
 func completeV1ExploreBundle(t *testing.T) modelPlanBundle {
 	t.Helper()
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	current, err = previousV49ModelPlanBundle(current)
 	testutil.NoError(t, err)
 	agents := make(map[string][]byte, len(current.agents))
 	for name, content := range current.agents {
@@ -241,6 +261,8 @@ func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 	service, options := NewIntegration(), integration.Options{ConfigDir: config}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	v49, err := previousV49ModelPlanBundle(current)
+	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(current)
 	testutil.NoError(t, err)
 	managerV42, err := previousManagerModelPlanBundleV42(v43)
@@ -255,7 +277,7 @@ func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 		name   string
 		bundle modelPlanBundle
 	}{
-		{"v41", managerV41}, {"v40", managerV40}, {"v39", managerV39},
+		{"v49-v6-v2", v49}, {"v41", managerV41}, {"v40", managerV40}, {"v39", managerV39},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeCompleteV1ExploreBundle(t, config, tc.bundle)
@@ -289,7 +311,7 @@ func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testi
 	testutil.NoError(t, err)
 	candidates, err := predecessorBundles(current)
 	testutil.NoError(t, err)
-	if minimum := len(managerPredecessorsMust(t, current)) * 2 * 3; len(candidates) < minimum {
+	if minimum := 60; len(candidates) < minimum {
 		t.Fatalf("predecessor combinations=%d, want at least %d", len(candidates), minimum)
 	}
 	seen := make(map[string]struct{}, len(candidates))

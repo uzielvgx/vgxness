@@ -1622,7 +1622,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 49"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 50"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -1967,7 +1967,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 49",
+		"artifact: opencode-agent/vgxness-manager; version: 50",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native adaptive general-purpose partner",
 		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",
@@ -2042,7 +2042,7 @@ func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 			}
 		}
 	}
-	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 6") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 4"), "current broad-profile markers were not bumped")
+	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 7") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 5"), "current broad-profile markers were not bumped")
 	legacy, err := previousSDDModelPlanBundle(bundle)
 	testutil.NoError(t, err)
 	testutil.Require(t, strings.Contains(string(legacy.agents[generalAgentName]), "artifact: opencode-agent/general; version: 5") && !strings.Contains(string(legacy.agents[generalAgentName]), "vgxness_sdd_record_projection: deny") && strings.Contains(string(legacy.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 3") && !strings.Contains(string(legacy.agents[verifierAgentName]), "vgxness_sdd_record_projection: deny"), "historical broad profiles were mutated")
@@ -3249,7 +3249,7 @@ func TestIntegrationV3RecognizesArtifactSpecificPredecessorsWithoutManifest(t *t
 	testutil.NoError(t, err)
 	general, err := bindProfile(previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", "artifact: opencode-agent/general; version: 4", resolved["agents/"+generalAgentName], false)
 	testutil.NoError(t, err)
-	verifier, err := bindProfile(canonicalVerifierPrompt, verifierPreviousMarker, verifierPreviousMarker, resolved["agents/"+verifierAgentName], false)
+	verifier, err := bindProfile(previousVerifierPromptV3(), verifierPreviousMarker, verifierPreviousMarker, resolved["agents/"+verifierAgentName], false)
 	testutil.NoError(t, err)
 	risk, err := bindAgent(previousReviewPromptsV2()[reviewRiskName], sdd.RoleRisk, resolved["agents/"+reviewRiskName])
 	testutil.NoError(t, err)

@@ -90,7 +90,7 @@ func renderPreConsolidationV4(version string, plan sdd.Plan) (Package, error) {
 // renderActiveV6 reconstructs the immediately preceding active package so
 // lifecycle inspection can upgrade it without treating it as user drift.
 func renderActiveV6(version string, plan sdd.Plan) (Package, error) {
-	selected, err := profilesForPlan(plan)
+	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
 	}
@@ -106,7 +106,7 @@ func renderActiveV6(version string, plan sdd.Plan) (Package, error) {
 // renderActiveV7 reconstructs the immediately preceding active package so
 // lifecycle inspection can upgrade it without treating it as user drift.
 func renderActiveV7(version string, plan sdd.Plan) (Package, error) {
-	selected, err := profilesForPlan(plan)
+	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
 	}
@@ -121,7 +121,7 @@ func renderActiveV7(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV8 reconstructs the immediately preceding managed predecessor.
 func renderActiveV8(version string, plan sdd.Plan) (Package, error) {
-	selected, err := profilesForPlan(plan)
+	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
 	}
@@ -130,6 +130,22 @@ func renderActiveV8(version string, plan sdd.Plan) (Package, error) {
 		return Package{}, err
 	}
 	pkg.Artifacts[0].Bytes = []byte(activeV8ManagerInstructions())
+	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
+	return pkg, nil
+}
+
+// renderActiveV9 reconstructs the exact package immediately before repository
+// children gained Context Capsule validation and echo requirements.
+func renderActiveV9(version string, plan sdd.Plan) (Package, error) {
+	selected, err := predecessorProfilesForPlan(plan)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg, err := renderPackage(version, selected, plan, false)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg.Artifacts[0].Bytes = []byte(activeV9ManagerInstructions())
 	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
 	return pkg, nil
 }
@@ -148,7 +164,7 @@ func preConsolidationManagerInstructions() string {
 }
 
 func preConsolidationProfilesForPlan(plan sdd.Plan) ([]profile, error) {
-	selected, err := profilesForPlan(plan)
+	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +210,15 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
 func activeManagerInstructions() string {
-	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 9; parity: opencode-v49", 1)
-	return value + nativeDelegationPolicy + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n"
+	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 10; parity: opencode-v50", 1)
+	return value + "\n\n" + currentCodexContextCapsule + "\n\n" + currentCodexExpertEnsemble + nativeDelegationPolicy + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n"
+}
+
+func activeV9ManagerInstructions() string {
+	value := strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 10; parity: opencode-v50", "artifact: codex-agent/manager; version: 9; parity: opencode-v49", 1)
+	value = strings.Replace(value, "\n\n"+currentCodexContextCapsule, "", 1)
+	value = strings.Replace(value, "\n\n"+currentCodexExpertEnsemble, "", 1)
+	return strings.Replace(value, adaptiveCodexMemoryPolicy, currentCodexMemoryPolicy, 1)
 }
 
 const currentCodexManagerIdentity = "You are VGXNESS Manager, the user's Codex-native adaptive general-purpose partner. When the engineering route activates, you are the sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority."
@@ -206,11 +229,16 @@ const currentCodexTodo = "When the shared route benefits from execution-state or
 const previousCodexTodoV8 = "Use a native Codex task list for multiple meaningful steps; keep"
 const currentCodexSkill = "Load a native skill through the skill tool only when its specialized workflow materially improves quality, safety, or verification."
 const previousCodexSkillV8 = "Load every clearly applicable native skill through the skill tool."
+const currentCodexContextCapsule = "The Manager is the sole digest-computation owner for every non-SDD repository delegation. Carry a Context Capsule v1 alongside the smallest applicable mission shape. Its required fields are goal, criteria, nonGoals, decisions, authorization, constraints, evidenceRefs, lineage, and contextDigest; lineage identifies the originating request and ordered Manager/child hops. Canonicalize the capsule as UTF-8 JSON with object keys sorted lexicographically, no insignificant whitespace, array order preserved, and the contextDigest field omitted. The Manager must compute lowercase SHA-256 with an available read-only local hashing capability before task launch, then compare the computed digest with both the capsule contextDigest and the mission's repeated external contextDigest. Reject altered capsule content even when the capsule and mission repeat the same supplied digest; reject a stale repeated digest. Count this computation within the selected route budget. If the capability is unavailable, do not delegate. Every continuation, correction, or synthesis delta carries parentContextDigest equal to the accepted parent contextDigest and receives a newly Manager-computed contextDigest. Require every child return to echo the accepted contextDigest unchanged; a missing capsule, absent echo, digest mismatch, stale repeated digest, or unbound parent delta is BLOCKED and cannot be treated as evidence. Keep the capsule compact by using criterion IDs, decision records, and bounded evidence references rather than copied transcript. SDD missions retain their stronger accepted artifact, revision, digest, and stateVersion bindings without duplicating this capsule. Direct and simple no-delegation routes do not create a capsule, add tools, task lists, review, or assurance ceremony. This is a prompt-level continuity and provenance contract, not runtime enforcement or a security-boundary claim."
+const currentCodexExpertEnsemble = "For repository diagnosis, the Manager may use at most two non-overlapping Explore advisory lenses only for high ambiguity or a concrete hot path, and only within the selected route's existing tool and delegation budgets. Give each lens a distinct name, bounded evidence question, shared Context Capsule, and no overlapping source-survey mandate. Diagnosis-only work may spend both delegation slots; preserve one delegation slot for general when implementation is required, so at most one Explore lens precedes general under a two-delegation budget. Reject duplicate or conflicting lens scope before launch. The Manager reconciles accepted lens returns into one digest-bound synthesis delta that separates facts, inferences, conflicts, and unknowns. General receives one Manager synthesis bound to the accepted contextDigest and integrates it with direct repository evidence; do not ask general to arbitrate unbound raw lens outputs."
+const codexChildContextContract = " For every non-SDD repository mission, require a Context Capsule v1. Validate the required goal, criteria, nonGoals, decisions, authorization, constraints, evidenceRefs, lineage, and contextDigest fields. Require the capsule contextDigest and mission's external contextDigest to equal the Manager-attested digest. Reject missing fields, unequal bindings, or stale repeated attestations. For every continuation, correction, or synthesis delta, require parentContextDigest to equal the previously accepted contextDigest; otherwise return BLOCKED or INCONCLUSIVE before work. Echo the accepted contextDigest unchanged in the return. Accept Manager synthesis only as a digest-bound synthesis bound to the accepted contextDigest; never arbitrate unbound raw child output. Do not independently recompute or claim recomputation; this Manager attestation is prompt-level continuity and provenance, not a security boundary."
 
 func activeV8ManagerInstructions() string {
-	value := activeManagerInstructions()
+	value := activeV9ManagerInstructions()
 	for _, replacement := range []struct{ old, new string }{
 		{"artifact: codex-agent/manager; version: 9; parity: opencode-v49", "artifact: codex-agent/manager; version: 8; parity: opencode-v48"},
+		{"\n\n" + currentCodexContextCapsule, ""},
+		{"\n\n" + currentCodexExpertEnsemble, ""},
 		{currentCodexManagerIdentity, previousCodexManagerIdentityV8},
 		{currentCodexRouting, previousCodexRoutingV8},
 		{currentCodexTodo, previousCodexTodoV8},
@@ -287,14 +315,14 @@ The manager is the sole Git and GitHub actor. Managed general must never branch,
 `
 
 var profiles = []profile{
-	readOnlyProfile("agents/explore.toml", "explore", "Read-only repository exploration", "gpt-5.6-terra", "medium", memoryReadTools, `Investigate only the manager-bounded question and return concise evidence with exact paths and line references. Use native Codex repository inspection first for structure and dependencies, then narrow source inspection as needed. Do not edit files, run mutating commands, access the network, spawn agents, or broaden scope. Separate facts, inferences, and unknowns.`),
-	workspaceProfile("agents/general.toml", "general", "Authorized workspace implementation", "gpt-5.6", "high", nil, `Implement only the manager-authorized workspace scope. Diagnose before editing, preserve unrelated changes, and use the smallest correct change. For safely testable behavior, add a focused failing test and observe RED before production edits, then validate GREEN. Manager missions supply accepted SDD inputs and evidence. Do not spawn agents, access external directories or network services, install packages, mutate durable memory, or mutate SDD lifecycle state. General may implement workspace changes but must not own the SDD lifecycle. Do not commit or push.`),
-	readOnlyProfile("agents/verifier.toml", "verifier", "Independent frozen-candidate validation", "gpt-5.6", "high", nil, `Validate exactly one frozen candidate using only manager-permitted read-only commands. Manager missions supply the accepted inputs and evidence. Record the supplied candidate identity before and after validation; if it differs, return INCONCLUSIVE. `+reviewBindingInstructions+` Report PASS, FAIL, or INCONCLUSIVE with observed evidence only, reporting the same candidate identity before and after.`),
-	readOnlyProfile("agents/risk.toml", "risk", "Focused security and risk review", "gpt-5.6-terra", "high", memoryReadTools, `Review the supplied frozen candidate for security, authorization, data, process, and operational risks. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or validate beyond the manager scope. Return concrete findings with evidence, severity, and residual uncertainty.`),
-	readOnlyProfile("agents/readability.toml", "readability", "Focused code readability review", "gpt-5.6-terra", "medium", memoryReadTools, `Review the supplied frozen candidate for clarity, maintainability, naming, structure, and documentation. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or broaden scope. Return evidence-backed findings only.`),
-	readOnlyProfile("agents/reliability.toml", "reliability", "Focused correctness and reliability review", "gpt-5.6-terra", "high", memoryReadTools, `Review the supplied frozen candidate for correctness, error handling, invariants, and regression risk. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or broaden scope. Return evidence-backed findings only.`),
-	readOnlyProfile("agents/resilience.toml", "resilience", "Focused failure-mode and recovery review", "gpt-5.6-terra", "high", memoryReadTools, `Review the supplied frozen candidate for failure handling, recovery, durability, and boundary conditions. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or broaden scope. Return evidence-backed findings only.`),
-	readOnlyProfile("agents/refuter.toml", "refuter", "Refute severe review findings", "gpt-5.6-terra", "high", memoryReadTools, `Evaluate only supplied severe inferential findings against the frozen candidate. `+reviewBindingInstructions+` Seek disconfirming evidence and report whether each finding is supported, refuted, or inconclusive. Remain read-only; do not edit, spawn agents, or broaden scope.`),
+	readOnlyProfile("agents/explore.toml", "explore", "Read-only repository exploration", "gpt-5.6-terra", "medium", memoryReadTools, `Investigate only the manager-bounded question and return concise evidence with exact paths and line references. Use native Codex repository inspection first for structure and dependencies, then narrow source inspection as needed. Do not edit files, run mutating commands, access the network, spawn agents, or broaden scope. Separate facts, inferences, and unknowns.`+codexChildContextContract),
+	workspaceProfile("agents/general.toml", "general", "Authorized workspace implementation", "gpt-5.6", "high", nil, `Implement only the manager-authorized workspace scope. Diagnose before editing, preserve unrelated changes, and use the smallest correct change. For safely testable behavior, add a focused failing test and observe RED before production edits, then validate GREEN. Manager missions supply accepted SDD inputs and evidence. Do not spawn agents, access external directories or network services, install packages, mutate durable memory, or mutate SDD lifecycle state. General may implement workspace changes but must not own the SDD lifecycle. Do not commit or push.`+codexChildContextContract),
+	readOnlyProfile("agents/verifier.toml", "verifier", "Independent frozen-candidate validation", "gpt-5.6", "high", nil, `Validate exactly one frozen candidate using only manager-permitted read-only commands. Manager missions supply the accepted inputs and evidence. Record the supplied candidate identity before and after validation; if it differs, return INCONCLUSIVE. `+reviewBindingInstructions+` Report PASS, FAIL, or INCONCLUSIVE with observed evidence only, reporting the same candidate identity before and after.`+codexChildContextContract),
+	readOnlyProfile("agents/risk.toml", "risk", "Focused security and risk review", "gpt-5.6-terra", "high", memoryReadTools, `Review the supplied frozen candidate for security, authorization, data, process, and operational risks. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or validate beyond the manager scope. Return concrete findings with evidence, severity, and residual uncertainty.`+codexChildContextContract),
+	readOnlyProfile("agents/readability.toml", "readability", "Focused code readability review", "gpt-5.6-terra", "medium", memoryReadTools, `Review the supplied frozen candidate for clarity, maintainability, naming, structure, and documentation. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or broaden scope. Return evidence-backed findings only.`+codexChildContextContract),
+	readOnlyProfile("agents/reliability.toml", "reliability", "Focused correctness and reliability review", "gpt-5.6-terra", "high", memoryReadTools, `Review the supplied frozen candidate for correctness, error handling, invariants, and regression risk. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or broaden scope. Return evidence-backed findings only.`+codexChildContextContract),
+	readOnlyProfile("agents/resilience.toml", "resilience", "Focused failure-mode and recovery review", "gpt-5.6-terra", "high", memoryReadTools, `Review the supplied frozen candidate for failure handling, recovery, durability, and boundary conditions. `+reviewBindingInstructions+` Remain read-only; do not edit, spawn agents, or broaden scope. Return evidence-backed findings only.`+codexChildContextContract),
+	readOnlyProfile("agents/refuter.toml", "refuter", "Refute severe review findings", "gpt-5.6-terra", "high", memoryReadTools, `Evaluate only supplied severe inferential findings against the frozen candidate. `+reviewBindingInstructions+` Seek disconfirming evidence and report whether each finding is supported, refuted, or inconclusive. Remain read-only; do not edit, spawn agents, or broaden scope.`+codexChildContextContract),
 	readOnlyProfile("agents/sdd-research.toml", "sdd-research", "Read-only SDD research phase", "gpt-5.6", "medium", sddReadTools, `Research the bounded SDD question and return evidence, assumptions, alternatives, and unknowns. Do not create changes, save or accept revisions, record projections, transition state, write workspace files, or spawn agents.`),
 	readOnlyProfile("agents/sdd-proposal.toml", "sdd-proposal", "Read-only SDD proposal phase", "gpt-5.6", "medium", sddReadTools, `Draft a bounded proposal from supplied evidence. State scope, non-goals, alternatives, and unresolved decisions. Do not create changes, save or accept revisions, record projections, transition state, write workspace files, or spawn agents.`),
 	readOnlyProfile("agents/sdd-spec.toml", "sdd-spec", "Read-only SDD specification phase", "gpt-5.6", "high", sddReadTools, `Draft a precise specification with observable requirements and acceptance criteria from supplied inputs. Do not create changes, save or accept revisions, record projections, transition state, write workspace files, or spawn agents.`),
@@ -308,7 +336,7 @@ const reviewBindingInstructions = `Review Binding: candidateDigest, exact change
 // legacyProfiles is the exact static package emitted before model plans were
 // introduced. It remains a trusted predecessor for status, uninstall, and a
 // deliberate reinstall into a current plan.
-var legacyProfiles = append([]profile(nil), profiles...)
+var legacyProfiles = withoutChildContext(profiles)
 
 var profileRoles = map[string]sdd.Role{
 	"agents/explore.toml":      sdd.RoleResearch,
@@ -348,6 +376,22 @@ func profilesForPlan(plan sdd.Plan) ([]profile, error) {
 		selected[index].reasoning = string(assignment.Variant)
 	}
 	return selected, nil
+}
+
+func predecessorProfilesForPlan(plan sdd.Plan) ([]profile, error) {
+	selected, err := profilesForPlan(plan)
+	if err != nil {
+		return nil, err
+	}
+	return withoutChildContext(selected), nil
+}
+
+func withoutChildContext(source []profile) []profile {
+	selected := append([]profile(nil), source...)
+	for index := range selected {
+		selected[index].instructions = strings.TrimSuffix(selected[index].instructions, codexChildContextContract)
+	}
+	return selected
 }
 
 var memoryReadTools = []string{"memory_recent", "memory_search", "memory_get"}
@@ -396,7 +440,7 @@ func (pkg Package) Validate() error {
 		}
 		previous = artifact.Path
 	}
-	if !packageMatches(pkg, selected, activeManagerInstructions()) && !packageMatches(pkg, selected, activeV8ManagerInstructions()) && !packageMatches(pkg, selected, activeV7ManagerInstructions()) && !packageMatches(pkg, selected, activeV6ManagerInstructions()) && !(pkg.legacy && packageMatches(pkg, selected, legacyManagerInstructions())) {
+	if !packageMatches(pkg, selected, activeManagerInstructions()) && !packageMatches(pkg, selected, activeV9ManagerInstructions()) && !packageMatches(pkg, selected, activeV8ManagerInstructions()) && !packageMatches(pkg, selected, activeV7ManagerInstructions()) && !packageMatches(pkg, selected, activeV6ManagerInstructions()) && !(pkg.legacy && packageMatches(pkg, selected, legacyManagerInstructions())) {
 		predecessors, predecessorErr := preConsolidationProfilesForPlan(pkg.plan)
 		if predecessorErr != nil || !packageMatches(pkg, predecessors, preConsolidationManagerInstructions()) {
 			return errors.New("invalid Codex package identity")
