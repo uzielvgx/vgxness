@@ -355,18 +355,18 @@ func TestPhase1ManagerPreservesDelegatedContextAndBoundsExpertEnsemble(t *testin
 	}
 }
 
-func TestGeneralV7RequiresConciseDecisiveReturns(t *testing.T) {
+func TestGeneralV8RequiresConciseDecisiveReturns(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/general; version: 7",
+		"artifact: opencode-agent/general; version: 8",
 		"Ordinary implementation returns are entire compact Child Return Envelope v1 JSON objects serialized as UTF-8 and target <=512 bytes with status, changed paths, exact checks/results, and blockers only when present.",
 		"Candidate identity, authorization, acceptance, and INCONCLUSIVE evidence are mandatory only",
 		"The <=16 KiB envelope applies only to full-assurance frozen, risky, verification, or SDD missions.",
 	} {
 		if !strings.Contains(general, required) {
-			t.Errorf("general v7 missing compact return contract %q", required)
+			t.Errorf("general v8 missing compact return contract %q", required)
 		}
 	}
 }
@@ -487,12 +487,12 @@ func TestManagerUsesIntentTriggeredMemoryWithAllThenAnyFallback(t *testing.T) {
 	}
 }
 
-func TestGeneralV7UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
+func TestGeneralV8UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/general; version: 7",
+		"artifact: opencode-agent/general; version: 8",
 		"Ordinary bounded missions are entire compact JSON objects serialized as UTF-8 and target <=512 bytes",
 		"Ordinary implementation returns are entire compact Child Return Envelope v1 JSON objects serialized as UTF-8 and target <=512 bytes with status, changed paths, exact checks/results, and blockers only when present.",
 		"Candidate identity, authorization, acceptance, and INCONCLUSIVE evidence are mandatory only when supplied or required by a frozen, risky, verification, or SDD mission.",
@@ -500,7 +500,7 @@ func TestGeneralV7UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 		"Malformed, stale, oversized, or missing required evidence remains BLOCKED.",
 	} {
 		if !strings.Contains(general, required) {
-			t.Errorf("general v7 missing %q", required)
+			t.Errorf("general v8 missing %q", required)
 		}
 	}
 }
@@ -536,9 +536,9 @@ func TestVersionEvolutionUsesOnlyManagedHEADPredecessors(t *testing.T) {
 	testutil.NoError(t, err)
 	for name, marker := range map[string]string{
 		managerAgentName:      "artifact: opencode-agent/vgxness-manager; version: 50",
-		generalAgentName:      "artifact: opencode-agent/general; version: 7",
-		exploreAgentName:      "artifact: opencode-agent/explore; version: 3",
-		verifierAgentName:     "artifact: opencode-agent/vgxness-verifier; version: 5",
+		generalAgentName:      "artifact: opencode-agent/general; version: 8",
+		exploreAgentName:      "artifact: opencode-agent/explore; version: 4",
+		verifierAgentName:     "artifact: opencode-agent/vgxness-verifier; version: 6",
 		reviewRiskName:        "artifact: opencode-agent/vgxness-review-risk; version: 4",
 		reviewReadabilityName: "artifact: opencode-agent/vgxness-review-readability; version: 4",
 		reviewReliabilityName: "artifact: opencode-agent/vgxness-review-reliability; version: 4",
@@ -550,19 +550,59 @@ func TestVersionEvolutionUsesOnlyManagedHEADPredecessors(t *testing.T) {
 		}
 	}
 	bundles := predecessorBundlesMust(t, current)
-	foundHEAD := false
+	foundHEAD, foundProfileHEAD := false, false
 	for _, candidate := range bundles {
-		if bytes.Contains(candidate.agents[managerAgentName], []byte("version: 50")) {
-			t.Error("rejected local manager-v50 package is recognized as a predecessor")
+		profileHEAD := bytes.Contains(candidate.agents[managerAgentName], []byte("version: 50")) && bytes.Contains(candidate.agents[generalAgentName], []byte("version: 7")) && bytes.Contains(candidate.agents[exploreAgentName], []byte("version: 3")) && bytes.Contains(candidate.agents[verifierAgentName], []byte("version: 5"))
+		if bytes.Contains(candidate.agents[managerAgentName], []byte("version: 50")) && !profileHEAD {
+			t.Error("unrecognized local manager-v50 package is recognized as a predecessor")
 		}
+		foundProfileHEAD = foundProfileHEAD || profileHEAD
 		foundHEAD = foundHEAD || bytes.Contains(candidate.agents[managerAgentName], []byte("version: 49")) && bytes.Contains(candidate.agents[generalAgentName], []byte("version: 6")) && bytes.Contains(candidate.agents[exploreAgentName], []byte("version: 2")) && bytes.Contains(candidate.agents[verifierAgentName], []byte("version: 4")) && bytes.Contains(candidate.agents[reviewRiskName], []byte("version: 3")) && bytes.Contains(candidate.agents[reviewRefuterName], []byte("version: 3"))
 	}
-	if !foundHEAD {
-		t.Fatal("missing exact direct HEAD predecessor bundle")
+	if !foundHEAD || !foundProfileHEAD {
+		t.Fatal("missing exact manager or profile HEAD predecessor bundle")
 	}
-	rejectedGeneralV8 := bytes.Replace(current.agents[generalAgentName], []byte("artifact: opencode-agent/general; version: 7"), []byte("artifact: opencode-agent/general; version: 8"), 1)
-	rejectedExploreV4 := bytes.Replace(current.agents[exploreAgentName], []byte("artifact: opencode-agent/explore; version: 3"), []byte("artifact: opencode-agent/explore; version: 4"), 1)
-	if len(previousGeneralV6(rejectedGeneralV8)) != 0 || len(previousExploreV2(rejectedExploreV4)) != 0 {
-		t.Fatal("rejected local General v8 or Explore v4 is recognized as managed")
+	rejectedGeneralV9 := bytes.Replace(current.agents[generalAgentName], []byte("artifact: opencode-agent/general; version: 8"), []byte("artifact: opencode-agent/general; version: 9"), 1)
+	rejectedExploreV5 := bytes.Replace(current.agents[exploreAgentName], []byte("artifact: opencode-agent/explore; version: 4"), []byte("artifact: opencode-agent/explore; version: 5"), 1)
+	if len(previousGeneralV7(rejectedGeneralV9)) != 0 || len(previousExploreV3(rejectedExploreV5)) != 0 {
+		t.Fatal("rejected local General v9 or Explore v5 is recognized as managed")
+	}
+}
+
+func TestCurrentProfileAndManagerPredecessorStepsAreConstructible(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	if _, err = previousActiveProfilesModelPlanBundle(current); err != nil {
+		t.Fatalf("active profiles: %v", err)
+	}
+	v49, err := previousV49ModelPlanBundle(current)
+	if err != nil {
+		t.Fatalf("v49: %v", err)
+	}
+	for name, build := range map[string]func() (modelPlanBundle, error){
+		"v48":              func() (modelPlanBundle, error) { return previousV48ModelPlanBundle(v49) },
+		"v47":              func() (modelPlanBundle, error) { return previousV47ModelPlanBundle(v49) },
+		"v46":              func() (modelPlanBundle, error) { return previousV46ModelPlanBundle(v49) },
+		"broad-permission": func() (modelPlanBundle, error) { return previousBroadPermissionModelPlanBundle(v49) },
+	} {
+		if _, buildErr := build(); buildErr != nil {
+			t.Errorf("%s: %v", name, buildErr)
+		}
+	}
+	v45, err := previousV45ModelPlanBundle(current)
+	if err != nil {
+		t.Fatalf("v45: %v", err)
+	}
+	v44, err := previousV44ModelPlanBundle(current)
+	if err != nil {
+		t.Fatalf("v44: %v", err)
+	}
+	for name, candidate := range map[string]modelPlanBundle{"v49": v49, "v45": v45, "v44": v44} {
+		if _, exploreErr := previousExploreModelPlanBundle(candidate); exploreErr != nil {
+			t.Errorf("%s explore: %v", name, exploreErr)
+		}
+		if _, sddErr := previousSDDModelPlanBundle(candidate); sddErr != nil {
+			t.Errorf("%s sdd: %v", name, sddErr)
+		}
 	}
 }

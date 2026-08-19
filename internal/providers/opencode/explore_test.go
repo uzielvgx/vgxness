@@ -50,7 +50,7 @@ permission:
 		t.Fatalf("unexpected explore frontmatter:\n%s", got)
 	}
 	for _, contract := range []string{
-		"artifact: opencode-agent/explore; version: 3",
+		"artifact: opencode-agent/explore; version: 4",
 		"Use codegraph_codegraph_explore first",
 		"Do not use shell",
 	} {

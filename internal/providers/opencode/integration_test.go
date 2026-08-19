@@ -2042,7 +2042,7 @@ func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 			}
 		}
 	}
-	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 7") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 5"), "current broad-profile markers were not bumped")
+	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 8") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 6"), "current broad-profile markers were not bumped")
 	legacy, err := previousSDDModelPlanBundle(bundle)
 	testutil.NoError(t, err)
 	testutil.Require(t, strings.Contains(string(legacy.agents[generalAgentName]), "artifact: opencode-agent/general; version: 5") && !strings.Contains(string(legacy.agents[generalAgentName]), "vgxness_sdd_record_projection: deny") && strings.Contains(string(legacy.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 3") && !strings.Contains(string(legacy.agents[verifierAgentName]), "vgxness_sdd_record_projection: deny"), "historical broad profiles were mutated")
