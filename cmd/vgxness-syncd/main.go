@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,11 +30,15 @@ import (
 )
 
 const (
-	compensationTimeout     = 5 * time.Second
-	defaultListenAddress    = "127.0.0.1:8787"
-	defaultAdminAddress     = "127.0.0.1:0"
-	containerListenAddress  = "0.0.0.0:8787"
-	maxPostgresDSNFileBytes = 16 << 10
+	compensationTimeout          = 5 * time.Second
+	defaultListenAddress         = "127.0.0.1:8787"
+	defaultAdminAddress          = "127.0.0.1:0"
+	containerListenAddress       = "0.0.0.0:8787"
+	integratedAdminListenAddress = "0.0.0.0:8788"
+	minAdminSecretBytes          = 32
+	maxAdminSecretBytes          = 4 << 10
+	maxAdminSecretFileBytes      = maxAdminSecretBytes + 2
+	maxPostgresDSNFileBytes      = 16 << 10
 )
 
 type deviceRepository interface {
@@ -49,11 +54,12 @@ const (
 )
 
 var (
-	run       = runCommand
-	getenv    = os.Getenv
-	setup     = defaultSetup
-	listenTCP = net.Listen
-	terminal  = func(value any) bool {
+	run                  = runCommand
+	getenv               = os.Getenv
+	setup                = defaultSetup
+	setupServeRepository = setupServe
+	listenTCP            = net.Listen
+	terminal             = func(value any) bool {
 		file, ok := value.(interface{ Fd() uintptr })
 		return ok && term.IsTerminal(file.Fd())
 	}
@@ -209,42 +215,200 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "serve configuration failed")
 		return 1
 	}
+	adminConfig, adminEnabled, ok := configuredIntegratedAdmin()
+	if !ok || adminEnabled && mode != containerNetworkListener {
+		fmt.Fprintln(stderr, "serve configuration failed")
+		return 1
+	}
 	repository, cleanup, ok := configuredServeRepository(ctx)
 	if !ok {
 		fmt.Fprintln(stderr, "serve setup failed")
 		return 1
 	}
 	defer cleanup()
-	listener, err := listenTCP("tcp", *listen)
-	if err != nil {
-		fmt.Fprintln(stderr, "serve listen failed")
-		return 1
-	}
-	defer listener.Close()
 	server, err := newServerWithAuthenticationLimits(repositoryAuthenticator{repository}, repositoryBackend{repository}, stderr, authLimits)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve configuration failed")
 		return 1
 	}
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(listener) }()
+	bindings := []httpServerBinding{{label: "api", server: server}}
+	if adminEnabled {
+		handler, handlerErr := syncadmin.NewTailscale(repository, adminConfig.secret, adminConfig.authority)
+		adminConfig.secret = ""
+		if handlerErr != nil {
+			fmt.Fprintln(stderr, "serve configuration failed")
+			return 1
+		}
+		bindings = append(bindings, httpServerBinding{label: "admin", server: newAdminServer(handler)})
+	}
+	for index := range bindings {
+		address := *listen
+		if index > 0 {
+			address = adminConfig.listen
+		}
+		bindings[index].listener, err = listenTCP("tcp", address)
+		if err != nil {
+			for opened := 0; opened < index; opened++ {
+				_ = bindings[opened].listener.Close()
+			}
+			fmt.Fprintln(stderr, "serve listen failed")
+			return 1
+		}
+		defer bindings[index].listener.Close()
+	}
+	return serveHTTPServers(ctx, bindings, stderr)
+}
+
+type integratedAdminConfig struct{ listen, authority, secret string }
+
+func configuredIntegratedAdmin() (integratedAdminConfig, bool, bool) {
+	config := integratedAdminConfig{
+		listen:    getenv("VGXNESS_SYNC_ADMIN_LISTEN"),
+		authority: getenv("VGXNESS_SYNC_ADMIN_AUTHORITY"),
+	}
+	secretPath := getenv("VGXNESS_SYNC_ADMIN_SECRET_FILE")
+	inline := getenv("VGXNESS_SYNC_ADMIN_SECRET")
+	enabled := config.listen != "" || config.authority != "" || secretPath != "" || inline != ""
+	if !enabled {
+		return integratedAdminConfig{}, false, true
+	}
+	if runtime.GOOS == "windows" {
+		return integratedAdminConfig{}, true, false
+	}
+	if inline != "" || config.listen != integratedAdminListenAddress || !syncadmin.IsTailscaleAuthority(config.authority) || secretPath == "" {
+		return integratedAdminConfig{}, true, false
+	}
+	secret, ok := readAdminSecret(secretPath)
+	if !ok {
+		return integratedAdminConfig{}, true, false
+	}
+	config.secret = secret
+	return config, true, true
+}
+
+func readAdminSecret(path string) (string, bool) {
+	if !filepath.IsAbs(path) {
+		return "", false
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !validAdminSecretMode(info.Mode()) || info.Size() < 1 || info.Size() > maxAdminSecretFileBytes {
+		return "", false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !validAdminSecretMode(opened.Mode()) || opened.Size() < 1 || opened.Size() > maxAdminSecretFileBytes || !os.SameFile(info, opened) {
+		return "", false
+	}
+	data, err := io.ReadAll(io.LimitReader(file, opened.Size()+1))
+	if err != nil || int64(len(data)) != opened.Size() {
+		return "", false
+	}
+	secret := string(data)
+	if strings.HasSuffix(secret, "\r\n") {
+		secret = strings.TrimSuffix(secret, "\r\n")
+	} else {
+		secret = strings.TrimSuffix(secret, "\n")
+	}
+	return secret, len(secret) >= minAdminSecretBytes && len(secret) <= maxAdminSecretBytes && !strings.ContainsAny(secret, "\r\n")
+}
+
+func validAdminSecretMode(mode os.FileMode) bool {
+	return runtime.GOOS != "windows" && mode.Perm()&0037 == 0
+}
+
+type httpServerBinding struct {
+	label    string
+	server   adminHTTPServer
+	listener net.Listener
+}
+
+type httpServeResult struct {
+	label string
+	err   error
+}
+
+func serveHTTPServers(ctx context.Context, bindings []httpServerBinding, stderr io.Writer) int {
+	if len(bindings) == 0 {
+		fmt.Fprintln(stderr, "serve configuration failed")
+		return 1
+	}
+	served := make(chan httpServeResult, len(bindings))
+	for _, binding := range bindings {
+		go func(binding httpServerBinding) {
+			served <- httpServeResult{binding.label, binding.server.Serve(binding.listener)}
+		}(binding)
+	}
+	results := make(map[string]error, len(bindings))
+	received := 0
+	cancelled := false
+	firstLabel := ""
 	select {
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := server.Shutdown(shutdown)
-		cancel()
-		if err != nil {
-			fmt.Fprintln(stderr, "serve shutdown failed")
+		cancelled = true
+	case result := <-served:
+		firstLabel = result.label
+		results[result.label] = result.err
+		received = 1
+	}
+	shutdownFailed := shutdownHTTPServers(bindings)
+	for received < len(bindings) {
+		result := <-served
+		results[result.label] = result.err
+		received++
+	}
+	for _, binding := range bindings {
+		if !errors.Is(results[binding.label], http.ErrServerClosed) {
+			writeServeFailure(stderr, binding.label)
 			return 1
 		}
-		<-served
-		return 0
-	case err := <-served:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintln(stderr, "serve failed")
-			return 1
+	}
+	if shutdownFailed {
+		fmt.Fprintln(stderr, "serve shutdown failed")
+		return 1
+	}
+	if !cancelled {
+		writeServeFailure(stderr, firstLabel)
+		return 1
+	}
+	return 0
+}
+
+func writeServeFailure(stderr io.Writer, label string) {
+	if label == "admin" {
+		fmt.Fprintln(stderr, "serve admin failed")
+		return
+	}
+	fmt.Fprintln(stderr, "serve api failed")
+}
+
+func shutdownHTTPServers(bindings []httpServerBinding) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	results := make(chan error, len(bindings))
+	for _, binding := range bindings {
+		go func(server adminHTTPServer) { results <- server.Shutdown(ctx) }(binding.server)
+	}
+	failed := false
+	for range bindings {
+		failed = (<-results != nil) || failed
+	}
+	if failed {
+		for _, binding := range bindings {
+			_ = binding.server.Close()
 		}
-		return 0
+	}
+	return failed
+}
+
+func newAdminServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10,
+		ErrorLog: log.New(io.Discard, "", 0),
 	}
 }
 
@@ -383,7 +547,7 @@ func configuredServeRepository(ctx context.Context) (*syncpg.Repository, func(),
 	if !dsnOK || err != nil || owner == uuid.Nil || owner.String() != ownerText {
 		return nil, nil, false
 	}
-	repository, cleanup, err := setupServe(ctx, dsn, owner)
+	repository, cleanup, err := setupServeRepository(ctx, dsn, owner)
 	return repository, cleanup, err == nil
 }
 

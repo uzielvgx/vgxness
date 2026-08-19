@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -575,6 +578,370 @@ func TestConfiguredPostgresDSNFileRejectsUnsafePathsWithoutSecretLeak(t *testing
 	}
 }
 
+func TestConfiguredIntegratedAdminIsDisabledOnlyWhenAllInputsAreAbsent(t *testing.T) {
+	withEnvironment(t, map[string]string{})
+	config, enabled, ok := configuredIntegratedAdmin()
+	if !ok || enabled || config != (integratedAdminConfig{}) {
+		t.Fatal("absent integrated admin configuration did not disable cleanly")
+	}
+}
+
+func TestConfiguredIntegratedAdminAcceptsProtectedFilePayloadBoundaries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("persistent integrated admin secret files are Docker/Linux-only")
+	}
+	path := filepath.Join(t.TempDir(), "admin-secret")
+	withEnvironment(t, integratedAdminEnvironment(path))
+	for _, test := range []struct{ payload, suffix string }{
+		{"0123456789abcdef0123456789abcdef", "\r\n"},
+		{strings.Repeat("x", 4<<10), ""},
+		{strings.Repeat("x", 4<<10), "\n"},
+		{strings.Repeat("x", 4<<10), "\r\n"},
+	} {
+		if err := os.WriteFile(path, []byte(test.payload+test.suffix), 0600); err != nil {
+			t.Fatal(err)
+		}
+		config, enabled, ok := configuredIntegratedAdmin()
+		if !ok || !enabled || config.authority != "100.64.0.1:8788" || config.secret != test.payload {
+			t.Fatalf("valid admin secret payload with suffix %q was rejected", test.suffix)
+		}
+	}
+}
+
+func TestConfiguredIntegratedAdminRejectsPartialInlineAndMalformedSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "admin-secret")
+	for _, test := range []struct {
+		name   string
+		values map[string]string
+	}{
+		{"listen only", map[string]string{"VGXNESS_SYNC_ADMIN_LISTEN": integratedAdminListenAddress}},
+		{"authority only", map[string]string{"VGXNESS_SYNC_ADMIN_AUTHORITY": "100.64.0.1:8788"}},
+		{"file only", map[string]string{"VGXNESS_SYNC_ADMIN_SECRET_FILE": path}},
+		{"inline secret", map[string]string{"VGXNESS_SYNC_ADMIN_SECRET": "must-not-be-accepted"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			withEnvironment(t, test.values)
+			if _, _, ok := configuredIntegratedAdmin(); ok {
+				t.Fatal("partial or inline integrated admin configuration was accepted")
+			}
+		})
+	}
+	for _, test := range []struct {
+		name     string
+		contents []byte
+	}{
+		{"empty", nil},
+		{"weak", []byte("0123456789abcdef0123456789abc")},
+		{"multiline", []byte("0123456789abcdef\n0123456789abcdef")},
+		{"multiple final newlines", []byte("0123456789abcdef0123456789abcdef\n\n")},
+		{"oversize", make([]byte, maxAdminSecretFileBytes+1)},
+		{"oversize payload within raw allowance", append(make([]byte, (4<<10)+1), '\n')},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(path, test.contents, 0600); err != nil {
+				t.Fatal(err)
+			}
+			withEnvironment(t, integratedAdminEnvironment(path))
+			if _, _, ok := configuredIntegratedAdmin(); ok {
+				t.Fatal("malformed admin secret file was accepted")
+			}
+		})
+	}
+}
+
+func TestConfiguredIntegratedAdminAllows0640(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("persistent integrated admin secret files are Docker/Linux-only")
+	}
+	path := filepath.Join(t.TempDir(), "admin-secret")
+	const secret = "0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(path, []byte(secret), 0640); err != nil {
+		t.Fatal(err)
+	}
+	withEnvironment(t, integratedAdminEnvironment(path))
+	if _, enabled, ok := configuredIntegratedAdmin(); !ok || !enabled {
+		t.Fatal("production 0640 admin secret was rejected")
+	}
+}
+
+func TestConfiguredIntegratedAdminRejectsUnsafeModes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "admin-secret")
+	const secret = "0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(path, []byte(secret), 0600); err != nil {
+		t.Fatal(err)
+	}
+	withEnvironment(t, integratedAdminEnvironment(path))
+	for _, mode := range []os.FileMode{0660, 0650, 0644} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, ok := configuredIntegratedAdmin(); ok {
+			t.Fatalf("unsafe admin secret mode %#o was accepted", mode)
+		}
+	}
+}
+
+func TestConfiguredIntegratedAdminRejectsUnsafePathAuthorityAndListen(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "admin-secret")
+	if err := os.WriteFile(path, []byte("0123456789abcdef0123456789abcdef"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(directory, "admin-secret-link")
+	if err := os.Symlink(path, symlink); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(map[string]string){
+		func(values map[string]string) { values["VGXNESS_SYNC_ADMIN_SECRET_FILE"] = "relative-secret" },
+		func(values map[string]string) { values["VGXNESS_SYNC_ADMIN_SECRET_FILE"] = symlink },
+		func(values map[string]string) { values["VGXNESS_SYNC_ADMIN_AUTHORITY"] = "192.0.2.1:8788" },
+		func(values map[string]string) { values["VGXNESS_SYNC_ADMIN_AUTHORITY"] = "100.64.0.1:08788" },
+		func(values map[string]string) { values["VGXNESS_SYNC_ADMIN_LISTEN"] = "127.0.0.1:8788" },
+	} {
+		values := integratedAdminEnvironment(path)
+		mutate(values)
+		withEnvironment(t, values)
+		if _, _, ok := configuredIntegratedAdmin(); ok {
+			t.Fatal("unsafe integrated admin configuration was accepted")
+		}
+	}
+}
+
+type lifecycleHTTPServer struct {
+	started chan struct{}
+	stop    chan struct{}
+	once    sync.Once
+	err     error
+	stopErr error
+}
+
+func newLifecycleHTTPServer(err error) *lifecycleHTTPServer {
+	return &lifecycleHTTPServer{started: make(chan struct{}), stop: make(chan struct{}), err: err}
+}
+func (server *lifecycleHTTPServer) Serve(net.Listener) error {
+	close(server.started)
+	if server.err != nil {
+		return server.err
+	}
+	<-server.stop
+	if server.stopErr != nil {
+		return server.stopErr
+	}
+	return http.ErrServerClosed
+}
+func (server *lifecycleHTTPServer) Shutdown(context.Context) error {
+	server.once.Do(func() { close(server.stop) })
+	return nil
+}
+func (server *lifecycleHTTPServer) Close() error {
+	server.once.Do(func() { close(server.stop) })
+	return nil
+}
+
+func TestServeHTTPServersCoordinatesCancellationAndUnexpectedFailure(t *testing.T) {
+	t.Run("cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		api, admin := newLifecycleHTTPServer(nil), newLifecycleHTTPServer(nil)
+		done := make(chan int, 1)
+		go func() {
+			done <- serveHTTPServers(ctx, []httpServerBinding{{label: "api", server: api}, {label: "admin", server: admin}}, io.Discard)
+		}()
+		<-api.started
+		<-admin.started
+		cancel()
+		if code := <-done; code != 0 {
+			t.Fatalf("cancellation exit code = %d", code)
+		}
+	})
+	t.Run("api failure", func(t *testing.T) {
+		api, admin := newLifecycleHTTPServer(errors.New("listener failed")), newLifecycleHTTPServer(nil)
+		var stderr strings.Builder
+		if code := serveHTTPServers(context.Background(), []httpServerBinding{{label: "api", server: api}, {label: "admin", server: admin}}, &stderr); code != 1 {
+			t.Fatalf("failure exit code = %d", code)
+		}
+		<-api.started
+		<-admin.started
+		if stderr.String() != "serve api failed\n" || strings.Contains(stderr.String(), "listener failed") {
+			t.Fatal("serve failure diagnostic leaked details")
+		}
+	})
+	t.Run("admin failure", func(t *testing.T) {
+		api, admin := newLifecycleHTTPServer(nil), newLifecycleHTTPServer(errors.New("secret admin listener failure"))
+		var stderr strings.Builder
+		if code := serveHTTPServers(context.Background(), []httpServerBinding{{label: "api", server: api}, {label: "admin", server: admin}}, &stderr); code != 1 {
+			t.Fatalf("failure exit code = %d", code)
+		}
+		if stderr.String() != "serve admin failed\n" || strings.Contains(stderr.String(), "secret") {
+			t.Fatal("admin failure diagnostic was not safely categorized")
+		}
+	})
+	t.Run("cancellation with listener failure", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		api, admin := newLifecycleHTTPServer(nil), newLifecycleHTTPServer(nil)
+		admin.stopErr = errors.New("secret concurrent failure")
+		done := make(chan int, 1)
+		var stderr strings.Builder
+		go func() {
+			done <- serveHTTPServers(ctx, []httpServerBinding{{label: "api", server: api}, {label: "admin", server: admin}}, &stderr)
+		}()
+		<-api.started
+		<-admin.started
+		cancel()
+		if code := <-done; code != 1 || stderr.String() != "serve admin failed\n" || strings.Contains(stderr.String(), "secret") {
+			t.Fatalf("concurrent cancellation/failure result = %d/%q", code, stderr.String())
+		}
+	})
+}
+
+type blockingListener struct {
+	address    net.Addr
+	accepted   chan struct{}
+	closed     chan struct{}
+	acceptOnce sync.Once
+	closeOnce  sync.Once
+}
+
+func newBlockingListener(address string) *blockingListener {
+	return &blockingListener{address: stringAddress(address), accepted: make(chan struct{}), closed: make(chan struct{})}
+}
+func (listener *blockingListener) Accept() (net.Conn, error) {
+	listener.acceptOnce.Do(func() { close(listener.accepted) })
+	<-listener.closed
+	return nil, net.ErrClosed
+}
+func (listener *blockingListener) Close() error {
+	listener.closeOnce.Do(func() { close(listener.closed) })
+	return nil
+}
+func (listener *blockingListener) Addr() net.Addr { return listener.address }
+
+type stringAddress string
+
+func (address stringAddress) Network() string { return "tcp" }
+func (address stringAddress) String() string  { return string(address) }
+
+func TestServeStartsSyncAndIntegratedAdminInOneLifecycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("persistent integrated admin listener lifecycle is Docker/Linux-only")
+	}
+	secretPath := filepath.Join(t.TempDir(), "admin-secret")
+	if err := os.WriteFile(secretPath, []byte("0123456789abcdef0123456789abcdef\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	values := integratedAdminEnvironment(secretPath)
+	values["VGXNESS_SYNC_POSTGRES_DSN"] = "postgres://unused"
+	values["VGXNESS_SYNC_OWNER_ID"] = "22222222-2222-2222-2222-222222222222"
+	withEnvironment(t, values)
+	apiListener := newBlockingListener(containerListenAddress)
+	adminListener := newBlockingListener(integratedAdminListenAddress)
+	oldSetup, oldListen := setupServeRepository, listenTCP
+	cleanupCalls := 0
+	setupServeRepository = func(context.Context, string, uuid.UUID) (*syncpg.Repository, func(), error) {
+		return &syncpg.Repository{}, func() { cleanupCalls++ }, nil
+	}
+	listenTCP = func(network, address string) (net.Listener, error) {
+		if network != "tcp" {
+			return nil, errors.New("unexpected network")
+		}
+		switch address {
+		case containerListenAddress:
+			return apiListener, nil
+		case integratedAdminListenAddress:
+			return adminListener, nil
+		default:
+			return nil, errors.New("unexpected address")
+		}
+	}
+	t.Cleanup(func() { setupServeRepository, listenTCP = oldSetup, oldListen })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- runServe(ctx, []string{"--container-network", "--listen", containerListenAddress}, io.Discard)
+	}()
+	<-apiListener.accepted
+	<-adminListener.accepted
+	cancel()
+	if code := <-done; code != 0 || cleanupCalls != 1 {
+		t.Fatalf("serve result = %d, cleanup calls = %d", code, cleanupCalls)
+	}
+}
+
+func TestServeAdminBindFailureClosesAPIBeforeServing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("persistent integrated admin listener lifecycle is Docker/Linux-only")
+	}
+	secretPath := filepath.Join(t.TempDir(), "admin-secret")
+	if err := os.WriteFile(secretPath, []byte("0123456789abcdef0123456789abcdef\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	values := integratedAdminEnvironment(secretPath)
+	values["VGXNESS_SYNC_POSTGRES_DSN"] = "postgres://unused"
+	values["VGXNESS_SYNC_OWNER_ID"] = "22222222-2222-2222-2222-222222222222"
+	withEnvironment(t, values)
+	apiListener := newBlockingListener(containerListenAddress)
+	oldSetup, oldListen := setupServeRepository, listenTCP
+	setupServeRepository = func(context.Context, string, uuid.UUID) (*syncpg.Repository, func(), error) {
+		return &syncpg.Repository{}, func() {}, nil
+	}
+	listenTCP = func(_ string, address string) (net.Listener, error) {
+		if address == containerListenAddress {
+			return apiListener, nil
+		}
+		return nil, errors.New("admin bind failed")
+	}
+	t.Cleanup(func() { setupServeRepository, listenTCP = oldSetup, oldListen })
+	var stderr strings.Builder
+	if code := runServe(context.Background(), []string{"--container-network", "--listen", containerListenAddress}, &stderr); code != 1 || stderr.String() != "serve listen failed\n" {
+		t.Fatalf("bind failure result = %d/%q", code, stderr.String())
+	}
+	select {
+	case <-apiListener.accepted:
+		t.Fatal("API began serving before the admin listener was bound")
+	default:
+	}
+	select {
+	case <-apiListener.closed:
+	default:
+		t.Fatal("API listener was not closed after admin bind failure")
+	}
+}
+
+func TestServeRejectsPartialIntegratedAdminBeforeListen(t *testing.T) {
+	withEnvironment(t, map[string]string{"VGXNESS_SYNC_ADMIN_AUTHORITY": "100.64.0.1:8788"})
+	oldListen := listenTCP
+	listenTCP = func(string, string) (net.Listener, error) {
+		t.Fatal("listen called for partial admin configuration")
+		return nil, errors.New("unexpected listen")
+	}
+	t.Cleanup(func() { listenTCP = oldListen })
+	var stderr strings.Builder
+	if code := runServe(context.Background(), []string{"--container-network", "--listen", containerListenAddress}, &stderr); code != 1 || stderr.String() != "serve configuration failed\n" {
+		t.Fatalf("partial configuration result = %d/%q", code, stderr.String())
+	}
+}
+
+func TestDockerComposePublishesOnlyTailscaleAdminPort(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "docker", "compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(contents)
+	for _, required := range []string{
+		"${VGXNESS_TAILSCALE_IP:?set the canonical Tailscale IP}:8788:8788",
+		"VGXNESS_SYNC_ADMIN_LISTEN: 0.0.0.0:8788",
+		"VGXNESS_SYNC_ADMIN_AUTHORITY: ${VGXNESS_TAILSCALE_IP:?set the canonical Tailscale IP}:8788",
+		"VGXNESS_SYNC_ADMIN_SECRET_FILE: /run/secrets/admin_secret",
+		"file: ${VGXNESS_ADMIN_SECRET:?set an absolute protected admin secret path}",
+	} {
+		if !strings.Contains(compose, required) {
+			t.Fatalf("Compose contract missing %q", required)
+		}
+	}
+	if strings.Contains(compose, ":8787:8787") || strings.Count(compose, ":8788:8788") != 1 || strings.Contains(compose, "VGXNESS_SYNC_ADMIN_SECRET:") {
+		t.Fatal("Compose exposes an API/public admin port or inline secret")
+	}
+}
+
 type failingHTTPWriter struct{ header http.Header }
 
 func (writer *failingHTTPWriter) Header() http.Header       { return writer.header }
@@ -1031,4 +1398,12 @@ func withEnvironment(t *testing.T, values map[string]string) {
 	oldGetenv := getenv
 	getenv = func(name string) string { return values[name] }
 	t.Cleanup(func() { getenv = oldGetenv })
+}
+
+func integratedAdminEnvironment(secretPath string) map[string]string {
+	return map[string]string{
+		"VGXNESS_SYNC_ADMIN_LISTEN":      integratedAdminListenAddress,
+		"VGXNESS_SYNC_ADMIN_AUTHORITY":   "100.64.0.1:8788",
+		"VGXNESS_SYNC_ADMIN_SECRET_FILE": secretPath,
+	}
 }
