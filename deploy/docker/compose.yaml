@@ -36,8 +36,14 @@ services:
     env_file: ${VGXNESS_SYNCD_ENV:?set an absolute syncd.env path}
     environment:
       VGXNESS_SYNC_POSTGRES_DSN_FILE: /run/secrets/syncd_dsn
+      VGXNESS_SYNC_ADMIN_LISTEN: 0.0.0.0:8788
+      VGXNESS_SYNC_ADMIN_AUTHORITY: ${VGXNESS_TAILSCALE_IP:?set the canonical Tailscale IP}:8788
+      VGXNESS_SYNC_ADMIN_SECRET_FILE: /run/secrets/admin_secret
     secrets:
       - syncd_dsn
+      - admin_secret
+    ports:
+      - "${VGXNESS_TAILSCALE_IP:?set the canonical Tailscale IP}:8788:8788"
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,6 +93,8 @@ secrets:
     file: ${VGXNESS_BACKUP_PASSWORD:?set an absolute backup password path}
   syncd_dsn:
     file: ${VGXNESS_SYNCD_DSN:?set an absolute DSN path}
+  admin_secret:
+    file: ${VGXNESS_ADMIN_SECRET:?set an absolute protected admin secret path}
 
 networks:
   proxy:

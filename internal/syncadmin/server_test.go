@@ -167,6 +167,25 @@ func TestAdminAcceptsLiteralAuthoritiesAndRejectsMismatch(t *testing.T) {
 		}
 	}
 }
+func TestTailscaleAdminAuthorityIsCanonicalAndRangeBound(t *testing.T) {
+	for _, authority := range []string{"100.64.0.1:8788", "100.127.255.254:65535", "[fd7a:115c:a1e0::1]:8788"} {
+		if _, err := NewTailscale(&testReader{}, testOperatorSecret, authority); err != nil {
+			t.Fatalf("Tailscale authority %q rejected", authority)
+		}
+		if _, err := New(&testReader{}, testOperatorSecret, authority); err == nil {
+			t.Fatalf("standalone admin accepted Tailscale authority %q", authority)
+		}
+	}
+	for _, authority := range []string{
+		"localhost:8788", "0.0.0.0:8788", "100.63.255.255:8788", "100.128.0.1:8788",
+		"100.64.0.1:0", "100.64.0.1:08788", "100.064.0.1:8788", "[::ffff:100.64.0.1]:8788",
+		"[fd7a:115c:a1df:ffff::1]:8788", "[fd7a:115c:a1e1::1]:8788", "[FD7A:115C:A1E0::1]:8788",
+	} {
+		if _, err := NewTailscale(&testReader{}, testOperatorSecret, authority); err == nil {
+			t.Fatalf("unsafe or noncanonical Tailscale authority accepted: %q", authority)
+		}
+	}
+}
 func TestAdminSessionPublicationFailureRefreshAndLogout(t *testing.T) {
 	reader := &testReader{}
 	handler := newTestHandler(t, reader, testAuthority)
@@ -500,7 +519,7 @@ func TestAdminViewsRenderOperationalDataAndAccessibleStructure(t *testing.T) {
 	handler := newTestHandler(t, reader, testAuthority)
 
 	login := response(handler, adminRequest(http.MethodGet, "/login", nil)).Body.String()
-	for _, want := range []string{"<title>VGXNESS cloud admin | Sign in</title>", "Local operator access", "loopback", `type="password"`, `autocomplete="current-password"`, "no session cookies", `:focus-visible`, `@media (max-width:`, `class="login-shell"`} {
+	for _, want := range []string{"<title>VGXNESS cloud admin | Sign in</title>", "Operator access", "restricted private listener", `type="password"`, `autocomplete="current-password"`, "no session cookies", `:focus-visible`, `@media (max-width:`, `class="login-shell"`} {
 		if !strings.Contains(login, want) {
 			t.Fatalf("login view missing %q", want)
 		}
@@ -521,6 +540,18 @@ func TestAdminViewsRenderOperationalDataAndAccessibleStructure(t *testing.T) {
 	}
 	if strings.Count(dashboard, `name="session"`) != 4 || strings.Count(dashboard, `type="hidden"`) != 4 || strings.Contains(dashboard, "<script") || strings.Contains(dashboard, "linear-gradient") {
 		t.Fatal("dashboard session publication or asset policy changed")
+	}
+	issuePage, err := encode(issueTemplate, issuedView{Credential: syncpg.DeviceCredential{Bearer: "redacted"}, Session: "session", Nonce: "nonce"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range []string{login, dashboard, string(issuePage)} {
+		lower := strings.ToLower(view)
+		for _, inaccurate := range []string{"loopback", "local operator", "local service", "local operations", "no remote sign-in"} {
+			if strings.Contains(lower, inaccurate) {
+				t.Fatalf("shared admin view contains standalone-only assertion %q", inaccurate)
+			}
+		}
 	}
 	unavailable, err := encode(overviewTemplate, overviewView{AdminOverview: syncpg.AdminOverview{Health: syncpg.AdminHealth{Database: false}}})
 	if err != nil {

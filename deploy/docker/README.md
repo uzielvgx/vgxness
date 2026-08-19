@@ -11,7 +11,9 @@ container. The observed VPS network name is `nginx-proxy-manager_default`.
 Set `VGXNESS_PROXY_NETWORK` only if local inspection shows a different NPM
 network. Docker network attachment is not an application isolation guarantee:
 the daemon's explicit `--container-network` flag permits only `0.0.0.0:8787`.
-Compose publishes no host ports, and PostgreSQL is on the private network only.
+Compose publishes no sync API port. Its sole host publication is dashboard port
+8788 bound to the required `VGXNESS_TAILSCALE_IP`; PostgreSQL remains on the
+private network only. NPM proxies only the sync API on container port 8787.
 
 ## Preflight and initial deploy
 
@@ -19,8 +21,9 @@ From the repository root, record the source identity with `git rev-parse HEAD`
 and inspect the exact staged files. Before changing anything, the authorized
 operator checks `docker compose version`, `docker network inspect
 nginx-proxy-manager_default`, and `docker compose -f deploy/docker/compose.yaml
-config`. Abort if NPM's network is absent, any host port is published, or the
-resolved configuration differs from review. Image tags are mutable: set
+config`. Abort if NPM's network is absent, the resolved configuration differs
+from review, or any host port other than the exact Tailscale-IP-to-8788
+dashboard mapping is published. Image tags are mutable: set
 `POSTGRES_IMAGE` to an operator-verified digest-pinned image reference. Record
 the source commit and the resulting local syncd image ID; do not describe a tag
 as immutable.
@@ -35,12 +38,34 @@ on either unexpected object rather than overwriting or deleting it.
 
 Create a root-owned private directory outside the repository. Set absolute paths
 for `VGXNESS_SYNCD_ENV`, `VGXNESS_SYNCD_DSN`, `VGXNESS_POSTGRES_ADMIN_PASSWORD`,
-`VGXNESS_SYNCD_PASSWORD`, `VGXNESS_BACKUP_PASSWORD`, and `VGXNESS_POSTGRES_INIT`
-before `docker compose config`; Compose has no worktree secret defaults. The
-admin, app, and backup password files are root:root `0600`. The DSN file is
-root:65532 `0640`, allowing only syncd runtime UID `65532:65532` to read it;
-`syncd.env` is root:root `0600`. The DSN accepts exactly one final LF or CRLF.
-Never put secrets in argv, logs, or proxy configuration.
+`VGXNESS_SYNCD_PASSWORD`, `VGXNESS_BACKUP_PASSWORD`, `VGXNESS_ADMIN_SECRET`,
+and `VGXNESS_POSTGRES_INIT` before `docker compose config`; Compose has no
+worktree secret defaults. Set `VGXNESS_TAILSCALE_IP` to the host's canonical
+Tailscale IPv4 in `100.64.0.0/10`, never `0.0.0.0`, a LAN/public address, or a
+DNS name. The database admin, app, and backup password files are root:root
+`0600`. The DSN and dashboard secret files are root:65532 `0640`, allowing only
+syncd runtime UID `65532:65532` to read them; `syncd.env` is root:root `0600`.
+The dashboard secret payload is 32 through 4096 bytes after removing at most one final LF or CRLF.
+The raw allowance is 4098 bytes solely for a 4096-byte payload plus CRLF; a larger payload or multiple newline fails.
+Production `0640` and test/dev `0600` are valid; group write/execute or any other-user permission fails startup.
+Never put secrets in environment values, argv, logs, or proxy configuration.
+
+Create the dashboard secret outside the repository without exposing its value
+in shell history, then verify metadata and runtime readability without printing
+the value:
+
+```sh
+sudo install -o root -g 65532 -m 0640 /dev/null /absolute/private/admin-secret
+openssl rand -hex 32 | sudo tee /absolute/private/admin-secret >/dev/null
+sudo stat /absolute/private/admin-secret
+sudo -u '#65532' test -r /absolute/private/admin-secret
+export VGXNESS_ADMIN_SECRET=/absolute/private/admin-secret
+```
+
+Do not place the generated value in `syncd.env`. The application rejects an
+inline `VGXNESS_SYNC_ADMIN_SECRET`, partial integrated-admin settings, unsafe
+secret paths or modes, weak secrets shorter than 32 bytes, multiline secrets,
+and noncanonical or non-Tailscale authorities.
 
 Generate the PostgreSQL password with at least 32 characters from exactly
 `[A-Za-z0-9._~-]`. This alphabet is safe both as a PostgreSQL password-file
@@ -58,6 +83,24 @@ are healthy. In NPM, create the HTTPS proxy host targeting `vgxness-syncd` port
 request must not be possible. Abort and escalate to the host owner on any other
 result, unknown network attachment, secret exposure, or unexpected port.
 
+## Persistent dashboard over Tailscale
+
+This persistent integrated dashboard is Docker/Linux-only and fails closed on Windows; standalone loopback-only `vgxness-syncd admin` remains supported.
+The same `vgxness-syncd serve` process, PostgreSQL repository/pool, image, and
+container lifecycle own the sync API and dashboard. Compose binds only
+`${VGXNESS_TAILSCALE_IP}:8788` on the host. From a tailnet peer, open the exact
+URL `http://${VGXNESS_TAILSCALE_IP}:8788/`; Tailscale encrypts the tailnet hop.
+In a private terminal on the host, read the configured value only when needed
+with `sudo cat "$VGXNESS_ADMIN_SECRET"`, paste it into the login form, and
+clear the terminal/clipboard according to local policy. The secret is never
+printed by `serve` and is still required for peers on the Docker networks.
+
+Never publish `0.0.0.0:8788`, bind port 8788 to a public or LAN address, add an
+NPM proxy host for it, or route it through another public reverse proxy. The
+dashboard is plain HTTP at the application layer because this deployment relies
+on Tailscale transport encryption; it is not suitable outside the tailnet.
+Verify from a non-tailnet interface that no dashboard connection is possible.
+
 ## Update and Rollback
 
 For an update, record and retain a digest-pinned predecessor as
@@ -67,6 +110,14 @@ digest-pinned Go 1.26 builder/runtime base identities. Roll back with
 then read back `docker compose ... ps` and repeat public-TLS `401`. Database migrations are
 forward-only: do not roll PostgreSQL schema backward. If the update migrates the
 database and fails, stop ingress and escalate to the DBA/maintenance owner.
+The dashboard stops and restarts with the syncd container; in-memory dashboard
+sessions are invalid after restart, while the protected secret file remains the
+login source. Updates and rollbacks must preserve the exact Tailscale bind,
+authority, and secret-file mapping. After either operation, repeat the sync API
+check, log in through the exact Tailscale URL, and confirm there is still no NPM
+route or non-Tailscale host publication for port 8788.
+Secret replacement, removal, or permission changes require a controlled syncd container restart.
+The old secret remains active until restart; changing the file alone does not revoke it from the running process.
 
 ## Backup and restore
 

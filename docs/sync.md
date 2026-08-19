@@ -101,6 +101,53 @@ task accepts that residual risk; the console does not claim to eliminate it.
 Use a dedicated browser context where practical, close the page promptly, and
 stop the admin process when the operation is complete.
 
+### Persistent Tailscale dashboard in Docker
+
+The Docker deployment can enable a persistent dashboard in the existing
+`vgxness-syncd serve` process. Its integrated settings form one fail-closed
+configuration:
+
+- `VGXNESS_SYNC_ADMIN_LISTEN` must be exactly `0.0.0.0:8788` and is accepted
+  only with `serve --container-network`.
+- `VGXNESS_SYNC_ADMIN_AUTHORITY` must be an exact canonical IP authority with a
+  nonzero canonical port and an address in Tailscale IPv4 `100.64.0.0/10` or
+  IPv6 `fd7a:115c:a1e0::/48`.
+- `VGXNESS_SYNC_ADMIN_SECRET_FILE` must be an absolute, bounded, regular
+  non-symlink file containing one 32-through-4096-byte payload after removal of
+  an optional final LF or CRLF. The 4098-byte raw allowance only permits a
+  maximum payload plus CRLF; larger payloads and multiple newlines fail.
+  Mode `0600` or production `0640` is accepted; group write/execute and every
+  other-user permission are rejected.
+- `VGXNESS_SYNC_ADMIN_SECRET` is forbidden; the login secret is file-only.
+
+When every integrated setting is absent, `serve` runs only the sync API. Any
+partial or invalid integrated setting aborts startup. Both listeners are set up
+and bound before either begins serving. Cancellation shuts both down, and an
+unexpected failure of either terminates `serve`. Both handlers share the same
+repository and connection pool. The separate `vgxness-syncd admin` command
+remains ephemeral, terminal-gated, random-port, and loopback-only.
+The persistent integrated mode is Docker/Linux-only and fails closed on Windows;
+this does not remove standalone admin support.
+
+In the reviewed Compose deployment, the host publishes only
+`${VGXNESS_TAILSCALE_IP}:8788:8788`; the sync API has no host publication and
+continues through NPM on the Docker network. Open exactly
+`http://${VGXNESS_TAILSCALE_IP}:8788/` from a tailnet peer and enter the value
+read from the protected secret file. Never bind the host side to `0.0.0.0`, use
+a public/LAN address, or add an NPM/public proxy route for the dashboard.
+Tailscale encrypts the tailnet hop; the application still requires its login
+secret. Container-network peers remain a residual trust zone but cannot log in
+without that secret.
+
+The dashboard follows the `serve` process/container lifecycle. Restarting,
+updating, or rolling back interrupts it and invalidates its in-memory session;
+preserve the protected secret mapping and exact Tailscale authority, then log in
+again through the same URL. See the Docker runbook for secret creation,
+readability checks, update/rollback verification, and exposure warnings.
+Secret replacement, removal, and permission changes are read only at process
+startup and require a controlled container restart. Until that restart, the
+previously loaded secret remains active even if the backing file changes.
+
 ## Local enrollment and status
 
 Enroll a local client without putting a bearer in command arguments,

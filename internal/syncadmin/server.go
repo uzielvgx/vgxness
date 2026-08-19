@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -52,7 +53,19 @@ type confirmationIntent struct {
 }
 
 func New(repository Repository, operatorSecret, authority string) (http.Handler, error) {
-	if repository == nil || operatorSecret == "" || !validAuthority(authority) {
+	return newHandler(repository, operatorSecret, authority, validLoopbackAuthority)
+}
+
+// NewTailscale creates an admin handler restricted to an exact Tailscale IP authority.
+func NewTailscale(repository Repository, operatorSecret, authority string) (http.Handler, error) {
+	return newHandler(repository, operatorSecret, authority, IsTailscaleAuthority)
+}
+
+// IsTailscaleAuthority reports whether value is a canonical Tailscale IP and nonzero-port authority.
+func IsTailscaleAuthority(value string) bool { return validTailscaleAuthority(value) }
+
+func newHandler(repository Repository, operatorSecret, authority string, valid func(string) bool) (http.Handler, error) {
+	if repository == nil || operatorSecret == "" || !valid(authority) {
 		return nil, errors.New("invalid admin configuration")
 	}
 	return &handler{repository: repository, authority: authority, secretHash: sha256.Sum256([]byte(operatorSecret)), random: rand.Reader, encodePage: encode, now: time.Now}, nil
@@ -478,10 +491,19 @@ func validSession(value string) bool {
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	return err == nil && len(decoded) == 32
 }
-func validAuthority(value string) bool {
+func validLoopbackAuthority(value string) bool {
 	host, port, splitErr := net.SplitHostPort(value)
 	number, numberErr := strconv.Atoi(port)
 	return splitErr == nil && (host == "127.0.0.1" || host == "::1") && numberErr == nil && number > 0 && number <= 65535 && strconv.Itoa(number) == port
+}
+func validTailscaleAuthority(value string) bool {
+	host, port, splitErr := net.SplitHostPort(value)
+	number, numberErr := strconv.Atoi(port)
+	address, addressErr := netip.ParseAddr(host)
+	if splitErr != nil || numberErr != nil || number < 1 || number > 65535 || strconv.Itoa(number) != port || addressErr != nil || address.String() != host {
+		return false
+	}
+	return netip.MustParsePrefix("100.64.0.0/10").Contains(address) || netip.MustParsePrefix("fd7a:115c:a1e0::/48").Contains(address)
 }
 func htmlError(writer http.ResponseWriter, status int) {
 	render(writer, status, errorTemplate, struct {
@@ -510,10 +532,10 @@ var (
   <section class="access-panel" aria-labelledby="login-title">
     <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">V</span><span>VGXNESS</span><small>cloud admin</small></div>
     <div class="access-copy">
-      <p class="eyebrow">Secure console / loopback</p>
-      <h1 id="login-title">Local operator access</h1>
-      <p class="lede">Inspect repository health, owner history, device trust, and audit activity from this machine.</p>
-      <div class="notice"><span class="status-dot" aria-hidden="true"></span><p>This console accepts credentials on the loopback interface only. Your operator secret is submitted directly to the local service and is never displayed here.</p></div>
+      <p class="eyebrow">Secure console / restricted private listener</p>
+      <h1 id="login-title">Operator access</h1>
+      <p class="lede">Inspect repository health, owner history, device trust, and audit activity through this restricted admin origin.</p>
+      <div class="notice"><span class="status-dot" aria-hidden="true"></span><p>This console accepts credentials only on its configured restricted private listener. Your operator secret is submitted directly to this admin origin and is never displayed here.</p></div>
     </div>
     {{if .}}<p class="alert" role="alert"><strong>Access denied.</strong> {{.}}</p>{{end}}
     <form class="login-form" method="post" action="/login">
@@ -521,7 +543,7 @@ var (
       <input id="secret" name="secret" type="password" required autocomplete="current-password" autofocus>
       <button class="primary-action" type="submit">Enter control room <span aria-hidden="true">→</span></button>
     </form>
-    <p class="access-foot">Local browser actions <span aria-hidden="true">·</span> no remote sign-in <span aria-hidden="true">·</span> no session cookies</p>
+    <p class="access-foot">Restricted admin origin <span aria-hidden="true">·</span> exact-origin forms <span aria-hidden="true">·</span> no session cookies</p>
   </section>
 </main>` + pageEnd))
 	errorTemplate = template.Must(template.New("error").Parse(documentStart("VGXNESS cloud admin | Error") + `
@@ -531,7 +553,7 @@ var (
     <p class="eyebrow">Control plane / exception</p>
     <p class="error-code" aria-label="Status {{.Status}}">{{.Status}}</p>
     <h1 id="error-title">{{.Label}}</h1>
-    <p class="lede">Status {{.Status}}. The local admin service could not complete this request.</p>
+    <p class="lede">Status {{.Status}}. The admin service could not complete this request.</p>
     <a class="primary-action" href="/login">Return to sign in <span aria-hidden="true">→</span></a>
     <p class="access-foot">No operational data was changed.</p>
   </section>
@@ -544,7 +566,7 @@ var (
     <p class="lede">Credential delivery completed for device <code>{{.Credential.ID}}</code>. The bearer is shown only in this response and cannot be recovered from this console. Verify this device appears active on the dashboard after returning before relying on it; commit acknowledgement can be ambiguous.</p>
     <div class="secret-block"><code id="issued-bearer">{{.Credential.Bearer}}</code><button class="primary-action" id="copy-bearer" type="button" aria-describedby="copy-status">Copy bearer</button></div>
     <p id="copy-status" class="muted" role="status" aria-live="polite">Copy it into the client enrollment input, then leave this page.</p>
-    <div class="notice warning"><span class="status-dot" aria-hidden="true"></span><p>A previously registered service worker controlling this reused loopback origin may initiate actions or read an in-browser bearer. Closing the console after use reduces exposure but does not eliminate that accepted browser risk.</p></div>
+    <div class="notice warning"><span class="status-dot" aria-hidden="true"></span><p>A previously registered service worker controlling this reused admin origin may initiate actions or read an in-browser bearer. Closing the console after use reduces exposure but does not eliminate that accepted browser risk.</p></div>
     <form class="return-form" method="post" action="/"><input type="hidden" name="session" value="{{.Session}}"><button class="quiet-action" type="submit">Return to dashboard</button></form>
   </section>
 </main>
@@ -585,7 +607,7 @@ var (
 <a class="skip-link" href="#main-content">Skip to repository overview</a>
 <header class="topbar">
   <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">V</span><span>VGXNESS</span><small>cloud admin</small></div>
-  <div class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span>Loopback</span><span class="divider" aria-hidden="true"></span><span>Issue / revoke</span></div>
+  <div class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span>Private admin origin</span><span class="divider" aria-hidden="true"></span><span>Issue / revoke</span></div>
   <form class="compact-form" method="post" action="/logout">
     <input type="hidden" name="session" value="{{.Session}}">
     <button class="quiet-action" type="submit">Sign out</button>
@@ -633,7 +655,7 @@ var (
   </section>
 
   <section class="action-panel" aria-labelledby="issue-device-title">
-    <div><p class="eyebrow">Browser action</p><h2 id="issue-device-title">Issue a device</h2><p>The bearer appears once in the next no-store response. A service worker already controlling this loopback origin remains an accepted risk.</p></div>
+    <div><p class="eyebrow">Browser action</p><h2 id="issue-device-title">Issue a device</h2><p>The bearer appears once in the next no-store response. A service worker already controlling this admin origin remains an accepted risk.</p></div>
     <form class="issue-form" method="post" action="/device/issue">
       <input type="hidden" name="session" value="{{.Session}}">
       <label for="device-name">Device display name</label><input id="device-name" name="name" maxlength="128" required autocomplete="off">
@@ -687,7 +709,7 @@ var (
     </div>
   </section>
 </main>
-<footer class="site-footer"><span>VGXNESS / local operations</span><span>Repository reads with explicit browser actions</span></footer>` + pageEnd))
+<footer class="site-footer"><span>VGXNESS / restricted admin operations</span><span>Repository reads with explicit browser actions</span></footer>` + pageEnd))
 )
 
 func timestamp(value time.Time) string   { return value.UTC().Format("2006-01-02 15:04 UTC") }
