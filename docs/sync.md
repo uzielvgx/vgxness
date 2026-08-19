@@ -70,12 +70,26 @@ ephemeral operator secret to terminal output. Open the exact printed URL, enter
 the secret, and keep the terminal private. The console uses no session cookie;
 its browser actions are POST-only and every response is `no-store`.
 
-Each POST normally requires exactly one `Origin` matching the configured HTTP
-authority. For browser form navigations that omit `Origin` or send literal
-`null`, the console instead requires single exact Fetch Metadata values of
-`same-origin`, `navigate`, and `document`. Missing, duplicate, or mismatched
-metadata is rejected, so cross-site forms (including `cross-site` and `none`)
-cannot use this compatibility fallback.
+Each POST accepts exactly one `Origin` matching the configured HTTP authority,
+regardless of Fetch Metadata. When `Origin` is absent or exactly `null`, the
+compatibility fallback accepts either all three routing headers absent or single
+exact `same-origin`, `navigate`, and `document` values. If any of those three
+headers is present, all three must be present and exact; partial, empty,
+duplicate, `cross-site`, `none`, or otherwise mismatched metadata is rejected.
+Empty, wrong, and duplicate `Origin` values are always rejected.
+
+Here, no routing metadata means all three of `Sec-Fetch-Site`,
+`Sec-Fetch-Mode`, and `Sec-Fetch-Dest` are absent. `Sec-Fetch-User` may be
+present, but it is ignored because it does not establish the request source.
+
+The no-routing-metadata case supports observed real Chrome form POST behavior
+on an HTTP Tailscale origin: `Origin: null` with all three routing headers
+absent. This source gate is not authentication. Every accepted admin POST still
+requires its high-entropy operator secret or session in the exact URL-encoded
+form body, and the console does not read cookies. A cross-origin page may still
+cause a request or an unauthenticated failure, so this is not a claim of broad
+CSRF immunity; confidentiality of the body credential and listener isolation
+remain required.
 
 The dashboard can issue a named device credential and begin revocation of an
 active device. Issuance displays the new bearer exactly once in the immediate

@@ -472,6 +472,9 @@ func allowedPostSource(header http.Header, authority string) bool {
 	if len(origins) > 1 || len(origins) == 1 && origins[0] != "null" {
 		return false
 	}
+	if len(header.Values("Sec-Fetch-Site")) == 0 && len(header.Values("Sec-Fetch-Mode")) == 0 && len(header.Values("Sec-Fetch-Dest")) == 0 {
+		return true
+	}
 	return exactHeader(header, "Sec-Fetch-Site", "same-origin") &&
 		exactHeader(header, "Sec-Fetch-Mode", "navigate") &&
 		exactHeader(header, "Sec-Fetch-Dest", "document")
