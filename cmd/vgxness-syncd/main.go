@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vgxness/vgxness/internal/syncadmin"
 	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncpg"
 	"github.com/vgxness/vgxness/internal/syncservice"
@@ -29,6 +31,7 @@ import (
 const (
 	compensationTimeout     = 5 * time.Second
 	defaultListenAddress    = "127.0.0.1:8787"
+	defaultAdminAddress     = "127.0.0.1:0"
 	containerListenAddress  = "0.0.0.0:8787"
 	maxPostgresDSNFileBytes = 16 << 10
 )
@@ -78,6 +81,9 @@ func runDevice(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 }
 
 func runCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "admin" {
+		return runAdmin(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "serve" {
 		return runServe(ctx, args[1:], stderr)
 	}
@@ -85,6 +91,95 @@ func runCommand(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return runHealthcheck(ctx)
 	}
 	return runDevice(ctx, args, stdin, stdout, stderr)
+}
+
+func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("admin", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	listen := flags.String("listen", defaultAdminAddress, "listen address")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return usage(stderr, "usage: vgxness-syncd admin [--listen LOOPBACK:0]")
+	}
+	if !validAdminListenAddress(*listen) {
+		return usage(stderr, "admin requires a literal loopback listen address")
+	}
+	if !terminal(stdout) {
+		return usage(stderr, "admin requires terminal stdout for the ephemeral login secret")
+	}
+	repository, cleanup, ok := configuredServeRepository(ctx)
+	if !ok {
+		fmt.Fprintln(stderr, "admin setup failed; verify VGXNESS_SYNC_POSTGRES_DSN or VGXNESS_SYNC_POSTGRES_DSN_FILE, canonical VGXNESS_SYNC_OWNER_ID, and PostgreSQL availability")
+		return 1
+	}
+	defer cleanup()
+	listener, err := listenTCP("tcp", *listen)
+	if err != nil {
+		fmt.Fprintln(stderr, "admin listen failed")
+		return 1
+	}
+	defer listener.Close()
+	authority := listener.Addr().String()
+	secret, err := syncadmin.NewOperatorSecret()
+	if err != nil {
+		fmt.Fprintln(stderr, "admin setup failed")
+		return 1
+	}
+	handler, err := syncadmin.New(repository, secret, authority)
+	if err != nil {
+		fmt.Fprintln(stderr, "admin setup failed")
+		return 1
+	}
+	if !printAdminCredentials(stdout, authority, secret) {
+		fmt.Fprintln(stderr, "admin secret display failed")
+		return 1
+	}
+	secret = ""
+	server := &http.Server{
+		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10,
+		ErrorLog: log.New(io.Discard, "", 0),
+	}
+	return serveAdmin(ctx, server, listener, stderr)
+}
+
+type adminHTTPServer interface {
+	Serve(net.Listener) error
+	Shutdown(context.Context) error
+	Close() error
+}
+
+func serveAdmin(ctx context.Context, server adminHTTPServer, listener net.Listener, stderr io.Writer) int {
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	select {
+	case <-ctx.Done():
+		shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := server.Shutdown(shutdown)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			<-served
+			fmt.Fprintln(stderr, "admin shutdown failed")
+			return 1
+		}
+		<-served
+		return 0
+	case err := <-served:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintln(stderr, "admin failed")
+			return 1
+		}
+		return 0
+	}
+}
+func printAdminCredentials(stdout io.Writer, address, secret string) bool {
+	written, err := fmt.Fprintf(stdout, "Admin URL: http://%s/\nAdmin login secret: %s\n", address, secret)
+	want := len("Admin URL: http://") + len(address) + len("/\nAdmin login secret: ") + len(secret) + 1
+	return err == nil && written == want
+}
+func validAdminListenAddress(address string) bool {
+	host, port, err := net.SplitHostPort(address)
+	return err == nil && port == "0" && (host == "127.0.0.1" || host == "::1")
 }
 
 func runServe(ctx context.Context, args []string, stderr io.Writer) int {
