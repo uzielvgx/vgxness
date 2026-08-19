@@ -62,6 +62,45 @@ response for container health checks; it does not disclose database state.
 The retired `--development-allow-insecure-non-loopback` flag rejects `true`;
 explicit `false` remains a no-op only so existing launch commands can migrate.
 
+## Local browser administration
+
+Run `vgxness-syncd admin` in an interactive terminal on the database host. The
+command binds a random literal-loopback port and prints that run's admin URL and
+ephemeral operator secret to terminal output. Open the exact printed URL, enter
+the secret, and keep the terminal private. The console uses no session cookie;
+its browser actions are POST-only and every response is `no-store`.
+
+The dashboard can issue a named device credential and begin revocation of an
+active device. Issuance displays the new bearer exactly once in the immediate
+response. Copy it directly into `vgxness memory sync configure` standard input;
+do not put it in a URL, shell argument, log, note, browser extension, or browser
+storage. Leaving or refreshing the one-time page loses the display. Revocation
+uses a separate, short-lived one-time confirmation page that shows the canonical
+device UUID before the final POST. Returning to the dashboard after either
+completed action requires POST; a GET never issues or revokes a device.
+After issuance, verify that the device appears active on the dashboard before
+using its bearer. Delivery can complete when commit acknowledgement is
+ambiguous, so the dashboard is the source of truth.
+
+For administration across SSH, first run the command on the remote host and
+note its printed `127.0.0.1:PORT`. In a second terminal, forward the **same**
+port so the browser's exact Host and Origin continue to match:
+
+```sh
+ssh -N -L 127.0.0.1:PORT:127.0.0.1:PORT operator@sync-host
+```
+
+Then open `http://127.0.0.1:PORT/` locally and use the operator secret from the
+remote interactive terminal. Replace both `PORT` values with the one printed by
+that admin run. Do not expose or reverse-proxy this admin listener.
+
+Loopback and a random port narrow exposure but are not a complete browser
+isolation boundary. A service worker previously registered for the exact reused
+loopback origin can initiate console actions or read an in-browser bearer. This
+task accepts that residual risk; the console does not claim to eliminate it.
+Use a dedicated browser context where practical, close the page promptly, and
+stop the admin process when the operation is complete.
+
 ## Local enrollment and status
 
 Enroll a local client without putting a bearer in command arguments,

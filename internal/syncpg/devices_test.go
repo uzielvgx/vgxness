@@ -40,9 +40,16 @@ type testDB struct {
 
 func TestDeviceIssuePersistsOnlyHashAndSafeAudit(t *testing.T) {
 	repo, db := deviceRepository(t)
-	issued, err := repo.IssueDevice(context.Background(), "desk")
+	var delivered DeviceCredential
+	issued, err := repo.IssueDeviceWithDelivery(context.Background(), "desk", func(credential DeviceCredential) error {
+		delivered = credential
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if delivered != issued {
+		t.Fatal("committed credential differs from delivered credential")
 	}
 	assertBearer(t, issued.Bearer, issued.ID)
 	if issued.Prefix != "vgx1."+issued.ID.String()[:8] {
@@ -72,6 +79,27 @@ func TestDeviceIssuePersistsOnlyHashAndSafeAudit(t *testing.T) {
 		t.Fatal("credential result must not implement Stringer")
 	}
 	assertNoBearer(t, issued.Bearer, issued.Prefix, action, outcome, reason)
+}
+
+func TestDeviceIssueDeliveryFailureRollsBackWrites(t *testing.T) {
+	repo, db := deviceRepository(t)
+	deliveryErr := errors.New("delivery failed")
+	credential, err := repo.IssueDeviceWithDelivery(context.Background(), "undelivered", func(delivered DeviceCredential) error {
+		if delivered.ID == uuid.Nil || delivered.Bearer == "" {
+			t.Fatal("callback received empty credential")
+		}
+		return deliveryErr
+	})
+	if !errors.Is(err, deliveryErr) || credential != (DeviceCredential{}) {
+		t.Fatalf("delivery result = %#v, %v", credential, err)
+	}
+	var devices, audits int
+	if err := db.conn.QueryRow(context.Background(), "SELECT (SELECT count(*) FROM devices), (SELECT count(*) FROM audit_events)").Scan(&devices, &audits); err != nil {
+		t.Fatal(err)
+	}
+	if devices != 0 || audits != 0 {
+		t.Fatalf("failed delivery persisted devices=%d audits=%d", devices, audits)
+	}
 }
 
 func TestDeviceAuthenticateUpdatesLastSeenAndFailuresAreStaticAudited(t *testing.T) {
