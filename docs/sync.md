@@ -70,6 +70,13 @@ ephemeral operator secret to terminal output. Open the exact printed URL, enter
 the secret, and keep the terminal private. The console uses no session cookie;
 its browser actions are POST-only and every response is `no-store`.
 
+Each POST normally requires exactly one `Origin` matching the configured HTTP
+authority. For browser form navigations that omit `Origin` or send literal
+`null`, the console instead requires single exact Fetch Metadata values of
+`same-origin`, `navigate`, and `document`. Missing, duplicate, or mismatched
+metadata is rejected, so cross-site forms (including `cross-site` and `none`)
+cannot use this compatibility fallback.
+
 The dashboard can issue a named device credential and begin revocation of an
 active device. Issuance displays the new bearer exactly once in the immediate
 response. Copy it directly into `vgxness memory sync configure` standard input;

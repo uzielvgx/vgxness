@@ -90,7 +90,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			htmlError(writer, http.StatusBadRequest)
 			return
 		}
-		if !exactHeader(request.Header, "Origin", "http://"+h.authority) {
+		if !allowedPostSource(request.Header, h.authority) {
 			htmlError(writer, http.StatusForbidden)
 			return
 		}
@@ -463,6 +463,18 @@ func issueSecurityHeaders(header http.Header, nonce string) {
 func exactHeader(header http.Header, name, value string) bool {
 	values := header.Values(name)
 	return len(values) == 1 && values[0] == value
+}
+func allowedPostSource(header http.Header, authority string) bool {
+	origins := header.Values("Origin")
+	if len(origins) == 1 && origins[0] == "http://"+authority {
+		return true
+	}
+	if len(origins) > 1 || len(origins) == 1 && origins[0] != "null" {
+		return false
+	}
+	return exactHeader(header, "Sec-Fetch-Site", "same-origin") &&
+		exactHeader(header, "Sec-Fetch-Mode", "navigate") &&
+		exactHeader(header, "Sec-Fetch-Dest", "document")
 }
 func formRequest(request *http.Request) bool {
 	values := request.Header.Values("Content-Type")

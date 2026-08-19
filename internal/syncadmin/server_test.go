@@ -167,6 +167,61 @@ func TestAdminAcceptsLiteralAuthoritiesAndRejectsMismatch(t *testing.T) {
 		}
 	}
 }
+func TestAdminPostOriginCompatibility(t *testing.T) {
+	handler := newTestHandler(t, &testReader{}, testAuthority)
+	tests := []struct {
+		name, user       string
+		origin           []string
+		site, mode, dest []string
+		want             int
+	}{
+		{name: "exact origin", origin: []string{"http://" + testAuthority}, want: http.StatusUnauthorized},
+		{name: "absent origin", site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusUnauthorized},
+		{name: "empty origin", origin: []string{""}, site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "null origin", origin: []string{"null"}, site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusUnauthorized},
+		{name: "wrong origin", origin: []string{"http://127.0.0.1:8789"}, site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "missing metadata", want: http.StatusForbidden},
+		{name: "fetch user substitute", user: "?1", want: http.StatusForbidden},
+		{name: "empty metadata", origin: []string{"null"}, site: []string{""}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "cross-site", site: []string{"cross-site"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "none site", origin: []string{"null"}, site: []string{"none"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "wrong mode", site: []string{"same-origin"}, mode: []string{"cors"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "wrong destination", origin: []string{"null"}, site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"iframe"}, want: http.StatusForbidden},
+		{name: "duplicate origin", origin: []string{"http://" + testAuthority, "http://" + testAuthority}, site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "duplicate site", site: []string{"same-origin", "same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "duplicate mode", origin: []string{"null"}, site: []string{"same-origin"}, mode: []string{"navigate", "navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
+		{name: "duplicate destination", site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document", "document"}, want: http.StatusForbidden},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := adminRequest(http.MethodPost, "/login", url.Values{"secret": {"wrong"}})
+			request.Header.Del("Origin")
+			if test.origin != nil {
+				request.Header["Origin"] = test.origin
+			}
+			request.Header["Sec-Fetch-Site"], request.Header["Sec-Fetch-Mode"], request.Header["Sec-Fetch-Dest"] = test.site, test.mode, test.dest
+			if test.user != "" {
+				request.Header.Set("Sec-Fetch-User", test.user)
+			}
+			if got := response(handler, request).Code; got != test.want {
+				t.Fatalf("status = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+func TestDeviceMutationFallbackRequiresBodySession(t *testing.T) {
+	repository := &testReader{}
+	handler := newTestHandler(t, repository, testAuthority)
+	request := adminRequest(http.MethodPost, "/device/issue", url.Values{"name": {"desk"}})
+	request.Header.Del("Origin")
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request.Header.Set("Sec-Fetch-Mode", "navigate")
+	request.Header.Set("Sec-Fetch-Dest", "document")
+	request.AddCookie(&http.Cookie{Name: "session", Value: loginSession(t, handler)})
+	if got := response(handler, request).Code; got != http.StatusBadRequest || len(repository.issued) != 0 {
+		t.Fatal("cookie-only session reached device mutation")
+	}
+}
 func TestTailscaleAdminAuthorityIsCanonicalAndRangeBound(t *testing.T) {
 	for _, authority := range []string{"100.64.0.1:8788", "100.127.255.254:65535", "[fd7a:115c:a1e0::1]:8788"} {
 		if _, err := NewTailscale(&testReader{}, testOperatorSecret, authority); err != nil {
