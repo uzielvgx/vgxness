@@ -68,6 +68,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	launcher := filepath.Join(launcherDirectory, executableName("vgxness"))
 	manager := filepath.Join(configDirectory, "agents", "vgxness-manager.md")
 	general := filepath.Join(configDirectory, "agents", "general.md")
+	explore := filepath.Join(configDirectory, "agents", "explore.md")
 	verifier := filepath.Join(configDirectory, "agents", "vgxness-verifier.md")
 	memoryPlugin := filepath.Join(configDirectory, "plugins", "vgxness.ts")
 	defaultAgentConfig := filepath.Join(configDirectory, "opencode.json")
@@ -87,7 +88,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"vgxness-sdd-apply.md",
 	}
 	managedProfiles := append(reviewerPaths(configDirectory, reviewers), reviewerPaths(configDirectory, sddProfiles)...)
-	for _, path := range append([]string{launcher, manager, general, verifier, defaultAgentConfig}, managedProfiles...) {
+	for _, path := range append([]string{launcher, manager, general, explore, verifier, defaultAgentConfig}, managedProfiles...) {
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.Mode().IsRegular() {
 			t.Fatalf("expected installed regular file %s: %v", path, statErr)
@@ -104,9 +105,11 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v49 marker", "artifact: opencode-agent/vgxness-manager; version: 49"},
+		{"active v50 marker", "artifact: opencode-agent/vgxness-manager; version: 50"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
+		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
+		{"context digest ownership", "The Manager is the sole digest-computation owner for every non-SDD repository delegation."},
 		{"stacked-pr", "automatically load `stacked-pr`"},
 		{"pre-write gate", "Before delegating any workspace write"},
 		{"global permission", "permission:\n  \"*\": allow"},
@@ -126,9 +129,26 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatalf("setup did not install the mixed v2 manifest: %v\n%s", err, manifestData)
 	}
 	generalData, generalErr := os.ReadFile(general)
+	exploreData, exploreErr := os.ReadFile(explore)
 	verifierData, verifierErr := os.ReadFile(verifier)
-	if generalErr != nil || verifierErr != nil || !bytes.Contains(generalData, []byte("artifact: opencode-agent/general; version: 6")) || !bytes.Contains(generalData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(generalData, []byte("vgxness_memory_save: deny")) || !bytes.Contains(generalData, []byte("vgxness_sdd_record_projection: deny")) || !bytes.Contains(generalData, []byte("delegated implementation worker")) || !bytes.Contains(verifierData, []byte("artifact: opencode-agent/vgxness-verifier; version: 4")) || !bytes.Contains(verifierData, []byte("permission:\n  \"*\": allow")) || !bytes.Contains(verifierData, []byte("vgxness_memory_save: deny")) || !bytes.Contains(verifierData, []byte("vgxness_sdd_record_projection: deny")) || !bytes.Contains(verifierData, []byte("PASS|FAIL|INCONCLUSIVE")) {
-		t.Fatalf("setup did not install managed writer/verifier contracts: general=%v verifier=%v", generalErr, verifierErr)
+	for _, required := range []struct {
+		name string
+		data []byte
+		err  error
+		want []string
+	}{
+		{"general", generalData, generalErr, []string{"artifact: opencode-agent/general; version: 7", "permission:\n  \"*\": allow", "delegated implementation worker", "Require a Context Capsule v1 for every non-SDD repository mission.", "Echo the accepted contextDigest unchanged in the return."}},
+		{"explore", exploreData, exploreErr, []string{"artifact: opencode-agent/explore; version: 3", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow", "Require a Context Capsule v1 for every non-SDD repository mission.", "Echo the accepted contextDigest unchanged in the return."}},
+		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 5", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission.", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
+	} {
+		if required.err != nil {
+			t.Fatalf("read installed %s contract: %v", required.name, required.err)
+		}
+		for _, want := range required.want {
+			if !bytes.Contains(required.data, []byte(want)) {
+				t.Errorf("installed %s contract is missing %q", required.name, want)
+			}
+		}
 	}
 	defaultAgentData, defaultAgentErr := os.ReadFile(defaultAgentConfig)
 	if defaultAgentErr != nil || !bytes.Contains(defaultAgentData, []byte(`"default_agent": "vgxness-manager"`)) || !bytes.Contains(defaultAgentData, []byte(`"--full"`)) {
