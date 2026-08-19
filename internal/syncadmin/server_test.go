@@ -148,12 +148,10 @@ func TestAdminAcceptsLiteralAuthoritiesAndRejectsMismatch(t *testing.T) {
 		}
 	}
 	handler := newTestHandler(t, &testReader{}, testAuthority)
-	for _, mismatch := range []struct{ host, origin string }{{"127.0.0.1:8789", ""}, {"[::1]:8788", ""}, {testAuthority, "-"}, {testAuthority, "http://127.0.0.1:8789"}, {testAuthority, "https://" + testAuthority}} {
+	for _, mismatch := range []struct{ host, origin string }{{"127.0.0.1:8789", ""}, {"[::1]:8788", ""}, {testAuthority, "http://127.0.0.1:8789"}, {testAuthority, "https://" + testAuthority}} {
 		request := adminRequest(http.MethodPost, "/login", url.Values{"secret": {testOperatorSecret}})
 		request.Host = mismatch.host
-		if mismatch.origin == "-" {
-			request.Header.Del("Origin")
-		} else if mismatch.origin != "" {
+		if mismatch.origin != "" {
 			request.Header.Set("Origin", mismatch.origin)
 		}
 		recorder := response(handler, request)
@@ -176,12 +174,16 @@ func TestAdminPostOriginCompatibility(t *testing.T) {
 		want             int
 	}{
 		{name: "exact origin", origin: []string{"http://" + testAuthority}, want: http.StatusUnauthorized},
+		{name: "exact origin ignores metadata", origin: []string{"http://" + testAuthority}, site: []string{"cross-site"}, want: http.StatusUnauthorized},
 		{name: "absent origin", site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusUnauthorized},
+		{name: "absent origin without metadata", want: http.StatusUnauthorized},
 		{name: "empty origin", origin: []string{""}, site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
 		{name: "null origin", origin: []string{"null"}, site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusUnauthorized},
+		{name: "null origin without metadata", origin: []string{"null"}, want: http.StatusUnauthorized},
 		{name: "wrong origin", origin: []string{"http://127.0.0.1:8789"}, site: []string{"same-origin"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
-		{name: "missing metadata", want: http.StatusForbidden},
-		{name: "fetch user substitute", user: "?1", want: http.StatusForbidden},
+		{name: "wrong origin without metadata", origin: []string{"http://127.0.0.1:8789"}, want: http.StatusForbidden},
+		{name: "fetch user ignored when routing metadata absent", user: "?1", want: http.StatusUnauthorized},
+		{name: "partial metadata", site: []string{"same-origin"}, want: http.StatusForbidden},
 		{name: "empty metadata", origin: []string{"null"}, site: []string{""}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
 		{name: "cross-site", site: []string{"cross-site"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
 		{name: "none site", origin: []string{"null"}, site: []string{"none"}, mode: []string{"navigate"}, dest: []string{"document"}, want: http.StatusForbidden},
@@ -213,10 +215,7 @@ func TestDeviceMutationFallbackRequiresBodySession(t *testing.T) {
 	repository := &testReader{}
 	handler := newTestHandler(t, repository, testAuthority)
 	request := adminRequest(http.MethodPost, "/device/issue", url.Values{"name": {"desk"}})
-	request.Header.Del("Origin")
-	request.Header.Set("Sec-Fetch-Site", "same-origin")
-	request.Header.Set("Sec-Fetch-Mode", "navigate")
-	request.Header.Set("Sec-Fetch-Dest", "document")
+	request.Header.Set("Origin", "null")
 	request.AddCookie(&http.Cookie{Name: "session", Value: loginSession(t, handler)})
 	if got := response(handler, request).Code; got != http.StatusBadRequest || len(repository.issued) != 0 {
 		t.Fatal("cookie-only session reached device mutation")
