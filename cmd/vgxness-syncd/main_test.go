@@ -354,6 +354,59 @@ func TestServeRejectsUnsafeListenBeforeConfiguration(t *testing.T) {
 	}
 }
 
+func TestAdminListenerRequiresZeroAndActualAuthorityIsCanonical(t *testing.T) {
+	if defaultAdminAddress != "127.0.0.1:0" || !validAdminListenAddress(defaultAdminAddress) || !validAdminListenAddress("[::1]:0") {
+		t.Fatal("zero-port loopback listener rejected")
+	}
+	for _, address := range []string{"127.0.0.1:8788", "127.0.0.1:00", "127.0.0.1:000", "0.0.0.0:0", "localhost:0", "127.0.0.2:0", "[::]:0"} {
+		if validAdminListenAddress(address) {
+			t.Fatalf("unsafe/stable admin listener accepted: %q", address)
+		}
+	}
+	listener, err := net.Listen("tcp", defaultAdminAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	authority := listener.Addr().String()
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil || port == "0" || authority != net.JoinHostPort(host, port) {
+		t.Fatalf("noncanonical actual authority: %q", authority)
+	}
+	const secret = "operator-secret"
+	var output strings.Builder
+	if !printAdminCredentials(&output, "127.0.0.1:8788", secret) {
+		t.Fatal("admin credentials were not printed")
+	}
+	if got, want := output.String(), "Admin URL: http://127.0.0.1:8788/\nAdmin login secret: "+secret+"\n"; got != want {
+		t.Fatalf("output = %q", got)
+	}
+	if strings.Contains(strings.SplitN(output.String(), "\n", 2)[0], secret) {
+		t.Fatal("secret appeared in admin URL")
+	}
+}
+
+type failingAdminServer struct{ done chan struct{} }
+
+func (server *failingAdminServer) Serve(net.Listener) error {
+	<-server.done
+	return http.ErrServerClosed
+}
+func (*failingAdminServer) Shutdown(context.Context) error { return errors.New("timeout") }
+func (server *failingAdminServer) Close() error {
+	close(server.done)
+	return nil
+}
+
+func TestAdminShutdownFailureClosesAndObservesServe(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	server := &failingAdminServer{done: make(chan struct{})}
+	if code := serveAdmin(ctx, server, nil, io.Discard); code != 1 {
+		t.Fatalf("shutdown fallback = %d", code)
+	}
+}
+
 func TestServeRejectsRetiredInsecureOverrideBeforeConfiguration(t *testing.T) {
 	oldGetenv := getenv
 	getenv = func(string) string { t.Fatal("environment read before flag validation"); return "" }
