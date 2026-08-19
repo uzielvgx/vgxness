@@ -52,11 +52,26 @@ type DeviceIdentity struct {
 // IssueDevice creates a device and commits its issuance audit before returning
 // the newly generated bearer credential.
 func (r *Repository) IssueDevice(ctx context.Context, name string) (DeviceCredential, error) {
+	credential, err := r.IssueDeviceWithDelivery(ctx, name, func(DeviceCredential) error { return nil })
+	if err != nil {
+		return DeviceCredential{}, err
+	}
+	return credential, nil
+}
+
+// IssueDeviceWithDelivery invokes deliver after the issuance writes and audit
+// are staged but before commit. A delivery failure rolls the transaction back.
+// A commit error may be returned with the credential because delivery already
+// completed and the commit acknowledgement can be ambiguous.
+func (r *Repository) IssueDeviceWithDelivery(ctx context.Context, name string, deliver func(DeviceCredential) error) (DeviceCredential, error) {
 	if err := ctx.Err(); err != nil {
 		return DeviceCredential{}, err
 	}
 	if !validDeviceName(name) {
 		return DeviceCredential{}, ErrInvalidDeviceName
+	}
+	if deliver == nil {
+		return DeviceCredential{}, ErrRepository
 	}
 	id, err := uuid.NewRandom()
 	if err != nil || id == uuid.Nil {
@@ -84,10 +99,14 @@ func (r *Repository) IssueDevice(ctx context.Context, name string) (DeviceCreden
 	if err = deviceAudit(ctx, tx, schema, r.ownerID, id, "device.issue", "success", ""); err != nil {
 		return DeviceCredential{}, repositoryError(ctx)
 	}
-	if err = commitRepository(ctx, tx); err != nil {
+	credential := DeviceCredential{ID: id, DisplayName: name, Prefix: prefix, Bearer: bearer}
+	if err = deliver(credential); err != nil {
 		return DeviceCredential{}, err
 	}
-	return DeviceCredential{ID: id, DisplayName: name, Prefix: prefix, Bearer: bearer}, nil
+	if err = commitRepository(ctx, tx); err != nil {
+		return credential, err
+	}
+	return credential, nil
 }
 
 // AuthenticateDevice verifies a bearer against this repository's owner and
