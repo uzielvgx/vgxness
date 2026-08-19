@@ -66,13 +66,18 @@ func codexPackage(options integration.Options) (Package, error) {
 }
 
 func knownPackages() ([]Package, error) {
-	packages := make([]Package, 0, 18)
+	packages := make([]Package, 0, 22)
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			return nil, err
 		}
 		packages = append(packages, current)
+		v9, err := renderActiveV9("v0.0.0", plan)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, v9)
 		v8, err := renderActiveV8("v0.0.0", plan)
 		if err != nil {
 			return nil, err
@@ -225,6 +230,11 @@ func collapsePartialCandidates(candidates []partialCandidate, preferred Package)
 	}
 	if current != -1 {
 		return candidates[current].state, candidates[current].pkg, nil
+	}
+	for _, candidate := range candidates {
+		if packageUsesManager(candidate.pkg, activeV9ManagerInstructions()) {
+			return candidate.state, candidate.pkg, nil
+		}
 	}
 	return inspection{}, Package{}, conflict("ambiguous managed Codex package")
 }

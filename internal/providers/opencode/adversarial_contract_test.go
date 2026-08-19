@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -178,6 +179,83 @@ func TestGeneratedManagerGeneralVerifierContractClauses(t *testing.T) {
 			if !strings.Contains(string(bundle.agents[name]), clause) {
 				t.Errorf("%s missing contract clause %q", name, clause)
 			}
+		}
+	}
+}
+
+func TestGeneratedRepositoryChildrenValidateAndEchoContextCapsule(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{exploreAgentName, generalAgentName, verifierAgentName, reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		content := string(bundle.agents[name])
+		for _, clause := range []string{"Context Capsule v1", "goal, criteria, nonGoals, decisions, authorization, constraints, evidenceRefs, lineage, and contextDigest", "Manager-attested digest", "capsule contextDigest and mission's external contextDigest", "parentContextDigest", "Echo the accepted contextDigest unchanged", "digest-bound synthesis", "Do not independently recompute", "not a security boundary"} {
+			if !strings.Contains(content, clause) {
+				t.Errorf("%s missing child context clause %q", name, clause)
+			}
+		}
+		for _, forbidden := range []string{"Recompute lowercase SHA-256", "object keys sorted lexicographically", "no insignificant whitespace", "array order preserved"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("%s exceeds child capability with %q", name, forbidden)
+			}
+		}
+	}
+	manager := string(bundle.agents[managerAgentName])
+	for _, clause := range []string{"sole digest-computation owner", "non-SDD repository delegation", "object keys sorted lexicographically", "no insignificant whitespace", "array order preserved", "contextDigest field omitted", "compute lowercase SHA-256 with an available read-only local hashing capability before task launch", "compare the computed digest with both", "altered capsule content even when", "stale repeated digest", "Count this computation within the selected route budget", "If the capability is unavailable, do not delegate", "SDD missions retain their stronger accepted artifact, revision, digest, and stateVersion bindings without duplicating this capsule"} {
+		if !strings.Contains(manager, clause) {
+			t.Errorf("manager missing deterministic capsule clause %q", clause)
+		}
+	}
+}
+
+func TestAlteredContextCapsuleWithRepeatedSuppliedDigestIsRejectedByContract(t *testing.T) {
+	canonicalDigest := func(capsule map[string]any) string {
+		copy := make(map[string]any, len(capsule))
+		for key, value := range capsule {
+			if key != "contextDigest" {
+				copy[key] = value
+			}
+		}
+		canonical, err := json.Marshal(copy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(canonical)
+		return hex.EncodeToString(digest[:])
+	}
+	original := map[string]any{"goal": "bounded repair", "criteria": []any{"A", "B"}, "lineage": map[string]any{"origin": "request", "hops": []any{"manager", "general"}}}
+	supplied := canonicalDigest(original)
+	original["contextDigest"] = supplied
+	altered := map[string]any{"lineage": original["lineage"], "criteria": original["criteria"], "goal": "broadened repair", "contextDigest": supplied}
+	if recomputed := canonicalDigest(altered); recomputed == supplied {
+		t.Fatal("altered capsule retained the original canonical digest")
+	}
+	if capsuleDigest, externalDigest := altered["contextDigest"], supplied; capsuleDigest != externalDigest {
+		t.Fatal("adversarial setup must repeat one stale supplied digest")
+	}
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(bundle.agents[managerAgentName]), "Reject altered capsule content even when the capsule and mission repeat the same supplied digest") {
+		t.Error("manager does not reject the repeated stale-digest adversary")
+	}
+}
+
+func TestSDDProfilesRemainContextCapsuleFreeWithExactPredecessors(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, role := range map[string]sdd.Role{sddResearchName: sdd.RoleResearch, sddProposalName: sdd.RoleProposal, sddSpecName: sdd.RoleSpec, sddDesignName: sdd.RoleDesign, sddTasksName: sdd.RoleTasks, sddApplyName: sdd.RoleApply} {
+		current := bundle.agents[name]
+		if bytes.Contains(current, []byte("Context Capsule v1")) {
+			t.Errorf("%s current identity gained Context Capsule bytes", name)
+		}
+		predecessor := previousSDDAgentPredecessor(role, current)
+		if len(predecessor) == 0 || bytes.Contains(predecessor, []byte("Context Capsule v1")) {
+			t.Errorf("%s exact predecessor identity changed", name)
 		}
 	}
 }

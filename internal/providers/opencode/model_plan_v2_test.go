@@ -29,6 +29,55 @@ func TestSchemaV2ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
 	}
 }
 
+func TestSchemaV2ImmediatePromptPredecessorKeepsModelBindings(t *testing.T) {
+	for _, current := range []modelPlanBundle{
+		mustBuildModelPlanV2(t, schemaV2TestConfig(t)),
+		mustRequestModelPlan(t, integration.Options{
+			ModelPlan: sdd.PlanHigh, ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
+			ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+			ModelEfficientVariant: "xhigh", ModelBalancedVariant: "max", ModelVariantsSpecified: true,
+		}),
+	} {
+		predecessor, err := previousV49ModelPlanBundle(current)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, recognized, err := parseInstalledModelPlanManifest(predecessor.manifest); err != nil || !bytes.Equal(recognized.manifest, predecessor.manifest) {
+			t.Fatalf("schema-v2 immediate predecessor manifest rejected: %v", err)
+		}
+		if _, err := managerPredecessors(current); err != nil {
+			t.Fatalf("schema-v2 manager predecessor candidates: %v", err)
+		}
+		for name, marker := range map[string]string{
+			managerAgentName: "artifact: opencode-agent/vgxness-manager; version: 49",
+			generalAgentName: "artifact: opencode-agent/general; version: 6",
+			exploreAgentName: "artifact: opencode-agent/explore; version: 2",
+		} {
+			if !bytes.Contains(predecessor.agents[name], []byte(marker)) || bytes.Contains(predecessor.agents[name], []byte("Context Capsule v1")) {
+				t.Errorf("schema-v2 %s is not the exact immediate predecessor", name)
+			}
+		}
+	}
+}
+
+func mustBuildModelPlanV2(t *testing.T, config sdd.ModelPlanConfigV2) modelPlanBundle {
+	t.Helper()
+	bundle, err := buildModelPlanBundleV2(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bundle
+}
+
+func mustRequestModelPlan(t *testing.T, options integration.Options) modelPlanBundle {
+	t.Helper()
+	bundle, err := requestedModelPlan(options, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bundle
+}
+
 func schemaV2TestConfig(t *testing.T) sdd.ModelPlanConfigV2 {
 	t.Helper()
 	config, err := sdd.NewModelPlanConfigV2(sdd.PlanMedium,

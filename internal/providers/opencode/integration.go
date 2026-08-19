@@ -26,6 +26,9 @@ import (
 //go:embed templates/manager.md
 var canonicalManagerPrompt string
 
+//go:embed templates/manager.v49.md
+var previousManagerPromptV49 string
+
 //go:embed templates/manager.v45.md
 var previousManagerPromptV45 string
 
@@ -59,6 +62,9 @@ var previousAutonomousStackedPRSkillV2 string
 //go:embed templates/general.md
 var canonicalGeneralPrompt string
 
+//go:embed templates/general.v6.md
+var previousGeneralPromptV6 string
+
 //go:embed templates/general.v4.md
 var previousGeneralPromptV4 string
 
@@ -73,6 +79,9 @@ var canonicalVerifierPrompt string
 
 //go:embed templates/verifier.v2.md
 var previousVerifierPromptV2 string
+
+//go:embed templates/verifier.v4.md
+var previousVerifierPromptV4 string
 
 //go:embed templates/review-risk.v2.md
 var previousReviewRiskPromptV2 string
@@ -91,6 +100,9 @@ var previousReviewRefuterPromptV2 string
 
 //go:embed templates/explore.md
 var explorePrompt string
+
+//go:embed templates/explore.v2.md
+var previousExplorePromptV2 string
 
 // OrchestrationContractIdentity identifies the provider-neutral policy used by
 // this provider without changing OpenCode's native prompt or tool semantics.
@@ -117,6 +129,7 @@ const (
 	maxDefaultAgentBytes         = 4 * 1024
 	maxArtifactBytes             = 512 * 1024
 	maxMemoryOutputBytes         = 128 * 1024
+	nativeChildContextContract   = `Require a Context Capsule v1 for every non-SDD repository mission. Validate the required goal, criteria, nonGoals, decisions, authorization, constraints, evidenceRefs, lineage, and contextDigest fields. Require the capsule contextDigest and mission's external contextDigest to equal the Manager-attested digest. Reject missing fields, unequal bindings, or stale repeated attestations. For every continuation, correction, or synthesis delta, require parentContextDigest to equal the previously accepted contextDigest; otherwise return BLOCKED or INCONCLUSIVE before work. Echo the accepted contextDigest unchanged in the return. Accept Manager synthesis only as a digest-bound synthesis bound to the accepted contextDigest. Do not independently recompute or claim recomputation; this Manager attestation is prompt-level continuity and provenance, not a security boundary.`
 	nativeReviewSharedContract   = `
 # Bounded review contract
 
@@ -128,6 +141,8 @@ Accept only one parent mission containing:
 - skills: relevant native skill names, when any
 - verificationEvidence: tests and read-only checks already run
 - frozenLedger and correctionDelta only in scoped-validation mode; correctionDelta only in scoped-validation mode with a frozenLedger
+
+` + nativeChildContextContract + `
 
 Accept Mission Instance v1 and Candidate Capsule v1 only within their 8 KiB/4 KiB limits; reject malformed, stale, oversized, or missing-digest capsules as INCONCLUSIVE. Echo the complete Review Binding unchanged in the return envelope. A missing, mismatched, or stale Review Binding is INCONCLUSIVE. Reject a mission that omits or contradicts its Review Binding. Load every supplied skill name through the native skill tool before reviewing. Use vgxness_memory_search and vgxness_memory_get only when prior project decisions are material to the supplied acceptance criteria; memory is context, never proof of the frozen candidate. When .codegraph exists and the question concerns code structure, flow, dependencies, or blast radius, use at most one bounded codegraph_explore query before fallback reads. CodeGraph cannot prove the candidate diff by itself; exact source and supplied diff evidence remain authoritative. If the index is unavailable or stale, continue with read, grep, glob, and list. Inspect only files needed to assess the supplied diff scope. Do not use shell, Git, network, package installation, delegation, or any write-capable tool. Do not edit, format, generate, commit, or push. Treat the candidate as immutable.
 
@@ -156,7 +171,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-risk; version: 3 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-risk; version: 4 -->
 
 You are the Risk lens for VGXNESS Native Manager. Inspect security boundaries, authorization, permissions, secrets, data exposure or loss, injection, unsafe process or shell use, dependency trust, and privilege escalation. Use stable finding IDs prefixed RISK-.
 ` + nativeReviewSharedContract
@@ -177,7 +192,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-readability; version: 3 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-readability; version: 4 -->
 
 You are the Readability lens for VGXNESS Native Manager. Inspect whether intention is clear, naming matches behavior, duplication or accidental complexity obscures contracts, dead code remains, and maintenance hazards can produce future defects. Do not report subjective style preferences without concrete maintenance impact. Use stable finding IDs prefixed READ-.
 ` + nativeReviewSharedContract
@@ -198,7 +213,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-reliability; version: 3 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-reliability; version: 4 -->
 
 You are the Reliability lens for VGXNESS Native Manager. Inspect behavioral contracts, correctness, regression coverage, edge cases, determinism, state transitions, concurrency, and outcomes that differ from the acceptance criteria. Use stable finding IDs prefixed REL-.
 ` + nativeReviewSharedContract
@@ -219,7 +234,7 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-resilience; version: 3 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-resilience; version: 4 -->
 
 You are the Resilience lens for VGXNESS Native Manager. Inspect failure paths, partial completion, fallback, retry safety, cancellation, observability, rollback, recovery, load behavior, and operational degradation. Use stable finding IDs prefixed RES-.
 ` + nativeReviewSharedContract
@@ -240,9 +255,11 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-refuter; version: 3 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-refuter; version: 4 -->
 
 You are the severe-finding refuter for VGXNESS Native Manager. Accept only one parent mission containing one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria; the same Candidate Capsule identity and scope; verification evidence; and one batch of inferential BLOCKER or CRITICAL findings with their supplied finding IDs and proof references. Echo the complete Review Binding unchanged in the return envelope. A missing, mismatched, or stale Review Binding is INCONCLUSIVE.
+
+` + nativeChildContextContract + `
 
 Independently attempt to disprove each supplied claim against the frozen candidate. Preserve the same candidate and only supplied severe inferential finding IDs in every result. Inspect only evidence needed for those IDs. Never add a new finding, broaden scope, suggest a fix, or turn uncertainty into approval. A deterministic severe finding must not be sent to you.
 
@@ -1165,20 +1182,12 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 				return inspection{}, predecessorErr
 			}
 			predecessors[managerAgentName] = managerPrior
-			v45, predecessorErr := previousV45ModelPlanBundle(plan)
-			if predecessorErr != nil {
-				return inspection{}, predecessorErr
-			}
-			v44, predecessorErr := previousV44ModelPlanBundle(plan)
-			if predecessorErr != nil {
-				return inspection{}, predecessorErr
-			}
-			v43, predecessorErr := previousV43ModelPlanBundle(v44)
+			compactPrior, predecessorErr := compactProtocolPredecessors(plan.agents)
 			if predecessorErr != nil {
 				return inspection{}, predecessorErr
 			}
 			for _, name := range compactProtocolAgentNames {
-				predecessors[name] = [][]byte{v45.agents[name], v44.agents[name], v43.agents[name]}
+				predecessors[name] = compactPrior[name]
 			}
 		}
 	}
@@ -1188,11 +1197,17 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		return nil
 	}
+	exploreV2 := previousExploreV2(plan.agents[exploreAgentName])
+	generalV6 := previousGeneralV6(plan.agents[generalAgentName])
+	verifierV4 := previousVerifierV4(plan.agents[verifierAgentName])
+	if len(exploreV2) == 0 || len(generalV6) == 0 || len(verifierV4) == 0 {
+		return inspection{}, integration.ErrInvalid
+	}
 	state := inspection{result: result, artifacts: []artifact{
 		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: predecessors[managerAgentName], regenerations: regeneration(managerPath)},
-		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{previousExplorePredecessor(plan.agents[exploreAgentName])}, regenerations: regeneration(explorePath)},
-		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: append(predecessors[generalAgentName], previousGeneralPredecessor(plan.agents[generalAgentName])), regenerations: regeneration(generalPath)},
-		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: append(predecessors[verifierAgentName], previousVerifierPredecessor(plan.agents[verifierAgentName])), regenerations: regeneration(verifierPath)},
+		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{exploreV2, previousExplorePredecessor(exploreV2)}, regenerations: regeneration(explorePath)},
+		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: append(predecessors[generalAgentName], generalV6, previousGeneralPredecessor(generalV6)), regenerations: regeneration(generalPath)},
+		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: append(predecessors[verifierAgentName], verifierV4, previousVerifierPredecessor(verifierV4)), regenerations: regeneration(verifierPath)},
 		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: predecessors[reviewRiskName], regenerations: regeneration(reviewRiskPath)},
 		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: predecessors[reviewReadabilityName], regenerations: regeneration(reviewReadabilityPath)},
 		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", predecessors: predecessors[reviewReliabilityName], regenerations: regeneration(reviewReliabilityPath)},
