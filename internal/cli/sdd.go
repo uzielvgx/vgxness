@@ -79,16 +79,33 @@ func runSDD(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	flags.StringVar(&workspace, "workspace", "", "canonical workspace used to resolve the project")
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
-	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || !stdinSource || workspace == "" {
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
 		return sddFailure(stderr, sdd.ErrInvalid)
+	}
+	if !stdinSource {
+		fmt.Fprintln(stderr, "invalid: use --stdin to provide SDD JSON input")
+		return 2
+	}
+	if workspace == "" {
+		fmt.Fprintln(stderr, "invalid: provide --workspace for the trusted project")
+		return 2
 	}
 	data, err := memoryInputBytes("", true, stdin)
 	if err != nil {
 		return sddFailure(stderr, sdd.ErrInvalid)
 	}
 	input, fields, err := decodeSDDInput(data)
-	if err != nil || input.SchemaVersion != 1 || fields["project"] {
-		return sddFailure(stderr, sdd.ErrInvalid)
+	if err != nil {
+		fmt.Fprintln(stderr, "invalid: provide one SDD JSON object with schemaVersion 1")
+		return 2
+	}
+	if input.SchemaVersion != 1 || fields["project"] {
+		fmt.Fprintln(stderr, "invalid: schemaVersion must be 1 and project is resolved from --workspace")
+		return 2
+	}
+	if field := unexpectedSDDField(operation, fields); field != "" {
+		fmt.Fprintf(stderr, "invalid: field %s is not accepted by SDD %s\n", field, operation)
+		return 2
 	}
 	absolute, err := filepath.Abs(workspace)
 	if err != nil {
@@ -234,11 +251,30 @@ func decodeSDDInput(data []byte) (sddInput, map[string]bool, error) {
 	}
 	var input sddInput
 	decoder = json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
 		return sddInput{}, nil, sdd.ErrInvalid
 	}
 	return input, fields, nil
+}
+
+func unexpectedSDDField(operation string, fields map[string]bool) string {
+	allowed := map[string][]string{
+		"create": {"schemaVersion", "idempotencyKey", "title", "backend", "interactionMode", "plan"}, "list": {"schemaVersion", "changeStatus", "limit"}, "get": {"schemaVersion", "id"},
+		"set-interaction-mode": {"schemaVersion", "changeId", "interactionMode", "expectedStateVersion"}, "save-revision": {"schemaVersion", "changeId", "artifact", "content", "externalLocation", "digest", "inputs", "inputDigest", "expectedStateVersion"}, "get-revision": {"schemaVersion", "changeId", "revisionId"}, "list-revisions": {"schemaVersion", "changeId", "artifact", "limit"}, "accept-revision": {"schemaVersion", "changeId", "revisionId", "expectedStateVersion"}, "transition": {"schemaVersion", "changeId", "targetPhase", "cancel", "expectedStateVersion"}, "projection-status": {"schemaVersion", "changeId", "artifactId"}, "record-projection": {"schemaVersion", "changeId", "artifactId", "revisionId", "status", "digest", "location", "expectedStateVersion"}, "render-projection": {"schemaVersion", "changeId", "revisionId"}, "compare-projection": {"schemaVersion", "changeId", "revisionId", "relativePath", "projectionContent", "missing", "symlink"},
+	}
+	set := make(map[string]bool, len(allowed[operation]))
+	for _, field := range allowed[operation] {
+		set[field] = true
+	}
+	var unexpected string
+	for field := range fields {
+		if !set[field] {
+			if unexpected == "" || field < unexpected {
+				unexpected = field
+			}
+		}
+	}
+	return unexpected
 }
 
 func onlySDDFields(fields map[string]bool, allowed ...string) bool {

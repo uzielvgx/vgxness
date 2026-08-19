@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -266,24 +267,70 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations}, server.callGet)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_save", Description: "Write a durable project memory entry. This tool stores data.", Annotations: writeAnnotations}, server.callSave)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_forget", Description: "Archive one exact project memory entry. This tool changes stored data and removes it from normal search.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}}, server.callForget)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_create", Description: "Create one structured SDD change. This stores state only and does not execute a workflow.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}}, server.callSDDCreate)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_list", Description: "List structured SDD changes for the trusted workspace project.", Annotations: annotations}, server.callSDDList)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_get", Description: "Get one structured SDD change by exact ID.", Annotations: annotations}, server.callSDDGet)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_set_interaction_mode", Description: "Change an SDD change interaction mode using optimistic state versioning. This tool changes stored data.", Annotations: writeAnnotations}, server.callSDDSetInteractionMode)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_transition", Description: "Record a legal SDD phase transition or cancellation using optimistic state versioning. This tool changes stored data.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}}, server.callSDDTransition)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_save_revision", Description: "Save a candidate SDD artifact revision. This tool changes stored data.", Annotations: writeAnnotations}, server.callSDDSaveRevision)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_get_revision", Description: "Get one SDD artifact revision by exact change and revision IDs.", Annotations: annotations}, server.callSDDGetRevision)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_list_revisions", Description: "List bounded SDD revision summaries without body content.", Annotations: annotations}, server.callSDDListRevisions)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_accept_revision", Description: "Accept one immutable candidate revision using optimistic state versioning. This tool changes stored data.", Annotations: writeAnnotations}, server.callSDDAcceptRevision)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_render_projection", Description: "Render deterministic managed OpenSpec bytes and a repository-relative target path.", Annotations: annotations}, server.callSDDRenderProjection)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_compare_projection", Description: "Compare caller-supplied OpenSpec bytes with accepted memory state. This tool never writes data.", Annotations: annotations}, server.callSDDCompareProjection)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_record_projection", Description: "Record supplied projection evidence. This tool changes stored data without filesystem access.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}}, server.callSDDRecordProjection)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_projection_status", Description: "Read recorded projection status for one SDD artifact.", Annotations: annotations}, server.callSDDProjectionStatus)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_create", Description: "Create one structured SDD change. This stores state only and does not execute a workflow.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"idempotencyKey", "title", "backend", "interactionMode", "plan"}, map[string]any{"idempotencyKey": sddString(), "title": sddString(), "backend": sddString("openspec", "memory", "hybrid"), "interactionMode": sddString("automatic", "interactive"), "plan": sddString("low", "medium", "high", "ultra")}), OutputSchema: sddChangeOutputSchema()}, server.callSDDCreate)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_list", Description: "List structured SDD changes for the trusted workspace project.", Annotations: annotations, InputSchema: sddSchema(nil, map[string]any{"status": sddString("active", "completed", "cancelled"), "limit": sddNumber()}), OutputSchema: sddChangesOutputSchema()}, server.callSDDList)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_get", Description: "Get one structured SDD change by exact ID.", Annotations: annotations, OutputSchema: sddChangeOutputSchema()}, server.callSDDGet)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_set_interaction_mode", Description: "Change an SDD change interaction mode using optimistic state versioning. This tool changes stored data.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"changeId", "interactionMode", "expectedStateVersion"}, map[string]any{"changeId": sddString(), "interactionMode": sddString("automatic", "interactive"), "expectedStateVersion": sddNumber()}), OutputSchema: sddChangeOutputSchema()}, server.callSDDSetInteractionMode)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_transition", Description: "Record a legal SDD phase transition or cancellation using optimistic state versioning. This tool changes stored data.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"changeId", "expectedStateVersion"}, map[string]any{"changeId": sddString(), "targetPhase": sddString(sddPhases...), "cancel": sddBoolean(), "expectedStateVersion": sddNumber()}), OutputSchema: sddChangeOutputSchema()}, server.callSDDTransition)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_save_revision", Description: "Save a candidate SDD artifact revision. This tool changes stored data.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"changeId", "artifact", "content", "expectedStateVersion"}, map[string]any{"changeId": sddString(), "artifact": sddString(sddPhases...), "content": sddString(), "externalLocation": sddString(), "digest": sddString(), "inputs": sddArray(sddRevisionBindingSchema()), "inputDigest": sddString(), "expectedStateVersion": sddNumber()}), OutputSchema: sddRevisionOutputSchema()}, server.callSDDSaveRevision)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_get_revision", Description: "Get one SDD artifact revision by exact change and revision IDs.", Annotations: annotations, OutputSchema: sddRevisionOutputSchema()}, server.callSDDGetRevision)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_list_revisions", Description: "List bounded SDD revision summaries without body content.", Annotations: annotations, InputSchema: sddSchema([]string{"changeId"}, map[string]any{"changeId": sddString(), "artifact": sddString(sddPhases...), "limit": sddNumber()}), OutputSchema: sddRevisionsOutputSchema()}, server.callSDDListRevisions)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_accept_revision", Description: "Accept one immutable candidate revision using optimistic state versioning. This tool changes stored data.", Annotations: writeAnnotations, OutputSchema: sddRevisionOutputSchema()}, server.callSDDAcceptRevision)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_render_projection", Description: "Render deterministic managed OpenSpec bytes and a repository-relative target path.", Annotations: annotations, OutputSchema: sddProjectionDocumentOutputSchema()}, server.callSDDRenderProjection)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_compare_projection", Description: "Compare caller-supplied OpenSpec bytes with accepted memory state. This tool never writes data.", Annotations: annotations, OutputSchema: sddProjectionComparisonOutputSchema()}, server.callSDDCompareProjection)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_record_projection", Description: "Record supplied projection evidence. This tool changes stored data without filesystem access.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"changeId", "artifactId", "revisionId", "status", "digest", "location", "expectedStateVersion"}, map[string]any{"changeId": sddString(), "artifactId": sddString(), "revisionId": sddString(), "status": sddString("current", "stale", "drift", "failed"), "digest": sddString(), "location": sddString(), "expectedStateVersion": sddNumber()}), OutputSchema: sddProjectionOutputSchema()}, server.callSDDRecordProjection)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_projection_status", Description: "Read recorded projection status for one SDD artifact.", Annotations: annotations, OutputSchema: sddProjectionOutputSchema()}, server.callSDDProjectionStatus)
 	}
 	return server, nil
 }
 
 func boolPtr(value bool) *bool { return &value }
+
+var sddPhases = []string{"explore", "proposal", "spec", "design", "tasks", "apply", "verify", "complete"}
+
+func sddSchema(required []string, properties map[string]any) map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}
+}
+func sddString(values ...string) map[string]any {
+	schema := map[string]any{"type": "string"}
+	if len(values) > 0 {
+		schema["enum"] = values
+	}
+	return schema
+}
+func sddNumber() map[string]any  { return map[string]any{"type": "number"} }
+func sddBoolean() map[string]any { return map[string]any{"type": "boolean"} }
+func sddArray(items map[string]any) map[string]any {
+	return map[string]any{"type": "array", "items": items}
+}
+func sddNullableArray(items map[string]any) map[string]any {
+	return map[string]any{"type": []string{"array", "null"}, "items": items}
+}
+func sddRevisionBindingSchema() map[string]any {
+	return sddSchema([]string{"artifactId", "revisionId", "digest"}, map[string]any{"artifactId": sddString(), "revisionId": sddString(), "digest": sddString()})
+}
+func sddChangeOutputSchema() map[string]any {
+	return sddSchema(nil, map[string]any{"id": sddString(), "project": sddString(), "title": sddString(), "backend": sddString(), "interactionMode": sddString(), "plan": sddString(), "phase": sddString(), "status": sddString(), "stateVersion": sddNumber(), "createdAt": sddString(), "updatedAt": sddString()})
+}
+func sddRevisionOutputSchema() map[string]any {
+	return sddSchema(nil, map[string]any{"id": sddString(), "project": sddString(), "changeId": sddString(), "artifactId": sddString(), "artifact": sddString(), "artifactStatus": sddString(), "status": sddString(), "content": sddString(), "externalLocation": sddString(), "digest": sddString(), "inputDigest": sddString(), "inputs": sddNullableArray(sddRevisionBindingSchema()), "stateVersion": sddNumber(), "createdAt": sddString(), "acceptedAt": sddString()})
+}
+func sddChangesOutputSchema() map[string]any {
+	return sddSchema(nil, map[string]any{"changes": sddArray(sddChangeOutputSchema())})
+}
+func sddRevisionsOutputSchema() map[string]any {
+	return sddSchema(nil, map[string]any{"revisions": sddArray(sddRevisionOutputSchema())})
+}
+func sddProjectionOutputSchema() map[string]any {
+	return sddSchema(nil, map[string]any{"project": sddString(), "changeId": sddString(), "artifactId": sddString(), "revisionId": sddString(), "status": sddString(), "digest": sddString(), "location": sddString(), "stateVersion": sddNumber(), "recordedAt": sddString()})
+}
+func sddProjectionDocumentOutputSchema() map[string]any {
+	metadata := sddSchema(nil, map[string]any{"schemaVersion": sddNumber(), "changeId": sddString(), "artifact": sddString(), "revisionId": sddString(), "contentDigest": sddString(), "inputDigest": sddString()})
+	return sddSchema(nil, map[string]any{"relativePath": sddString(), "content": sddString(), "digest": sddString(), "metadata": metadata})
+}
+func sddProjectionComparisonOutputSchema() map[string]any {
+	return sddSchema(nil, map[string]any{"state": sddString(), "relativePath": sddString(), "canonicalDigest": sddString(), "observedDigest": sddString(), "memoryCanonical": sddBoolean(), "options": sddNullableArray(sddString()), "requiresSaveRevision": sddBoolean(), "candidateContent": sddString(), "candidateDigest": sddString()})
+}
 
 // Run serves MCP requests over an injected transport until ctx is cancelled or
 // the transport closes. It never writes diagnostic output to the transport.
@@ -392,6 +439,24 @@ type sddProjectionStatusInput struct {
 	ArtifactID string `json:"artifactId" jsonschema:"required"`
 }
 
+type sddProjectionDocument struct {
+	RelativePath string                 `json:"relativePath"`
+	Content      string                 `json:"content"`
+	Digest       sdd.Digest             `json:"digest"`
+	Metadata     sdd.ProjectionMetadata `json:"metadata"`
+}
+
+func makeSDDProjectionDocument(value sdd.ProjectionDocument) sddProjectionDocument {
+	return sddProjectionDocument{RelativePath: value.RelativePath, Content: string(value.Content), Digest: value.Digest, Metadata: value.Metadata}
+}
+
+type sddInputError struct{ field string }
+
+func (err sddInputError) Error() string { return "invalid MCP tool input: " + err.field }
+func (err sddInputError) Unwrap() error { return ErrInvalidInput }
+
+func invalidSDDField(field string) error { return sddInputError{field: field} }
+
 type result struct {
 	Entries []entry `json:"entries"`
 }
@@ -473,6 +538,12 @@ func (server *Server) sddList(ctx context.Context, input sddListInput) ([]sdd.Ch
 		return nil, ErrUnavailable
 	}
 	items, err := server.sdd.ListChanges(ctx, sdd.ListChangesRequest{Project: server.project, Status: input.Status, Limit: limit})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	if items == nil {
+		items = []sdd.Change{}
+	}
 	return items, shapeSDDError(ctx, err)
 }
 func (server *Server) sddGet(ctx context.Context, input sddGetInput) (sdd.Change, error) {
@@ -512,8 +583,14 @@ func (server *Server) sddTransition(ctx context.Context, input sddTransitionInpu
 }
 func (server *Server) sddSaveRevision(ctx context.Context, input sddSaveRevisionInput) (sdd.Revision, error) {
 	version, err := sddVersion(input.ExpectedStateVersion)
-	if err != nil || len(input.Content) > 48<<10 || len(input.Inputs) > 32 {
-		return sdd.Revision{}, ErrInvalidInput
+	if err != nil {
+		return sdd.Revision{}, err
+	}
+	if len(input.Content) > 48<<10 {
+		return sdd.Revision{}, invalidSDDField("content")
+	}
+	if len(input.Inputs) > 32 {
+		return sdd.Revision{}, invalidSDDField("inputs")
 	}
 	inputs := make([]sdd.RevisionBinding, len(input.Inputs))
 	for index, value := range input.Inputs {
@@ -532,7 +609,14 @@ func (server *Server) sddListRevisions(ctx context.Context, input sddListRevisio
 		return nil, err
 	}
 	request := sdd.ListRevisionsRequest{Project: server.project, ChangeID: input.ChangeID, Artifact: input.Artifact, Limit: limit}
-	return sddValue(server, ctx, request.Validate, func() ([]sdd.Revision, error) { return server.sdd.ListRevisions(ctx, request) })
+	items, err := sddValue(server, ctx, request.Validate, func() ([]sdd.Revision, error) { return server.sdd.ListRevisions(ctx, request) })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	if items == nil && err == nil {
+		items = []sdd.Revision{}
+	}
+	return items, err
 }
 func (server *Server) sddAcceptRevision(ctx context.Context, input sddAcceptRevisionInput) (sdd.Revision, error) {
 	version, err := sddVersion(input.ExpectedStateVersion)
@@ -547,8 +631,14 @@ func (server *Server) sddRenderProjection(ctx context.Context, input sddRenderPr
 	return sddValue(server, ctx, request.Validate, func() (sdd.ProjectionDocument, error) { return server.sdd.RenderProjection(ctx, request) })
 }
 func (server *Server) sddCompareProjection(ctx context.Context, input sddCompareProjectionInput) (sdd.ProjectionComparison, error) {
-	if input.Symlink || len(input.ProjectionContent) > 48<<10 || len(input.RelativePath) > 512 {
-		return sdd.ProjectionComparison{}, ErrInvalidInput
+	if input.Symlink {
+		return sdd.ProjectionComparison{}, invalidSDDField("symlink")
+	}
+	if len(input.ProjectionContent) > 48<<10 {
+		return sdd.ProjectionComparison{}, invalidSDDField("projectionContent")
+	}
+	if len(input.RelativePath) > 512 {
+		return sdd.ProjectionComparison{}, invalidSDDField("relativePath")
 	}
 	request := sdd.CompareProjectionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID, Input: sdd.ProjectionInput{RelativePath: input.RelativePath, Content: []byte(input.ProjectionContent), Missing: input.Missing, Symlink: input.Symlink}}
 	return sddValue(server, ctx, request.Validate, func() (sdd.ProjectionComparison, error) { return server.sdd.CompareProjection(ctx, request) })
@@ -594,7 +684,7 @@ func sddLimit(value float64) (int, error) {
 		return 20, nil
 	}
 	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < 1 || value > 100 {
-		return 0, ErrInvalidInput
+		return 0, invalidSDDField("limit")
 	}
 	return int(math.Trunc(value)), nil
 }
@@ -606,7 +696,7 @@ func sddRevisionLimit(value float64) (int, error) {
 }
 func sddVersion(value float64) (int64, error) {
 	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < 1 || value > maxJSONInteger {
-		return 0, ErrInvalidInput
+		return 0, invalidSDDField("expectedStateVersion")
 	}
 	return int64(math.Trunc(value)), nil
 }
@@ -770,9 +860,9 @@ func (server *Server) callSDDAcceptRevision(ctx context.Context, _ *sdk.CallTool
 	output, err := server.sddAcceptRevision(ctx, input)
 	return sddToolResponse(err, output)
 }
-func (server *Server) callSDDRenderProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddRenderProjectionInput) (*sdk.CallToolResult, sdd.ProjectionDocument, error) {
+func (server *Server) callSDDRenderProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddRenderProjectionInput) (*sdk.CallToolResult, sddProjectionDocument, error) {
 	output, err := server.sddRenderProjection(ctx, input)
-	return sddToolResponse(err, output)
+	return sddToolResponse(err, makeSDDProjectionDocument(output))
 }
 func (server *Server) callSDDCompareProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddCompareProjectionInput) (*sdk.CallToolResult, sdd.ProjectionComparison, error) {
 	output, err := server.sddCompareProjection(ctx, input)
@@ -821,22 +911,29 @@ func entryResponse(err error, output entry) (*sdk.CallToolResult, entry, error) 
 
 func sddResponse(err error, output sdd.Change) (*sdk.CallToolResult, sdd.Change, error) {
 	if err == nil {
-		return toolText("SDD change returned.", false), output, nil
+		return sddSuccessResponse(output), output, nil
 	}
 	return sddErrorResponse(err), sdd.Change{}, nil
 }
 func sddListResponse(err error, output sddChangesResult) (*sdk.CallToolResult, sddChangesResult, error) {
 	if err == nil {
-		return toolText(fmt.Sprintf("Returned %d SDD changes.", len(output.Changes)), false), output, nil
+		return sddSuccessResponse(output), output, nil
 	}
 	return sddErrorResponse(err), sddChangesResult{}, nil
 }
 func sddToolResponse[T any](err error, output T) (*sdk.CallToolResult, T, error) {
 	if err == nil {
-		return toolText("SDD result returned.", false), output, nil
+		return sddSuccessResponse(output), output, nil
 	}
 	var zero T
 	return sddErrorResponse(err), zero, nil
+}
+func sddSuccessResponse(output any) *sdk.CallToolResult {
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		return toolText("SDD service unavailable", true)
+	}
+	return toolText(string(encoded), false)
 }
 func sddErrorResponse(err error) *sdk.CallToolResult {
 	if errors.Is(err, ErrSDDCancelled) {
@@ -844,6 +941,10 @@ func sddErrorResponse(err error) *sdk.CallToolResult {
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return toolText("request cancelled", true)
+	}
+	var inputErr sddInputError
+	if errors.As(err, &inputErr) {
+		return toolText("invalid tool input: "+inputErr.field, true)
 	}
 	if errors.Is(err, ErrInvalidInput) {
 		return toolText("invalid tool input", true)

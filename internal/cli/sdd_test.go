@@ -153,6 +153,31 @@ func TestRunSDDRejectsUntrustedProjectAndUnknownFields(t *testing.T) {
 	}
 }
 
+func TestRunSDDReportsActionableInvocationAndInputDiagnostics(t *testing.T) {
+	runtime := &fakeSDDRuntime{project: "trusted-project"}
+	for _, test := range []struct {
+		name string
+		args []string
+		body string
+		want string
+	}{
+		{"unsupported operation", []string{"unknown"}, "", "invalid: unsupported SDD operation\n"},
+		{"missing stdin", []string{"create", "--json", "--workspace", t.TempDir()}, "", "invalid: use --stdin to provide SDD JSON input\n"},
+		{"missing workspace", []string{"create", "--stdin", "--json"}, `{}`, "invalid: provide --workspace for the trusted project\n"},
+		{"malformed JSON", []string{"create", "--stdin", "--json", "--workspace", t.TempDir()}, `{`, "invalid: provide one SDD JSON object with schemaVersion 1\n"},
+		{"schema version", []string{"create", "--stdin", "--json", "--workspace", t.TempDir()}, `{"schemaVersion":2}`, "invalid: schemaVersion must be 1 and project is resolved from --workspace\n"},
+		{"invalid operation field", []string{"get", "--stdin", "--json", "--workspace", t.TempDir()}, `{"schemaVersion":1,"id":"change-1","title":"wrong"}`, "invalid: field title is not accepted by SDD get\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runSDD(context.Background(), test.args, bytes.NewBufferString(test.body), &stdout, &stderr, runtime)
+			if code != 2 || stdout.Len() != 0 || stderr.String() != test.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
 func TestSDDFailurePreservesSafeCategory(t *testing.T) {
 	for _, test := range []struct {
 		err      error
