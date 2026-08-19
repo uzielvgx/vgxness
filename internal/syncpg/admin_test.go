@@ -47,10 +47,10 @@ func TestAdminOverviewIsOwnerScopedAndContainsNoCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, `INSERT INTO owners(id) VALUES ($1);
-		INSERT INTO owner_sync_state(owner_id,history_id,next_seq) VALUES ($1,$2,1);
-		INSERT INTO devices(id,owner_id,display_name,credential_hash,credential_prefix) VALUES ($3,$1,'other-device',decode(repeat('00',32),'hex'),'secret-prefix');
-		INSERT INTO audit_events(owner_id,device_id,action,outcome,reason_code) VALUES ($1,$3,'other.action','ok','private')`, other, uuid.New(), uuid.New()); err != nil {
+	if _, err := conn.Exec(ctx, `WITH other_owner AS (INSERT INTO owners(id) VALUES ($1::uuid) RETURNING id),
+		other_state AS (INSERT INTO owner_sync_state(owner_id,history_id,next_seq) SELECT id,$2::uuid,1 FROM other_owner RETURNING owner_id),
+		other_device AS (INSERT INTO devices(id,owner_id,display_name,credential_hash,credential_prefix) SELECT $3::uuid,owner_id,'other-device',decode(repeat('00',32),'hex'),'secret-prefix' FROM other_state RETURNING id,owner_id)
+		INSERT INTO audit_events(owner_id,device_id,action,outcome,reason_code) SELECT owner_id,id,'other.action','ok','private' FROM other_device`, other, uuid.New(), uuid.New()); err != nil {
 		t.Fatal(err)
 	}
 	view, err := repository.AdminOverview(ctx, AdminPage{Limit: 10}, AdminPage{Limit: 10})
