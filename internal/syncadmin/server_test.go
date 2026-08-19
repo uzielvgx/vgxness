@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/vgxness/vgxness/internal/syncpg"
 )
 
@@ -19,12 +20,16 @@ const testOperatorSecret, testAuthority = "operator-secret-that-must-not-be-refl
 type testReader struct {
 	calls atomic.Int32
 	err   error
+	view  syncpg.AdminOverview
 }
 
 func (reader *testReader) AdminOverview(context.Context, syncpg.AdminPage, syncpg.AdminPage) (syncpg.AdminOverview, error) {
 	reader.calls.Add(1)
 	if reader.err != nil {
 		return syncpg.AdminOverview{}, reader.err
+	}
+	if reader.view.Health.Database {
+		return reader.view, nil
 	}
 	return syncpg.AdminOverview{Health: syncpg.AdminHealth{Database: true}}, nil
 }
@@ -136,7 +141,7 @@ func TestAdminSessionPublicationFailureRefreshAndLogout(t *testing.T) {
 	get := response(handler, adminRequest(http.MethodGet, "/login", nil))
 	logout := post(handler, "/logout", url.Values{"session": {stale}})
 	refresh := post(handler, "/", url.Values{"session": {current}})
-	if strings.Contains(get.Body.String(), stale) || strings.Contains(get.Body.String(), current) || logout.Code != http.StatusSeeOther || logout.Header().Get("Location") != "/login" || refresh.Code != http.StatusOK || refresh.Header().Get("Cache-Control") != "no-store" || strings.Count(refresh.Body.String(), current) != 2 || strings.Count(refresh.Body.String(), `scope="col"`) != 8 {
+	if strings.Contains(get.Body.String(), stale) || strings.Contains(get.Body.String(), current) || logout.Code != http.StatusSeeOther || logout.Header().Get("Location") != "/login" || refresh.Code != http.StatusOK || refresh.Header().Get("Cache-Control") != "no-store" || strings.Count(refresh.Body.String(), current) != 2 || strings.Count(refresh.Body.String(), `scope="col"`) != 10 {
 		t.Fatal("GET, stale logout, or refresh publication was unsafe")
 	}
 	post(handler, "/logout", url.Values{"session": {current}})
@@ -218,5 +223,66 @@ func TestFailedLoginPublicationRestoresPriorSession(t *testing.T) {
 		if post(handler, "/", url.Values{"session": {prior}}).Code != http.StatusOK || post(handler, "/", url.Values{"session": {undelivered}}).Code != http.StatusUnauthorized {
 			t.Fatal("failed publication changed active session")
 		}
+	}
+}
+
+func TestAdminViewsRenderOperationalDataAndAccessibleStructure(t *testing.T) {
+	issued := time.Date(2026, time.August, 17, 10, 30, 0, 0, time.UTC)
+	lastSeen := issued.Add(45 * time.Minute)
+	revoked := issued.Add(2 * time.Hour)
+	activeID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	revokedID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	historyID := uuid.MustParse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	reader := &testReader{view: syncpg.AdminOverview{
+		Health: syncpg.AdminHealth{Database: true, HistoryID: historyID, HeadSequence: 42},
+		Devices: []syncpg.AdminDevice{
+			{ID: activeID, Name: "Operator workstation", IssuedAt: issued, LastSeenAt: &lastSeen},
+			{ID: revokedID, Name: "Retired build host", IssuedAt: issued, RevokedAt: &revoked},
+		},
+		AuditEvents: []syncpg.AdminAuditEvent{
+			{OccurredAt: lastSeen, DeviceID: &activeID, Action: "sync.pull", Outcome: "allowed", Reason: "owner_match"},
+		},
+	}}
+	handler := newTestHandler(t, reader, testAuthority)
+
+	login := response(handler, adminRequest(http.MethodGet, "/login", nil)).Body.String()
+	for _, want := range []string{"Local operator access", "loopback", `type="password"`, `autocomplete="current-password"`, "no session cookies", `:focus-visible`, `@media (max-width:`, `class="login-shell"`} {
+		if !strings.Contains(login, want) {
+			t.Fatalf("login view missing %q", want)
+		}
+	}
+	if strings.Contains(login, "no browser storage") || strings.Contains(login, `name="session"`) || strings.Contains(login, "<script") || strings.Contains(login, "linear-gradient") {
+		t.Fatal("login view contains inaccurate storage assurance, session, script, or gradient")
+	}
+
+	dashboard := post(handler, "/login", url.Values{"secret": {testOperatorSecret}}).Body.String()
+	for _, want := range []string{
+		`<main id="main-content"`, "Repository online", "Head sequence", ">42<", "Active in snapshot", "Revoked in snapshot", "Trusted identities in this page", "Withdrawn identities in this page", ">1<",
+		historyID.String(), "Operator workstation", "Retired build host", "Last seen", "2026-08-17 11:15 UTC", "Never observed",
+		"Recent audit activity", "sync.pull", "allowed", "owner_match", activeID.String(), `scope="col"`, `aria-label="Repository status"`,
+	} {
+		if !strings.Contains(dashboard, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+	if strings.Count(dashboard, `name="session"`) != 2 || strings.Count(dashboard, `type="hidden"`) != 2 || strings.Contains(dashboard, "<script") || strings.Contains(dashboard, "linear-gradient") {
+		t.Fatal("dashboard session publication or asset policy changed")
+	}
+	unavailable, err := encode(overviewTemplate, overviewView{AdminOverview: syncpg.AdminOverview{Health: syncpg.AdminHealth{Database: false}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(unavailable), "Repository unavailable") || !strings.Contains(string(unavailable), `class="metric-index">Unavailable</span>`) || strings.Contains(string(unavailable), "> Live</span>") {
+		t.Fatal("unavailable repository presented as live")
+	}
+
+	errorBody := response(handler, adminRequest(http.MethodGet, "/missing", nil)).Body.String()
+	for _, want := range []string{`aria-label="Status 404"`, `<h1 id="error-title">Not Found</h1>`, "Status 404", "Return to sign in"} {
+		if !strings.Contains(errorBody, want) {
+			t.Fatalf("error view missing %q", want)
+		}
+	}
+	if strings.Contains(errorBody, "Request interrupted") {
+		t.Fatal("error view contains generic heading")
 	}
 }
