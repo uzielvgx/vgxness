@@ -487,6 +487,47 @@ func TestFullServerAdvertisesExactMutationSchemas(t *testing.T) {
 	}
 }
 
+func TestFullServerToolSchemasUseRequiredArrays(t *testing.T) {
+	server, err := newFullWithReader(context.Background(), "/workspace", &fakeReader{project: "project-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.InputSchema == nil {
+			t.Errorf("%s has no input schema", tool.Name)
+		}
+		assertSchemaRequiredArrays(t, tool.Name+" input", tool.InputSchema)
+		assertSchemaRequiredArrays(t, tool.Name+" output", tool.OutputSchema)
+	}
+}
+
+func TestSDDGetRevisionInputSchemaRequiresChangeAndRevision(t *testing.T) {
+	encoded, err := json.Marshal(sddGetRevisionInputSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(encoded, &schema); err != nil {
+		t.Fatal(err)
+	}
+	assertSchemaProperties(t, schema, map[string]schemaExpectation{
+		"changeId":   {required: true, kind: "string"},
+		"revisionId": {required: true, kind: "string"},
+	})
+}
+
 func TestFullServerMemoryMutationsStayProjectScoped(t *testing.T) {
 	backend := &fakeReader{project: "project-1", entry: memory.Entry{ID: "obs-1", Title: "Decision", Content: "durable", Project: "project-1", Scope: memory.ScopeProject, State: memory.StateActive}}
 	server, err := newFullWithReader(context.Background(), "/workspace", backend)
@@ -956,6 +997,38 @@ func assertSchemaProperties(t *testing.T, schema any, expected map[string]schema
 		}
 		if found != expected.required {
 			t.Errorf("schema property %q required = %v, want %v", name, found, expected.required)
+		}
+	}
+}
+
+func assertSchemaRequiredArrays(t *testing.T, name string, schema any) {
+	t.Helper()
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("%s schema marshal: %v", name, err)
+	}
+	var value any
+	if err := json.Unmarshal(encoded, &value); err != nil {
+		t.Fatalf("%s schema unmarshal: %v", name, err)
+	}
+	assertRequiredArrays(t, name, value)
+}
+
+func assertRequiredArrays(t *testing.T, name string, value any) {
+	t.Helper()
+	switch value := value.(type) {
+	case map[string]any:
+		if required, ok := value["required"]; ok {
+			if _, ok := required.([]any); !ok {
+				t.Errorf("%s schema required = %#v, want array", name, required)
+			}
+		}
+		for _, child := range value {
+			assertRequiredArrays(t, name, child)
+		}
+	case []any:
+		for _, child := range value {
+			assertRequiredArrays(t, name, child)
 		}
 	}
 }

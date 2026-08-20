@@ -242,7 +242,7 @@ func TestMemoryConfigureSyncCredentialFileDoesNotUseOrPersistKeyring(t *testing.
 	}
 	root := t.TempDir()
 	bearer := "vgx1.550e8400-e29b-41d4-a716-446655440000.secret"
-	credentialFile := filepath.Join(t.TempDir(), "credential")
+	credentialFile := filepath.Join(canonicalRuntimeTestDir(t), "credential")
 	if err := os.WriteFile(credentialFile, []byte(bearer+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestMemoryConfigureSyncCredentialFileRejectsKeyringProfileWithoutSideEffect
 	if _, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, "vgx1."+device+".keyring"); err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(t.TempDir(), "credential")
+	file := filepath.Join(canonicalRuntimeTestDir(t), "credential")
 	if err := os.WriteFile(file, []byte("vgx1."+device+".file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -524,6 +524,15 @@ func syncProfileForTest(t *testing.T, root string) memory.SyncProfile {
 }
 
 type roundTripper func(*http.Request) (*http.Response, error)
+
+func canonicalRuntimeTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
 
 func (round roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
 	return round(request)
