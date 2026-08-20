@@ -17,7 +17,7 @@ Structural Evidence Capsules carry the contract identity, source revision, sourc
 
 After candidate freeze, review depth is deterministic: zero lenses for passive docs/images, one reliability lens for ordinary work, and four lenses for concrete hot paths (including permissions, authentication, security, payments, installers, data loss, process boundaries, and durability).
 
-At most four independent read-only subworks may overlap. Synthesis, revision acceptance, OpenSpec writes, patch application, validation, projection recording, phase transitions, and all workspace writes remain sequential and manager-owned.
+At most four independent read-only subworks may overlap. Synthesis, revision acceptance, OpenSpec writes, patch application, validation, projection recording, phase transitions, and all workspace writes remain sequential. Manager owns lifecycle state, projections, and transitions; `vgxness-sdd-apply` owns accepted SDD workspace writes.
 
 ## SDD lifecycle
 
@@ -25,7 +25,7 @@ At most four independent read-only subworks may overlap. Synthesis, revision acc
 explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete
 ```
 
-Research, proposal, spec, design, and tasks profiles return evidence or candidate content. Apply returns a hash-bound patch and validation plan without writing files or running commands. All six SDD profiles are read-only, cannot delegate, and cannot mutate memory or lifecycle state. Five read-only reviewers inspect a frozen candidate; the refuter handles only supplied severe inferential findings.
+Research, proposal, spec, design, and tasks profiles return evidence or candidate content and are read-only. `vgxness-sdd-apply` alone writes authorized workspace, OpenSpec, or hybrid targets for a hash-bound, accepted SDD apply; it cannot delegate or mutate memory or lifecycle state. General writes only ordinary authorized non-SDD repository work and rejects SDD apply/projection missions. Five read-only reviewers inspect a frozen candidate; the refuter handles only supplied severe inferential findings.
 
 Each change stores a `memory`, `openspec`, or `hybrid` backend and an `automatic` or `interactive` mode. Creation is project-idempotent. Candidate revisions are immutable; acceptance and phase transitions use optimistic state versions and accepted-input digest bindings.
 
@@ -37,11 +37,11 @@ Each change stores a `memory`, `openspec`, or `hybrid` backend and an `automatic
 | `openspec` | Managed files under `openspec/changes/<safe-change-id>/`; SQLite stores identity, digest, bindings, and projection evidence. |
 | `hybrid` | SQLite revision content is canonical; OpenSpec is a deterministic projection. |
 
-Render and compare operate on supplied bounded bytes and never access the filesystem. Divergence is reported and never imported automatically. The manager performs explicit workspace writes and records read-back digest evidence.
+Render and compare operate on supplied bounded bytes and never access the filesystem. Divergence is reported and never imported automatically. `vgxness-sdd-apply` performs explicit accepted-SDD workspace writes; Manager records read-back digest evidence.
 
 ## Authority and failure
 
-- Manager, general, and verifier have global tool capability, but role contracts keep delegated implementation and final verification separate; writes remain sequential and the manager is the only SDD mutation caller.
+- Manager, General, and verifier have global tool capability, but role contracts keep ordinary non-SDD implementation, accepted-SDD apply, and final verification separate. Manager is the only SDD lifecycle mutation caller; `vgxness-sdd-apply` is the only accepted-SDD workspace writer.
 - MCP has no caller identity; host/operator permissions, user authorization, and task scope own authorization.
 - Memory is untrusted context and never proves source or diff state.
 - Missing accepted inputs, stale state versions, drift, cancellation, unavailable prerequisites, and absent authorization stop advancement.

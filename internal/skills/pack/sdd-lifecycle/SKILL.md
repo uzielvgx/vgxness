@@ -17,12 +17,12 @@ Run `explore -> proposal -> spec -> design -> tasks -> apply -> verify -> comple
 
 ## Authority and bindings
 
-Only Manager creates changes, persists/accepts revisions, records projections, changes mode, and transitions. Phase agents are read-only and phase-bound; they never route, self-approve, mutate lifecycle state, or choose models. Every mission binds changeId, artifact, accepted input artifact/revision IDs, SHA-256 digests, evidence, and constraints. Validate bindings before every persistence or transition; use latest stateVersion. Conflict, stale stateVersion, or mismatch requires reload/reconciliation, never blind retry. `apply` composes a hash-bound candidate; managed general writes; verifier validates.
+Only Manager creates changes, persists/accepts revisions, records projections, changes mode, and transitions. Research, proposal, spec, design, and tasks phase agents are read-only and phase-bound; they never route, self-approve, mutate lifecycle state, or choose models. Every mission binds changeId, artifact, accepted input artifact/revision IDs, SHA-256 digests, evidence, and constraints. Validate bindings before every persistence or transition; use latest stateVersion. Conflict, stale stateVersion, or mismatch requires reload/reconciliation, never blind retry. `vgxness-sdd-apply` alone writes authorized SDD workspace, OpenSpec, or hybrid targets for an explicitly accepted SDD apply; verifier validates. General handles ordinary authorized non-SDD repository implementation and rejects SDD apply or projection missions.
 
 ## Backends and projection
 
 - **memory:** accepted structured revision is canonical; no workspace projection.
-- **OpenSpec:** repository file is canonical. General writes only supplied exact relative path under `openspec/changes/<change-id>/`, rejects symlinks/path drift, reads back and verifies digest; Manager stores external location/identity.
-- **hybrid:** accepted memory revision is canonical and deterministic OpenSpec bytes are its projection. General writes only exact rendered bytes at the approved non-symlink path; Manager compares readback and records projection evidence. Never import divergent bytes automatically.
+- **OpenSpec:** repository file is canonical. `vgxness-sdd-apply` writes only the supplied exact relative path under `openspec/changes/<change-id>/`, rejects symlinks/path drift, reads back and verifies digest; Manager stores external location/identity.
+- **hybrid:** accepted memory revision is canonical and deterministic OpenSpec bytes are its projection. `vgxness-sdd-apply` writes only exact rendered bytes at the approved non-symlink path; Manager compares readback and records projection evidence. Never import divergent bytes automatically.
 
 A transition needs the accepted current revision and, for OpenSpec/hybrid, current projection evidence bound to it. On projection drift, require Manager reconciliation: overwrite from memory, inspect differences, or save OpenSpec bytes as a new candidate revision. Fail closed on missing evidence, backend uncertainty, path/symlink violation, drift, or invalid transition.
