@@ -400,7 +400,7 @@ func (handler *handler) authenticate(request *http.Request) (Identity, int) {
 		return Identity{}, http.StatusUnauthorized
 	}
 	deviceID, declared := declaredDeviceID(bearer)
-	if !handler.authLimits.allow(deviceID, declared) {
+	if !handler.authLimits.allowGlobal() {
 		return Identity{}, http.StatusTooManyRequests
 	}
 	if handler.authenticator == nil {
@@ -415,6 +415,12 @@ func (handler *handler) authenticate(request *http.Request) (Identity, int) {
 	}
 	if identity.OwnerID == uuid.Nil || identity.DeviceID == uuid.Nil {
 		return Identity{}, http.StatusUnauthorized
+	}
+	if !declared || identity.DeviceID != deviceID {
+		return Identity{}, http.StatusUnauthorized
+	}
+	if !handler.authLimits.allowDevice(identity.DeviceID) {
+		return Identity{}, http.StatusTooManyRequests
 	}
 	return identity, 0
 }
@@ -581,10 +587,8 @@ func newAuthenticationLimits(config authenticationLimitConfig) *authenticationLi
 	return &authenticationLimits{config: config, devices: make(map[uuid.UUID]authenticationWindow)}
 }
 
-// allow performs a non-blocking, fixed-window admission decision. A valid
-// bearer always consumes global capacity; its declared UUID additionally gets
-// a fair share without allowing unbounded UUID state.
-func (limits *authenticationLimits) allow(deviceID uuid.UUID, declared bool) bool {
+// allowGlobal bounds every syntactically valid bearer before authentication.
+func (limits *authenticationLimits) allowGlobal() bool {
 	now := limits.config.Now()
 	limits.mu.Lock()
 	defer limits.mu.Unlock()
@@ -594,23 +598,30 @@ func (limits *authenticationLimits) allow(deviceID uuid.UUID, declared bool) boo
 	if limits.global.used >= limits.config.GlobalPerWindow {
 		return false
 	}
-	if declared {
-		entry, exists := limits.devices[deviceID]
-		if !exists && len(limits.devices) >= limits.config.MaxDevices {
-			limits.evictDevice(now)
-		}
-		entry = limits.devices[deviceID]
-		if now.Sub(entry.start) >= limits.config.Window || entry.start.IsZero() {
-			entry = authenticationWindow{start: now}
-		}
-		if entry.used >= limits.config.DevicePerWindow {
-			return false
-		}
-		entry.used++
-		entry.seen = now
-		limits.devices[deviceID] = entry
-	}
 	limits.global.used++
+	return true
+}
+
+// allowDevice bounds only an authenticated device after its declared identity
+// has been validated, preventing untrusted bearers from consuming its quota.
+func (limits *authenticationLimits) allowDevice(deviceID uuid.UUID) bool {
+	now := limits.config.Now()
+	limits.mu.Lock()
+	defer limits.mu.Unlock()
+	entry, exists := limits.devices[deviceID]
+	if !exists && len(limits.devices) >= limits.config.MaxDevices {
+		limits.evictDevice(now)
+	}
+	entry = limits.devices[deviceID]
+	if now.Sub(entry.start) >= limits.config.Window || entry.start.IsZero() {
+		entry = authenticationWindow{start: now}
+	}
+	if entry.used >= limits.config.DevicePerWindow {
+		return false
+	}
+	entry.used++
+	entry.seen = now
+	limits.devices[deviceID] = entry
 	return true
 }
 

@@ -28,7 +28,7 @@ func TestHandlerHealthzIsUnauthenticatedAndBounded(t *testing.T) {
 }
 
 func TestHandlerLimitsGlobalAndDevice(t *testing.T) {
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	entered := make(chan struct{}, 4)
 	release := make(chan struct{})
 	handler := newHandlerWithLimits(&testAuthenticator{identity: identity}, func(context.Context) CapabilitiesResponse {
@@ -104,40 +104,40 @@ func TestRequestLimitsGlobalAndDeviceCleanup(t *testing.T) {
 	}
 }
 
-func TestAuthenticationLimitsBoundGlobalAndDeclaredDeviceAdmissions(t *testing.T) {
+func TestAuthenticationLimitsBoundGlobalAndAuthenticatedDeviceAdmissions(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	limits := newAuthenticationLimits(authenticationLimitConfig{
-		GlobalPerWindow: 3,
+		GlobalPerWindow: 4,
 		DevicePerWindow: 2,
 		MaxDevices:      2,
 		Window:          time.Minute,
 		Now:             func() time.Time { return now },
 	})
 	first, second, third := uuid.New(), uuid.New(), uuid.New()
-	if !limits.allow(first, true) || !limits.allow(first, true) {
-		t.Fatal("declared device rejected before its capacity")
+	if !limits.allowGlobal() || !limits.allowDevice(first) || !limits.allowGlobal() || !limits.allowDevice(first) {
+		t.Fatal("authenticated device rejected before its capacity")
 	}
-	if limits.allow(first, true) {
-		t.Fatal("declared device exceeded its capacity")
+	if !limits.allowGlobal() || limits.allowDevice(first) {
+		t.Fatal("authenticated device exceeded its capacity")
 	}
-	if !limits.allow(second, true) {
-		t.Fatal("second declared device was not admitted")
+	if !limits.allowGlobal() || !limits.allowDevice(second) {
+		t.Fatal("second authenticated device was not admitted")
 	}
-	if limits.allow(third, true) {
-		t.Fatal("global capacity did not bound another declared device")
+	if limits.allowGlobal() {
+		t.Fatal("global capacity did not bound another admission")
 	}
 	if got := limits.deviceCount(); got > 2 {
 		t.Fatalf("device state = %d, want bounded at 2", got)
 	}
 	now = now.Add(time.Minute)
-	if !limits.allow(third, true) {
+	if !limits.allowGlobal() || !limits.allowDevice(third) {
 		t.Fatal("new fixed window did not admit request")
 	}
 }
 
 func TestAuthenticationAdmissionRejectsBeforeAuthenticator(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
-	auth := &testAuthenticator{identity: Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}}
+	auth := &testAuthenticator{identity: testIdentity()}
 	h := &handler{
 		authenticator: auth,
 		capabilities: func(context.Context) CapabilitiesResponse {
@@ -164,6 +164,75 @@ func TestAuthenticationAdmissionRejectsBeforeAuthenticator(t *testing.T) {
 	assertError(t, recorder, ErrorLimitExceeded, false)
 }
 
+func TestAuthenticationLimitsDoNotChargeDeclaredDeviceBeforeIdentityValidation(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	auth := &testAuthenticator{identity: Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}}
+	h := &handler{
+		authenticator: auth,
+		capabilities: func(context.Context) CapabilitiesResponse {
+			return CapabilitiesResponse{ProtocolVersion: ProtocolVersion}
+		},
+		limits: newRequestLimits(),
+		authLimits: newAuthenticationLimits(authenticationLimitConfig{
+			GlobalPerWindow: 4, DevicePerWindow: 1, MaxDevices: 1, Window: time.Minute,
+			Now: func() time.Time { return now },
+		}),
+	}
+	request := func(bearer string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/v1/sync/capabilities", nil)
+		r.Header.Set("Authorization", "Bearer "+bearer)
+		r.Header.Set("Accept", MediaType)
+		return r
+	}
+
+	for _, bearer := range []string{testBearer, testBearer[:len(testBearer)-1] + "B"} {
+		recorder := httptest.NewRecorder()
+		h.ServeHTTP(recorder, request(bearer))
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("untrusted request status = %d, want 401", recorder.Code)
+		}
+	}
+	auth.identity.DeviceID = testBearerDeviceID
+	for _, want := range []int{http.StatusOK, http.StatusTooManyRequests, http.StatusTooManyRequests} {
+		recorder := httptest.NewRecorder()
+		h.ServeHTTP(recorder, request(testBearer))
+		if recorder.Code != want {
+			t.Fatalf("authenticated request status = %d, want %d", recorder.Code, want)
+		}
+	}
+	if auth.calls != 4 {
+		t.Fatalf("authenticator calls = %d, want 4", auth.calls)
+	}
+}
+
+func TestHandlerRejectsBearerDeviceIDMismatchBeforeBackend(t *testing.T) {
+	declaredDeviceID := testBearerDeviceID
+	for _, test := range []struct {
+		name                   string
+		authenticatedDeviceID  uuid.UUID
+		wantStatus             int
+		wantBackendDiscoveries int
+	}{
+		{name: "mismatch", authenticatedDeviceID: uuid.New(), wantStatus: http.StatusUnauthorized, wantBackendDiscoveries: 0},
+		{name: "match", authenticatedDeviceID: declaredDeviceID, wantStatus: http.StatusOK, wantBackendDiscoveries: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &testSyncBackend{}
+			handler := NewSyncServerHandler(&testAuthenticator{identity: Identity{OwnerID: uuid.New(), DeviceID: test.authenticatedDeviceID}}, backend, nil)
+			request := httptest.NewRequest(http.MethodGet, "/v1/sync/discovery", nil)
+			request.Header.Set("Authorization", "Bearer "+testBearer)
+			request.Header.Set("Accept", MediaType)
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != test.wantStatus || backend.discovers != test.wantBackendDiscoveries {
+				t.Fatalf("status/backend discoveries = %d/%d, want %d/%d", recorder.Code, backend.discovers, test.wantStatus, test.wantBackendDiscoveries)
+			}
+		})
+	}
+}
+
 func TestAuthenticationLimitsBoundMalformedAdmissionsAndUUIDChurn(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	limits := newAuthenticationLimits(authenticationLimitConfig{
@@ -171,17 +240,17 @@ func TestAuthenticationLimitsBoundMalformedAdmissionsAndUUIDChurn(t *testing.T) 
 		Now: func() time.Time { return now },
 	})
 	for range 20 {
-		if !limits.allow(uuid.Nil, false) {
+		if !limits.allowGlobal() {
 			t.Fatal("malformed admission rejected before global capacity")
 		}
 	}
-	if limits.allow(uuid.Nil, false) {
+	if limits.allowGlobal() {
 		t.Fatal("malformed admission bypassed global capacity")
 	}
 
 	now = now.Add(time.Minute)
 	for range 10 {
-		if !limits.allow(uuid.New(), true) {
+		if !limits.allowGlobal() || !limits.allowDevice(uuid.New()) {
 			t.Fatal("UUID churn rejected before global capacity")
 		}
 		if got := limits.deviceCount(); got > 2 {
@@ -191,6 +260,12 @@ func TestAuthenticationLimitsBoundMalformedAdmissionsAndUUIDChurn(t *testing.T) 
 }
 
 const testBearer = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+var testBearerDeviceID = uuid.MustParse("123e4567-e89b-12d3-a456-426614174000")
+
+func testIdentity() Identity {
+	return Identity{OwnerID: uuid.New(), DeviceID: testBearerDeviceID}
+}
 
 type testAuthenticator struct {
 	mu       sync.Mutex
@@ -232,7 +307,7 @@ func TestResponseFailureObserverIsContentFree(t *testing.T) {
 }
 
 func TestHandlerAppliesThirtySecondRequestDeadline(t *testing.T) {
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	seen := time.Duration(0)
 	handler := newHandlerWithLimits(&testAuthenticator{identity: identity}, func(ctx context.Context) CapabilitiesResponse {
 		deadline, ok := ctx.Deadline()
@@ -262,7 +337,7 @@ func (reader *zeroThenDataReader) Read(value []byte) (int, error) {
 
 func TestCapabilitiesSuccess(t *testing.T) {
 	t.Parallel()
-	identity := Identity{OwnerID: uuid.MustParse("123e4567-e89b-12d3-a456-426614174001"), DeviceID: uuid.MustParse("123e4567-e89b-12d3-a456-426614174002")}
+	identity := Identity{OwnerID: uuid.MustParse("123e4567-e89b-12d3-a456-426614174001"), DeviceID: testBearerDeviceID}
 	auth := &testAuthenticator{identity: identity}
 	seen := Identity{}
 	handler := newHandler(auth, func(ctx context.Context) CapabilitiesResponse {
@@ -313,7 +388,7 @@ func TestCapabilitiesRejectsBeforeAcceptAndBody(t *testing.T) {
 
 func TestCapabilitiesValidation(t *testing.T) {
 	t.Parallel()
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	cases := []struct {
 		name   string
 		method string
@@ -479,7 +554,7 @@ func validProjectMutation(id string) syncservice.Mutation {
 }
 
 func TestPushSuccessPreservesOrderAndAuthenticatedDevice(t *testing.T) {
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	backend := &testSyncBackend{}
 	requestBody, err := json.Marshal(PushRequest{ProtocolVersion: ProtocolVersion, Items: []syncservice.Mutation{validProjectMutation(uuid.NewString()), validProjectMutation(uuid.NewString())}})
 	if err != nil {
@@ -501,7 +576,7 @@ func TestPushSuccessPreservesOrderAndAuthenticatedDevice(t *testing.T) {
 }
 
 func TestPullQueryDefaultsWatermarkAndResponse(t *testing.T) {
-	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	identity, history := testIdentity(), uuid.New()
 	first, second := authoredPullChange(t, 1), authoredPullChange(t, 2)
 	backend := &testSyncBackend{page: syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history.String(), Position: 2, Watermark: 4}, HasMore: true, Changes: []syncservice.Change{first, second}}}
 	request := httptest.NewRequest(http.MethodGet, "/v1/sync/pull?history_id="+history.String()+"&after=0", nil)
@@ -524,7 +599,7 @@ func TestPullQueryDefaultsWatermarkAndResponse(t *testing.T) {
 }
 
 func TestPullRejectsNoncanonicalHistoryIDWithoutBackendEffects(t *testing.T) {
-	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	identity, history := testIdentity(), uuid.New()
 	backend := &testSyncBackend{}
 	request := httptest.NewRequest(http.MethodGet, "/v1/sync/pull?history_id="+strings.ToUpper(history.String())+"&after=0", nil)
 	request.Header.Set("Authorization", "Bearer "+testBearer)
@@ -537,7 +612,7 @@ func TestPullRejectsNoncanonicalHistoryIDWithoutBackendEffects(t *testing.T) {
 }
 
 func TestProjectPullUsesSelectorAndAllowsSparsePage(t *testing.T) {
-	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	identity, history := testIdentity(), uuid.New()
 	projectID := "550e8400-e29b-41d4-a716-446655440001"
 	change := syncservice.Change{Sequence: 3, CanonicalVersion: 1, Mutation: syncservice.Mutation{MutationID: uuid.NewString(), RecordID: projectID, RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: projectID}}}
 	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
@@ -557,7 +632,7 @@ func TestProjectPullUsesSelectorAndAllowsSparsePage(t *testing.T) {
 }
 
 func TestProjectPullRejectsInvalidSelectorWithoutBackendEffects(t *testing.T) {
-	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	identity, history := testIdentity(), uuid.New()
 	for _, projectID := range []string{"", "project-1", "550E8400-E29B-41D4-A716-446655440001"} {
 		backend := &testSyncBackend{}
 		request := httptest.NewRequest(http.MethodGet, "/v1/sync/pull?history_id="+history.String()+"&after=0&project_id="+projectID, nil)
@@ -572,7 +647,7 @@ func TestProjectPullRejectsInvalidSelectorWithoutBackendEffects(t *testing.T) {
 }
 
 func TestSyncEndpointsRejectInvalidRequestsWithoutBackendEffects(t *testing.T) {
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	backend := &testSyncBackend{}
 	handler := NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil)
 	history := uuid.New().String()
@@ -634,7 +709,7 @@ func TestSyncEndpointsRejectInvalidRequestsWithoutBackendEffects(t *testing.T) {
 }
 
 func TestPullRejectsUnboundBackendPages(t *testing.T) {
-	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	identity, history := testIdentity(), uuid.New()
 	change := func(sequence int64) syncservice.Change {
 		return authoredPullChange(t, sequence)
 	}
@@ -681,7 +756,7 @@ func TestPullRejectsUnboundBackendPages(t *testing.T) {
 }
 
 func TestPullRejectsInvalidBackendChangeHashes(t *testing.T) {
-	identity, history := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}, uuid.New()
+	identity, history := testIdentity(), uuid.New()
 	valid := authoredPullChange(t, 1)
 	stale := valid
 	stale.Mutation = validProjectMutation(uuid.NewString())
@@ -718,7 +793,7 @@ func authoredPullChange(t *testing.T, sequence int64) syncservice.Change {
 }
 
 func TestSyncBackendErrorsAreSafe(t *testing.T) {
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	backend := &testSyncBackend{pushErr: errors.New("database secret")}
 	body, _ := json.Marshal(PushRequest{ProtocolVersion: ProtocolVersion, Items: []syncservice.Mutation{validProjectMutation(uuid.NewString())}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/sync/push", bytes.NewReader(body))
@@ -749,7 +824,7 @@ func TestSyncBackendErrorsAreSafe(t *testing.T) {
 }
 
 func TestSyncBackendUnauthenticatedIsUnauthorized(t *testing.T) {
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	body, _ := json.Marshal(PushRequest{ProtocolVersion: ProtocolVersion, Items: []syncservice.Mutation{validProjectMutation(uuid.NewString())}})
 	for _, test := range []struct {
 		name    string
@@ -776,7 +851,7 @@ func TestSyncBackendUnauthenticatedIsUnauthorized(t *testing.T) {
 }
 
 func TestDiscoveryRequiresAuthenticatedBodyFreeGET(t *testing.T) {
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	backend := &testSyncBackend{}
 	request := httptest.NewRequest(http.MethodGet, "/v1/sync/discovery", nil)
 	request.Header.Set("Authorization", "Bearer "+testBearer)
@@ -802,7 +877,7 @@ func TestDiscoveryRequiresAuthenticatedBodyFreeGET(t *testing.T) {
 }
 
 func TestDiscoveryBackendFailuresAreTypedAndSafe(t *testing.T) {
-	identity := Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := testIdentity()
 	for _, test := range []struct {
 		name    string
 		backend *testSyncBackend
