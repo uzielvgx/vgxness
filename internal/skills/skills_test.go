@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -138,6 +139,27 @@ func TestBundledSDDLifecycleDefinesNarrowActivationAndFailClosedContract(t *test
 	for _, required := range []string{"name: sdd-lifecycle", "<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->", "Use ONLY after", "explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete", "Automatic", "Interactive", "stateVersion", "idempotency", "memory", "OpenSpec", "hybrid", "symlink", "fail closed"} {
 		if !bytes.Contains([]byte(skill), []byte(required)) {
 			t.Errorf("sdd-lifecycle missing %q", required)
+		}
+	}
+}
+
+func TestBundledSDDLifecycleReservesAcceptedSDDWritesForApply(t *testing.T) {
+	catalog, err := bundledCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill := string(catalog.definitions[18].files["SKILL.md"])
+	for _, required := range []string{
+		"`vgxness-sdd-apply` alone writes authorized SDD workspace, OpenSpec, or hybrid targets",
+		"General handles ordinary authorized non-SDD repository implementation and rejects SDD apply or projection missions",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Errorf("sdd-lifecycle missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"managed general writes", "General writes only supplied exact relative path"} {
+		if strings.Contains(skill, forbidden) {
+			t.Errorf("sdd-lifecycle contains stale SDD writer claim %q", forbidden)
 		}
 	}
 }
