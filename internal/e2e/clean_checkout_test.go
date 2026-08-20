@@ -105,7 +105,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v50 marker", "artifact: opencode-agent/vgxness-manager; version: 50"},
+		{"active v51 marker", "artifact: opencode-agent/vgxness-manager; version: 51"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
 		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
@@ -137,7 +137,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		err  error
 		want []string
 	}{
-		{"general", generalData, generalErr, []string{"artifact: opencode-agent/general; version: 8", "permission:\n  \"*\": allow", "delegated implementation worker", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
+		{"general", generalData, generalErr, []string{"artifact: opencode-agent/general; version: 9", "permission:\n  \"*\": allow", "delegated non-SDD implementation worker", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
 		{"explore", exploreData, exploreErr, []string{"artifact: opencode-agent/explore; version: 4", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
 		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 6", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
 	} {
