@@ -23,10 +23,12 @@ const (
 	sddTasksName                                            = "vgxness-sdd-tasks.md"
 	sddApplyName                                            = "vgxness-sdd-apply.md"
 	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 4, 3
-	sddApplyTargetVersion, sddApplyPredecessorVersion       = 5, 4
-	managerCurrentMarker                                    = "artifact: opencode-agent/vgxness-manager; version: 50"
-	managerPreviousMarker                                   = "artifact: opencode-agent/vgxness-manager; version: 49"
-	generalCurrentMarker                                    = "artifact: opencode-agent/general; version: 8"
+	sddApplyTargetVersion, sddApplyPredecessorVersion       = 6, 5
+	managerCurrentMarker                                    = "artifact: opencode-agent/vgxness-manager; version: 51"
+	managerPreviousMarker                                   = "artifact: opencode-agent/vgxness-manager; version: 50"
+	managerV49Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 49"
+	generalCurrentMarker                                    = "artifact: opencode-agent/general; version: 9"
+	generalV8Marker                                         = "artifact: opencode-agent/general; version: 8"
 	generalV7Marker                                         = "artifact: opencode-agent/general; version: 7"
 	generalV6Marker                                         = "artifact: opencode-agent/general; version: 6"
 	generalPreviousMarker                                   = "artifact: opencode-agent/general; version: 5"
@@ -156,6 +158,9 @@ const preConsolidationManagerAssurance = "After general returns inspect exact di
 const currentManagerReviewDepth = "Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use vgxness-review-risk, vgxness-review-readability, vgxness-review-reliability, and vgxness-review-resilience only on the same candidate; send only supplied severe inferential finding IDs to vgxness-review-refuter in one batch; permit at most one correction transaction and one scoped validation. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet."
 const preConsolidationManagerReviewDepth = "Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use vgxness-review-risk, vgxness-review-readability, vgxness-review-reliability, and vgxness-review-resilience only on the same candidate; send severe inferential findings to vgxness-review-refuter in one batch; permit at most one correction transaction and one scoped validation; never loop until reviewers become quiet."
 const currentManagerSDDBoundary = "Use SDD only after the user explicitly requests or accepts it. Load `sdd-lifecycle` before creating an accepted SDD change. Verify the managed global portable catalog marker `<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->`; block if source, scope, or marker cannot be verified, a same-name/project-local skill collides, or loading fails. If `sdd-lifecycle` is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. An SDD apply handoff to general must bind task revision ID/digest, accepted inputs, expectedStateVersion, mission identity/replay nonce, and for every target its repository-relative allowed path, current SHA-256, and no-symlink constraint; stale, mismatched, replayed, changed, or symlinked inputs block before a write. Require exact post-write readback SHA-256. These checks reduce but do not eliminate TOCTOU risk; do not claim atomic host enforcement. SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the `sdd-lifecycle` skill is the sole detailed lifecycle policy."
+
+var currentManagerSDDBoundaryV51 = strings.Replace(strings.Replace(currentManagerSDDBoundary, "An SDD apply handoff to general must bind task revision ID/digest, accepted inputs, expectedStateVersion, mission identity/replay nonce, and for every target its repository-relative allowed path, current SHA-256, and no-symlink constraint; stale, mismatched, replayed, changed, or symlinked inputs block before a write.", "Route accepted SDD apply directly to vgxness-sdd-apply. Its mission must bind task revision ID/digest, accepted inputs, expectedStateVersion, mission identity/replay nonce, and for every target its repository-relative allowed path, current SHA-256, no-symlink constraint, exact commands, and required RED/GREEN evidence; stale, mismatched, replayed, changed, or symlinked inputs block before a write.", 1), "SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections", "Research, proposal, spec, design, and tasks phase agents are read-only; vgxness-sdd-apply alone writes authorized SDD workspace, OpenSpec, or hybrid projections", 1)
+
 const preConsolidationManagerSDDBoundary = "Use SDD only after the user explicitly requests or accepts it. Load `sdd-lifecycle` before creating an accepted SDD change. Verify the managed global portable catalog marker `<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->`; block if source, scope, or marker cannot be verified, a same-name/project-local skill collides, or loading fails. If `sdd-lifecycle` is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the `sdd-lifecycle` skill is the sole detailed lifecycle policy."
 
 func buildModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
@@ -612,6 +617,10 @@ func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlan
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
+	v50, err := previousV50ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
 	activeProfiles, err := previousActiveProfilesModelPlanBundle(current)
 	if err != nil {
 		return nil, err
@@ -673,7 +682,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		}
 		withExplore = append(withExplore, explore)
 	}
-	candidates := []modelPlanBundle{activeProfiles}
+	candidates := []modelPlanBundle{v50, activeProfiles}
 	for _, candidate := range withExplore {
 		candidates = append(candidates, candidate)
 		sddBundle, err := previousSDDModelPlanBundle(candidate)
@@ -700,10 +709,12 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 
 func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	agents := cloneAgents(current.agents)
-	agents[generalAgentName] = previousGeneralV7(agents[generalAgentName])
+	agents[managerAgentName] = previousManagerV50(agents[managerAgentName])
+	agents[generalAgentName] = previousGeneralV8(agents[generalAgentName])
 	agents[exploreAgentName] = previousExploreV3(agents[exploreAgentName])
 	agents[verifierAgentName] = previousVerifierV5(agents[verifierAgentName])
-	for _, name := range []string{generalAgentName, exploreAgentName, verifierAgentName} {
+	agents[sddApplyName] = previousSDDAgentPredecessor(sdd.RoleApply, agents[sddApplyName])
+	for _, name := range []string{managerAgentName, generalAgentName, exploreAgentName, verifierAgentName, sddApplyName} {
 		if len(agents[name]) == 0 {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
@@ -712,7 +723,11 @@ func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBu
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
-	v49, err := previousV49ModelPlanBundle(current)
+	v50, err := previousV50ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
+	v49, err := previousV49ModelPlanBundle(v50)
 	if err != nil {
 		return nil, err
 	}
@@ -732,7 +747,7 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := [][]byte{v49.agents[managerAgentName], v48.agents[managerAgentName], v47.agents[managerAgentName], v46.agents[managerAgentName]}
+	result := [][]byte{v50.agents[managerAgentName], v49.agents[managerAgentName], v48.agents[managerAgentName], v47.agents[managerAgentName], v46.agents[managerAgentName]}
 	for _, prior := range []struct {
 		base, marker string
 	}{
@@ -754,8 +769,21 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 }
 
 func previousV49ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	var err error
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
+		current, err = immediatePredecessor(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+	}
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerV49Marker)) {
+		return current, nil
+	}
+	if !bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
 	manager := previousManagerV49(current.agents[managerAgentName])
-	general := previousGeneralV6(previousGeneralV7(current.agents[generalAgentName]))
+	general := previousGeneralV6FromCurrent(current.agents[generalAgentName])
 	explore := previousExploreV2(previousExploreV3(current.agents[exploreAgentName]))
 	verifier := previousVerifierV4(previousVerifierV5(current.agents[verifierAgentName]))
 	agents := cloneAgents(current.agents)
@@ -763,7 +791,7 @@ func previousV49ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		agents[name] = previousReviewV3(name, agents[name])
 	}
 	agents[managerAgentName], agents[generalAgentName], agents[exploreAgentName], agents[verifierAgentName] = manager, general, explore, verifier
-	for _, name := range []string{managerAgentName, generalAgentName, exploreAgentName, verifierAgentName, reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+	for _, name := range []string{managerAgentName, generalAgentName, exploreAgentName, verifierAgentName, reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName, sddApplyName} {
 		if len(agents[name]) == 0 {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
@@ -771,9 +799,34 @@ func previousV49ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	return encodeLike(current, agents)
 }
 
+func previousV50ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	agents := cloneAgents(current.agents)
+	agents[managerAgentName] = previousManagerV50(agents[managerAgentName])
+	agents[generalAgentName] = previousGeneralV8(agents[generalAgentName])
+	agents[sddApplyName] = previousSDDAgentPredecessor(sdd.RoleApply, agents[sddApplyName])
+	for _, name := range []string{managerAgentName, generalAgentName, sddApplyName} {
+		if len(agents[name]) == 0 {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+	}
+	return encodeLike(current, agents)
+}
+
+func previousGeneralV6FromCurrent(current []byte) []byte {
+	assignment, err := promptAssignment(current)
+	if err != nil {
+		return nil
+	}
+	value, err := bindProfile(previousGeneralPromptV6, generalV6Marker, generalV6Marker, assignment, true)
+	if err != nil {
+		return nil
+	}
+	return preserveVariantShape(current, value)
+}
+
 func previousV48ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	var err error
-	current, err = immediatePredecessor(current)
+	current, err = legacyV49Baseline(current)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -800,7 +853,7 @@ func previousV48ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 
 func previousV47ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	var err error
-	current, err = immediatePredecessor(current)
+	current, err = legacyV49Baseline(current)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -827,7 +880,7 @@ func previousV47ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 
 func previousV46ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	var err error
-	current, err = immediatePredecessor(current)
+	current, err = legacyV49Baseline(current)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -841,15 +894,27 @@ func previousV46ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV45ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
-	return fullModelPlanBundle(current.config, current.resolved, previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", previousVerifierPromptV3(), verifierPreviousMarker, previousReviewPromptsV3())
+	return fullHistoricalModelPlanBundle(current, previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", previousVerifierPromptV3(), verifierPreviousMarker, previousReviewPromptsV3())
 }
 
 func previousV44ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
-	return fullModelPlanBundle(current.config, current.resolved, previousManagerPromptV44, "artifact: opencode-agent/vgxness-manager; version: 44", previousGeneralPromptV3, "artifact: opencode-agent/general; version: 3", previousVerifierPromptV3(), verifierPreviousMarker, previousReviewPromptsV3())
+	return fullHistoricalModelPlanBundle(current, previousManagerPromptV44, "artifact: opencode-agent/vgxness-manager; version: 44", previousGeneralPromptV3, "artifact: opencode-agent/general; version: 3", previousVerifierPromptV3(), verifierPreviousMarker, previousReviewPromptsV3())
 }
 
 func previousV43ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
-	return fullModelPlanBundle(current.config, current.resolved, previousManagerPromptV43, "artifact: opencode-agent/vgxness-manager; version: 43", previousGeneralPromptV2, "artifact: opencode-agent/general; version: 2", previousVerifierPromptV2, "artifact: opencode-agent/vgxness-verifier; version: 2", previousReviewPromptsV2())
+	return fullHistoricalModelPlanBundle(current, previousManagerPromptV43, "artifact: opencode-agent/vgxness-manager; version: 43", previousGeneralPromptV2, "artifact: opencode-agent/general; version: 2", previousVerifierPromptV2, "artifact: opencode-agent/vgxness-verifier; version: 2", previousReviewPromptsV2())
+}
+
+func fullHistoricalModelPlanBundle(current modelPlanBundle, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
+	bundle, err := fullModelPlanBundle(current.config, current.resolved, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker, reviews)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	bundle.agents[sddApplyName] = previousSDDAgentPredecessor(sdd.RoleApply, bundle.agents[sddApplyName])
+	if len(bundle.agents[sddApplyName]) == 0 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	return encodeModelPlanBundle(bundle.config, bundle.resolved, bundle.agents)
 }
 
 func previousManagerModelPlanBundleV42(current modelPlanBundle) (modelPlanBundle, error) {
@@ -918,6 +983,13 @@ func encodeLike(current modelPlanBundle, agents map[string][]byte) (modelPlanBun
 
 func immediatePredecessor(current modelPlanBundle) (modelPlanBundle, error) {
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
+		return previousV50ModelPlanBundle(current)
+	}
+	return current, nil
+}
+
+func legacyV49Baseline(current modelPlanBundle) (modelPlanBundle, error) {
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
 		return previousV49ModelPlanBundle(current)
 	}
 	return current, nil
@@ -925,7 +997,7 @@ func immediatePredecessor(current modelPlanBundle) (modelPlanBundle, error) {
 
 func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	var err error
-	current, err = immediatePredecessor(current)
+	current, err = legacyV49Baseline(current)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -962,7 +1034,7 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 
 func previousBroadPermissionModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	var err error
-	current, err = immediatePredecessor(current)
+	current, err = legacyV49Baseline(current)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -996,7 +1068,7 @@ func previousSDDModelPlanBundleV2(current modelPlanBundle) (modelPlanBundle, err
 
 func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	var err error
-	current, err = immediatePredecessor(current)
+	current, err = legacyV49Baseline(current)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -1235,7 +1307,9 @@ func modelBoundAgentPredecessorCandidatesV3(plan sdd.OpenCodePlanV3, name string
 		appendCandidate(v2)
 		appendCandidate(previousExplorePredecessor(v2))
 	case generalAgentName:
-		v7 := previousGeneralV7(agents[name])
+		v8 := previousGeneralV8(agents[name])
+		appendCandidate(v8)
+		v7 := previousGeneralV7(v8)
 		appendCandidate(v7)
 		v6 := previousGeneralV6(v7)
 		appendCandidate(v6)
@@ -1353,18 +1427,25 @@ func activeManagerPrompt(value []byte) []byte {
 }
 
 func previousManagerV49(current []byte) []byte {
-	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 {
+	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+		current = previousManagerV50(current)
+	}
+	if bytes.Count(current, []byte(managerPreviousMarker)) != 1 {
 		return nil
 	}
 	assignment, err := promptAssignment(current)
 	if err != nil {
 		return nil
 	}
-	value, err := bindManagerTemplate(previousManagerPromptV49, managerPreviousMarker, assignment)
+	value, err := bindManagerTemplate(previousManagerPromptV49, managerV49Marker, assignment)
 	if err != nil {
 		return nil
 	}
 	return preserveVariantShape(current, activeManagerPrompt(value))
+}
+
+func previousManagerV50(current []byte) []byte {
+	return derivePredecessor(current, []textReplacement{{old: managerCurrentMarker, new: managerPreviousMarker}, {old: currentManagerSDDBoundaryV51, new: currentManagerSDDBoundary}})
 }
 
 func previousManagerV48(current []byte) []byte {
@@ -1556,7 +1637,23 @@ func preserveVariantShape(current, candidate []byte) []byte {
 }
 
 func previousGeneralV7(current []byte) []byte {
-	return derivePredecessor(current, []textReplacement{{old: generalCurrentMarker, new: generalV7Marker}, {old: activeChildContextContract, new: nativeChildContextContract}})
+	if bytes.Count(current, []byte(generalCurrentMarker)) == 1 {
+		current = previousGeneralV8(current)
+		if len(current) == 0 {
+			return nil
+		}
+	}
+	if predecessor := derivePredecessor(current, []textReplacement{{old: generalV8Marker, new: generalV7Marker}, {old: "\n\n" + currentGeneralSDDHandoff, new: ""}, {old: activeChildContextContract, new: nativeChildContextContract}}); len(predecessor) != 0 {
+		return predecessor
+	}
+	if bytes.Count(current, []byte(generalV7Marker)) != 1 {
+		return nil
+	}
+	return derivePredecessor(previousGeneralV6FromCurrent(current), []textReplacement{{old: generalV6Marker, new: generalV7Marker}})
+}
+
+func previousGeneralV8(current []byte) []byte {
+	return derivePredecessor(current, []textReplacement{{old: generalCurrentMarker, new: generalV8Marker}, {old: "the delegated non-SDD implementation worker", new: "the delegated implementation worker"}, {old: " Reject SDD implementation or projection missions: only vgxness-sdd-apply writes an authorized SDD workspace or projection.", new: ""}, {old: "hard maxima only for frozen, risky, or verification work.", new: "hard maxima only for frozen, risky, verification, or SDD work."}, {old: "\n\nReturn one compact Child Return Envelope", new: "\n\n" + currentGeneralSDDHandoff + "\n\nReturn one compact Child Return Envelope"}})
 }
 
 func previousGeneralV6(current []byte) []byte {
@@ -1673,7 +1770,7 @@ func bindAgent(base string, role sdd.Role, assignment sdd.OpenCodeRoleAssignment
 func sddAgentPrompt(role sdd.Role, assignment sdd.OpenCodeRoleAssignment) string {
 	if role == sdd.RoleApply {
 		return fmt.Sprintf(`---
-description: Native read-only SDD implementation and patch composer for one exact accepted task revision
+description: Native exclusive SDD workspace and projection writer for one exact accepted task revision
 mode: subagent
 hidden: true
 model: %s
@@ -1686,8 +1783,8 @@ permission:
   list: allow
   skill: allow
   codegraph_explore: allow
-  edit: deny
-  bash: deny
+  edit: allow
+  bash: ask
   question: deny
   task: deny
   webfetch: deny
@@ -1701,12 +1798,12 @@ permission:
 
 <!-- managed-by: vgxness; artifact: opencode-agent/vgxness-sdd-apply; version: %d -->
 
-You are the read-only implementation and patch composer for one accepted SDD tasks revision. Compose a hash-bound candidate. Reject a mission unless it contains exact change ID, task IDs, accepted task revision ID and SHA-256 digest, every accepted input revision ID and digest, expectedStateVersion, mission identity and replay nonce, exact relevant native skill names, allowed paths with current content SHA-256 hashes and no-symlink constraints, acceptance criteria, exact validation commands, and required RED/TDD evidence. Treat stale or mismatched task/input digests, stateVersion, mission identity/replay nonce, path, hash, or no-symlink constraint as BLOCKED before a write.
+You are the exclusive SDD workspace and projection writer for one accepted SDD tasks revision. Reject a mission unless it contains exact change ID, task IDs, accepted task revision ID and SHA-256 digest, every accepted input revision ID and digest, expectedStateVersion, mission identity/replay nonce, exact relevant native skill names, allowed paths with current content SHA-256 hashes and no-symlink constraints, acceptance criteria, exact validation commands, and required RED/GREEN evidence. Immediately before each write recheck every accepted binding, task/input digest, expectedStateVersion, mission identity/replay nonce, allowed path, current SHA-256, no-symlink constraint, and exact command. Treat stale or mismatched values as BLOCKED before a write.
 
-Inspect only the accepted scope. Do not edit, execute shell commands or tests, delegate, ask questions, persist memory, call SDD write or lifecycle tools, select models, install packages, use network, commit, push, or alter OpenSpec projections. Produce a bounded patch proposal whose paths stay within the mission and whose expected original hashes prevent stale application. Preserve the RED/GREEN plan and identify exact developmental and final validation commands. The manager validates bindings, state version, paths, hashes, and replay identity; managed general rechecks them immediately before each write and performs workspace writes and exact OpenSpec or hybrid projection writes with SHA-256 readback; verifier executes final validation; reviewers assess the same frozen candidate; the manager saves or accepts revisions, records projections, and advances lifecycle state.
+Inspect only the accepted scope and write only its authorized paths. Run only the exact manager-permitted developmental commands. Do not create changes, save or accept revisions, record projections, transition state, write memory, use network, install packages, commit, push, ask questions, or spawn agents. Do not call SDD write or lifecycle tools, select models, or delegate. After each authorized write, return its exact post-write SHA-256. Preserve and report observed RED/GREEN evidence. The manager alone validates lifecycle bindings, saves or accepts revisions, records projections, and advances lifecycle state; verifier executes final validation and reviewers assess the same frozen candidate. These checks reduce but do not eliminate TOCTOU risk; no atomic host enforcement is claimed. Do not accept revisions, transition phases, or record projections.
 
 Return exactly one compact JSON object and no Markdown:
-{"status":"complete|blocked","missionIdentity":"exact mission ID","replayNonce":"exact nonce","taskRevision":{"id":"exact ID","digest":"sha256"},"acceptedInputs":[{"artifactId":"exact ID","revisionId":"exact ID","digest":"sha256"}],"expectedStateVersion":1,"proposedChanges":[{"path":"allowed path","expectedSHA256":"current file digest","noSymlink":true,"patch":"bounded exact proposed change"}],"validationPlan":[{"command":"exact command","purpose":"RED|GREEN|regression|static"}],"tddEvidence":{"redPlan":"expected pre-change failure","greenPlan":"expected post-change pass"},"summary":"bounded implementation rationale","blockers":["blocking fact"]}
+{"status":"complete|blocked","missionIdentity":"exact mission ID","replayNonce":"exact nonce","taskRevision":{"id":"exact ID","digest":"sha256"},"acceptedInputs":[{"artifactId":"exact ID","revisionId":"exact ID","digest":"sha256"}],"expectedStateVersion":1,"changedPaths":[{"path":"allowed path","expectedSHA256":"current file digest","postWriteSHA256":"written file digest","noSymlink":true}],"validationEvidence":[{"command":"exact command","result":"RED|GREEN|regression|static"}],"tddEvidence":{"red":"observed pre-change failure","green":"observed post-change pass"},"summary":"bounded implementation rationale","blockers":["blocking fact"]}
 	`, assignment.Model, assignment.Variant, sddApplyTargetVersion) + sddSkillLoadingContract
 	}
 	return readOnlySDDAgentPrompt(role, assignment)
@@ -1758,23 +1855,74 @@ Mission schema requires "skills":["exact relevant native skill name"]. The exact
 func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 	target, prior := sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion
 	if role == sdd.RoleApply {
-		target, prior = sddApplyTargetVersion, sddApplyPredecessorVersion
+		currentMarker := fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyTargetVersion)
+		priorMarker := fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion)
+		if bytes.Count(current, []byte(currentMarker)) == 1 {
+			assignment, err := promptAssignment(current)
+			if err != nil {
+				return nil
+			}
+			return []byte(readOnlySDDApplyV5Prompt(assignment))
+		}
+		if bytes.Count(current, []byte(priorMarker)) == 1 {
+			return derivePredecessor(current, []textReplacement{{old: priorMarker, new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion-1)}})
+		}
+		return nil
 	}
 	replacements := []textReplacement{{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, target), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, prior)}}
-	if role == sdd.RoleApply {
-		return derivePredecessor(current, replacements)
-	}
 	if role == sdd.RoleResearch {
 		replacements = append(replacements, textReplacement{old: researchBootstrapPhaseAgentContract(), new: legacyPhaseAgentContract(role)})
 	}
 	return derivePredecessor(current, replacements)
 }
 
+// readOnlySDDApplyV5Prompt reconstructs the complete pre-exclusive-writer
+// apply handoff. It is deliberately generated independently of v6: a marker
+// substitution would admit a workspace-writing package under the v5 identity.
+func readOnlySDDApplyV5Prompt(assignment sdd.OpenCodeRoleAssignment) string {
+	return fmt.Sprintf(`---
+description: Native read-only SDD implementation and patch composer for one exact accepted task revision
+mode: subagent
+hidden: true
+model: %s
+variant: %s
+permission:
+  "*": deny
+  read: allow
+  grep: allow
+  glob: allow
+  list: allow
+  skill: allow
+  codegraph_explore: allow
+  edit: deny
+  bash: deny
+  question: deny
+  task: deny
+  webfetch: deny
+  websearch: deny
+  vgxness_sdd_list: allow
+  vgxness_sdd_get: allow
+  vgxness_sdd_get_revision: allow
+  vgxness_sdd_list_revisions: allow
+  vgxness_sdd_projection_status: allow
+---
+
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-sdd-apply; version: 5 -->
+
+You are the read-only implementation and patch composer for one accepted SDD tasks revision. Compose a hash-bound candidate. Reject a mission unless it contains exact change ID, task IDs, accepted task revision ID and SHA-256 digest, every accepted input revision ID and digest, expectedStateVersion, mission identity and replay nonce, exact relevant native skill names, allowed paths with current content SHA-256 hashes and no-symlink constraints, acceptance criteria, exact validation commands, and required RED/TDD evidence. Treat stale or mismatched task/input digests, stateVersion, mission identity/replay nonce, path, hash, or no-symlink constraint as BLOCKED before a write.
+
+Inspect only the accepted scope. Do not edit, execute shell commands or tests, delegate, ask questions, persist memory, call SDD write or lifecycle tools, select models, install packages, use network, commit, push, or alter OpenSpec projections. Produce a bounded patch proposal whose paths stay within the mission and whose expected original hashes prevent stale application. Preserve the RED/GREEN plan and identify exact developmental and final validation commands. The manager validates bindings, state version, paths, hashes, and replay identity; managed general rechecks them immediately before each write and performs workspace writes and exact OpenSpec or hybrid projection writes with SHA-256 readback; verifier executes final validation; reviewers assess the same frozen candidate; the manager saves or accepts revisions, records projections, and advances lifecycle state.
+
+Return exactly one compact JSON object and no Markdown:
+{"status":"complete|blocked","missionIdentity":"exact mission ID","replayNonce":"exact nonce","taskRevision":{"id":"exact ID","digest":"sha256"},"acceptedInputs":[{"artifactId":"exact ID","revisionId":"exact ID","digest":"sha256"}],"expectedStateVersion":1,"proposedChanges":[{"path":"allowed path","expectedSHA256":"current file digest","noSymlink":true,"patch":"bounded exact proposed change"}],"validationPlan":[{"command":"exact command","purpose":"RED|GREEN|regression|static"}],"tddEvidence":{"redPlan":"expected pre-change failure","greenPlan":"expected post-change pass"},"summary":"bounded implementation rationale","blockers":["blocking fact"]}
+	`, assignment.Model, assignment.Variant) + sddSkillLoadingContract
+}
+
 func legacySDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 	if role == sdd.RoleApply {
 		prior := previousSDDAgentPredecessor(role, current)
 		return derivePredecessor(prior, []textReplacement{
-			{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion-1)},
+			{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion-1), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, sddApplyPredecessorVersion-2)},
 		})
 	}
 	return derivePredecessor(current, []textReplacement{

@@ -804,7 +804,7 @@ func TestIntegrationRejectsOldAgentsBehindNewManifest(t *testing.T) {
 func TestSDDAgentProfilesEnforceReadOnlySkillLoadingAndManagerWriterBoundaries(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName, sddApplyName} {
+	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
 		profile := string(bundle.agents[name])
 		for _, required := range []string{"mode: subagent", "hidden: true", "model: ", "variant: ", `"*": deny`, "read: allow", "grep: allow", "glob: allow", "list: allow", "skill: allow", "codegraph_explore: allow", "edit: deny", "bash: deny", "question: deny", "task: deny", `"skills":["exact relevant native skill name"]`, "exact skill list is required", "empty list is allowed only when the manager determined none apply", "Load every supplied applicable native skill with the skill tool before phase work", "Do not discover, invent, or self-route skills", "report it as unavailable"} {
 			if !strings.Contains(profile, required) {
@@ -818,12 +818,12 @@ func TestSDDAgentProfilesEnforceReadOnlySkillLoadingAndManagerWriterBoundaries(t
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"read-only implementation and patch composer", "edit: deny", "bash: deny", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "every accepted input revision ID and digest", "expectedStateVersion", "mission identity and replay nonce", "allowed paths with current content SHA-256 hashes and no-symlink constraints", "exact validation commands", "RED/TDD evidence", "manager validates bindings, state version, paths, hashes, and replay identity", `"missionIdentity"`, `"taskRevision"`, `"acceptedInputs"`, `"expectedStateVersion"`, `"proposedChanges"`, `"expectedSHA256"`, `"noSymlink"`, `"validationPlan"`} {
+	for _, required := range []string{"exclusive SDD workspace and projection writer", "edit: allow", "bash: ask", "question: deny", "task: deny", `"*": deny`, "exact change ID", "accepted task revision ID and SHA-256 digest", "every accepted input revision ID and digest", "expectedStateVersion", "mission identity/replay nonce", "allowed paths with current content SHA-256 hashes and no-symlink constraints", "exact validation commands", "RED/GREEN evidence", "The manager alone validates lifecycle bindings", `"missionIdentity"`, `"taskRevision"`, `"acceptedInputs"`, `"expectedStateVersion"`, `"postWriteSHA256"`, `"noSymlink"`, `"validationEvidence"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"edit: allow", "  bash:\n", `"go test *": allow`, `"git status*": allow`, "vgxness_sdd_save_revision: allow", "vgxness_sdd_accept_revision: allow", "vgxness_sdd_transition: allow", "vgxness_sdd_record_projection: allow", "question: allow", "task: allow", "webfetch: allow", "websearch: allow"} {
+	for _, forbidden := range []string{`"go test *": allow`, `"git status*": allow`, "vgxness_sdd_save_revision: allow", "vgxness_sdd_accept_revision: allow", "vgxness_sdd_transition: allow", "vgxness_sdd_record_projection: allow", "question: allow", "task: allow", "webfetch: allow", "websearch: allow"} {
 		if strings.Contains(apply, forbidden) {
 			t.Errorf("apply allows %q", forbidden)
 		}
@@ -1622,7 +1622,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 50"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 51"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -1967,7 +1967,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 50",
+		"artifact: opencode-agent/vgxness-manager; version: 51",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native adaptive general-purpose partner",
 		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",
@@ -2042,7 +2042,7 @@ func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 			}
 		}
 	}
-	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 8") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 6"), "current broad-profile markers were not bumped")
+	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 9") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 6"), "current broad-profile markers were not bumped")
 	legacy, err := previousSDDModelPlanBundle(bundle)
 	testutil.NoError(t, err)
 	testutil.Require(t, strings.Contains(string(legacy.agents[generalAgentName]), "artifact: opencode-agent/general; version: 5") && !strings.Contains(string(legacy.agents[generalAgentName]), "vgxness_sdd_record_projection: deny") && strings.Contains(string(legacy.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 3") && !strings.Contains(string(legacy.agents[verifierAgentName]), "vgxness_sdd_record_projection: deny"), "historical broad profiles were mutated")
@@ -2143,7 +2143,7 @@ func TestManagerPromptDefinesExecutableSDDLifecycle(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
-	for _, required := range []string{"Use SDD only after the user explicitly requests or accepts it.", "sole detailed lifecycle policy", "SHA-256 digests", "latest stateVersion", "managed general alone writes", "verifier validates"} {
+	for _, required := range []string{"Use SDD only after the user explicitly requests or accepts it.", "sole detailed lifecycle policy", "SHA-256 digests", "latest stateVersion", "vgxness-sdd-apply alone writes authorized SDD workspace", "verifier validates"} {
 		if !strings.Contains(prompt, required) {
 			t.Errorf("manager prompt is missing executable SDD contract %q", required)
 		}
@@ -2374,12 +2374,12 @@ func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"version: 5", "Native read-only SDD implementation and patch composer", "edit: deny", "bash: deny", "managed general rechecks them immediately before each write", "verifier executes final validation", `"status":"complete|blocked"`, `"proposedChanges"`, `"validationPlan"`, `"tddEvidence"`} {
+	for _, required := range []string{"version: 6", "exclusive SDD workspace and projection writer", "edit: allow", "bash: ask", "Immediately before each write recheck", "verifier executes final validation", `"status":"complete|blocked"`, `"validationEvidence"`, `"postWriteSHA256"`, `"tddEvidence"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing phase contract %q", required)
 		}
 	}
-	for _, forbidden := range []string{"edit: allow", "go test *", "git status*", "You are the single writer"} {
+	for _, forbidden := range []string{"go test *", "git status*", "managed general rechecks them immediately before each write"} {
 		if strings.Contains(apply, forbidden) {
 			t.Errorf("apply retains write-capable contract %q", forbidden)
 		}

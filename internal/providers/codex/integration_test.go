@@ -13,13 +13,17 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
-func TestKnownPackagesOrderCurrentThenV9ForEveryPlanAndRetainOlderPredecessors(t *testing.T) {
+func TestKnownPackagesOrderCurrentThenV10ThenV9ForEveryPlanAndRetainOlderPredecessors(t *testing.T) {
 	known, err := knownPackages()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v10, err := renderActiveV10("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -35,19 +39,22 @@ func TestKnownPackagesOrderCurrentThenV9ForEveryPlanAndRetainOlderPredecessors(t
 		if err != nil {
 			t.Fatal(err)
 		}
-		foundV6, foundV7, currentIndex, v9Index := false, false, -1, -1
+		foundV6, foundV7, currentIndex, v10Index, v9Index := false, false, -1, -1, -1
 		for index, pkg := range known {
 			foundV6 = foundV6 || pkg.SHA256 == v6.SHA256
 			foundV7 = foundV7 || pkg.SHA256 == v7.SHA256
 			if pkg.SHA256 == current.SHA256 {
 				currentIndex = index
 			}
+			if pkg.SHA256 == v10.SHA256 {
+				v10Index = index
+			}
 			if pkg.SHA256 == v9.SHA256 {
 				v9Index = index
 			}
 		}
-		if !foundV6 || !foundV7 || currentIndex < 0 || v9Index != currentIndex+1 {
-			t.Errorf("known packages order for %s: current=%d v9=%d v7=%v v6=%v", plan, currentIndex, v9Index, foundV7, foundV6)
+		if !foundV6 || !foundV7 || currentIndex < 0 || v10Index != currentIndex+1 || v9Index != v10Index+1 {
+			t.Errorf("known packages order for %s: current=%d v10=%d v9=%d v7=%v v6=%v", plan, currentIndex, v10Index, v9Index, foundV7, foundV6)
 		}
 	}
 }

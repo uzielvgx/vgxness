@@ -216,13 +216,13 @@ func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
 	}
 }
 
-func TestManagerInstructionsCoverOpenCodeV50SectionParity(t *testing.T) {
+func TestManagerInstructionsCoverOpenCodeV51SectionParity(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	const openCodeV50Marker = "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 50 -->"
+	const openCodeV51Marker = "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 51 -->"
 	// This is the complete section-by-section Codex adaptation manifest for the
 	// OpenCode v50 manager. Paragraphs are full clauses, not keyword probes.
 	sections := map[string][]string{
@@ -243,20 +243,20 @@ func TestManagerInstructionsCoverOpenCodeV50SectionParity(t *testing.T) {
 			"After general returns inspect exact diff, changed paths, status identity, and command evidence. For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude IMPLEMENTED; do not automatically freeze, invoke verifier/review, or claim VERIFIED. Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs. A source change creates a new candidate and invalidates validation and review evidence. Freeze one exact candidate identity before final validation and review without inventing a digest that excludes untracked files. Define one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria. Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation; missing, mismatched, or stale binding is INCONCLUSIVE. Verifier mission schema: the Review Binding, frozen candidate digest, digest procedure, exact changed paths, acceptance criteria, evidence scope, exact permitted commands, expected environment, and stop condition; accept only PASS, FAIL, or INCONCLUSIVE evidence echoing the complete binding and reporting the same digest before and after. Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, exact skills, verificationEvidence, and lens-specific goal, scope, nonGoals, acceptance, evidence, stop, and return contract; every reviewer and refuter echoes the complete binding unchanged, and missing evidence is not success.",
 			"Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use risk, readability, reliability, and resilience reviewers only on the same candidate; send only supplied severe inferential finding IDs to refuter in one batch; permit at most one correction transaction and one scoped validation. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet.",
 		},
-		"sdd":                {"Use SDD only after the user explicitly requests or accepts it. Load sdd-lifecycle before creating an accepted SDD change. Verify the managed global portable catalog marker <!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->; Block if provenance, source, scope, marker, or loading cannot be verified, or if a same-name/project-local skill collides; never fall back inline or accept a local skill with the same name. If sdd-lifecycle is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. An SDD apply handoff to general must bind task revision ID/digest, accepted inputs, expectedStateVersion, mission identity/replay nonce, and for every target its repository-relative allowed path, current SHA-256, and no-symlink constraint; stale, mismatched, replayed, changed, or symlinked inputs block before a write. Require exact post-write readback SHA-256. These checks reduce but do not eliminate TOCTOU risk; do not claim atomic host enforcement. SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the sdd-lifecycle skill is the sole detailed lifecycle policy."},
+		"sdd":                {"Use SDD only after the user explicitly requests or accepts it. Load sdd-lifecycle before creating an accepted SDD change. Verify the managed global portable catalog marker <!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->; Block if provenance, source, scope, marker, or loading cannot be verified, or if a same-name/project-local skill collides; never fall back inline or accept a local skill with the same name. If sdd-lifecycle is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. Route accepted SDD apply directly to sdd-apply must bind task revision ID/digest, accepted inputs, expectedStateVersion, mission identity/replay nonce, and for every target its repository-relative allowed path, current SHA-256, and no-symlink constraint; stale, mismatched, replayed, changed, or symlinked inputs block before a write. Require exact post-write readback SHA-256. These checks reduce but do not eliminate TOCTOU risk; do not claim atomic host enforcement. Research, proposal, spec, design, and tasks phase agents are read-only; sdd-apply alone writes authorized SDD workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the sdd-lifecycle skill is the sole detailed lifecycle policy."},
 		"delivery-reporting": {"The manager is the sole Git and GitHub actor. Managed general must never branch, stage, commit, push, create a pull request, merge, return a branch, or clean delivery branches. After freeze, verification, and review, perform only native Git/GitHub operations authorized by the loaded skill and current-task authorization. Stop on ambiguity or a failed skill gate; do not invent a fallback delivery procedure. Report only observed labels IMPLEMENTED, VERIFIED, DELIVERED, MERGED, and INSTALLED: IMPLEMENTED: intended workspace changes complete and developmental checks observed; not independently verified. VERIFIED: exact frozen candidate passed independent verifier and required review. DELIVERED: exact commit was published and a new current-task PR was created and read back. MERGED: that PR was verified merged and base containment/readback succeeded. INSTALLED: merged version was installed and installation/handshake readback succeeded. Never infer a later state; never present an earlier state as a later one. Report changed files, RED/GREEN evidence, validation, review, limitations, identities when created, and Git status without raw logs. Never use destructive Git cleanup or discard unrelated work."},
 	}
 	openCodeManager, err := os.ReadFile(filepath.Join("..", "opencode", "templates", "manager.md"))
 	if err != nil {
-		t.Fatalf("read OpenCode v50 template: %v", err)
+		t.Fatalf("read OpenCode v51 template: %v", err)
 	}
-	if !strings.Contains(string(openCodeManager), openCodeV50Marker) {
-		t.Errorf("OpenCode v50 marker %q changed; update this section map deliberately", openCodeV50Marker)
+	if !strings.Contains(string(openCodeManager), openCodeV51Marker) {
+		t.Errorf("OpenCode v51 marker %q changed; update this section map deliberately", openCodeV51Marker)
 	}
 	for section, clauses := range sections {
 		for _, clause := range clauses {
 			if !strings.Contains(content, clause) {
-				t.Errorf("%s lacks v50 parity clause %q", section, clause)
+				t.Errorf("%s lacks v51 parity clause %q", section, clause)
 			}
 		}
 	}
@@ -313,7 +313,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"agents/explore.toml", "agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml", "agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml", "agents/sdd-apply.toml"} {
+	for _, path := range []string{"agents/explore.toml", "agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml", "agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml"} {
 		content := string(artifact(t, pkg, path).Bytes)
 		if !strings.Contains(content, "sandbox_mode = \"read-only\"") {
 			t.Errorf("%s is not read-only", path)
@@ -330,13 +330,19 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s must not expose MCP tools", path)
 		}
 	}
-	for _, path := range []string{"agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml", "agents/sdd-apply.toml"} {
+	for _, path := range []string{"agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml"} {
 		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, sddTools) {
 			t.Errorf("%s lacks the exact protected SDD-read allowlist", path)
 		}
 	}
-	if content := string(artifact(t, pkg, "agents/general.toml").Bytes); !strings.Contains(content, "sandbox_mode = \"workspace-write\"") || !strings.Contains(content, "must not own the SDD lifecycle") || !strings.Contains(content, "model = \"gpt-5.6-terra\"") || !strings.Contains(content, "model_reasoning_effort = \"medium\"") {
-		t.Error("general profile does not retain its workspace-only boundary")
+	apply := string(artifact(t, pkg, "agents/sdd-apply.toml").Bytes)
+	for _, required := range []string{`sandbox_mode = "workspace-write"`, "exclusive SDD workspace and projection writer", "expectedStateVersion", "mission identity/replay nonce", "exact post-write SHA-256", "Do not create changes, save or accept revisions, record projections, transition state, write memory, use network, install packages, commit, push, ask questions, or spawn agents."} {
+		if !strings.Contains(apply, required) {
+			t.Errorf("sdd-apply lacks boundary %q", required)
+		}
+	}
+	if content := string(artifact(t, pkg, "agents/general.toml").Bytes); !strings.Contains(content, "sandbox_mode = \"workspace-write\"") || !strings.Contains(content, "Authorized non-SDD workspace implementation") || !strings.Contains(content, "Reject SDD implementation or projection missions") || !strings.Contains(content, "model = \"gpt-5.6-terra\"") || !strings.Contains(content, "model_reasoning_effort = \"medium\"") {
+		t.Error("general profile does not retain its non-SDD workspace boundary")
 	}
 	if content := string(artifact(t, pkg, "agents/explore.toml").Bytes); !strings.Contains(content, "model = \"gpt-5.6-luna\"") || !strings.Contains(content, "model_reasoning_effort = \"medium\"") {
 		t.Error("explore profile does not use the supported read-heavy model")
@@ -346,7 +352,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 10; parity: opencode-v50") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 11; parity: opencode-v51") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }
@@ -390,13 +396,21 @@ func TestRenderedSDDProfilesRemainExactAndContextCapsuleFree(t *testing.T) {
 	for _, item := range predecessor {
 		prior[item.path] = item
 	}
+	var currentApplyProfile profile
 	for _, item := range current {
 		if !strings.HasPrefix(item.path, "agents/sdd-") {
 			continue
 		}
-		if strings.Contains(item.instructions, "Context Capsule v1") || renderProfile(item) != renderProfile(prior[item.path]) {
+		if item.name == "sdd-apply" {
+			currentApplyProfile = item
+		}
+		if item.name != "sdd-apply" && (strings.Contains(item.instructions, "Context Capsule v1") || renderProfile(item) != renderProfile(prior[item.path])) {
 			t.Errorf("%s changed from its exact HEAD identity", item.path)
 		}
+	}
+	currentApply, priorApply := renderProfile(currentApplyProfile), renderProfile(prior["agents/sdd-apply.toml"])
+	if !strings.Contains(currentApply, `sandbox_mode = "workspace-write"`) || !strings.Contains(currentApply, "exclusive SDD workspace and projection writer") || !strings.Contains(priorApply, `sandbox_mode = "read-only"`) || !strings.Contains(priorApply, "Only general may implement an authorized projection") {
+		t.Fatal("current and predecessor SDD Apply boundaries are not distinct")
 	}
 }
 
@@ -424,27 +438,38 @@ func TestRenderUsesIntentTriggeredMemoryWithoutRoutineRecentFirst(t *testing.T) 
 	}
 }
 
-func TestV10ManagerHasAdaptiveParityAndRecognizesV9(t *testing.T) {
+func TestV11ManagerHasAdaptiveParityAndRecognizesV10ThenV9(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
 	for _, required := range []string{
-		"artifact: codex-agent/manager; version: 10; parity: opencode-v50",
+		"artifact: codex-agent/manager; version: 11; parity: opencode-v51",
 		"adaptive general-purpose partner",
 		"When the engineering route activates",
 		orchestration.ContractPolicy,
 		orchestration.ContractBudgetPolicy,
 	} {
 		if !strings.Contains(manager, required) {
-			t.Errorf("Codex manager v10 missing %q", required)
+			t.Errorf("Codex manager v11 missing %q", required)
 		}
 	}
 	for _, forbidden := range []string{"native Codex task list for multiple meaningful steps", "Load every clearly applicable native skill", "sole orchestration authority and sole SDD lifecycle authority"} {
 		if strings.Contains(manager, forbidden) {
-			t.Errorf("Codex manager v10 retains unconditional ceremony %q", forbidden)
+			t.Errorf("Codex manager v11 retains unconditional ceremony %q", forbidden)
 		}
+	}
+	v10, err := renderActiveV10("v1.2.3", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v10.Validate(); err != nil {
+		t.Fatalf("v10 predecessor is not recognized: %v", err)
+	}
+	v10Manager := string(artifact(t, v10, "AGENTS.md").Bytes)
+	if !strings.Contains(v10Manager, "artifact: codex-agent/manager; version: 10; parity: opencode-v50") || !strings.Contains(v10Manager, currentCodexContextCapsule) || !strings.Contains(string(artifact(t, v10, "agents/general.toml").Bytes), "Context Capsule v1") || !strings.Contains(string(artifact(t, v10, "agents/sdd-apply.toml").Bytes), `sandbox_mode = "read-only"`) {
+		t.Fatal("exact v10 predecessor lost former HEAD identity")
 	}
 	predecessor, err := renderActiveV9("v1.2.3", sdd.PlanMedium)
 	if err != nil {
@@ -497,7 +522,7 @@ func TestDelegationProfileMatrix(t *testing.T) {
 	profiles := map[string]string{
 		"explore": "read-only", "general": "workspace-write", "verifier": "read-only", "risk": "read-only",
 		"readability": "read-only", "reliability": "read-only", "resilience": "read-only", "refuter": "read-only",
-		"sdd-research": "read-only", "sdd-proposal": "read-only", "sdd-spec": "read-only", "sdd-design": "read-only", "sdd-tasks": "read-only", "sdd-apply": "read-only",
+		"sdd-research": "read-only", "sdd-proposal": "read-only", "sdd-spec": "read-only", "sdd-design": "read-only", "sdd-tasks": "read-only", "sdd-apply": "workspace-write",
 	}
 	if len(profiles) != 14 {
 		t.Fatal("specialist matrix must cover fourteen agent types")
@@ -512,8 +537,8 @@ func TestDelegationProfileMatrix(t *testing.T) {
 	}
 	for _, item := range pkg.Artifacts[1:] {
 		content := string(item.Bytes)
-		if strings.Contains(content, `sandbox_mode = "workspace-write"`) && !strings.Contains(content, `name = "general"`) {
-			t.Errorf("only general may have workspace-write: %s", item.Path)
+		if strings.Contains(content, `sandbox_mode = "workspace-write"`) && !strings.Contains(content, `name = "general"`) && !strings.Contains(content, `name = "sdd-apply"`) {
+			t.Errorf("only general and sdd-apply may have workspace-write: %s", item.Path)
 		}
 	}
 }

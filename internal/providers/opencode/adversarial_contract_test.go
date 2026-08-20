@@ -124,7 +124,7 @@ func TestGeneratedReviewAndSDDContractsHaveRoleSpecificClauses(t *testing.T) {
 		sddSpecName:           {"You are the read-only SDD spec agent", "Return bounded evidence and candidate artifact content"},
 		sddDesignName:         {"You are the read-only SDD design agent", "Return bounded evidence and candidate artifact content"},
 		sddTasksName:          {"You are the read-only SDD tasks agent", "Return bounded evidence and candidate artifact content"},
-		sddApplyName:          {"read-only implementation and patch composer", "expectedStateVersion", "no-symlink constraints", "SHA-256 readback"},
+		sddApplyName:          {"exclusive SDD workspace and projection writer", "expectedStateVersion", "no-symlink constraints", "Immediately before each write recheck", "RED/GREEN evidence"},
 	} {
 		content := string(bundle.agents[name])
 		for _, clause := range clauses {
@@ -155,10 +155,10 @@ func TestGeneratedPromptExamplesHaveStructuralContracts(t *testing.T) {
 	}
 	requireJSONArrayObjectFields(t, refuter, "results", "findingId:string", "outcome:string", "proofRefs:array")
 	apply := promptJSONExample(t, bundle.agents[sddApplyName], `{"status"`)
-	requireJSONFields(t, apply, "status:string", "missionIdentity:string", "replayNonce:string", "taskRevision:object", "acceptedInputs:array", "expectedStateVersion:number", "proposedChanges:array", "validationPlan:array", "tddEvidence:object")
+	requireJSONFields(t, apply, "status:string", "missionIdentity:string", "replayNonce:string", "taskRevision:object", "acceptedInputs:array", "expectedStateVersion:number", "changedPaths:array", "validationEvidence:array", "tddEvidence:object")
 	requireJSONFields(t, objectField(t, apply, "taskRevision"), "id:string", "digest:string")
 	requireJSONArrayObjectFields(t, apply, "acceptedInputs", "artifactId:string", "revisionId:string", "digest:string")
-	requireJSONArrayObjectFields(t, apply, "proposedChanges", "path:string", "expectedSHA256:string", "noSymlink:bool", "patch:string")
+	requireJSONArrayObjectFields(t, apply, "changedPaths", "path:string", "expectedSHA256:string", "postWriteSHA256:string", "noSymlink:bool")
 	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
 		example := promptJSONExample(t, bundle.agents[name], `{"status"`)
 		requireJSONFields(t, example, "status:string", "candidateContent:string", "evidence:array", "openQuestions:array", "blockers:array")
@@ -171,8 +171,9 @@ func TestGeneratedManagerGeneralVerifierContractClauses(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, clauses := range map[string][]string{
-		managerAgentName:  {"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority", "managed general as the delegated implementation worker", "one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria"},
-		generalAgentName:  {"immediately before each write recheck", "exact readback SHA-256", "do not eliminate TOCTOU risk", "Do not accept revisions, transition phases, or record projections"},
+		managerAgentName:  {"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority", "Route accepted SDD apply directly to vgxness-sdd-apply", "one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria"},
+		generalAgentName:  {"Reject SDD implementation or projection missions", "non-SDD implementation worker"},
+		sddApplyName:      {"Immediately before each write recheck", "exact post-write SHA-256", "do not eliminate TOCTOU risk", "Do not accept revisions, transition phases, or record projections"},
 		verifierAgentName: {"verification remains non-mutating", "Never edit, fix, format, delegate", "A validation command that unexpectedly changes the candidate makes the result INCONCLUSIVE"},
 	} {
 		for _, clause := range clauses {
@@ -459,8 +460,9 @@ func TestGeneratedPermissionMapsAndHoldoutMetadataLeakage(t *testing.T) {
 		t.Fatal(err)
 	}
 	general := map[string]string{"*": "allow", "vgxness_memory_save": "deny", "vgxness_memory_forget": "deny", "vgxness_sdd_create": "deny", "vgxness_sdd_set_interaction_mode": "deny", "vgxness_sdd_save_revision": "deny", "vgxness_sdd_accept_revision": "deny", "vgxness_sdd_transition": "deny", "vgxness_sdd_record_projection": "deny"}
+	apply := map[string]string{"*": "deny", "read": "allow", "grep": "allow", "glob": "allow", "list": "allow", "skill": "allow", "codegraph_explore": "allow", "edit": "allow", "bash": "ask", "question": "deny", "task": "deny", "webfetch": "deny", "websearch": "deny", "vgxness_sdd_list": "allow", "vgxness_sdd_get": "allow", "vgxness_sdd_get_revision": "allow", "vgxness_sdd_list_revisions": "allow", "vgxness_sdd_projection_status": "allow"}
 	reviewer := map[string]string{"*": "deny", "read": "allow", "grep": "allow", "glob": "allow", "list": "allow", "skill": "allow", "codegraph_explore": "allow", "vgxness_memory_search": "allow", "vgxness_memory_get": "allow", "task": "deny"}
-	for name, want := range map[string]map[string]string{managerAgentName: {"*": "allow"}, generalAgentName: general, verifierAgentName: general, reviewRiskName: reviewer, reviewReadabilityName: reviewer, reviewReliabilityName: reviewer, reviewResilienceName: reviewer, reviewRefuterName: reviewer} {
+	for name, want := range map[string]map[string]string{managerAgentName: {"*": "allow"}, generalAgentName: general, verifierAgentName: general, sddApplyName: apply, reviewRiskName: reviewer, reviewReadabilityName: reviewer, reviewReliabilityName: reviewer, reviewResilienceName: reviewer, reviewRefuterName: reviewer} {
 		got, err := parseContractPermissions(bundle.agents[name])
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s permissions=%v err=%v", name, got, err)
@@ -524,7 +526,7 @@ func parseContractPermissions(content []byte) (map[string]string, error) {
 		}
 		key, value, ok := strings.Cut(strings.TrimSpace(line), ": ")
 		key = strings.Trim(key, `"`)
-		if !ok || key == "" || (value != "allow" && value != "deny") || result[key] != "" {
+		if !ok || key == "" || (value != "allow" && value != "ask" && value != "deny") || result[key] != "" {
 			return nil, os.ErrInvalid
 		}
 		result[key] = value

@@ -66,13 +66,18 @@ func codexPackage(options integration.Options) (Package, error) {
 }
 
 func knownPackages() ([]Package, error) {
-	packages := make([]Package, 0, 22)
+	packages := make([]Package, 0, 26)
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			return nil, err
 		}
 		packages = append(packages, current)
+		v10, err := renderActiveV10("v0.0.0", plan)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, v10)
 		v9, err := renderActiveV9("v0.0.0", plan)
 		if err != nil {
 			return nil, err

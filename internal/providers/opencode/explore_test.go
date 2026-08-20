@@ -117,18 +117,15 @@ func TestSDDApplyAndGeneralFailClosedHashBoundHandoffContract(t *testing.T) {
 	testutil.NoError(t, err)
 	apply, general := string(bundle.agents[sddApplyName]), string(bundle.agents[generalAgentName])
 	for _, contract := range []string{
-		"expectedStateVersion", "mission identity and replay nonce", "allowed paths with current content SHA-256 hashes and no-symlink constraints",
+		"expectedStateVersion", "mission identity/replay nonce", "allowed paths with current content SHA-256 hashes and no-symlink constraints",
 		`"missionIdentity"`, `"taskRevision"`, `"acceptedInputs"`, `"expectedStateVersion"`, `"noSymlink"`,
-		"manager validates bindings, state version, paths, hashes, and replay identity",
+		"The manager alone validates lifecycle bindings",
 	} {
 		if !strings.Contains(apply, contract) {
 			t.Errorf("apply contract missing %q", contract)
 		}
 	}
-	for _, contract := range []string{
-		"immediately before each write", "accepted binding", "current stateVersion", "no-symlink", "replay or mission identity", "BLOCKED before writing",
-		"exact readback SHA-256", "do not eliminate TOCTOU", "no atomic host enforcement",
-	} {
+	for _, contract := range []string{"Reject SDD implementation or projection missions", "only vgxness-sdd-apply writes an authorized SDD workspace or projection"} {
 		if !strings.Contains(general, contract) {
 			t.Errorf("general contract missing %q", contract)
 		}
