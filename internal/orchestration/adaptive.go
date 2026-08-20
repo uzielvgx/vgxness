@@ -105,7 +105,10 @@ const BudgetAllAttempts BudgetAccounting = "all-attempts-including-failures-and-
 
 type ExhaustionPolicy string
 
-const ExhaustionHaltAndReport ExhaustionPolicy = "halt-and-report-no-new-call-no-escalation"
+const (
+	ExhaustionHaltAndReport         ExhaustionPolicy = "halt-and-report-no-new-call-no-escalation"
+	ExhaustionCheckpointAndContinue ExhaustionPolicy = "checkpoint-and-continue-with-explicit-user-continuation"
+)
 
 type BudgetKind string
 
@@ -117,7 +120,7 @@ const (
 // AllowsAttempt denies malformed accounting and any new call at exhaustion.
 // Callers count every attempt, including failures and retries, before retrying.
 func (policy ExecutionPolicy) AllowsAttempt(kind BudgetKind, attempts int) bool {
-	if attempts < 0 || policy.BudgetAccounting != BudgetAllAttempts || policy.OnExhaustion != ExhaustionHaltAndReport {
+	if attempts < 0 || policy.BudgetAccounting != BudgetAllAttempts || (policy.OnExhaustion != ExhaustionHaltAndReport && policy.OnExhaustion != ExhaustionCheckpointAndContinue) {
 		return false
 	}
 	switch kind {
@@ -145,13 +148,15 @@ func (classification Classification) Validate() error {
 // PolicyFor maps supplied semantic facts to a bounded execution policy.
 func PolicyFor(classification Classification) (ExecutionPolicy, error) {
 	if err := classification.Validate(); err != nil {
-		return newExecutionPolicy(AdaptiveRouteAssured, 0, 0, true, AuthorizationExplicit, VerificationIndependent), err
+		policy := newExecutionPolicy(AdaptiveRouteAssured, 0, 0, true, AuthorizationExplicit, VerificationIndependent)
+		policy.OnExhaustion = ExhaustionHaltAndReport
+		return policy, err
 	}
 	if classification.Risk == RiskHigh || classification.SideEffect == SideEffectIrreversible {
-		return newExecutionPolicy(AdaptiveRouteAssured, 16, 2, true, AuthorizationExplicit, VerificationIndependent), nil
+		return newExecutionPolicy(AdaptiveRouteAssured, 40, 5, true, AuthorizationExplicit, VerificationIndependent), nil
 	}
 	if classification.Domain == DomainRepository && (classification.Operation == OperationExecute || classification.Operation == OperationModify || classification.Operation == OperationInspect && (classification.Complexity == ComplexityComplex || classification.Risk == RiskMedium)) {
-		return newExecutionPolicy(AdaptiveRouteEngineering, 12, 2, true, authorizationFor(classification.SideEffect), VerificationComprehensive), nil
+		return newExecutionPolicy(AdaptiveRouteEngineering, 30, 5, true, authorizationFor(classification.SideEffect), VerificationComprehensive), nil
 	}
 	if classification.SideEffect == SideEffectLocalWrite || classification.SideEffect == SideEffectExternal {
 		return newExecutionPolicy(AdaptiveRouteAction, 6, 0, false, authorizationFor(classification.SideEffect), VerificationTargeted), nil
@@ -167,7 +172,11 @@ func PolicyFor(classification Classification) (ExecutionPolicy, error) {
 }
 
 func newExecutionPolicy(route AdaptiveRoute, tools, delegations int, todo bool, authorization AuthorizationPolicy, verification VerificationPolicy) ExecutionPolicy {
-	return ExecutionPolicy{Route: route, MaxTools: tools, MaxDelegations: delegations, UseTodo: todo, Authorization: authorization, Verification: verification, BudgetAccounting: BudgetAllAttempts, OnExhaustion: ExhaustionHaltAndReport}
+	exhaustion := ExhaustionHaltAndReport
+	if route == AdaptiveRouteEngineering || route == AdaptiveRouteAssured {
+		exhaustion = ExhaustionCheckpointAndContinue
+	}
+	return ExecutionPolicy{Route: route, MaxTools: tools, MaxDelegations: delegations, UseTodo: todo, Authorization: authorization, Verification: verification, BudgetAccounting: BudgetAllAttempts, OnExhaustion: exhaustion}
 }
 
 func authorizationFor(effect SideEffect) AuthorizationPolicy {

@@ -55,17 +55,17 @@ func TestPolicyForIsProportionalAndDeterministic(t *testing.T) {
 		{
 			"repository diagnosis",
 			Classification{DomainRepository, OperationInspect, ComplexityComplex, SideEffectRead, RiskMedium},
-			expectedExecutionPolicy(ExecutionPolicy{Route: AdaptiveRouteEngineering, MaxTools: 12, MaxDelegations: 2, UseTodo: true, Authorization: AuthorizationNone, Verification: VerificationComprehensive}),
+			expectedExecutionPolicy(ExecutionPolicy{Route: AdaptiveRouteEngineering, MaxTools: 30, MaxDelegations: 5, UseTodo: true, Authorization: AuthorizationNone, Verification: VerificationComprehensive}),
 		},
 		{
 			"repository edit",
 			Classification{DomainRepository, OperationModify, ComplexityComplex, SideEffectLocalWrite, RiskMedium},
-			expectedExecutionPolicy(ExecutionPolicy{Route: AdaptiveRouteEngineering, MaxTools: 12, MaxDelegations: 2, UseTodo: true, Authorization: AuthorizationScoped, Verification: VerificationComprehensive}),
+			expectedExecutionPolicy(ExecutionPolicy{Route: AdaptiveRouteEngineering, MaxTools: 30, MaxDelegations: 5, UseTodo: true, Authorization: AuthorizationScoped, Verification: VerificationComprehensive}),
 		},
 		{
 			"irreversible action escalation",
 			Classification{DomainSystem, OperationExecute, ComplexitySimple, SideEffectIrreversible, RiskMedium},
-			expectedExecutionPolicy(ExecutionPolicy{Route: AdaptiveRouteAssured, MaxTools: 16, MaxDelegations: 2, UseTodo: true, Authorization: AuthorizationExplicit, Verification: VerificationIndependent}),
+			expectedExecutionPolicy(ExecutionPolicy{Route: AdaptiveRouteAssured, MaxTools: 40, MaxDelegations: 5, UseTodo: true, Authorization: AuthorizationExplicit, Verification: VerificationIndependent}),
 		},
 	}
 	for _, test := range tests {
@@ -179,6 +179,24 @@ func TestExecutionBudgetAccountingAndExhaustion(t *testing.T) {
 	}
 }
 
+func TestEngineeringAndAssuredPoliciesSupportFiveAgentWavesAndContinuation(t *testing.T) {
+	for _, classification := range []Classification{
+		{Domain: DomainRepository, Operation: OperationModify, Complexity: ComplexityComplex, SideEffect: SideEffectLocalWrite, Risk: RiskMedium},
+		{Domain: DomainSystem, Operation: OperationExecute, Complexity: ComplexityComplex, SideEffect: SideEffectIrreversible, Risk: RiskHigh},
+	} {
+		policy, err := PolicyFor(classification)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if policy.MaxDelegations != 5 || policy.MaxTools < 25 || policy.OnExhaustion != ExhaustionCheckpointAndContinue {
+			t.Fatalf("policy does not support a resumable five-agent wave: %+v", policy)
+		}
+		if !policy.AllowsAttempt(BudgetDelegation, 4) || policy.AllowsAttempt(BudgetDelegation, 5) || !policy.AllowsAttempt(BudgetDelegation, 0) {
+			t.Fatalf("policy does not expose a fresh caller-owned budget window: %+v", policy)
+		}
+	}
+}
+
 func TestPolicyJSONPreservesDenyControls(t *testing.T) {
 	execution, _ := PolicyFor(Classification{DomainConversation, OperationAnswer, ComplexityTrivial, SideEffectNone, RiskLow})
 	memory, _ := MemoryPolicyFor(MemoryIntentNone, MemoryCandidate{})
@@ -189,6 +207,9 @@ func TestPolicyJSONPreservesDenyControls(t *testing.T) {
 func expectedExecutionPolicy(policy ExecutionPolicy) ExecutionPolicy {
 	policy.BudgetAccounting = BudgetAllAttempts
 	policy.OnExhaustion = ExhaustionHaltAndReport
+	if policy.Route == AdaptiveRouteEngineering || policy.Route == AdaptiveRouteAssured {
+		policy.OnExhaustion = ExhaustionCheckpointAndContinue
+	}
 	return policy
 }
 

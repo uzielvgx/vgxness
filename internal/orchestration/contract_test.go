@@ -50,9 +50,19 @@ func TestContractPolicyProjectsAdaptiveExecutionAndOrthogonalMemory(t *testing.T
 }
 
 func TestContractPolicyProjectsCanonicalNumericBudgets(t *testing.T) {
-	const want = "Canonical budgets: direct 0 tools/0 delegations; assisted simple 3 tools/0 delegations and complex 3 tools/1 delegation; action 6 tools/0 delegations; engineering 12 tools/2 delegations; assured 16 tools/2 delegations."
+	const want = "Canonical budgets: direct 0 tools/0 delegations; assisted simple 3 tools/0 delegations and complex 3 tools/1 delegation; action 6 tools/0 delegations; engineering 30 tools/5 delegations; assured 40 tools/5 delegations."
 	if ContractBudgetPolicy != want || !strings.Contains(ContractPolicy, want) {
 		t.Fatalf("numeric budget projection differs\npolicy: %q\ncontract: %q", ContractBudgetPolicy, ContractPolicy)
+	}
+}
+
+func TestContractLimitsReadOnlyConcurrencyAndResumesBudgetWindows(t *testing.T) {
+	for _, required := range []string{
+		"at most five independent read-only agents concurrently", "never overlap workspace writers", "exhaustion is a checkpoint", "explicit user continuation opens a fresh same-route window", "scope, authorization, lineage, todos, candidate, and child context",
+	} {
+		if !strings.Contains(ContractPolicy, required) {
+			t.Errorf("contract missing %q", required)
+		}
 	}
 }
 

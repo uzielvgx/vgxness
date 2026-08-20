@@ -54,13 +54,13 @@
       "id": "dev-repository-diagnosis", "category": "repository",
       "request": "Diagnose why the repository's focused orchestration test fails and identify the smallest safe correction without editing files.",
       "classification": {"domain":"repository-engineering","operation":"inspect","complexity":"complex","side_effect":"read","risk":"medium"},
-      "expected_policy": {"route":"engineering","max_tools":12,"max_delegations":2,"use_todo":true,"authorization":"none","verification":"comprehensive","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+      "expected_policy": {"route":"engineering","max_tools":30,"max_delegations":5,"use_todo":true,"authorization":"none","verification":"comprehensive","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"checkpoint-and-continue-with-explicit-user-continuation"}
     },
     {
       "id": "dev-repository-edit", "category": "repository",
       "request": "Update the repository parser and its focused regression test, then run the authorized checks.",
       "classification": {"domain":"repository-engineering","operation":"modify","complexity":"complex","side_effect":"local-write","risk":"medium"},
-      "expected_policy": {"route":"engineering","max_tools":12,"max_delegations":2,"use_todo":true,"authorization":"scoped","verification":"comprehensive","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"halt-and-report-no-new-call-no-escalation"}
+      "expected_policy": {"route":"engineering","max_tools":30,"max_delegations":5,"use_todo":true,"authorization":"scoped","verification":"comprehensive","budget_accounting":"all-attempts-including-failures-and-retries","on_exhaustion":"checkpoint-and-continue-with-explicit-user-continuation"}
     }
   ]
 }
