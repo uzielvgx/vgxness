@@ -51,9 +51,10 @@ const (
 
 // Diagnostic contains only stable, privacy-safe client failure metadata.
 type Diagnostic struct {
-	Operation  Operation  `json:"operation"`
-	HTTPStatus int        `json:"httpStatus,omitempty"`
-	Class      ErrorClass `json:"class"`
+	Operation  Operation         `json:"operation"`
+	HTTPStatus int               `json:"httpStatus,omitempty"`
+	Class      ErrorClass        `json:"class"`
+	Code       syncapi.ErrorCode `json:"code,omitempty"`
 }
 
 // diagnosticError is private so its state cannot be forged outside this package.
@@ -61,6 +62,7 @@ type diagnosticError struct {
 	operation Operation
 	status    int
 	class     ErrorClass
+	code      syncapi.ErrorCode
 	cause     error
 }
 
@@ -84,10 +86,10 @@ func NewDiagnosticError(operation Operation, class ErrorClass, status int, cause
 // DiagnosticFrom extracts a validated copy of sanitized metadata from an error chain.
 func DiagnosticFrom(err error) (Diagnostic, bool) {
 	var diagnostic *diagnosticError
-	if !errors.As(err, &diagnostic) || diagnostic == nil || !validOperation(diagnostic.operation) || !validErrorClass(diagnostic.class) || diagnostic.status < 0 || diagnostic.status > 999 || canonicalCause(diagnostic.cause) == nil {
+	if !errors.As(err, &diagnostic) || diagnostic == nil || !validOperation(diagnostic.operation) || !validErrorClass(diagnostic.class) || diagnostic.status < 0 || diagnostic.status > 999 || diagnostic.code != "" && !validRemoteCode(diagnostic.code) || canonicalCause(diagnostic.cause) == nil {
 		return Diagnostic{}, false
 	}
-	return Diagnostic{Operation: diagnostic.operation, Class: diagnostic.class, HTTPStatus: diagnostic.status}, true
+	return Diagnostic{Operation: diagnostic.operation, Class: diagnostic.class, HTTPStatus: diagnostic.status, Code: diagnostic.code}, true
 }
 
 func canonicalCause(cause error) error {
@@ -291,11 +293,11 @@ func (client *Client) pushOnce(ctx context.Context, credential string, push sync
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized:
-		return nil, false, NewDiagnosticError(OperationPush, ErrorClassAuthentication, response.StatusCode, ErrUnauthorized)
+		return nil, false, newRemoteHTTPError(OperationPush, response, ErrorClassAuthentication, ErrUnauthorized)
 	case http.StatusServiceUnavailable:
-		return nil, true, NewDiagnosticError(OperationPush, ErrorClassHTTPStatus, response.StatusCode, ErrUnavailable)
+		return nil, true, newRemoteHTTPError(OperationPush, response, ErrorClassHTTPStatus, ErrUnavailable)
 	default:
-		return nil, false, NewDiagnosticError(OperationPush, ErrorClassHTTPStatus, response.StatusCode, ErrRemote)
+		return nil, false, newRemoteHTTPError(OperationPush, response, ErrorClassHTTPStatus, ErrRemote)
 	}
 	if response.Body == nil {
 		return nil, false, NewDiagnosticError(OperationPush, ErrorClassResponseInvalid, response.StatusCode, ErrRemote)
@@ -349,16 +351,16 @@ func (client *Client) get(ctx context.Context, operation Operation, path string,
 		return NewDiagnosticError(operation, ErrorClassResponseInvalid, 0, ErrRemote)
 	}
 	if response.StatusCode == http.StatusNotFound && path == "/v1/sync/discovery" {
-		return NewDiagnosticError(operation, ErrorClassHTTPStatus, response.StatusCode, ErrDiscoveryUnsupported)
+		return newRemoteHTTPError(operation, response, ErrorClassHTTPStatus, ErrDiscoveryUnsupported)
 	}
 	if response.StatusCode == http.StatusUnauthorized {
-		return NewDiagnosticError(operation, ErrorClassAuthentication, response.StatusCode, ErrUnauthorized)
+		return newRemoteHTTPError(operation, response, ErrorClassAuthentication, ErrUnauthorized)
 	}
 	if response.StatusCode == http.StatusServiceUnavailable {
-		return NewDiagnosticError(operation, ErrorClassHTTPStatus, response.StatusCode, ErrUnavailable)
+		return newRemoteHTTPError(operation, response, ErrorClassHTTPStatus, ErrUnavailable)
 	}
 	if response.StatusCode != http.StatusOK {
-		return NewDiagnosticError(operation, ErrorClassHTTPStatus, response.StatusCode, ErrRemote)
+		return newRemoteHTTPError(operation, response, ErrorClassHTTPStatus, ErrRemote)
 	}
 	if response.Body == nil {
 		return NewDiagnosticError(operation, ErrorClassResponseInvalid, response.StatusCode, ErrRemote)
@@ -374,6 +376,36 @@ func (client *Client) get(ctx context.Context, operation Operation, path string,
 		return NewDiagnosticError(operation, ErrorClassResponseInvalid, response.StatusCode, ErrRemote)
 	}
 	return nil
+}
+
+func newRemoteHTTPError(operation Operation, response *http.Response, class ErrorClass, cause error) error {
+	err := NewDiagnosticError(operation, class, response.StatusCode, cause)
+	if response.Body == nil || len(response.Header.Values("Content-Type")) != 1 || response.Header.Get("Content-Type") != mediaType {
+		return err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, syncapi.MaxBodyBytes+1))
+	if readErr != nil || len(body) > syncapi.MaxBodyBytes {
+		return err
+	}
+	var payload struct {
+		ProtocolVersion int               `json:"protocol_version"`
+		Error           syncapi.ErrorCode `json:"error"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&payload) != nil || decoder.Decode(&struct{}{}) != io.EOF || payload.ProtocolVersion != syncapi.ProtocolVersion || !validRemoteCode(payload.Error) {
+		return err
+	}
+	return &diagnosticError{operation: operation, class: class, status: response.StatusCode, code: payload.Error, cause: canonicalCause(cause)}
+}
+
+func validRemoteCode(code syncapi.ErrorCode) bool {
+	switch code {
+	case syncapi.ErrorInvalidInput, syncapi.ErrorLimitExceeded, syncapi.ErrorUnsupportedVersion, syncapi.ErrorUnsupportedSemantic, syncapi.ErrorUnavailable, syncapi.ErrorUnauthorized, syncapi.ErrorRevoked, syncapi.ErrorConflict, syncapi.ErrorHistory, syncapi.ErrorCursor:
+		return true
+	default:
+		return false
+	}
 }
 
 func contextError(ctx context.Context, err error) error {

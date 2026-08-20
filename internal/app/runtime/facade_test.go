@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/config"
@@ -42,6 +44,22 @@ func TestMemoryFacadePersistsAndReadsEntries(t *testing.T) {
 	forgotten, err := runtime.Forget(ctx, opts, memory.Forget{ID: entry.ID, Project: "project", Scope: memory.ScopeProject})
 	if err != nil || forgotten.State != memory.StateArchived {
 		t.Fatalf("forget = %+v, %v", forgotten, err)
+	}
+}
+
+func TestMemoryReadOnlyMutationsDoNotCreateStorage(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "absent-store")
+	runtime := NewMemory("test", true)
+	opts := config.Options{StorageRoot: root}
+	remember := memory.Remember{Content: "must not persist", Project: "project", Scope: memory.ScopeProject}
+	if _, err := runtime.Remember(context.Background(), opts, remember); !errors.Is(err, memory.ErrInvalid) {
+		t.Fatalf("remember error = %v, want invalid", err)
+	}
+	if _, err := runtime.Forget(context.Background(), opts, memory.Forget{ID: "entry", Project: "project", Scope: memory.ScopeProject}); !errors.Is(err, memory.ErrInvalid) {
+		t.Fatalf("forget error = %v, want invalid", err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("read-only mutation created storage root: %v", err)
 	}
 }
 

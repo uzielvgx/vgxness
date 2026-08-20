@@ -285,6 +285,20 @@ func TestDiagnosticErrorsAreSanitizedAndPreserveSentinels(t *testing.T) {
 	}
 }
 
+func TestRemoteStructuredErrorCodeIsRetainedInDiagnostic(t *testing.T) {
+	client, err := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusConflict, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(`{"protocol_version":1,"error":"conflict"}`))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Capabilities(context.Background(), "secret-credential")
+	diagnostic, ok := DiagnosticFrom(err)
+	if !errors.Is(err, ErrRemote) || !ok || diagnostic.HTTPStatus != http.StatusConflict || diagnostic.Code != syncapi.ErrorConflict {
+		t.Fatalf("err=%v diagnostic=%+v ok=%v", err, diagnostic, ok)
+	}
+}
+
 func TestDiagnosticRejectsForgedStateAndCanonicalizesCause(t *testing.T) {
 	secret := "Bearer secret https://private.example/v1/sync/pull?project_id=project-secret body=private"
 	forged := &diagnosticError{operation: Operation(secret), class: ErrorClass(secret), status: 2000, cause: errors.New(secret)}

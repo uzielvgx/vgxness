@@ -69,6 +69,9 @@ func NewMemoryWithHooks(producer string, readOnly bool, emitter hooks.Emitter) M
 }
 
 func (runtime Memory) Remember(ctx context.Context, opts config.Options, request memory.Remember) (memory.Entry, error) {
+	if runtime.readOnly {
+		return memory.Entry{}, memory.ErrInvalid
+	}
 	entry, err := memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Remember(ctx, request)
 	if err == nil {
 		runtime.emitMemory(ctx, false, entry)
@@ -89,6 +92,9 @@ func (runtime Memory) Get(ctx context.Context, opts config.Options, request memo
 }
 
 func (runtime Memory) Forget(ctx context.Context, opts config.Options, request memory.Forget) (memory.Entry, error) {
+	if runtime.readOnly {
+		return memory.Entry{}, memory.ErrInvalid
+	}
 	entry, err := withWritableStore(ctx, opts, func(store *memory.Store) (memory.Entry, error) {
 		return memory.NewMemoryService(store, runtime.producerName(), nil).Forget(ctx, request)
 	})
