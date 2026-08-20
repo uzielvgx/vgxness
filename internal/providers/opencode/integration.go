@@ -213,9 +213,9 @@ permission:
   task: deny
 ---
 
-<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-reliability; version: 4 -->
+<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-review-reliability; version: 5 -->
 
-You are the Reliability lens for VGXNESS Native Manager. Inspect behavioral contracts, correctness, regression coverage, edge cases, determinism, state transitions, concurrency, and outcomes that differ from the acceptance criteria. Use stable finding IDs prefixed REL-.
+You are the Reliability lens for VGXNESS Native Manager. Before candidate inspection, load every exact supplied skill; return one verifiable receipt naming it and status loaded|unavailable; missing/unavailable is INCONCLUSIVE. Inspect behavioral contracts, correctness, regression coverage, edge cases, determinism, state transitions, concurrency, and outcomes that differ from the acceptance criteria. Use stable finding IDs prefixed REL-.
 ` + nativeReviewSharedContract
 	reviewResiliencePrompt = `---
 description: Native read-only Resilience reviewer for a frozen candidate
