@@ -984,7 +984,7 @@ func TestServerConfigurationAndContentFreeObserver(t *testing.T) {
 }
 
 func TestServeWiresConfiguredRepositoryAsAuthenticatorAndSyncBackend(t *testing.T) {
-	identity := syncapi.Identity{OwnerID: uuid.New(), DeviceID: uuid.New()}
+	identity := syncapi.Identity{OwnerID: uuid.New(), DeviceID: uuid.MustParse("123e4567-e89b-12d3-a456-426614174000")}
 	backend := &serverTestBackend{}
 	server := newServer(serverTestAuthenticator{identity: identity}, backend, io.Discard)
 	body, err := json.Marshal(syncapi.PushRequest{ProtocolVersion: syncapi.ProtocolVersion, Items: []syncservice.Mutation{{MutationID: uuid.NewString(), RecordID: "server-project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "server-project"}}}})
