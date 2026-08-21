@@ -8,8 +8,21 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+const (
+	windowsErrorAccessDenied     syscall.Errno = 5
+	windowsErrorSharingViolation syscall.Errno = 32
+)
+
+// windowsRenameBlocked recognizes only the Windows errors caused by renaming
+// an opened root; unrelated rename failures must propagate and fail the test.
+func windowsRenameBlocked(err error) bool {
+	return runtime.GOOS == "windows" &&
+		(errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation))
+}
 
 func TestRestoreReturnsPublishedPartialResultOnDurabilityFailure(t *testing.T) {
 	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
@@ -84,7 +97,7 @@ func TestRestoreRejectsSourceReplacementAfterPublication(t *testing.T) {
 	replacementBlocked := false
 	engine.syncRestoreDirectories = func(*os.Root, string) error {
 		if err := os.Rename(engine.sourceRoot, engine.sourceRoot+"-old"); err != nil {
-			if runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission) {
+			if windowsRenameBlocked(err) {
 				replacementBlocked = true
 				return nil
 			}
@@ -147,7 +160,7 @@ func TestCreateRejectsBackupRootReplacementDuringFinalSync(t *testing.T) {
 	replacementBlocked := false
 	engine.syncBackupRoot = func(*os.Root) error {
 		if err := os.Rename(backup, backup+"-old"); err != nil {
-			if runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission) {
+			if windowsRenameBlocked(err) {
 				replacementBlocked = true
 				return nil
 			}
