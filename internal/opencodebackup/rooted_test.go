@@ -29,10 +29,11 @@ func TestVerifyDirectoryHoldsSnapshotAcrossReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ref.Close()
-	if err := os.Rename(snapshot.Directory, snapshot.Directory+"-old"); err != nil {
+	snapshotPath := filepath.Join(engine.backupRoot, snapshot.Manifest.SnapshotID)
+	if err := os.Rename(snapshotPath, snapshotPath+"-old"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(snapshot.Directory, 0o700); err != nil {
+	if err := os.Mkdir(snapshotPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	verified, err := verifyDirectory(context.Background(), ref.snapshot, snapshot.Manifest.SnapshotID)
@@ -48,10 +49,11 @@ func TestSnapshotRefRejectsChildReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ref.Close()
-	if err := os.Rename(snapshot.Directory, snapshot.Directory+"-old"); err != nil {
+	snapshotPath := filepath.Join(engine.backupRoot, snapshot.Manifest.SnapshotID)
+	if err := os.Rename(snapshotPath, snapshotPath+"-old"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(snapshot.Directory, 0o700); err != nil {
+	if err := os.Mkdir(snapshotPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := ref.revalidate(snapshot.Manifest.SnapshotID); !errors.Is(err, ErrConflict) {
