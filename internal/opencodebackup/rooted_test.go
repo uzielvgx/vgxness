@@ -41,6 +41,24 @@ func TestVerifyDirectoryHoldsSnapshotAcrossReplacement(t *testing.T) {
 	}
 }
 
+func TestSnapshotRefRejectsChildReplacement(t *testing.T) {
+	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
+	ref, err := openSnapshot(engine.backupAnchor, snapshot.Manifest.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ref.Close()
+	if err := os.Rename(snapshot.Directory, snapshot.Directory+"-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(snapshot.Directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ref.revalidate(snapshot.Manifest.SnapshotID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("revalidate() error=%v, want ErrConflict", err)
+	}
+}
+
 func TestReserveSnapshotReturnsConflictOnCollision(t *testing.T) {
 	directory := t.TempDir()
 	root, err := os.OpenRoot(directory)

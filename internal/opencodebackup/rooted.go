@@ -160,6 +160,7 @@ func (a *rootAnchor) open() (*os.Root, error) {
 type snapshotRef struct {
 	backup   *os.Root
 	snapshot *os.Root
+	info     os.FileInfo
 	mu       sync.Mutex
 	closed   bool
 	closeErr error
@@ -185,7 +186,28 @@ func openSnapshot(backup *rootAnchor, snapshotID string) (*snapshotRef, error) {
 	if statErr != nil || !opened.IsDir() || !os.SameFile(info, opened) {
 		return nil, errors.Join(corrupt("open rooted snapshot", snapshotID, statErr), snapshotRoot.Close(), backupRoot.Close())
 	}
-	return &snapshotRef{backup: backupRoot, snapshot: snapshotRoot}, nil
+	return &snapshotRef{backup: backupRoot, snapshot: snapshotRoot, info: info}, nil
+}
+
+func (r *snapshotRef) revalidate(snapshotID string) error {
+	info, err := r.backup.Lstat(snapshotID)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !os.SameFile(r.info, info) {
+		return &Error{Kind: ErrConflict, Op: "revalidate snapshot", Path: snapshotID, Err: err}
+	}
+	opened, err := r.snapshot.Stat(".")
+	if err != nil || !opened.IsDir() || !os.SameFile(r.info, opened) {
+		return &Error{Kind: ErrConflict, Op: "revalidate held snapshot", Path: snapshotID, Err: err}
+	}
+	probe, err := r.backup.OpenRoot(snapshotID)
+	if err != nil {
+		return &Error{Kind: ErrConflict, Op: "open snapshot", Path: snapshotID, Err: err}
+	}
+	probed, statErr := probe.Stat(".")
+	closeErr := probe.Close()
+	if statErr != nil || closeErr != nil || !probed.IsDir() || !os.SameFile(r.info, probed) {
+		return errors.Join(&Error{Kind: ErrConflict, Op: "revalidate snapshot", Path: snapshotID, Err: statErr}, closeErr)
+	}
+	return nil
 }
 
 func (r *snapshotRef) Close() error {

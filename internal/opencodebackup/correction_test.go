@@ -306,6 +306,51 @@ func TestCreateRejectsPinnedSourceReplacement(t *testing.T) {
 	}
 }
 
+func TestPreviewRejectsPinnedSourceReplacement(t *testing.T) {
+	parent := t.TempDir()
+	source, backup := filepath.Join(parent, "source"), filepath.Join(parent, "backup")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "file"), []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(Options{SourceRoot: source, BackupRoot: backup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := engine.Create(context.Background(), ModeFull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(source, filepath.Join(parent, "old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.PreviewRestore(context.Background(), snapshot.Manifest.SnapshotID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("PreviewRestore() error=%v, want ErrConflict", err)
+	}
+}
+
+func TestOpenRestoreRefsCancellationDoesNotCreateBackupRoot(t *testing.T) {
+	source := canonicalCorrectionPath(t, t.TempDir())
+	backup := filepath.Join(canonicalCorrectionPath(t, t.TempDir()), "backup")
+	engine, err := New(Options{SourceRoot: source, BackupRoot: backup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if refs, err := engine.openRestoreRefs(ctx, "20260820T000000.000000000Z-0123456789abcdef"); refs != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("openRestoreRefs() = %v, %v; want nil, cancellation", refs, err)
+	}
+	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled ref opening created backup root: %v", err)
+	}
+}
+
 func correctionSnapshot(t *testing.T, name, contents string) (*Engine, Snapshot) {
 	t.Helper()
 	source := canonicalCorrectionPath(t, t.TempDir())
