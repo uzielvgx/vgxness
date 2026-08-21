@@ -117,7 +117,7 @@ func TestCreateRejectsSymlinks(t *testing.T) {
 	})
 }
 
-func TestCreateCleansTemporarySnapshotsOnCancellationAndFailure(t *testing.T) {
+func TestCreateAvoidsReservationOnCancellationAndRetainsIncompleteFailure(t *testing.T) {
 	t.Run("cancelled", func(t *testing.T) {
 		source := t.TempDir()
 		writeFile(t, source, "file", strings.Repeat("x", 1024), 0o600)
@@ -142,7 +142,17 @@ func TestCreateCleansTemporarySnapshotsOnCancellationAndFailure(t *testing.T) {
 		if _, err := engine.Create(context.Background(), opencodebackup.ModeFull); err == nil {
 			t.Fatal("Create() unexpectedly succeeded")
 		}
-		assertDirectoryEmpty(t, backup)
+		summaries, listErr := engine.List(context.Background())
+		if listErr != nil || len(summaries) != 0 {
+			t.Fatalf("List() = %v, %v", summaries, listErr)
+		}
+		entries, readErr := os.ReadDir(backup)
+		if readErr != nil || len(entries) != 1 || !entries[0].IsDir() {
+			t.Fatalf("failed reservation missing: %v, %v", entries, readErr)
+		}
+		if _, verifyErr := engine.Verify(context.Background(), entries[0].Name()); !errors.Is(verifyErr, opencodebackup.ErrCorrupt) {
+			t.Fatalf("Verify() error = %v, want ErrCorrupt", verifyErr)
+		}
 	})
 }
 
@@ -297,6 +307,19 @@ func TestListDoesNotCreateBackupRootAfterCancellation(t *testing.T) {
 	}
 	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cancelled List created backup root: %v", err)
+	}
+}
+
+func TestVerifyDoesNotCreateBackupRootAfterCancellation(t *testing.T) {
+	source := t.TempDir()
+	engine, backup := newEngine(t, source, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := engine.Verify(ctx, "20260820T000000.000000000Z-0123456789abcdef"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Verify() error = %v, want context cancellation", err)
+	}
+	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled Verify created backup root: %v", err)
 	}
 }
 

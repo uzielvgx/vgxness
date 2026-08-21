@@ -3,6 +3,7 @@ package opencodebackup
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,7 +110,7 @@ func TestCreateReturnsRetainedSnapshotOnPublicationSyncFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	syncErr := errors.New("injected publication sync failure")
-	engine.syncPublishedSnapshot = func(string) error { return syncErr }
+	engine.syncBackupRoot = func(*os.Root) error { return syncErr }
 	snapshot, err := engine.Create(context.Background(), ModeFull)
 	if !errors.Is(err, syncErr) || snapshot.Manifest.SnapshotID == "" || snapshot.Directory == "" {
 		t.Fatalf("Create()=%+v, %v", snapshot, err)
@@ -120,16 +121,116 @@ func TestCreateReturnsRetainedSnapshotOnPublicationSyncFailure(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsBackupRootReplacementDuringFinalSync(t *testing.T) {
+	source := canonicalCorrectionPath(t, t.TempDir())
+	backup := filepath.Join(canonicalCorrectionPath(t, t.TempDir()), "backup")
+	if err := os.WriteFile(filepath.Join(source, "file"), []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(Options{SourceRoot: source, BackupRoot: backup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.syncBackupRoot = func(*os.Root) error {
+		if err := os.Rename(backup, backup+"-old"); err != nil {
+			return err
+		}
+		return os.Mkdir(backup, 0o700)
+	}
+	snapshot, err := engine.Create(context.Background(), ModeFull)
+	if !errors.Is(err, ErrConflict) || snapshot.Directory != "" {
+		t.Fatalf("Create() = %+v, %v; want empty snapshot, ErrConflict", snapshot, err)
+	}
+}
+
+func TestCreateRejectsSnapshotReplacementDuringFinalSync(t *testing.T) {
+	source := canonicalCorrectionPath(t, t.TempDir())
+	backup := filepath.Join(canonicalCorrectionPath(t, t.TempDir()), "backup")
+	if err := os.WriteFile(filepath.Join(source, "file"), []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(Options{SourceRoot: source, BackupRoot: backup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.syncBackupRoot = func(root *os.Root) error {
+		entries, err := fs.ReadDir(root.FS(), ".")
+		if err != nil || len(entries) != 1 {
+			return errors.Join(err, ErrConflict)
+		}
+		id := entries[0].Name()
+		if err := root.Rename(id, "replaced"); err != nil {
+			return err
+		}
+		return root.Mkdir(id, 0o700)
+	}
+	snapshot, err := engine.Create(context.Background(), ModeFull)
+	if !errors.Is(err, ErrConflict) || snapshot.Directory != "" {
+		t.Fatalf("Create() = %+v, %v; want empty snapshot, ErrConflict", snapshot, err)
+	}
+}
+
 func TestCollectChecksCancellationDuringDiscovery(t *testing.T) {
 	root := canonicalCorrectionPath(t, t.TempDir())
 	engine := &Engine{sourceRoot: root, managedPaths: []string{"a", "b"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := engine.collect(ctx, ModeManaged); !errors.Is(err, context.Canceled) {
+	if _, err := engine.collect(ctx, nil, ModeManaged); !errors.Is(err, context.Canceled) {
 		t.Fatalf("managed collect error=%v", err)
 	}
-	if _, err := engine.collect(ctx, ModeFull); !errors.Is(err, context.Canceled) {
+	if _, err := engine.collect(ctx, nil, ModeFull); !errors.Is(err, context.Canceled) {
 		t.Fatalf("full collect error=%v", err)
+	}
+}
+
+func TestListSkipsIncompleteReservationsWithoutDeletingThem(t *testing.T) {
+	for name, mark := range map[string]bool{"empty": false, "marked": true} {
+		t.Run(name, func(t *testing.T) {
+			source := canonicalCorrectionPath(t, t.TempDir())
+			backup := filepath.Join(canonicalCorrectionPath(t, t.TempDir()), "backup")
+			engine, err := New(Options{SourceRoot: source, BackupRoot: backup})
+			if err != nil {
+				t.Fatal(err)
+			}
+			anchor, err := engine.backupRootAnchor()
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := anchor.open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			id := "20260820T000000.000000000Z-0123456789abcdef"
+			if err := root.Mkdir(id, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if mark {
+				snapshot, err := root.OpenRoot(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file, err := snapshot.OpenFile(".incomplete", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+				if err == nil {
+					err = file.Sync()
+				}
+				if closeErr := file.Close(); err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if summaries, err := engine.List(context.Background()); err != nil || len(summaries) != 0 {
+				t.Fatalf("List() = %v, %v", summaries, err)
+			}
+			if _, err := engine.Verify(context.Background(), id); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("Verify() error=%v, want ErrCorrupt", err)
+			}
+			if info, err := root.Lstat(id); err != nil || !info.IsDir() {
+				t.Fatalf("incomplete reservation removed: %v, %v", info, err)
+			}
+		})
 	}
 }
 
@@ -139,6 +240,49 @@ func TestManifestRejectsExplicitEmptyLauncherPaths(t *testing.T) {
 		if err := requireManifestFields([]byte(document)); err == nil {
 			t.Fatalf("explicit empty %s was accepted", field)
 		}
+	}
+}
+
+func TestNewRejectsPhysicalRootAliasesAndOverlap(t *testing.T) {
+	parent := t.TempDir()
+	source := filepath.Join(parent, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(parent, "alias")
+	if err := os.Symlink(source, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	for name, backup := range map[string]string{"same alias": alias, "child through alias": filepath.Join(alias, "backup")} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := New(Options{SourceRoot: source, BackupRoot: backup}); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("New() error=%v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestCreateRejectsPinnedSourceReplacement(t *testing.T) {
+	parent := t.TempDir()
+	source, backup := filepath.Join(parent, "source"), filepath.Join(parent, "backup")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "file"), []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(Options{SourceRoot: source, BackupRoot: backup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(source, filepath.Join(parent, "old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Create(context.Background(), ModeFull); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Create() error=%v, want ErrConflict", err)
 	}
 }
 
