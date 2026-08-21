@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -131,13 +132,32 @@ func TestCreateRejectsBackupRootReplacementDuringFinalSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	replacementBlocked := false
 	engine.syncBackupRoot = func(*os.Root) error {
 		if err := os.Rename(backup, backup+"-old"); err != nil {
+			if runtime.GOOS == "windows" {
+				replacementBlocked = true
+				return nil
+			}
 			return err
 		}
 		return os.Mkdir(backup, 0o700)
 	}
 	snapshot, err := engine.Create(context.Background(), ModeFull)
+	if replacementBlocked {
+		if err != nil || snapshot.Manifest.SnapshotID == "" {
+			t.Fatalf("Create() = %+v, %v; want retained verified snapshot", snapshot, err)
+		}
+		info, statErr := os.Lstat(backup)
+		if statErr != nil || !os.SameFile(engine.backupAnchor.info, info) {
+			t.Fatalf("backup root identity changed: %v", statErr)
+		}
+		verified, verifyErr := engine.Verify(context.Background(), snapshot.Manifest.SnapshotID)
+		if verifyErr != nil || verified.Manifest.SnapshotID != snapshot.Manifest.SnapshotID {
+			t.Fatalf("retained snapshot did not verify: %+v, %v", verified, verifyErr)
+		}
+		return
+	}
 	if !errors.Is(err, ErrConflict) || snapshot.Directory != "" {
 		t.Fatalf("Create() = %+v, %v; want empty snapshot, ErrConflict", snapshot, err)
 	}
