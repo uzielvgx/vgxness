@@ -6,12 +6,26 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
+
+const (
+	windowsErrorAccessDenied     syscall.Errno = 5
+	windowsErrorSharingViolation syscall.Errno = 32
+)
+
+// windowsRootRenameBlocked recognizes only Windows errors caused by renaming
+// an opened root; unrelated rename failures must propagate and fail the test.
+func windowsRootRenameBlocked(err error) bool {
+	return runtime.GOOS == "windows" &&
+		(errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation))
+}
 
 func TestKnownPackagesOrderCurrentThenV10ThenV9ForEveryPlanAndRetainOlderPredecessors(t *testing.T) {
 	known, err := knownPackages()
@@ -354,12 +368,12 @@ func TestIntegrationInstallAndIdempotence(t *testing.T) {
 func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) {
 	for _, test := range []struct {
 		name string
-		open func(*testing.T, string, *Integration)
+		open func(*testing.T, string, *Integration, *bool)
 		want error
 	}{
 		{
 			name: "replacement before open fails closed",
-			open: func(t *testing.T, root string, service *Integration) {
+			open: func(t *testing.T, root string, service *Integration, replacementBlocked *bool) {
 				t.Helper()
 				replaced := root + "-protected"
 				require(t, os.Rename(root, replaced) == nil)
@@ -369,7 +383,7 @@ func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) 
 		},
 		{
 			name: "replacement after open cannot redirect writes",
-			open: func(t *testing.T, root string, service *Integration) {
+			open: func(t *testing.T, root string, service *Integration, replacementBlocked *bool) {
 				t.Helper()
 				service.open = func(ctx context.Context, options integration.Options, create bool) (*Root, error) {
 					held, err := OpenRoot(ctx, options, create)
@@ -378,6 +392,17 @@ func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) 
 					}
 					prior := root + "-protected"
 					if err := os.Rename(root, prior); err != nil {
+						if windowsRootRenameBlocked(err) {
+							heldInfo, heldErr := held.fs.Lstat(".")
+							rootInfo, rootErr := os.Lstat(root)
+							_, priorErr := os.Lstat(prior)
+							if heldErr != nil || rootErr != nil || !os.SameFile(heldInfo, rootInfo) || !errors.Is(priorErr, os.ErrNotExist) {
+								_ = held.Close()
+								t.Fatalf("blocked replacement did not retain held root: held=%v root=%v prior=%v", heldErr, rootErr, priorErr)
+							}
+							*replacementBlocked = true
+							return held, nil
+						}
 						_ = held.Close()
 						return nil, err
 					}
@@ -401,7 +426,8 @@ func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) 
 			info, err := sourceRootIdentity(root)
 			require(t, err == nil)
 			service := NewIntegration()
-			test.open(t, root, service)
+			replacementBlocked := false
+			test.open(t, root, service, &replacementBlocked)
 
 			result, err := service.InstallProtected(context.Background(), integration.Options{ConfigDir: root}, sourceIdentity{info: info})
 			if test.want != nil {
@@ -412,6 +438,13 @@ func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) 
 			}
 			if err != nil || result.State != integration.StateInstalled {
 				t.Fatalf("InstallProtected() = %+v, %v", result, err)
+			}
+			if replacementBlocked {
+				_, originalErr := os.Stat(filepath.Join(root, "AGENTS.md"))
+				require(t, originalErr == nil)
+				_, priorErr := os.Stat(filepath.Join(root+"-protected", "AGENTS.md"))
+				require(t, errors.Is(priorErr, os.ErrNotExist))
+				return
 			}
 			_, replacementErr := os.Stat(filepath.Join(root, "AGENTS.md"))
 			require(t, errors.Is(replacementErr, os.ErrNotExist))
