@@ -107,9 +107,8 @@ type Summary struct {
 }
 
 type Snapshot struct {
-	Manifest  Manifest
-	Summary   Summary
-	Directory string
+	Manifest Manifest
+	Summary  Summary
 }
 
 type RestoreRequest struct {

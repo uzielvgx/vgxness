@@ -8,7 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
+	"path"
 	"runtime"
 	"strings"
 )
@@ -98,6 +98,10 @@ func (e *Engine) validateRestoreRefs(ctx context.Context, refs *restoreRefs, sna
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	held, err := refs.source.Stat(".")
+	if err != nil || !held.IsDir() || !os.SameFile(e.sourceAnchor.info, held) {
+		return &Error{Kind: ErrConflict, Op: "revalidate held restore source", Path: e.sourceRoot, Err: err}
+	}
 	source, err := e.sourceAnchor.open()
 	if err != nil {
 		return err
@@ -129,10 +133,6 @@ func (e *Engine) Restore(ctx context.Context, request RestoreRequest) (RestoreRe
 	if len(request.ReplaceConflicts) != 0 {
 		return RestoreResult{}, unsupported("replace conflicts", "", nil)
 	}
-	snapshot, err := e.Verify(ctx, request.SnapshotID)
-	if err != nil {
-		return RestoreResult{}, err
-	}
 	include := make(map[string]struct{}, len(request.IncludePaths))
 	for _, relative := range request.IncludePaths {
 		if err := validateRelativePath(relative); err != nil {
@@ -142,6 +142,15 @@ func (e *Engine) Restore(ctx context.Context, request RestoreRequest) (RestoreRe
 			return RestoreResult{}, invalid("validate included restore path", relative, errors.New("duplicate path"))
 		}
 		include[relative] = struct{}{}
+	}
+	refs, err := e.openRestoreRefs(ctx, request.SnapshotID)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	defer refs.Close()
+	snapshot, err := e.verifySnapshotRef(ctx, refs.snapshot, request.SnapshotID)
+	if err != nil {
+		return RestoreResult{}, err
 	}
 	available := make(map[string]struct{}, len(snapshot.Manifest.Entries))
 	for _, entry := range snapshot.Manifest.Entries {
@@ -153,7 +162,7 @@ func (e *Engine) Restore(ctx context.Context, request RestoreRequest) (RestoreRe
 		}
 	}
 	preview, observations, err := e.previewWithObservations(ctx, snapshot, func(ctx context.Context, entry Entry) (observation, error) {
-		return observeDestination(ctx, e.sourceRoot, entry)
+		return observeDestinationAt(ctx, refs.source, entry)
 	})
 	if err != nil {
 		return RestoreResult{}, err
@@ -178,7 +187,7 @@ func (e *Engine) Restore(ctx context.Context, request RestoreRequest) (RestoreRe
 		observed := byPath[entry.Path]
 		switch observed.State {
 		case "missing":
-			published, err := e.restoreMissing(ctx, snapshot, entry)
+			published, err := e.restoreMissing(ctx, refs, entry)
 			if published {
 				result.Created++
 			}
@@ -190,6 +199,9 @@ func (e *Engine) Restore(ctx context.Context, request RestoreRequest) (RestoreRe
 		default:
 			result.Unresolved = append(result.Unresolved, entry.Path)
 		}
+	}
+	if err := e.validateRestoreRefs(ctx, refs, request.SnapshotID); err != nil {
+		return result, err
 	}
 	return result, nil
 }
@@ -285,105 +297,49 @@ func observeDestinationAt(ctx context.Context, root *os.Root, entry Entry) (obse
 	return observation{}, invalid("observe restore destination", entry.Path, nil)
 }
 
-func observeDestination(ctx context.Context, root string, entry Entry) (observation, error) {
-	if err := inspectExistingAncestors(root); err != nil {
-		return observation{}, unsupported("inspect restore root", root, err)
-	}
-	observed := observation{Path: entry.Path}
-	current := root
-	components := strings.Split(entry.Path, "/")
-	for index, component := range components {
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
-		if errors.Is(err, os.ErrNotExist) {
-			observed.State = "missing"
-			return observed, nil
-		}
-		if err != nil {
-			return observation{}, &Error{Kind: ErrConflict, Op: "inspect restore destination", Path: entry.Path, Err: err}
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			observed.State, observed.Mode = "conflict-symlink", uint32(info.Mode().Perm())
-			return observed, nil
-		}
-		if index < len(components)-1 {
-			if !info.IsDir() {
-				observed.State, observed.Mode = "conflict-type", uint32(info.Mode().Perm())
-				return observed, nil
-			}
-			continue
-		}
-		if !info.Mode().IsRegular() {
-			observed.State, observed.Mode = "conflict-type", uint32(info.Mode().Perm())
-			return observed, nil
-		}
-		size, digest, mode, err := hashRegularFile(ctx, current)
-		if err != nil {
-			return observation{}, &Error{Kind: ErrConflict, Op: "inspect restore destination", Path: entry.Path, Err: err}
-		}
-		observed.Size, observed.SHA256, observed.Mode = size, digest, uint32(mode)
-		if size == entry.Size && digest == entry.SHA256 {
-			observed.State = "identical"
-		} else {
-			observed.State = "conflict-regular"
-		}
-		return observed, nil
-	}
-	return observation{}, invalid("observe restore destination", entry.Path, nil)
-}
-
-func (e *Engine) restoreMissing(ctx context.Context, snapshot Snapshot, entry Entry) (bool, error) {
-	if err := ensureDestinationParents(e.sourceRoot, entry.Path); err != nil {
+func (e *Engine) restoreMissing(ctx context.Context, refs *restoreRefs, entry Entry) (created bool, err error) {
+	if err := ensureDestinationParentsAt(refs.source, entry.Path); err != nil {
 		return false, err
 	}
-	destination := filepath.Join(e.sourceRoot, filepath.FromSlash(entry.Path))
-	directory := filepath.Dir(destination)
-	output, err := os.CreateTemp(directory, ".vgxness-restore-*")
+	output, err := refs.source.OpenFile(entry.Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return false, &Error{Kind: ErrConflict, Op: "reserve restored file", Path: entry.Path, Err: err}
+	}
 	if err != nil {
-		return false, wrapFilesystem("create restored file", entry.Path, err)
+		return false, wrapFilesystem("reserve restored file", entry.Path, err)
 	}
-	temporary := output.Name()
-	defer func() {
-		_ = output.Close()
-		_ = os.Remove(temporary)
-	}()
-	if err := copySnapshotEntry(ctx, snapshot, entry, output); err != nil {
-		return false, err
-	}
-	if err := output.Chmod(0o600); err != nil {
-		return false, wrapFilesystem("secure restored file", entry.Path, err)
-	}
-	if err := output.Sync(); err != nil {
-		return false, wrapFilesystem("sync restored file", entry.Path, err)
-	}
-	if err := output.Close(); err != nil {
-		return false, wrapFilesystem("close restored file", entry.Path, err)
-	}
-	if err := verifyRestoredFile(ctx, temporary, entry); err != nil {
-		return false, err
-	}
-	if err := e.publishRestoreFile(temporary, destination); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return false, &Error{Kind: ErrConflict, Op: "publish restored file", Path: entry.Path}
-		}
-		return false, wrapFilesystem("publish restored file", entry.Path, err)
-	}
-	if err := verifyRestoredFile(ctx, destination, entry); err != nil {
+	defer output.Close()
+	if err := copySnapshotEntry(ctx, refs.snapshot.snapshot, entry, output); err != nil {
 		return true, err
 	}
-	if err := e.syncRestoreDirectory(directory); err != nil {
+	if err := output.Chmod(0o600); err != nil {
+		return true, wrapFilesystem("secure restored file", entry.Path, err)
+	}
+	if err := output.Sync(); err != nil {
+		return true, wrapFilesystem("sync restored file", entry.Path, err)
+	}
+	if err := output.Close(); err != nil {
+		return true, wrapFilesystem("close restored file", entry.Path, err)
+	}
+	if err := verifyRestoredFileAt(ctx, refs.source, entry.Path, entry); err != nil {
+		return true, err
+	}
+	if err := e.syncRestoreDirectories(refs.source, entry.Path); err != nil {
 		return true, wrapFilesystem("sync restored directory", entry.Path, err)
+	}
+	if err := verifyRestoredFileAt(ctx, refs.source, entry.Path, entry); err != nil {
+		return true, err
 	}
 	return true, nil
 }
 
-func copySnapshotEntry(ctx context.Context, snapshot Snapshot, entry Entry, output io.Writer) error {
-	source := filepath.Join(snapshot.Directory, payloadName, filepath.FromSlash(entry.Path))
-	before, err := os.Lstat(source)
+func copySnapshotEntry(ctx context.Context, snapshot *os.Root, entry Entry, output io.Writer) error {
+	source := path.Join(payloadName, entry.Path)
+	before, err := snapshot.Lstat(source)
 	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
 		return corrupt("inspect snapshot payload", entry.Path, err)
 	}
-	input, err := os.Open(source)
+	input, err := snapshot.Open(source)
 	if err != nil {
 		return corrupt("open snapshot payload", entry.Path, err)
 	}
@@ -398,15 +354,15 @@ func copySnapshotEntry(ctx context.Context, snapshot Snapshot, entry Entry, outp
 		return wrapFilesystem("copy snapshot payload", entry.Path, err)
 	}
 	afterOpen, statErr := input.Stat()
-	afterPath, pathErr := os.Lstat(source)
+	afterPath, pathErr := snapshot.Lstat(source)
 	if statErr != nil || pathErr != nil || !os.SameFile(before, afterOpen) || !os.SameFile(before, afterPath) || before.Size() != afterOpen.Size() || !before.ModTime().Equal(afterOpen.ModTime()) || written != afterOpen.Size() || written != entry.Size || hex.EncodeToString(hash.Sum(nil)) != entry.SHA256 {
 		return corrupt("copy snapshot payload", entry.Path, nil)
 	}
 	return nil
 }
 
-func verifyRestoredFile(ctx context.Context, filePath string, entry Entry) error {
-	size, digest, mode, err := hashRegularFile(ctx, filePath)
+func verifyRestoredFileAt(ctx context.Context, root *os.Root, filePath string, entry Entry) error {
+	size, digest, mode, err := hashRegularFileAt(ctx, root, filePath)
 	if err != nil {
 		return wrapFilesystem("verify restored file", entry.Path, err)
 	}
@@ -416,24 +372,21 @@ func verifyRestoredFile(ctx context.Context, filePath string, entry Entry) error
 	return nil
 }
 
-func ensureDestinationParents(root, relative string) error {
-	if err := ensureRestoreRoot(root); err != nil {
-		return err
-	}
-	current := root
+func ensureDestinationParentsAt(root *os.Root, relative string) error {
+	current := "."
 	components := strings.Split(relative, "/")
 	for _, component := range components[:len(components)-1] {
-		current = filepath.Join(current, component)
-		mkdirErr := os.Mkdir(current, 0o700)
+		current = path.Join(current, component)
+		mkdirErr := root.Mkdir(current, 0o700)
 		if mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
 			return wrapFilesystem("create restored directory", relative, mkdirErr)
 		}
-		info, err := os.Lstat(current)
+		info, err := root.Lstat(current)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return unsupported("create restored directory", relative, err)
 		}
 		if mkdirErr == nil {
-			if err := os.Chmod(current, 0o700); err != nil {
+			if err := root.Chmod(current, 0o700); err != nil {
 				return wrapFilesystem("secure restored directory", relative, err)
 			}
 		}
@@ -441,33 +394,15 @@ func ensureDestinationParents(root, relative string) error {
 	return nil
 }
 
-func ensureRestoreRoot(root string) error {
-	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
-		if err := ensurePrivateRoot(root); err != nil {
-			return wrapFilesystem("create restore root", root, err)
-		}
-		return nil
-	}
-	if err := requireSafeDirectory(root); err != nil {
-		return unsupported("inspect restore root", root, err)
-	}
-	return nil
-}
-
-func inspectExistingAncestors(filePath string) error {
-	for _, ancestor := range pathAncestors(filePath) {
-		info, err := os.Lstat(ancestor)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
+func syncRestoreDirectoriesAt(root *os.Root, destination string) error {
+	for directory := path.Dir(destination); ; directory = path.Dir(directory) {
+		if err := syncDirectoryAt(root, directory); err != nil {
 			return err
 		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return ErrUnsupported
+		if directory == "." {
+			return nil
 		}
 	}
-	return nil
 }
 
 func digestBytes(data []byte) string {
