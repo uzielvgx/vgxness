@@ -37,11 +37,13 @@ type ProviderPlan struct {
 }
 
 type ProviderResult struct {
-	Provider Provider
-	Verified bool
-	Changed  bool
-	Skipped  bool
-	Recovery string
+	Provider         Provider
+	Verified         bool
+	Changed          bool
+	Skipped          bool
+	Recovery         string
+	SnapshotID       string
+	SnapshotVerified bool
 }
 
 type SharedPhase struct{ Name string }
@@ -101,12 +103,26 @@ type ProviderRuntime interface {
 // IntegrationProvider adapts one provider-owned integration without exposing
 // filesystem behavior to Multi. Codex receives only its root and shared plan.
 type IntegrationProvider struct {
-	provider Provider
-	runtime  integration.Runtime
-	options  integration.Options
+	provider   Provider
+	runtime    integration.Runtime
+	options    integration.Options
+	protection ManagedProtection
+}
+
+// ManagedProtection snapshots a provider-owned layout immediately before a
+// mutation. It is intentionally provider-neutral and injected in tests.
+type ManagedProtection interface {
+	Protect(context.Context) (ManagedSnapshot, error)
+}
+
+type ManagedSnapshot struct {
+	ID                string
+	Verified, Skipped bool
+	Source            integration.SourceIdentity
 }
 
 func NewIntegrationProvider(provider Provider, runtime integration.Runtime, options integration.Options) *IntegrationProvider {
+	home := options.HomeDir
 	if provider == ProviderCodex {
 		root := integration.Options{ModelPlan: options.ModelPlan}
 		if options.ConfigDir != "" {
@@ -116,7 +132,7 @@ func NewIntegrationProvider(provider Provider, runtime integration.Runtime, opti
 		}
 		options = root
 	}
-	return &IntegrationProvider{provider: provider, runtime: runtime, options: options}
+	return &IntegrationProvider{provider: provider, runtime: runtime, options: options, protection: newManagedProtection(provider, options, home)}
 }
 
 func (adapter *IntegrationProvider) Provider() Provider { return adapter.provider }
@@ -145,18 +161,42 @@ func (adapter *IntegrationProvider) Apply(ctx context.Context, plan ProviderPlan
 	if adapter == nil || adapter.runtime == nil || !plan.Ready || plan.Provider != adapter.provider {
 		return ProviderResult{Provider: adapter.provider}, ErrPrerequisite
 	}
+	result := ProviderResult{Provider: adapter.provider}
+	var snapshot ManagedSnapshot
+	if adapter.provider == ProviderCodex && (plan.State == integration.StatePartial || plan.State == integration.StateInstalled) {
+		_, ok := adapter.runtime.(integration.ManagedRuntime)
+		if !ok || adapter.protection == nil {
+			return result, fmt.Errorf("%w: codex managed protection", ErrPrerequisite)
+		}
+		var err error
+		snapshot, err = adapter.protection.Protect(ctx)
+		if err != nil {
+			return result, err
+		}
+		if !snapshot.Skipped && (snapshot.ID == "" || !snapshot.Verified) {
+			return result, fmt.Errorf("%w: codex snapshot verification", ErrVerification)
+		}
+		if snapshot.Source == nil {
+			return result, fmt.Errorf("%w: codex protected source", ErrPrerequisite)
+		}
+		result.SnapshotID, result.SnapshotVerified = snapshot.ID, snapshot.Verified
+	}
 	var installed integration.Result
 	var err error
-	if adapter.provider == ProviderCodex && plan.State == integration.StatePartial {
-		managed, ok := adapter.runtime.(integration.ManagedRuntime)
-		if !ok {
-			return ProviderResult{Provider: adapter.provider}, fmt.Errorf("%w: codex managed runtime", ErrPrerequisite)
+	if adapter.provider == ProviderCodex && (plan.State == integration.StatePartial || plan.State == integration.StateInstalled) {
+		protected, ok := adapter.runtime.(integration.ProtectedRuntime)
+		if !ok || snapshot.Source == nil {
+			return result, fmt.Errorf("%w: codex protected runtime", ErrPrerequisite)
 		}
-		installed, err = managed.Reinstall(ctx, adapter.options)
+		if plan.State == integration.StatePartial {
+			installed, err = protected.ReinstallProtected(ctx, adapter.options, snapshot.Source)
+		} else {
+			installed, err = protected.InstallProtected(ctx, adapter.options, snapshot.Source)
+		}
 	} else {
 		installed, err = adapter.runtime.Install(ctx, adapter.options)
 	}
-	result := ProviderResult{Provider: adapter.provider, Changed: installed.Changed}
+	result.Changed = installed.Changed
 	if err != nil {
 		return result, err
 	}

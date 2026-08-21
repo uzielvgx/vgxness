@@ -6,12 +6,26 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
+
+const (
+	windowsErrorAccessDenied     syscall.Errno = 5
+	windowsErrorSharingViolation syscall.Errno = 32
+)
+
+// windowsRootRenameBlocked recognizes only Windows errors caused by renaming
+// an opened root; unrelated rename failures must propagate and fail the test.
+func windowsRootRenameBlocked(err error) bool {
+	return runtime.GOOS == "windows" &&
+		(errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation))
+}
 
 func TestKnownPackagesOrderCurrentThenV10ThenV9ForEveryPlanAndRetainOlderPredecessors(t *testing.T) {
 	known, err := knownPackages()
@@ -349,6 +363,138 @@ func TestIntegrationInstallAndIdempotence(t *testing.T) {
 	require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired)
 	again, err := service.Install(context.Background(), options)
 	require(t, err == nil && !again.Changed && !again.RestartRequired && again.State == integration.StateInstalled)
+}
+
+func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		open func(*testing.T, string, *Integration, *bool)
+		want error
+	}{
+		{
+			name: "replacement before open fails closed",
+			open: func(t *testing.T, root string, service *Integration, replacementBlocked *bool) {
+				t.Helper()
+				replaced := root + "-protected"
+				require(t, os.Rename(root, replaced) == nil)
+				require(t, os.Mkdir(root, 0o700) == nil)
+			},
+			want: integration.ErrConflict,
+		},
+		{
+			name: "replacement after open cannot redirect writes",
+			open: func(t *testing.T, root string, service *Integration, replacementBlocked *bool) {
+				t.Helper()
+				service.open = func(ctx context.Context, options integration.Options, create bool) (*Root, error) {
+					held, err := OpenRoot(ctx, options, create)
+					if err != nil {
+						return nil, err
+					}
+					prior := root + "-protected"
+					if err := os.Rename(root, prior); err != nil {
+						if windowsRootRenameBlocked(err) {
+							heldInfo, heldErr := held.fs.Lstat(".")
+							rootInfo, rootErr := os.Lstat(root)
+							_, priorErr := os.Lstat(prior)
+							if heldErr != nil || rootErr != nil || !os.SameFile(heldInfo, rootInfo) || !errors.Is(priorErr, os.ErrNotExist) {
+								_ = held.Close()
+								t.Fatalf("blocked replacement did not retain held root: held=%v root=%v prior=%v", heldErr, rootErr, priorErr)
+							}
+							*replacementBlocked = true
+							return held, nil
+						}
+						_ = held.Close()
+						return nil, err
+					}
+					if err := os.Mkdir(root, 0o700); err != nil {
+						_ = held.Close()
+						return nil, err
+					}
+					if err := os.Mkdir(filepath.Join(root, "agents"), 0o700); err != nil {
+						_ = held.Close()
+						return nil, err
+					}
+					return held, nil
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "codex")
+			require(t, os.Mkdir(root, 0o700) == nil)
+			require(t, os.Mkdir(filepath.Join(root, "agents"), 0o700) == nil)
+			info, err := sourceRootIdentity(root)
+			require(t, err == nil)
+			service := NewIntegration()
+			replacementBlocked := false
+			test.open(t, root, service, &replacementBlocked)
+
+			result, err := service.InstallProtected(context.Background(), integration.Options{ConfigDir: root}, sourceIdentity{info: info})
+			if test.want != nil {
+				require(t, errors.Is(err, test.want) && !result.Changed)
+				_, replacementErr := os.Stat(filepath.Join(root, "AGENTS.md"))
+				require(t, errors.Is(replacementErr, os.ErrNotExist))
+				return
+			}
+			if err != nil || result.State != integration.StateInstalled {
+				t.Fatalf("InstallProtected() = %+v, %v", result, err)
+			}
+			if replacementBlocked {
+				_, originalErr := os.Stat(filepath.Join(root, "AGENTS.md"))
+				require(t, originalErr == nil)
+				_, priorErr := os.Stat(filepath.Join(root+"-protected", "AGENTS.md"))
+				require(t, errors.Is(priorErr, os.ErrNotExist))
+				return
+			}
+			_, replacementErr := os.Stat(filepath.Join(root, "AGENTS.md"))
+			require(t, errors.Is(replacementErr, os.ErrNotExist))
+			_, protectedErr := os.Stat(filepath.Join(root+"-protected", "AGENTS.md"))
+			require(t, protectedErr == nil)
+		})
+	}
+}
+
+func TestProtectedInstallDoesNotCreateMissingRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "codex")
+	require(t, os.Mkdir(root, 0o700) == nil)
+	info, err := sourceRootIdentity(root)
+	require(t, err == nil)
+	require(t, os.Remove(root) == nil)
+
+	_, err = NewIntegration().InstallProtected(context.Background(), integration.Options{ConfigDir: root}, sourceIdentity{info: info})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("InstallProtected() error = %v", err)
+	}
+	_, statErr := os.Stat(root)
+	require(t, errors.Is(statErr, os.ErrNotExist))
+}
+
+func TestReinstallProtectedBindsOrPreservesMissingRoot(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+		want   error
+	}{
+		{"replacement", func(t *testing.T, root string) {
+			require(t, os.Rename(root, root+"-prior") == nil)
+			require(t, os.Mkdir(root, 0o700) == nil)
+		}, integration.ErrConflict},
+		{"missing", func(t *testing.T, root string) { require(t, os.Remove(root) == nil) }, integration.ErrInvalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "codex")
+			require(t, os.Mkdir(root, 0o700) == nil)
+			info, err := sourceRootIdentity(root)
+			require(t, err == nil)
+			test.mutate(t, root)
+			_, err = NewIntegration().ReinstallProtected(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium}, sourceIdentity{info: info})
+			require(t, errors.Is(err, test.want))
+			if test.name == "missing" {
+				_, err = os.Stat(root)
+				require(t, errors.Is(err, os.ErrNotExist))
+			}
+		})
+	}
 }
 
 func writePackage(t *testing.T, root string, pkg Package) {

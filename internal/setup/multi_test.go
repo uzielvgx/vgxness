@@ -31,17 +31,30 @@ type fakeShared struct {
 
 type fakeIntegrationRuntime struct {
 	preview, install, reinstall, status integration.Result
+	layout                              integration.ManagedLayout
 	previewOptions                      integration.Options
 	installOptions                      integration.Options
 	statusOptions                       integration.Options
+	installCalls                        int
 	reinstallCalls                      int
+	protectedInstallCalls               int
+	protectedReinstallCalls             int
+	events                              *[]string
 }
+
+type fakeSourceIdentity struct{}
+
+func (fakeSourceIdentity) SourceIdentity() {}
 
 func (f *fakeIntegrationRuntime) Preview(_ context.Context, options integration.Options) (integration.Result, error) {
 	f.previewOptions = options
 	return f.preview, nil
 }
 func (f *fakeIntegrationRuntime) Install(_ context.Context, options integration.Options) (integration.Result, error) {
+	f.installCalls++
+	if f.events != nil {
+		*f.events = append(*f.events, "install")
+	}
 	f.installOptions = options
 	return f.install, nil
 }
@@ -53,15 +66,83 @@ func (f *fakeIntegrationRuntime) Uninstall(context.Context, integration.Options)
 	return integration.Result{}, nil
 }
 func (f *fakeIntegrationRuntime) ManagedLayout(context.Context, integration.Options) (integration.ManagedLayout, error) {
-	return integration.ManagedLayout{}, nil
+	return f.layout, nil
+}
+
+type fakeManagedProtection struct {
+	snapshot ManagedSnapshot
+	err      error
+	calls    int
+	events   *[]string
+}
+
+func (f *fakeManagedProtection) Protect(context.Context) (ManagedSnapshot, error) {
+	f.calls++
+	if f.events != nil {
+		*f.events = append(*f.events, "protect")
+	}
+	return f.snapshot, f.err
 }
 func (f *fakeIntegrationRuntime) ReinstallPending(context.Context, integration.Options) (bool, error) {
 	return false, nil
 }
 func (f *fakeIntegrationRuntime) Reinstall(_ context.Context, options integration.Options) (integration.Result, error) {
 	f.reinstallCalls++
+	if f.events != nil {
+		*f.events = append(*f.events, "install")
+	}
 	f.installOptions = options
 	return f.reinstall, nil
+}
+func (f *fakeIntegrationRuntime) InstallProtected(ctx context.Context, options integration.Options, _ integration.SourceIdentity) (integration.Result, error) {
+	f.protectedInstallCalls++
+	return f.Install(ctx, options)
+}
+func (f *fakeIntegrationRuntime) ReinstallProtected(ctx context.Context, options integration.Options, _ integration.SourceIdentity) (integration.Result, error) {
+	f.protectedReinstallCalls++
+	return f.Reinstall(ctx, options)
+}
+
+func TestCodexProtectionPrecedesInstalledAndPartialMutations(t *testing.T) {
+	for _, state := range []integration.State{integration.StateInstalled, integration.StatePartial} {
+		t.Run(string(state), func(t *testing.T) {
+			events := []string{}
+			runtime := &fakeIntegrationRuntime{layout: integration.ManagedLayout{Root: t.TempDir()}, status: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "sum", ArtifactCount: 15}, events: &events}
+			runtime.install, runtime.reinstall = runtime.status, runtime.status
+			protection := &fakeManagedProtection{snapshot: ManagedSnapshot{ID: "snapshot", Verified: true, Source: fakeSourceIdentity{}}, events: &events}
+			adapter := &IntegrationProvider{provider: ProviderCodex, runtime: runtime, protection: protection}
+			result, err := adapter.Apply(context.Background(), ProviderPlan{Provider: ProviderCodex, Ready: true, State: state, ArtifactSHA256: "sum", ArtifactCount: 15}, SharedResult{})
+			if err != nil || protection.calls != 1 || !result.SnapshotVerified || result.SnapshotID != "snapshot" {
+				t.Fatalf("result=%#v err=%v calls=%d", result, err, protection.calls)
+			}
+			if len(events) != 2 || events[0] != "protect" || events[1] != "install" {
+				t.Fatalf("events=%v", events)
+			}
+			if state == integration.StatePartial && runtime.reinstallCalls != 1 {
+				t.Fatal("partial did not reinstall")
+			}
+		})
+	}
+}
+
+func TestCodexProtectionFailurePreventsMutationAndAbsentSkips(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{layout: integration.ManagedLayout{Root: t.TempDir()}, status: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "sum", ArtifactCount: 15}}
+	runtime.install = runtime.status
+	protection := &fakeManagedProtection{err: errors.New("unsafe")}
+	adapter := &IntegrationProvider{provider: ProviderCodex, runtime: runtime, protection: protection}
+	if _, err := adapter.Apply(context.Background(), ProviderPlan{Provider: ProviderCodex, Ready: true, State: integration.StateInstalled, ArtifactSHA256: "sum", ArtifactCount: 15}, SharedResult{}); err == nil || runtime.installCalls != 0 || runtime.reinstallCalls != 0 {
+		t.Fatalf("install=%d reinstall=%d", runtime.installCalls, runtime.reinstallCalls)
+	}
+	if _, err := adapter.Apply(context.Background(), ProviderPlan{Provider: ProviderCodex, Ready: true, State: integration.StatePartial, ArtifactSHA256: "sum", ArtifactCount: 15}, SharedResult{}); err == nil || runtime.installCalls != 0 || runtime.reinstallCalls != 0 {
+		t.Fatal("protection failure mutated partial")
+	}
+	if _, err := adapter.Apply(context.Background(), ProviderPlan{Provider: ProviderCodex, Ready: true, State: integration.StateAbsent, ArtifactSHA256: "sum", ArtifactCount: 15}, SharedResult{}); err != nil || protection.calls != 2 {
+		t.Fatalf("err=%v calls=%d", err, protection.calls)
+	}
+	protection.err, protection.snapshot = nil, ManagedSnapshot{}
+	if _, err := adapter.Apply(context.Background(), ProviderPlan{Provider: ProviderCodex, Ready: true, State: integration.StateInstalled, ArtifactSHA256: "sum", ArtifactCount: 15}, SharedResult{}); err == nil {
+		t.Fatal("unverified snapshot allowed mutation")
+	}
 }
 
 func (f fakeShared) Plan(context.Context) (SharedPlan, error) {
@@ -309,6 +390,14 @@ func TestIntegrationProviderAllowsPartialPlanForRepair(t *testing.T) {
 	}
 }
 
+func TestIntegrationProviderPreservesCodexHomeForProtection(t *testing.T) {
+	home := t.TempDir()
+	adapter := NewIntegrationProvider(ProviderCodex, &fakeIntegrationRuntime{}, integration.Options{ConfigDir: t.TempDir(), HomeDir: home})
+	if adapter.options.HomeDir != "" || adapter.protection.(*managedProtection).home != home {
+		t.Fatal("Codex backup home was discarded")
+	}
+}
+
 func TestIntegrationProviderReinstallsPartialCodex(t *testing.T) {
 	runtime := &fakeIntegrationRuntime{
 		preview:   integration.Result{Provider: "codex", State: integration.StatePartial, ArtifactSHA256: "repair", ArtifactCount: 1},
@@ -316,12 +405,13 @@ func TestIntegrationProviderReinstallsPartialCodex(t *testing.T) {
 		status:    integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "repair", ArtifactCount: 1},
 	}
 	adapter := NewIntegrationProvider(ProviderCodex, runtime, integration.Options{HomeDir: "/home"})
+	adapter.protection = &fakeManagedProtection{snapshot: ManagedSnapshot{Skipped: true, Source: fakeSourceIdentity{}}}
 	plan, err := adapter.Plan(context.Background(), SharedPlan{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.Apply(context.Background(), plan, SharedResult{}); err != nil || runtime.reinstallCalls != 1 {
-		t.Fatalf("result err=%v reinstallCalls=%d", err, runtime.reinstallCalls)
+	if _, err := adapter.Apply(context.Background(), plan, SharedResult{}); err != nil || runtime.protectedReinstallCalls != 1 {
+		t.Fatalf("result err=%v protectedReinstallCalls=%d", err, runtime.protectedReinstallCalls)
 	}
 }
 

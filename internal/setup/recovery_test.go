@@ -18,6 +18,25 @@ import (
 	"github.com/vgxness/vgxness/internal/selfinstall"
 )
 
+func TestManagedProtectionUsesCodexRecovery(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	p := newManagedProtection(ProviderCodex, integration.Options{ConfigDir: root}, home).(*managedProtection)
+	result, err := p.Protect(context.Background())
+	if err != nil || !result.Skipped || result.Source == nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("managed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err = p.Protect(context.Background())
+	if err != nil || !result.Verified || result.ID == "" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "share", "vgxness", "backups", "codex", result.ID)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProtectedReinstallCreatesAndVerifiesBackupBeforeMutation(t *testing.T) {
 	calls := []string{}
 	launcherStatus := managedLauncherForRecoveryTest(t)
