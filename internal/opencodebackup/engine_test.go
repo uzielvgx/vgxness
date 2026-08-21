@@ -69,6 +69,43 @@ func TestNewValidatesModesRootsAndManagedPaths(t *testing.T) {
 	}
 }
 
+func TestManagedOnlyPolicyRejectsFullSnapshotsAtEveryBoundary(t *testing.T) {
+	source, backup := t.TempDir(), t.TempDir()
+	writeFile(t, source, "managed", "safe", 0o600)
+	writeFile(t, source, "private", "excluded", 0o600)
+	full, err := opencodebackup.New(opencodebackup.Options{SourceRoot: source, BackupRoot: backup, ManagedPaths: []string{"managed"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := full.Create(context.Background(), opencodebackup.ModeFull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := full.PreviewRestore(context.Background(), snapshot.Manifest.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := opencodebackup.New(opencodebackup.Options{SourceRoot: source, BackupRoot: backup, ManagedPaths: []string{"managed"}, ModePolicy: opencodebackup.ModePolicyManagedOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managed.Create(context.Background(), opencodebackup.ModeFull); !errors.Is(err, opencodebackup.ErrInvalid) {
+		t.Fatalf("create full err=%v", err)
+	}
+	if _, err := managed.Verify(context.Background(), snapshot.Manifest.SnapshotID); !errors.Is(err, opencodebackup.ErrInvalid) {
+		t.Fatalf("verify full err=%v", err)
+	}
+	if _, err := managed.List(context.Background()); !errors.Is(err, opencodebackup.ErrInvalid) {
+		t.Fatalf("list full err=%v", err)
+	}
+	if _, err := managed.PreviewRestore(context.Background(), snapshot.Manifest.SnapshotID); !errors.Is(err, opencodebackup.ErrInvalid) {
+		t.Fatalf("preview full err=%v", err)
+	}
+	if _, err := managed.Restore(context.Background(), opencodebackup.RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256}); !errors.Is(err, opencodebackup.ErrInvalid) {
+		t.Fatalf("restore full err=%v", err)
+	}
+}
+
 func TestDefaultBackupRoot(t *testing.T) {
 	home := canonicalPath(t, t.TempDir())
 	source := canonicalPath(t, t.TempDir())

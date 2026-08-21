@@ -244,6 +244,8 @@ type Model struct {
 	recoveryRefreshWarning bool
 	cancelRecovery         context.CancelFunc
 
+	recoverySelectedProvider setupflow.Provider
+
 	setupAssignmentRows         [SetupModelAssignmentCount]SetupModelAssignmentRequest
 	setupAssignmentEntryRows    [SetupModelAssignmentCount]SetupModelAssignmentRequest
 	setupAssignmentsSeeded      bool
