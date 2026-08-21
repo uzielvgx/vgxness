@@ -81,13 +81,32 @@ func TestRestoreRejectsSourceReplacementAfterPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	replacementBlocked := false
 	engine.syncRestoreDirectories = func(*os.Root, string) error {
 		if err := os.Rename(engine.sourceRoot, engine.sourceRoot+"-old"); err != nil {
+			if runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission) {
+				replacementBlocked = true
+				return nil
+			}
 			return err
 		}
 		return os.Mkdir(engine.sourceRoot, 0o700)
 	}
 	result, err := engine.Restore(context.Background(), RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256})
+	if replacementBlocked {
+		if err != nil || result.Created != 1 {
+			t.Fatalf("Restore() = %+v, %v; want retained published result", result, err)
+		}
+		info, statErr := os.Lstat(engine.sourceRoot)
+		if statErr != nil || !os.SameFile(engine.sourceAnchor.info, info) {
+			t.Fatalf("source root identity changed: %v", statErr)
+		}
+		verified, verifyErr := engine.Verify(context.Background(), snapshot.Manifest.SnapshotID)
+		if verifyErr != nil || verified.Manifest.SnapshotID != snapshot.Manifest.SnapshotID {
+			t.Fatalf("retained snapshot did not verify: %+v, %v", verified, verifyErr)
+		}
+		return
+	}
 	if result.Created != 1 || !errors.Is(err, ErrConflict) {
 		t.Fatalf("Restore() = %+v, %v; want published result and ErrConflict", result, err)
 	}
