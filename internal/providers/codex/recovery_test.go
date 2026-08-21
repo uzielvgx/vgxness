@@ -43,6 +43,20 @@ func TestRecoveryManagedPathsDefensiveCopy(t *testing.T) {
 	}
 }
 
+func TestRecoveryRejectsFullMode(t *testing.T) {
+	backup := filepath.Join(t.TempDir(), "backups")
+	recovery, err := NewRecovery(context.Background(), RecoveryOptions{Integration: integration.Options{ConfigDir: t.TempDir()}, BackupRoot: backup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recovery.Create(context.Background(), opencodebackup.ModeFull); err == nil {
+		t.Fatal("Codex recovery accepted full snapshot")
+	}
+	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatalf("full rejection created backup root: %v", err)
+	}
+}
+
 func TestRecoveryUsesProviderSeparatedBackupAndRejectsManagedSymlink(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
 	recovery, err := NewRecovery(context.Background(), RecoveryOptions{Integration: integration.Options{ConfigDir: root}, HomeDir: home})

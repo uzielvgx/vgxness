@@ -349,6 +349,14 @@ func (backend tuiBackend) ApplySetup(ctx context.Context, request tui.SetupReque
 }
 
 func (backend tuiBackend) PlanRecovery(ctx context.Context, request tui.RecoveryPlanRequest) (tui.RecoveryPlan, error) {
+	provider, err := normalizeRecoveryProvider(request.Provider)
+	if err != nil {
+		return tui.RecoveryPlan{}, err
+	}
+	request.Provider = provider
+	if request.Provider == setupflow.ProviderCodex {
+		return backend.planCodexRecovery(ctx, request)
+	}
 	options, backupRoot, mode, err := tuiRecoveryOptions(request.Workspace, request.BackupRoot, request.Mode)
 	if err != nil || backend.recovery == nil {
 		return tui.RecoveryPlan{}, fmt.Errorf("invalid recovery request")
@@ -364,6 +372,23 @@ func (backend tuiBackend) PlanRecovery(ctx context.Context, request tui.Recovery
 }
 
 func (backend tuiBackend) ListBackups(ctx context.Context, request tui.BackupListRequest) (tui.BackupListResult, error) {
+	provider, err := normalizeRecoveryProvider(request.Provider)
+	if err != nil {
+		return tui.BackupListResult{}, err
+	}
+	request.Provider = provider
+	if request.Provider == setupflow.ProviderCodex {
+		recovery, err := backend.codexRecovery(ctx, request.Workspace, request.BackupRoot)
+		if err != nil {
+			return tui.BackupListResult{}, safeRecoveryError(ctx, "backup list", err)
+		}
+		listed, err := recovery.List(ctx)
+		result := tui.BackupListResult{Snapshots: make([]tui.BackupSummary, len(listed))}
+		for i, summary := range listed {
+			result.Snapshots[i] = tuiBackupSummary(summary)
+		}
+		return result, safeRecoveryError(ctx, "backup list", err)
+	}
 	options, backupRoot, err := tuiRecoveryBase(request.Workspace, request.BackupRoot)
 	if err != nil || backend.recovery == nil {
 		return tui.BackupListResult{}, fmt.Errorf("invalid backup list request")
@@ -377,6 +402,26 @@ func (backend tuiBackend) ListBackups(ctx context.Context, request tui.BackupLis
 }
 
 func (backend tuiBackend) CreateBackup(ctx context.Context, request tui.CreateBackupRequest) (tui.BackupResult, error) {
+	provider, err := normalizeRecoveryProvider(request.Provider)
+	if err != nil {
+		return tui.BackupResult{}, err
+	}
+	request.Provider = provider
+	if request.Provider == setupflow.ProviderCodex {
+		if request.Mode != string(opencodebackup.ModeManaged) {
+			return tui.BackupResult{}, fmt.Errorf("invalid backup request")
+		}
+		recovery, err := backend.codexRecovery(ctx, request.Workspace, request.BackupRoot)
+		if err != nil {
+			return tui.BackupResult{}, safeRecoveryError(ctx, "backup creation", err)
+		}
+		created, err := recovery.Create(ctx, opencodebackup.ModeManaged)
+		if err != nil {
+			return tui.BackupResult{}, safeRecoveryError(ctx, "backup creation", err)
+		}
+		verified, err := recovery.Verify(ctx, created.ID)
+		return tui.BackupResult{Mode: string(opencodebackup.ModeManaged), Snapshot: tuiBackupSummary(opencodebackup.Summary{SnapshotID: created.ID})}, safeRecoveryError(ctx, "backup creation", verifyCodexSnapshot(created, verified, err))
+	}
 	options, backupRoot, mode, err := tuiRecoveryOptions(request.Workspace, request.BackupRoot, request.Mode)
 	if err != nil || backend.recovery == nil {
 		return tui.BackupResult{}, fmt.Errorf("invalid backup request")
@@ -390,6 +435,19 @@ func (backend tuiBackend) CreateBackup(ctx context.Context, request tui.CreateBa
 }
 
 func (backend tuiBackend) PreviewRestore(ctx context.Context, request tui.RestorePreviewRequest) (tui.RestorePreview, error) {
+	provider, err := normalizeRecoveryProvider(request.Provider)
+	if err != nil {
+		return tui.RestorePreview{}, err
+	}
+	request.Provider = provider
+	if request.Provider == setupflow.ProviderCodex {
+		recovery, err := backend.codexRecovery(ctx, request.Workspace, request.BackupRoot)
+		if err != nil {
+			return tui.RestorePreview{}, safeRecoveryError(ctx, "restore preview", err)
+		}
+		preview, err := recovery.PreviewRestore(ctx, request.SnapshotID)
+		return tui.RestorePreview{SnapshotID: preview.SnapshotID, PreviewSHA256: preview.SHA256, Missing: append([]string(nil), preview.Missing...), Identical: append([]string(nil), preview.Identical...), Conflicts: append([]string(nil), preview.Conflicts...)}, safeRecoveryError(ctx, "restore preview", err)
+	}
 	options, backupRoot, err := tuiRecoveryBase(request.Workspace, request.BackupRoot)
 	if err != nil || opencodebackup.ValidateSnapshotID(request.SnapshotID) != nil || backend.recovery == nil {
 		return tui.RestorePreview{}, fmt.Errorf("invalid restore preview request")
@@ -403,6 +461,19 @@ func (backend tuiBackend) PreviewRestore(ctx context.Context, request tui.Restor
 }
 
 func (backend tuiBackend) RestoreBackup(ctx context.Context, request tui.RestoreRequest) (tui.RestoreResult, error) {
+	provider, err := normalizeRecoveryProvider(request.Provider)
+	if err != nil {
+		return tui.RestoreResult{}, err
+	}
+	request.Provider = provider
+	if request.Provider == setupflow.ProviderCodex {
+		recovery, err := backend.codexRecovery(ctx, request.Workspace, request.BackupRoot)
+		if err != nil {
+			return tui.RestoreResult{}, safeRecoveryError(ctx, "restore", err)
+		}
+		result, err := recovery.Restore(ctx, opencodebackup.RestoreRequest{SnapshotID: request.SnapshotID, PreviewSHA256: request.PreviewSHA256})
+		return tui.RestoreResult{SnapshotID: result.SnapshotID, Created: result.Created, Identical: result.Identical, Replaced: result.Replaced, Unresolved: append([]string(nil), result.Unresolved...)}, safeRecoveryError(ctx, "restore", err)
+	}
 	options, backupRoot, err := tuiRecoveryBase(request.Workspace, request.BackupRoot)
 	if err != nil || opencodebackup.ValidateSnapshotID(request.SnapshotID) != nil || opencodebackup.ValidatePreviewSHA256(request.PreviewSHA256) != nil || backend.recovery == nil {
 		return tui.RestoreResult{}, fmt.Errorf("invalid restore request")
@@ -419,6 +490,14 @@ func (backend tuiBackend) RestoreBackup(ctx context.Context, request tui.Restore
 }
 
 func (backend tuiBackend) ProtectedReinstall(ctx context.Context, request tui.ProtectedReinstallRequest) (tui.ProtectedReinstallResult, error) {
+	provider, err := normalizeRecoveryProvider(request.Provider)
+	if err != nil {
+		return tui.ProtectedReinstallResult{}, err
+	}
+	request.Provider = provider
+	if request.Provider == setupflow.ProviderCodex {
+		return backend.protectedCodexReinstall(ctx, request)
+	}
 	options, backupRoot, mode, err := tuiRecoveryOptions(request.Workspace, request.BackupRoot, request.Mode)
 	if err != nil || backend.recovery == nil {
 		return tui.ProtectedReinstallResult{}, fmt.Errorf("invalid protected reinstall request")
@@ -435,6 +514,85 @@ func (backend tuiBackend) ProtectedReinstall(ctx context.Context, request tui.Pr
 		HandshakeStatus: reinstalled.Handshake.Status.String(), RecoveryAttempted: reinstalled.Recovery.Attempted,
 		RecoveryMissing: append([]string(nil), reinstalled.Recovery.Missing...), RecoveryGuidance: reinstalled.Recovery.Guidance,
 	}, safeRecoveryError(ctx, "protected reinstall", domainErr)
+}
+
+func normalizeRecoveryProvider(provider setupflow.Provider) (setupflow.Provider, error) {
+	if provider == "" || provider == setupflow.ProviderOpenCode {
+		return setupflow.ProviderOpenCode, nil
+	}
+	if provider == setupflow.ProviderCodex {
+		return provider, nil
+	}
+	return "", fmt.Errorf("invalid recovery request")
+}
+
+func (backend tuiBackend) codexRecovery(ctx context.Context, workspace, backupRoot string) (*codex.Recovery, error) {
+	if backend.codex == nil {
+		return nil, fmt.Errorf("invalid recovery request")
+	}
+	_, cleanBackupRoot, err := tuiRecoveryBase(workspace, backupRoot)
+	if err != nil {
+		return nil, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	return codex.NewRecovery(ctx, codex.RecoveryOptions{Integration: integration.Options{HomeDir: home}, BackupRoot: cleanBackupRoot, HomeDir: home})
+}
+
+func (backend tuiBackend) planCodexRecovery(ctx context.Context, request tui.RecoveryPlanRequest) (tui.RecoveryPlan, error) {
+	if request.Mode != string(opencodebackup.ModeManaged) {
+		return tui.RecoveryPlan{}, fmt.Errorf("invalid recovery request")
+	}
+	recovery, err := backend.codexRecovery(ctx, request.Workspace, request.BackupRoot)
+	if err != nil {
+		return tui.RecoveryPlan{}, safeRecoveryError(ctx, "recovery plan", err)
+	}
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		return tui.RecoveryPlan{}, safeRecoveryError(ctx, "recovery plan", homeErr)
+	}
+	status, err := backend.codex.Status(ctx, integration.Options{HomeDir: home})
+	return tui.RecoveryPlan{Mode: string(opencodebackup.ModeManaged), SourceRoot: "managed Codex configuration", BackupRoot: recovery.BackupRoot(), ArtifactCount: len(recovery.ManagedPaths()), IntegrationState: fmt.Sprint(status.State), Ready: err == nil}, safeRecoveryError(ctx, "recovery plan", err)
+}
+
+func verifyCodexSnapshot(created, verified codex.Snapshot, err error) error {
+	if err != nil || created.ID == "" || verified.ID != created.ID || verified.Source() == nil {
+		return fmt.Errorf("Codex snapshot verification")
+	}
+	return nil
+}
+
+func (backend tuiBackend) protectedCodexReinstall(ctx context.Context, request tui.ProtectedReinstallRequest) (tui.ProtectedReinstallResult, error) {
+	if request.Mode != string(opencodebackup.ModeManaged) {
+		return tui.ProtectedReinstallResult{}, fmt.Errorf("invalid protected reinstall request")
+	}
+	recovery, err := backend.codexRecovery(ctx, request.Workspace, request.BackupRoot)
+	if err != nil {
+		return tui.ProtectedReinstallResult{}, safeRecoveryError(ctx, "protected reinstall", err)
+	}
+	created, err := recovery.Create(ctx, opencodebackup.ModeManaged)
+	result := tui.ProtectedReinstallResult{Mode: string(opencodebackup.ModeManaged), SnapshotID: created.ID}
+	if err != nil {
+		return result, safeRecoveryError(ctx, "protected reinstall", err)
+	}
+	verified, err := recovery.Verify(ctx, created.ID)
+	if err = verifyCodexSnapshot(created, verified, err); err != nil {
+		return result, safeRecoveryError(ctx, "protected reinstall", err)
+	}
+	result.SnapshotVerified = true
+	protected, ok := backend.codex.(integration.ProtectedRuntime)
+	if !ok {
+		return result, fmt.Errorf("protected reinstall unavailable")
+	}
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		return result, safeRecoveryError(ctx, "protected reinstall", homeErr)
+	}
+	installed, err := protected.ReinstallProtected(ctx, integration.Options{HomeDir: home}, verified.Source())
+	result.IntegrationState = fmt.Sprint(installed.State)
+	return result, safeRecoveryError(ctx, "protected reinstall", err)
 }
 
 func tuiRecoveryOptions(workspace, backupRoot, selectedMode string) (setupflow.Options, string, opencodebackup.Mode, error) {
