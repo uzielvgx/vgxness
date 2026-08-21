@@ -33,13 +33,15 @@ import (
 func TestTUIBackendCodexRecoveryUsesSeparateManagedRoot(t *testing.T) {
 	home, workspace, backup := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "backups")
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows.
+	t.Setenv("USERPROFILE", home)
 	runtime := codex.NewIntegration()
 	if _, err := runtime.Install(context.Background(), integration.Options{HomeDir: home}); err != nil {
 		t.Fatal(err)
 	}
 	backend := tuiBackend{codex: runtime}
 	plan, err := backend.PlanRecovery(context.Background(), tui.RecoveryPlanRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
-	if err != nil || plan.BackupRoot != backup || plan.Mode != "managed" {
+	if err != nil || plan.Mode != "managed" || plan.SourceRoot != "managed Codex configuration" || plan.BackupRoot != backup {
 		t.Fatalf("plan=%+v err=%v", plan, err)
 	}
 	created, err := backend.CreateBackup(context.Background(), tui.CreateBackupRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
