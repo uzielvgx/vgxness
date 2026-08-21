@@ -24,6 +24,7 @@ type RecoveryOptions struct {
 type Recovery struct {
 	engine       *opencodebackup.Engine
 	sourceRoot   string
+	backupRoot   string
 	sourceInfo   os.FileInfo
 	managedPaths []string
 }
@@ -71,14 +72,14 @@ func NewRecovery(ctx context.Context, options RecoveryOptions) (*Recovery, error
 	if err != nil {
 		return nil, err
 	}
-	engine, err := opencodebackup.New(opencodebackup.Options{SourceRoot: layout.Root, BackupRoot: backupRoot, ManagedPaths: paths})
+	engine, err := opencodebackup.New(opencodebackup.Options{SourceRoot: layout.Root, BackupRoot: backupRoot, ManagedPaths: paths, ModePolicy: opencodebackup.ModePolicyManagedOnly})
 	if err != nil {
 		return nil, err
 	}
 	if err := verifySourceRoot(layout.Root, sourceInfo); err != nil {
 		return nil, err
 	}
-	return &Recovery{engine: engine, sourceRoot: layout.Root, sourceInfo: sourceInfo, managedPaths: paths}, nil
+	return &Recovery{engine: engine, sourceRoot: layout.Root, backupRoot: backupRoot, sourceInfo: sourceInfo, managedPaths: paths}, nil
 }
 
 func (r *Recovery) List(ctx context.Context) ([]opencodebackup.Summary, error) {
@@ -117,6 +118,9 @@ func (r *Recovery) Restore(ctx context.Context, request opencodebackup.RestoreRe
 
 // ManagedPaths returns a defensive copy of the immutable provider contract.
 func (r *Recovery) ManagedPaths() []string { return append([]string(nil), r.managedPaths...) }
+
+// BackupRoot is the provider-separated root selected for this recovery handle.
+func (r *Recovery) BackupRoot() string { return r.backupRoot }
 
 // HasManagedFiles examines only managed paths. Missing entries are harmless;
 // symlinks and unsafe types in a managed path fail closed.

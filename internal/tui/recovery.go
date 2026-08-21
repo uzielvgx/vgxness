@@ -15,6 +15,7 @@ const (
 )
 
 type RecoveryPlanRequest struct {
+	Provider   setupflow.Provider
 	Workspace  string
 	BackupRoot string
 	Mode       string
@@ -34,6 +35,7 @@ type RecoveryPlan struct {
 }
 
 type BackupListRequest struct {
+	Provider   setupflow.Provider
 	Workspace  string
 	BackupRoot string
 }
@@ -51,6 +53,7 @@ type BackupListResult struct {
 }
 
 type CreateBackupRequest struct {
+	Provider   setupflow.Provider
 	Workspace  string
 	BackupRoot string
 	Mode       string
@@ -62,6 +65,7 @@ type BackupResult struct {
 }
 
 type RestorePreviewRequest struct {
+	Provider   setupflow.Provider
 	Workspace  string
 	BackupRoot string
 	SnapshotID string
@@ -76,6 +80,7 @@ type RestorePreview struct {
 }
 
 type RestoreRequest struct {
+	Provider      setupflow.Provider
 	Workspace     string
 	BackupRoot    string
 	SnapshotID    string
@@ -91,6 +96,7 @@ type RestoreResult struct {
 }
 
 type ProtectedReinstallRequest struct {
+	Provider   setupflow.Provider
 	Workspace  string
 	BackupRoot string
 	Mode       string
@@ -185,6 +191,7 @@ type recoveryReinstalledMsg struct {
 
 func (m *Model) resetRecoveryState() {
 	m.recoveryMode = RecoveryModeManaged
+	m.recoverySelectedProvider = setupflow.ProviderOpenCode
 	m.recoveryPlan = RecoveryPlan{}
 	m.recoveryBackups = nil
 	m.recoveryPreview = RestorePreview{}
@@ -242,8 +249,8 @@ func (m *Model) loadRecovery() tea.Cmd {
 	m.recoveryConfirm = recoveryConfirmNone
 	m.recoveryPreview = RestorePreview{}
 	m.recoveryFailure = recoveryFailureNone
-	request := RecoveryPlanRequest{Workspace: m.options.Workspace, Mode: m.recoveryMode}
-	listRequest := BackupListRequest{Workspace: m.options.Workspace}
+	request := RecoveryPlanRequest{Provider: m.recoveryProvider(), Workspace: m.options.Workspace, Mode: m.recoveryMode}
+	listRequest := BackupListRequest{Provider: request.Provider, Workspace: m.options.Workspace}
 	return func() tea.Msg {
 		if m.backend == nil {
 			return recoveryLoadedMsg{generation: generation, planErr: fmt.Errorf("recovery backend unavailable"), listErr: fmt.Errorf("recovery backend unavailable")}
@@ -259,7 +266,7 @@ func (m *Model) createRecoveryBackup() tea.Cmd {
 	ctx, generation := m.startRecoveryOperation(recoveryOperationCreate)
 	m.recoveryConfirm = recoveryConfirmNone
 	m.recoveryFailure = recoveryFailureNone
-	request := CreateBackupRequest{Workspace: m.options.Workspace, BackupRoot: m.recoveryPlan.BackupRoot, Mode: m.recoveryMode}
+	request := CreateBackupRequest{Provider: m.recoveryProvider(), Workspace: m.options.Workspace, BackupRoot: m.recoveryPlan.BackupRoot, Mode: m.recoveryMode}
 	return func() tea.Msg {
 		value, err := m.backend.CreateBackup(ctx, request)
 		return recoveryBackupCreatedMsg{generation: generation, value: value, err: err}
@@ -274,7 +281,7 @@ func (m *Model) previewRecoveryRestore() tea.Cmd {
 	ctx, generation := m.startRecoveryOperation(recoveryOperationPreview)
 	m.recoveryFailure = recoveryFailureNone
 	m.recoveryPreview = RestorePreview{}
-	request := RestorePreviewRequest{Workspace: m.options.Workspace, BackupRoot: m.recoveryPlan.BackupRoot, SnapshotID: m.recoveryBackups[m.recoverySnapshotIndex].SnapshotID}
+	request := RestorePreviewRequest{Provider: m.recoveryProvider(), Workspace: m.options.Workspace, BackupRoot: m.recoveryPlan.BackupRoot, SnapshotID: m.recoveryBackups[m.recoverySnapshotIndex].SnapshotID}
 	return func() tea.Msg {
 		value, err := m.backend.PreviewRestore(ctx, request)
 		return recoveryPreviewLoadedMsg{generation: generation, value: value, err: err}
@@ -286,7 +293,7 @@ func (m *Model) restoreRecoverySnapshot() tea.Cmd {
 	m.recoveryConfirm = recoveryConfirmNone
 	m.recoveryFailure = recoveryFailureNone
 	request := RestoreRequest{
-		Workspace: m.options.Workspace, BackupRoot: m.recoveryPlan.BackupRoot,
+		Provider: m.recoveryProvider(), Workspace: m.options.Workspace, BackupRoot: m.recoveryPlan.BackupRoot,
 		SnapshotID: m.recoveryPreview.SnapshotID, PreviewSHA256: m.recoveryPreview.PreviewSHA256,
 	}
 	return func() tea.Msg {
@@ -299,7 +306,7 @@ func (m *Model) protectedRecoveryReinstall() tea.Cmd {
 	ctx, generation := m.startRecoveryOperation(recoveryOperationReinstall)
 	m.recoveryConfirm = recoveryConfirmNone
 	m.recoveryFailure = recoveryFailureNone
-	request := ProtectedReinstallRequest{Workspace: m.options.Workspace, BackupRoot: m.recoveryPlan.BackupRoot, Mode: m.recoveryMode}
+	request := ProtectedReinstallRequest{Provider: m.recoveryProvider(), Workspace: m.options.Workspace, BackupRoot: m.recoveryPlan.BackupRoot, Mode: m.recoveryMode}
 	return func() tea.Msg {
 		value, err := m.backend.ProtectedReinstall(ctx, request)
 		return recoveryReinstalledMsg{generation: generation, value: value, err: err}
@@ -388,20 +395,13 @@ func (m *Model) handleRecoveryReinstalled(msg recoveryReinstalledMsg) tea.Cmd {
 }
 
 func (m *Model) updateRecoveryKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
-		if msg.String() == "tab" {
-			m.setupView = setupViewInstall
-			return true, m.loadSetupPlan()
+	if m.multiSetupEnabled() && m.hasSetupProvider(setupflow.ProviderOpenCode) && m.hasSetupProvider(setupflow.ProviderCodex) {
+		switch msg.String() {
+		case "o":
+			return true, m.switchRecoveryProvider(setupflow.ProviderOpenCode)
+		case "c":
+			return true, m.switchRecoveryProvider(setupflow.ProviderCodex)
 		}
-		if msg.String() == "esc" {
-			m.setRoute(routeOverview)
-			return true, nil
-		}
-		if msg.String() == "r" {
-			m.setupView = setupViewInstall
-			return true, m.loadSetupPlan()
-		}
-		return true, nil
 	}
 	if m.recoveryConfirm != recoveryConfirmNone {
 		switch msg.String() {
@@ -434,6 +434,9 @@ func (m *Model) updateRecoveryKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case "right", "l":
+		if m.recoveryProvider() == setupflow.ProviderCodex {
+			return true, nil
+		}
 		if m.recoveryMode != RecoveryModeFull {
 			m.clearRecoveryOutcome()
 			m.recoveryMode = RecoveryModeFull
@@ -490,11 +493,9 @@ func (m *Model) moveRecoverySelection(offset int) {
 }
 
 func (m Model) recoveryRouteLines() []string {
-	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
-		return []string{"CODEX SETUP  Verification & Retry", "! OpenCode backups are unavailable for Codex-only setup.", "Action: [r] replan and retry; no backup or restore action will run.", "[Tab] return to Setup"}
-	}
-	lines := []string{"OPENCODE SETUP  Install  [Backup & Recovery]", "mode  " + strings.ToUpper(m.recoveryMode)}
-	if m.recoveryMode == RecoveryModeFull {
+	provider := m.recoveryProvider()
+	lines := []string{strings.ToUpper(string(provider)) + " SETUP  Install  [Backup & Recovery]", "mode  " + strings.ToUpper(m.recoveryMode)}
+	if provider != setupflow.ProviderCodex && m.recoveryMode == RecoveryModeFull {
 		lines = append(lines, "! FULL BACKUP WARNING", "  May contain credentials; local storage is 0700/0600 with no encryption.")
 	}
 	if m.recoveryConfirm != recoveryConfirmNone {
@@ -651,9 +652,6 @@ func (m Model) recoveryFailureLines() []string {
 }
 
 func (m Model) recoveryHelp() string {
-	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
-		return "[r/Tab] replan Setup  [Esc] Overview"
-	}
 	if m.recoveryOperation.mutating() {
 		return "Controlled write locked  [ctrl+c] request cancellation and wait"
 	}
@@ -663,7 +661,40 @@ func (m Model) recoveryHelp() string {
 	if m.recoveryPreview.SnapshotID != "" {
 		return "[j/k] inspect conflicts  [x] restore missing only  [Esc] close preview"
 	}
-	return "[Tab] Install  [r] refresh  [h/l] mode  [j/k] snapshot  [p] preview  controlled writes: [b] backup [i] reinstall"
+	modeHelp := "[h/l] mode  "
+	if m.recoveryProvider() == setupflow.ProviderCodex {
+		modeHelp = "managed-only  "
+	}
+	switchHelp := ""
+	if m.multiSetupEnabled() && m.hasSetupProvider(setupflow.ProviderOpenCode) && m.hasSetupProvider(setupflow.ProviderCodex) {
+		switchHelp = "[o/c] provider  "
+	}
+	return "[Tab] Install  [r] refresh  " + switchHelp + modeHelp + "[j/k] snapshot  [p] preview  controlled writes: [b] backup [i] reinstall"
+}
+
+func (m Model) recoveryProvider() setupflow.Provider {
+	if m.multiSetupEnabled() && m.hasSetupProvider(setupflow.ProviderCodex) && (!m.hasSetupProvider(setupflow.ProviderOpenCode) || m.recoverySelectedProvider == setupflow.ProviderCodex) {
+		return setupflow.ProviderCodex
+	}
+	return setupflow.ProviderOpenCode
+}
+
+func (m *Model) switchRecoveryProvider(provider setupflow.Provider) tea.Cmd {
+	if !m.hasSetupProvider(provider) || m.recoveryProvider() == provider {
+		return nil
+	}
+	m.cancelRecoveryOperation()
+	m.clearRecoveryOutcome()
+	m.recoveryPlan = RecoveryPlan{}
+	m.recoveryBackups = nil
+	m.recoveryPreview = RestorePreview{}
+	m.recoverySnapshotIndex, m.recoveryConflictIndex = 0, 0
+	m.recoveryFailure, m.recoveryRefreshPending, m.recoveryRefreshWarning = recoveryFailureNone, false, false
+	m.recoverySelectedProvider = provider
+	if provider == setupflow.ProviderCodex {
+		m.recoveryMode = RecoveryModeManaged
+	}
+	return m.loadRecovery()
 }
 
 func (m *Model) clearRecoveryOutcome() {
