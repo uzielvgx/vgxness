@@ -2,6 +2,7 @@ package opencodebackup
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -90,6 +91,9 @@ func (e *Engine) verifySnapshotRef(ctx context.Context, ref *snapshotRef, snapsh
 	}
 	if snapshot.Manifest.SourceRoot != e.sourceRoot {
 		return Snapshot{}, corrupt("verify snapshot source root", snapshotID, nil)
+	}
+	if err := e.validateMode(snapshot.Manifest.Mode); err != nil {
+		return Snapshot{}, err
 	}
 	return snapshot, nil
 }
@@ -301,27 +305,67 @@ func (e *Engine) restoreMissing(ctx context.Context, refs *restoreRefs, entry En
 	if err := ensureDestinationParentsAt(refs.source, entry.Path); err != nil {
 		return false, err
 	}
-	output, err := refs.source.OpenFile(entry.Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return false, &Error{Kind: ErrConflict, Op: "reserve restored file", Path: entry.Path, Err: err}
-	}
+	staging, err := newRestoreStagingName(entry.Path)
 	if err != nil {
-		return false, wrapFilesystem("reserve restored file", entry.Path, err)
+		return false, wrapFilesystem("reserve restored staging", entry.Path, err)
 	}
-	defer output.Close()
-	if err := copySnapshotEntry(ctx, refs.snapshot.snapshot, entry, output); err != nil {
-		return true, err
+	output, err := refs.source.OpenFile(staging, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return false, wrapFilesystem("reserve restored staging", entry.Path, err)
+	}
+	stagingInfo, err := output.Stat()
+	if err != nil {
+		return false, errors.Join(wrapFilesystem("inspect reserved restored staging", entry.Path, err), output.Close())
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = output.Close()
+		}
+	}()
+	cleanup := func(cause error) (bool, error) {
+		if !closed {
+			closeErr := output.Close()
+			closed = true
+			cause = errors.Join(cause, closeErr)
+		}
+		return false, errors.Join(cause, cleanupRestoreStaging(refs.source, staging, stagingInfo, syncRestoreDirectoriesAt))
+	}
+	if err := e.copySnapshotEntry(ctx, refs.snapshot.snapshot, entry, output); err != nil {
+		return cleanup(err)
 	}
 	if err := output.Chmod(0o600); err != nil {
-		return true, wrapFilesystem("secure restored file", entry.Path, err)
+		return cleanup(wrapFilesystem("secure restored file", entry.Path, err))
 	}
 	if err := output.Sync(); err != nil {
-		return true, wrapFilesystem("sync restored file", entry.Path, err)
+		return cleanup(wrapFilesystem("sync restored file", entry.Path, err))
 	}
 	if err := output.Close(); err != nil {
-		return true, wrapFilesystem("close restored file", entry.Path, err)
+		closed = true
+		return cleanup(wrapFilesystem("close restored file", entry.Path, err))
+	}
+	closed = true
+	if err := verifyRestoredFileAt(ctx, refs.source, staging, entry); err != nil {
+		return cleanup(err)
+	}
+	if err := e.beforeRestorePublish(refs.source, entry.Path); err != nil {
+		return cleanup(err)
+	}
+	if err := refs.source.Link(staging, entry.Path); err != nil {
+		kind := wrapFilesystem("publish restored file", entry.Path, err)
+		if errors.Is(err, os.ErrExist) {
+			kind = &Error{Kind: ErrConflict, Op: "publish restored file", Path: entry.Path, Err: err}
+		}
+		return cleanup(kind)
+	}
+	finalInfo, err := refs.source.Lstat(entry.Path)
+	if err != nil || !os.SameFile(stagingInfo, finalInfo) {
+		return false, errors.Join(corrupt("publish restored file", entry.Path, err), cleanupRestoreStaging(refs.source, staging, stagingInfo, syncRestoreDirectoriesAt))
 	}
 	if err := verifyRestoredFileAt(ctx, refs.source, entry.Path, entry); err != nil {
+		return true, err
+	}
+	if err := cleanupRestoreStaging(refs.source, staging, stagingInfo, syncRestoreDirectoriesAt); err != nil {
 		return true, err
 	}
 	if err := e.syncRestoreDirectories(refs.source, entry.Path); err != nil {
@@ -331,6 +375,40 @@ func (e *Engine) restoreMissing(ctx context.Context, refs *restoreRefs, entry En
 		return true, err
 	}
 	return true, nil
+}
+
+func newRestoreStagingName(destination string) (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return path.Join(path.Dir(destination), ".vgxness-restore-"+hex.EncodeToString(bytes)), nil
+}
+
+func cleanupRestoreStaging(root *os.Root, staging string, expected os.FileInfo, sync func(*os.Root, string) error) error {
+	current, err := root.Lstat(staging)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !os.SameFile(current, expected) {
+		return errors.Join(wrapFilesystem("inspect restored staging", staging, err), &Error{Kind: ErrConflict, Op: "cleanup restored staging", Path: staging})
+	}
+	quarantine, err := newRestoreStagingName(staging)
+	if err != nil {
+		return err
+	}
+	if err := root.Rename(staging, quarantine); err != nil {
+		return err
+	}
+	quarantined, err := root.Lstat(quarantine)
+	if err != nil || !os.SameFile(quarantined, expected) {
+		restoreErr := root.Link(quarantine, staging)
+		return errors.Join(&Error{Kind: ErrConflict, Op: "cleanup restored staging", Path: staging}, err, restoreErr)
+	}
+	if err := root.Remove(quarantine); err != nil {
+		return err
+	}
+	return sync(root, staging)
 }
 
 func copySnapshotEntry(ctx context.Context, snapshot *os.Root, entry Entry, output io.Writer) error {

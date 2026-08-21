@@ -59,6 +59,14 @@ func (m Mode) Validate() error {
 	return nil
 }
 
+// ModePolicy restricts an Engine without changing the zero-value behavior.
+type ModePolicy uint8
+
+const (
+	ModePolicyAny ModePolicy = iota
+	ModePolicyManagedOnly
+)
+
 type LauncherMetadata struct {
 	Version        string `json:"version"`
 	ManagedBy      string `json:"managedBy"`
@@ -75,6 +83,7 @@ type Options struct {
 	HomeDir      string
 	ManagedPaths []string
 	Launcher     *LauncherMetadata
+	ModePolicy   ModePolicy
 }
 
 type Entry struct {

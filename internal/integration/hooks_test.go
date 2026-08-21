@@ -152,6 +152,38 @@ func TestObservePreservesManagedRuntimePassThrough(t *testing.T) {
 	}
 }
 
+func TestObservePreservesProtectedRuntime(t *testing.T) {
+	base := &protectedHookRuntime{managedHookRuntime: managedHookRuntime{hookRuntime: &hookRuntime{}}}
+	emitter := hooks.New()
+	events := 0
+	if err := emitter.Register("protected", func(context.Context, hooks.Event) error { events++; return nil }, hooks.NameIntegrationInstallCompleted); err != nil {
+		t.Fatal(err)
+	}
+	observed, ok := Observe(base, emitter).(ProtectedRuntime)
+	if !ok {
+		t.Fatal("protected capability lost")
+	}
+	if _, err := observed.InstallProtected(context.Background(), Options{}, fakeSourceIdentity{}); err != nil || events != 1 {
+		t.Fatalf("install err=%v events=%d", err, events)
+	}
+	if _, err := observed.ReinstallProtected(context.Background(), Options{}, fakeSourceIdentity{}); err != nil || events != 2 {
+		t.Fatalf("reinstall err=%v events=%d", err, events)
+	}
+}
+
+type protectedHookRuntime struct{ managedHookRuntime }
+
+func (r *protectedHookRuntime) InstallProtected(context.Context, Options, SourceIdentity) (Result, error) {
+	return Result{Provider: "protected", State: StateInstalled}, nil
+}
+func (r *protectedHookRuntime) ReinstallProtected(context.Context, Options, SourceIdentity) (Result, error) {
+	return Result{Provider: "protected", State: StateInstalled}, nil
+}
+
+type fakeSourceIdentity struct{}
+
+func (fakeSourceIdentity) SourceIdentity() {}
+
 func TestObserveDoesNotAddMemorySyncSurface(t *testing.T) {
 	base := &hookRuntime{result: Result{Provider: "provider", State: StateInstalled}}
 	events := 0

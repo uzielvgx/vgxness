@@ -12,9 +12,40 @@ func Observe(runtime Runtime, emitter hooks.Emitter) Runtime {
 		return runtime
 	}
 	if managed, ok := runtime.(ManagedRuntime); ok {
+		if protected, ok := managed.(ProtectedRuntime); ok {
+			return observedProtected{ProtectedRuntime: protected, emitter: emitter}
+		}
 		return observedManaged{ManagedRuntime: managed, emitter: emitter}
 	}
 	return observedRuntime{Runtime: runtime, emitter: emitter}
+}
+
+type observedProtected struct {
+	ProtectedRuntime
+	emitter hooks.Emitter
+}
+
+func (r observedProtected) Preview(ctx context.Context, o Options) (Result, error) {
+	return observedManaged{r.ProtectedRuntime, r.emitter}.Preview(ctx, o)
+}
+func (r observedProtected) Install(ctx context.Context, o Options) (Result, error) {
+	return observedManaged{r.ProtectedRuntime, r.emitter}.Install(ctx, o)
+}
+func (r observedProtected) Status(ctx context.Context, o Options) (Result, error) {
+	return observedManaged{r.ProtectedRuntime, r.emitter}.Status(ctx, o)
+}
+func (r observedProtected) Uninstall(ctx context.Context, o Options) (Result, error) {
+	return observedManaged{r.ProtectedRuntime, r.emitter}.Uninstall(ctx, o)
+}
+func (r observedProtected) InstallProtected(ctx context.Context, o Options, source SourceIdentity) (Result, error) {
+	result, err := r.ProtectedRuntime.InstallProtected(ctx, o, source)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationInstallCompleted, result, err)
+	return result, err
+}
+func (r observedProtected) ReinstallProtected(ctx context.Context, o Options, source SourceIdentity) (Result, error) {
+	result, err := r.ProtectedRuntime.ReinstallProtected(ctx, o, source)
+	emitIntegration(ctx, r.emitter, hooks.NewIntegrationInstallCompleted, result, err)
+	return result, err
 }
 
 type observedRuntime struct {
