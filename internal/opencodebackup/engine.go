@@ -48,16 +48,15 @@ func ValidatePreviewSHA256(digest string) error {
 }
 
 type Engine struct {
-	sourceRoot           string
-	backupRoot           string
-	sourceAnchor         *rootAnchor
-	backupAnchor         *rootAnchor
-	anchorMu             sync.Mutex
-	managedPaths         []string
-	launcher             *LauncherMetadata
-	publishRestoreFile   func(string, string) error
-	syncRestoreDirectory func(string) error
-	syncBackupRoot       func(*os.Root) error
+	sourceRoot             string
+	backupRoot             string
+	sourceAnchor           *rootAnchor
+	backupAnchor           *rootAnchor
+	anchorMu               sync.Mutex
+	managedPaths           []string
+	launcher               *LauncherMetadata
+	syncRestoreDirectories func(*os.Root, string) error
+	syncBackupRoot         func(*os.Root) error
 }
 
 type sourceFile struct {
@@ -117,9 +116,9 @@ func New(options Options) (*Engine, error) {
 	}
 	return &Engine{
 		sourceRoot: sourceAnchor.path, backupRoot: backupRoot, managedPaths: managed, launcher: launcher,
-		sourceAnchor:       sourceAnchor,
-		publishRestoreFile: os.Link, syncRestoreDirectory: syncDirectory,
-		syncBackupRoot: func(root *os.Root) error { return syncDirectoryAt(root, ".") },
+		sourceAnchor:           sourceAnchor,
+		syncRestoreDirectories: syncRestoreDirectoriesAt,
+		syncBackupRoot:         func(root *os.Root) error { return syncDirectoryAt(root, ".") },
 	}, nil
 }
 
@@ -253,7 +252,6 @@ func (e *Engine) Create(ctx context.Context, mode Mode) (snapshot Snapshot, err 
 	if err := validateReservedSnapshot(backup, id, reserved); err != nil {
 		return Snapshot{}, err
 	}
-	verified.Directory = filepath.Join(backupAnchor.path, id)
 	if syncErr != nil {
 		return verified, wrapFilesystem("sync backup root", id, syncErr)
 	}
@@ -289,7 +287,6 @@ func (e *Engine) Verify(ctx context.Context, snapshotID string) (Snapshot, error
 	if snapshot.Manifest.SourceRoot != e.sourceRoot {
 		return Snapshot{}, corrupt("verify snapshot source root", snapshotID, nil)
 	}
-	snapshot.Directory = filepath.Join(e.backupRoot, snapshotID)
 	return snapshot, nil
 }
 

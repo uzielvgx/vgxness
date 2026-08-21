@@ -81,9 +81,12 @@ func TestDefaultBackupRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".local", "share", "vgxness", "backups", "opencode", snapshot.Manifest.SnapshotID)
-	if snapshot.Directory != want {
-		t.Fatalf("snapshot directory = %q, want %q", snapshot.Directory, want)
+	snapshotRoot := filepath.Join(home, ".local", "share", "vgxness", "backups", "opencode", snapshot.Manifest.SnapshotID)
+	if info, err := os.Stat(snapshotRoot); err != nil || !info.IsDir() {
+		t.Fatalf("snapshot root = %v, %v; want published directory", info, err)
+	}
+	if info, err := os.Stat(filepath.Join(snapshotRoot, "manifest.json")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("snapshot manifest = %v, %v; want regular file", info, err)
 	}
 }
 
@@ -190,8 +193,8 @@ func TestVerifyRejectsTamperingAndMalformedManifests(t *testing.T) {
 	}
 
 	t.Run("payload", func(t *testing.T) {
-		engine, _, snapshot := newSnapshot(t)
-		payload := filepath.Join(snapshot.Directory, "files", "config.json")
+		engine, backup, snapshot := newSnapshot(t)
+		payload := filepath.Join(backup, snapshot.Manifest.SnapshotID, "files", "config.json")
 		if err := os.WriteFile(payload, []byte("tampered"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -201,8 +204,8 @@ func TestVerifyRejectsTamperingAndMalformedManifests(t *testing.T) {
 	})
 
 	t.Run("unknown manifest field", func(t *testing.T) {
-		engine, _, snapshot := newSnapshot(t)
-		manifest := filepath.Join(snapshot.Directory, "manifest.json")
+		engine, backup, snapshot := newSnapshot(t)
+		manifest := filepath.Join(backup, snapshot.Manifest.SnapshotID, "manifest.json")
 		data, err := os.ReadFile(manifest)
 		if err != nil {
 			t.Fatal(err)
@@ -217,8 +220,8 @@ func TestVerifyRejectsTamperingAndMalformedManifests(t *testing.T) {
 	})
 
 	t.Run("trailing JSON", func(t *testing.T) {
-		engine, _, snapshot := newSnapshot(t)
-		manifest := filepath.Join(snapshot.Directory, "manifest.json")
+		engine, backup, snapshot := newSnapshot(t)
+		manifest := filepath.Join(backup, snapshot.Manifest.SnapshotID, "manifest.json")
 		file, err := os.OpenFile(manifest, os.O_APPEND|os.O_WRONLY, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -234,16 +237,16 @@ func TestVerifyRejectsTamperingAndMalformedManifests(t *testing.T) {
 	})
 
 	t.Run("extra payload", func(t *testing.T) {
-		engine, _, snapshot := newSnapshot(t)
-		writeFile(t, filepath.Join(snapshot.Directory, "files"), "extra", "extra", 0o600)
+		engine, backup, snapshot := newSnapshot(t)
+		writeFile(t, filepath.Join(backup, snapshot.Manifest.SnapshotID, "files"), "extra", "extra", 0o600)
 		if _, err := engine.Verify(context.Background(), snapshot.Manifest.SnapshotID); !errors.Is(err, opencodebackup.ErrCorrupt) {
 			t.Fatalf("Verify() error = %v, want ErrCorrupt", err)
 		}
 	})
 
 	t.Run("extra payload directory", func(t *testing.T) {
-		engine, _, snapshot := newSnapshot(t)
-		if err := os.Mkdir(filepath.Join(snapshot.Directory, "files", "extra-dir"), 0o700); err != nil {
+		engine, backup, snapshot := newSnapshot(t)
+		if err := os.Mkdir(filepath.Join(backup, snapshot.Manifest.SnapshotID, "files", "extra-dir"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := engine.Verify(context.Background(), snapshot.Manifest.SnapshotID); !errors.Is(err, opencodebackup.ErrCorrupt) {
@@ -255,8 +258,8 @@ func TestVerifyRejectsTamperingAndMalformedManifests(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("Windows does not expose Unix permission bits")
 		}
-		engine, _, snapshot := newSnapshot(t)
-		manifest := filepath.Join(snapshot.Directory, "manifest.json")
+		engine, backup, snapshot := newSnapshot(t)
+		manifest := filepath.Join(backup, snapshot.Manifest.SnapshotID, "manifest.json")
 		if err := os.Chmod(manifest, 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +272,7 @@ func TestVerifyRejectsTamperingAndMalformedManifests(t *testing.T) {
 func TestListIsVerifiedAndNewestFirst(t *testing.T) {
 	source := t.TempDir()
 	writeFile(t, source, "config", "one", 0o600)
-	engine, _ := newEngine(t, source, nil)
+	engine, backup := newEngine(t, source, nil)
 	first, err := engine.Create(context.Background(), opencodebackup.ModeFull)
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +291,7 @@ func TestListIsVerifiedAndNewestFirst(t *testing.T) {
 		t.Fatalf("List IDs = %v, want %v", got, want)
 	}
 
-	payload := filepath.Join(first.Directory, "files", "config")
+	payload := filepath.Join(backup, first.Manifest.SnapshotID, "files", "config")
 	if err := os.WriteFile(payload, []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -8,35 +8,20 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
-func TestRestoreMissingPublishesCompleteFileWithoutOverwritingRaceWinner(t *testing.T) {
-	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
-	if err := os.Remove(filepath.Join(engine.sourceRoot, "file")); err != nil {
-		t.Fatal(err)
-	}
-	preview, err := engine.PreviewRestore(context.Background(), snapshot.Manifest.SnapshotID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	engine.publishRestoreFile = func(_, destination string) error {
-		if err := os.WriteFile(destination, []byte("concurrent winner"), 0o600); err != nil {
-			return err
-		}
-		return os.ErrExist
-	}
-	result, err := engine.Restore(context.Background(), RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256})
-	if !errors.Is(err, ErrConflict) || result.Created != 0 {
-		t.Fatalf("Restore()=%+v, %v", result, err)
-	}
-	data, readErr := os.ReadFile(filepath.Join(engine.sourceRoot, "file"))
-	if readErr != nil || string(data) != "concurrent winner" {
-		t.Fatalf("race winner changed: %q, %v", data, readErr)
-	}
-	if matches, _ := filepath.Glob(filepath.Join(engine.sourceRoot, ".vgxness-restore-*")); len(matches) != 0 {
-		t.Fatalf("restore temporary files leaked: %v", matches)
-	}
+const (
+	windowsErrorAccessDenied     syscall.Errno = 5
+	windowsErrorSharingViolation syscall.Errno = 32
+)
+
+// windowsRenameBlocked recognizes only the Windows errors caused by renaming
+// an opened root; unrelated rename failures must propagate and fail the test.
+func windowsRenameBlocked(err error) bool {
+	return runtime.GOOS == "windows" &&
+		(errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation))
 }
 
 func TestRestoreReturnsPublishedPartialResultOnDurabilityFailure(t *testing.T) {
@@ -49,7 +34,7 @@ func TestRestoreReturnsPublishedPartialResultOnDurabilityFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	durabilityErr := errors.New("injected restore directory sync failure")
-	engine.syncRestoreDirectory = func(string) error { return durabilityErr }
+	engine.syncRestoreDirectories = func(*os.Root, string) error { return durabilityErr }
 	result, err := engine.Restore(context.Background(), RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256})
 	if !errors.Is(err, durabilityErr) || result.Created != 1 {
 		t.Fatalf("Restore()=%+v, %v", result, err)
@@ -87,16 +72,56 @@ func TestRestoreCancellationReturnsAccumulatedResult(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := 0
-	engine.syncRestoreDirectory = func(directory string) error {
+	engine.syncRestoreDirectories = func(root *os.Root, destination string) error {
 		calls++
 		if calls == 1 {
 			cancel()
 		}
-		return syncDirectory(directory)
+		return syncRestoreDirectoriesAt(root, destination)
 	}
 	result, err := engine.Restore(ctx, RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256})
 	if !errors.Is(err, context.Canceled) || result.Created != 1 {
 		t.Fatalf("Restore()=%+v, %v", result, err)
+	}
+}
+
+func TestRestoreRejectsSourceReplacementAfterPublication(t *testing.T) {
+	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
+	if err := os.Remove(filepath.Join(engine.sourceRoot, "file")); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := engine.PreviewRestore(context.Background(), snapshot.Manifest.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementBlocked := false
+	engine.syncRestoreDirectories = func(*os.Root, string) error {
+		if err := os.Rename(engine.sourceRoot, engine.sourceRoot+"-old"); err != nil {
+			if windowsRenameBlocked(err) {
+				replacementBlocked = true
+				return nil
+			}
+			return err
+		}
+		return os.Mkdir(engine.sourceRoot, 0o700)
+	}
+	result, err := engine.Restore(context.Background(), RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256})
+	if replacementBlocked {
+		if err != nil || result.Created != 1 {
+			t.Fatalf("Restore() = %+v, %v; want retained published result", result, err)
+		}
+		info, statErr := os.Lstat(engine.sourceRoot)
+		if statErr != nil || !os.SameFile(engine.sourceAnchor.info, info) {
+			t.Fatalf("source root identity changed: %v", statErr)
+		}
+		verified, verifyErr := engine.Verify(context.Background(), snapshot.Manifest.SnapshotID)
+		if verifyErr != nil || verified.Manifest.SnapshotID != snapshot.Manifest.SnapshotID {
+			t.Fatalf("retained snapshot did not verify: %+v, %v", verified, verifyErr)
+		}
+		return
+	}
+	if result.Created != 1 || !errors.Is(err, ErrConflict) {
+		t.Fatalf("Restore() = %+v, %v; want published result and ErrConflict", result, err)
 	}
 }
 
@@ -113,7 +138,7 @@ func TestCreateReturnsRetainedSnapshotOnPublicationSyncFailure(t *testing.T) {
 	syncErr := errors.New("injected publication sync failure")
 	engine.syncBackupRoot = func(*os.Root) error { return syncErr }
 	snapshot, err := engine.Create(context.Background(), ModeFull)
-	if !errors.Is(err, syncErr) || snapshot.Manifest.SnapshotID == "" || snapshot.Directory == "" {
+	if !errors.Is(err, syncErr) || snapshot.Manifest.SnapshotID == "" {
 		t.Fatalf("Create()=%+v, %v", snapshot, err)
 	}
 	verified, verifyErr := engine.Verify(context.Background(), snapshot.Manifest.SnapshotID)
@@ -135,7 +160,7 @@ func TestCreateRejectsBackupRootReplacementDuringFinalSync(t *testing.T) {
 	replacementBlocked := false
 	engine.syncBackupRoot = func(*os.Root) error {
 		if err := os.Rename(backup, backup+"-old"); err != nil {
-			if runtime.GOOS == "windows" {
+			if windowsRenameBlocked(err) {
 				replacementBlocked = true
 				return nil
 			}
@@ -158,7 +183,7 @@ func TestCreateRejectsBackupRootReplacementDuringFinalSync(t *testing.T) {
 		}
 		return
 	}
-	if !errors.Is(err, ErrConflict) || snapshot.Directory != "" {
+	if !errors.Is(err, ErrConflict) || snapshot.Manifest.SnapshotID != "" {
 		t.Fatalf("Create() = %+v, %v; want empty snapshot, ErrConflict", snapshot, err)
 	}
 }
@@ -185,7 +210,7 @@ func TestCreateRejectsSnapshotReplacementDuringFinalSync(t *testing.T) {
 		return root.Mkdir(id, 0o700)
 	}
 	snapshot, err := engine.Create(context.Background(), ModeFull)
-	if !errors.Is(err, ErrConflict) || snapshot.Directory != "" {
+	if !errors.Is(err, ErrConflict) || snapshot.Manifest.SnapshotID != "" {
 		t.Fatalf("Create() = %+v, %v; want empty snapshot, ErrConflict", snapshot, err)
 	}
 }
@@ -348,6 +373,26 @@ func TestOpenRestoreRefsCancellationDoesNotCreateBackupRoot(t *testing.T) {
 	}
 	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cancelled ref opening created backup root: %v", err)
+	}
+}
+
+func TestRestoreRejectsInvalidIncludeBeforeInitializingBackupRoot(t *testing.T) {
+	source := canonicalCorrectionPath(t, t.TempDir())
+	backup := filepath.Join(canonicalCorrectionPath(t, t.TempDir()), "backup")
+	engine, err := New(Options{SourceRoot: source, BackupRoot: backup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = engine.Restore(context.Background(), RestoreRequest{
+		SnapshotID:    "20260820T000000.000000000Z-0123456789abcdef",
+		PreviewSHA256: strings.Repeat("a", 64),
+		IncludePaths:  []string{"../invalid"},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Restore() error=%v, want ErrInvalid", err)
+	}
+	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid request initialized backup root: %v", err)
 	}
 }
 
