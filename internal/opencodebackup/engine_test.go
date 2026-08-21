@@ -323,6 +323,29 @@ func TestVerifyDoesNotCreateBackupRootAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestPreviewDoesNotCreateBackupRootAfterCancellation(t *testing.T) {
+	source := t.TempDir()
+	engine, backup := newEngine(t, source, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := engine.PreviewRestore(ctx, "20260820T000000.000000000Z-0123456789abcdef"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("PreviewRestore() error = %v, want context cancellation", err)
+	}
+	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled PreviewRestore created backup root: %v", err)
+	}
+}
+
+func TestPreviewRejectsInvalidIDWithoutCreatingBackupRoot(t *testing.T) {
+	engine, backup := newEngine(t, t.TempDir(), nil)
+	if _, err := engine.PreviewRestore(context.Background(), "invalid"); !errors.Is(err, opencodebackup.ErrInvalid) {
+		t.Fatalf("PreviewRestore() error = %v, want ErrInvalid", err)
+	}
+	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid PreviewRestore created backup root: %v", err)
+	}
+}
+
 func TestMergeRestore(t *testing.T) {
 	source := t.TempDir()
 	writeFile(t, source, "missing", "snapshot missing", 0o644)
