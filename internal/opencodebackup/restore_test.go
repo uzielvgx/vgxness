@@ -3,6 +3,7 @@ package opencodebackup
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -41,7 +42,7 @@ func TestSnapshotDoesNotExposeDirectory(t *testing.T) {
 	}
 }
 
-func TestRestoreMissingRetainsReservedDestinationOnCopyFailure(t *testing.T) {
+func TestRestoreMissingRemovesReservedDestinationOnCopyFailure(t *testing.T) {
 	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
 	if err := os.Remove(engine.sourceRoot + "/file"); err != nil {
 		t.Fatal(err)
@@ -54,10 +55,64 @@ func TestRestoreMissingRetainsReservedDestinationOnCopyFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	created, err := engine.restoreMissing(ctx, refs, snapshot.Manifest.Entries[0])
-	if !created || !errors.Is(err, context.Canceled) {
-		t.Fatalf("restoreMissing() = %v, %v; want retained destination and cancellation", created, err)
+	if created || !errors.Is(err, context.Canceled) {
+		t.Fatalf("restoreMissing() = %v, %v; want cleaned destination and cancellation", created, err)
 	}
-	if _, err := refs.source.Lstat("file"); err != nil {
-		t.Fatalf("reserved destination was removed: %v", err)
+	if _, err := refs.source.Lstat("file"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reserved destination was retained: %v", err)
+	}
+}
+
+func TestRestoreRetriesAfterPrePublicationCopyFailure(t *testing.T) {
+	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
+	if err := os.Remove(filepath.Join(engine.sourceRoot, "file")); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := engine.PreviewRestore(context.Background(), snapshot.Manifest.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyErr := errors.New("copy failure")
+	engine.copySnapshotEntry = func(_ context.Context, _ *os.Root, _ Entry, output io.Writer) error {
+		_, _ = output.Write([]byte("partial"))
+		return copyErr
+	}
+	result, err := engine.Restore(context.Background(), RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256})
+	if !errors.Is(err, copyErr) || result.Created != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(engine.sourceRoot, "file")); !os.IsNotExist(err) {
+		t.Fatalf("failed restore retained destination: %v", err)
+	}
+	if names, err := filepath.Glob(filepath.Join(engine.sourceRoot, ".vgxness-restore-*")); err != nil || len(names) != 0 {
+		t.Fatalf("staging=%v err=%v", names, err)
+	}
+	engine.copySnapshotEntry = copySnapshotEntry
+	result, err = engine.Restore(context.Background(), RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256})
+	if err != nil || result.Created != 1 {
+		t.Fatalf("retry result=%+v err=%v", result, err)
+	}
+}
+
+func TestRestoreDoesNotOverwriteConcurrentFinalAtPublish(t *testing.T) {
+	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
+	if err := os.Remove(filepath.Join(engine.sourceRoot, "file")); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := engine.PreviewRestore(context.Background(), snapshot.Manifest.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.beforeRestorePublish = func(root *os.Root, _ string) error { return root.WriteFile("file", []byte("concurrent"), 0o600) }
+	result, err := engine.Restore(context.Background(), RestoreRequest{SnapshotID: snapshot.Manifest.SnapshotID, PreviewSHA256: preview.SHA256})
+	if !errors.Is(err, ErrConflict) || result.Created != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(engine.sourceRoot, "file"))
+	if err != nil || string(data) != "concurrent" {
+		t.Fatalf("final=%q err=%v", data, err)
+	}
+	if names, err := filepath.Glob(filepath.Join(engine.sourceRoot, ".vgxness-restore-*")); err != nil || len(names) != 0 {
+		t.Fatalf("staging=%v err=%v", names, err)
 	}
 }
