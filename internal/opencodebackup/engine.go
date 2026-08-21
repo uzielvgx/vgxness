@@ -18,12 +18,14 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	manifestName = "manifest.json"
-	payloadName  = "files"
+	manifestName   = "manifest.json"
+	payloadName    = "files"
+	incompleteName = ".incomplete"
 )
 
 var (
@@ -46,22 +48,24 @@ func ValidatePreviewSHA256(digest string) error {
 }
 
 type Engine struct {
-	sourceRoot            string
-	backupRoot            string
-	managedPaths          []string
-	launcher              *LauncherMetadata
-	publishRestoreFile    func(string, string) error
-	syncRestoreDirectory  func(string) error
-	syncPublishedSnapshot func(string) error
+	sourceRoot           string
+	backupRoot           string
+	sourceAnchor         *rootAnchor
+	backupAnchor         *rootAnchor
+	anchorMu             sync.Mutex
+	managedPaths         []string
+	launcher             *LauncherMetadata
+	publishRestoreFile   func(string, string) error
+	syncRestoreDirectory func(string) error
+	syncBackupRoot       func(*os.Root) error
 }
 
 type sourceFile struct {
-	rel  string
-	path string
+	rel string
 }
 
 func New(options Options) (*Engine, error) {
-	sourceRoot, err := absoluteRoot(options.SourceRoot)
+	sourceRoot, err := canonicalRoot(options.SourceRoot)
 	if err != nil {
 		return nil, invalid("resolve source root", "", err)
 	}
@@ -74,13 +78,13 @@ func New(options Options) (*Engine, error) {
 				return nil, invalid("resolve home directory", "", err)
 			}
 		}
-		home, err = absoluteRoot(home)
+		home, err = canonicalRoot(home)
 		if err != nil {
 			return nil, invalid("resolve home directory", "", err)
 		}
 		backupValue = filepath.Join(home, ".local", "share", "vgxness", "backups", "opencode")
 	}
-	backupRoot, err := absoluteRoot(backupValue)
+	backupRoot, err := canonicalRoot(backupValue)
 	if err != nil {
 		return nil, invalid("resolve backup root", "", err)
 	}
@@ -107,10 +111,33 @@ func New(options Options) (*Engine, error) {
 	if err := validateLauncher(launcher); err != nil {
 		return nil, invalid("validate launcher metadata", "", err)
 	}
+	sourceAnchor, err := newRootAnchor(sourceRoot)
+	if err != nil {
+		return nil, err
+	}
 	return &Engine{
-		sourceRoot: sourceRoot, backupRoot: backupRoot, managedPaths: managed, launcher: launcher,
-		publishRestoreFile: os.Link, syncRestoreDirectory: syncDirectory, syncPublishedSnapshot: syncDirectory,
+		sourceRoot: sourceAnchor.path, backupRoot: backupRoot, managedPaths: managed, launcher: launcher,
+		sourceAnchor:       sourceAnchor,
+		publishRestoreFile: os.Link, syncRestoreDirectory: syncDirectory,
+		syncBackupRoot: func(root *os.Root) error { return syncDirectoryAt(root, ".") },
 	}, nil
+}
+
+func (e *Engine) backupRootAnchor() (*rootAnchor, error) {
+	e.anchorMu.Lock()
+	defer e.anchorMu.Unlock()
+	if e.backupAnchor != nil {
+		return e.backupAnchor, nil
+	}
+	anchor, err := newPrivateRootAnchor(e.backupRoot)
+	if err != nil {
+		return nil, err
+	}
+	if containsPath(e.sourceAnchor.path, anchor.path) || containsPath(anchor.path, e.sourceAnchor.path) {
+		return nil, invalid("validate roots", "", nil)
+	}
+	e.backupAnchor = anchor
+	return anchor, nil
 }
 
 func (e *Engine) Create(ctx context.Context, mode Mode) (snapshot Snapshot, err error) {
@@ -123,13 +150,21 @@ func (e *Engine) Create(ctx context.Context, mode Mode) (snapshot Snapshot, err 
 	if err := mode.Validate(); err != nil {
 		return Snapshot{}, err
 	}
-	if err := requireSafeDirectory(e.sourceRoot); err != nil {
-		return Snapshot{}, wrapFilesystem("inspect source root", e.sourceRoot, err)
+	source, err := e.sourceAnchor.open()
+	if err != nil {
+		return Snapshot{}, err
 	}
-	if err := ensurePrivateRoot(e.backupRoot); err != nil {
-		return Snapshot{}, wrapFilesystem("prepare backup root", e.backupRoot, err)
+	defer source.Close()
+	backupAnchor, err := e.backupRootAnchor()
+	if err != nil {
+		return Snapshot{}, err
 	}
-	files, err := e.collect(ctx, mode)
+	backup, err := backupAnchor.open()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer backup.Close()
+	files, err := e.collect(ctx, source, mode)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -138,24 +173,26 @@ func (e *Engine) Create(ctx context.Context, mode Mode) (snapshot Snapshot, err 
 	if err != nil {
 		return Snapshot{}, wrapFilesystem("generate snapshot id", "", err)
 	}
-	temporary, err := os.MkdirTemp(e.backupRoot, ".tmp-")
+	reserved, err := reserveSnapshot(backup, id)
 	if err != nil {
-		return Snapshot{}, wrapFilesystem("create temporary snapshot", e.backupRoot, err)
+		return Snapshot{}, err
 	}
-	published := false
-	defer func() {
-		if !published {
-			_ = os.RemoveAll(temporary)
-		}
-	}()
-	if err := os.Chmod(temporary, 0o700); err != nil {
-		return Snapshot{}, wrapFilesystem("secure temporary snapshot", "", err)
+	snapshotRoot, err := backup.OpenRoot(id)
+	if err != nil {
+		return Snapshot{}, wrapFilesystem("open reserved snapshot", id, err)
 	}
-	payload := filepath.Join(temporary, payloadName)
-	if err := os.Mkdir(payload, 0o700); err != nil {
+	defer snapshotRoot.Close()
+	opened, err := snapshotRoot.Stat(".")
+	if err != nil || !os.SameFile(reserved, opened) {
+		return Snapshot{}, corrupt("open reserved snapshot", id, err)
+	}
+	if err := writeIncompleteMarker(snapshotRoot); err != nil {
+		return Snapshot{}, err
+	}
+	if err := snapshotRoot.Mkdir(payloadName, 0o700); err != nil {
 		return Snapshot{}, wrapFilesystem("create snapshot payload", "", err)
 	}
-	if err := os.Chmod(payload, 0o700); err != nil {
+	if err := snapshotRoot.Chmod(payloadName, 0o700); err != nil {
 		return Snapshot{}, wrapFilesystem("secure snapshot payload", "", err)
 	}
 
@@ -168,46 +205,57 @@ func (e *Engine) Create(ctx context.Context, mode Mode) (snapshot Snapshot, err 
 		Entries:       make([]Entry, 0, len(files)),
 		Launcher:      cloneLauncher(e.launcher),
 	}
-	for _, source := range files {
+	for _, sourceFile := range files {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
 		}
-		destination := filepath.Join(payload, filepath.FromSlash(source.rel))
-		if err := makePrivateParents(payload, path.Dir(source.rel)); err != nil {
-			return Snapshot{}, wrapFilesystem("create payload directory", source.rel, err)
+		if err := makePrivateParents(snapshotRoot, path.Dir(sourceFile.rel)); err != nil {
+			return Snapshot{}, wrapFilesystem("create payload directory", sourceFile.rel, err)
 		}
-		entry, err := copySourceFile(ctx, source.path, destination, source.rel)
+		entry, err := copySourceFile(ctx, source, snapshotRoot, sourceFile.rel)
 		if err != nil {
 			return Snapshot{}, err
 		}
 		if manifest.TotalBytes > MaxTotalBytes-entry.Size {
-			return Snapshot{}, invalid("create snapshot", source.rel, errors.New("total size limit exceeded"))
+			return Snapshot{}, invalid("create snapshot", sourceFile.rel, errors.New("total size limit exceeded"))
 		}
 		manifest.TotalBytes += entry.Size
 		manifest.Entries = append(manifest.Entries, entry)
 	}
 
-	if err := writeManifest(temporary, manifest); err != nil {
+	if err := writeManifest(snapshotRoot, manifest); err != nil {
 		return Snapshot{}, err
 	}
-	if err := syncTreeDirectories(temporary); err != nil {
-		return Snapshot{}, wrapFilesystem("sync temporary snapshot", "", err)
+	if err := syncTreeDirectories(snapshotRoot); err != nil {
+		return Snapshot{}, wrapFilesystem("sync snapshot", id, err)
 	}
-	verified, err := verifyDirectory(ctx, temporary, id)
+	if err := snapshotRoot.Remove(incompleteName); err != nil {
+		return Snapshot{}, wrapFilesystem("complete snapshot", id, err)
+	}
+	if err := syncDirectoryAt(snapshotRoot, "."); err != nil {
+		return Snapshot{}, wrapFilesystem("sync completed snapshot", id, err)
+	}
+	verified, err := verifyDirectory(ctx, snapshotRoot, id)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
-	final := filepath.Join(e.backupRoot, id)
-	if err := os.Rename(temporary, final); err != nil {
-		return Snapshot{}, wrapFilesystem("publish snapshot", id, err)
+	syncErr := e.syncBackupRoot(backup)
+	validated, validationErr := backupAnchor.open()
+	if validationErr != nil {
+		return Snapshot{}, validationErr
 	}
-	published = true
-	verified.Directory = final
-	if err := e.syncPublishedSnapshot(e.backupRoot); err != nil {
-		return verified, wrapFilesystem("publish snapshot", id, err)
+	if err := validated.Close(); err != nil {
+		return Snapshot{}, err
+	}
+	if err := validateReservedSnapshot(backup, id, reserved); err != nil {
+		return Snapshot{}, err
+	}
+	verified.Directory = filepath.Join(backupAnchor.path, id)
+	if syncErr != nil {
+		return verified, wrapFilesystem("sync backup root", id, syncErr)
 	}
 	return verified, nil
 }
@@ -216,29 +264,32 @@ func (e *Engine) Verify(ctx context.Context, snapshotID string) (Snapshot, error
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
 	if !snapshotIDPattern.MatchString(snapshotID) {
 		return Snapshot{}, invalid("verify snapshot id", "", nil)
 	}
-	if err := requirePrivateDirectory(e.backupRoot); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Snapshot{}, &Error{Kind: ErrNotFound, Op: "verify snapshot"}
-		}
-		return Snapshot{}, corrupt("verify backup root", "", err)
+	backup, err := e.backupRootAnchor()
+	if err != nil {
+		return Snapshot{}, err
 	}
-	directory := filepath.Join(e.backupRoot, snapshotID)
-	if _, err := os.Lstat(directory); err != nil {
+	ref, err := openSnapshot(backup, snapshotID)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Snapshot{}, &Error{Kind: ErrNotFound, Op: "verify snapshot", Path: snapshotID}
 		}
-		return Snapshot{}, corrupt("inspect snapshot", snapshotID, err)
+		return Snapshot{}, err
 	}
-	snapshot, err := verifyDirectory(ctx, directory, snapshotID)
+	defer ref.Close()
+	snapshot, err := verifyDirectory(ctx, ref.snapshot, snapshotID)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	if snapshot.Manifest.SourceRoot != e.sourceRoot {
 		return Snapshot{}, corrupt("verify snapshot source root", snapshotID, nil)
 	}
+	snapshot.Directory = filepath.Join(e.backupRoot, snapshotID)
 	return snapshot, nil
 }
 
@@ -249,10 +300,16 @@ func (e *Engine) List(ctx context.Context) ([]Summary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := ensurePrivateRoot(e.backupRoot); err != nil {
-		return nil, wrapFilesystem("prepare backup root", e.backupRoot, err)
+	backup, err := e.backupRootAnchor()
+	if err != nil {
+		return nil, err
 	}
-	entries, err := os.ReadDir(e.backupRoot)
+	root, err := backup.open()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return nil, wrapFilesystem("list snapshots", e.backupRoot, err)
 	}
@@ -263,6 +320,13 @@ func (e *Engine) List(ctx context.Context) ([]Summary, error) {
 		}
 		if !snapshotIDPattern.MatchString(entry.Name()) || !entry.IsDir() {
 			return nil, corrupt("list snapshots", entry.Name(), nil)
+		}
+		incomplete, err := isIncompleteSnapshot(root, entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		if incomplete {
+			continue
 		}
 		ids = append(ids, entry.Name())
 	}
@@ -281,14 +345,17 @@ func (e *Engine) List(ctx context.Context) ([]Summary, error) {
 	return summaries, nil
 }
 
-func (e *Engine) collect(ctx context.Context, mode Mode) ([]sourceFile, error) {
+func (e *Engine) collect(ctx context.Context, root *os.Root, mode Mode) ([]sourceFile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if mode == ModeManaged {
 		files := make([]sourceFile, 0, len(e.managedPaths))
 		for _, relative := range e.managedPaths {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			file, exists, err := inspectManagedFile(e.sourceRoot, relative)
+			file, exists, err := inspectManagedFile(root, relative)
 			if err != nil {
 				return nil, err
 			}
@@ -299,14 +366,14 @@ func (e *Engine) collect(ctx context.Context, mode Mode) ([]sourceFile, error) {
 		return files, nil
 	}
 	files := make([]sourceFile, 0)
-	err := filepath.WalkDir(e.sourceRoot, func(filePath string, entry fs.DirEntry, walkErr error) error {
+	err := fs.WalkDir(root.FS(), ".", func(relative string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if walkErr != nil {
 			return wrapFilesystem("walk source", "", walkErr)
 		}
-		if filePath == e.sourceRoot {
+		if relative == "." {
 			return nil
 		}
 		info, err := entry.Info()
@@ -314,15 +381,14 @@ func (e *Engine) collect(ctx context.Context, mode Mode) ([]sourceFile, error) {
 			return wrapFilesystem("inspect source entry", "", err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return unsupported("walk source", relativeDisplay(e.sourceRoot, filePath), nil)
+			return unsupported("walk source", relative, nil)
 		}
 		if info.IsDir() {
 			return nil
 		}
 		if !info.Mode().IsRegular() {
-			return unsupported("walk source", relativeDisplay(e.sourceRoot, filePath), nil)
+			return unsupported("walk source", relative, nil)
 		}
-		relative := relativeDisplay(e.sourceRoot, filePath)
 		if err := validateRelativePath(relative); err != nil {
 			return invalid("walk source", relative, err)
 		}
@@ -332,7 +398,7 @@ func (e *Engine) collect(ctx context.Context, mode Mode) ([]sourceFile, error) {
 		if info.Size() < 0 || info.Size() > MaxFileSize {
 			return invalid("walk source", relative, errors.New("file size limit exceeded"))
 		}
-		files = append(files, sourceFile{rel: relative, path: filePath})
+		files = append(files, sourceFile{rel: relative})
 		return nil
 	})
 	if err != nil {
@@ -342,12 +408,11 @@ func (e *Engine) collect(ctx context.Context, mode Mode) ([]sourceFile, error) {
 	return files, nil
 }
 
-func inspectManagedFile(root, relative string) (sourceFile, bool, error) {
-	current := root
+func inspectManagedFile(root *os.Root, relative string) (sourceFile, bool, error) {
 	components := strings.Split(relative, "/")
-	for index, component := range components {
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
+	for index := range components {
+		name := strings.Join(components[:index+1], "/")
+		info, err := root.Lstat(name)
 		if errors.Is(err, os.ErrNotExist) {
 			return sourceFile{}, false, nil
 		}
@@ -370,18 +435,18 @@ func inspectManagedFile(root, relative string) (sourceFile, bool, error) {
 			return sourceFile{}, false, invalid("inspect managed path", relative, errors.New("file size limit exceeded"))
 		}
 	}
-	return sourceFile{rel: relative, path: current}, true, nil
+	return sourceFile{rel: relative}, true, nil
 }
 
-func copySourceFile(ctx context.Context, source, destination, relative string) (Entry, error) {
-	before, err := os.Lstat(source)
+func copySourceFile(ctx context.Context, source, destination *os.Root, relative string) (Entry, error) {
+	before, err := source.Lstat(relative)
 	if err != nil {
 		return Entry{}, wrapFilesystem("inspect source file", relative, err)
 	}
 	if !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
 		return Entry{}, unsupported("copy source file", relative, nil)
 	}
-	input, err := os.Open(source)
+	input, err := source.Open(relative)
 	if err != nil {
 		return Entry{}, wrapFilesystem("open source file", relative, err)
 	}
@@ -390,7 +455,7 @@ func copySourceFile(ctx context.Context, source, destination, relative string) (
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
 		return Entry{}, unsupported("copy raced source file", relative, err)
 	}
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	output, err := destination.OpenFile(payloadName+"/"+relative, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return Entry{}, wrapFilesystem("create payload file", relative, err)
 	}
@@ -398,7 +463,7 @@ func copySourceFile(ctx context.Context, source, destination, relative string) (
 	defer func() {
 		_ = output.Close()
 		if remove {
-			_ = os.Remove(destination)
+			_ = destination.Remove(payloadName + "/" + relative)
 		}
 	}()
 	hash := sha256.New()
@@ -410,7 +475,7 @@ func copySourceFile(ctx context.Context, source, destination, relative string) (
 		return Entry{}, invalid("copy source file", relative, errors.New("file size limit exceeded"))
 	}
 	afterOpen, statErr := input.Stat()
-	afterPath, pathErr := os.Lstat(source)
+	afterPath, pathErr := source.Lstat(relative)
 	if statErr != nil || pathErr != nil || !os.SameFile(before, afterOpen) || !os.SameFile(before, afterPath) || before.Size() != afterOpen.Size() || !before.ModTime().Equal(afterOpen.ModTime()) || written != afterOpen.Size() {
 		return Entry{}, unsupported("copy raced source file", relative, errors.Join(statErr, pathErr))
 	}
@@ -427,7 +492,7 @@ func copySourceFile(ctx context.Context, source, destination, relative string) (
 	return Entry{Path: relative, Size: written, Mode: uint32(before.Mode().Perm()), SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
-func writeManifest(directory string, manifest Manifest) error {
+func writeManifest(root *os.Root, manifest Manifest) error {
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return corrupt("encode manifest", "", err)
@@ -436,7 +501,7 @@ func writeManifest(directory string, manifest Manifest) error {
 	if int64(len(data)) > MaxManifestSize {
 		return invalid("encode manifest", "", errors.New("manifest size limit exceeded"))
 	}
-	file, err := os.OpenFile(filepath.Join(directory, manifestName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := root.OpenFile(manifestName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return wrapFilesystem("create manifest", "", err)
 	}
@@ -458,14 +523,14 @@ func writeManifest(directory string, manifest Manifest) error {
 	return nil
 }
 
-func verifyDirectory(ctx context.Context, directory, expectedID string) (Snapshot, error) {
+func verifyDirectory(ctx context.Context, root *os.Root, expectedID string) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
-	if err := requirePrivateDirectory(directory); err != nil {
+	if err := requirePrivateDirectoryAt(root, "."); err != nil {
 		return Snapshot{}, corrupt("verify snapshot directory", expectedID, err)
 	}
-	rootEntries, err := os.ReadDir(directory)
+	rootEntries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return Snapshot{}, corrupt("read snapshot directory", expectedID, err)
 	}
@@ -475,12 +540,11 @@ func verifyDirectory(ctx context.Context, directory, expectedID string) (Snapsho
 	if !rootEntries[0].IsDir() || rootEntries[1].Type()&os.ModeType != 0 {
 		return Snapshot{}, corrupt("verify snapshot layout", expectedID, nil)
 	}
-	manifest, err := readManifest(filepath.Join(directory, manifestName), expectedID)
+	manifest, err := readManifest(root, manifestName, expectedID)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	payload := filepath.Join(directory, payloadName)
-	if err := requirePrivateDirectory(payload); err != nil {
+	if err := requirePrivateDirectoryAt(root, payloadName); err != nil {
 		return Snapshot{}, corrupt("verify payload directory", expectedID, err)
 	}
 	expected := make(map[string]Entry, len(manifest.Entries))
@@ -492,14 +556,14 @@ func verifyDirectory(ctx context.Context, directory, expectedID string) (Snapsho
 		}
 	}
 	seen := make(map[string]struct{}, len(expected))
-	err = filepath.WalkDir(payload, func(filePath string, dirEntry fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(root.FS(), payloadName, func(filePath string, dirEntry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return corrupt("walk payload", expectedID, walkErr)
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if filePath == payload {
+		if filePath == payloadName {
 			return nil
 		}
 		info, err := dirEntry.Info()
@@ -513,7 +577,7 @@ func verifyDirectory(ctx context.Context, directory, expectedID string) (Snapsho
 			if err := requirePrivateMode(info, 0o700); err != nil {
 				return corrupt("verify payload permissions", expectedID, err)
 			}
-			if _, exists := expectedDirectories[relativeDisplay(payload, filePath)]; !exists {
+			if _, exists := expectedDirectories[strings.TrimPrefix(filePath, payloadName+"/")]; !exists {
 				return corrupt("verify extra payload directory", expectedID, nil)
 			}
 			return nil
@@ -521,7 +585,7 @@ func verifyDirectory(ctx context.Context, directory, expectedID string) (Snapsho
 		if !info.Mode().IsRegular() {
 			return corrupt("verify payload type", expectedID, nil)
 		}
-		relative := relativeDisplay(payload, filePath)
+		relative := strings.TrimPrefix(filePath, payloadName+"/")
 		entry, exists := expected[relative]
 		if !exists {
 			return corrupt("verify extra payload", relative, nil)
@@ -529,7 +593,7 @@ func verifyDirectory(ctx context.Context, directory, expectedID string) (Snapsho
 		if err := requirePrivateMode(info, 0o600); err != nil {
 			return corrupt("verify payload permissions", relative, err)
 		}
-		size, digest, _, err := hashRegularFile(ctx, filePath)
+		size, digest, _, err := hashRegularFileAt(ctx, root, filePath)
 		if err != nil {
 			return corrupt("hash payload", relative, err)
 		}
@@ -546,11 +610,11 @@ func verifyDirectory(ctx context.Context, directory, expectedID string) (Snapsho
 		return Snapshot{}, corrupt("verify missing payload", expectedID, nil)
 	}
 	summary := summaryOf(manifest)
-	return Snapshot{Manifest: manifest, Summary: summary, Directory: directory}, nil
+	return Snapshot{Manifest: manifest, Summary: summary}, nil
 }
 
-func readManifest(filePath, expectedID string) (Manifest, error) {
-	info, err := os.Lstat(filePath)
+func readManifest(root *os.Root, name, expectedID string) (Manifest, error) {
+	info, err := root.Lstat(name)
 	if err != nil {
 		return Manifest{}, corrupt("inspect manifest", expectedID, err)
 	}
@@ -560,7 +624,7 @@ func readManifest(filePath, expectedID string) (Manifest, error) {
 	if err := requirePrivateMode(info, 0o600); err != nil {
 		return Manifest{}, corrupt("verify manifest permissions", expectedID, err)
 	}
-	file, err := os.Open(filePath)
+	file, err := root.Open(name)
 	if err != nil {
 		return Manifest{}, corrupt("open manifest", expectedID, err)
 	}
@@ -571,7 +635,7 @@ func readManifest(filePath, expectedID string) (Manifest, error) {
 	}
 	data, err := io.ReadAll(io.LimitReader(file, MaxManifestSize+1))
 	afterOpen, statErr := file.Stat()
-	afterPath, pathErr := os.Lstat(filePath)
+	afterPath, pathErr := root.Lstat(name)
 	closeErr := file.Close()
 	if err != nil || statErr != nil || pathErr != nil || closeErr != nil || int64(len(data)) > MaxManifestSize || !os.SameFile(info, afterOpen) || !os.SameFile(info, afterPath) || info.Size() != afterOpen.Size() || !info.ModTime().Equal(afterOpen.ModTime()) {
 		return Manifest{}, corrupt("read manifest", expectedID, errors.Join(err, statErr, pathErr, closeErr))
@@ -722,6 +786,36 @@ func hashRegularFile(ctx context.Context, filePath string) (int64, string, os.Fi
 	return size, hex.EncodeToString(hash.Sum(nil)), before.Mode().Perm(), nil
 }
 
+func hashRegularFileAt(ctx context.Context, root *os.Root, name string) (int64, string, os.FileMode, error) {
+	before, err := root.Lstat(name)
+	if err != nil {
+		return 0, "", 0, err
+	}
+	if !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
+		return 0, "", 0, ErrUnsupported
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return 0, "", 0, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		return 0, "", 0, errors.Join(ErrUnsupported, err)
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, io.LimitReader(contextReader{ctx: ctx, reader: file}, MaxFileSize+1))
+	if err != nil {
+		return 0, "", 0, err
+	}
+	afterOpen, statErr := file.Stat()
+	afterPath, pathErr := root.Lstat(name)
+	if size > MaxFileSize || statErr != nil || pathErr != nil || !os.SameFile(before, afterOpen) || !os.SameFile(before, afterPath) || before.Size() != afterOpen.Size() || !before.ModTime().Equal(afterOpen.ModTime()) || size != afterOpen.Size() {
+		return 0, "", 0, errors.Join(ErrUnsupported, statErr, pathErr)
+	}
+	return size, hex.EncodeToString(hash.Sum(nil)), before.Mode().Perm(), nil
+}
+
 type contextReader struct {
 	ctx    context.Context
 	reader io.Reader
@@ -807,22 +901,22 @@ func relativeDisplay(root, filePath string) string {
 	return filepath.ToSlash(relative)
 }
 
-func makePrivateParents(root, relativeDirectory string) error {
+func makePrivateParents(root *os.Root, relativeDirectory string) error {
 	if relativeDirectory == "." {
 		return nil
 	}
-	current := root
+	current := ""
 	for _, component := range strings.Split(relativeDirectory, "/") {
-		current = filepath.Join(current, component)
-		err := os.Mkdir(current, 0o700)
+		current = path.Join(current, component)
+		err := root.Mkdir(payloadName+"/"+current, 0o700)
 		if err != nil && !errors.Is(err, os.ErrExist) {
 			return err
 		}
-		info, err := os.Lstat(current)
+		info, err := root.Lstat(payloadName + "/" + current)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return errors.Join(ErrUnsupported, err)
 		}
-		if err := os.Chmod(current, 0o700); err != nil {
+		if err := root.Chmod(payloadName+"/"+current, 0o700); err != nil {
 			return err
 		}
 	}
@@ -910,6 +1004,17 @@ func requirePrivateDirectory(directory string) error {
 	return requirePrivateMode(info, 0o700)
 }
 
+func requirePrivateDirectoryAt(root *os.Root, name string) error {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return ErrUnsupported
+	}
+	return requirePrivateMode(info, 0o700)
+}
+
 func requirePrivateMode(info os.FileInfo, expected os.FileMode) error {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != expected {
 		return fmt.Errorf("permission mode is not private")
@@ -917,9 +1022,9 @@ func requirePrivateMode(info os.FileInfo, expected os.FileMode) error {
 	return nil
 }
 
-func syncTreeDirectories(root string) error {
+func syncTreeDirectories(root *os.Root) error {
 	directories := make([]string, 0)
-	err := filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, err error) error {
+	err := fs.WalkDir(root.FS(), ".", func(filePath string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -932,11 +1037,103 @@ func syncTreeDirectories(root string) error {
 		return err
 	}
 	for index := len(directories) - 1; index >= 0; index-- {
-		if err := syncDirectory(directories[index]); err != nil {
+		if err := syncDirectoryAt(root, directories[index]); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func syncDirectoryAt(root *os.Root, name string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return err
+	}
+	err = file.Sync()
+	return errors.Join(err, file.Close())
+}
+
+func reserveSnapshot(backup *os.Root, id string) (os.FileInfo, error) {
+	if err := backup.Mkdir(id, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil, &Error{Kind: ErrConflict, Op: "reserve snapshot", Path: id, Err: err}
+		}
+		return nil, wrapFilesystem("reserve snapshot", id, err)
+	}
+	reserved, err := backup.Lstat(id)
+	if err != nil || !reserved.IsDir() || reserved.Mode()&os.ModeSymlink != 0 {
+		return nil, corrupt("reserve snapshot", id, err)
+	}
+	return reserved, nil
+}
+
+func validateReservedSnapshot(backup *os.Root, id string, reserved os.FileInfo) error {
+	info, err := backup.Lstat(id)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !os.SameFile(reserved, info) {
+		return &Error{Kind: ErrConflict, Op: "validate snapshot", Path: id, Err: err}
+	}
+	snapshot, err := backup.OpenRoot(id)
+	if err != nil {
+		return &Error{Kind: ErrConflict, Op: "open snapshot", Path: id, Err: err}
+	}
+	opened, statErr := snapshot.Stat(".")
+	closeErr := snapshot.Close()
+	if statErr != nil || closeErr != nil || !opened.IsDir() || !os.SameFile(reserved, opened) || !os.SameFile(info, opened) {
+		return errors.Join(&Error{Kind: ErrConflict, Op: "validate snapshot", Path: id, Err: statErr}, closeErr)
+	}
+	return nil
+}
+
+func writeIncompleteMarker(root *os.Root) error {
+	file, err := root.OpenFile(incompleteName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return wrapFilesystem("mark incomplete snapshot", "", err)
+	}
+	if _, err := file.WriteString("incomplete\n"); err != nil {
+		_ = file.Close()
+		return wrapFilesystem("mark incomplete snapshot", "", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return wrapFilesystem("secure incomplete marker", "", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return wrapFilesystem("sync incomplete marker", "", err)
+	}
+	if err := file.Close(); err != nil {
+		return wrapFilesystem("close incomplete marker", "", err)
+	}
+	if err := syncDirectoryAt(root, "."); err != nil {
+		return wrapFilesystem("sync incomplete snapshot", "", err)
+	}
+	return nil
+}
+
+func isIncompleteSnapshot(backup *os.Root, id string) (bool, error) {
+	snapshot, err := backup.OpenRoot(id)
+	if err != nil {
+		return false, corrupt("open incomplete snapshot", id, err)
+	}
+	defer snapshot.Close()
+	entries, err := fs.ReadDir(snapshot.FS(), ".")
+	if err != nil {
+		return false, corrupt("inspect incomplete snapshot", id, err)
+	}
+	if len(entries) == 0 {
+		return true, nil
+	}
+	info, err := snapshot.Lstat(incompleteName)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || requirePrivateMode(info, 0o600) != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 func syncDirectory(directory string) error {

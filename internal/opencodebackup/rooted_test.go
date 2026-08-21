@@ -1,12 +1,64 @@
 package opencodebackup
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 )
+
+func TestVerifyDirectoryUsesHeldSnapshotRoot(t *testing.T) {
+	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
+	ref, err := openSnapshot(engine.backupAnchor, snapshot.Manifest.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ref.Close()
+	verified, err := verifyDirectory(context.Background(), ref.snapshot, snapshot.Manifest.SnapshotID)
+	if err != nil || verified.Manifest.SnapshotID != snapshot.Manifest.SnapshotID {
+		t.Fatalf("verifyDirectory() = %+v, %v", verified, err)
+	}
+}
+
+func TestVerifyDirectoryHoldsSnapshotAcrossReplacement(t *testing.T) {
+	engine, snapshot := correctionSnapshot(t, "file", "snapshot bytes")
+	ref, err := openSnapshot(engine.backupAnchor, snapshot.Manifest.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ref.Close()
+	if err := os.Rename(snapshot.Directory, snapshot.Directory+"-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(snapshot.Directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := verifyDirectory(context.Background(), ref.snapshot, snapshot.Manifest.SnapshotID)
+	if err != nil || verified.Manifest.SnapshotID != snapshot.Manifest.SnapshotID {
+		t.Fatalf("held snapshot verification = %+v, %v", verified, err)
+	}
+}
+
+func TestReserveSnapshotReturnsConflictOnCollision(t *testing.T) {
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	id := "20260820T000000.000000000Z-0123456789abcdef"
+	if _, err := reserveSnapshot(root, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reserveSnapshot(root, id); !errors.Is(err, ErrConflict) {
+		t.Fatalf("reserveSnapshot() error=%v, want ErrConflict", err)
+	}
+	if info, err := root.Lstat(id); err != nil || !info.IsDir() {
+		t.Fatalf("collision destination changed: %v, %v", info, err)
+	}
+}
 
 func TestRootAnchorPinsAndReopensSameRoot(t *testing.T) {
 	directory := t.TempDir()
