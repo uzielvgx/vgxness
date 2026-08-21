@@ -147,7 +147,7 @@ func TestCreateRejectsBackupRootReplacementDuringFinalSync(t *testing.T) {
 	replacementBlocked := false
 	engine.syncBackupRoot = func(*os.Root) error {
 		if err := os.Rename(backup, backup+"-old"); err != nil {
-			if runtime.GOOS == "windows" {
+			if runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission) {
 				replacementBlocked = true
 				return nil
 			}
