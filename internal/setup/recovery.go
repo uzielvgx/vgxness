@@ -18,6 +18,7 @@ import (
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/launcher"
 	"github.com/vgxness/vgxness/internal/opencodebackup"
+	"github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	"github.com/vgxness/vgxness/internal/skills"
 )
@@ -505,6 +506,48 @@ func pathsContainEachOther(left, right string) bool {
 func containsSetupPath(parent, child string) bool {
 	relative, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
 	return err == nil && (relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+type managedProtection struct {
+	options  integration.Options
+	home     string
+	recovery *codex.Recovery
+}
+
+func newManagedProtection(provider Provider, options integration.Options, home string) ManagedProtection {
+	if provider != ProviderCodex {
+		return nil
+	}
+	return &managedProtection{options: options, home: home}
+}
+
+func (p *managedProtection) Protect(ctx context.Context) (ManagedSnapshot, error) {
+	if p.recovery == nil {
+		recovery, err := codex.NewRecovery(ctx, codex.RecoveryOptions{Integration: p.options, HomeDir: p.home})
+		if err != nil {
+			return ManagedSnapshot{}, err
+		}
+		p.recovery = recovery
+	}
+	found, err := p.recovery.HasManagedFiles(ctx)
+	if err != nil || !found {
+		if err != nil {
+			return ManagedSnapshot{}, err
+		}
+		return ManagedSnapshot{Skipped: true, Source: p.recovery.Source()}, nil
+	}
+	snapshot, err := p.recovery.Create(ctx, opencodebackup.ModeManaged)
+	if err != nil {
+		return ManagedSnapshot{}, err
+	}
+	verified, err := p.recovery.Verify(ctx, snapshot.ID)
+	if err != nil || verified.ID != snapshot.ID {
+		return ManagedSnapshot{}, fmt.Errorf("%w: codex snapshot verification", ErrVerification)
+	}
+	if verified.Source() == nil {
+		return ManagedSnapshot{}, fmt.Errorf("%w: codex snapshot source", ErrVerification)
+	}
+	return ManagedSnapshot{ID: snapshot.ID, Verified: true, Source: verified.Source()}, nil
 }
 
 func sameLauncher(left, right *opencodebackup.LauncherMetadata) bool {
