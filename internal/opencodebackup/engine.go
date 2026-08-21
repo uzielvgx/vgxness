@@ -55,6 +55,9 @@ type Engine struct {
 	anchorMu               sync.Mutex
 	managedPaths           []string
 	launcher               *LauncherMetadata
+	modePolicy             ModePolicy
+	copySnapshotEntry      func(context.Context, *os.Root, Entry, io.Writer) error
+	beforeRestorePublish   func(*os.Root, string) error
 	syncRestoreDirectories func(*os.Root, string) error
 	syncBackupRoot         func(*os.Root) error
 }
@@ -114,9 +117,15 @@ func New(options Options) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	if options.ModePolicy != ModePolicyAny && options.ModePolicy != ModePolicyManagedOnly {
+		return nil, invalid("validate mode policy", "", nil)
+	}
 	return &Engine{
 		sourceRoot: sourceAnchor.path, backupRoot: backupRoot, managedPaths: managed, launcher: launcher,
+		modePolicy:             options.ModePolicy,
 		sourceAnchor:           sourceAnchor,
+		copySnapshotEntry:      copySnapshotEntry,
+		beforeRestorePublish:   func(*os.Root, string) error { return nil },
 		syncRestoreDirectories: syncRestoreDirectoriesAt,
 		syncBackupRoot:         func(root *os.Root) error { return syncDirectoryAt(root, ".") },
 	}, nil
@@ -147,6 +156,9 @@ func (e *Engine) Create(ctx context.Context, mode Mode) (snapshot Snapshot, err 
 		return Snapshot{}, err
 	}
 	if err := mode.Validate(); err != nil {
+		return Snapshot{}, err
+	}
+	if err := e.validateMode(mode); err != nil {
 		return Snapshot{}, err
 	}
 	source, err := e.sourceAnchor.open()
@@ -287,7 +299,17 @@ func (e *Engine) Verify(ctx context.Context, snapshotID string) (Snapshot, error
 	if snapshot.Manifest.SourceRoot != e.sourceRoot {
 		return Snapshot{}, corrupt("verify snapshot source root", snapshotID, nil)
 	}
+	if err := e.validateMode(snapshot.Manifest.Mode); err != nil {
+		return Snapshot{}, err
+	}
 	return snapshot, nil
+}
+
+func (e *Engine) validateMode(mode Mode) error {
+	if e.modePolicy == ModePolicyManagedOnly && mode != ModeManaged {
+		return invalid("validate snapshot mode", "", nil)
+	}
+	return nil
 }
 
 func (e *Engine) List(ctx context.Context) ([]Summary, error) {

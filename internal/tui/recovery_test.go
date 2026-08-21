@@ -29,20 +29,20 @@ func (fakeBackend) ProtectedReinstall(context.Context, ProtectedReinstallRequest
 	return ProtectedReinstallResult{}, nil
 }
 
-func TestCodexOnlyRecoveryNeverLoadsOpenCodeBackupFlow(t *testing.T) {
+func TestCodexOnlyRecoveryUsesManagedProviderFlow(t *testing.T) {
 	backend := &recordingMultiSetupBackend{}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
 	model.route, model.setupView = routeSetup, setupViewRecovery
 	model.setupProviders = []setupflow.Provider{setupflow.ProviderCodex}
-	if lines := strings.Join(model.recoveryRouteLines(), "\n"); !strings.Contains(lines, "backups are unavailable") {
+	if lines := strings.Join(model.recoveryRouteLines(), "\n"); !strings.Contains(lines, "CODEX SETUP") || strings.Contains(lines, "FULL BACKUP") {
 		t.Fatalf("recovery lines=%s", lines)
 	}
-	updated, command := model.updateRecoveryKey(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
-	if !updated || command != nil || model.recoveryConfirm != recoveryConfirmNone {
+	updated, command := model.updateRecoveryKey(tea.KeyPressMsg(tea.Key{Code: 'l', Text: "l"}))
+	if !updated || command != nil || model.recoveryMode != RecoveryModeManaged {
 		t.Fatalf("handled=%t cmd=%v confirm=%v", updated, command, model.recoveryConfirm)
 	}
 	updated, command = model.updateRecoveryKey(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
-	if !updated || command == nil || model.setupView != setupViewInstall {
+	if !updated || command == nil || model.setupView != setupViewRecovery {
 		t.Fatalf("retry handled=%t cmd=%v view=%v", updated, command, model.setupView)
 	}
 }
@@ -52,6 +52,43 @@ func TestRecoveryHelpListsRefresh(t *testing.T) {
 	if help := model.recoveryHelp(); !strings.Contains(help, "[r] refresh") {
 		t.Fatalf("help=%q", help)
 	}
+}
+
+func TestBothSetupProvidersSwitchRecoveryProvider(t *testing.T) {
+	base := readyRecoveryBackend()
+	backend := multiRecoveryBackend{base}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model.setupView = setupViewRecovery
+	model.setupProviders = []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex}
+	model.recoveryMode, model.recoverySnapshotIndex = RecoveryModeFull, 2
+	model.recoveryPlan = RecoveryPlan{Ready: true}
+	model.recoveryBackups = []BackupSummary{{SnapshotID: "prior"}}
+	model.recoveryBackup = BackupResult{Snapshot: BackupSummary{SnapshotID: "prior"}}
+	model.recoveryPreview = RestorePreview{SnapshotID: "prior"}
+	updated, command := model.updateRecoveryKey(keyPress("c"))
+	if !updated || command == nil || model.recoveryProvider() != setupflow.ProviderCodex || model.recoveryMode != RecoveryModeManaged || model.recoverySnapshotIndex != 0 || model.recoveryBackup.Snapshot.SnapshotID != "" || model.recoveryPreview.SnapshotID != "" || model.recoveryPlan.Ready || len(model.recoveryBackups) != 0 {
+		t.Fatalf("switch=%v provider=%s mode=%s", command, model.recoveryProvider(), model.recoveryMode)
+	}
+	for _, key := range []string{"b", "i", "p"} {
+		_, stale := model.updateRecoveryKey(keyPress(key))
+		if stale != nil || model.recoveryConfirm != recoveryConfirmNone {
+			t.Fatalf("stale %s armed recovery", key)
+		}
+	}
+	_ = command()
+	if got := base.planRequests[len(base.planRequests)-1].Provider; got != setupflow.ProviderCodex {
+		t.Fatalf("provider=%s", got)
+	}
+	assertMaximumWidth(t, model.View().Content, 80)
+}
+
+type multiRecoveryBackend struct{ *recordingRecoveryBackend }
+
+func (multiRecoveryBackend) PlanMultiSetup(context.Context, MultiSetupRequest) (setupflow.MultiPlan, error) {
+	return setupflow.MultiPlan{}, nil
+}
+func (multiRecoveryBackend) ApplyMultiSetup(context.Context, MultiSetupRequest) (setupflow.MultiResult, error) {
+	return setupflow.MultiResult{}, nil
 }
 
 type recordingRecoveryBackend struct {

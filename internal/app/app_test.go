@@ -20,6 +20,7 @@ import (
 	"github.com/vgxness/vgxness/internal/launcher"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
+	"github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
@@ -28,6 +29,70 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 	"github.com/vgxness/vgxness/internal/tui"
 )
+
+func TestTUIBackendCodexRecoveryUsesSeparateManagedRoot(t *testing.T) {
+	home, workspace, backup := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "backups")
+	t.Setenv("HOME", home)
+	runtime := codex.NewIntegration()
+	if _, err := runtime.Install(context.Background(), integration.Options{HomeDir: home}); err != nil {
+		t.Fatal(err)
+	}
+	backend := tuiBackend{codex: runtime}
+	plan, err := backend.PlanRecovery(context.Background(), tui.RecoveryPlanRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
+	if err != nil || plan.BackupRoot != backup || plan.Mode != "managed" {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	created, err := backend.CreateBackup(context.Background(), tui.CreateBackupRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
+	if err != nil || created.Snapshot.SnapshotID == "" {
+		t.Fatalf("created=%+v err=%v", created, err)
+	}
+	listed, err := backend.ListBackups(context.Background(), tui.BackupListRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup})
+	if err != nil || len(listed.Snapshots) != 1 {
+		t.Fatalf("listed=%+v err=%v", listed, err)
+	}
+	layout, err := runtime.ManagedLayout(context.Background(), integration.Options{HomeDir: home})
+	if err != nil || os.Remove(filepath.Join(layout.Root, layout.Artifacts[0].RelativePath)) != nil {
+		t.Fatal("remove managed artifact")
+	}
+	preview, err := backend.PreviewRestore(context.Background(), tui.RestorePreviewRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, SnapshotID: created.Snapshot.SnapshotID})
+	if err != nil || len(preview.Missing) == 0 {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	if _, err := backend.RestoreBackup(context.Background(), tui.RestoreRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, SnapshotID: created.Snapshot.SnapshotID, PreviewSHA256: preview.PreviewSHA256}); err != nil {
+		t.Fatal(err)
+	}
+	protected, err := backend.ProtectedReinstall(context.Background(), tui.ProtectedReinstallRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
+	if err != nil || !protected.SnapshotVerified || protected.SnapshotID == "" {
+		t.Fatalf("protected=%+v err=%v", protected, err)
+	}
+	failing := tuiBackend{codex: failingProtectedRuntime{runtime}}
+	retained, err := failing.ProtectedReinstall(context.Background(), tui.ProtectedReinstallRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
+	if err == nil || !retained.SnapshotVerified || retained.SnapshotID == "" {
+		t.Fatalf("retained=%+v err=%v", retained, err)
+	}
+	listed, err = backend.ListBackups(context.Background(), tui.BackupListRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup})
+	if err != nil || len(listed.Snapshots) != 3 {
+		t.Fatalf("retained list=%+v err=%v", listed, err)
+	}
+	if _, err := backend.CreateBackup(context.Background(), tui.CreateBackupRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "full"}); err == nil {
+		t.Fatal("full accepted")
+	}
+	if _, err := backend.ListBackups(context.Background(), tui.BackupListRequest{Provider: "unknown", Workspace: workspace, BackupRoot: backup}); err == nil {
+		t.Fatal("unknown provider accepted")
+	}
+	if _, err := backend.ListBackups(context.Background(), tui.BackupListRequest{Provider: setupflow.ProviderCodex, BackupRoot: backup}); err == nil {
+		t.Fatal("empty workspace accepted")
+	}
+	if _, err := (tuiBackend{}).PlanRecovery(context.Background(), tui.RecoveryPlanRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, Mode: "managed"}); err == nil {
+		t.Fatal("nil runtime accepted")
+	}
+}
+
+type failingProtectedRuntime struct{ integration.ProtectedRuntime }
+
+func (failingProtectedRuntime) ReinstallProtected(context.Context, integration.Options, integration.SourceIdentity) (integration.Result, error) {
+	return integration.Result{}, errors.New("mutation failed")
+}
 
 func TestAppHooksVersionClosesInjectedDispatcher(t *testing.T) {
 	d := hooks.New()

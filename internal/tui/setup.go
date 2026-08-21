@@ -443,10 +443,6 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, m.loadSetupPlan()
 		}
 	case "tab":
-		if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
-			m.setupView = setupViewRecovery
-			return true, nil
-		}
 		m.cancelSetupOperation()
 		m.setupView = setupViewRecovery
 		m.resetRecoveryState()
@@ -504,11 +500,17 @@ func (m *Model) toggleSetupProvider(provider setupflow.Provider) {
 		for index, value := range m.setupProviders {
 			if value == provider {
 				m.setupProviders = append(m.setupProviders[:index], m.setupProviders[index+1:]...)
+				if m.hasSetupProvider(setupflow.ProviderCodex) && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
+					m.recoveryMode = RecoveryModeManaged
+				}
 				return
 			}
 		}
 	}
 	m.setupProviders = append(m.setupProviders, provider)
+	if m.hasSetupProvider(setupflow.ProviderCodex) && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
+		m.recoveryMode = RecoveryModeManaged
+	}
 }
 func (m Model) multiSetupRequest() MultiSetupRequest {
 	verified := make([]setupflow.ProviderResult, 0, len(m.setupMultiResult.Providers))
