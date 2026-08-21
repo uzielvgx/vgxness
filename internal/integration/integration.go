@@ -122,3 +122,16 @@ type ManagedRuntime interface {
 	ReinstallPending(context.Context, Options) (bool, error)
 	Reinstall(context.Context, Options) (Result, error)
 }
+
+// SourceIdentity is an opaque capability emitted after a provider snapshot is
+// verified or a no-managed source is inspected. Providers must validate it
+// against the rooted handle they retain for every subsequent mutation.
+type SourceIdentity interface{ SourceIdentity() }
+
+// ProtectedRuntime accepts a verified snapshot source without widening the
+// ordinary Runtime surface.
+type ProtectedRuntime interface {
+	ManagedRuntime
+	InstallProtected(context.Context, Options, SourceIdentity) (Result, error)
+	ReinstallProtected(context.Context, Options, SourceIdentity) (Result, error)
+}

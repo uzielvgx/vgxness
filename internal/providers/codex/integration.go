@@ -52,6 +52,22 @@ func (s *Integration) check(point, name string) error {
 }
 
 var _ integration.ManagedRuntime = (*Integration)(nil)
+var _ integration.ProtectedRuntime = (*Integration)(nil)
+
+func verifyProtectedRoot(root *Root, source integration.SourceIdentity) error {
+	identity, ok := source.(sourceIdentity)
+	if !ok || identity.info == nil {
+		return conflict("invalid protected source")
+	}
+	held, err := root.fs.Lstat(".")
+	if err != nil {
+		return err
+	}
+	if !held.IsDir() || !os.SameFile(identity.info, held) {
+		return conflict("protected source root replaced")
+	}
+	return nil
+}
 
 func codexPackage(options integration.Options) (Package, error) {
 	if options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != "" ||
@@ -476,15 +492,31 @@ func (s *Integration) install(ctx context.Context, root *Root, pkg Package, stat
 	return verified.result, nil
 }
 func (s *Integration) Install(ctx context.Context, options integration.Options) (integration.Result, error) {
+	return s.installProtected(ctx, options, nil, true)
+}
+
+func (s *Integration) InstallProtected(ctx context.Context, options integration.Options, source integration.SourceIdentity) (integration.Result, error) {
+	if source == nil {
+		return integration.Result{}, conflict("missing protected source")
+	}
+	return s.installProtected(ctx, options, source, false)
+}
+
+func (s *Integration) installProtected(ctx context.Context, options integration.Options, source integration.SourceIdentity, create bool) (integration.Result, error) {
 	pkg, err := codexPackage(options)
 	if err != nil {
 		return integration.Result{}, err
 	}
-	root, err := s.openRoot(ctx, options, true)
+	root, err := s.openRoot(ctx, options, create)
 	if err != nil {
 		return integration.Result{}, err
 	}
 	defer root.Close()
+	if source != nil {
+		if err := verifyProtectedRoot(root, source); err != nil {
+			return integration.Result{}, err
+		}
+	}
 	if p, err := pending(root, pkg); err != nil || p {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	}
@@ -721,11 +753,22 @@ func (s *Integration) uninstall(ctx context.Context, root *Root, pkg Package, st
 	return verified.result, nil
 }
 func (s *Integration) Reinstall(ctx context.Context, options integration.Options) (integration.Result, error) {
+	return s.reinstallProtected(ctx, options, nil, options.ModelPlan != "")
+}
+
+func (s *Integration) ReinstallProtected(ctx context.Context, options integration.Options, source integration.SourceIdentity) (integration.Result, error) {
+	if source == nil {
+		return integration.Result{}, conflict("missing protected source")
+	}
+	return s.reinstallProtected(ctx, options, source, false)
+}
+
+func (s *Integration) reinstallProtected(ctx context.Context, options integration.Options, source integration.SourceIdentity, create bool) (integration.Result, error) {
 	pkg, err := codexPackage(options)
 	if err != nil {
 		return integration.Result{}, err
 	}
-	root, err := s.openRoot(ctx, options, options.ModelPlan != "")
+	root, err := s.openRoot(ctx, options, create)
 	if errors.Is(err, os.ErrNotExist) {
 		return integration.Result{}, fmt.Errorf("%w: managed Codex artifacts are absent", integration.ErrInvalid)
 	}
@@ -733,6 +776,11 @@ func (s *Integration) Reinstall(ctx context.Context, options integration.Options
 		return integration.Result{}, err
 	}
 	defer root.Close()
+	if source != nil {
+		if err := verifyProtectedRoot(root, source); err != nil {
+			return integration.Result{}, err
+		}
+	}
 	if p, err := pending(root, pkg); err != nil {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	} else if p {

@@ -351,6 +351,119 @@ func TestIntegrationInstallAndIdempotence(t *testing.T) {
 	require(t, err == nil && !again.Changed && !again.RestartRequired && again.State == integration.StateInstalled)
 }
 
+func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		open func(*testing.T, string, *Integration)
+		want error
+	}{
+		{
+			name: "replacement before open fails closed",
+			open: func(t *testing.T, root string, service *Integration) {
+				t.Helper()
+				replaced := root + "-protected"
+				require(t, os.Rename(root, replaced) == nil)
+				require(t, os.Mkdir(root, 0o700) == nil)
+			},
+			want: integration.ErrConflict,
+		},
+		{
+			name: "replacement after open cannot redirect writes",
+			open: func(t *testing.T, root string, service *Integration) {
+				t.Helper()
+				service.open = func(ctx context.Context, options integration.Options, create bool) (*Root, error) {
+					held, err := OpenRoot(ctx, options, create)
+					if err != nil {
+						return nil, err
+					}
+					prior := root + "-protected"
+					if err := os.Rename(root, prior); err != nil {
+						_ = held.Close()
+						return nil, err
+					}
+					if err := os.Mkdir(root, 0o700); err != nil {
+						_ = held.Close()
+						return nil, err
+					}
+					if err := os.Mkdir(filepath.Join(root, "agents"), 0o700); err != nil {
+						_ = held.Close()
+						return nil, err
+					}
+					return held, nil
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "codex")
+			require(t, os.Mkdir(root, 0o700) == nil)
+			require(t, os.Mkdir(filepath.Join(root, "agents"), 0o700) == nil)
+			info, err := sourceRootIdentity(root)
+			require(t, err == nil)
+			service := NewIntegration()
+			test.open(t, root, service)
+
+			result, err := service.InstallProtected(context.Background(), integration.Options{ConfigDir: root}, sourceIdentity{info: info})
+			if test.want != nil {
+				require(t, errors.Is(err, test.want) && !result.Changed)
+				_, replacementErr := os.Stat(filepath.Join(root, "AGENTS.md"))
+				require(t, errors.Is(replacementErr, os.ErrNotExist))
+				return
+			}
+			if err != nil || result.State != integration.StateInstalled {
+				t.Fatalf("InstallProtected() = %+v, %v", result, err)
+			}
+			_, replacementErr := os.Stat(filepath.Join(root, "AGENTS.md"))
+			require(t, errors.Is(replacementErr, os.ErrNotExist))
+			_, protectedErr := os.Stat(filepath.Join(root+"-protected", "AGENTS.md"))
+			require(t, protectedErr == nil)
+		})
+	}
+}
+
+func TestProtectedInstallDoesNotCreateMissingRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "codex")
+	require(t, os.Mkdir(root, 0o700) == nil)
+	info, err := sourceRootIdentity(root)
+	require(t, err == nil)
+	require(t, os.Remove(root) == nil)
+
+	_, err = NewIntegration().InstallProtected(context.Background(), integration.Options{ConfigDir: root}, sourceIdentity{info: info})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("InstallProtected() error = %v", err)
+	}
+	_, statErr := os.Stat(root)
+	require(t, errors.Is(statErr, os.ErrNotExist))
+}
+
+func TestReinstallProtectedBindsOrPreservesMissingRoot(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+		want   error
+	}{
+		{"replacement", func(t *testing.T, root string) {
+			require(t, os.Rename(root, root+"-prior") == nil)
+			require(t, os.Mkdir(root, 0o700) == nil)
+		}, integration.ErrConflict},
+		{"missing", func(t *testing.T, root string) { require(t, os.Remove(root) == nil) }, integration.ErrInvalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "codex")
+			require(t, os.Mkdir(root, 0o700) == nil)
+			info, err := sourceRootIdentity(root)
+			require(t, err == nil)
+			test.mutate(t, root)
+			_, err = NewIntegration().ReinstallProtected(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium}, sourceIdentity{info: info})
+			require(t, errors.Is(err, test.want))
+			if test.name == "missing" {
+				_, err = os.Stat(root)
+				require(t, errors.Is(err, os.ErrNotExist))
+			}
+		})
+	}
+}
+
 func writePackage(t *testing.T, root string, pkg Package) {
 	t.Helper()
 	for _, item := range pkg.Artifacts {
