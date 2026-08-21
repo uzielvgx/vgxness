@@ -21,12 +21,102 @@ type observation struct {
 	SHA256 string `json:"sha256,omitempty"`
 }
 
+type observeDestinationFunc func(context.Context, Entry) (observation, error)
+
+type restoreRefs struct {
+	source   *os.Root
+	snapshot *snapshotRef
+}
+
+func (r *restoreRefs) Close() error { return errors.Join(r.source.Close(), r.snapshot.Close()) }
+
 func (e *Engine) PreviewRestore(ctx context.Context, snapshotID string) (RestorePreview, error) {
-	snapshot, err := e.Verify(ctx, snapshotID)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return RestorePreview{}, err
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return RestorePreview{}, err
+	}
+	refs, err := e.openRestoreRefs(ctx, snapshotID)
 	if err != nil {
 		return RestorePreview{}, err
 	}
-	return e.preview(ctx, snapshot)
+	defer refs.Close()
+	snapshot, err := e.verifySnapshotRef(ctx, refs.snapshot, snapshotID)
+	if err != nil {
+		return RestorePreview{}, err
+	}
+	preview, _, err := e.previewWithObservations(ctx, snapshot, func(ctx context.Context, entry Entry) (observation, error) {
+		return observeDestinationAt(ctx, refs.source, entry)
+	})
+	if err != nil {
+		return RestorePreview{}, err
+	}
+	if err := e.validateRestoreRefs(ctx, refs, snapshotID); err != nil {
+		return RestorePreview{}, err
+	}
+	return preview, nil
+}
+
+func (e *Engine) openRestoreRefs(ctx context.Context, snapshotID string) (*restoreRefs, error) {
+	source, err := e.sourceAnchor.open()
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = source.Close()
+		return nil, err
+	}
+	backup, err := e.backupRootAnchor()
+	if err != nil {
+		_ = source.Close()
+		return nil, err
+	}
+	ref, err := openSnapshot(backup, snapshotID)
+	if err != nil {
+		_ = source.Close()
+		return nil, err
+	}
+	return &restoreRefs{source: source, snapshot: ref}, nil
+}
+
+func (e *Engine) verifySnapshotRef(ctx context.Context, ref *snapshotRef, snapshotID string) (Snapshot, error) {
+	snapshot, err := verifyDirectory(ctx, ref.snapshot, snapshotID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.Manifest.SourceRoot != e.sourceRoot {
+		return Snapshot{}, corrupt("verify snapshot source root", snapshotID, nil)
+	}
+	return snapshot, nil
+}
+
+func (e *Engine) validateRestoreRefs(ctx context.Context, refs *restoreRefs, snapshotID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	source, err := e.sourceAnchor.open()
+	if err != nil {
+		return err
+	}
+	if err := source.Close(); err != nil {
+		return err
+	}
+	backup, err := e.backupRootAnchor()
+	if err != nil {
+		return err
+	}
+	root, err := backup.open()
+	if err != nil {
+		return err
+	}
+	if err := root.Close(); err != nil {
+		return err
+	}
+	return refs.snapshot.revalidate(snapshotID)
 }
 
 func (e *Engine) Restore(ctx context.Context, request RestoreRequest) (RestoreResult, error) {
@@ -62,7 +152,9 @@ func (e *Engine) Restore(ctx context.Context, request RestoreRequest) (RestoreRe
 			return RestoreResult{}, invalid("validate included restore path", relative, nil)
 		}
 	}
-	preview, observations, err := e.previewWithObservations(ctx, snapshot)
+	preview, observations, err := e.previewWithObservations(ctx, snapshot, func(ctx context.Context, entry Entry) (observation, error) {
+		return observeDestination(ctx, e.sourceRoot, entry)
+	})
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -102,17 +194,9 @@ func (e *Engine) Restore(ctx context.Context, request RestoreRequest) (RestoreRe
 	return result, nil
 }
 
-func (e *Engine) preview(ctx context.Context, snapshot Snapshot) (RestorePreview, error) {
-	preview, _, err := e.previewWithObservations(ctx, snapshot)
-	return preview, err
-}
-
-func (e *Engine) previewWithObservations(ctx context.Context, snapshot Snapshot) (RestorePreview, []observation, error) {
+func (e *Engine) previewWithObservations(ctx context.Context, snapshot Snapshot, observe observeDestinationFunc) (RestorePreview, []observation, error) {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	if err := inspectExistingAncestors(e.sourceRoot); err != nil {
-		return RestorePreview{}, nil, unsupported("inspect restore root", e.sourceRoot, err)
 	}
 	preview := RestorePreview{SnapshotID: snapshot.Manifest.SnapshotID, Missing: []string{}, Identical: []string{}, Conflicts: []string{}}
 	observations := make([]observation, 0, len(snapshot.Manifest.Entries))
@@ -120,7 +204,7 @@ func (e *Engine) previewWithObservations(ctx context.Context, snapshot Snapshot)
 		if err := ctx.Err(); err != nil {
 			return RestorePreview{}, nil, err
 		}
-		observed, err := observeDestination(ctx, e.sourceRoot, entry)
+		observed, err := observe(ctx, entry)
 		if err != nil {
 			return RestorePreview{}, nil, err
 		}
@@ -153,13 +237,12 @@ func (e *Engine) previewWithObservations(ctx context.Context, snapshot Snapshot)
 	return preview, observations, nil
 }
 
-func observeDestination(ctx context.Context, root string, entry Entry) (observation, error) {
+func observeDestinationAt(ctx context.Context, root *os.Root, entry Entry) (observation, error) {
 	observed := observation{Path: entry.Path}
-	current := root
 	components := strings.Split(entry.Path, "/")
-	for index, component := range components {
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
+	for index := range components {
+		current := strings.Join(components[:index+1], "/")
+		info, err := root.Lstat(current)
 		if errors.Is(err, os.ErrNotExist) {
 			observed.State = "missing"
 			return observed, nil
@@ -185,13 +268,60 @@ func observeDestination(ctx context.Context, root string, entry Entry) (observat
 			observed.Mode = uint32(info.Mode().Perm())
 			return observed, nil
 		}
-		size, digest, mode, err := hashRegularFile(ctx, current)
+		size, digest, mode, err := hashRegularFileAt(ctx, root, current)
 		if err != nil {
 			return observation{}, &Error{Kind: ErrConflict, Op: "inspect restore destination", Path: entry.Path, Err: err}
 		}
 		observed.Size = size
 		observed.SHA256 = digest
 		observed.Mode = uint32(mode)
+		if size == entry.Size && digest == entry.SHA256 {
+			observed.State = "identical"
+		} else {
+			observed.State = "conflict-regular"
+		}
+		return observed, nil
+	}
+	return observation{}, invalid("observe restore destination", entry.Path, nil)
+}
+
+func observeDestination(ctx context.Context, root string, entry Entry) (observation, error) {
+	if err := inspectExistingAncestors(root); err != nil {
+		return observation{}, unsupported("inspect restore root", root, err)
+	}
+	observed := observation{Path: entry.Path}
+	current := root
+	components := strings.Split(entry.Path, "/")
+	for index, component := range components {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			observed.State = "missing"
+			return observed, nil
+		}
+		if err != nil {
+			return observation{}, &Error{Kind: ErrConflict, Op: "inspect restore destination", Path: entry.Path, Err: err}
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			observed.State, observed.Mode = "conflict-symlink", uint32(info.Mode().Perm())
+			return observed, nil
+		}
+		if index < len(components)-1 {
+			if !info.IsDir() {
+				observed.State, observed.Mode = "conflict-type", uint32(info.Mode().Perm())
+				return observed, nil
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			observed.State, observed.Mode = "conflict-type", uint32(info.Mode().Perm())
+			return observed, nil
+		}
+		size, digest, mode, err := hashRegularFile(ctx, current)
+		if err != nil {
+			return observation{}, &Error{Kind: ErrConflict, Op: "inspect restore destination", Path: entry.Path, Err: err}
+		}
+		observed.Size, observed.SHA256, observed.Mode = size, digest, uint32(mode)
 		if size == entry.Size && digest == entry.SHA256 {
 			observed.State = "identical"
 		} else {
