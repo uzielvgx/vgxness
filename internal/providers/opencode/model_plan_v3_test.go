@@ -525,6 +525,9 @@ func TestV52PredecessorPackageRequiresExactBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got, want := artifactSHA256(predecessor.agents[managerAgentName]), "759932caf84ef663a7fa5337b249afc27fb5cba2f861e4be56f175279b9575be"; got != want {
+		t.Fatalf("manager v52 SHA-256 = %s, want %s", got, want)
+	}
 	if _, recognized, err := parseInstalledModelPlanManifest(predecessor.manifest); err != nil || !bytes.Equal(recognized.manifest, predecessor.manifest) {
 		t.Fatalf("exact v52 package rejected: %v", err)
 	}

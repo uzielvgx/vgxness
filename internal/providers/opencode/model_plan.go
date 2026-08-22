@@ -1530,7 +1530,7 @@ func previousManagerV51(current []byte) []byte {
 }
 
 func previousManagerV52(current []byte) []byte {
-	return derivePredecessor(current, []textReplacement{{old: managerCurrentMarker, new: managerPreviousMarker}, {old: "\n\n" + orchestration.ReadinessManagerContract, new: ""}})
+	return derivePredecessor(current, []textReplacement{{old: managerCurrentMarker, new: managerPreviousMarker}, {old: "\n\n" + orchestration.ReadinessManagerContract + "\n", new: ""}})
 }
 
 func previousV51ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
