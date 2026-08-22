@@ -516,6 +516,36 @@ func TestPreConsolidationV1MediumBundleIsExactAndRejectsMutations(t *testing.T) 
 	}
 }
 
+func TestV52PredecessorPackageRequiresExactBytes(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err := previousV52ModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recognized, err := parseInstalledModelPlanManifest(predecessor.manifest); err != nil || !bytes.Equal(recognized.manifest, predecessor.manifest) {
+		t.Fatalf("exact v52 package rejected: %v", err)
+	}
+	if _, _, err := parseInstalledModelPlanManifest(mutateManifestDigest(t, predecessor, generalAgentName)); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("altered v52 package accepted: %v", err)
+	}
+	mixed := cloneAgents(predecessor.agents)
+	v51, err := previousV51ModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed[managerAgentName] = v51.agents[managerAgentName]
+	mixedBundle, err := encodeLike(predecessor, mixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := parseInstalledModelPlanManifest(mixedBundle.manifest); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("mixed v52 package accepted: %v", err)
+	}
+}
+
 func TestRequestedModelPlanV3RejectsIncompleteAssignments(t *testing.T) {
 	for name, mutate := range map[string]func(map[string]sdd.ManagedAgentModelConfig){
 		"missing": func(assignments map[string]sdd.ManagedAgentModelConfig) {
