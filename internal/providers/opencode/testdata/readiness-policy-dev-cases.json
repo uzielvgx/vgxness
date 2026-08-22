@@ -1,0 +1,1 @@
+{"partition":"development","target":"readiness-envelope/v1","cases":[{"id":"dev-exempt","activation":"exempt"},{"id":"dev-full-sdd","activation":"full"}]}

@@ -197,14 +197,14 @@ func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
 	}
 }
 
-func TestV12PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
+func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 12; parity: opencode-v52") {
-		t.Fatal("current Codex manager is not v12")
+	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 13; parity: opencode-v53") || !strings.Contains(manager, "readiness-envelope/v1") {
+		t.Fatal("current Codex manager is not v13 with readiness")
 	}
 	reliability := string(artifact(t, pkg, "agents/reliability.toml").Bytes)
 	for _, required := range []string{"Before candidate inspection", "receipt naming it and status loaded|unavailable", "missing/unavailable is INCONCLUSIVE"} {
@@ -215,6 +215,21 @@ func TestV12PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 	predecessor, err := renderActiveV11("v1.2.3", sdd.PlanMedium)
 	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 11; parity: opencode-v51") {
 		t.Fatalf("exact Codex v11 predecessor is not preserved: %v", err)
+	}
+}
+
+func TestActiveV12PredecessorPackageRequiresExactBytes(t *testing.T) {
+	pkg, err := renderActiveV12("v1.2.3", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pkg.Validate(); err != nil {
+		t.Fatalf("exact v12 package rejected: %v", err)
+	}
+	pkg.Artifacts[0].Bytes[0] ^= 1
+	pkg.SHA256 = aggregate(pkg.Artifacts)
+	if err := pkg.Validate(); err == nil {
+		t.Fatal("altered v12 package accepted")
 	}
 }
 
@@ -237,13 +252,13 @@ func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
 	}
 }
 
-func TestManagerInstructionsCoverOpenCodeV52SectionParity(t *testing.T) {
+func TestManagerInstructionsCoverOpenCodeV53SectionParity(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	const openCodeV52Marker = "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 52 -->"
+	const openCodeV53Marker = "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 53 -->"
 	// This is the complete section-by-section Codex adaptation manifest for the
 	// OpenCode v50 manager. Paragraphs are full clauses, not keyword probes.
 	sections := map[string][]string{
@@ -271,13 +286,13 @@ func TestManagerInstructionsCoverOpenCodeV52SectionParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read OpenCode v52 template: %v", err)
 	}
-	if !strings.Contains(string(openCodeManager), openCodeV52Marker) {
-		t.Errorf("OpenCode v52 marker %q changed; update this section map deliberately", openCodeV52Marker)
+	if !strings.Contains(string(openCodeManager), openCodeV53Marker) {
+		t.Errorf("OpenCode v53 marker %q changed; update this section map deliberately", openCodeV53Marker)
 	}
 	for section, clauses := range sections {
 		for _, clause := range clauses {
 			if !strings.Contains(content, clause) {
-				t.Errorf("%s lacks v52 parity clause %q", section, clause)
+				t.Errorf("%s lacks v53 parity clause %q", section, clause)
 			}
 		}
 	}
@@ -373,7 +388,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 12; parity: opencode-v52") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 13; parity: opencode-v53") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }
@@ -459,26 +474,26 @@ func TestRenderUsesIntentTriggeredMemoryWithoutRoutineRecentFirst(t *testing.T) 
 	}
 }
 
-func TestV12ManagerHasAdaptiveParityAndRecognizesV11ThenV10(t *testing.T) {
+func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
 	for _, required := range []string{
-		"artifact: codex-agent/manager; version: 12; parity: opencode-v52",
+		"artifact: codex-agent/manager; version: 13; parity: opencode-v53",
 		"adaptive general-purpose partner",
 		"When the engineering route activates",
 		orchestration.ContractPolicy,
 		orchestration.ContractBudgetPolicy,
 	} {
 		if !strings.Contains(manager, required) {
-			t.Errorf("Codex manager v12 missing %q", required)
+			t.Errorf("Codex manager v13 missing %q", required)
 		}
 	}
 	for _, forbidden := range []string{"native Codex task list for multiple meaningful steps", "Load every clearly applicable native skill", "sole orchestration authority and sole SDD lifecycle authority"} {
 		if strings.Contains(manager, forbidden) {
-			t.Errorf("Codex manager v12 retains unconditional ceremony %q", forbidden)
+			t.Errorf("Codex manager v13 retains unconditional ceremony %q", forbidden)
 		}
 	}
 	v10, err := renderActiveV10("v1.2.3", sdd.PlanMedium)

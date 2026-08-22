@@ -17,7 +17,7 @@ Structural Evidence Capsules carry the contract identity, source revision, sourc
 
 After candidate freeze, review depth is deterministic: zero lenses for passive docs/images, one reliability lens for ordinary work, and four lenses for concrete hot paths (including permissions, authentication, security, payments, installers, data loss, process boundaries, and durability).
 
-At most four independent read-only subworks may overlap. Synthesis, revision acceptance, OpenSpec writes, patch application, validation, projection recording, phase transitions, and all workspace writes remain sequential. Manager owns lifecycle state, projections, and transitions; `vgxness-sdd-apply` owns accepted SDD workspace writes.
+At most five independent read-only subworks may overlap. Synthesis, revision acceptance, OpenSpec writes, patch application, validation, projection recording, phase transitions, and all workspace writes remain sequential. Manager owns lifecycle state, projections, and transitions; `vgxness-sdd-apply` owns accepted SDD workspace writes.
 
 ## SDD lifecycle
 
@@ -28,6 +28,20 @@ explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete
 Research, proposal, spec, design, and tasks profiles return evidence or candidate content and are read-only. `vgxness-sdd-apply` alone writes authorized workspace, OpenSpec, or hybrid targets for a hash-bound, accepted SDD apply; it cannot delegate or mutate memory or lifecycle state. General writes only ordinary authorized non-SDD repository work and rejects SDD apply/projection missions. Five read-only reviewers inspect a frozen candidate; the refuter handles only supplied severe inferential findings.
 
 Each change stores a `memory`, `openspec`, or `hybrid` backend and an `automatic` or `interactive` mode. Creation is project-idempotent. Candidate revisions are immutable; acceptance and phase transitions use optimistic state versions and accepted-input digest bindings.
+
+## Invocation-local readiness
+
+Readiness is provider-neutral, invocation-local evidence for one delegated write, not approval, authorization, validation, review, lifecycle authority, host/runtime enforcement, prevention proof, or effectiveness proof. Classification is deterministic: direct/no-write or simple exact-read work is **exempt** with zero envelope, tools, task list, review, or ceremony; every other delegated repository write is **light** unless an SDD, frozen/delivery, cross-platform, lifecycle/recovery, identity/digest, provider/template, or other concrete high-risk predicate (or ambiguity) selects **full**.
+
+For non-exempt work, Manager assembles the bound envelope and independently rechecks it immediately before launch. The writer rechecks and echoes the exact envelope and applicable mission/context/SDD bindings before writing. `READY` only says required evidence is current for that invocation; it never grants approval or authorization. `BLOCKED` and `INCONCLUSIVE` prevent writes.
+
+The envelope is invalid on any change to its mission, task, accepted input, state version, replay identity, scope/path, target hash or no-symlink evidence, acceptance criteria, permitted validation, dependency, provider artifact/template, candidate, or material evidence. A source or path correction invalidates related candidate, validation, and review evidence; a new binding is required.
+
+Copied observations are bounded and privacy-safe: only class, status, controlled reason/risk categories, invalidation trigger, elapsed bucket, and write-launched flag may be observed. They exclude mission, source, path, credentials, authorization, and identity; never persist, launch work, or influence readiness, delegation, or lifecycle state.
+
+Rollback removes the new contract projection or returns to the exact recognized predecessor artifacts (OpenCode manager/general/apply v52/v9/v6; Codex manager v12). It does not claim automatic runtime rollback. These contracts are prompt and source behavior, not host enforcement, prevention proof, or effectiveness proof.
+
+Baseline and controlled pilot work are deferred and separately authorized; no pilot or external holdout runs here. Any future matched cohorts require external opaque holdout custody and stop on: activation coverage <100%, binding-safety >0%, invalidation recall <100%, accidental exempt ceremony, seeded verifier/reviewer recall <100%, pilot recall below matched baseline, false-block >10%, p95 overhead >15 minutes, or unknown metric provenance. No proven-effectiveness claim follows from this documentation.
 
 ## Backend authority
 

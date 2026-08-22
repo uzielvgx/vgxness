@@ -1622,7 +1622,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 52"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 53"), []byte("version: 41"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -1967,7 +1967,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 52",
+		"artifact: opencode-agent/vgxness-manager; version: 53",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native adaptive general-purpose partner",
 		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",
@@ -2042,7 +2042,7 @@ func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 			}
 		}
 	}
-	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 9") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 6"), "current broad-profile markers were not bumped")
+	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 10") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 6"), "current broad-profile markers were not bumped")
 	legacy, err := previousSDDModelPlanBundle(bundle)
 	testutil.NoError(t, err)
 	testutil.Require(t, strings.Contains(string(legacy.agents[generalAgentName]), "artifact: opencode-agent/general; version: 5") && !strings.Contains(string(legacy.agents[generalAgentName]), "vgxness_sdd_record_projection: deny") && strings.Contains(string(legacy.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 3") && !strings.Contains(string(legacy.agents[verifierAgentName]), "vgxness_sdd_record_projection: deny"), "historical broad profiles were mutated")
@@ -2374,7 +2374,7 @@ func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 		}
 	}
 	apply := string(bundle.agents[sddApplyName])
-	for _, required := range []string{"version: 6", "exclusive SDD workspace and projection writer", "edit: allow", "bash: ask", "Immediately before each write recheck", "verifier executes final validation", `"status":"complete|blocked"`, `"validationEvidence"`, `"postWriteSHA256"`, `"tddEvidence"`} {
+	for _, required := range []string{"version: 7", "exclusive SDD workspace and projection writer", "edit: allow", "bash: ask", "Immediately before each write recheck", "verifier executes final validation", `"status":"complete|blocked"`, `"validationEvidence"`, `"postWriteSHA256"`, `"tddEvidence"`} {
 		if !strings.Contains(apply, required) {
 			t.Errorf("apply missing phase contract %q", required)
 		}

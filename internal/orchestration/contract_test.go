@@ -66,6 +66,21 @@ func TestContractLimitsReadOnlyConcurrencyAndResumesBudgetWindows(t *testing.T) 
 	}
 }
 
+func TestReadinessContractsAreEvidenceOnlyAndPreserveExemptRoutes(t *testing.T) {
+	for _, required := range []string{
+		"readiness-envelope/v1", "Manager alone assembles and immediately revalidates", "never approval, authorization, validation, review, lifecycle authority, or host enforcement", "invalidate it when mission identity, scope, acceptance criteria, skills, permitted validation, candidate, provider artifact, target hash, or dependency changes", "Direct and exempt routes create no readiness envelope or ceremony",
+	} {
+		if !strings.Contains(ReadinessManagerContract, required) {
+			t.Errorf("manager readiness contract missing %q", required)
+		}
+	}
+	for _, required := range []string{"reject missing, stale, malformed, mismatched, BLOCKED, or INCONCLUSIVE readiness envelopes before writing", "echo the accepted envelopeDigest", "never approval or host enforcement"} {
+		if !strings.Contains(ReadinessWriterContract, required) {
+			t.Errorf("writer readiness contract missing %q", required)
+		}
+	}
+}
+
 func TestStructuralEvidenceReuseFallsBackWhenUnsafe(t *testing.T) {
 	valid := StructuralEvidence{Contract: ContractIdentity, Query: "flow", Revision: "abc", Digest: strings.Repeat("a", 64), Source: "codegraph", Paths: []string{"a.go"}, Symbols: []string{"Run"}, CallPath: []string{"Run->Check"}}
 	if !valid.ReusableFor("flow", "abc", strings.Repeat("a", 64)) || valid.FallbackRequired("flow", "abc", strings.Repeat("a", 64)) {

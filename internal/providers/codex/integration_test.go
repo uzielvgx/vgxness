@@ -27,13 +27,20 @@ func windowsRootRenameBlocked(err error) bool {
 		(errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation))
 }
 
-func TestKnownPackagesOrderCurrentThenV10ThenV9ForEveryPlanAndRetainOlderPredecessors(t *testing.T) {
+func TestKnownPackagesOrderCurrentThenV12ForEveryPlan(t *testing.T) {
 	known, err := knownPackages()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(known) != 30 {
+		t.Fatalf("known packages length = %d, want 30", len(known))
+	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v12, err := renderActiveV12("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -53,23 +60,107 @@ func TestKnownPackagesOrderCurrentThenV10ThenV9ForEveryPlanAndRetainOlderPredece
 		if err != nil {
 			t.Fatal(err)
 		}
-		foundV6, foundV7, currentIndex, v10Index, v9Index := false, false, -1, -1, -1
+		v8, err := renderActiveV8("v0.0.0", plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{current.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
+		foundV12 := 0
 		for index, pkg := range known {
-			foundV6 = foundV6 || pkg.SHA256 == v6.SHA256
-			foundV7 = foundV7 || pkg.SHA256 == v7.SHA256
-			if pkg.SHA256 == current.SHA256 {
-				currentIndex = index
+			if pkg.SHA256 == v12.SHA256 {
+				foundV12++
 			}
-			if pkg.SHA256 == v10.SHA256 {
-				v10Index = index
-			}
-			if pkg.SHA256 == v9.SHA256 {
-				v9Index = index
+			if index >= int(planIndex(plan))*7 && index < int(planIndex(plan))*7+7 && pkg.SHA256 != want[index-int(planIndex(plan))*7] {
+				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*7])
 			}
 		}
-		if !foundV6 || !foundV7 || currentIndex < 0 || v10Index != currentIndex+1 || v9Index != v10Index+1 {
-			t.Errorf("known packages order for %s: current=%d v10=%d v9=%d v7=%v v6=%v", plan, currentIndex, v10Index, v9Index, foundV7, foundV6)
+		if foundV12 != 1 {
+			t.Fatalf("known packages v12 count for %s = %d, want 1", plan, foundV12)
 		}
+	}
+}
+
+func planIndex(plan sdd.Plan) int {
+	for index, candidate := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+		if plan == candidate {
+			return index
+		}
+	}
+	panic("unknown plan")
+}
+
+func TestActiveV12LifecycleStatusReinstallAndProtection(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "codex")
+	plan := sdd.PlanMedium
+	v12, err := renderActiveV12("v0.0.0", plan)
+	require(t, err == nil)
+	writePackage(t, root, v12)
+	sentinel := []byte("unrelated sentinel\n")
+	sentinelPath := filepath.Join(root, "config.toml")
+	require(t, os.WriteFile(sentinelPath, sentinel, 0o600) == nil)
+	service := NewIntegration()
+
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
+	require(t, err == nil && status.State == integration.StateInstalled && status.ArtifactSHA256 == v12.SHA256)
+	reinstalled, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
+	require(t, err == nil && reinstalled.State == integration.StateInstalled && reinstalled.Changed && reinstalled.ArtifactSHA256 != v12.SHA256)
+	preserved, err := os.ReadFile(sentinelPath)
+	require(t, err == nil && bytes.Equal(preserved, sentinel))
+
+	writePackage(t, root, v12)
+	path := filepath.Join(root, "AGENTS.md")
+	body, err := os.ReadFile(path)
+	require(t, err == nil && os.WriteFile(path, append(body, []byte("modified")...), 0o600) == nil)
+	modified, err := os.ReadFile(path)
+	require(t, err == nil)
+	status, statusErr := service.Status(context.Background(), integration.Options{ConfigDir: root})
+	_, reinstallErr := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
+	_, uninstallErr := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
+	require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(reinstallErr, integration.ErrDrift) && errors.Is(uninstallErr, integration.ErrDrift))
+	after, err := os.ReadFile(path)
+	require(t, err == nil && bytes.Equal(after, modified))
+	preserved, err = os.ReadFile(sentinelPath)
+	require(t, err == nil && bytes.Equal(preserved, sentinel))
+}
+
+func TestIntegrationRecoveryRecognizesActiveV12Sidecar(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "codex")
+	plan := sdd.PlanMedium
+	v12, err := renderActiveV12("v0.0.0", plan)
+	require(t, err == nil && os.MkdirAll(root, 0o700) == nil)
+	sentinel := []byte("unrelated recovery sentinel\n")
+	sentinelPath := filepath.Join(root, "config.toml")
+	require(t, os.WriteFile(sentinelPath, sentinel, 0o600) == nil)
+	require(t, os.WriteFile(filepath.Join(root, ".vgxness-pending"), []byte("codex-pending\n"), 0o600) == nil)
+	for _, item := range v12.Artifacts {
+		path := filepath.Join(root, filepath.FromSlash(item.Path+".vgxness-stage"))
+		require(t, os.MkdirAll(filepath.Dir(path), 0o700) == nil)
+		require(t, os.WriteFile(path, item.Bytes, 0o600) == nil)
+	}
+
+	result, err := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
+	if err != nil || result.State != integration.StateInstalled || !result.Changed || result.ArtifactSHA256 != v12.SHA256 {
+		t.Fatalf("Reinstall(v12 sidecar) = %+v, %v", result, err)
+	}
+	assertNoEvidence(t, root)
+	preserved, err := os.ReadFile(sentinelPath)
+	require(t, err == nil && bytes.Equal(preserved, sentinel))
+}
+
+func TestPartialCandidateCollapseRejectsV12Conflict(t *testing.T) {
+	current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	require(t, err == nil)
+	v12, err := renderActiveV12("v0.0.0", sdd.PlanMedium)
+	require(t, err == nil)
+	partial := func(pkg Package) partialCandidate {
+		state := inspection{result: integration.Result{State: integration.StatePartial}, artifacts: make([]inspectedArtifact, len(pkg.Artifacts))}
+		for index, item := range pkg.Artifacts {
+			state.artifacts[index] = inspectedArtifact{artifact: item, present: item.Path == "AGENTS.md", exact: item.Path == "AGENTS.md"}
+		}
+		return partialCandidate{state: state, pkg: pkg}
+	}
+	if _, _, err := collapsePartialCandidates([]partialCandidate{partial(current), partial(v12)}, current); !errors.Is(err, integration.ErrConflict) {
+		t.Fatalf("conflicting v12 manager bytes error=%v, want conflict", err)
 	}
 }
 
