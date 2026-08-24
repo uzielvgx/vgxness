@@ -14,6 +14,13 @@ the daemon's explicit `--container-network` flag permits only `0.0.0.0:8787`.
 Compose publishes no sync API port. Its sole host publication is dashboard port
 8788 bound to the required `VGXNESS_TAILSCALE_IP`; PostgreSQL remains on the
 private network only. NPM proxies only the sync API on container port 8787.
+NPM is the required HTTPS/TLS terminator for public sync traffic; the daemon does
+not terminate TLS and must not receive public traffic directly. Compose makes the
+default admission settings explicit (120 global attempts/minute, 60 per declared
+device/minute, and 256 device states), but they apply to this one `syncd` process
+only. They are not a distributed rate limit; add an independently operated
+upstream control before scaling to multiple daemon processes when a fleet-wide
+limit is required.
 
 ## Preflight and initial deploy
 

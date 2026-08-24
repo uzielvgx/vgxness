@@ -36,6 +36,10 @@ services:
     env_file: ${VGXNESS_SYNCD_ENV:?set an absolute syncd.env path}
     environment:
       VGXNESS_SYNC_POSTGRES_DSN_FILE: /run/secrets/syncd_dsn
+      # These admission limits apply only to this syncd process, not the Docker fleet.
+      VGXNESS_SYNC_AUTH_GLOBAL_PER_MINUTE: "120"
+      VGXNESS_SYNC_AUTH_DEVICE_PER_MINUTE: "60"
+      VGXNESS_SYNC_AUTH_DEVICE_STATES: "256"
       VGXNESS_SYNC_ADMIN_LISTEN: 0.0.0.0:8788
       VGXNESS_SYNC_ADMIN_AUTHORITY: ${VGXNESS_TAILSCALE_IP:?set the canonical Tailscale IP}:8788
       VGXNESS_SYNC_ADMIN_SECRET_FILE: /run/secrets/admin_secret

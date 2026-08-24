@@ -69,10 +69,30 @@ execution authority.
 
 **Implemented:** A read-only database open cannot migrate an older supported schema to v19.
 Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
-another read operation may therefore report a migration/storage failure. Run one
-write-capable memory or SDD operation to open the database and atomically apply
-v19, then rerun the read-only command. Do not delete or recreate the database;
-the existing data is the migration source and remains authoritative.
+another read operation may therefore report a migration/storage failure. Do not delete or
+recreate the database; the existing data is the migration source and remains authoritative.
+
+For a safe upgrade, first stop or quiesce other local writers and preserve an offline copy of
+the database using the operator's normal backup procedure. Then run one intended write-capable
+memory or SDD operation. The migrator obtains SQLite write ownership with `BEGIN IMMEDIATE`,
+applies every missing forward migration and its `PRAGMA user_version` update in a transaction,
+and rolls that transaction back on an error. It retries a transient SQLite busy/locked error
+within the operation context; it does not downgrade a database whose schema is newer than the
+binary supports. On success, rerun the read-only command to confirm the reported migration.
+
+If the writer reports a migration failure or remains pending, preserve the database and its
+error output, ensure no competing process still holds the file and that the storage location is
+writable, then retry the same intentional write after correcting that local condition. Do not
+reset `user_version`, replay SQL manually, or replace the database with an empty file. Escalate
+with the preserved copy if the failure persists.
+
+### Doctor scope
+
+`doctor` deliberately has the same local inspection scope as `status`: it resolves the selected
+storage paths and asks the configured storage health check for the schema version. It has no
+local evidence for proxy TLS, private-network membership, remote endpoint reachability, or
+fleet-wide admission limits, so it emits no guesses about those settings and makes no network
+calls. Those deployment boundaries are documented in [sync](sync.md).
 
 Older project-level `memory.db` files are a separate compatibility case. The
 transactional, idempotent importer remains in the Go memory package, but normal
