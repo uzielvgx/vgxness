@@ -223,8 +223,8 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 14; parity: opencode-v54") || !strings.Contains(manager, "readiness-envelope/v1") {
-		t.Fatal("current Codex manager is not v14 with readiness")
+	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 15; parity: opencode-v55") || !strings.Contains(manager, "readiness-envelope/v1") || !strings.Contains(manager, currentCodexCandidateCapsuleContract) {
+		t.Fatal("current Codex manager is not v15 with readiness and Candidate Capsule")
 	}
 	predecessor, err := renderActiveV13("v1.2.3", sdd.PlanMedium)
 	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 13; parity: opencode-v53") {
@@ -402,7 +402,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 14; parity: opencode-v54") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 15; parity: opencode-v55") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }
@@ -495,7 +495,7 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
 	for _, required := range []string{
-		"artifact: codex-agent/manager; version: 14; parity: opencode-v54",
+		"artifact: codex-agent/manager; version: 15; parity: opencode-v55",
 		"adaptive general-purpose partner",
 		"When the engineering route activates",
 		orchestration.ContractPolicy,
