@@ -73,7 +73,11 @@ func renderLegacy(version string) (Package, error) {
 // renderActiveV13 retains the complete pre-CARE package exclusively for
 // lifecycle recognition. It must never be used by the current renderer.
 func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
-	pkg, err := renderActiveV14(version, plan)
+	selected, err := preCAREProfilesForPlan(plan)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg, err := renderPackage(version, selected, plan, false)
 	if err != nil {
 		return Package{}, err
 	}
@@ -85,7 +89,7 @@ func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
 // renderActiveV14 retains the complete v14 package exclusively for lifecycle
 // recognition. It is the exact predecessor of the current v15 package.
 func renderActiveV14(version string, plan sdd.Plan) (Package, error) {
-	selected, err := preCAREProfilesForPlan(plan)
+	selected, err := profilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
 	}
