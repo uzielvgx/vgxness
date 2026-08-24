@@ -159,6 +159,7 @@ func preConsolidationSDDApply(current []byte) []byte {
 }
 
 const currentManagerAssurance = "After general returns inspect exact diff, changed paths, status identity, and command evidence. For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`. Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs. A source change creates a new candidate and invalidates validation and review evidence. Freeze one exact candidate identity before final validation and review without inventing a digest that excludes untracked files. Define one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria. Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation; missing, mismatched, or stale binding is `INCONCLUSIVE`. Verifier mission schema: the Review Binding, frozen candidate digest, digest procedure, exact changed paths, acceptance criteria, evidence scope, exact permitted commands, expected environment, and stop condition; accept only PASS, FAIL, or INCONCLUSIVE evidence echoing the complete binding and reporting the same digest before and after. Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, exact skills, verificationEvidence, and lens-specific goal, scope, nonGoals, acceptance, evidence, stop, and return contract; every reviewer and refuter echoes the complete binding unchanged, and missing evidence is not success."
+const managerReviewerCandidateCapsule = "Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, the complete Candidate Capsule, exact skills, verificationEvidence"
 const preConsolidationManagerAssurance = "After general returns inspect exact diff, changed paths, status identity, and command evidence. For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`. Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs. A source change creates a new candidate and invalidates validation and review evidence. Freeze one exact candidate identity before final validation and review without inventing a digest that excludes untracked files. Verifier mission schema: frozen candidate digest, digest procedure, exact changed paths, acceptance criteria, evidence scope, exact permitted commands, expected environment, and stop condition; accept only PASS, FAIL, or INCONCLUSIVE evidence reporting the same digest before and after. Reviewer mission schema: mode, candidate identity, exact changedPaths, diffScope, exact skills, verificationEvidence, and lens-specific goal, scope, nonGoals, acceptance, evidence, stop, and return contract; every reviewer receives the same frozen identity and scope, and missing evidence is not success."
 const currentManagerReviewDepth = "Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use vgxness-review-risk, vgxness-review-readability, vgxness-review-reliability, and vgxness-review-resilience only on the same candidate; send only supplied severe inferential finding IDs to vgxness-review-refuter in one batch; permit at most one correction transaction and one scoped validation. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet."
 const preConsolidationManagerReviewDepth = "Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use vgxness-review-risk, vgxness-review-readability, vgxness-review-reliability, and vgxness-review-resilience only on the same candidate; send severe inferential findings to vgxness-review-refuter in one batch; permit at most one correction transaction and one scoped validation; never loop until reviewers become quiet."
@@ -273,10 +274,7 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 		}
 		return buildModelPlanBundleV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: provider, Assignments: assignments, Provenance: sdd.ModelPlanCLI})
 	}
-	if installedV3 != nil {
-		if explicit || hasSlotEffort(options) || hasSlotVariant(options) {
-			return modelPlanBundle{}, fmt.Errorf("%w: installed per-agent plan requires complete per-agent assignments", integration.ErrInvalid)
-		}
+	if installedV3 != nil && !explicit && !hasSlotEffort(options) && !hasSlotVariant(options) {
 		return buildModelPlanBundleV3(*installedV3)
 	}
 	if installedV2 != nil {
@@ -314,7 +312,8 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 		if !explicit && !hasSlotEffort(options) {
 			config.Provenance = base.Provenance
 		}
-		return buildModelPlanBundleV3(projectModelPlanV2ToV3(config))
+		candidate, candidateErr := buildModelPlanBundleV3(projectModelPlanV2ToV3(config))
+		return verifyInstalledV3SlotProjection(installedV3, installedBundle, candidate, candidateErr)
 	}
 	if hasSlotEffort(options) {
 		config, err := modelPlanConfigV2(options, plan, efficient, balanced, frontier)
@@ -324,7 +323,8 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 		if !explicit {
 			config.Provenance = base.Provenance
 		}
-		return buildModelPlanBundleV3(projectModelPlanV2ToV3(config))
+		candidate, candidateErr := buildModelPlanBundleV3(projectModelPlanV2ToV3(config))
+		return verifyInstalledV3SlotProjection(installedV3, installedBundle, candidate, candidateErr)
 	}
 	config, err := sdd.NewModelPlanConfig(plan, efficient, balanced, frontier)
 	if err != nil {
@@ -345,7 +345,18 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 	if installedV1 {
 		return buildModelPlanBundle(config)
 	}
-	return buildModelPlanBundleV3(projectModelPlanToV3(config))
+	candidate, candidateErr := buildModelPlanBundleV3(projectModelPlanToV3(config))
+	return verifyInstalledV3SlotProjection(installedV3, installedBundle, candidate, candidateErr)
+}
+
+func verifyInstalledV3SlotProjection(installed *sdd.ModelPlanConfigV3, existing, candidate modelPlanBundle, err error) (modelPlanBundle, error) {
+	if err != nil || installed == nil {
+		return candidate, err
+	}
+	if !bytes.Equal(candidate.manifest, existing.manifest) {
+		return modelPlanBundle{}, fmt.Errorf("%w: slot flags differ from installed per-agent plan", integration.ErrInvalid)
+	}
+	return candidate, nil
 }
 
 func projectModelPlanToV3(config sdd.ModelPlanConfig) sdd.ModelPlanConfigV3 {
@@ -1680,6 +1691,7 @@ func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignmen
 
 func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	value, err := bindManagerTemplate(canonicalManagerPrompt, managerCurrentMarker, assignment)
+	value = bytes.Replace(value, []byte("Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, exact skills, verificationEvidence"), []byte(managerReviewerCandidateCapsule), 1)
 	return activeManagerPrompt(value), err
 }
 
@@ -1736,7 +1748,11 @@ func previousManagerV51(current []byte) []byte {
 }
 
 func previousManagerV52(current []byte) []byte {
-	return derivePredecessor(current, []textReplacement{{old: managerPreviousMarker, new: managerV52Marker}, {old: "\n\n" + orchestration.ReadinessManagerContract + "\n", new: ""}})
+	return derivePredecessor(current, []textReplacement{
+		{old: managerPreviousMarker, new: managerV52Marker},
+		{old: managerReviewerCandidateCapsule, new: "Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, exact skills, verificationEvidence"},
+		{old: "\n\n" + orchestration.ReadinessManagerContract + "\n", new: ""},
+	})
 }
 
 func previousManagerV53(current []byte) []byte {

@@ -1404,6 +1404,57 @@ func TestIntegrationRetiresOnlyExactLegacyProviderSkill(t *testing.T) {
 	}
 }
 
+func TestIntegrationV3MigrationRetiresExactV2Reviewers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	legacy := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+	}
+
+	installed, installErr := service.Install(context.Background(), options)
+	status, statusErr := service.Status(context.Background(), options)
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		if _, err := os.Stat(filepath.Join(root, "agents", name)); !os.IsNotExist(err) {
+			t.Errorf("exact V2 reviewer %s was not retired: %v", name, err)
+		}
+	}
+	testutil.Require(t, installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+}
+
+func TestIntegrationV3MigrationRetainsModifiedV2ReviewerAsDrift(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	legacy := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+	}
+	path := filepath.Join(root, "agents", reviewRiskName)
+	modified := append(append([]byte(nil), legacy.agents[reviewRiskName]...), []byte("\nuser modification\n")...)
+	testutil.NoError(t, os.WriteFile(path, modified, 0o600))
+
+	status, statusErr := service.Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "status=%+v statusErr=%v install=%v read=%v", status, statusErr, installErr, readErr)
+}
+
 func TestIntegrationRestoresRetiredSkillAfterLaterFailure(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
@@ -2143,7 +2194,7 @@ func TestManagerPromptDefinesInstalledChildMissionSchemas(t *testing.T) {
 		"frozen candidate digest", "digest procedure", "exact changed paths", "acceptance criteria", "evidence scope",
 		"exact permitted commands", "expected environment", "stop condition",
 		"Reviewer mission schema",
-		"mode", "candidate identity", "exact changedPaths", "diffScope", "exact skills", "verificationEvidence",
+		"mode", "candidate identity", "exact changedPaths", "diffScope", "complete Candidate Capsule", "exact skills", "verificationEvidence",
 		"lens-specific goal", "scope", "nonGoals", "acceptance", "evidence", "stop", "return contract",
 	} {
 		if !strings.Contains(prompt, required) {

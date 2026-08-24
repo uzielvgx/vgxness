@@ -252,6 +252,32 @@ func TestRequestedModelPlanV3OmitsEmptyVariant(t *testing.T) {
 	}
 }
 
+func TestRequestedModelPlanV3SlotFlagsRequireExactInstalledProjection(t *testing.T) {
+	options := integration.Options{
+		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+	}
+	directory := t.TempDir()
+	first, err := requestedModelPlan(options, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(directory, "vgxness"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "vgxness", modelPlanManifestName), first.manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := requestedModelPlan(options, directory)
+	if err != nil || !bytes.Equal(second.manifest, first.manifest) {
+		t.Fatalf("same slot flags did not regenerate installed v3 projection: err=%v", err)
+	}
+	options.ModelFrontier = "other/frontier"
+	if _, err := requestedModelPlan(options, directory); !errors.Is(err, integration.ErrInvalid) {
+		t.Fatalf("incompatible slot flags error=%v, want invalid", err)
+	}
+}
+
 func TestOmitEmptyVariantLinesRemovesOnlyFirstLine(t *testing.T) {
 	agents := map[string][]byte{"agent.md": []byte("variant: \nvariant: \n")}
 	got := omitEmptyVariantLines(agents)["agent.md"]

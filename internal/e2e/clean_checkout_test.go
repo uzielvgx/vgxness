@@ -59,7 +59,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"--model-efficient", "openai/gpt-5.6-luna", "--model-balanced", "anthropic/claude-sonnet", "--model-frontier", "acme/frontier",
 		"--model-efficient-effort", "low", "--model-balanced-effort", "high", "--model-frontier-effort", "ultra",
 	)
-	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy", "Slot efficient:\n    provider=openai\n    ref=openai/gpt-5.6-luna\n    effort=low\n    source=catalog\n    availability=catalog-known", "Slot balanced:\n    provider=anthropic\n    ref=anthropic/claude-sonnet\n    effort=high\n    source=custom\n    availability=unknown", "Slot frontier:\n    provider=acme\n    ref=acme/frontier\n    effort=ultra\n    source=custom\n    availability=unknown", "Reinicia OpenCode para cargar vgxness-manager"} {
+	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy", "Reinicia OpenCode para cargar vgxness-manager"} {
 		if !strings.Contains(setupOutput, expected) {
 			t.Fatalf("setup output is missing %q:\n%s", expected, setupOutput)
 		}
@@ -123,8 +123,10 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatal("installed manager retains retired vgxness-autonomous-stacked-pr loading")
 	}
 	manifestData, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", "model-plan.json"))
-	if err != nil || !bytes.Contains(manifestData, []byte(`"schemaVersion": 2`)) || !bytes.Contains(manifestData, []byte(`"provider": "mixed"`)) {
-		t.Fatalf("setup did not install the mixed v2 manifest: %v\n%s", err, manifestData)
+	for _, expected := range []string{`"schemaVersion": 3`, `"configV3"`, `"provider": "mixed"`, `"agents/vgxness-care-reviewer.md"`, `"agents/vgxness-care-specialist.md"`, `"agents/vgxness-care-challenger.md"`} {
+		if err != nil || !bytes.Contains(manifestData, []byte(expected)) {
+			t.Fatalf("setup did not install the expected v3 manifest content %q: %v\n%s", expected, err, manifestData)
+		}
 	}
 	generalData, generalErr := os.ReadFile(general)
 	exploreData, exploreErr := os.ReadFile(explore)
@@ -160,7 +162,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"setup", "opencode", "--status", "--workspace", workspace,
 		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
 	)
-	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") || !strings.Contains(statusOutput, "Slot balanced:\n    provider=anthropic\n    ref=anthropic/claude-sonnet\n    effort=high\n    source=custom\n    availability=unknown") {
+	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") || !strings.Contains(statusOutput, "Plan de modelos:  provider=mixed manifest=") {
 		t.Fatalf("installed setup is not healthy:\n%s", statusOutput)
 	}
 

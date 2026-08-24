@@ -1158,7 +1158,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	if containerErr != nil {
 		return inspection{}, fmt.Errorf("inspect OpenCode integration directory: %w", containerErr)
 	}
-	_, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
+	installedPlan, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
 	preConsolidation, predecessorErr := preConsolidationV1MediumBundle()
 	if predecessorErr != nil {
 		return inspection{}, predecessorErr
@@ -1272,10 +1272,14 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		state.result.State = integration.StateDrifted
 		return state, nil
 	}
-	retired, retirementErr := inspectRetiredArtifacts(
+	retirementCandidates := []retiredArtifact{
 		retiredArtifact{path: skillPath, recognize: isRetiredSkill},
 		retiredArtifact{path: legacyPluginPath, recognize: isPreviousMemoryPlugin},
-	)
+	}
+	if plan.configV3 != nil {
+		retirementCandidates = append(retirementCandidates, legacyV2ReviewRetirementCandidates(configDirectory, installedPlan)...)
+	}
+	retired, retirementErr := inspectRetiredArtifacts(retirementCandidates...)
 	if retirementErr != nil {
 		state.result.State = integration.StateDrifted
 		return state, nil
@@ -1459,6 +1463,31 @@ func inspectRetiredArtifacts(candidates ...retiredArtifact) ([]retiredArtifact, 
 		retired = append(retired, candidate)
 	}
 	return retired, nil
+}
+
+func legacyV2ReviewRetirementCandidates(configDirectory string, installed modelPlanBundle) []retiredArtifact {
+	if installed.configV2 == nil {
+		return nil
+	}
+	candidates := make([]retiredArtifact, 0, 5)
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		expected := [][]byte{installed.agents[name]}
+		candidates = append(candidates, retiredArtifact{
+			path: filepath.Join(configDirectory, "agents", name), recognize: recognizesExactArtifacts(expected),
+		})
+	}
+	return candidates
+}
+
+func recognizesExactArtifacts(expected [][]byte) func([]byte) bool {
+	return func(candidate []byte) bool {
+		for _, known := range expected {
+			if bytes.Equal(candidate, known) {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 func defaultAgentArtifacts(configPath, statePath, executable string) ([]byte, []byte, defaultAgentState, []byte, bool, error) {
