@@ -262,6 +262,10 @@ func encodeModelPlanBundleV3(config sdd.ModelPlanConfigV3, resolved sdd.OpenCode
 }
 
 func requestedModelPlan(options integration.Options, configDirectory string) (modelPlanBundle, error) {
+	return requestedModelPlanForMigration(options, configDirectory, false)
+}
+
+func requestedModelPlanForMigration(options integration.Options, configDirectory string, migrateInstalledV1 bool) (modelPlanBundle, error) {
 	explicit := options.ModelPlan != "" || options.ModelEfficient != "" || options.ModelBalanced != "" || options.ModelFrontier != ""
 	v3Requested := options.ModelAssignments != nil
 	if v3Requested && (explicit || hasSlotEffort(options) || hasSlotVariant(options)) {
@@ -371,7 +375,14 @@ func requestedModelPlan(options integration.Options, configDirectory string) (mo
 			return historical, nil
 		}
 	}
-	if installedV1 {
+	if installedV1 && migrateInstalledV1 {
+		exact, exactErr := buildModelPlanBundle(base)
+		if exactErr != nil {
+			return modelPlanBundle{}, exactErr
+		}
+		migrateInstalledV1 = base == sdd.DefaultModelPlanConfig() && bytes.Equal(installedBundle.manifest, exact.manifest)
+	}
+	if installedV1 && !migrateInstalledV1 {
 		return buildModelPlanBundle(config)
 	}
 	candidate, candidateErr := buildModelPlanBundleV3(projectModelPlanToV3(config))
