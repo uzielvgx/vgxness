@@ -178,7 +178,7 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintf(writer, "  Versiones: %s\n", terminalSafe(plan.SelfInstall.DataDir))
 	fmt.Fprintf(writer, "  Manager: %s (estado=%s)\n", terminalSafe(plan.Integration.Path), plan.Integration.State)
 	fmt.Fprintf(writer, "  Skills globales: %s (estado=%s, archivos=%d)\n", terminalSafe(plan.Skills.Path), plan.Skills.State, plan.Skills.FileCount)
-	fmt.Fprintln(writer, "  Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario + Explore + general escritor + verificador + cinco revisores + seis agentes SDD + MCP --full administrado como único runtime")
+	fmt.Fprintln(writer, "  Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario + Explore + general escritor + verificador + tres perfiles CARE de revisión + seis agentes SDD + MCP --full administrado como único runtime")
 	fmt.Fprintf(writer, "  Artefactos administrados: %d\n", plan.Integration.ArtifactCount)
 	fmt.Fprintf(writer, "  Plan de modelos: %s provider=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider))
 	renderModelSlots(writer, plan.Integration)

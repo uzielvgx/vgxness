@@ -1430,6 +1430,197 @@ func TestIntegrationV3MigrationRetiresExactV2Reviewers(t *testing.T) {
 	testutil.Require(t, installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
 }
 
+func TestIntegrationV3MigrationRetiresExactFixedLensV53Reviewers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	legacy, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+	}
+
+	installed, installErr := service.Install(context.Background(), options)
+	status, statusErr := service.Status(context.Background(), options)
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		if _, err := os.Stat(filepath.Join(root, "agents", name)); !os.IsNotExist(err) {
+			t.Errorf("exact fixed-lens reviewer %s was not retired: %v", name, err)
+		}
+	}
+	testutil.Require(t, installErr == nil && installed.State == integration.StateInstalled && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+}
+
+func TestIntegrationV3MigrationRetiresExactCurrentV1Reviewers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	legacy, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+	}
+
+	installed, installErr := service.Install(context.Background(), options)
+	status, statusErr := service.Status(context.Background(), options)
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		if _, err := os.Stat(filepath.Join(root, "agents", name)); !os.IsNotExist(err) {
+			t.Errorf("exact current V1 reviewer %s was not retired: %v", name, err)
+		}
+	}
+	testutil.Require(t, installErr == nil && installed.State == integration.StateInstalled && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+}
+
+func TestIntegrationV3MigrationRejectsIncompleteManifestBoundReviewers(t *testing.T) {
+	assignments := completeModelAssignmentsV3()
+	for _, test := range []struct {
+		name   string
+		bundle func(t *testing.T) modelPlanBundle
+	}{
+		{
+			name: "v1",
+			bundle: func(t *testing.T) modelPlanBundle {
+				bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+				testutil.NoError(t, err)
+				return bundle
+			},
+		},
+		{
+			name: "v2",
+			bundle: func(t *testing.T) modelPlanBundle {
+				return mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+			},
+		},
+		{
+			name: "v53",
+			bundle: func(t *testing.T) modelPlanBundle {
+				bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+				testutil.NoError(t, err)
+				return bundle
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "opencode")
+			options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+			service := NewIntegration()
+			_, err := service.Install(context.Background(), options)
+			testutil.NoError(t, err)
+			legacy := test.bundle(t)
+			testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+			for name, content := range legacy.agents {
+				testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+			}
+			for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+				testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+			}
+			missingPath := filepath.Join(root, "agents", reviewRefuterName)
+			before, err := os.ReadFile(filepath.Join(root, "agents", reviewRiskName))
+			testutil.NoError(t, err)
+			testutil.NoError(t, os.Remove(missingPath))
+
+			status, statusErr := service.Status(context.Background(), options)
+			preview, previewErr := service.Preview(context.Background(), options)
+			_, installErr := service.Install(context.Background(), options)
+			after, readErr := os.ReadFile(filepath.Join(root, "agents", reviewRiskName))
+			_, careErr := os.Stat(filepath.Join(root, "agents", "vgxness-care-reviewer.md"))
+			testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(before, after) && os.IsNotExist(careErr), "status=%+v statusErr=%v preview=%+v previewErr=%v install=%v read=%v care=%v", status, statusErr, preview, previewErr, installErr, readErr, careErr)
+		})
+	}
+}
+
+func TestIntegrationMigratesExactCurrentV1ToCAREWithoutOverrides(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	options := integration.Options{ConfigDir: root}
+	legacy, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
+	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+
+	service := NewIntegration()
+	installed, installErr := service.Install(context.Background(), options)
+	status, statusErr := service.Status(context.Background(), options)
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		if _, err := os.Stat(filepath.Join(root, "agents", name)); !os.IsNotExist(err) {
+			t.Errorf("exact current V1 reviewer %s was not retired: %v", name, err)
+		}
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		if _, err := os.Stat(filepath.Join(root, "agents", name)); err != nil {
+			t.Errorf("CARE reviewer %s was not installed: %v", name, err)
+		}
+	}
+	testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 3 && installed.ArtifactCount == 16 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+}
+
+func TestIntegrationV3MigrationRetainsModifiedCurrentV1ReviewerAsDrift(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	options := integration.Options{ConfigDir: root}
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	legacy, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+	}
+	path := filepath.Join(root, "agents", reviewRiskName)
+	modified := append(append([]byte(nil), legacy.agents[reviewRiskName]...), []byte("\nuser modification\n")...)
+	testutil.NoError(t, os.WriteFile(path, modified, 0o600))
+
+	status, statusErr := service.Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "status=%+v statusErr=%v install=%v read=%v", status, statusErr, installErr, readErr)
+}
+
+func TestIntegrationV3MigrationRetainsModifiedFixedLensV53ReviewerAsDrift(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	legacy, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+	}
+	path := filepath.Join(root, "agents", reviewRiskName)
+	modified := append(append([]byte(nil), legacy.agents[reviewRiskName]...), []byte("\nuser modification\n")...)
+	testutil.NoError(t, os.WriteFile(path, modified, 0o600))
+
+	status, statusErr := service.Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "status=%+v statusErr=%v install=%v read=%v", status, statusErr, installErr, readErr)
+}
+
 func TestIntegrationV3MigrationRetainsModifiedV2ReviewerAsDrift(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "opencode")
 	assignments := completeModelAssignmentsV3()
@@ -1453,6 +1644,23 @@ func TestIntegrationV3MigrationRetainsModifiedV2ReviewerAsDrift(t *testing.T) {
 	_, installErr := service.Install(context.Background(), options)
 	after, readErr := os.ReadFile(path)
 	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "status=%+v statusErr=%v install=%v read=%v", status, statusErr, installErr, readErr)
+}
+
+func TestIntegrationRejectsUnboundFixedReviewerBeforeV3Install(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	path := filepath.Join(root, "agents", reviewRiskName)
+	unknown := []byte("unknown fixed reviewer\n")
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	testutil.NoError(t, os.WriteFile(path, unknown, 0o600))
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: root}
+
+	status, statusErr := service.Status(context.Background(), options)
+	preview, previewErr := service.Preview(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	_, careErr := os.Stat(filepath.Join(root, "agents", "vgxness-care-reviewer.md"))
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, unknown) && os.IsNotExist(careErr), "status=%+v statusErr=%v preview=%+v previewErr=%v install=%v read=%v care=%v", status, statusErr, preview, previewErr, installErr, readErr, careErr)
 }
 
 func TestIntegrationRestoresRetiredSkillAfterLaterFailure(t *testing.T) {
@@ -1760,6 +1968,43 @@ func TestIntegrationRecoversCompleteV45BundleWithoutManifest(t *testing.T) {
 	preview, previewErr := service.Preview(context.Background(), options)
 	installed, installErr := service.Install(context.Background(), options)
 	testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled, "preview=%+v install=%+v", preview, installed)
+}
+
+func TestIntegrationV3MigrationRetiresCompleteHistoricalReviewBundleWithManifest(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	v45, err := previousV45ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	v44, err := previousV44ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	v43, err := previousV43ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	assignments := completeModelAssignmentsV3()
+
+	for _, tc := range []struct {
+		name   string
+		bundle modelPlanBundle
+	}{
+		{name: "v45", bundle: v45},
+		{name: "v44", bundle: v44},
+		{name: "v43", bundle: v43},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "opencode")
+			writeModelPlanBundleFixture(t, root, tc.bundle)
+
+			service := NewIntegration()
+			options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+			installed, installErr := service.Install(context.Background(), options)
+			status, statusErr := service.Status(context.Background(), options)
+			for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+				if _, err := os.Stat(filepath.Join(root, "agents", name)); !os.IsNotExist(err) {
+					t.Errorf("exact historical %s reviewer %s was not retired: %v", tc.name, name, err)
+				}
+			}
+			testutil.Require(t, installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+		})
+	}
 }
 
 func TestIntegrationUpgradesOnlyCompletePreConsolidationV1MediumPackage(t *testing.T) {

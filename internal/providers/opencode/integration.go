@@ -768,10 +768,11 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 	if pending, err := service.ReinstallPending(ctx, options); err != nil || pending {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	}
-	state, err := service.inspect(ctx, options)
+	state, err := service.inspectWithV1Migration(ctx, options, true)
 	if err != nil {
 		return integration.Result{}, err
 	}
+	migrateInstalledV1 := state.result.ModelSchemaVersion == 3
 	if state.result.State == integration.StateInstalled {
 		return state.result, nil
 	}
@@ -839,7 +840,7 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 			}
 		}
 	}
-	verified, err := service.inspect(ctx, options)
+	verified, err := service.inspectWithV1Migration(ctx, options, migrateInstalledV1)
 	if err != nil || verified.result.State != integration.StateInstalled {
 		return integration.Result{}, fmt.Errorf("read back OpenCode integration artifacts: %w", integration.ErrDrift)
 	}
@@ -1075,6 +1076,10 @@ func (change defaultAgentUninstall) cleanup() error {
 }
 
 func (service *Integration) inspect(ctx context.Context, options integration.Options) (inspection, error) {
+	return service.inspectWithV1Migration(ctx, options, false)
+}
+
+func (service *Integration) inspectWithV1Migration(ctx context.Context, options integration.Options, migrateInstalledV1 bool) (inspection, error) {
 	if err := ctx.Err(); err != nil {
 		return inspection{}, err
 	}
@@ -1103,7 +1108,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	if service.afterDefaultAgentSnapshot != nil {
 		service.afterDefaultAgentSnapshot()
 	}
-	plan, err := requestedModelPlan(options, configDirectory)
+	plan, err := requestedModelPlanForMigration(options, configDirectory, migrateInstalledV1)
 	if err != nil {
 		return inspection{}, err
 	}
@@ -1159,6 +1164,15 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		return inspection{}, fmt.Errorf("inspect OpenCode integration directory: %w", containerErr)
 	}
 	installedPlan, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
+	var historicalReviewBundle modelPlanBundle
+	historicalReviewBundleMatched := false
+	if plan.configV3 != nil {
+		var historicalErr error
+		historicalReviewBundle, historicalReviewBundleMatched, historicalErr = completeHistoricalReviewBundle(configDirectory)
+		if historicalErr != nil {
+			return inspection{}, historicalErr
+		}
+	}
 	preConsolidation, predecessorErr := preConsolidationV1MediumBundle()
 	if predecessorErr != nil {
 		return inspection{}, predecessorErr
@@ -1207,6 +1221,11 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 			for _, name := range compactProtocolAgentNames {
 				predecessors[name] = compactPrior[name]
 			}
+		}
+	}
+	if historicalReviewBundleMatched {
+		for _, name := range []string{managerAgentName, generalAgentName, verifierAgentName} {
+			predecessors[name] = append(predecessors[name], historicalReviewBundle.agents[name])
 		}
 	}
 	regeneration := func(path string) [][]byte {
@@ -1286,7 +1305,28 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		retiredArtifact{path: legacyPluginPath, recognize: isPreviousMemoryPlugin},
 	}
 	if plan.configV3 != nil {
-		retirementCandidates = append(retirementCandidates, legacyV2ReviewRetirementCandidates(configDirectory, installedPlan)...)
+		if historicalReviewBundleMatched {
+			retirementCandidates = append(retirementCandidates, legacyReviewRetirementCandidates(configDirectory, historicalReviewBundle)...)
+		} else if installedPlanOK {
+			complete, completeErr := installedLegacyReviewersComplete(configDirectory, installedPlan)
+			if completeErr != nil || !complete {
+				state.result.State = integration.StateDrifted
+				return state, nil
+			}
+			retirementCandidates = append(retirementCandidates, legacyReviewRetirementCandidatesForInstalledPlan(configDirectory, installedPlan)...)
+		} else {
+			if fixedLensV53ManifestInstalled {
+				retirementCandidates = append(retirementCandidates, legacyReviewRetirementCandidates(configDirectory, fixedLensV53)...)
+			}
+			if predecessorManifestInstalled {
+				retirementCandidates = append(retirementCandidates, legacyReviewRetirementCandidates(configDirectory, preConsolidation)...)
+			}
+		}
+		unbound, unboundErr := hasUnboundFixedReviewers(configDirectory, retirementCandidates)
+		if unboundErr != nil || unbound {
+			state.result.State = integration.StateDrifted
+			return state, nil
+		}
 	}
 	retired, retirementErr := inspectRetiredArtifacts(retirementCandidates...)
 	if retirementErr != nil {
@@ -1403,6 +1443,40 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	return state, nil
 }
 
+func completeHistoricalReviewBundle(configDirectory string) (modelPlanBundle, bool, error) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if err != nil {
+		return modelPlanBundle{}, false, err
+	}
+	v45, err := previousV45ModelPlanBundle(current)
+	if err != nil {
+		return modelPlanBundle{}, false, err
+	}
+	v44, err := previousV44ModelPlanBundle(current)
+	if err != nil {
+		return modelPlanBundle{}, false, err
+	}
+	v43, err := previousV43ModelPlanBundle(current)
+	if err != nil {
+		return modelPlanBundle{}, false, err
+	}
+	for _, bundle := range []modelPlanBundle{v45, v44, v43} {
+		matched := true
+		for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
+			expected := bundle.agents[name]
+			actual, readErr := readRegularFile(filepath.Join(configDirectory, "agents", name))
+			if readErr != nil || !bytes.Equal(actual, expected) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return bundle, true, nil
+		}
+	}
+	return modelPlanBundle{}, false, nil
+}
+
 func resultModelAssignments(resolved []sdd.OpenCodeAgentAssignmentV3) (*[integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3, error) {
 	if len(resolved) != integration.ModelAssignmentCount {
 		return nil, fmt.Errorf("%w: resolved OpenCode v3 assignment count", integration.ErrInvalid)
@@ -1479,10 +1553,37 @@ func inspectRetiredArtifacts(candidates ...retiredArtifact) ([]retiredArtifact, 
 	return retired, nil
 }
 
-func legacyV2ReviewRetirementCandidates(configDirectory string, installed modelPlanBundle) []retiredArtifact {
-	if installed.configV2 == nil {
+func legacyReviewRetirementCandidatesForInstalledPlan(configDirectory string, installed modelPlanBundle) []retiredArtifact {
+	if installed.configV3 != nil || len(installed.agents) == 0 {
 		return nil
 	}
+	return legacyReviewRetirementCandidates(configDirectory, installed)
+}
+
+func installedLegacyReviewersComplete(configDirectory string, installed modelPlanBundle) (bool, error) {
+	if installed.configV3 != nil || len(installed.agents) == 0 {
+		return true, nil
+	}
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		expected, ok := installed.agents[name]
+		if !ok || len(expected) == 0 {
+			return false, nil
+		}
+		current, err := readRegularFile(filepath.Join(configDirectory, "agents", name))
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !bytes.Equal(current, expected) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func legacyReviewRetirementCandidates(configDirectory string, installed modelPlanBundle) []retiredArtifact {
 	candidates := make([]retiredArtifact, 0, 5)
 	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
 		expected := [][]byte{installed.agents[name]}
@@ -1491,6 +1592,27 @@ func legacyV2ReviewRetirementCandidates(configDirectory string, installed modelP
 		})
 	}
 	return candidates
+}
+
+func hasUnboundFixedReviewers(configDirectory string, candidates []retiredArtifact) (bool, error) {
+	bound := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		bound[candidate.path] = struct{}{}
+	}
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		path := filepath.Join(configDirectory, "agents", name)
+		_, err := readRegularFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if _, ok := bound[path]; !ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func recognizesExactArtifacts(expected [][]byte) func([]byte) bool {
