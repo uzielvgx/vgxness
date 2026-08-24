@@ -431,7 +431,7 @@ func TestSchemaV3RecognizesImmediateProfileManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	predecessor, err := immediatePredecessor(current)
+	predecessor, err := previousV53ModelPlanBundle(current)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +480,7 @@ func TestSchemaV3PredecessorRecognizesV53V6BeforeOlderTransitions(t *testing.T) 
 		t.Fatalf("schema-v3 v53/v6 predecessor rejected: %v", err)
 	}
 	for name, marker := range map[string]string{
-		managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 53",
+		managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 54",
 		verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 6",
 	} {
 		candidates, err := modelBoundAgentPredecessorCandidatesV3(*current.resolvedV3, name)

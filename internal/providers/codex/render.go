@@ -73,6 +73,18 @@ func renderLegacy(version string) (Package, error) {
 // renderActiveV13 retains the complete pre-CARE package exclusively for
 // lifecycle recognition. It must never be used by the current renderer.
 func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
+	pkg, err := renderActiveV14(version, plan)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg.Artifacts[0].Bytes = []byte(activeV13ManagerInstructions())
+	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
+	return pkg, nil
+}
+
+// renderActiveV14 retains the complete v14 package exclusively for lifecycle
+// recognition. It is the exact predecessor of the current v15 package.
+func renderActiveV14(version string, plan sdd.Plan) (Package, error) {
 	selected, err := preCAREProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -81,7 +93,7 @@ func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	pkg.Artifacts[0].Bytes = []byte(activeV13ManagerInstructions())
+	pkg.Artifacts[0].Bytes = []byte(activeV14ManagerInstructions())
 	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
 	return pkg, nil
 }
@@ -272,14 +284,21 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
 func activeManagerInstructions() string {
-	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 14; parity: opencode-v54", 1)
+	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 15; parity: opencode-v55", 1)
 	value = strings.Replace(value, "An SDD apply handoff to general", "Route accepted SDD apply directly to sdd-apply", 1)
 	value = strings.Replace(value, "SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections", "Research, proposal, spec, design, and tasks phase agents are read-only; sdd-apply alone writes authorized SDD workspace, OpenSpec, or hybrid projections", 1)
-	return value + "\n\n" + currentCodexContextCapsule + "\n\n" + currentCodexExpertEnsemble + nativeDelegationPolicy + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n\n" + orchestration.ReadinessManagerContract + "\n"
+	return value + "\n\n" + currentCodexContextCapsule + "\n\n" + currentCodexExpertEnsemble + nativeDelegationPolicy + "\n\n" + currentCodexCandidateCapsuleContract + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n\n" + orchestration.ReadinessManagerContract + "\n"
+}
+
+const currentCodexCandidateCapsuleContract = "For every frozen, risky, verification, or SDD delegation, require one complete Candidate Capsule v1 bound to the candidate identity: candidateDigest, digestProcedure, changedPaths, baseIdentity, criterion IDs, verificationState, evidenceRefs, and openBlockers. Reject a missing, stale, malformed, oversized, or scope-mismatched capsule before launch; preserve the complete capsule unchanged in every frozen-candidate handoff."
+
+func activeV14ManagerInstructions() string {
+	value := strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 15; parity: opencode-v55", "artifact: codex-agent/manager; version: 14; parity: opencode-v54", 1)
+	return strings.Replace(value, "\n\n"+currentCodexCandidateCapsuleContract, "", 1)
 }
 
 func activeV13ManagerInstructions() string {
-	value := strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 14; parity: opencode-v54", "artifact: codex-agent/manager; version: 13; parity: opencode-v53", 1)
+	value := strings.Replace(activeV14ManagerInstructions(), "artifact: codex-agent/manager; version: 14; parity: opencode-v54", "artifact: codex-agent/manager; version: 13; parity: opencode-v53", 1)
 	return strings.Replace(value, nativeDelegationPolicy, predecessorNativeDelegationPolicy, 1)
 }
 

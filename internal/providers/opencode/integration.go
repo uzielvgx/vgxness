@@ -1163,8 +1163,13 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	if predecessorErr != nil {
 		return inspection{}, predecessorErr
 	}
+	fixedLensV53, fixedLensV53Err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	if fixedLensV53Err != nil {
+		return inspection{}, fixedLensV53Err
+	}
 	predecessorManifest, predecessorManifestErr := readRegularFile(manifestPath)
 	predecessorManifestInstalled := predecessorManifestErr == nil && bytes.Equal(predecessorManifest, preConsolidation.manifest)
+	fixedLensV53ManifestInstalled := predecessorManifestErr == nil && bytes.Equal(predecessorManifest, fixedLensV53.manifest)
 	if predecessorManifestErr != nil && !errors.Is(predecessorManifestErr, os.ErrNotExist) {
 		return inspection{}, fmt.Errorf("inspect OpenCode model plan manifest: %w", predecessorManifestErr)
 	}
@@ -1175,11 +1180,15 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 			if candidateErr == nil && bytes.Equal(predecessorManifest, candidate.manifest) {
 				preConsolidation, predecessorManifestInstalled = candidate, true
 			}
+			candidate, candidateErr = fixedLensV53ModelPlanBundle(*manifest.Config)
+			if candidateErr == nil && bytes.Equal(predecessorManifest, candidate.manifest) {
+				fixedLensV53, fixedLensV53ManifestInstalled = candidate, true
+			}
 		}
 	}
 	predecessors := map[string][][]byte{}
 	predecessorRecognizers := map[string]func([]byte) bool{}
-	if !installedPlanOK {
+	if !installedPlanOK || predecessorManifestInstalled {
 		if plan.configV3 != nil {
 			predecessors, err = modelBoundAgentPredecessorsV3(*plan.resolvedV3)
 			if err != nil {
@@ -1324,8 +1333,13 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		}
 		item.present = true
 		present++
-		if predecessorManifestInstalled {
-			if expected, ok := preConsolidation.agents[filepath.Base(item.path)]; ok && !bytes.Equal(current, expected) {
+		if fixedLensV53ManifestInstalled {
+			if expected, ok := fixedLensV53.agents[filepath.Base(item.path)]; ok && !bytes.Equal(current, expected) {
+				state.result.State = integration.StateDrifted
+				return state, nil
+			}
+		} else if predecessorManifestInstalled {
+			if expected, ok := preConsolidation.agents[filepath.Base(item.path)]; ok && !bytes.Equal(current, expected) && !isManagedPredecessor(current, item.content, item.predecessors, item.recognize) {
 				state.result.State = integration.StateDrifted
 				return state, nil
 			}
@@ -1340,7 +1354,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 			item.exact = bytes.Equal(current, item.content)
 		}
 		if !item.exact {
-			if installedPlanOK && len(installedPlanBytes[item.path]) != 0 && !bytes.Equal(current, installedPlanBytes[item.path]) {
+			if installedPlanOK && len(installedPlanBytes[item.path]) != 0 && !bytes.Equal(current, installedPlanBytes[item.path]) && !isManagedPredecessor(current, item.content, item.predecessors, item.recognize) {
 				state.result.State = integration.StateDrifted
 				return state, nil
 			}
