@@ -1543,9 +1543,48 @@ func TestIntegrationV3MigrationRejectsIncompleteManifestBoundReviewers(t *testin
 }
 
 func TestIntegrationMigratesExactCurrentV1ToCAREWithoutOverrides(t *testing.T) {
+	for _, provenance := range []sdd.ModelPlanProvenance{sdd.ModelPlanDefault, sdd.ModelPlanCLI} {
+		t.Run(string(provenance), func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "opencode")
+			options := integration.Options{ConfigDir: root}
+			config := sdd.DefaultModelPlanConfig()
+			config.Provenance = provenance
+			legacy, err := buildModelPlanBundle(config)
+			testutil.NoError(t, err)
+			testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
+			testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
+			testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+			for name, content := range legacy.agents {
+				testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+			}
+
+			service := NewIntegration()
+			statusBefore, statusBeforeErr := service.Status(context.Background(), options)
+			previewBefore, previewBeforeErr := service.Preview(context.Background(), options)
+			testutil.Require(t, statusBeforeErr == nil && statusBefore.ModelSchemaVersion == 1 && previewBeforeErr == nil && previewBefore.ModelSchemaVersion == 1, "status before=%+v statusErr=%v preview before=%+v previewErr=%v", statusBefore, statusBeforeErr, previewBefore, previewBeforeErr)
+			installed, installErr := service.Install(context.Background(), options)
+			status, statusErr := service.Status(context.Background(), options)
+			for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+				if _, err := os.Stat(filepath.Join(root, "agents", name)); !os.IsNotExist(err) {
+					t.Errorf("exact current V1 reviewer %s was not retired: %v", name, err)
+				}
+			}
+			for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+				if _, err := os.Stat(filepath.Join(root, "agents", name)); err != nil {
+					t.Errorf("CARE reviewer %s was not installed: %v", name, err)
+				}
+			}
+			testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 3 && installed.ArtifactCount == 16 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+		})
+	}
+}
+
+func TestIntegrationDoesNotMigrateCustomV1ToCARE(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "opencode")
 	options := integration.Options{ConfigDir: root}
-	legacy, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	config, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "acme/fast", "acme/balanced", "acme/frontier")
+	testutil.NoError(t, err)
+	legacy, err := buildModelPlanBundle(config)
 	testutil.NoError(t, err)
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
@@ -1555,19 +1594,26 @@ func TestIntegrationMigratesExactCurrentV1ToCAREWithoutOverrides(t *testing.T) {
 	}
 
 	service := NewIntegration()
+	statusBefore, statusBeforeErr := service.Status(context.Background(), options)
+	previewBefore, previewBeforeErr := service.Preview(context.Background(), options)
 	installed, installErr := service.Install(context.Background(), options)
-	status, statusErr := service.Status(context.Background(), options)
-	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
-		if _, err := os.Stat(filepath.Join(root, "agents", name)); !os.IsNotExist(err) {
-			t.Errorf("exact current V1 reviewer %s was not retired: %v", name, err)
-		}
-	}
-	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
-		if _, err := os.Stat(filepath.Join(root, "agents", name)); err != nil {
-			t.Errorf("CARE reviewer %s was not installed: %v", name, err)
-		}
-	}
-	testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 3 && installed.ArtifactCount == 16 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+	_, careErr := os.Stat(filepath.Join(root, "agents", "vgxness-care-reviewer.md"))
+	testutil.Require(t,
+		statusBeforeErr == nil && statusBefore.ModelSchemaVersion == 1 &&
+			previewBeforeErr == nil && previewBefore.ModelSchemaVersion == 1 &&
+			installErr == nil && installed.ModelSchemaVersion == 1 && installed.ArtifactCount == 18 &&
+			os.IsNotExist(careErr),
+		"status before=%+v statusErr=%v preview before=%+v previewErr=%v installed=%+v install=%v care=%v",
+		statusBefore, statusBeforeErr, previewBefore, previewBeforeErr, installed, installErr, careErr)
+}
+
+func TestIntegrationDoesNotMigrateProviderModifiedV1ToCARE(t *testing.T) {
+	config := sdd.DefaultModelPlanConfig()
+	legacy, err := buildModelPlanBundle(config)
+	testutil.NoError(t, err)
+	testutil.Require(t, isExactSetupCLIV1Plan(config, legacy), "default setup-cli V1 was not eligible")
+	config.Provider = "acme"
+	testutil.Require(t, !isExactSetupCLIV1Plan(config, legacy), "provider-modified setup-cli V1 was eligible")
 }
 
 func TestIntegrationV3MigrationRetainsModifiedCurrentV1ReviewerAsDrift(t *testing.T) {
