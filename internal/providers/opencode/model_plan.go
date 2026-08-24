@@ -376,17 +376,29 @@ func requestedModelPlanForMigration(options integration.Options, configDirectory
 		}
 	}
 	if installedV1 && migrateInstalledV1 {
-		exact, exactErr := buildModelPlanBundle(base)
-		if exactErr != nil {
-			return modelPlanBundle{}, exactErr
-		}
-		migrateInstalledV1 = base == sdd.DefaultModelPlanConfig() && bytes.Equal(installedBundle.manifest, exact.manifest)
+		migrateInstalledV1 = isExactSetupCLIV1Plan(base, installedBundle)
 	}
 	if installedV1 && !migrateInstalledV1 {
 		return buildModelPlanBundle(config)
 	}
 	candidate, candidateErr := buildModelPlanBundleV3(projectModelPlanToV3(config))
 	return verifyInstalledV3SlotProjection(installedV3, installedBundle, candidate, candidateErr)
+}
+
+func isExactSetupCLIV1Plan(config sdd.ModelPlanConfig, installed modelPlanBundle) bool {
+	exact, err := buildModelPlanBundle(config)
+	if err != nil {
+		return false
+	}
+	defaults := sdd.DefaultModelPlanConfig()
+	return config.SchemaVersion == defaults.SchemaVersion &&
+		config.Provider == defaults.Provider &&
+		config.ActivePlan == defaults.ActivePlan &&
+		config.Efficient == defaults.Efficient &&
+		config.Balanced == defaults.Balanced &&
+		config.Frontier == defaults.Frontier &&
+		(config.Provenance == sdd.ModelPlanDefault || config.Provenance == sdd.ModelPlanCLI) &&
+		bytes.Equal(installed.manifest, exact.manifest)
 }
 
 func verifyInstalledV3SlotProjection(installed *sdd.ModelPlanConfigV3, existing, candidate modelPlanBundle, err error) (modelPlanBundle, error) {
