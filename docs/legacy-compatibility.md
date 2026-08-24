@@ -27,3 +27,7 @@ Historical bytes, digests, and schema migrations are compatibility evidence. Cha
 ## Portable sync compatibility
 
 Legacy local identifiers are not rewritten for sync. Outbound project-scoped transport uses durable deterministic wire-only identities instead; `resolve`, pull, and bootstrap translation remain unsupported.
+
+## CARE compatibility boundary
+
+CARE has no current fixed-lens aliases. Exact predecessors are recognized only for lifecycle and upgrade compatibility, never as current markers. [CARE architecture](care.md) defines those markers; [CARE evaluation](care-evaluation.md) distinguishes static repository checks from external adjudication.

@@ -73,11 +73,9 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	memoryPlugin := filepath.Join(configDirectory, "plugins", "vgxness.ts")
 	defaultAgentConfig := filepath.Join(configDirectory, "opencode.json")
 	reviewers := []string{
-		"vgxness-review-risk.md",
-		"vgxness-review-readability.md",
-		"vgxness-review-reliability.md",
-		"vgxness-review-resilience.md",
-		"vgxness-review-refuter.md",
+		"vgxness-care-reviewer.md",
+		"vgxness-care-specialist.md",
+		"vgxness-care-challenger.md",
 	}
 	sddProfiles := []string{
 		"vgxness-sdd-research.md",
@@ -105,7 +103,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v53 marker", "artifact: opencode-agent/vgxness-manager; version: 53"},
+		{"active v54 marker", "artifact: opencode-agent/vgxness-manager; version: 54"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
 		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
@@ -139,7 +137,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	}{
 		{"general", generalData, generalErr, []string{"artifact: opencode-agent/general; version: 10", "permission:\n  \"*\": allow", "delegated non-SDD implementation worker", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
 		{"explore", exploreData, exploreErr, []string{"artifact: opencode-agent/explore; version: 4", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
-		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 6", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
+		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 7", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
 	} {
 		if required.err != nil {
 			t.Fatalf("read installed %s contract: %v", required.name, required.err)

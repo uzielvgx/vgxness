@@ -558,6 +558,24 @@ func TestSetupSameProviderUnlistedRefsBlockPreviewAndApply(t *testing.T) {
 }
 
 func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testing.T) {
+	want := []setupAgentIdentity{
+		{"agents/vgxness-manager.md", "manager", "manager", "core"},
+		{"agents/explore.md", "explore", "research", "core"},
+		{"agents/general.md", "general", "implementation", "core"},
+		{"agents/vgxness-verifier.md", "verifier", "verification", "core"},
+		{"agents/vgxness-care-reviewer.md", "CARE reviewer", "review", "review"},
+		{"agents/vgxness-care-specialist.md", "CARE specialist", "review", "review"},
+		{"agents/vgxness-care-challenger.md", "CARE challenger", "review", "review"},
+		{"agents/vgxness-sdd-research.md", "sdd-research", "research", "sdd"},
+		{"agents/vgxness-sdd-proposal.md", "sdd-proposal", "proposal", "sdd"},
+		{"agents/vgxness-sdd-spec.md", "sdd-spec", "spec", "sdd"},
+		{"agents/vgxness-sdd-design.md", "sdd-design", "design", "sdd"},
+		{"agents/vgxness-sdd-tasks.md", "sdd-tasks", "tasks", "sdd"},
+		{"agents/vgxness-sdd-apply.md", "sdd-apply", "apply", "sdd"},
+	}
+	if got := setupAgentRows[:]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("current setup identities=%+v want=%+v", got, want)
+	}
 	backend := &recordingSetupBackend{catalog: []SetupCatalogModel{
 		{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh", "max"}, Source: "catalog", Availability: "catalog-known"},
 		{Provider: "openai", Reference: "openai/gpt-5.6-sol", Variants: []string{"none", "thinking"}, Source: "catalog", Availability: "catalog-known"},
@@ -783,7 +801,7 @@ func TestSetupAssignmentIdentitySeedingAndLongExactRendering(t *testing.T) {
 	longRef := "p/" + strings.Repeat("a", 256) + "/" + strings.Repeat("b", 253)
 	plan.ModelAssignments[0].Model, plan.ModelAssignments[0].Provider, plan.ModelAssignments[0].RequestedEffort = longRef, "p", "ultra"
 	plan.ModelAssignments[0].Variant, plan.ModelAssignments[0].VariantSpecified = "xhigh", true
-	plan.ModelAssignments[0], plan.ModelAssignments[14] = plan.ModelAssignments[14], plan.ModelAssignments[0]
+	plan.ModelAssignments[0], plan.ModelAssignments[SetupModelAssignmentCount-1] = plan.ModelAssignments[SetupModelAssignmentCount-1], plan.ModelAssignments[0]
 	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	model.setRoute(routeSetup)

@@ -1,18 +1,18 @@
 # Guided OpenCode setup
 
-The wizard explains and verifies the complete OpenCode setup before changing anything. Current ownership is 18 OpenCode-managed artifacts plus the separate global 47-file, 19-skill catalog, which adds `memory-sync` and `sdd-lifecycle`; the latter activates only after explicit SDD request/acceptance and fails closed when unavailable. The legacy provider skill is not an active artifact.
+The wizard explains and verifies the complete OpenCode setup before changing anything. Current ownership is 16 OpenCode-managed artifacts plus the separate global 47-file, 19-skill catalog, which adds `memory-sync` and `sdd-lifecycle`; the latter activates only after explicit SDD request/acceptance and fails closed when unavailable. The legacy provider skill is not an active artifact.
 
 1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
 2. Install or update the permanent versioned launcher.
 3. Retire only exact legacy OpenCode plugin `vgxness.ts` v1-v10 bytes and provider skill `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes before global publication; modified, malformed, foreign, unknown, or newer bytes block without removal.
-4. Install `vgxness-manager`, managed `general` and verifier profiles, the read-only `explore` override, five hidden read-only review profiles, and six hidden SDD profiles.
+4. Install `vgxness-manager`, managed `general` and verifier profiles, the read-only `explore` override, three hidden read-only CARE profiles, and six hidden SDD profiles.
 5. Install `<config-dir>/vgxness/model-plan.json`, the `opencode.json` default-agent selection and bounded `<config-dir>/vgxness/default-agent.json` restoration metadata, configure `vgxness mcp --full`, then publish the global 47-file, 19-skill catalog listed above. No plugin is installed.
 6. Read back all managed identities and perform the live OpenCode handshake.
 7. Report recovery guidance if any step fails.
 
-The resulting 18 OpenCode artifacts are 15 agents, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v49; managed `general` v6, verifier v4, and five reviewers v3; `explore`; and six SDD profiles. Exact historical manager v48 and older supported identities can be upgraded, while modified or unknown bytes remain drift. `vgxness mcp --full` exposes five memory and 13 SDD tools. Official setup publishes the global 47-file, 19-skill catalog including `memory-sync`; only exact historical `vgxness.ts` v1-v10 plugin and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable, while modified, malformed, foreign, unknown, or newer bytes block without removal. OpenCode uninstall does not own global skills.
+The resulting 16 OpenCode artifacts are 13 agents, model-plan manifest, default-agent selection, and restoration metadata. The agents include manager v54, managed `general` v10, `explore` v4, verifier v7, three CARE v1 roles/profiles, and six SDD roles/profiles including `vgxness-sdd-apply` v7. The exact manager-v53/verifier-v6 fixed-lens package and older supported identities are predecessor-only and can be upgraded, while modified or unknown bytes remain drift. `vgxness mcp --full` exposes five memory and 13 SDD tools. Official setup publishes the global 47-file, 19-skill catalog including `memory-sync`; only exact historical `vgxness.ts` v1-v10 plugin and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable, while modified, malformed, foreign, unknown, or newer bytes block without removal. OpenCode uninstall does not own global skills.
 
-Manager v49 embeds a prompt-level adaptive contract, not a runtime broker: no-effect conversation, writing, translation, summarization, brainstorming, and planning take a zero-execution-tool fast path; bounded exact reads allow at most three tool attempts without delegation or todos; complex evidence research may use one read-only delegation. Failed attempts and retries count, and the manager must stop before exceeding the selected budget. Recall remains intent-triggered. Independently of the execution route, the prompt permits at most one autonomous memory save only for durable, evidence-backed, safely assessed project decisions, preferences, constraints, or learnings—never transient state, logs, secrets, or personal data—and does not require engineering ceremony or enable automatic cloud sync.
+Manager v54 embeds a prompt-level adaptive contract, not a runtime broker: no-effect conversation, writing, translation, summarization, brainstorming, and planning take a zero-execution-tool fast path; bounded exact reads allow at most three tool attempts without delegation or todos; complex evidence research may use one read-only delegation. Failed attempts and retries count, and the manager must stop before exceeding the selected budget. Recall remains intent-triggered. Independently of the execution route, the prompt permits at most one autonomous memory save only for durable, evidence-backed, safely assessed project decisions, preferences, constraints, or learnings—never transient state, logs, secrets, or personal data—and does not require engineering ceremony or enable automatic cloud sync.
 
 ## Commands
 
@@ -39,7 +39,7 @@ With no model override flags, planning can retain the installed configuration or
 Preview is ready to apply when OpenCode responds healthily and no managed destination is drifted. Status is healthy when:
 
 - the permanent launcher identity is installed;
-- all 15 agent identities (manager, `general`, verifier, `explore`, five reviewers, and six SDD profiles) are installed with the resolved model and variant;
+- all 13 agent identities (manager, `general`, verifier, `explore`, three CARE profiles, and six SDD profiles) are installed with the resolved model and variant;
 - MCP is configured as `vgxness mcp --full`; no plugin is installed;
 - the canonical non-secret model-plan manifest binds all model-aware agent digests;
 - only exact `vgxness.ts` v1-v10 plugin and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill retirement bytes are absent; modified, malformed, foreign, unknown, or newer bytes block without removal, and global `stacked-pr` is installed without drift;
@@ -56,3 +56,7 @@ Install and uninstall rollback is conservative and never overwrites concurrent c
 Immediately after upgrading a binary, `--status` may fail when its database has an older schema because read-only status cannot migrate it. Run one write-capable memory or SDD operation to atomically apply the required migration, then rerun `--status`. After a forward migration, older binaries fail closed and cannot use the database. Never delete the database; see [Native memory](memory.md#upgrade-migration-caveat).
 
 Restart OpenCode Desktop after setup, an artifact upgrade, or any plan/slot change. Running sessions retain the previously loaded agent files, MCP configuration, and model bindings.
+
+## CARE setup boundary
+
+Setup installs the current CARE identities but does not establish an evaluation outcome. See [CARE architecture](care.md) and [CARE evaluation](care-evaluation.md). Runtime evidence is observed on macOS only; target-native Windows and Linux behavior remains unverified.

@@ -54,9 +54,9 @@ func TestOpenCodePlanVariantsAndMatrices(t *testing.T) {
 	if !mixed || resolved.Roles[RoleManager].Variant != VariantXHigh {
 		t.Fatalf("high plan is not mixed or manager is not xhigh: %+v", resolved)
 	}
-	readability := resolved.Roles[RoleReadability]
-	if readability.Degradation.Degraded || readability.RequestedEffort != EffortHigh || readability.Effort != EffortHigh || readability.Variant != VariantHigh {
-		t.Fatalf("efficient-slot degradation was not preserved: %+v", readability)
+	careReviewer := resolved.Roles[RoleCAREReviewer]
+	if careReviewer.Capability != CapabilityFrontier || careReviewer.Degradation.Degraded || careReviewer.RequestedEffort != EffortHigh || careReviewer.Effort != EffortHigh || careReviewer.Variant != VariantHigh {
+		t.Fatalf("CARE reviewer high assignment is not frontier/high without degradation: %+v", careReviewer)
 	}
 }
 

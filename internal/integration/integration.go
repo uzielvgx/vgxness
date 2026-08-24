@@ -18,7 +18,7 @@ type State string
 type HandshakeStatus string
 
 const (
-	ModelAssignmentCount = 15
+	ModelAssignmentCount = 13
 
 	StateAbsent    State = "absent"
 	StatePartial   State = "partial"

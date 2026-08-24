@@ -15,6 +15,32 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
+func TestCAREInventoryUsesThreeCurrentRolesOnly(t *testing.T) {
+	got := ModelAgentInventoryV3()
+	want := map[string]sdd.Role{
+		"agents/vgxness-care-reviewer.md":   sdd.RoleCAREReviewer,
+		"agents/vgxness-care-specialist.md": sdd.RoleCARESpecialist,
+		"agents/vgxness-care-challenger.md": sdd.RoleCAREChallenger,
+	}
+	seen := map[string]sdd.Role{}
+	for _, item := range got {
+		seen[item.ArtifactKey] = item.Role
+	}
+	if len(got) != 13 {
+		t.Errorf("current OpenCode inventory has %d agents, want 13", len(got))
+	}
+	for path, role := range want {
+		if seen[path] != role {
+			t.Errorf("%s = %s, want %s", path, seen[path], role)
+		}
+	}
+	for _, legacy := range []string{"risk", "readability", "reliability", "resilience", "refuter"} {
+		if _, ok := seen["agents/vgxness-review-"+legacy+".md"]; ok {
+			t.Errorf("legacy %s artifact remains current", legacy)
+		}
+	}
+}
+
 func completeModelAssignmentsV3() map[string]sdd.ManagedAgentModelConfig {
 	assignments := make(map[string]sdd.ManagedAgentModelConfig, len(modelAgentInventoryV3))
 	efforts := []sdd.Effort{sdd.EffortLow, sdd.EffortMedium, sdd.EffortHigh, sdd.EffortUltra}
@@ -33,11 +59,9 @@ func TestModelAgentInventoryV3IsCanonical(t *testing.T) {
 		{ArtifactKey: "agents/explore.md", Role: sdd.RoleResearch, Class: sdd.ManagedAgentClassCore},
 		{ArtifactKey: "agents/general.md", Role: sdd.RoleImplementation, Class: sdd.ManagedAgentClassCore},
 		{ArtifactKey: "agents/vgxness-verifier.md", Role: sdd.RoleVerification, Class: sdd.ManagedAgentClassCore},
-		{ArtifactKey: "agents/vgxness-review-risk.md", Role: sdd.RoleRisk, Class: sdd.ManagedAgentClassReview},
-		{ArtifactKey: "agents/vgxness-review-readability.md", Role: sdd.RoleReadability, Class: sdd.ManagedAgentClassReview},
-		{ArtifactKey: "agents/vgxness-review-reliability.md", Role: sdd.RoleReliability, Class: sdd.ManagedAgentClassReview},
-		{ArtifactKey: "agents/vgxness-review-resilience.md", Role: sdd.RoleResilience, Class: sdd.ManagedAgentClassReview},
-		{ArtifactKey: "agents/vgxness-review-refuter.md", Role: sdd.RoleRefuter, Class: sdd.ManagedAgentClassReview},
+		{ArtifactKey: "agents/vgxness-care-reviewer.md", Role: sdd.RoleCAREReviewer, Class: sdd.ManagedAgentClassReview},
+		{ArtifactKey: "agents/vgxness-care-specialist.md", Role: sdd.RoleCARESpecialist, Class: sdd.ManagedAgentClassReview},
+		{ArtifactKey: "agents/vgxness-care-challenger.md", Role: sdd.RoleCAREChallenger, Class: sdd.ManagedAgentClassReview},
 		{ArtifactKey: "agents/vgxness-sdd-research.md", Role: sdd.RoleResearch, Class: sdd.ManagedAgentClassSDD},
 		{ArtifactKey: "agents/vgxness-sdd-proposal.md", Role: sdd.RoleProposal, Class: sdd.ManagedAgentClassSDD},
 		{ArtifactKey: "agents/vgxness-sdd-spec.md", Role: sdd.RoleSpec, Class: sdd.ManagedAgentClassSDD},
@@ -236,7 +260,7 @@ func TestOmitEmptyVariantLinesRemovesOnlyFirstLine(t *testing.T) {
 	}
 }
 
-func TestRequestedModelPlanSameProviderVariantsUseV2AndRenderVerbatim(t *testing.T) {
+func TestRequestedModelPlanSameProviderVariantsProjectToV3AndRenderVerbatim(t *testing.T) {
 	bundle, err := requestedModelPlan(integration.Options{
 		ModelPlan:              sdd.PlanMedium,
 		ModelEfficient:         "openai/gpt-5.6-luna",
@@ -247,16 +271,8 @@ func TestRequestedModelPlanSameProviderVariantsUseV2AndRenderVerbatim(t *testing
 		ModelFrontierVariant:   "none",
 		ModelVariantsSpecified: true,
 	}, t.TempDir())
-	if err != nil || bundle.configV2 == nil || bundle.configV3 != nil {
+	if err != nil || bundle.configV2 != nil || bundle.configV3 == nil {
 		t.Fatalf("bundle=%+v err=%v", bundle, err)
-	}
-	for capability, variant := range map[sdd.Capability]sdd.OpenCodeVariant{
-		sdd.CapabilityEfficient: "xhigh", sdd.CapabilityBalanced: "max", sdd.CapabilityFrontier: "none",
-	} {
-		slot := bundle.configV2.Slots[capability]
-		if slot.Variant != variant || !slot.VariantSpecified || slot.RequestedEffort != sdd.EffortMedium {
-			t.Fatalf("%s slot=%+v", capability, slot)
-		}
 	}
 	for _, variant := range []string{"xhigh", "max", "none"} {
 		found := false
@@ -269,9 +285,9 @@ func TestRequestedModelPlanSameProviderVariantsUseV2AndRenderVerbatim(t *testing
 	}
 }
 
-func TestRequestedModelPlanV2OmitsExplicitEmptyVariants(t *testing.T) {
+func TestRequestedModelPlanV3OmitsExplicitEmptyVariants(t *testing.T) {
 	bundle, err := requestedModelPlan(integration.Options{ModelVariantsSpecified: true}, t.TempDir())
-	if err != nil || bundle.configV2 == nil {
+	if err != nil || bundle.configV3 == nil || bundle.configV2 != nil {
 		t.Fatalf("bundle=%+v err=%v", bundle, err)
 	}
 	for name, content := range bundle.agents {
@@ -366,11 +382,9 @@ func TestV47ManagerPredecessorHasFrozenSHA256(t *testing.T) {
 }
 
 func TestSchemaV3ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
-	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
-	current, err := buildModelPlanBundleV3(config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Fixed-lens v47 is a historical V2 package. Do not derive it from the
+	// current thirteen-agent CARE V3 inventory.
+	current := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
 	v47, err := previousV47ModelPlanBundle(current)
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +405,7 @@ func TestSchemaV3RecognizesImmediateProfileManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	predecessor, err := previousActiveProfilesModelPlanBundle(current)
+	predecessor, err := immediatePredecessor(current)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,11 +418,9 @@ func TestSchemaV3RecognizesImmediateProfileManifest(t *testing.T) {
 }
 
 func TestSchemaV3RecognizesImmediatePromptPredecessorsWithoutNewContext(t *testing.T) {
-	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
-	current, err := buildModelPlanBundleV3(config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The prompt predecessor is retained as an exact fixed-lens V2 package;
+	// current V3 assignments must never be expanded into legacy review roles.
+	current := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
 	immediate, err := previousV49ModelPlanBundle(current)
 	if err != nil {
 		t.Fatal(err)
@@ -421,16 +433,36 @@ func TestSchemaV3RecognizesImmediatePromptPredecessorsWithoutNewContext(t *testi
 		generalAgentName: "artifact: opencode-agent/general; version: 6",
 		exploreAgentName: "artifact: opencode-agent/explore; version: 2",
 	} {
-		predecessors, err := modelBoundAgentPredecessorCandidatesV3(*current.resolvedV3, name)
+		content := immediate.agents[name]
+		if !bytes.Contains(content, []byte(marker)) || bytes.Contains(content, []byte("Context Capsule v1")) {
+			t.Errorf("historical %s is not the exact immediate predecessor", name)
+		}
+	}
+}
+
+func TestSchemaV3PredecessorRecognizesV53V6BeforeOlderTransitions(t *testing.T) {
+	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
+	current, err := buildModelPlanBundleV3(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err := immediatePredecessor(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recognized, err := parseInstalledModelPlanManifest(predecessor.manifest); err != nil || !bytes.Equal(recognized.manifest, predecessor.manifest) {
+		t.Fatalf("schema-v3 v53/v6 predecessor rejected: %v", err)
+	}
+	for name, marker := range map[string]string{
+		managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 53",
+		verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 6",
+	} {
+		candidates, err := modelBoundAgentPredecessorCandidatesV3(*current.resolvedV3, name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		found := false
-		for _, candidate := range predecessors {
-			found = found || bytes.Contains(candidate, []byte(marker)) && !bytes.Contains(candidate, []byte("Context Capsule v1"))
-		}
-		if !found {
-			t.Errorf("schema-v3 %s lacks exact immediate predecessor", name)
+		if len(candidates) == 0 || !bytes.Contains(candidates[0], []byte(marker)) {
+			t.Fatalf("%s does not expose its immediate marker predecessor first", name)
 		}
 	}
 }
@@ -569,11 +601,35 @@ func TestRequestedModelPlanV3RejectsIncompleteAssignments(t *testing.T) {
 	}
 }
 
-func TestRequestedModelPlanV3PresenceDistinguishesNilPointer(t *testing.T) {
-	legacy, err := requestedModelPlan(integration.Options{}, t.TempDir())
-	if err != nil || legacy.configV3 != nil || legacy.config.SchemaVersion != 1 {
-		t.Fatalf("nil pointer did not preserve legacy selection: bundle=%+v err=%v", legacy, err)
+func TestRequestedModelPlanProjectsFreshDefaultsAndSlotsToV3(t *testing.T) {
+	defaults, err := requestedModelPlan(integration.Options{}, t.TempDir())
+	if err != nil || defaults.configV3 == nil || defaults.configV2 != nil || defaults.config.SchemaVersion != 0 || len(defaults.configV3.Assignments) != integration.ModelAssignmentCount {
+		t.Fatalf("fresh defaults did not select v3: bundle=%+v err=%v", defaults, err)
 	}
+
+	slots := integration.Options{
+		ModelPlan:      sdd.PlanHigh,
+		ModelEfficient: "alpha/efficient", ModelBalanced: "beta/balanced", ModelFrontier: "gamma/frontier",
+		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+		ModelEfficientVariant: "thinking", ModelBalancedVariant: "max", ModelFrontierVariant: "xhigh", ModelVariantsSpecified: true,
+	}
+	bundle, err := requestedModelPlan(slots, t.TempDir())
+	if err != nil || bundle.configV3 == nil || bundle.configV2 != nil || len(bundle.configV3.Assignments) != integration.ModelAssignmentCount {
+		t.Fatalf("fresh slots did not select v3: bundle=%+v err=%v", bundle, err)
+	}
+	for _, identity := range modelAgentInventoryV3 {
+		assignment := bundle.configV3.Assignments[identity.ArtifactKey]
+		if assignment.Provider == "" || assignment.Reference == "" || assignment.RequestedEffort == "" || !assignment.VariantSpecified || assignment.Source == "" || assignment.Availability == "" {
+			t.Fatalf("%s lost slot metadata: %+v", identity.ArtifactKey, assignment)
+		}
+	}
+	if _, ok := bundle.configV3.Assignments["agents/explore.md"]; !ok {
+		t.Fatal("core research artifact is missing")
+	}
+	if _, ok := bundle.configV3.Assignments["agents/vgxness-sdd-research.md"]; !ok {
+		t.Fatal("SDD research artifact is missing")
+	}
+
 	var assignments map[string]sdd.ManagedAgentModelConfig
 	if _, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir()); !errors.Is(err, integration.ErrInvalid) {
 		t.Fatalf("explicit nil underlying map accepted: %v", err)

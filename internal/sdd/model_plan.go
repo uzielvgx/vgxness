@@ -83,9 +83,12 @@ const (
 	RoleRefuter        Role = "refuter"
 	RoleImplementation Role = "implementation"
 	RoleVerification   Role = "verification"
+	RoleCAREReviewer   Role = "care-reviewer"
+	RoleCARESpecialist Role = "care-specialist"
+	RoleCAREChallenger Role = "care-challenger"
 )
 
-var roles = []Role{RoleManager, RoleResearch, RoleProposal, RoleSpec, RoleDesign, RoleTasks, RoleApply, RoleRisk, RoleReadability, RoleReliability, RoleResilience, RoleRefuter, RoleImplementation, RoleVerification}
+var roles = []Role{RoleManager, RoleResearch, RoleProposal, RoleSpec, RoleDesign, RoleTasks, RoleApply, RoleImplementation, RoleVerification, RoleCAREReviewer, RoleCARESpecialist, RoleCAREChallenger}
 
 func AllRoles() []Role { return append([]Role(nil), roles...) }
 
@@ -103,36 +106,28 @@ var roleMatrices = map[Plan]map[Role]RoleAssignment{
 		RoleManager: {CapabilityBalanced, EffortHigh}, RoleResearch: {CapabilityEfficient, EffortLow},
 		RoleProposal: {CapabilityEfficient, EffortMedium}, RoleSpec: {CapabilityEfficient, EffortMedium},
 		RoleDesign: {CapabilityBalanced, EffortMedium}, RoleTasks: {CapabilityEfficient, EffortLow},
-		RoleApply: {CapabilityBalanced, EffortLow}, RoleRisk: {CapabilityEfficient, EffortMedium},
-		RoleReadability: {CapabilityEfficient, EffortLow}, RoleReliability: {CapabilityEfficient, EffortMedium},
-		RoleResilience: {CapabilityEfficient, EffortMedium}, RoleRefuter: {CapabilityBalanced, EffortMedium},
+		RoleApply: {CapabilityBalanced, EffortLow}, RoleCAREReviewer: {CapabilityEfficient, EffortMedium}, RoleCARESpecialist: {CapabilityBalanced, EffortMedium}, RoleCAREChallenger: {CapabilityBalanced, EffortMedium},
 		RoleImplementation: {CapabilityBalanced, EffortLow}, RoleVerification: {CapabilityEfficient, EffortLow},
 	},
 	PlanMedium: {
 		RoleManager: {CapabilityFrontier, EffortHigh}, RoleResearch: {CapabilityEfficient, EffortMedium},
 		RoleProposal: {CapabilityBalanced, EffortMedium}, RoleSpec: {CapabilityBalanced, EffortHigh},
 		RoleDesign: {CapabilityFrontier, EffortMedium}, RoleTasks: {CapabilityBalanced, EffortMedium},
-		RoleApply: {CapabilityBalanced, EffortMedium}, RoleRisk: {CapabilityFrontier, EffortMedium},
-		RoleReadability: {CapabilityEfficient, EffortMedium}, RoleReliability: {CapabilityBalanced, EffortHigh},
-		RoleResilience: {CapabilityBalanced, EffortHigh}, RoleRefuter: {CapabilityFrontier, EffortMedium},
+		RoleApply: {CapabilityBalanced, EffortMedium}, RoleCAREReviewer: {CapabilityFrontier, EffortMedium}, RoleCARESpecialist: {CapabilityBalanced, EffortHigh}, RoleCAREChallenger: {CapabilityFrontier, EffortMedium},
 		RoleImplementation: {CapabilityBalanced, EffortMedium}, RoleVerification: {CapabilityEfficient, EffortMedium},
 	},
 	PlanHigh: {
 		RoleManager: {CapabilityFrontier, EffortUltra}, RoleResearch: {CapabilityBalanced, EffortHigh},
 		RoleProposal: {CapabilityBalanced, EffortHigh}, RoleSpec: {CapabilityFrontier, EffortHigh},
 		RoleDesign: {CapabilityFrontier, EffortHigh}, RoleTasks: {CapabilityBalanced, EffortHigh},
-		RoleApply: {CapabilityBalanced, EffortHigh}, RoleRisk: {CapabilityFrontier, EffortHigh},
-		RoleReadability: {CapabilityEfficient, EffortHigh}, RoleReliability: {CapabilityFrontier, EffortHigh},
-		RoleResilience: {CapabilityFrontier, EffortHigh}, RoleRefuter: {CapabilityFrontier, EffortHigh},
+		RoleApply: {CapabilityBalanced, EffortHigh}, RoleCAREReviewer: {CapabilityFrontier, EffortHigh}, RoleCARESpecialist: {CapabilityFrontier, EffortHigh}, RoleCAREChallenger: {CapabilityFrontier, EffortHigh},
 		RoleImplementation: {CapabilityFrontier, EffortHigh}, RoleVerification: {CapabilityBalanced, EffortHigh},
 	},
 	PlanUltra: {
 		RoleManager: {CapabilityFrontier, EffortUltra}, RoleResearch: {CapabilityFrontier, EffortHigh},
 		RoleProposal: {CapabilityFrontier, EffortHigh}, RoleSpec: {CapabilityFrontier, EffortHigh},
 		RoleDesign: {CapabilityFrontier, EffortHigh}, RoleTasks: {CapabilityFrontier, EffortHigh},
-		RoleApply: {CapabilityFrontier, EffortHigh}, RoleRisk: {CapabilityFrontier, EffortHigh},
-		RoleReadability: {CapabilityBalanced, EffortHigh}, RoleReliability: {CapabilityFrontier, EffortHigh},
-		RoleResilience: {CapabilityFrontier, EffortHigh}, RoleRefuter: {CapabilityFrontier, EffortHigh},
+		RoleApply: {CapabilityFrontier, EffortHigh}, RoleCAREReviewer: {CapabilityFrontier, EffortHigh}, RoleCARESpecialist: {CapabilityFrontier, EffortHigh}, RoleCAREChallenger: {CapabilityFrontier, EffortHigh},
 		RoleImplementation: {CapabilityFrontier, EffortHigh}, RoleVerification: {CapabilityFrontier, EffortHigh},
 	},
 }

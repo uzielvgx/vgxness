@@ -32,14 +32,16 @@ func TestKnownPackagesOrderCurrentThenV12ForEveryPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(known) != 30 {
-		t.Fatalf("known packages length = %d, want 30", len(known))
+	if len(known) != 34 {
+		t.Fatalf("known packages length = %d, want 34", len(known))
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
 		}
+		v13, err := renderActiveV13("v0.0.0", plan)
+		require(t, err == nil)
 		v12, err := renderActiveV12("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
@@ -64,14 +66,14 @@ func TestKnownPackagesOrderCurrentThenV12ForEveryPlan(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []string{current.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
+		want := []string{current.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
 		foundV12 := 0
 		for index, pkg := range known {
 			if pkg.SHA256 == v12.SHA256 {
 				foundV12++
 			}
-			if index >= int(planIndex(plan))*7 && index < int(planIndex(plan))*7+7 && pkg.SHA256 != want[index-int(planIndex(plan))*7] {
-				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*7])
+			if index >= int(planIndex(plan))*8 && index < int(planIndex(plan))*8+8 && pkg.SHA256 != want[index-int(planIndex(plan))*8] {
+				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*8])
 			}
 		}
 		if foundV12 != 1 {
@@ -101,7 +103,7 @@ func TestActiveV12LifecycleStatusReinstallAndProtection(t *testing.T) {
 	service := NewIntegration()
 
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
-	require(t, err == nil && status.State == integration.StateInstalled && status.ArtifactSHA256 == v12.SHA256)
+	require(t, err == nil && status.State == integration.StatePartial && status.RestartRequired && status.ArtifactSHA256 == v12.SHA256)
 	reinstalled, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
 	require(t, err == nil && reinstalled.State == integration.StateInstalled && reinstalled.Changed && reinstalled.ArtifactSHA256 != v12.SHA256)
 	preserved, err := os.ReadFile(sentinelPath)
@@ -121,6 +123,21 @@ func TestActiveV12LifecycleStatusReinstallAndProtection(t *testing.T) {
 	require(t, err == nil && bytes.Equal(after, modified))
 	preserved, err = os.ReadFile(sentinelPath)
 	require(t, err == nil && bytes.Equal(preserved, sentinel))
+}
+
+func TestExactPredecessorIsUpgradeableButNotReportedInstalled(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "codex")
+	predecessor, err := renderActiveV12("v0.0.0", sdd.PlanMedium)
+	require(t, err == nil)
+	writePackage(t, root, predecessor)
+
+	service := NewIntegration()
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
+	require(t, err == nil && status.State == integration.StatePartial && status.RestartRequired)
+
+	upgraded, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium})
+	current, currentErr := RenderPlan("v0.0.0", sdd.PlanMedium)
+	require(t, err == nil && currentErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && upgraded.ArtifactSHA256 == current.SHA256)
 }
 
 func TestIntegrationRecoveryRecognizesActiveV12Sidecar(t *testing.T) {
@@ -174,7 +191,7 @@ func TestActiveV8LifecycleStatusUpgradeUninstallAndDrift(t *testing.T) {
 	}{
 		{"status", func(t *testing.T, root string, service *Integration) {
 			result, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
-			require(t, err == nil && result.State == integration.StateInstalled && result.ArtifactSHA256 == v8.SHA256)
+			require(t, err == nil && result.State == integration.StatePartial && result.RestartRequired && result.ArtifactSHA256 == v8.SHA256)
 		}},
 		{"upgrade", func(t *testing.T, root string, service *Integration) {
 			result, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
@@ -449,7 +466,7 @@ func TestIntegrationInstallAndIdempotence(t *testing.T) {
 	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	service := NewIntegration()
 	before, err := service.Status(context.Background(), options)
-	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 15)
+	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 13)
 	installed, err := service.Install(context.Background(), options)
 	require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired)
 	again, err := service.Install(context.Background(), options)
@@ -656,7 +673,7 @@ func TestStatusReportsRecoveryWhenClearPendingFails(t *testing.T) {
 }
 func TestManagedLayoutExcludesPluginArtifacts(t *testing.T) {
 	layout, err := NewIntegration().ManagedLayout(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")})
-	require(t, err == nil && len(layout.Artifacts) == 15)
+	require(t, err == nil && len(layout.Artifacts) == 13)
 	for _, item := range layout.Artifacts {
 		require(t, item.RelativePath != "config.toml" && item.RelativePath != ".mcp.json" && filepath.Ext(item.RelativePath) != ".plugin")
 	}
