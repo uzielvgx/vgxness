@@ -100,3 +100,7 @@ Windows examples should use absolute paths and the extracted `.exe` candidate:
 - Installation roots reject symlink ancestors before mutation and remain anchored for transaction writes; a replaced root fails closed or retains writes in the originally opened directory.
 
 If `~/.local/bin` is not already on `PATH`, invoke the permanent launcher by its absolute path or update the shell environment separately.
+
+## CARE lifecycle boundary
+
+CARE recognizes exact predecessors only for lifecycle and upgrade handling; it does not make them current aliases or change self-install activation. See [CARE architecture](care.md) for markers and authority, and [CARE evaluation](care-evaluation.md) for static-check limits.

@@ -83,6 +83,15 @@ var previousVerifierPromptV2 string
 //go:embed templates/verifier.v4.md
 var previousVerifierPromptV4 string
 
+//go:embed templates/vgxness-care-reviewer.md
+var careReviewerPrompt string
+
+//go:embed templates/vgxness-care-specialist.md
+var careSpecialistPrompt string
+
+//go:embed templates/vgxness-care-challenger.md
+var careChallengerPrompt string
+
 //go:embed templates/review-risk.v2.md
 var previousReviewRiskPromptV2 string
 
@@ -1149,7 +1158,7 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 	if containerErr != nil {
 		return inspection{}, fmt.Errorf("inspect OpenCode integration directory: %w", containerErr)
 	}
-	_, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
+	installedPlan, installedPlanBytes, installedPlanOK := installedModelPlan(configDirectory)
 	preConsolidation, predecessorErr := preConsolidationV1MediumBundle()
 	if predecessorErr != nil {
 		return inspection{}, predecessorErr
@@ -1226,6 +1235,28 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState},
 		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
 	}}
+	if plan.configV3 != nil {
+		state.artifacts = make([]artifact, 0, len(modelAgentInventoryV3)+3)
+		for _, identity := range modelAgentInventoryV3 {
+			name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
+			content, ok := plan.agents[name]
+			if !ok || len(content) == 0 {
+				return inspection{}, fmt.Errorf("%w: missing OpenCode v3 agent artifact", integration.ErrInvalid)
+			}
+			state.artifacts = append(state.artifacts, artifact{
+				path:          filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey)),
+				content:       content,
+				backup:        strings.TrimSuffix(name, ".md"),
+				predecessors:  predecessors[name],
+				regenerations: regeneration(filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey))),
+			})
+		}
+		state.artifacts = append(state.artifacts,
+			artifact{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
+			artifact{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState},
+			artifact{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
+		)
+	}
 	for index := range state.artifacts {
 		state.artifacts[index].retainedRoot = configDirectory
 		if recognize := predecessorRecognizers[filepath.Base(state.artifacts[index].path)]; recognize != nil {
@@ -1241,10 +1272,14 @@ func (service *Integration) inspect(ctx context.Context, options integration.Opt
 		state.result.State = integration.StateDrifted
 		return state, nil
 	}
-	retired, retirementErr := inspectRetiredArtifacts(
+	retirementCandidates := []retiredArtifact{
 		retiredArtifact{path: skillPath, recognize: isRetiredSkill},
 		retiredArtifact{path: legacyPluginPath, recognize: isPreviousMemoryPlugin},
-	)
+	}
+	if plan.configV3 != nil {
+		retirementCandidates = append(retirementCandidates, legacyV2ReviewRetirementCandidates(configDirectory, installedPlan)...)
+	}
+	retired, retirementErr := inspectRetiredArtifacts(retirementCandidates...)
 	if retirementErr != nil {
 		state.result.State = integration.StateDrifted
 		return state, nil
@@ -1368,7 +1403,11 @@ func legacyResultModelAssignments(plan modelPlanBundle) (*[integration.ModelAssi
 	for _, identity := range modelAgentInventoryV3 {
 		row := sdd.OpenCodeAgentAssignmentV3{ArtifactKey: identity.ArtifactKey, Role: identity.Role, Class: identity.Class}
 		if plan.resolvedV2 != nil && plan.configV2 != nil {
-			assignment, ok := plan.resolvedV2.Roles[identity.Role]
+			resolved, err := sdd.ResolveOpenCodePlanV2(*plan.configV2)
+			if err != nil {
+				return nil, fmt.Errorf("%w: resolve OpenCode v2 model plan", integration.ErrInvalid)
+			}
+			assignment, ok := resolved.Roles[identity.Role]
 			if !ok {
 				return nil, fmt.Errorf("%w: missing OpenCode v2 role assignment", integration.ErrInvalid)
 			}
@@ -1381,7 +1420,11 @@ func legacyResultModelAssignments(plan modelPlanBundle) (*[integration.ModelAssi
 			row.VariantSpecified = slot.VariantSpecified
 			row.Source, row.Availability = slot.Source, slot.Availability
 		} else {
-			assignment, ok := plan.resolved.Roles[identity.Role]
+			resolved, err := sdd.ResolveOpenCodePlan(plan.config)
+			if err != nil {
+				return nil, fmt.Errorf("%w: resolve OpenCode v1 model plan", integration.ErrInvalid)
+			}
+			assignment, ok := resolved.Roles[identity.Role]
 			if !ok {
 				return nil, fmt.Errorf("%w: missing OpenCode v1 role assignment", integration.ErrInvalid)
 			}
@@ -1420,6 +1463,31 @@ func inspectRetiredArtifacts(candidates ...retiredArtifact) ([]retiredArtifact, 
 		retired = append(retired, candidate)
 	}
 	return retired, nil
+}
+
+func legacyV2ReviewRetirementCandidates(configDirectory string, installed modelPlanBundle) []retiredArtifact {
+	if installed.configV2 == nil {
+		return nil
+	}
+	candidates := make([]retiredArtifact, 0, 5)
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		expected := [][]byte{installed.agents[name]}
+		candidates = append(candidates, retiredArtifact{
+			path: filepath.Join(configDirectory, "agents", name), recognize: recognizesExactArtifacts(expected),
+		})
+	}
+	return candidates
+}
+
+func recognizesExactArtifacts(expected [][]byte) func([]byte) bool {
+	return func(candidate []byte) bool {
+		for _, known := range expected {
+			if bytes.Equal(candidate, known) {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 func defaultAgentArtifacts(configPath, statePath, executable string) ([]byte, []byte, defaultAgentState, []byte, bool, error) {

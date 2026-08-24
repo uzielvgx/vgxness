@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+func TestCARECurrentRolesReplaceFixedReviewLenses(t *testing.T) {
+	roles := map[Role]bool{}
+	for _, role := range AllRoles() {
+		roles[role] = true
+	}
+	for _, role := range []Role{RoleCAREReviewer, RoleCARESpecialist, RoleCAREChallenger} {
+		if !roles[role] {
+			t.Errorf("current role matrix lacks %s", role)
+		}
+	}
+	for _, legacy := range []Role{RoleRisk, RoleReadability, RoleReliability, RoleResilience, RoleRefuter} {
+		if roles[legacy] {
+			t.Errorf("legacy fixed lens %s appears in current roles", legacy)
+		}
+	}
+}
+
 func TestApprovedRoleMatrices(t *testing.T) {
 	for _, plan := range []Plan{PlanLow, PlanMedium, PlanHigh, PlanUltra} {
 		matrix, err := RoleMatrix(plan)
@@ -63,8 +80,8 @@ func TestImplementationAndVerificationRoleAssignments(t *testing.T) {
 			}
 		}
 	}
-	if got := len(AllRoles()); got != 14 {
-		t.Fatalf("roles = %d, want 14", got)
+	if got := len(AllRoles()); got != 12 {
+		t.Fatalf("roles = %d, want 12", got)
 	}
 }
 

@@ -14,22 +14,44 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
+func TestCAREDelegationRendersOnlyCurrentProfiles(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]bool{}
+	for _, item := range pkg.Artifacts {
+		paths[item.Path] = true
+	}
+	for _, path := range []string{"agents/care-reviewer.toml", "agents/care-specialist.toml", "agents/care-challenger.toml"} {
+		if !paths[path] {
+			t.Errorf("missing CARE profile %s", path)
+		}
+	}
+	if len(pkg.Artifacts) != 13 {
+		t.Errorf("Codex package artifact count = %d, want 13 including AGENTS.md", len(pkg.Artifacts))
+	}
+	for _, legacy := range []string{"risk", "readability", "reliability", "resilience", "refuter"} {
+		if paths["agents/"+legacy+".toml"] {
+			t.Errorf("legacy profile %s is current", legacy)
+		}
+	}
+}
+
 func TestRenderPlanUsesSharedModelMatrix(t *testing.T) {
 	roles := map[string]sdd.Role{
-		"agents/explore.toml":      sdd.RoleResearch,
-		"agents/general.toml":      sdd.RoleImplementation,
-		"agents/verifier.toml":     sdd.RoleVerification,
-		"agents/risk.toml":         sdd.RoleRisk,
-		"agents/readability.toml":  sdd.RoleReadability,
-		"agents/reliability.toml":  sdd.RoleReliability,
-		"agents/resilience.toml":   sdd.RoleResilience,
-		"agents/refuter.toml":      sdd.RoleRefuter,
-		"agents/sdd-research.toml": sdd.RoleResearch,
-		"agents/sdd-proposal.toml": sdd.RoleProposal,
-		"agents/sdd-spec.toml":     sdd.RoleSpec,
-		"agents/sdd-design.toml":   sdd.RoleDesign,
-		"agents/sdd-tasks.toml":    sdd.RoleTasks,
-		"agents/sdd-apply.toml":    sdd.RoleApply,
+		"agents/explore.toml":         sdd.RoleResearch,
+		"agents/general.toml":         sdd.RoleImplementation,
+		"agents/verifier.toml":        sdd.RoleVerification,
+		"agents/care-reviewer.toml":   sdd.RoleCAREReviewer,
+		"agents/care-specialist.toml": sdd.RoleCARESpecialist,
+		"agents/care-challenger.toml": sdd.RoleCAREChallenger,
+		"agents/sdd-research.toml":    sdd.RoleResearch,
+		"agents/sdd-proposal.toml":    sdd.RoleProposal,
+		"agents/sdd-spec.toml":        sdd.RoleSpec,
+		"agents/sdd-design.toml":      sdd.RoleDesign,
+		"agents/sdd-tasks.toml":       sdd.RoleTasks,
+		"agents/sdd-apply.toml":       sdd.RoleApply,
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		pkg, err := RenderPlan("v1.2.3", plan)
@@ -158,13 +180,11 @@ func TestRenderProducesNativeCodexProjection(t *testing.T) {
 	}
 	wantPaths := []string{
 		"AGENTS.md",
+		"agents/care-challenger.toml",
+		"agents/care-reviewer.toml",
+		"agents/care-specialist.toml",
 		"agents/explore.toml",
 		"agents/general.toml",
-		"agents/readability.toml",
-		"agents/refuter.toml",
-		"agents/reliability.toml",
-		"agents/resilience.toml",
-		"agents/risk.toml",
 		"agents/sdd-apply.toml",
 		"agents/sdd-design.toml",
 		"agents/sdd-proposal.toml",
@@ -203,18 +223,12 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 13; parity: opencode-v53") || !strings.Contains(manager, "readiness-envelope/v1") {
-		t.Fatal("current Codex manager is not v13 with readiness")
+	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 14; parity: opencode-v54") || !strings.Contains(manager, "readiness-envelope/v1") {
+		t.Fatal("current Codex manager is not v14 with readiness")
 	}
-	reliability := string(artifact(t, pkg, "agents/reliability.toml").Bytes)
-	for _, required := range []string{"Before candidate inspection", "receipt naming it and status loaded|unavailable", "missing/unavailable is INCONCLUSIVE"} {
-		if !strings.Contains(reliability, required) {
-			t.Errorf("Codex reliability contract missing %q", required)
-		}
-	}
-	predecessor, err := renderActiveV11("v1.2.3", sdd.PlanMedium)
-	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 11; parity: opencode-v51") {
-		t.Fatalf("exact Codex v11 predecessor is not preserved: %v", err)
+	predecessor, err := renderActiveV13("v1.2.3", sdd.PlanMedium)
+	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 13; parity: opencode-v53") {
+		t.Fatalf("exact Codex v13 predecessor is not preserved: %v", err)
 	}
 }
 
@@ -242,7 +256,7 @@ func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
 	for _, required := range []string{
 		"Provider-native delegation policy:",
 		"fresh native Codex task with the exact agent_type",
-		"explore, general, verifier, risk, readability, reliability, resilience, refuter, sdd-research, sdd-proposal, sdd-spec, sdd-design, sdd-tasks, or sdd-apply",
+		"explore, general, verifier, care-reviewer, care-specialist, care-challenger, sdd-research, sdd-proposal, sdd-spec, sdd-design, sdd-tasks, or sdd-apply",
 		"Never combine an explicit agent_type with a full-history fork.",
 		"omit agent_type and treat the child as inherited manager context, not specialist delegation.",
 	} {
@@ -252,13 +266,13 @@ func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
 	}
 }
 
-func TestManagerInstructionsCoverOpenCodeV53SectionParity(t *testing.T) {
+func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	const openCodeV53Marker = "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 53 -->"
+	const openCodeV54Marker = "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 54 -->"
 	// This is the complete section-by-section Codex adaptation manifest for the
 	// OpenCode v50 manager. Paragraphs are full clauses, not keyword probes.
 	sections := map[string][]string{
@@ -286,8 +300,8 @@ func TestManagerInstructionsCoverOpenCodeV53SectionParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read OpenCode v52 template: %v", err)
 	}
-	if !strings.Contains(string(openCodeManager), openCodeV53Marker) {
-		t.Errorf("OpenCode v53 marker %q changed; update this section map deliberately", openCodeV53Marker)
+	if !strings.Contains(string(openCodeManager), openCodeV54Marker) {
+		t.Errorf("OpenCode v54 marker %q changed; update this section map deliberately", openCodeV54Marker)
 	}
 	for section, clauses := range sections {
 		for _, clause := range clauses {
@@ -349,13 +363,13 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"agents/explore.toml", "agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml", "agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml"} {
+	for _, path := range []string{"agents/explore.toml", "agents/verifier.toml", "agents/care-reviewer.toml", "agents/care-specialist.toml", "agents/care-challenger.toml", "agents/sdd-research.toml", "agents/sdd-proposal.toml", "agents/sdd-spec.toml", "agents/sdd-design.toml", "agents/sdd-tasks.toml"} {
 		content := string(artifact(t, pkg, path).Bytes)
 		if !strings.Contains(content, "sandbox_mode = \"read-only\"") {
 			t.Errorf("%s is not read-only", path)
 		}
 	}
-	for _, path := range []string{"agents/explore.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml"} {
+	for _, path := range []string{"agents/explore.toml", "agents/care-reviewer.toml", "agents/care-specialist.toml", "agents/care-challenger.toml"} {
 		if content := string(artifact(t, pkg, path).Bytes); !strings.Contains(content, `enabled_tools = ["memory_recent", "memory_search", "memory_get"]`) {
 			t.Errorf("%s lacks the exact protected memory-read allowlist", path)
 		}
@@ -388,7 +402,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 13; parity: opencode-v53") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 14; parity: opencode-v54") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }
@@ -398,7 +412,7 @@ func TestRenderedRepositoryChildrenValidateAndEchoContextCapsule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"agents/explore.toml", "agents/general.toml", "agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml"} {
+	for _, path := range []string{"agents/explore.toml", "agents/general.toml", "agents/verifier.toml"} {
 		content := string(artifact(t, pkg, path).Bytes)
 		for _, clause := range []string{"Context Capsule v1", "goal, criteria, nonGoals, decisions, authorization, constraints, evidenceRefs, lineage, and contextDigest", "Manager-attested digest", "capsule contextDigest and mission's external contextDigest", "parentContextDigest", "Echo the accepted contextDigest unchanged", "digest-bound synthesis", "Do not independently recompute", "not a security boundary"} {
 			if !strings.Contains(content, clause) {
@@ -481,7 +495,7 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
 	for _, required := range []string{
-		"artifact: codex-agent/manager; version: 13; parity: opencode-v53",
+		"artifact: codex-agent/manager; version: 14; parity: opencode-v54",
 		"adaptive general-purpose partner",
 		"When the engineering route activates",
 		orchestration.ContractPolicy,
@@ -556,12 +570,11 @@ func TestDelegationProfileMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	profiles := map[string]string{
-		"explore": "read-only", "general": "workspace-write", "verifier": "read-only", "risk": "read-only",
-		"readability": "read-only", "reliability": "read-only", "resilience": "read-only", "refuter": "read-only",
+		"explore": "read-only", "general": "workspace-write", "verifier": "read-only", "care-reviewer": "read-only", "care-specialist": "read-only", "care-challenger": "read-only",
 		"sdd-research": "read-only", "sdd-proposal": "read-only", "sdd-spec": "read-only", "sdd-design": "read-only", "sdd-tasks": "read-only", "sdd-apply": "workspace-write",
 	}
-	if len(profiles) != 14 {
-		t.Fatal("specialist matrix must cover fourteen agent types")
+	if len(profiles) != 12 {
+		t.Fatal("specialist matrix must cover twelve delegated agent types")
 	}
 	for name, sandbox := range profiles {
 		content := string(artifact(t, pkg, "agents/"+name+".toml").Bytes)
@@ -586,7 +599,7 @@ func TestAssuranceProfilesRequireAndEchoReviewBinding(t *testing.T) {
 	}
 	const binding = "Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria."
 	const bindingContract = "Reject a missing, mismatched, or stale Review Binding as INCONCLUSIVE, and echo the complete Review Binding unchanged."
-	for _, path := range []string{"agents/verifier.toml", "agents/risk.toml", "agents/readability.toml", "agents/reliability.toml", "agents/resilience.toml", "agents/refuter.toml"} {
+	for _, path := range []string{"agents/verifier.toml", "agents/care-reviewer.toml", "agents/care-specialist.toml", "agents/care-challenger.toml"} {
 		content := string(artifact(t, pkg, path).Bytes)
 		for _, required := range []string{binding, bindingContract} {
 			if !strings.Contains(content, required) {
@@ -600,9 +613,9 @@ func TestAssuranceProfilesRequireAndEchoReviewBinding(t *testing.T) {
 			t.Errorf("verifier lacks candidate identity behavior %q", required)
 		}
 	}
-	refuter := string(artifact(t, pkg, "agents/refuter.toml").Bytes)
-	if !strings.Contains(refuter, "Evaluate only supplied severe inferential findings") {
-		t.Error("refuter is not limited to supplied severe inferential findings")
+	challenger := string(artifact(t, pkg, "agents/care-challenger.toml").Bytes)
+	if !strings.Contains(challenger, "Challenge only supplied typed claim, finding, evidence, or scope targets") {
+		t.Error("challenger is not limited to supplied typed targets")
 	}
 }
 

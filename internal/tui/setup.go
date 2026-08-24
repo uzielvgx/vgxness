@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultSetupPlan          = "medium"
-	SetupModelAssignmentCount = 15
+	SetupModelAssignmentCount = 13
 	setupDiscoveryDisclaimer  = "Local discovery proves identifier presence only; not authorization or support."
 )
 
@@ -102,11 +102,9 @@ var setupAgentRows = [SetupModelAssignmentCount]setupAgentIdentity{
 	{"agents/explore.md", "explore", "research", "core"},
 	{"agents/general.md", "general", "implementation", "core"},
 	{"agents/vgxness-verifier.md", "verifier", "verification", "core"},
-	{"agents/vgxness-review-risk.md", "review-risk", "risk", "review"},
-	{"agents/vgxness-review-readability.md", "review-readability", "readability", "review"},
-	{"agents/vgxness-review-reliability.md", "review-reliability", "reliability", "review"},
-	{"agents/vgxness-review-resilience.md", "review-resilience", "resilience", "review"},
-	{"agents/vgxness-review-refuter.md", "review-refuter", "refuter", "review"},
+	{"agents/vgxness-care-reviewer.md", "CARE reviewer", "review", "review"},
+	{"agents/vgxness-care-specialist.md", "CARE specialist", "review", "review"},
+	{"agents/vgxness-care-challenger.md", "CARE challenger", "review", "review"},
 	{"agents/vgxness-sdd-research.md", "sdd-research", "research", "sdd"},
 	{"agents/vgxness-sdd-proposal.md", "sdd-proposal", "proposal", "sdd"},
 	{"agents/vgxness-sdd-spec.md", "sdd-spec", "spec", "sdd"},
@@ -1150,7 +1148,7 @@ func (m Model) setupHelp() string {
 }
 
 func (m Model) modelAssignmentLines() []string {
-	lines := []string{"AGENT ASSIGNMENT MATRIX · 15 agents", "agent                  class/role          provider/model · variant"}
+	lines := []string{"AGENT ASSIGNMENT MATRIX · 13 agents", "agent                  class/role          provider/model · variant"}
 	for index, identity := range setupAgentRows {
 		marker := " "
 		if index == m.setupModelSlot {

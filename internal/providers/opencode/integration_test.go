@@ -159,7 +159,7 @@ func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 			result.State == integration.StateAbsent &&
 			result.Path == expected &&
 			result.ToolPath == "" &&
-			result.ToolSHA256 == "" && result.ArtifactCount == 18 &&
+			result.ToolSHA256 == "" && result.ModelSchemaVersion == 3 && result.ModelAssignments != nil && result.ArtifactCount == 16 &&
 			result.Changed &&
 			len(result.ArtifactSHA256) == 64,
 		"unexpected preview: %#v", result,
@@ -249,7 +249,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	testutil.NoError(t, err)
 	info, err := os.Stat(installed.Path)
 	testutil.NoError(t, err)
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := requestedModelPlan(options, configDirectory)
 	testutil.NoError(t, err)
 
 	expectedAgents := bundle.agents
@@ -283,9 +283,8 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.Changed &&
 			installed.ToolPath == "" &&
 			installed.ToolSHA256 == "" &&
-			installed.ModelPlan == sdd.PlanMedium && installed.ModelProvider == "openai" &&
-			installed.ArtifactCount == 18 &&
-			installed.ModelEfficient == "openai/gpt-5.6-luna" && installed.ModelBalanced == "openai/gpt-5.6-terra" && installed.ModelFrontier == "openai/gpt-5.6-sol" &&
+			installed.ModelSchemaVersion == 3 && installed.ModelProvider == "openai" && installed.ModelAssignments != nil &&
+			installed.ArtifactCount == 16 &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired &&
 			installed.DefaultAgent == defaultAgentName &&
 			installed.DefaultAgentPath == filepath.Join(configDirectory, defaultAgentConfigName) &&
@@ -657,21 +656,15 @@ func TestIntegrationSwitchesManagedModelPlanAndRefusesManualDrift(t *testing.T) 
 
 	highOptions := integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh}
 	preview, err := service.Preview(context.Background(), highOptions)
-	testutil.Require(t, err == nil && preview.State == integration.StatePartial && preview.Changed && preview.RestartRequired, "preview=%+v err=%v", preview, err)
-	high, err := service.Install(context.Background(), highOptions)
-	testutil.Require(t, err == nil && high.State == integration.StateInstalled && high.Changed && high.ModelPlan == sdd.PlanHigh && high.RestartRequired, "high=%+v err=%v", high, err)
-	highManager, err := os.ReadFile(high.Path)
-	testutil.NoError(t, err)
-	if bytes.Equal(mediumManager, highManager) || !bytes.Contains(highManager, []byte("variant: xhigh")) || !bytes.Contains(highManager, []byte("model: openai/gpt-5.6-sol")) {
-		t.Fatalf("manager did not switch plans: %s", highManager)
-	}
-	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
-	testutil.Require(t, err == nil && status.State == integration.StateInstalled && status.ModelPlan == sdd.PlanHigh && !status.RestartRequired, "status=%+v err=%v", status, err)
+	testutil.Require(t, errors.Is(err, integration.ErrInvalid) && !preview.Changed, "preview=%+v err=%v", preview, err)
+	_, err = service.Install(context.Background(), highOptions)
+	afterRejectedOverride, readErr := os.ReadFile(medium.Path)
+	testutil.Require(t, errors.Is(err, integration.ErrInvalid) && readErr == nil && bytes.Equal(afterRejectedOverride, mediumManager), "installed v3 override mutated: err=%v read=%v", err, readErr)
 
-	modified := append(append([]byte(nil), highManager...), []byte("\nmanual change\n")...)
-	testutil.NoError(t, os.WriteFile(high.Path, modified, 0o600))
-	_, err = service.Install(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanLow})
-	after, readErr := os.ReadFile(high.Path)
+	modified := append(append([]byte(nil), mediumManager...), []byte("\nmanual change\n")...)
+	testutil.NoError(t, os.WriteFile(medium.Path, modified, 0o600))
+	_, err = service.Install(context.Background(), integration.Options{ConfigDir: configDirectory})
+	after, readErr := os.ReadFile(medium.Path)
 	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "manual drift changed: err=%v", err)
 }
 
@@ -679,51 +672,15 @@ func TestIntegrationRecognizesHistoricalHighPlanWithLunaFastDegradation(t *testi
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
 	options := integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh}
-	_, err := service.Install(context.Background(), options)
-	testutil.NoError(t, err)
 
 	historicalConfig, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "openai/gpt-5.6-luna-fast", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol")
 	testutil.NoError(t, err)
-	historicalCatalog := sdd.DefaultOpenAICatalog()
-	for index := range historicalCatalog.Models {
-		model := &historicalCatalog.Models[index]
-		if model.Capability == sdd.CapabilityEfficient {
-			model.ID = "openai/gpt-5.6-luna-fast"
-			model.Name = "Luna Fast"
-			model.SupportedEfforts = []sdd.Effort{sdd.EffortLow, sdd.EffortMedium}
-		}
-	}
-	resolved, err := sdd.ResolveModelPlan(historicalCatalog, sdd.PlanHigh)
+	historicalBundle, err := buildModelPlanBundle(historicalConfig)
 	testutil.NoError(t, err)
-	matrix, err := sdd.RoleMatrix(sdd.PlanHigh)
-	testutil.NoError(t, err)
-	historicalRoles := make(map[sdd.Role]sdd.OpenCodeRoleAssignment, len(resolved.Roles))
-	for role, assignment := range resolved.Roles {
-		historicalRoles[role] = sdd.OpenCodeRoleAssignment{
-			Role: role, Capability: assignment.Capability, Model: assignment.Model.ID,
-			RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort,
-			Variant: sdd.OpenCodeVariantForEffort(assignment.Effort), Degradation: assignment.Degradation,
-			Strength: matrix[role].Strength(),
-		}
-	}
-	readability := historicalRoles[sdd.RoleReadability]
-	testutil.Require(t, readability.Model == "openai/gpt-5.6-luna-fast" && readability.RequestedEffort == sdd.EffortHigh && readability.Effort == sdd.EffortMedium && readability.Degradation.Degraded, "historical readability role=%+v", readability)
-	historical := sdd.OpenCodePlan{
-		SchemaVersion: 1, ActivePlan: sdd.PlanHigh, Provider: "openai",
-		Slots: map[sdd.Capability]string{sdd.CapabilityEfficient: historicalConfig.Efficient, sdd.CapabilityBalanced: historicalConfig.Balanced, sdd.CapabilityFrontier: historicalConfig.Frontier},
-		Roles: historicalRoles, Provenance: historicalConfig.Provenance,
-	}
-	agents, err := modelBoundAgents(historical)
-	testutil.NoError(t, err)
-	historicalBundle, err := encodeModelPlanBundle(historicalConfig, historical, agents)
-	testutil.NoError(t, err)
-	for name, content := range historicalBundle.agents {
-		testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", name), content, 0o600))
-	}
-	testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "vgxness", modelPlanManifestName), historicalBundle.manifest, 0o600))
+	writeModelPlanBundleFixture(t, configDirectory, historicalBundle)
 
 	status, err := service.Status(context.Background(), options)
-	testutil.Require(t, err == nil && status.State == integration.StateInstalled && status.ModelPlan == sdd.PlanHigh && status.ModelEfficient == "openai/gpt-5.6-luna-fast", "status=%+v err=%v", status, err)
+	testutil.Require(t, err == nil && status.State == integration.StatePartial && status.ModelPlan == sdd.PlanHigh && status.ModelEfficient == "openai/gpt-5.6-luna-fast", "status=%+v err=%v", status, err)
 }
 
 func TestIntegrationCustomModelSlots(t *testing.T) {
@@ -732,40 +689,39 @@ func TestIntegrationCustomModelSlots(t *testing.T) {
 		ConfigDir: t.TempDir(), ModelPlan: sdd.PlanLow,
 		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
 	})
-	testutil.Require(t, err == nil && result.ModelPlan == sdd.PlanLow && result.ModelProvider == "acme" && result.ModelEfficient == "acme/fast" && result.ModelFrontier == "acme/frontier", "result=%+v err=%v", result, err)
+	testutil.Require(t, err == nil && result.ModelSchemaVersion == 3 && result.ModelProvider == "acme" && result.ModelAssignments != nil && len(result.ModelAssignments) == integration.ModelAssignmentCount, "result=%+v err=%v", result, err)
 	_, err = service.Preview(context.Background(), integration.Options{ConfigDir: t.TempDir(), ModelEfficient: "one/fast", ModelBalanced: "two/balanced", ModelFrontier: "one/frontier"})
 	testutil.Require(t, errors.Is(err, integration.ErrInvalid), "cross-provider error=%v", err)
 }
 
 func TestRequestedModelPlanOverlaysInstalledCustomSlots(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
-	service := NewIntegration()
 	custom := integration.Options{
 		ConfigDir: configDirectory, ModelPlan: sdd.PlanLow,
 		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
 	}
-	installed, err := service.Install(context.Background(), custom)
+	legacyConfig, err := sdd.NewModelPlanConfig(custom.ModelPlan, custom.ModelEfficient, custom.ModelBalanced, custom.ModelFrontier)
 	testutil.NoError(t, err)
-	noFlags, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
-	testutil.Require(t, err == nil && noFlags.ModelPlan == sdd.PlanLow && noFlags.ModelProvider == "acme" && noFlags.ModelEfficient == "acme/fast" && noFlags.ModelFrontier == "acme/frontier", "no-flags status=%+v err=%v", noFlags, err)
-	high, err := service.Preview(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh})
-	testutil.Require(t, err == nil && high.State == integration.StatePartial && high.ModelPlan == sdd.PlanHigh && high.ModelProvider == "acme" && high.ModelEfficient == "acme/fast" && high.ModelBalanced == "acme/balanced" && high.ModelFrontier == "acme/frontier", "high overlay=%+v err=%v installed=%+v", high, err, installed)
+	legacy, err := buildModelPlanBundle(legacyConfig)
+	testutil.NoError(t, err)
+	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(manifestPath), 0o700))
+	testutil.NoError(t, os.WriteFile(manifestPath, legacy.manifest, 0o600))
+	noFlags, err := requestedModelPlan(integration.Options{ConfigDir: configDirectory}, configDirectory)
+	testutil.Require(t, err == nil && noFlags.config.Provider == "acme" && noFlags.config.ActivePlan == sdd.PlanLow, "no-flags=%+v err=%v", noFlags, err)
+	high, err := requestedModelPlan(integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanHigh}, configDirectory)
+	testutil.Require(t, err == nil && high.config.Provider == "acme" && high.config.ActivePlan == sdd.PlanHigh, "high overlay=%+v err=%v", high, err)
 }
 
 func TestIntegrationResumesExactMixedModelPlanSwitch(t *testing.T) {
 	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
-	oldOptions := integration.Options{
-		ConfigDir: configDirectory, ModelPlan: sdd.PlanLow,
-		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
-	}
-	_, err := service.Install(context.Background(), oldOptions)
-	testutil.NoError(t, err)
 	oldConfig, err := sdd.NewModelPlanConfig(sdd.PlanLow, "acme/fast", "acme/balanced", "acme/frontier")
 	testutil.NoError(t, err)
 	oldBundle, err := buildModelPlanBundle(oldConfig)
 	testutil.NoError(t, err)
+	writeModelPlanBundleFixture(t, configDirectory, oldBundle)
 	newConfig, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "acme/fast", "acme/balanced", "acme/frontier")
 	testutil.NoError(t, err)
 	newBundle, err := buildModelPlanBundle(newConfig)
@@ -789,8 +745,9 @@ func TestIntegrationResumesExactMixedModelPlanSwitch(t *testing.T) {
 func TestIntegrationRejectsOldAgentsBehindNewManifest(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
-	_, err := service.Install(context.Background(), integration.Options{ConfigDir: configDirectory, ModelPlan: sdd.PlanLow})
+	oldBundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	writeModelPlanBundleFixture(t, configDirectory, oldBundle)
 	newConfig := sdd.DefaultModelPlanConfig()
 	newConfig.ActivePlan = sdd.PlanHigh
 	newConfig.Provenance = sdd.ModelPlanCLI
@@ -832,11 +789,10 @@ func TestSDDAgentProfilesEnforceReadOnlySkillLoadingAndManagerWriterBoundaries(t
 
 func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh} {
-		config := sdd.DefaultModelPlanConfig()
-		config.ActivePlan = plan
-		bundle, err := buildModelPlanBundle(config)
+		assignments := completeModelAssignmentsV3()
+		bundle, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir())
 		testutil.NoError(t, err)
-		if len(bundle.agents) != integration.ModelAssignmentCount {
+		if len(bundle.agents) != 13 {
 			t.Fatalf("plan %s agents=%d", plan, len(bundle.agents))
 		}
 		for name, content := range bundle.agents {
@@ -847,7 +803,7 @@ func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
 	}
 }
 
-func TestRequestedModelPlanBuildsV2BundleForMixedSlots(t *testing.T) {
+func TestRequestedModelPlanProjectsMixedSlotsToV3(t *testing.T) {
 	configDirectory := t.TempDir()
 	bundle, err := requestedModelPlan(integration.Options{
 		ConfigDir:            configDirectory,
@@ -861,28 +817,12 @@ func TestRequestedModelPlanBuildsV2BundleForMixedSlots(t *testing.T) {
 	}, configDirectory)
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		bundle.configV2 != nil && bundle.resolvedV2 != nil && len(bundle.manifest) != 0 &&
-			bundle.configV2.Slots[sdd.CapabilityEfficient].Source == sdd.ModelSlotCatalog &&
-			bundle.configV2.Slots[sdd.CapabilityEfficient].Availability == sdd.ModelSlotCatalogKnown &&
-			bundle.configV2.Slots[sdd.CapabilityBalanced].Source == sdd.ModelSlotCustom &&
-			bundle.configV2.Slots[sdd.CapabilityBalanced].Availability == sdd.ModelSlotUnknown &&
-			bundle.resolvedV2.Roles[sdd.RoleManager].Model == "acme/frontier" && bundle.resolvedV2.Roles[sdd.RoleManager].Effort == sdd.EffortUltra &&
+		bundle.configV3 != nil && bundle.resolvedV3 != nil && bundle.configV2 == nil && len(bundle.configV3.Assignments) == integration.ModelAssignmentCount && len(bundle.manifest) != 0 &&
+			bundle.configV3.Assignments["agents/explore.md"].Source == sdd.ModelSlotCustom &&
+			bundle.configV3.Assignments["agents/vgxness-manager.md"].Reference == "acme/frontier" && bundle.configV3.Assignments["agents/vgxness-manager.md"].RequestedEffort == sdd.EffortUltra &&
 			bytes.Contains(bundle.agents[managerAgentName], []byte("model: acme/frontier\nvariant: xhigh")),
-		"unexpected v2 bundle: %+v", bundle,
+		"unexpected v3 bundle: %+v", bundle,
 	)
-	for agent, role := range map[string]sdd.Role{
-		managerAgentName: sdd.RoleManager, exploreAgentName: sdd.RoleResearch,
-		generalAgentName: sdd.RoleImplementation, verifierAgentName: sdd.RoleVerification,
-		reviewRiskName: sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
-		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
-		reviewRefuterName: sdd.RoleRefuter, sddResearchName: sdd.RoleResearch,
-		sddProposalName: sdd.RoleProposal, sddSpecName: sdd.RoleSpec,
-		sddDesignName: sdd.RoleDesign, sddTasksName: sdd.RoleTasks, sddApplyName: sdd.RoleApply,
-	} {
-		assignment := bundle.resolvedV2.Roles[role]
-		content := string(bundle.agents[agent])
-		testutil.Require(t, strings.Contains(content, "model: "+assignment.Model) && strings.Contains(content, "variant: "+string(assignment.Variant)), "agent %s did not preserve %s/%s: %s", agent, assignment.Model, assignment.Effort, content)
-	}
 }
 
 func TestLegacyResultModelAssignmentsPreserveV2VariantSpecified(t *testing.T) {
@@ -905,11 +845,33 @@ func TestLegacyResultModelAssignmentsPreserveV2VariantSpecified(t *testing.T) {
 	}
 }
 
-func TestRequestedModelPlanKeepsV1BundleWithoutMixedSemantics(t *testing.T) {
+func TestLegacyResultModelAssignmentsProjectCurrentCAREInventory(t *testing.T) {
+	for name, build := range map[string]func() (modelPlanBundle, error){
+		"v1": func() (modelPlanBundle, error) { return buildModelPlanBundle(sdd.DefaultModelPlanConfig()) },
+		"v2": func() (modelPlanBundle, error) { return buildModelPlanBundleV2(sdd.DefaultModelPlanConfigV2()) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle, err := build()
+			testutil.NoError(t, err)
+
+			rows, err := legacyResultModelAssignments(bundle)
+			testutil.NoError(t, err)
+			testutil.Require(t, len(rows) == integration.ModelAssignmentCount, "rows=%d", len(rows))
+			for _, row := range rows {
+				testutil.Require(t,
+					row.Role != sdd.RoleRisk && row.Role != sdd.RoleReadability && row.Role != sdd.RoleReliability && row.Role != sdd.RoleResilience && row.Role != sdd.RoleRefuter,
+					"legacy role projected into current status: %+v", row,
+				)
+			}
+		})
+	}
+}
+
+func TestRequestedModelPlanProjectsHomogeneousSlotsToV3(t *testing.T) {
 	options := integration.Options{ConfigDir: t.TempDir(), ModelPlan: sdd.PlanHigh, ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier"}
 	bundle, err := requestedModelPlan(options, options.ConfigDir)
 	testutil.NoError(t, err)
-	testutil.Require(t, bundle.configV2 == nil && bundle.resolvedV2 == nil && len(bundle.manifest) != 0 && bundle.config.Provider == "acme", "unexpected v1 bundle: %+v", bundle)
+	testutil.Require(t, bundle.configV3 != nil && bundle.resolvedV3 != nil && bundle.configV3.Provider == "acme" && len(bundle.configV3.Assignments) == integration.ModelAssignmentCount, "unexpected v3 bundle: %+v", bundle)
 }
 
 func TestRequestedModelPlanInheritsInstalledSlotsForPartialMixedOverride(t *testing.T) {
@@ -926,11 +888,11 @@ func TestRequestedModelPlanInheritsInstalledSlotsForPartialMixedOverride(t *test
 	}, configDirectory)
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		bundle.configV2 != nil &&
-			bundle.configV2.Slots[sdd.CapabilityEfficient].Reference == "openai/gpt-5.6-luna" &&
-			bundle.configV2.Slots[sdd.CapabilityBalanced].Reference == "anthropic/claude-sonnet" &&
-			bundle.configV2.Slots[sdd.CapabilityFrontier].Reference == "openai/gpt-5.6-sol",
-		"partial mixed override did not inherit installed slots: %+v", bundle.configV2,
+		bundle.configV3 != nil &&
+			bundle.configV3.Assignments["agents/explore.md"].Reference == "openai/gpt-5.6-luna" &&
+			bundle.configV3.Assignments["agents/general.md"].Reference == "anthropic/claude-sonnet" &&
+			bundle.configV3.Assignments["agents/vgxness-manager.md"].Reference == "openai/gpt-5.6-sol",
+		"partial mixed override did not project slots: %+v", bundle.configV3,
 	)
 }
 
@@ -974,11 +936,7 @@ func TestRequestedModelPlanMixedPartialOverrideRequiresAndPreservesAllEfforts(t 
 	}, configDirectory)
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		bundle.configV2 != nil &&
-			bundle.configV2.Slots[sdd.CapabilityEfficient].Reference == "openai/gpt-5.6-luna" && bundle.configV2.Slots[sdd.CapabilityEfficient].RequestedEffort == sdd.EffortLow &&
-			bundle.configV2.Slots[sdd.CapabilityBalanced].Reference == "anthropic/claude-sonnet" && bundle.configV2.Slots[sdd.CapabilityBalanced].RequestedEffort == sdd.EffortHigh &&
-			bundle.configV2.Slots[sdd.CapabilityFrontier].Reference == "openai/gpt-5.6-sol" && bundle.configV2.Slots[sdd.CapabilityFrontier].RequestedEffort == sdd.EffortUltra &&
-			bundle.resolvedV2.Roles[sdd.RoleManager].Effort == sdd.EffortUltra,
+		bundle.configV3 != nil && len(bundle.configV3.Assignments) == integration.ModelAssignmentCount,
 		"mixed partial override lost references or efforts: %+v", bundle,
 	)
 }
@@ -1446,6 +1404,57 @@ func TestIntegrationRetiresOnlyExactLegacyProviderSkill(t *testing.T) {
 	}
 }
 
+func TestIntegrationV3MigrationRetiresExactV2Reviewers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	legacy := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+	}
+
+	installed, installErr := service.Install(context.Background(), options)
+	status, statusErr := service.Status(context.Background(), options)
+	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
+		if _, err := os.Stat(filepath.Join(root, "agents", name)); !os.IsNotExist(err) {
+			t.Errorf("exact V2 reviewer %s was not retired: %v", name, err)
+		}
+	}
+	testutil.Require(t, installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+}
+
+func TestIntegrationV3MigrationRetainsModifiedV2ReviewerAsDrift(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	assignments := completeModelAssignmentsV3()
+	options := integration.Options{ConfigDir: root, ModelAssignments: &assignments}
+	service := NewIntegration()
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	legacy := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
+	for name, content := range legacy.agents {
+		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
+	}
+	for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
+		testutil.NoError(t, os.Remove(filepath.Join(root, "agents", name)))
+	}
+	path := filepath.Join(root, "agents", reviewRiskName)
+	modified := append(append([]byte(nil), legacy.agents[reviewRiskName]...), []byte("\nuser modification\n")...)
+	testutil.NoError(t, os.WriteFile(path, modified, 0o600))
+
+	status, statusErr := service.Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && bytes.Equal(after, modified), "status=%+v statusErr=%v install=%v read=%v", status, statusErr, installErr, readErr)
+}
+
 func TestIntegrationRestoresRetiredSkillAfterLaterFailure(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()
@@ -1622,7 +1631,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 53"), []byte("version: 41"), 1)
+	older := bytes.Replace(current, []byte("version: 54"), []byte("version: 53"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -1869,6 +1878,7 @@ func TestIntegrationRejectsModifiedV2ProfileWithoutManifest(t *testing.T) {
 	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(current)
 	testutil.NoError(t, err)
+	writeModelPlanBundleFixture(t, configDirectory, v43)
 	for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
 		content := v43.agents[name]
 		if name == reviewRiskName {
@@ -1967,7 +1977,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 53",
+		"artifact: opencode-agent/vgxness-manager; version: 54",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native adaptive general-purpose partner",
 		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",
@@ -2030,6 +2040,31 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	}
 }
 
+func TestCAREChallengerRequiresBoundTypedOutcomes(t *testing.T) {
+	bundle, err := buildModelPlanBundleV3(sdd.ModelPlanConfigV3{
+		SchemaVersion: 3,
+		Provider:      "acme",
+		Provenance:    sdd.ModelPlanCLI,
+		Assignments:   completeModelAssignmentsV3(),
+	})
+	testutil.NoError(t, err)
+	challenger := string(bundle.agents["vgxness-care-challenger.md"])
+	for _, required := range []string{
+		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
+		"matching candidate identity",
+		"Reject a missing, mismatched, or stale Review Binding or candidate identity as INCONCLUSIVE.",
+		"Echo the complete Review Binding unchanged",
+		"Each result is corroborated, refuted, or inconclusive.",
+	} {
+		if !strings.Contains(challenger, required) {
+			t.Errorf("CARE challenger is missing bound outcome contract %q", required)
+		}
+	}
+	if strings.Contains(challenger, "Each result is PASS, FAIL, or INCONCLUSIVE.") {
+		t.Error("CARE challenger retains the generic verification outcome vocabulary")
+	}
+}
+
 func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
@@ -2042,7 +2077,7 @@ func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 			}
 		}
 	}
-	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 10") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 6"), "current broad-profile markers were not bumped")
+	testutil.Require(t, strings.Contains(string(bundle.agents[generalAgentName]), "artifact: opencode-agent/general; version: 10") && strings.Contains(string(bundle.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 7"), "current broad-profile markers were not bumped")
 	legacy, err := previousSDDModelPlanBundle(bundle)
 	testutil.NoError(t, err)
 	testutil.Require(t, strings.Contains(string(legacy.agents[generalAgentName]), "artifact: opencode-agent/general; version: 5") && !strings.Contains(string(legacy.agents[generalAgentName]), "vgxness_sdd_record_projection: deny") && strings.Contains(string(legacy.agents[verifierAgentName]), "artifact: opencode-agent/vgxness-verifier; version: 3") && !strings.Contains(string(legacy.agents[verifierAgentName]), "vgxness_sdd_record_projection: deny"), "historical broad profiles were mutated")
@@ -2159,7 +2194,7 @@ func TestManagerPromptDefinesInstalledChildMissionSchemas(t *testing.T) {
 		"frozen candidate digest", "digest procedure", "exact changed paths", "acceptance criteria", "evidence scope",
 		"exact permitted commands", "expected environment", "stop condition",
 		"Reviewer mission schema",
-		"mode", "candidate identity", "exact changedPaths", "diffScope", "exact skills", "verificationEvidence",
+		"mode", "candidate identity", "exact changedPaths", "diffScope", "complete Candidate Capsule", "exact skills", "verificationEvidence",
 		"lens-specific goal", "scope", "nonGoals", "acceptance", "evidence", "stop", "return contract",
 	} {
 		if !strings.Contains(prompt, required) {
@@ -3043,6 +3078,15 @@ func TestIntegrationMixedV2ManifestPersistsAndStatusIsExact(t *testing.T) {
 		ModelEfficientVariant: "xhigh", ModelBalancedVariant: "max", ModelFrontierVariant: "", ModelVariantsSpecified: true,
 	}
 	service := NewIntegration()
+	config, err := sdd.NewModelPlanConfigV2(options.ModelPlan,
+		sdd.ModelSlotConfig{Reference: options.ModelEfficient, RequestedEffort: options.ModelEfficientEffort, Variant: options.ModelEfficientVariant, VariantSpecified: options.ModelVariantsSpecified, Source: sdd.ModelSlotCatalog, Availability: sdd.ModelSlotCatalogKnown},
+		sdd.ModelSlotConfig{Reference: options.ModelBalanced, RequestedEffort: options.ModelBalancedEffort, Variant: options.ModelBalancedVariant, VariantSpecified: options.ModelVariantsSpecified, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+		sdd.ModelSlotConfig{Reference: options.ModelFrontier, RequestedEffort: options.ModelFrontierEffort, Variant: options.ModelFrontierVariant, VariantSpecified: options.ModelVariantsSpecified, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+	)
+	testutil.NoError(t, err)
+	bundle, err := buildModelPlanBundleV2(config)
+	testutil.NoError(t, err)
+	writeModelPlanBundleFixture(t, root, bundle)
 	installed, err := service.Install(context.Background(), options)
 	testutil.NoError(t, err)
 	manifestPath := filepath.Join(root, "vgxness", modelPlanManifestName)
@@ -3098,7 +3142,7 @@ func TestIntegrationV3InstallStatusChangeAndUninstall(t *testing.T) {
 	resolved, err := ResolveModelPlanV3(*parsed.ConfigV3)
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired && installed.ArtifactCount == 18 &&
+		installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired && installed.ArtifactCount == 16 &&
 			parsed.SchemaVersion == 3 && parsed.Config == nil && parsed.Resolved == nil && parsed.ConfigV2 == nil && parsed.ResolvedV2 == nil &&
 			len(parsed.ConfigV3.Assignments) == integration.ModelAssignmentCount && len(parsed.ResolvedV3.Assignments) == integration.ModelAssignmentCount &&
 			status.State == integration.StateInstalled && status.ModelProvider == "acme" && status.ModelAssignments != nil && reflect.DeepEqual(status.ModelAssignments[:], resolved.Assignments) &&
@@ -3149,9 +3193,6 @@ func TestIntegrationV3InstallStatusChangeAndUninstall(t *testing.T) {
 func TestIntegrationUpgradesExactV47SchemaV2AndV3WithoutOverrides(t *testing.T) {
 	builders := map[string]func() (modelPlanBundle, error){
 		"schema-v2": func() (modelPlanBundle, error) { return buildModelPlanBundleV2(schemaV2TestConfig(t)) },
-		"schema-v3": func() (modelPlanBundle, error) {
-			return buildModelPlanBundleV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()})
-		},
 	}
 	for schema, build := range builders {
 		for _, operation := range []struct {
@@ -3251,9 +3292,7 @@ func TestIntegrationV3RecognizesArtifactSpecificPredecessorsWithoutManifest(t *t
 	testutil.NoError(t, err)
 	verifier, err := bindProfile(previousVerifierPromptV3(), verifierPreviousMarker, verifierPreviousMarker, resolved["agents/"+verifierAgentName], false)
 	testutil.NoError(t, err)
-	risk, err := bindAgent(previousReviewPromptsV2()[reviewRiskName], sdd.RoleRisk, resolved["agents/"+reviewRiskName])
-	testutil.NoError(t, err)
-	predecessors := map[string][]byte{managerAgentName: manager, generalAgentName: general, verifierAgentName: verifier, reviewRiskName: risk}
+	predecessors := map[string][]byte{managerAgentName: manager, generalAgentName: general, verifierAgentName: verifier}
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
 	for name, data := range predecessors {
 		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), data, 0o600))
@@ -3297,16 +3336,14 @@ func TestIntegrationV3EditedSeedRecognizesExactLegacyModelsWithoutManifest(t *te
 	testutil.NoError(t, err)
 	general, err := bindProfile(previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", "artifact: opencode-agent/general; version: 4", legacy["agents/"+generalAgentName], false)
 	testutil.NoError(t, err)
-	risk, err := bindAgent(previousReviewPromptsV2()[reviewRiskName], sdd.RoleRisk, legacy["agents/"+reviewRiskName])
-	testutil.NoError(t, err)
-	legacyBytes := map[string][]byte{managerAgentName: manager, generalAgentName: general, reviewRiskName: risk}
+	legacyBytes := map[string][]byte{managerAgentName: manager, generalAgentName: general}
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
 	for name, data := range legacyBytes {
 		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), data, 0o600))
 	}
 
 	edited := completeModelAssignmentsV3()
-	for _, key := range []string{"agents/" + managerAgentName, "agents/" + generalAgentName, "agents/" + reviewRiskName} {
+	for _, key := range []string{"agents/" + managerAgentName, "agents/" + generalAgentName} {
 		assignment := edited[key]
 		assignment.Reference = "acme/edited-" + strings.TrimSuffix(filepath.Base(key), ".md")
 		edited[key] = assignment
@@ -3367,15 +3404,23 @@ func TestModelPlanManifestV1RemainsExactAndV2RejectsDrift(t *testing.T) {
 }
 
 func TestModelPlanV2SlotChangeOnlyChangesDependentAgentHashes(t *testing.T) {
-	options := integration.Options{
-		ModelPlan:      sdd.PlanMedium,
-		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "openai/gpt-5.6-sol",
-		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
-	}
-	first, err := requestedModelPlan(options, filepath.Join(t.TempDir(), "opencode"))
+	firstConfig, err := sdd.NewModelPlanConfigV2(sdd.PlanMedium,
+		sdd.ModelSlotConfig{Reference: "openai/gpt-5.6-luna", RequestedEffort: sdd.EffortLow, Source: sdd.ModelSlotCatalog, Availability: sdd.ModelSlotCatalogKnown},
+		sdd.ModelSlotConfig{Reference: "anthropic/claude-sonnet", RequestedEffort: sdd.EffortHigh, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+		sdd.ModelSlotConfig{Reference: "openai/gpt-5.6-sol", RequestedEffort: sdd.EffortUltra, Source: sdd.ModelSlotCatalog, Availability: sdd.ModelSlotCatalogKnown},
+	)
 	testutil.NoError(t, err)
-	options.ModelBalanced = "anthropic/claude-opus"
-	second, err := requestedModelPlan(options, filepath.Join(t.TempDir(), "opencode"))
+	first, err := buildModelPlanBundleV2(firstConfig)
+	testutil.NoError(t, err)
+	secondConfig := firstConfig
+	secondConfig.Slots = make(map[sdd.Capability]sdd.ModelSlotConfig, len(firstConfig.Slots))
+	for capability, slot := range firstConfig.Slots {
+		secondConfig.Slots[capability] = slot
+	}
+	balanced := secondConfig.Slots[sdd.CapabilityBalanced]
+	balanced.Reference = "anthropic/claude-opus"
+	secondConfig.Slots[sdd.CapabilityBalanced] = balanced
+	second, err := buildModelPlanBundleV2(secondConfig)
 	testutil.NoError(t, err)
 	roles := map[string]sdd.Role{
 		managerAgentName: sdd.RoleManager, exploreAgentName: sdd.RoleResearch,
@@ -3388,7 +3433,12 @@ func TestModelPlanV2SlotChangeOnlyChangesDependentAgentHashes(t *testing.T) {
 	}
 	for name, role := range roles {
 		changed := artifactSHA256(first.agents[name]) != artifactSHA256(second.agents[name])
-		wantChanged := first.resolvedV2.Roles[role].Capability == sdd.CapabilityBalanced
+		assignment, found := first.resolvedV2.Roles[role]
+		capability := assignment.Capability
+		if !found {
+			capability = legacyReviewAssignmentsV2(*first.resolvedV2)[role].Capability
+		}
+		wantChanged := capability == sdd.CapabilityBalanced
 		testutil.Require(t, changed == wantChanged, "%s changed=%t want=%t", name, changed, wantChanged)
 	}
 	testutil.Require(t, !bytes.Equal(first.manifest, second.manifest), "manifest hash did not change")
@@ -3401,7 +3451,13 @@ func TestRequestedModelPlanV2PartialOverridesPreserveInstalledSlots(t *testing.T
 		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
 		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
 	}
-	base, err := requestedModelPlan(baseOptions, root)
+	baseConfig, err := sdd.NewModelPlanConfigV2(baseOptions.ModelPlan,
+		sdd.ModelSlotConfig{Reference: baseOptions.ModelEfficient, RequestedEffort: baseOptions.ModelEfficientEffort, Source: sdd.ModelSlotCatalog, Availability: sdd.ModelSlotCatalogKnown},
+		sdd.ModelSlotConfig{Reference: baseOptions.ModelBalanced, RequestedEffort: baseOptions.ModelBalancedEffort, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+		sdd.ModelSlotConfig{Reference: baseOptions.ModelFrontier, RequestedEffort: baseOptions.ModelFrontierEffort, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+	)
+	testutil.NoError(t, err)
+	base, err := buildModelPlanBundleV2(baseConfig)
 	testutil.NoError(t, err)
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
 	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), base.manifest, 0o600))
@@ -3482,9 +3538,29 @@ func TestIntegrationExposesCanonicalAssignmentRowsForEveryModelSchema(t *testing
 				options.ModelAssignments = &assignments
 			}
 			service := NewIntegration()
-			installed, err := service.Install(context.Background(), options)
-			testutil.NoError(t, err)
-			before, err := os.ReadFile(installed.ManifestPath)
+			manifestPath := filepath.Join(root, "vgxness", modelPlanManifestName)
+			if test.schema == 1 {
+				bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+				testutil.NoError(t, err)
+				writeModelPlanBundleFixture(t, root, bundle)
+			}
+			if test.schema == 2 {
+				config, err := sdd.NewModelPlanConfigV2(test.options.ModelPlan,
+					sdd.ModelSlotConfig{Reference: test.options.ModelEfficient, RequestedEffort: test.options.ModelEfficientEffort, Source: sdd.ModelSlotCatalog, Availability: sdd.ModelSlotCatalogKnown},
+					sdd.ModelSlotConfig{Reference: test.options.ModelBalanced, RequestedEffort: test.options.ModelBalancedEffort, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+					sdd.ModelSlotConfig{Reference: test.options.ModelFrontier, RequestedEffort: test.options.ModelFrontierEffort, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+				)
+				testutil.NoError(t, err)
+				bundle, err := buildModelPlanBundleV2(config)
+				testutil.NoError(t, err)
+				writeModelPlanBundleFixture(t, root, bundle)
+			}
+			if test.schema == 3 {
+				installed, err := service.Install(context.Background(), options)
+				testutil.NoError(t, err)
+				manifestPath = installed.ManifestPath
+			}
+			before, err := os.ReadFile(manifestPath)
 			testutil.NoError(t, err)
 
 			for name, inspect := range map[string]func(context.Context, integration.Options) (integration.Result, error){"preview": service.Preview, "status": service.Status} {
@@ -3506,7 +3582,7 @@ func TestIntegrationExposesCanonicalAssignmentRowsForEveryModelSchema(t *testing
 					}
 				}
 			}
-			after, err := os.ReadFile(installed.ManifestPath)
+			after, err := os.ReadFile(manifestPath)
 			testutil.Require(t, err == nil && bytes.Equal(before, after), "schema %d manifest changed: %v", test.schema, err)
 		})
 	}

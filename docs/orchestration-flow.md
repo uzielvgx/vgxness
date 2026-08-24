@@ -61,3 +61,7 @@ Render and compare operate on supplied bounded bytes and never access the filesy
 - Missing accepted inputs, stale state versions, drift, cancellation, unavailable prerequisites, and absent authorization stop advancement.
 - An interrupted SDD preserves its accepted revisions and current phase; missing work is never inferred.
 - Risky filesystem, Git, network, package, release, credential, or permission-expansion actions require explicit user authority.
+
+## CARE routing
+
+CARE records the route, risk, evidence ledger, and invalidation markers for direct, assisted, action, engineering, and assured work; Manager retains lifecycle authority. See [CARE architecture](care.md) and the [development-visible evaluation plan](care-evaluation.md). Protected-holdout adjudication remains external to this flow.

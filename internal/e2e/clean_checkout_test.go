@@ -59,7 +59,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"--model-efficient", "openai/gpt-5.6-luna", "--model-balanced", "anthropic/claude-sonnet", "--model-frontier", "acme/frontier",
 		"--model-efficient-effort", "low", "--model-balanced-effort", "high", "--model-frontier-effort", "ultra",
 	)
-	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy", "Slot efficient:\n    provider=openai\n    ref=openai/gpt-5.6-luna\n    effort=low\n    source=catalog\n    availability=catalog-known", "Slot balanced:\n    provider=anthropic\n    ref=anthropic/claude-sonnet\n    effort=high\n    source=custom\n    availability=unknown", "Slot frontier:\n    provider=acme\n    ref=acme/frontier\n    effort=ultra\n    source=custom\n    availability=unknown", "Reinicia OpenCode para cargar vgxness-manager"} {
+	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy", "Reinicia OpenCode para cargar vgxness-manager"} {
 		if !strings.Contains(setupOutput, expected) {
 			t.Fatalf("setup output is missing %q:\n%s", expected, setupOutput)
 		}
@@ -73,11 +73,9 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	memoryPlugin := filepath.Join(configDirectory, "plugins", "vgxness.ts")
 	defaultAgentConfig := filepath.Join(configDirectory, "opencode.json")
 	reviewers := []string{
-		"vgxness-review-risk.md",
-		"vgxness-review-readability.md",
-		"vgxness-review-reliability.md",
-		"vgxness-review-resilience.md",
-		"vgxness-review-refuter.md",
+		"vgxness-care-reviewer.md",
+		"vgxness-care-specialist.md",
+		"vgxness-care-challenger.md",
 	}
 	sddProfiles := []string{
 		"vgxness-sdd-research.md",
@@ -105,7 +103,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v53 marker", "artifact: opencode-agent/vgxness-manager; version: 53"},
+		{"active v54 marker", "artifact: opencode-agent/vgxness-manager; version: 54"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
 		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
@@ -125,8 +123,10 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatal("installed manager retains retired vgxness-autonomous-stacked-pr loading")
 	}
 	manifestData, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", "model-plan.json"))
-	if err != nil || !bytes.Contains(manifestData, []byte(`"schemaVersion": 2`)) || !bytes.Contains(manifestData, []byte(`"provider": "mixed"`)) {
-		t.Fatalf("setup did not install the mixed v2 manifest: %v\n%s", err, manifestData)
+	for _, expected := range []string{`"schemaVersion": 3`, `"configV3"`, `"provider": "mixed"`, `"agents/vgxness-care-reviewer.md"`, `"agents/vgxness-care-specialist.md"`, `"agents/vgxness-care-challenger.md"`} {
+		if err != nil || !bytes.Contains(manifestData, []byte(expected)) {
+			t.Fatalf("setup did not install the expected v3 manifest content %q: %v\n%s", expected, err, manifestData)
+		}
 	}
 	generalData, generalErr := os.ReadFile(general)
 	exploreData, exploreErr := os.ReadFile(explore)
@@ -139,7 +139,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	}{
 		{"general", generalData, generalErr, []string{"artifact: opencode-agent/general; version: 10", "permission:\n  \"*\": allow", "delegated non-SDD implementation worker", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
 		{"explore", exploreData, exploreErr, []string{"artifact: opencode-agent/explore; version: 4", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
-		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 6", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
+		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 7", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
 	} {
 		if required.err != nil {
 			t.Fatalf("read installed %s contract: %v", required.name, required.err)
@@ -162,7 +162,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"setup", "opencode", "--status", "--workspace", workspace,
 		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
 	)
-	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") || !strings.Contains(statusOutput, "Slot balanced:\n    provider=anthropic\n    ref=anthropic/claude-sonnet\n    effort=high\n    source=custom\n    availability=unknown") {
+	if !strings.Contains(statusOutput, "Launcher: state=installed") || !strings.Contains(statusOutput, "Handshake: ok=true status=healthy") || !strings.Contains(statusOutput, "Plan de modelos:  provider=mixed manifest=") {
 		t.Fatalf("installed setup is not healthy:\n%s", statusOutput)
 	}
 

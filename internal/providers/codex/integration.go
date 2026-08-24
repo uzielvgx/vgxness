@@ -82,13 +82,18 @@ func codexPackage(options integration.Options) (Package, error) {
 }
 
 func knownPackages() ([]Package, error) {
-	packages := make([]Package, 0, 30)
+	packages := make([]Package, 0, 34)
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			return nil, err
 		}
 		packages = append(packages, current)
+		v13, err := renderActiveV13("v0.0.0", plan)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, v13)
 		v12, err := renderActiveV12("v0.0.0", plan)
 		if err != nil {
 			return nil, err
@@ -221,6 +226,14 @@ func inspectKnown(ctx context.Context, root *Root, preferred Package) (inspectio
 	return state, preferred, err
 }
 
+func isCurrentPackage(pkg Package) bool {
+	if pkg.legacy || pkg.plan == "" {
+		return false
+	}
+	current, err := RenderPlan("v0.0.0", pkg.plan)
+	return err == nil && current.SHA256 == pkg.SHA256
+}
+
 func collapsePartialCandidates(candidates []partialCandidate, preferred Package) (inspection, Package, error) {
 	present := make(map[string]bool)
 	for _, candidate := range candidates {
@@ -332,7 +345,7 @@ func (s *Integration) Status(ctx context.Context, options integration.Options) (
 		return integration.Result{}, err
 	}
 	defer root.Close()
-	state, _, err := inspectKnown(ctx, root, pkg)
+	state, installed, err := inspectKnown(ctx, root, pkg)
 	if err != nil {
 		return state.result, err
 	}
@@ -341,6 +354,12 @@ func (s *Integration) Status(ctx context.Context, options integration.Options) (
 	}
 	if options.ModelPlan != "" && state.result.State == integration.StateInstalled && state.result.ArtifactSHA256 != pkg.SHA256 {
 		state.result = resultFor(state.result.Path, pkg)
+		state.result.State = integration.StatePartial
+		state.result.Changed = true
+		state.result.RestartRequired = true
+	}
+	if state.result.State == integration.StateInstalled && !isCurrentPackage(installed) {
+		state.result = resultFor(state.result.Path, installed)
 		state.result.State = integration.StatePartial
 		state.result.Changed = true
 		state.result.RestartRequired = true
