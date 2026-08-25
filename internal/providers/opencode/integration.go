@@ -1088,14 +1088,6 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		return inspection{}, err
 	}
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
-	explorePath := filepath.Join(configDirectory, "agents", exploreAgentName)
-	generalPath := filepath.Join(configDirectory, "agents", generalAgentName)
-	verifierPath := filepath.Join(configDirectory, "agents", verifierAgentName)
-	reviewRiskPath := filepath.Join(configDirectory, "agents", reviewRiskName)
-	reviewReadabilityPath := filepath.Join(configDirectory, "agents", reviewReadabilityName)
-	reviewReliabilityPath := filepath.Join(configDirectory, "agents", reviewReliabilityName)
-	reviewResiliencePath := filepath.Join(configDirectory, "agents", reviewResilienceName)
-	reviewRefuterPath := filepath.Join(configDirectory, "agents", reviewRefuterName)
 	legacyPluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
@@ -1184,6 +1176,8 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	predecessorManifest, predecessorManifestErr := readRegularFile(manifestPath)
 	predecessorManifestInstalled := predecessorManifestErr == nil && bytes.Equal(predecessorManifest, preConsolidation.manifest)
 	fixedLensV53ManifestInstalled := predecessorManifestErr == nil && bytes.Equal(predecessorManifest, fixedLensV53.manifest)
+	legacyFixedLens, legacyFixedLensErr := legacyFixedLensBundle(plan)
+	legacyFixedLensInstalled := legacyFixedLensErr == nil && predecessorManifestErr == nil && bytes.Equal(predecessorManifest, legacyFixedLens.manifest)
 	if predecessorManifestErr != nil && !errors.Is(predecessorManifestErr, os.ErrNotExist) {
 		return inspection{}, fmt.Errorf("inspect OpenCode model plan manifest: %w", predecessorManifestErr)
 	}
@@ -1214,7 +1208,11 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 				return inspection{}, predecessorErr
 			}
 			predecessors[managerAgentName] = managerPrior
-			compactPrior, predecessorErr := compactProtocolPredecessors(plan.agents)
+			legacy, predecessorErr := legacyFixedLensBundle(plan)
+			if predecessorErr != nil {
+				return inspection{}, predecessorErr
+			}
+			compactPrior, predecessorErr := compactProtocolPredecessors(legacy.agents)
 			if predecessorErr != nil {
 				return inspection{}, predecessorErr
 			}
@@ -1243,48 +1241,32 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	if len(exploreV3) == 0 || len(exploreV2) == 0 || len(generalV7) == 0 || len(generalV6) == 0 || len(verifierV5) == 0 || len(verifierV4) == 0 {
 		return inspection{}, integration.ErrInvalid
 	}
-	state := inspection{result: result, artifacts: []artifact{
-		{path: managerPath, content: plan.agents[managerAgentName], backup: "vgxness-manager", predecessors: predecessors[managerAgentName], regenerations: regeneration(managerPath)},
-		{path: explorePath, content: plan.agents[exploreAgentName], backup: "vgxness-explore", predecessors: [][]byte{exploreV3, exploreV2, previousExplorePredecessor(exploreV2)}, regenerations: regeneration(explorePath)},
-		{path: generalPath, content: plan.agents[generalAgentName], backup: "vgxness-general", predecessors: append(predecessors[generalAgentName], generalV7, generalV6, previousGeneralPredecessor(generalV6)), regenerations: regeneration(generalPath)},
-		{path: verifierPath, content: plan.agents[verifierAgentName], backup: "vgxness-verifier", predecessors: append(predecessors[verifierAgentName], verifierV5, verifierV4, previousVerifierPredecessor(verifierV4)), regenerations: regeneration(verifierPath)},
-		{path: reviewRiskPath, content: plan.agents[reviewRiskName], backup: "vgxness-review-risk", predecessors: predecessors[reviewRiskName], regenerations: regeneration(reviewRiskPath)},
-		{path: reviewReadabilityPath, content: plan.agents[reviewReadabilityName], backup: "vgxness-review-readability", predecessors: predecessors[reviewReadabilityName], regenerations: regeneration(reviewReadabilityPath)},
-		{path: reviewReliabilityPath, content: plan.agents[reviewReliabilityName], backup: "vgxness-review-reliability", predecessors: predecessors[reviewReliabilityName], regenerations: regeneration(reviewReliabilityPath)},
-		{path: reviewResiliencePath, content: plan.agents[reviewResilienceName], backup: "vgxness-review-resilience", predecessors: predecessors[reviewResilienceName], regenerations: regeneration(reviewResiliencePath)},
-		{path: reviewRefuterPath, content: plan.agents[reviewRefuterName], backup: "vgxness-review-refuter", predecessors: predecessors[reviewRefuterName], regenerations: regeneration(reviewRefuterPath)},
-		{path: filepath.Join(configDirectory, "agents", sddResearchName), content: plan.agents[sddResearchName], backup: "vgxness-sdd-research", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleResearch, plan.agents[sddResearchName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddResearchName))},
-		{path: filepath.Join(configDirectory, "agents", sddProposalName), content: plan.agents[sddProposalName], backup: "vgxness-sdd-proposal", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleProposal, plan.agents[sddProposalName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddProposalName))},
-		{path: filepath.Join(configDirectory, "agents", sddSpecName), content: plan.agents[sddSpecName], backup: "vgxness-sdd-spec", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleSpec, plan.agents[sddSpecName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddSpecName))},
-		{path: filepath.Join(configDirectory, "agents", sddDesignName), content: plan.agents[sddDesignName], backup: "vgxness-sdd-design", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleDesign, plan.agents[sddDesignName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddDesignName))},
-		{path: filepath.Join(configDirectory, "agents", sddTasksName), content: plan.agents[sddTasksName], backup: "vgxness-sdd-tasks", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleTasks, plan.agents[sddTasksName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddTasksName))},
-		{path: filepath.Join(configDirectory, "agents", sddApplyName), content: plan.agents[sddApplyName], backup: "vgxness-sdd-apply", predecessors: [][]byte{previousSDDAgentPredecessor(sdd.RoleApply, plan.agents[sddApplyName])}, regenerations: regeneration(filepath.Join(configDirectory, "agents", sddApplyName))},
-		{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
-		{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState},
-		{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
-	}}
-	if plan.configV3 != nil {
-		state.artifacts = make([]artifact, 0, len(modelAgentInventoryV3)+3)
-		for _, identity := range modelAgentInventoryV3 {
-			name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
-			content, ok := plan.agents[name]
-			if !ok || len(content) == 0 {
-				return inspection{}, fmt.Errorf("%w: missing OpenCode v3 agent artifact", integration.ErrInvalid)
-			}
-			state.artifacts = append(state.artifacts, artifact{
-				path:          filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey)),
-				content:       content,
-				backup:        strings.TrimSuffix(name, ".md"),
-				predecessors:  predecessors[name],
-				regenerations: regeneration(filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey))),
-			})
+	state := inspection{result: result, artifacts: make([]artifact, 0, len(modelAgentInventoryV3)+3)}
+	for _, identity := range modelAgentInventoryV3 {
+		name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
+		content := plan.agents[name]
+		if len(content) == 0 {
+			return inspection{}, fmt.Errorf("%w: missing current OpenCode agent artifact", integration.ErrInvalid)
 		}
-		state.artifacts = append(state.artifacts,
-			artifact{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)},
-			artifact{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState},
-			artifact{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent},
-		)
+		prior := predecessors[name]
+		if plan.configV3 == nil {
+			switch name {
+			case exploreAgentName:
+				prior = [][]byte{exploreV3, exploreV2, previousExplorePredecessor(exploreV2)}
+			case generalAgentName:
+				prior = append(prior, generalV7, generalV6, previousGeneralPredecessor(generalV6))
+			case verifierAgentName:
+				prior = append(prior, verifierV5, verifierV4, previousVerifierPredecessor(verifierV4))
+			default:
+				if identity.Class == sdd.ManagedAgentClassSDD {
+					prior = [][]byte{previousSDDAgentPredecessor(identity.Role, content)}
+				}
+			}
+		}
+		path := filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey))
+		state.artifacts = append(state.artifacts, artifact{path: path, content: content, backup: strings.TrimSuffix(name, ".md"), predecessors: prior, regenerations: regeneration(path)})
 	}
+	state.artifacts = append(state.artifacts, artifact{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)}, artifact{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState}, artifact{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent})
 	for index := range state.artifacts {
 		state.artifacts[index].retainedRoot = configDirectory
 		if recognize := predecessorRecognizers[filepath.Base(state.artifacts[index].path)]; recognize != nil {
@@ -1304,10 +1286,13 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		retiredArtifact{path: skillPath, recognize: isRetiredSkill},
 		retiredArtifact{path: legacyPluginPath, recognize: isPreviousMemoryPlugin},
 	}
+	if !legacyFixedLensInstalled && installedPlanOK && len(installedPlan.agents[reviewRiskName]) != 0 {
+		legacyFixedLens, legacyFixedLensInstalled = installedPlan, true
+	}
 	if plan.configV3 != nil {
 		if historicalReviewBundleMatched {
 			retirementCandidates = append(retirementCandidates, legacyReviewRetirementCandidates(configDirectory, historicalReviewBundle)...)
-		} else if installedPlanOK {
+		} else if installedPlanOK && len(installedPlan.agents[reviewRiskName]) != 0 {
 			complete, completeErr := installedLegacyReviewersComplete(configDirectory, installedPlan)
 			if completeErr != nil || !complete {
 				state.result.State = integration.StateDrifted
@@ -1322,6 +1307,15 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 				retirementCandidates = append(retirementCandidates, legacyReviewRetirementCandidates(configDirectory, preConsolidation)...)
 			}
 		}
+	} else if legacyFixedLensInstalled {
+		complete, completeErr := installedLegacyReviewersComplete(configDirectory, legacyFixedLens)
+		if completeErr != nil || !complete {
+			state.result.State = integration.StateDrifted
+			return state, nil
+		}
+		retirementCandidates = append(retirementCandidates, legacyReviewRetirementCandidates(configDirectory, legacyFixedLens)...)
+	}
+	if plan.configV3 != nil || legacyFixedLensInstalled {
 		unbound, unboundErr := hasUnboundFixedReviewers(configDirectory, retirementCandidates)
 		if unboundErr != nil || unbound {
 			state.result.State = integration.StateDrifted

@@ -31,6 +31,7 @@ type Package struct {
 	profiles  []profile
 	plan      sdd.Plan
 	legacy    bool
+	current   bool
 }
 
 type profile struct {
@@ -57,7 +58,15 @@ func RenderPlan(version string, plan sdd.Plan) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	return renderPackage(version, selected, plan, false)
+	pkg, err := renderPackage(version, selected, plan, false)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg.current = true
+	if err := pkg.Validate(); err != nil {
+		return Package{}, err
+	}
+	return clonePackage(pkg), nil
 }
 
 func renderLegacy(version string) (Package, error) {
@@ -86,8 +95,24 @@ func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
 	return pkg, nil
 }
 
+// renderActiveV15 retains the complete v15 package exclusively for lifecycle
+// recognition. It is the exact predecessor of the current v16 package.
+func renderActiveV15(version string, plan sdd.Plan) (Package, error) {
+	selected, err := profilesForPlan(plan)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg, err := renderPackage(version, selected, plan, false)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg.Artifacts[0].Bytes = []byte(activeV15ManagerInstructions())
+	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
+	return pkg, nil
+}
+
 // renderActiveV14 retains the complete v14 package exclusively for lifecycle
-// recognition. It is the exact predecessor of the current v15 package.
+// recognition.
 func renderActiveV14(version string, plan sdd.Plan) (Package, error) {
 	selected, err := profilesForPlan(plan)
 	if err != nil {
@@ -277,9 +302,6 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 	pkg := Package{Artifacts: artifacts, profiles: append([]profile(nil), selected...), plan: plan, legacy: legacy}
 	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
-	if err := pkg.Validate(); err != nil {
-		return Package{}, err
-	}
 	return clonePackage(pkg), nil
 }
 
@@ -288,7 +310,7 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
 func activeManagerInstructions() string {
-	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 15; parity: opencode-v55", 1)
+	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 16; parity: opencode-v56", 1)
 	value = strings.Replace(value, "An SDD apply handoff to general", "Route accepted SDD apply directly to sdd-apply", 1)
 	value = strings.Replace(value, "SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections", "Research, proposal, spec, design, and tasks phase agents are read-only; sdd-apply alone writes authorized SDD workspace, OpenSpec, or hybrid projections", 1)
 	return value + "\n\n" + currentCodexContextCapsule + "\n\n" + currentCodexExpertEnsemble + nativeDelegationPolicy + "\n\n" + currentCodexCandidateCapsuleContract + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n\n" + orchestration.ReadinessManagerContract + "\n"
@@ -297,8 +319,12 @@ func activeManagerInstructions() string {
 const currentCodexCandidateCapsuleContract = "For every frozen, risky, verification, or SDD delegation, require one complete Candidate Capsule v1 bound to the candidate identity: candidateDigest, digestProcedure, changedPaths, baseIdentity, criterion IDs, verificationState, evidenceRefs, and openBlockers. Reject a missing, stale, malformed, oversized, or scope-mismatched capsule before launch; preserve the complete capsule unchanged in every frozen-candidate handoff."
 
 func activeV14ManagerInstructions() string {
-	value := strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 15; parity: opencode-v55", "artifact: codex-agent/manager; version: 14; parity: opencode-v54", 1)
+	value := strings.Replace(activeV15ManagerInstructions(), "artifact: codex-agent/manager; version: 15; parity: opencode-v55", "artifact: codex-agent/manager; version: 14; parity: opencode-v54", 1)
 	return strings.Replace(value, "\n\n"+currentCodexCandidateCapsuleContract, "", 1)
+}
+
+func activeV15ManagerInstructions() string {
+	return strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 16; parity: opencode-v56", "artifact: codex-agent/manager; version: 15; parity: opencode-v55", 1)
 }
 
 func activeV13ManagerInstructions() string {
@@ -717,13 +743,18 @@ func (pkg Package) Validate() error {
 		}
 		previous = artifact.Path
 	}
+	current, currentErr := profilesForPlan(pkg.plan)
 	activeV12, activeV12Err := activeV12ProfilesForPlan(pkg.plan)
 	activeV11, activeV11Err := activeV11ProfilesForPlan(pkg.plan)
 	activeV10, activeV10Err := activeV10ProfilesForPlan(pkg.plan)
 	preCARE, preCAREErr := preCAREProfilesForPlan(pkg.plan)
 	predecessors, predecessorErr := predecessorProfilesForPlan(pkg.plan)
 	preConsolidation, preConsolidationErr := preConsolidationProfilesForPlan(pkg.plan)
-	matchesKnown := packageMatches(pkg, selected, activeManagerInstructions()) ||
+	matchesCurrent := packageMatches(pkg, selected, activeManagerInstructions())
+	if pkg.current {
+		matchesCurrent = currentErr == nil && packageMatches(pkg, current, activeManagerInstructions())
+	}
+	matchesKnown := matchesCurrent ||
 		(preCAREErr == nil && packageMatches(pkg, preCARE, activeV13ManagerInstructions())) ||
 		(activeV12Err == nil && packageMatches(pkg, activeV12, activeV12ManagerInstructions())) ||
 		(activeV11Err == nil && packageMatches(pkg, activeV11, activeV11ManagerInstructions())) ||
@@ -786,7 +817,7 @@ func aggregateSHA256(artifacts []Artifact) string {
 }
 
 func clonePackage(source Package) Package {
-	result := Package{Artifacts: make([]Artifact, len(source.Artifacts)), SHA256: source.SHA256, profiles: append([]profile(nil), source.profiles...), plan: source.plan, legacy: source.legacy}
+	result := Package{Artifacts: make([]Artifact, len(source.Artifacts)), SHA256: source.SHA256, profiles: append([]profile(nil), source.profiles...), plan: source.plan, legacy: source.legacy, current: source.current}
 	for index, artifact := range source.Artifacts {
 		result.Artifacts[index] = Artifact{Path: artifact.Path, Bytes: append([]byte(nil), artifact.Bytes...)}
 	}

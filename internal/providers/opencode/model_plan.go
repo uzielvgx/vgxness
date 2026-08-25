@@ -24,8 +24,9 @@ const (
 	sddApplyName                                            = "vgxness-sdd-apply.md"
 	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 4, 3
 	sddApplyTargetVersion, sddApplyPredecessorVersion       = 7, 6
-	managerCurrentMarker                                    = "artifact: opencode-agent/vgxness-manager; version: 55"
-	managerPreviousMarker                                   = "artifact: opencode-agent/vgxness-manager; version: 54"
+	managerCurrentMarker                                    = "artifact: opencode-agent/vgxness-manager; version: 56"
+	managerPreviousMarker                                   = "artifact: opencode-agent/vgxness-manager; version: 55"
+	managerV54Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 54"
 	managerV53Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 53"
 	managerV52Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 52"
 	managerV51Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 51"
@@ -99,11 +100,11 @@ func fixedLensV53ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, e
 		return modelPlanBundle{}, err
 	}
 	populateLegacyReviewAssignments(&resolved)
-	agents, err := modelBoundAgents(resolved)
+	agents, err := legacyModelBoundAgents(resolved)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	managerTemplate := strings.Replace(canonicalManagerPrompt, managerPreviousMarker, managerV53Marker, 1)
+	managerTemplate := strings.Replace(strings.Replace(canonicalManagerPrompt, managerPreviousMarker, managerV53Marker, 1), managerReviewDepthV56, currentManagerReviewDepth, 1)
 	manager, err := bindManagerTemplate(managerTemplate, managerV53Marker, resolved.Roles[sdd.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
@@ -191,6 +192,7 @@ const currentManagerAssurance = "After general returns inspect exact diff, chang
 const managerReviewerCandidateCapsule = "Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, the complete Candidate Capsule, exact skills, verificationEvidence"
 const preConsolidationManagerAssurance = "After general returns inspect exact diff, changed paths, status identity, and command evidence. For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`. Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs. A source change creates a new candidate and invalidates validation and review evidence. Freeze one exact candidate identity before final validation and review without inventing a digest that excludes untracked files. Verifier mission schema: frozen candidate digest, digest procedure, exact changed paths, acceptance criteria, evidence scope, exact permitted commands, expected environment, and stop condition; accept only PASS, FAIL, or INCONCLUSIVE evidence reporting the same digest before and after. Reviewer mission schema: mode, candidate identity, exact changedPaths, diffScope, exact skills, verificationEvidence, and lens-specific goal, scope, nonGoals, acceptance, evidence, stop, and return contract; every reviewer receives the same frozen identity and scope, and missing evidence is not success."
 const currentManagerReviewDepth = "Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use vgxness-review-risk, vgxness-review-readability, vgxness-review-reliability, and vgxness-review-resilience only on the same candidate; send only supplied severe inferential finding IDs to vgxness-review-refuter in one batch; permit at most one correction transaction and one scoped validation. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet."
+const managerReviewDepthV56 = "Choose review depth after freeze: Zero lenses for proven passive documentation or images; use only the native verifier and CARE reviewer, CARE specialist, and CARE challenger profiles for review. Apply the standard, elevated, or critical CARE matrix according to the concrete risk; passive documentation and images remain exempt, while permissions, authentication, secrets, payments, installers, data exposure or loss, shell/process boundaries, durability, and other hot paths are non-exempt. Keep every selected reviewer on the same frozen candidate; permit at most one correction transaction and one scoped validation. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet."
 const preConsolidationManagerReviewDepth = "Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use vgxness-review-risk, vgxness-review-readability, vgxness-review-reliability, and vgxness-review-resilience only on the same candidate; send severe inferential findings to vgxness-review-refuter in one batch; permit at most one correction transaction and one scoped validation; never loop until reviewers become quiet."
 const currentManagerSDDBoundary = "Use SDD only after the user explicitly requests or accepts it. Load `sdd-lifecycle` before creating an accepted SDD change. Verify the managed global portable catalog marker `<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->`; block if source, scope, or marker cannot be verified, a same-name/project-local skill collides, or loading fails. If `sdd-lifecycle` is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. An SDD apply handoff to general must bind task revision ID/digest, accepted inputs, expectedStateVersion, mission identity/replay nonce, and for every target its repository-relative allowed path, current SHA-256, and no-symlink constraint; stale, mismatched, replayed, changed, or symlinked inputs block before a write. Require exact post-write readback SHA-256. These checks reduce but do not eliminate TOCTOU risk; do not claim atomic host enforcement. SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the `sdd-lifecycle` skill is the sole detailed lifecycle policy."
 
@@ -654,7 +656,11 @@ func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (mo
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
-	predecessor, err := previousV54ModelPlanBundle(current)
+	predecessor, err := previousV55ModelPlanBundle(current)
+	if err == nil && bytes.Equal(predecessor.manifest, data) {
+		return predecessor, nil
+	}
+	predecessor, err = previousV54ModelPlanBundle(predecessor)
 	if err == nil && bytes.Equal(predecessor.manifest, data) {
 		return predecessor, nil
 	}
@@ -693,7 +699,11 @@ func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (mo
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
-	predecessor, err := previousV54ModelPlanBundle(current)
+	predecessor, err := previousV55ModelPlanBundle(current)
+	if err == nil && bytes.Equal(predecessor.manifest, data) {
+		return predecessor, nil
+	}
+	predecessor, err = previousV54ModelPlanBundle(predecessor)
 	if err == nil && bytes.Equal(predecessor.manifest, data) {
 		return predecessor, nil
 	}
@@ -781,7 +791,7 @@ func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlan
 		assignment.Degradation = sdd.Degradation{Degraded: true, Reason: fmt.Sprintf("requested effort %s is unsupported by %s; using highest declared effort %s", assignment.RequestedEffort, assignment.Model, assignment.Effort)}
 		plan.Roles[role] = assignment
 	}
-	agents, err := modelBoundAgents(plan)
+	agents, err := legacyModelBoundAgents(plan)
 	if err != nil {
 		return modelPlanBundle{}, false, err
 	}
@@ -790,7 +800,11 @@ func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlan
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
-	v54, err := previousV54ModelPlanBundle(current)
+	v55, err := previousV55ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
+	v54, err := previousV54ModelPlanBundle(v55)
 	if err != nil {
 		return nil, err
 	}
@@ -871,7 +885,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		}
 		withExplore = append(withExplore, explore)
 	}
-	candidates := []modelPlanBundle{v54, v53, v52, v51, v50, activeProfiles}
+	candidates := []modelPlanBundle{v55, v54, v53, v52, v51, v50, activeProfiles}
 	for _, candidate := range withExplore {
 		candidates = append(candidates, candidate)
 		sddBundle, err := previousSDDModelPlanBundle(candidate)
@@ -898,7 +912,15 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 
 func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	var err error
-	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
+		current, err = previousV55ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+		current, err = previousV54ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
 		current, err = previousV53ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
@@ -927,7 +949,11 @@ func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBu
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
-	v54, err := previousV54ModelPlanBundle(current)
+	v55, err := previousV55ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
+	v54, err := previousV54ModelPlanBundle(v55)
 	if err != nil {
 		return nil, err
 	}
@@ -967,7 +993,7 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := [][]byte{v54.agents[managerAgentName], v53.agents[managerAgentName], v52.agents[managerAgentName], v51.agents[managerAgentName], v50.agents[managerAgentName], v49.agents[managerAgentName], v48.agents[managerAgentName], v47.agents[managerAgentName], v46.agents[managerAgentName]}
+	result := [][]byte{v55.agents[managerAgentName], v54.agents[managerAgentName], v53.agents[managerAgentName], v52.agents[managerAgentName], v51.agents[managerAgentName], v50.agents[managerAgentName], v49.agents[managerAgentName], v48.agents[managerAgentName], v47.agents[managerAgentName], v46.agents[managerAgentName]}
 	for _, prior := range []struct {
 		base, marker string
 	}{
@@ -990,13 +1016,21 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 
 func previousV49ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	var err error
-	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
+	if current.configV3 == nil && current.resolvedV3 == nil {
+		if _, ok := current.agents[reviewRiskName]; !ok {
+			current, err = legacyFixedLensBundle(current)
+			if err != nil {
+				return modelPlanBundle{}, err
+			}
+		}
+	}
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
 		current, err = previousV54ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
 		}
 	}
-	if bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerV54Marker)) {
 		current, err = previousV53ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
@@ -1045,6 +1079,52 @@ func previousV49ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		}
 	}
 	return encodeLike(current, agents)
+}
+
+func legacyFixedLensBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if current.configV2 != nil || current.resolvedV2 != nil {
+		if current.configV2 == nil || current.resolvedV2 == nil {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+		legacy := *current.resolvedV2
+		legacy.Roles = make(map[sdd.Role]sdd.OpenCodeRoleAssignmentV2, len(current.resolvedV2.Roles)+2)
+		for role, assignment := range current.resolvedV2.Roles {
+			legacy.Roles[role] = assignment
+		}
+		for _, role := range []sdd.Role{sdd.RoleCAREReviewer, sdd.RoleCARESpecialist, sdd.RoleCAREChallenger} {
+			delete(legacy.Roles, role)
+		}
+		for role, assignment := range legacyReviewAssignmentsV2(*current.resolvedV2) {
+			legacy.Roles[role] = sdd.OpenCodeRoleAssignmentV2{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
+		}
+		agentPlan := sdd.OpenCodePlan{Roles: make(map[sdd.Role]sdd.OpenCodeRoleAssignment, len(legacy.Roles))}
+		for role, assignment := range legacy.Roles {
+			agentPlan.Roles[role] = sdd.OpenCodeRoleAssignment{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
+		}
+		agents, err := legacyModelBoundAgents(agentPlan)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+		agents[managerAgentName] = previousManagerV55(agents[managerAgentName])
+		if len(agents[managerAgentName]) == 0 {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+		return encodeModelPlanBundleV2(*current.configV2, legacy, omitEmptyVariantLines(agents))
+	}
+	if current.configV3 != nil || current.resolvedV3 != nil {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	legacy := current.resolved
+	populateLegacyReviewAssignments(&legacy)
+	agents, err := legacyModelBoundAgents(legacy)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	agents[managerAgentName] = previousManagerV55(agents[managerAgentName])
+	if len(agents[managerAgentName]) == 0 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	return encodeModelPlanBundle(current.config, legacy, agents)
 }
 
 func previousV50ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
@@ -1246,7 +1326,7 @@ func encodeLike(current modelPlanBundle, agents map[string][]byte) (modelPlanBun
 
 func immediatePredecessor(current modelPlanBundle) (modelPlanBundle, error) {
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
-		return previousV54ModelPlanBundle(current)
+		return previousV55ModelPlanBundle(current)
 	}
 	return current, nil
 }
@@ -1348,7 +1428,32 @@ func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, e
 }
 
 func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
-	return fullModelBoundAgents(plan, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, legacyReviewBindings(currentReviewPrompts()), true)
+	assignments := make(map[string]sdd.OpenCodeRoleAssignment, len(modelAgentInventoryV3))
+	for _, identity := range modelAgentInventoryV3 {
+		assignment, ok := plan.Roles[identity.Role]
+		if !ok {
+			return nil, integration.ErrInvalid
+		}
+		assignments[strings.TrimPrefix(identity.ArtifactKey, "agents/")] = assignment
+	}
+	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, currentCAREReviewBindings(), true)
+}
+
+func legacyModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
+	assignments := make(map[string]sdd.OpenCodeRoleAssignment, len(modelAgentInventoryV3)+2)
+	for _, identity := range modelAgentInventoryV3 {
+		if assignment, ok := plan.Roles[identity.Role]; ok {
+			assignments[strings.TrimPrefix(identity.ArtifactKey, "agents/")] = assignment
+		}
+	}
+	for _, review := range legacyReviewBindings(nil) {
+		assignment, ok := plan.Roles[review.role]
+		if !ok {
+			return nil, integration.ErrInvalid
+		}
+		assignments[review.name] = assignment
+	}
+	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, legacyReviewBindings(currentReviewPrompts()), true)
 }
 
 func modelBoundAgentsV2(plan sdd.OpenCodePlanV2) (map[string][]byte, error) {
@@ -1408,6 +1513,14 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 	if err != nil {
 		return nil, err
 	}
+	for _, review := range legacyReviewBindings(nil) {
+		name := map[sdd.Role]string{sdd.RoleRisk: "vgxness-care-reviewer.md", sdd.RoleReadability: "vgxness-care-specialist.md", sdd.RoleReliability: "vgxness-care-reviewer.md", sdd.RoleResilience: "vgxness-care-specialist.md", sdd.RoleRefuter: "vgxness-care-challenger.md"}[review.role]
+		assignment, ok := assignments[name]
+		if !ok {
+			return nil, integration.ErrInvalid
+		}
+		assignment.Role, assignments[review.name] = review.role, assignment
+	}
 	build := func(managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (map[string][]byte, error) {
 		managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 			return bindManagerTemplate(managerBase, managerMarker, assignment)
@@ -1439,7 +1552,8 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 	if err != nil {
 		return nil, err
 	}
-	v54 := previousManagerV54(current)
+	v55 := previousManagerV55(current)
+	v54 := previousManagerV54(v55)
 	v53 := previousManagerV53(v54)
 	v52 := previousManagerV52(v53)
 	v51 := previousManagerV51(v52)
@@ -1448,10 +1562,10 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 	v48 := previousManagerV48(v49)
 	v47 := previousManagerV47(v49)
 	v46 := []byte(legacyManagerPrompt(string(v49)))
-	if len(v54) == 0 || len(v53) == 0 || len(v52) == 0 || len(v51) == 0 || len(v50) == 0 || len(v49) == 0 || len(v48) == 0 || len(v47) == 0 || len(v46) == 0 {
+	if len(v55) == 0 || len(v54) == 0 || len(v53) == 0 || len(v52) == 0 || len(v51) == 0 || len(v50) == 0 || len(v49) == 0 || len(v48) == 0 || len(v47) == 0 || len(v46) == 0 {
 		return nil, integration.ErrInvalid
 	}
-	predecessors[managerAgentName] = [][]byte{v54, v53, v52, v51, v50, v49, v48, v47, v46, v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
+	predecessors[managerAgentName] = [][]byte{v55, v54, v53, v52, v51, v50, v49, v48, v47, v46, v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
 	for _, prior := range []struct {
 		base   string
 		marker string
@@ -1689,6 +1803,11 @@ func legacyReviewAssignmentsV2(plan sdd.OpenCodePlanV2) map[sdd.Role]sdd.OpenCod
 			}
 			break
 		}
+		if _, ok := assignments[review.role]; !ok {
+			if slot, ok := plan.Slots[matrix.Capability]; ok {
+				assignments[review.role] = sdd.OpenCodeRoleAssignment{Role: review.role, Capability: matrix.Capability, Model: slot.Reference, RequestedEffort: matrix.Effort, Effort: matrix.Effort, Variant: sdd.OpenCodeVariantForEffort(matrix.Effort), Strength: matrix.Strength()}
+			}
+		}
 	}
 	return assignments
 }
@@ -1797,7 +1916,7 @@ func previousManagerV49(current []byte) []byte {
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV54(current)
 	}
-	if bytes.Count(current, []byte(managerPreviousMarker)) == 1 {
+	if bytes.Count(current, []byte(managerV54Marker)) == 1 {
 		current = previousManagerV53(current)
 	}
 	if bytes.Count(current, []byte(managerV53Marker)) == 1 {
@@ -1843,20 +1962,30 @@ func previousManagerV52(current []byte) []byte {
 }
 
 func previousManagerV53(current []byte) []byte {
-	if bytes.Count(current, []byte(managerPreviousMarker)) != 1 || bytes.Count(current, []byte(managerV53Marker)) != 0 {
+	if bytes.Count(current, []byte(managerV54Marker)) != 1 || bytes.Count(current, []byte(managerV53Marker)) != 0 {
 		return nil
 	}
 	return derivePredecessor(current, []textReplacement{
-		{old: managerPreviousMarker, new: managerV53Marker},
+		{old: managerV54Marker, new: managerV53Marker},
 		{old: managerReviewerCandidateCapsule, new: "Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, exact skills, verificationEvidence"},
 	})
 }
 
 func previousManagerV54(current []byte) []byte {
-	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 || bytes.Count(current, []byte(managerPreviousMarker)) != 0 {
+	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+		current = previousManagerV55(current)
+	}
+	if bytes.Count(current, []byte(managerPreviousMarker)) != 1 || bytes.Count(current, []byte(managerCurrentMarker)) != 0 {
 		return nil
 	}
-	return derivePredecessor(current, []textReplacement{{old: managerCurrentMarker, new: managerPreviousMarker}, {old: "\n\n" + currentManagerCandidateCapsuleContract, new: ""}})
+	return derivePredecessor(current, []textReplacement{{old: managerPreviousMarker, new: managerV54Marker}, {old: "\n\n" + currentManagerCandidateCapsuleContract, new: ""}})
+}
+
+func previousManagerV55(current []byte) []byte {
+	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 || bytes.Count(current, []byte(managerPreviousMarker)) > 1 {
+		return nil
+	}
+	return derivePredecessor(current, []textReplacement{{old: managerCurrentMarker, new: managerPreviousMarker}, {old: managerReviewDepthV56, new: currentManagerReviewDepth}})
 }
 
 func previousV51ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
@@ -1909,12 +2038,16 @@ func previousV52ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 func previousV53ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
 		var err error
+		current, err = previousV55ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
 		current, err = previousV54ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
 		}
 	}
-	for name, marker := range map[string]string{managerAgentName: managerPreviousMarker, verifierAgentName: verifierCurrentMarker} {
+	for name, marker := range map[string]string{managerAgentName: managerV54Marker, verifierAgentName: verifierCurrentMarker} {
 		if bytes.Count(current.agents[name], []byte(marker)) != 1 {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
@@ -1932,11 +2065,38 @@ func previousV53ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 // predecessor of v55. It changes only the manager identity and removes the
 // v55 Candidate Capsule contract, preserving every other artifact byte.
 func previousV54ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+		var err error
+		current, err = previousV55ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+	}
+	if bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	agents := cloneAgents(current.agents)
 	agents[managerAgentName] = previousManagerV54(agents[managerAgentName])
+	if len(agents[managerAgentName]) == 0 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	return encodeLike(current, agents)
+}
+
+func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if current.configV3 == nil && current.resolvedV3 == nil {
+		if _, ok := current.agents[reviewRiskName]; !ok {
+			return legacyFixedLensBundle(current)
+		}
+		if bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
+			return current, nil
+		}
+	}
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	agents := cloneAgents(current.agents)
+	agents[managerAgentName] = previousManagerV55(agents[managerAgentName])
 	if len(agents[managerAgentName]) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}

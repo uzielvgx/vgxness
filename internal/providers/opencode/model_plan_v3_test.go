@@ -479,10 +479,7 @@ func TestSchemaV3PredecessorRecognizesV53V6BeforeOlderTransitions(t *testing.T) 
 	if _, recognized, err := parseInstalledModelPlanManifest(predecessor.manifest); err != nil || !bytes.Equal(recognized.manifest, predecessor.manifest) {
 		t.Fatalf("schema-v3 v53/v6 predecessor rejected: %v", err)
 	}
-	for name, marker := range map[string]string{
-		managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 54",
-		verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 6",
-	} {
+	for name, marker := range map[string]string{managerAgentName: "artifact: opencode-agent/vgxness-manager; version: 55", verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 6"} {
 		candidates, err := modelBoundAgentPredecessorCandidatesV3(*current.resolvedV3, name)
 		if err != nil {
 			t.Fatal(err)

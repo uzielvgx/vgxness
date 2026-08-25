@@ -231,6 +231,16 @@ func (value effortFlag) Set(input string) error {
 }
 
 func renderModelSlots(writer io.Writer, result integration.Result) {
+	if result.ModelSchemaVersion == 3 && result.ModelAssignments != nil {
+		for _, assignment := range result.ModelAssignments {
+			fmt.Fprintf(writer, "  Assignment artifact_key=%s provider=%s model=%s requested_effort=%s effective_effort=%s variant=%s source=%s availability=%s", terminalSafe(assignment.ArtifactKey), terminalSafe(assignment.Provider), terminalSafe(assignment.Model), terminalSafe(string(assignment.RequestedEffort)), terminalSafe(string(assignment.Effort)), terminalSafe(string(assignment.Variant)), terminalSafe(string(assignment.Source)), terminalSafe(string(assignment.Availability)))
+			if assignment.Degradation.Degraded {
+				fmt.Fprintf(writer, " degradation=%s", terminalSafe(assignment.Degradation.Reason))
+			}
+			fmt.Fprintln(writer)
+		}
+		return
+	}
 	for _, slot := range []struct {
 		name, ref    string
 		effort       sdd.Effort
