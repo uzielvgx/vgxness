@@ -675,8 +675,7 @@ func TestIntegrationRecognizesHistoricalHighPlanWithLunaFastDegradation(t *testi
 
 	historicalConfig, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "openai/gpt-5.6-luna-fast", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol")
 	testutil.NoError(t, err)
-	historicalBundle, err := buildModelPlanBundle(historicalConfig)
-	testutil.NoError(t, err)
+	historicalBundle := mustLegacyV1Bundle(t, historicalConfig)
 	writeModelPlanBundleFixture(t, configDirectory, historicalBundle)
 
 	status, err := service.Status(context.Background(), options)
@@ -1411,7 +1410,7 @@ func TestIntegrationV3MigrationRetiresExactV2Reviewers(t *testing.T) {
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), options)
 	testutil.NoError(t, err)
-	legacy := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+	legacy := mustLegacyFixedLensBundle(t, mustBuildModelPlanV2(t, schemaV2TestConfig(t)))
 	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
 	for name, content := range legacy.agents {
 		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
@@ -1464,8 +1463,7 @@ func TestIntegrationV3MigrationRetiresExactCurrentV1Reviewers(t *testing.T) {
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), options)
 	testutil.NoError(t, err)
-	legacy, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	testutil.NoError(t, err)
+	legacy := mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
 	for name, content := range legacy.agents {
 		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
@@ -1493,15 +1491,13 @@ func TestIntegrationV3MigrationRejectsIncompleteManifestBoundReviewers(t *testin
 		{
 			name: "v1",
 			bundle: func(t *testing.T) modelPlanBundle {
-				bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-				testutil.NoError(t, err)
-				return bundle
+				return mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
 			},
 		},
 		{
 			name: "v2",
 			bundle: func(t *testing.T) modelPlanBundle {
-				return mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+				return mustLegacyFixedLensBundle(t, mustBuildModelPlanV2(t, schemaV2TestConfig(t)))
 			},
 		},
 		{
@@ -1549,8 +1545,7 @@ func TestIntegrationMigratesExactCurrentV1ToCAREWithoutOverrides(t *testing.T) {
 			options := integration.Options{ConfigDir: root}
 			config := sdd.DefaultModelPlanConfig()
 			config.Provenance = provenance
-			legacy, err := buildModelPlanBundle(config)
-			testutil.NoError(t, err)
+			legacy := mustLegacyV1Bundle(t, config)
 			testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
 			testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
 			testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
@@ -1569,23 +1564,17 @@ func TestIntegrationMigratesExactCurrentV1ToCAREWithoutOverrides(t *testing.T) {
 					t.Errorf("exact current V1 reviewer %s was not retired: %v", name, err)
 				}
 			}
-			for _, name := range []string{"vgxness-care-reviewer.md", "vgxness-care-specialist.md", "vgxness-care-challenger.md"} {
-				if _, err := os.Stat(filepath.Join(root, "agents", name)); err != nil {
-					t.Errorf("CARE reviewer %s was not installed: %v", name, err)
-				}
-			}
-			testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 3 && installed.ArtifactCount == 16 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+			testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 1 && installed.ArtifactCount == 16 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
 		})
 	}
 }
 
-func TestIntegrationDoesNotMigrateCustomV1ToCARE(t *testing.T) {
+func TestIntegrationMigratesCustomV1ToCARE(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "opencode")
 	options := integration.Options{ConfigDir: root}
 	config, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "acme/fast", "acme/balanced", "acme/frontier")
 	testutil.NoError(t, err)
-	legacy, err := buildModelPlanBundle(config)
-	testutil.NoError(t, err)
+	legacy := mustLegacyV1Bundle(t, config)
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "vgxness"), 0o700))
 	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
@@ -1598,13 +1587,14 @@ func TestIntegrationDoesNotMigrateCustomV1ToCARE(t *testing.T) {
 	previewBefore, previewBeforeErr := service.Preview(context.Background(), options)
 	installed, installErr := service.Install(context.Background(), options)
 	_, careErr := os.Stat(filepath.Join(root, "agents", "vgxness-care-reviewer.md"))
+	_, reviewerErr := os.Stat(filepath.Join(root, "agents", reviewRiskName))
 	testutil.Require(t,
-		statusBeforeErr == nil && statusBefore.ModelSchemaVersion == 1 &&
+		statusBeforeErr == nil && statusBefore.ModelSchemaVersion == 1 && statusBefore.ModelPlan == sdd.PlanHigh && statusBefore.ModelEfficient == "acme/fast" && statusBefore.ModelBalanced == "acme/balanced" && statusBefore.ModelFrontier == "acme/frontier" &&
 			previewBeforeErr == nil && previewBefore.ModelSchemaVersion == 1 &&
-			installErr == nil && installed.ModelSchemaVersion == 1 && installed.ArtifactCount == 18 &&
-			os.IsNotExist(careErr),
-		"status before=%+v statusErr=%v preview before=%+v previewErr=%v installed=%+v install=%v care=%v",
-		statusBefore, statusBeforeErr, previewBefore, previewBeforeErr, installed, installErr, careErr)
+			installErr == nil && installed.ModelSchemaVersion == 1 && installed.ModelPlan == sdd.PlanHigh && installed.ModelEfficient == "acme/fast" && installed.ModelBalanced == "acme/balanced" && installed.ModelFrontier == "acme/frontier" && installed.ArtifactCount == 16 &&
+			careErr == nil && os.IsNotExist(reviewerErr),
+		"status before=%+v statusErr=%v preview before=%+v previewErr=%v installed=%+v install=%v care=%v reviewer=%v",
+		statusBefore, statusBeforeErr, previewBefore, previewBeforeErr, installed, installErr, careErr, reviewerErr)
 }
 
 func TestIntegrationDoesNotMigrateProviderModifiedV1ToCARE(t *testing.T) {
@@ -1622,8 +1612,7 @@ func TestIntegrationV3MigrationRetainsModifiedCurrentV1ReviewerAsDrift(t *testin
 	service := NewIntegration()
 	_, err := service.Install(context.Background(), options)
 	testutil.NoError(t, err)
-	legacy, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	testutil.NoError(t, err)
+	legacy := mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), legacy.manifest, 0o600))
 	for name, content := range legacy.agents {
 		testutil.NoError(t, os.WriteFile(filepath.Join(root, "agents", name), content, 0o600))
@@ -1885,7 +1874,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 55"), []byte("version: 53"), 1)
+	older := bytes.Replace(current, []byte("version: 56"), []byte("version: 53"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -2124,13 +2113,12 @@ func TestIntegrationRejectsMixedManifestlessV3Predecessors(t *testing.T) {
 
 func TestIntegrationRecoversCompleteV43BundleWithoutManifest(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	testutil.NoError(t, err)
-	v43, err := previousV43ModelPlanBundle(current)
+	historical := mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
+	v43, err := previousV43ModelPlanBundle(historical)
 	testutil.NoError(t, err)
 	for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
-		if !isManagedPredecessor(v43.agents[name], current.agents[name], [][]byte{v43.agents[name]}, nil) {
-			ci, cv, cok := managedArtifactMarker(current.agents[name])
+		if !isManagedPredecessor(v43.agents[name], historical.agents[name], [][]byte{v43.agents[name]}, nil) {
+			ci, cv, cok := managedArtifactMarker(historical.agents[name])
 			pi, pv, pok := managedArtifactMarker(v43.agents[name])
 			t.Fatalf("%s v43 predecessor is not recognizable current=%s/%d/%v prior=%s/%d/%v", name, ci, cv, cok, pi, pv, pok)
 		}
@@ -2165,13 +2153,9 @@ func TestIntegrationRecoversCompleteV44BundleWithoutManifest(t *testing.T) {
 
 func TestIntegrationRejectsModifiedV2ProfileWithoutManifest(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	testutil.NoError(t, err)
-	v43, err := previousV43ModelPlanBundle(current)
-	testutil.NoError(t, err)
-	writeModelPlanBundleFixture(t, configDirectory, v43)
+	historical := mustLegacyFixedLensBundle(t, mustBuildModelPlanV2(t, schemaV2TestConfig(t)))
 	for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
-		content := v43.agents[name]
+		content := historical.agents[name]
 		if name == reviewRiskName {
 			content = append(append([]byte(nil), content...), "\nmodified\n"...)
 		}
@@ -2189,7 +2173,7 @@ func TestIntegrationRejectsModifiedV2ProfileWithoutManifest(t *testing.T) {
 }
 
 func TestCurrentReviewerAndRefuterUseChildReturnEnvelopeV1(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
 		prompt := string(bundle.agents[name])
@@ -2268,7 +2252,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 55",
+		"artifact: opencode-agent/vgxness-manager; version: 56",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native adaptive general-purpose partner",
 		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",
@@ -2293,8 +2277,8 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"the delegated worker continues with native reads and search without blocking",
 		"Search with vgxness_memory_search using all-term matching first; retry with any-term matching only when all-term results are insufficient.",
 		"Call vgxness_memory_recent only for an explicit recent-work, session, or compaction-recovery request; never use it as a routine first action.",
-		"Zero lenses", "One dominant lens", "Four lenses",
-		"severe inferential findings", "one batch", "one correction transaction and one scoped validation",
+		"Zero lenses", "CARE reviewer", "CARE specialist", "CARE challenger",
+		"standard, elevated, or critical CARE matrix", "one correction transaction and one scoped validation",
 		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
 		"Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation",
 		"A correction changes the candidate digest and invalidates all prior validation and review evidence",
@@ -2379,7 +2363,7 @@ func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 }
 
 func TestManagedProfilesExcludeMCPMutations(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	mutations := []string{"vgxness_memory_save", "vgxness_memory_forget", "vgxness_sdd_create", "vgxness_sdd_set_interaction_mode", "vgxness_sdd_transition", "vgxness_sdd_save_revision", "vgxness_sdd_accept_revision", "vgxness_sdd_record_projection"}
 	profiles := []string{exploreAgentName, generalAgentName, verifierAgentName, reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName, sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName, sddApplyName}
@@ -3152,7 +3136,7 @@ func mustJSONForTest(t *testing.T, value string) []byte {
 }
 
 func TestReviewAgentsAreReadOnlyWithNativeSkillAndCodeGraphAccess(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	profiles := map[string]struct {
 		prompt string
@@ -3542,6 +3526,20 @@ func writeModelPlanBundleFixture(t *testing.T, root string, bundle modelPlanBund
 	testutil.NoError(t, os.WriteFile(filepath.Join(root, "vgxness", modelPlanManifestName), bundle.manifest, 0o600))
 }
 
+func mustLegacyFixedLensBundle(t *testing.T, bundle modelPlanBundle) modelPlanBundle {
+	t.Helper()
+	legacy, err := legacyFixedLensBundle(bundle)
+	testutil.NoError(t, err)
+	return legacy
+}
+
+func mustLegacyV1Bundle(t *testing.T, config sdd.ModelPlanConfig) modelPlanBundle {
+	t.Helper()
+	current, err := buildModelPlanBundle(config)
+	testutil.NoError(t, err)
+	return mustLegacyFixedLensBundle(t, current)
+}
+
 func TestIntegrationV3RejectsIncompleteAssignmentsBeforeWrites(t *testing.T) {
 	for name, mutate := range map[string]func(map[string]sdd.ManagedAgentModelConfig){
 		"empty": func(assignments map[string]sdd.ManagedAgentModelConfig) {
@@ -3716,9 +3714,8 @@ func TestModelPlanV2SlotChangeOnlyChangesDependentAgentHashes(t *testing.T) {
 	roles := map[string]sdd.Role{
 		managerAgentName: sdd.RoleManager, exploreAgentName: sdd.RoleResearch,
 		generalAgentName: sdd.RoleImplementation, verifierAgentName: sdd.RoleVerification,
-		reviewRiskName: sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
-		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
-		reviewRefuterName: sdd.RoleRefuter, sddResearchName: sdd.RoleResearch,
+		"vgxness-care-reviewer.md": sdd.RoleCAREReviewer, "vgxness-care-specialist.md": sdd.RoleCARESpecialist,
+		"vgxness-care-challenger.md": sdd.RoleCAREChallenger, sddResearchName: sdd.RoleResearch,
 		sddProposalName: sdd.RoleProposal, sddSpecName: sdd.RoleSpec,
 		sddDesignName: sdd.RoleDesign, sddTasksName: sdd.RoleTasks, sddApplyName: sdd.RoleApply,
 	}
@@ -3727,7 +3724,7 @@ func TestModelPlanV2SlotChangeOnlyChangesDependentAgentHashes(t *testing.T) {
 		assignment, found := first.resolvedV2.Roles[role]
 		capability := assignment.Capability
 		if !found {
-			capability = legacyReviewAssignmentsV2(*first.resolvedV2)[role].Capability
+			t.Fatalf("missing current assignment for %s", role)
 		}
 		wantChanged := capability == sdd.CapabilityBalanced
 		testutil.Require(t, changed == wantChanged, "%s changed=%t want=%t", name, changed, wantChanged)

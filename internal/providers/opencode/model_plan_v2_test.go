@@ -81,6 +81,7 @@ func TestSchemaV2LegacyReviewFamilyIsolatedFromCARE(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+	legacyCurrent := mustLegacyFixedLensBundle(t, current)
 	v49, err := previousV49ModelPlanBundle(current)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +105,7 @@ func TestSchemaV2LegacyReviewFamilyIsolatedFromCARE(t *testing.T) {
 		t.Fatalf("current v3 agent count = %d, want 13", len(v3.agents))
 	}
 
-	for name, bundle := range map[string]modelPlanBundle{"v53": current, "v49": v49, "v47": v47} {
+	for name, bundle := range map[string]modelPlanBundle{"legacy-current": legacyCurrent, "v49": v49, "v47": v47} {
 		t.Run(name, func(t *testing.T) {
 			for _, review := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
 				content, ok := bundle.agents[review]

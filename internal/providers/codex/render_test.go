@@ -38,6 +38,20 @@ func TestCAREDelegationRendersOnlyCurrentProfiles(t *testing.T) {
 	}
 }
 
+func TestCurrentPackageValidationRejectsMissingOrRetiredProfiles(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	require(t, err == nil)
+	missing := clonePackage(pkg)
+	missing.Artifacts = missing.Artifacts[:len(missing.Artifacts)-1]
+	missing.SHA256 = aggregateSHA256(missing.Artifacts)
+	require(t, missing.Validate() != nil)
+	retired := clonePackage(pkg)
+	retired.profiles[0] = preCAREProfiles[3]
+	retired.Artifacts[1] = Artifact{Path: retired.profiles[0].path, Bytes: []byte(renderProfile(retired.profiles[0]))}
+	retired.SHA256 = aggregateSHA256(retired.Artifacts)
+	require(t, retired.Validate() != nil)
+}
+
 func TestRenderPlanUsesSharedModelMatrix(t *testing.T) {
 	roles := map[string]sdd.Role{
 		"agents/explore.toml":         sdd.RoleResearch,
@@ -223,8 +237,8 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 15; parity: opencode-v55") || !strings.Contains(manager, "readiness-envelope/v1") || !strings.Contains(manager, currentCodexCandidateCapsuleContract) {
-		t.Fatal("current Codex manager is not v15 with readiness and Candidate Capsule")
+	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 16; parity: opencode-v56") || !strings.Contains(manager, "readiness-envelope/v1") || !strings.Contains(manager, currentCodexCandidateCapsuleContract) {
+		t.Fatal("current Codex manager is not v16 with readiness and Candidate Capsule")
 	}
 	predecessor, err := renderActiveV13("v1.2.3", sdd.PlanMedium)
 	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 13; parity: opencode-v53") {
@@ -272,7 +286,7 @@ func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	const openCodeV54Marker = "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 54 -->"
+	const openCodeV54Marker = "<!-- managed-by: vgxness; artifact: opencode-agent/vgxness-manager; version: 55 -->"
 	// This is the complete section-by-section Codex adaptation manifest for the
 	// OpenCode v50 manager. Paragraphs are full clauses, not keyword probes.
 	sections := map[string][]string{
@@ -301,7 +315,7 @@ func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
 		t.Fatalf("read OpenCode v52 template: %v", err)
 	}
 	if !strings.Contains(string(openCodeManager), openCodeV54Marker) {
-		t.Errorf("OpenCode v54 marker %q changed; update this section map deliberately", openCodeV54Marker)
+		t.Errorf("OpenCode v55 template marker %q changed; update this section map deliberately", openCodeV54Marker)
 	}
 	for section, clauses := range sections {
 		for _, clause := range clauses {
@@ -402,7 +416,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 15; parity: opencode-v55") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 16; parity: opencode-v56") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "stacked-pr") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }
@@ -495,7 +509,7 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
 	for _, required := range []string{
-		"artifact: codex-agent/manager; version: 15; parity: opencode-v55",
+		"artifact: codex-agent/manager; version: 16; parity: opencode-v56",
 		"adaptive general-purpose partner",
 		"When the engineering route activates",
 		orchestration.ContractPolicy,

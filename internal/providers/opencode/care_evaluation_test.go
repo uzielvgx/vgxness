@@ -50,10 +50,10 @@ func TestCAREDocumentationContract(t *testing.T) {
 		"docs/care.md":                  {"CARE is the default for non-exempt work", "Standard allocates a reviewer", "elevated allocates a reviewer plus specialist", "critical allocates all three roles", "required attempts are respectively 3, 4, and 5", "exact frozen Review Binding", "one bounded manager-assigned assurance domain", "at most five stable typed targets", "corroborated, refuted, or inconclusive", "without inventing scope, findings, or fixes", "OpenCode currently has 13 agents", "Codex currently has `AGENTS.md` plus 12 delegated profiles", "no current fixed-lens aliases"},
 		"docs/care-evaluation.md":       {"Direct covers no-tool conversation, writing, and planning", "Assisted covers bounded exact reads and evidence work", "authorized actions", "ordinary engineering", "assured high-risk work", "positive routing", "negative non-activation", "ambiguous requests", "adversarial", "coexistence", "critical cases"},
 		"docs/orchestration-flow.md":    {"CARE records the route, risk, evidence ledger"},
-		"docs/opencode-integration.md":  {"16 managed artifacts", "13 agents", "manager v55", "manager-v54 package is the immediate predecessor", "manager-v53/verifier-v6", "verifier v7", "three CARE v1 roles", "six SDD roles"},
-		"docs/codex-integration.md":     {"12 delegated profiles", "Manager v15", "OpenCode v55 parity", "care-reviewer", "care-specialist", "care-challenger"},
-		"docs/opencode-setup-wizard.md": {"16 OpenCode-managed artifacts", "13 agents", "manager v55", "Runtime evidence is observed on macOS only"},
-		"docs/go-implementation.md":     {"16 managed artifacts", "manager v55", "manager-v54 immediate predecessor", "manager-v53/verifier-v6 deeper lifecycle identity", "manager v15", "manager v14 artifact validated as its immediate historical predecessor", "manager v13 retained as a deeper lifecycle identity", "12 delegated profiles", "not a Go provider runtime or a new schema/transport surface"},
+		"docs/opencode-integration.md":  {"16 managed artifacts", "13 agents", "manager v56", "manager-v55 package is the immediate predecessor", "manager-v54/verifier-v6", "verifier v7", "three CARE v1 roles", "six SDD roles"},
+		"docs/codex-integration.md":     {"12 delegated profiles", "Manager v16", "parity OpenCode manager v56", "care-reviewer", "care-specialist", "care-challenger"},
+		"docs/opencode-setup-wizard.md": {"16 OpenCode-managed artifacts", "13 agents", "manager v56", "Runtime evidence is observed on macOS only"},
+		"docs/go-implementation.md":     {"16 managed artifacts", "Manager v56", "manager-v55 immediate predecessor", "manager-v54/verifier-v6 deeper lifecycle identity", "manager v16", "manager v15 artifact validated as its immediate historical predecessor", "manager v14 retained as a deeper lifecycle identity", "12 delegated profiles", "not a Go provider runtime or a new schema/transport surface"},
 		"docs/self-install.md":          {"predecessors only for lifecycle and upgrade handling"},
 		"docs/legacy-compatibility.md":  {"no current fixed-lens aliases"},
 	}
@@ -71,7 +71,7 @@ func TestCAREDocumentationContract(t *testing.T) {
 	}
 	for _, doc := range []string{"docs/opencode-integration.md", "docs/codex-integration.md", "docs/opencode-setup-wizard.md", "docs/go-implementation.md"} {
 		body, _ := os.ReadFile(filepath.Join(root, doc))
-		for _, stale := range []string{"Current delivery policy is manager v53", "Current manager v13", "currently owns 18 managed artifacts", "currently owns only `AGENTS.md` and 14 files"} {
+		for _, stale := range []string{"Current delivery policy is manager v55", "The current generated manager is v15", "The exact manager-v54 package is the immediate predecessor", "its exact v14 artifact is the immediate predecessor", "manager v55 with global tool permission", "Manager v15 shares OpenCode v55's provider-neutral prompt contract", "manager v15 has OpenCode v55 parity", "For an eligible implementation task, manager v55", "The integration is installed only when manager v55"} {
 			if strings.Contains(string(body), stale) {
 				t.Errorf("%s retains stale current guidance: %q", doc, stale)
 			}

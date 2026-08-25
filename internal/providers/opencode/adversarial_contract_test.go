@@ -109,7 +109,7 @@ func safeContractPath(value string) bool {
 }
 
 func TestGeneratedReviewAndSDDContractsHaveRoleSpecificClauses(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestGeneratedReviewAndSDDContractsHaveRoleSpecificClauses(t *testing.T) {
 }
 
 func TestGeneratedPromptExamplesHaveStructuralContracts(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestGeneratedManagerGeneralVerifierContractClauses(t *testing.T) {
 }
 
 func TestGeneratedRepositoryChildrenValidateAndEchoContextCapsule(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +455,7 @@ func hasContractSymlink(root, relative string) bool {
 }
 
 func TestGeneratedPermissionMapsAndHoldoutMetadataLeakage(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}

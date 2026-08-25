@@ -689,7 +689,7 @@ func (m *Model) resetSetupAssignments() {
 }
 
 func (m *Model) seedSetupAssignments(plan SetupPlan) {
-	ordered, ok := orderedSetupAssignments(plan.ModelAssignments)
+	ordered, ok := canonicalSetupAssignments(plan.ModelAssignments)
 	if !ok {
 		return
 	}
@@ -1249,11 +1249,21 @@ func setupPlanModelProfile(plan SetupPlan, width int) []string {
 	if plan.ModelAssignments != nil {
 		lines := []string{"EXACT AGENT ASSIGNMENTS"}
 		ordered, ok := orderedSetupAssignments(plan.ModelAssignments)
+		if plan.ModelSchemaVersion < 3 {
+			ordered, ok = canonicalSetupAssignments(plan.ModelAssignments)
+		}
 		if !ok {
 			return append(lines, "! Invalid agent identity set; exact profile not applied.")
 		}
 		for index, row := range ordered {
-			lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Model, []string{
+			name := setupAgentRows[index].Name
+			for _, identity := range setupAgentRows {
+				if identity.ArtifactKey == row.ArtifactKey {
+					name = identity.Name
+					break
+				}
+			}
+			lines = appendSetupAssignmentProfile(lines, name, row.Model, []string{
 				"requested=" + row.RequestedEffort, "effective=" + row.Effort, "variant=" + row.Variant,
 				"source=" + row.Source, "availability=" + row.Availability,
 			}, width)
@@ -1323,24 +1333,46 @@ func appendSetupWrapped(lines []string, prefix, value string, width int) []strin
 }
 
 func orderedSetupAssignments(rows *[SetupModelAssignmentCount]SetupModelAssignment) ([SetupModelAssignmentCount]SetupModelAssignment, bool) {
-	var ordered [SetupModelAssignmentCount]SetupModelAssignment
 	if rows == nil {
-		return ordered, false
+		return [SetupModelAssignmentCount]SetupModelAssignment{}, false
 	}
+	seen := make(map[string]struct{}, SetupModelAssignmentCount)
 	for _, row := range rows {
-		index := -1
-		for candidate, identity := range setupAgentRows {
+		valid := false
+		for _, identity := range setupAgentRows {
 			if row.ArtifactKey == identity.ArtifactKey && row.Role == identity.Role && row.Class == identity.Class {
-				index = candidate
+				valid = true
 				break
 			}
 		}
-		if index < 0 || ordered[index].ArtifactKey != "" {
+		if !valid {
 			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
 		}
-		ordered[index] = row
+		if _, duplicate := seen[row.ArtifactKey]; duplicate {
+			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
+		}
+		seen[row.ArtifactKey] = struct{}{}
 	}
-	return ordered, true
+	return *rows, len(seen) == SetupModelAssignmentCount
+}
+
+// canonicalSetupAssignments is retained for schema v1/v2 editor compatibility.
+// Schema v3 displays the provider-returned order through orderedSetupAssignments.
+func canonicalSetupAssignments(rows *[SetupModelAssignmentCount]SetupModelAssignment) ([SetupModelAssignmentCount]SetupModelAssignment, bool) {
+	returned, ok := orderedSetupAssignments(rows)
+	if !ok {
+		return returned, false
+	}
+	var canonical [SetupModelAssignmentCount]SetupModelAssignment
+	for _, row := range returned {
+		for index, identity := range setupAgentRows {
+			if row.ArtifactKey == identity.ArtifactKey {
+				canonical[index] = row
+				break
+			}
+		}
+	}
+	return canonical, true
 }
 
 func setupResultHasKnownState(result SetupResult) bool {

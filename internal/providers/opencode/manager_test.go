@@ -19,12 +19,12 @@ description: Use when autonomously delivering an eligible change as one review-r
 func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	if len(bundle.agents) != 15 || len(bundle.resolved.Roles) != 14 {
+	if len(bundle.agents) != 13 || len(bundle.resolved.Roles) != 12 {
 		t.Fatalf("current bundle agents=%d roles=%d", len(bundle.agents), len(bundle.resolved.Roles))
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 55",
+		"artifact: opencode-agent/vgxness-manager; version: 56",
 		currentManagerCandidateCapsuleContract,
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
@@ -69,45 +69,35 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 }
 
-func TestVersionEvolutionImmediatePredecessorIsExactV54Package(t *testing.T) {
+func TestVersionEvolutionImmediatePredecessorIsExactV55Package(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
-	for name, markers := range map[string][2]string{managerAgentName: {"artifact: opencode-agent/vgxness-manager; version: 55", "artifact: opencode-agent/vgxness-manager; version: 54"}} {
-		currentMarker, previousMarker := markers[0], markers[1]
-		currentAgent, predecessorAgent := current.agents[name], predecessor.agents[name]
-		if bytes.Count(currentAgent, []byte(currentMarker)) != 1 || bytes.Count(currentAgent, []byte(previousMarker)) != 0 {
-			t.Fatalf("current %s marker cardinality is invalid", name)
-		}
-		if bytes.Count(predecessorAgent, []byte(previousMarker)) != 1 || bytes.Count(predecessorAgent, []byte(currentMarker)) != 0 {
-			t.Fatalf("predecessor %s marker cardinality is invalid", name)
-		}
-		want := bytes.Replace(currentAgent, []byte(currentMarker), []byte(previousMarker), 1)
-		want = bytes.Replace(want, []byte("\n\n"+currentManagerCandidateCapsuleContract), nil, 1)
-		if !bytes.Equal(predecessorAgent, want) {
-			t.Fatalf("%s predecessor changed bytes beyond its marker", name)
-		}
+	historical := mustLegacyFixedLensBundle(t, current)
+	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 56")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 55")) {
+		t.Fatal("immediate predecessor did not convert CARE to the historical fixed-lens package")
 	}
-	for name, agent := range current.agents {
-		if name != managerAgentName && !bytes.Equal(agent, predecessor.agents[name]) {
-			t.Fatalf("unaffected agent %s changed in immediate predecessor", name)
+	for name, want := range historical.agents {
+		if !bytes.Equal(predecessor.agents[name], want) {
+			t.Fatalf("historical agent %s changed in immediate predecessor", name)
 		}
 	}
 }
 
 func TestV54PreservesV53ThenV51ReliabilityPredecessorsAndSkillReceipts(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	testutil.NoError(t, err)
-	if !bytes.Contains(current.agents[reviewReliabilityName], []byte("artifact: opencode-agent/vgxness-review-reliability; version: 5")) {
+	historical := mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
+	if !bytes.Contains(historical.agents[reviewReliabilityName], []byte("artifact: opencode-agent/vgxness-review-reliability; version: 5")) {
 		t.Fatal("current reliability identity is not v5")
 	}
 	for _, required := range []string{"Before candidate inspection", "receipt naming it and status loaded|unavailable", "missing/unavailable is INCONCLUSIVE"} {
-		if !bytes.Contains(current.agents[reviewReliabilityName], []byte(required)) {
+		if !bytes.Contains(historical.agents[reviewReliabilityName], []byte(required)) {
 			t.Errorf("reliability contract missing %q", required)
 		}
 	}
-	predecessor, err := previousV53ModelPlanBundle(current)
+	v54, err := previousV54ModelPlanBundle(historical)
+	testutil.NoError(t, err)
+	predecessor, err := previousV53ModelPlanBundle(v54)
 	testutil.NoError(t, err)
 	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("artifact: opencode-agent/vgxness-manager; version: 53")) || !bytes.Contains(predecessor.agents[reviewReliabilityName], []byte("artifact: opencode-agent/vgxness-review-reliability; version: 5")) {
 		t.Fatal("exact v53/reliability-v5 deeper predecessor is not preserved")
@@ -118,14 +108,15 @@ func TestV54UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	for _, required := range []string{"version: 55", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
+	historical := mustLegacyFixedLensBundle(t, current)
+	for _, required := range []string{"version: 56", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
 		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
 			t.Errorf("manager missing compact protocol %q", required)
 		}
 	}
-	v45, err := previousV45ModelPlanBundle(current)
+	v45, err := previousV45ModelPlanBundle(historical)
 	testutil.NoError(t, err)
-	if got, minimum := len(predecessorBundlesMust(t, current)), 60; got < minimum {
+	if got, minimum := len(predecessorBundlesMust(t, historical)), 60; got < minimum {
 		t.Fatalf("predecessor bundles=%d, want at least %d", got, minimum)
 	}
 	if !bytes.Contains(v45.agents[managerAgentName], []byte("artifact: opencode-agent/vgxness-manager; version: 45")) ||
@@ -137,7 +128,7 @@ func TestV54UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 	v43, err := previousV43ModelPlanBundle(v44)
 	testutil.NoError(t, err)
 	for _, name := range compactProtocolAgentNames {
-		if !bytes.Contains(v43.agents[name], []byte("version: 2")) || bytes.Equal(v43.agents[name], current.agents[name]) {
+		if !bytes.Contains(v43.agents[name], []byte("version: 2")) || bytes.Equal(v43.agents[name], historical.agents[name]) {
 			t.Errorf("%s was not reconstructed from the exact v2 profile", name)
 		}
 	}
@@ -193,14 +184,13 @@ func TestCurrentAndPredecessorProfileSnapshotsHaveFixedDigestsAndExactBoundShape
 			}
 		})
 	}
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	testutil.NoError(t, err)
-	v44, err := previousV44ModelPlanBundle(current)
+	historical := mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
+	v44, err := previousV44ModelPlanBundle(historical)
 	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(v44)
 	testutil.NoError(t, err)
 	for _, name := range compactProtocolAgentNames {
-		if !isManagedPredecessor(v43.agents[name], current.agents[name], [][]byte{v43.agents[name]}, nil) {
+		if !isManagedPredecessor(v43.agents[name], historical.agents[name], [][]byte{v43.agents[name]}, nil) {
 			t.Fatalf("%s v43 stream is not an exact predecessor", name)
 		}
 	}
@@ -496,7 +486,7 @@ func TestReadinessV54RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 55",
+		"artifact: opencode-agent/vgxness-manager; version: 56",
 		"bounded simple exact reads use at most three total tool attempts and no delegation or todo",
 		"complex evidence research may use at most one read-only delegation",
 		"For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`.",
@@ -575,7 +565,7 @@ func TestReadinessV54ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV53The
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 55",
+		"artifact: opencode-agent/vgxness-manager; version: 56",
 		"adaptive general-purpose partner",
 		"When the engineering route activates",
 		orchestration.ContractPolicy,
@@ -591,31 +581,33 @@ func TestReadinessV54ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV53The
 		}
 	}
 	predecessors := managerPredecessorsMust(t, bundle)
-	if len(predecessors) < 6 || !bytes.Contains(predecessors[0], []byte("artifact: opencode-agent/vgxness-manager; version: 54")) || !bytes.Contains(predecessors[1], []byte("artifact: opencode-agent/vgxness-manager; version: 53")) || !bytes.Contains(predecessors[2], []byte("artifact: opencode-agent/vgxness-manager; version: 52")) || !bytes.Contains(predecessors[2], []byte(adaptiveManagerMemoryPolicy)) || !bytes.Contains(predecessors[2], []byte("Context Capsule v1")) {
-		t.Fatal("exact v54, v53, then v52 predecessors with context continuity are not first")
+	if len(predecessors) < 7 || !bytes.Contains(predecessors[0], []byte("artifact: opencode-agent/vgxness-manager; version: 55")) || !bytes.Contains(predecessors[1], []byte("artifact: opencode-agent/vgxness-manager; version: 54")) || !bytes.Contains(predecessors[2], []byte("artifact: opencode-agent/vgxness-manager; version: 53")) || !bytes.Contains(predecessors[3], []byte("artifact: opencode-agent/vgxness-manager; version: 52")) || !bytes.Contains(predecessors[3], []byte(adaptiveManagerMemoryPolicy)) || !bytes.Contains(predecessors[3], []byte("Context Capsule v1")) {
+		t.Fatal("exact v55, v54, v53, then v52 predecessors with context continuity are not first")
 	}
-	if !bytes.Contains(predecessors[5], []byte("artifact: opencode-agent/vgxness-manager; version: 49")) || !bytes.Contains(predecessors[5], []byte(adaptiveManagerMemoryPolicy)) || bytes.Contains(predecessors[5], []byte("Context Capsule v1")) {
-		t.Fatal("exact context-free v49 predecessor with intent-triggered memory semantics is not sixth")
+	if !bytes.Contains(predecessors[6], []byte("artifact: opencode-agent/vgxness-manager; version: 49")) || !bytes.Contains(predecessors[6], []byte(adaptiveManagerMemoryPolicy)) || bytes.Contains(predecessors[6], []byte("Context Capsule v1")) {
+		t.Fatal("exact context-free v49 predecessor with intent-triggered memory semantics is not seventh")
 	}
 }
 
 func TestVersionEvolutionUsesOnlyManagedHEADPredecessors(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	historical, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
 	for name, marker := range map[string]string{
-		managerAgentName:      "artifact: opencode-agent/vgxness-manager; version: 55",
-		generalAgentName:      "artifact: opencode-agent/general; version: 10",
-		exploreAgentName:      "artifact: opencode-agent/explore; version: 4",
-		verifierAgentName:     "artifact: opencode-agent/vgxness-verifier; version: 7",
-		reviewRiskName:        "artifact: opencode-agent/vgxness-review-risk; version: 4",
-		reviewReadabilityName: "artifact: opencode-agent/vgxness-review-readability; version: 4",
-		reviewReliabilityName: "artifact: opencode-agent/vgxness-review-reliability; version: 5",
-		reviewResilienceName:  "artifact: opencode-agent/vgxness-review-resilience; version: 4",
-		reviewRefuterName:     "artifact: opencode-agent/vgxness-review-refuter; version: 4",
-		sddApplyName:          "artifact: opencode-agent/vgxness-sdd-apply; version: 7",
+		managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 56",
+		generalAgentName:  "artifact: opencode-agent/general; version: 10",
+		exploreAgentName:  "artifact: opencode-agent/explore; version: 4",
+		verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 7",
+		sddApplyName:      "artifact: opencode-agent/vgxness-sdd-apply; version: 7",
 	} {
 		if !bytes.Contains(current.agents[name], []byte(marker)) {
 			t.Errorf("current %s missing %q", name, marker)
+		}
+	}
+	for name, marker := range map[string]string{reviewRiskName: "artifact: opencode-agent/vgxness-review-risk; version: 4", reviewReadabilityName: "artifact: opencode-agent/vgxness-review-readability; version: 4", reviewReliabilityName: "artifact: opencode-agent/vgxness-review-reliability; version: 5", reviewResilienceName: "artifact: opencode-agent/vgxness-review-resilience; version: 4", reviewRefuterName: "artifact: opencode-agent/vgxness-review-refuter; version: 4"} {
+		if !bytes.Contains(historical.agents[name], []byte(marker)) {
+			t.Errorf("historical %s missing %q", name, marker)
 		}
 	}
 	bundles := predecessorBundlesMust(t, current)

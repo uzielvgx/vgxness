@@ -1377,6 +1377,15 @@ func assignmentSetupPlan(schema int) SetupPlan {
 	return plan
 }
 
+func TestSchemaV3PreservesProviderReturnedAssignmentOrder(t *testing.T) {
+	plan := assignmentSetupPlan(3)
+	plan.ModelAssignments[0], plan.ModelAssignments[1] = plan.ModelAssignments[1], plan.ModelAssignments[0]
+	rows, ok := orderedSetupAssignments(plan.ModelAssignments)
+	if !ok || rows[0].ArtifactKey != plan.ModelAssignments[0].ArtifactKey {
+		t.Fatalf("schema v3 reordered provider-returned assignments")
+	}
+}
+
 func openSetupRoute(t *testing.T, model Model) (Model, tea.Cmd) {
 	t.Helper()
 	model = updateModel(t, model, keyPress("g"))

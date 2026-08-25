@@ -89,6 +89,11 @@ func knownPackages() ([]Package, error) {
 			return nil, err
 		}
 		packages = append(packages, current)
+		v15, err := renderActiveV15("v0.0.0", plan)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, v15)
 		v14, err := renderActiveV14("v0.0.0", plan)
 		if err != nil {
 			return nil, err

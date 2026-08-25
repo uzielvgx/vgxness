@@ -228,6 +228,20 @@ func TestRenderModelSlotsWrapsMaximumReferenceWithoutLoss(t *testing.T) {
 	}
 }
 
+func TestRenderModelSlotsV3UsesAssignmentOrderAndOmitsLegacySlots(t *testing.T) {
+	assignments := new([integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3)
+	assignments[0] = sdd.OpenCodeAgentAssignmentV3{ArtifactKey: "agents/first.md", Provider: "alpha", Model: "alpha/first", RequestedEffort: sdd.EffortUltra, Effort: sdd.EffortHigh, Variant: sdd.VariantXHigh, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown, Degradation: sdd.Degradation{Degraded: true, Reason: "bounded"}}
+	assignments[1] = sdd.OpenCodeAgentAssignmentV3{ArtifactKey: "agents/second.md", Provider: "beta", Model: "beta/second", RequestedEffort: sdd.EffortLow, Effort: sdd.EffortLow, Variant: sdd.VariantLow, Source: sdd.ModelSlotCatalog, Availability: sdd.ModelSlotCatalogKnown}
+	var output bytes.Buffer
+	renderModelSlots(&output, integration.Result{ModelSchemaVersion: 3, ModelAssignments: assignments})
+	got := output.String()
+	first := "  Assignment artifact_key=agents/first.md provider=alpha model=alpha/first requested_effort=ultra effective_effort=high variant=xhigh source=custom availability=unknown degradation=bounded\n"
+	second := "  Assignment artifact_key=agents/second.md provider=beta model=beta/second requested_effort=low effective_effort=low variant=low source=catalog availability=catalog-known\n"
+	if !strings.Contains(got, first) || !strings.Contains(got, second) || strings.Index(got, first) > strings.Index(got, second) || strings.Contains(got, "Slot efficient") {
+		t.Fatalf("assignments=%q", got)
+	}
+}
+
 func TestSetupWizardRequiresExplicitConfirmation(t *testing.T) {
 	for _, test := range []struct {
 		name       string
