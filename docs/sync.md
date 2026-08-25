@@ -37,7 +37,9 @@ across the process and at most 60 per minute for each syntactically declared
 device UUID. Excess attempts receive the normal
 `429 limit_exceeded` response and do not reach PostgreSQL. The UUID fairness
 state is capped at 256 entries and is process-local, so deployments with
-multiple daemon processes enforce the bound independently.
+multiple daemon processes enforce the bound independently. These settings are not a
+distributed rate limiter: a multi-process deployment needs independently operated
+upstream admission control if it requires a fleet-wide limit.
 
 Failed-authentication audit evidence converges toward a 30-day retained window
 and 10,000 events for the configured owner. Cleanup runs only in a failed

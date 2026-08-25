@@ -311,25 +311,48 @@ func TestUnreleasedChangelogManagedArtifactVersions(t *testing.T) {
 	if nextSection := strings.Index(unreleased, "\n## "); nextSection >= 0 {
 		unreleased = unreleased[:nextSection]
 	}
-	for _, fact := range []struct {
-		pattern string
-		current string
-	}{
-		{`\b[0-9]+ managed artifacts\b`, "18 managed artifacts"},
-		{`\bOpenCode manager v[0-9]+\b`, "OpenCode manager v49"},
-		{`\bCodex manager v[0-9]+\b`, "Codex manager v9"},
-		{"`general` v[0-9]+\\b", "`general` v6"},
-		{`\bverifier v[0-9]+\b`, "verifier v4"},
-		{"`explore` v[0-9]+\\b", "`explore` v2"},
+	for _, current := range []string{
+		"16 managed artifacts",
+		"manager v56",
+		"Codex manager v16",
+		"`general` v10",
+		"verifier v7",
+		"`explore` v4",
 	} {
-		matches := regexp.MustCompile(fact.pattern).FindAllString(unreleased, -1)
-		if len(matches) == 0 {
-			t.Errorf("Unreleased section missing current managed artifact fact %q", fact.current)
+		if !strings.Contains(unreleased, current) {
+			t.Errorf("Unreleased section missing current managed artifact fact %q", current)
 		}
-		for _, match := range matches {
-			if match != fact.current {
-				t.Errorf("Unreleased section contains managed artifact fact %q, want %q", match, fact.current)
+	}
+	for _, stale := range []string{
+		"18 managed artifacts",
+		"OpenCode manager v49",
+		"Codex manager v9",
+		"`general` v6",
+		"verifier v4",
+		"`explore` v2",
+	} {
+		for _, line := range strings.Split(unreleased, "\n") {
+			if strings.Contains(line, stale) && !strings.Contains(line, "Earlier in this unreleased cycle") {
+				t.Errorf("Unreleased section presents stale managed artifact fact %q as current", stale)
 			}
+		}
+	}
+}
+
+func TestDocumentedDockerAdmissionBoundary(t *testing.T) {
+	compose := readRepositoryFile(t, "../../deploy/docker/compose.yaml")
+	for _, want := range []string{
+		"VGXNESS_SYNC_AUTH_GLOBAL_PER_MINUTE: \"120\"",
+		"VGXNESS_SYNC_AUTH_DEVICE_PER_MINUTE: \"60\"",
+		"VGXNESS_SYNC_AUTH_DEVICE_STATES: \"256\"",
+	} {
+		if !strings.Contains(compose, want) {
+			t.Errorf("Docker deployment omits admission default %q", want)
+		}
+	}
+	for _, path := range []string{"../../deploy/docker/README.md", "../../docs/sync.md"} {
+		if !strings.Contains(readRepositoryFile(t, path), "rate limit") {
+			t.Errorf("%s omits the distributed admission-limit boundary", path)
 		}
 	}
 }
