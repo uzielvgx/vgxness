@@ -5,6 +5,8 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,10 +116,18 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		{"sdd-lifecycle", "Load `sdd-lifecycle` before creating an accepted SDD change"},
 		{"managed catalog", "managed global portable catalog"},
 		{"same-name collision", "same-name/project-local skill collides"},
+		{"strict CARE terminal rule", "A non-exempt candidate is VERIFIED only with same-candidate verifier and applicable CARE evidence."},
+		{"strict CARE implementation rule", "Every non-exempt implementation must freeze, pass the native verifier, and complete its applicable CARE matrix before terminal success; IMPLEMENTED may be reported only as an intermediate state."},
 	} {
 		if !bytes.Contains(managerData, []byte(required.value)) {
 			t.Errorf("installed manager is missing %s clause %q", required.name, required.value)
 		}
+	}
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 56")); got != 1 {
+		t.Fatalf("installed current manager v56 marker count=%d, want 1", got)
+	}
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 55")); got != 0 {
+		t.Fatalf("installed current manager retains v55 marker count=%d, want 0", got)
 	}
 	if bytes.Contains(managerData, []byte("automatically load `vgxness-autonomous-stacked-pr`")) {
 		t.Fatal("installed manager retains retired vgxness-autonomous-stacked-pr loading")
@@ -127,6 +137,48 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		if err != nil || !bytes.Contains(manifestData, []byte(expected)) {
 			t.Fatalf("setup did not install the expected v3 manifest content %q: %v\n%s", expected, err, manifestData)
 		}
+	}
+	predecessorManager := deriveExactV55Manager(t, managerData)
+	type manifest struct {
+		SchemaVersion int                    `json:"schemaVersion"`
+		ManagedBy     string                 `json:"managedBy"`
+		Config        *sdd.ModelPlanConfig   `json:"config,omitempty"`
+		Resolved      *sdd.OpenCodePlan      `json:"resolved,omitempty"`
+		ConfigV2      *sdd.ModelPlanConfigV2 `json:"configV2,omitempty"`
+		ResolvedV2    *sdd.OpenCodePlanV2    `json:"resolvedV2,omitempty"`
+		ConfigV3      *sdd.ModelPlanConfigV3 `json:"configV3,omitempty"`
+		ResolvedV3    *sdd.OpenCodePlanV3    `json:"resolvedV3,omitempty"`
+		Artifacts     map[string]string      `json:"artifacts"`
+	}
+	var predecessorManifest manifest
+	if err := json.Unmarshal(manifestData, &predecessorManifest); err != nil {
+		t.Fatalf("decode current manifest: %v", err)
+	}
+	digest := sha256.Sum256([]byte(predecessorManager))
+	predecessorManifest.Artifacts["agents/vgxness-manager.md"] = hex.EncodeToString(digest[:])
+	predecessorManifestData, err := json.MarshalIndent(predecessorManifest, "", "  ")
+	if err != nil {
+		t.Fatalf("encode exact v55 manifest: %v", err)
+	}
+	predecessorManifestData = append(predecessorManifestData, '\n')
+	if err := os.WriteFile(manager, []byte(predecessorManager), 0o600); err != nil {
+		t.Fatalf("seed exact v55 manager: %v", err)
+	}
+	manifestPath := filepath.Join(configDirectory, "vgxness", "model-plan.json")
+	if err := os.WriteFile(manifestPath, predecessorManifestData, 0o600); err != nil {
+		t.Fatalf("seed exact v55 manifest: %v", err)
+	}
+	run(t, environment, workspace, sourceExecutable,
+		"setup", "opencode", "--yes", "--workspace", workspace,
+		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
+	)
+	upgradedManager, err := os.ReadFile(manager)
+	if err != nil || !bytes.Equal(upgradedManager, managerData) {
+		t.Fatalf("exact v55 manager did not upgrade to captured v56 bytes: %v", err)
+	}
+	upgradedManifest, err := os.ReadFile(manifestPath)
+	if err != nil || !bytes.Equal(upgradedManifest, manifestData) {
+		t.Fatalf("exact v55 manifest did not upgrade to captured v56 bytes: %v", err)
 	}
 	generalData, generalErr := os.ReadFile(general)
 	exploreData, exploreErr := os.ReadFile(explore)
@@ -201,6 +253,26 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(homeDirectory, ".vgxness", "memory.db")); err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("global project-isolated memory store is missing: info=%v err=%v", info, err)
 	}
+}
+
+func deriveExactV55Manager(t *testing.T, current []byte) string {
+	t.Helper()
+	value := string(current)
+	replacements := [][2]string{
+		{"artifact: opencode-agent/vgxness-manager; version: 56", "artifact: opencode-agent/vgxness-manager; version: 55"},
+		{"Every non-exempt implementation must freeze, pass the native verifier, and complete its applicable CARE matrix before terminal success; IMPLEMENTED may be reported only as an intermediate state. Static proof must establish that the entire change is passive documentation or images with no behavior, configuration, permission, or generated-output effect; extension or location alone is insufficient. A non-exempt candidate is VERIFIED only with same-candidate verifier and applicable CARE evidence.", "For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`. Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs."},
+		{"every selected CARE role echoes the complete binding unchanged, and missing evidence is not success.", "every reviewer and refuter echoes the complete binding unchanged, and missing evidence is not success."},
+		{"Copy that exact Review Binding unchanged to verifier, every selected CARE role, and scoped validation;", "Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation;"},
+		{"reviewers analyze that same candidate and the CARE challenger handles severe inferential findings.", "reviewers analyze that same candidate and the refuter handles only severe inferential findings."},
+		{"Current CARE review is strict: only proven passive documentation or images are exempt. Each non-exempt candidate uses matrix: standard requires CARE reviewer; elevated requires CARE reviewer and CARE specialist; critical requires CARE reviewer, CARE specialist, and CARE challenger. Verifier and CARE reviewers assess same candidate. At most one correction transaction and one scoped validation are permitted. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet.", "Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use vgxness-review-risk, vgxness-review-readability, vgxness-review-reliability, and vgxness-review-resilience only on the same candidate; send only supplied severe inferential finding IDs to vgxness-review-refuter in one batch; permit at most one correction transaction and one scoped validation. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet."},
+	}
+	for _, replacement := range replacements {
+		if got := strings.Count(value, replacement[0]); got != 1 {
+			t.Fatalf("exact v55 derivation anchor %q count=%d, want 1", replacement[0], got)
+		}
+		value = strings.Replace(value, replacement[0], replacement[1], 1)
+	}
+	return value
 }
 
 func reviewerPaths(configDirectory string, names []string) []string {

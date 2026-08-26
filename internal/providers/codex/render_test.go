@@ -246,6 +246,71 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 	}
 }
 
+func TestCurrentCAREContractIsStrictAndV55RemainsHistorical(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := string(artifact(t, pkg, "AGENTS.md").Bytes)
+	for _, required := range []string{
+		"Current CARE review is strict: only proven passive documentation or images",
+		"standard requires CARE reviewer; elevated requires CARE reviewer and CARE specialist; critical requires CARE reviewer, CARE specialist, and CARE challenger",
+		"A non-exempt candidate is VERIFIED only with same-candidate verifier and applicable CARE evidence.",
+		"Every non-exempt implementation must freeze, pass the native verifier, and complete its applicable CARE matrix before terminal success; IMPLEMENTED may be reported only as an intermediate state.",
+		"Static proof must establish that the entire change is passive documentation or images with no behavior, configuration, permission, or generated-output effect; extension or location alone is insufficient.",
+	} {
+		if !strings.Contains(current, required) {
+			t.Errorf("current manager missing strict CARE clause %q", required)
+		}
+	}
+	if strings.Contains(current, "one General mission plus Manager readback may conclude IMPLEMENTED; do not automatically freeze") {
+		t.Fatal("current manager retains the low-risk IMPLEMENTED terminal bypass")
+	}
+	for _, forbidden := range []string{"the refuter handles only severe inferential findings", "every reviewer and refuter echoes"} {
+		if strings.Contains(current, forbidden) {
+			t.Fatalf("current manager retains legacy refuter routing %q", forbidden)
+		}
+	}
+	if strings.Contains(strings.ToLower(current), "refuter") {
+		t.Fatal("current manager retains a refuter token")
+	}
+	if !strings.Contains(current, "CARE challenger handles severe inferential findings") || !strings.Contains(current, "every selected CARE role echoes") {
+		t.Fatal("current manager lacks CARE-only review routing")
+	}
+	predecessor, err := renderActiveV15("v1.2.3", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical := string(artifact(t, predecessor, "AGENTS.md").Bytes)
+	if !strings.Contains(historical, "artifact: codex-agent/manager; version: 15; parity: opencode-v55") || strings.Contains(historical, "Current CARE review is strict") || !strings.Contains(historical, "one General mission plus Manager readback may conclude IMPLEMENTED; do not automatically freeze") {
+		t.Fatal("v55 predecessor does not reverse the current CARE contract exactly")
+	}
+	if !strings.Contains(historical, "the refuter handles only severe inferential findings") || !strings.Contains(historical, "every reviewer and refuter echoes") {
+		t.Fatal("v55 predecessor lost legacy refuter routing")
+	}
+}
+
+func TestCurrentManagerAnchorValidationRejectsAbsentAndDuplicateAnchors(t *testing.T) {
+	for name, template := range map[string]string{
+		"absent assurance":          strings.Replace(managerInstructions, historicalCodexCAREBypass, "", 1),
+		"duplicate assurance":       managerInstructions + historicalCodexCAREBypass,
+		"absent review":             strings.Replace(managerInstructions, historicalFixedLensReviewDepth, "", 1),
+		"duplicate review":          managerInstructions + historicalFixedLensReviewDepth,
+		"absent refuter route":      strings.Replace(managerInstructions, historicalCodexRefuterRouting, "", 1),
+		"duplicate refuter route":   managerInstructions + historicalCodexRefuterRouting,
+		"absent refuter binding":    strings.Replace(managerInstructions, historicalCodexRefuterBinding, "", 1),
+		"duplicate refuter binding": managerInstructions + historicalCodexRefuterBinding,
+		"absent refuter handoff":    strings.Replace(managerInstructions, historicalCodexRefuterHandoff, "", 1),
+		"duplicate refuter handoff": managerInstructions + historicalCodexRefuterHandoff,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateCurrentManagerAnchors(template); err == nil {
+				t.Fatal("current manager accepted malformed historical anchors")
+			}
+		})
+	}
+}
+
 func TestActiveV12PredecessorPackageRequiresExactBytes(t *testing.T) {
 	pkg, err := renderActiveV12("v1.2.3", sdd.PlanMedium)
 	if err != nil {
@@ -292,7 +357,7 @@ func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
 	sections := map[string][]string{
 		"identity-authority-routing": {
 			"You are VGXNESS Manager, the user's Codex-native adaptive general-purpose partner. When the engineering route activates, you are the sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority. Manager, managed general, verifier, and other custom agents have their configured native Codex permissions: capability never replaces user authorization, scope, ownership, or safety. Bring calm senior-engineer judgment; prefer proven reversible paths, resist overengineering, Match the language and register of the user's direct conversation, and keep technical artifacts neutral and in English by default.",
-			"Apply the shared adaptive execution contract below before acting. Handle direct and action routes yourself within their budgets. Use Explore only for complex repository evidence or diagnosis that materially benefits from read-only separation. Use managed general as the delegated implementation worker for clear authorized repository implementation, including necessary diagnosis, edits, and developmental checks; reserve Explore -> general for genuine ambiguity. Use verifier for independent final executable validation after candidate freeze; reviewers analyze that same candidate and the refuter handles only severe inferential findings. Never use a fresh general as verifier or overlap writes; retain candidate identity, evidence quality, acceptance, lifecycle, and Git authority.",
+			"Apply the shared adaptive execution contract below before acting. Handle direct and action routes yourself within their budgets. Use Explore only for complex repository evidence or diagnosis that materially benefits from read-only separation. Use managed general as the delegated implementation worker for clear authorized repository implementation, including necessary diagnosis, edits, and developmental checks; reserve Explore -> general for genuine ambiguity. Use verifier for independent final executable validation after candidate freeze; reviewers analyze that same candidate and the CARE challenger handles severe inferential findings. Never use a fresh general as verifier or overlap writes; retain candidate identity, evidence quality, acceptance, lifecycle, and Git authority.",
 			"When the shared route benefits from execution-state or user-visible tracking, use a native Codex task list; never create one merely because an answer has several steps. Keep an in-session launch log keyed by normalized goal and scope; Never launch the same task twice. A second native Codex agent launch for the same goal requires an explicit blocker, new evidence, correction, or independent assurance; resume the same child where applicable and send only the delta. Do not characterize a verifier as duplicate implementation. Parallelize only independent read-only work; keep writes and lifecycle mutations sequential. Load a native skill through the skill tool only when its specialized workflow materially improves quality, safety, or verification. Resolve interaction mode by explicit task override, durable project default recalled from VGXNESS memory, then Automatic mode. A task override applies only to the current request and never changes the project default. In Automatic mode use the safest sensible reversible default and ask only for required authorization, irreversible or high-consequence ambiguity, unavailable prerequisites, or explicit acceptance before SDD. Briefly disclose material assumptions. In Interactive mode use native Codex interaction for a consequential decision about route, architecture, behavior, scope, or testing tradeoffs, not inspectable facts. Inspect available evidence before asking: one blocking decision at a time, recommended option first, do not add an Other option, Allow multiple selections only when choices are genuinely compatible, at most one follow-up, and Never ask the user to run commands. Treat an answer as a session decision and do not ask it again. A question never grants permission or overrides a denial. When a consequential ambiguity remains unresolved, choose a safe reversible default when available or remain blocked; never continue through unsafe, irreversible, unauthorized, or consequential ambiguity.",
 		},
 		"evidence-interaction": {
@@ -304,8 +369,8 @@ func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
 		},
 		"implementation-freeze-assurance": {
 			"For an eligible Git implementation task, automatically load stacked-pr from the managed native global catalog before delegating writes: load stacked-pr and complete its required pre-write gate before any delegated workspace write or branch creation. Eligibility and narrowing restrictions come from stacked-pr; plan-only, read-only, outside-Git, or failed isolation/evidence gates do not activate routine delivery, and the detailed operational delivery policy lives only in that loaded skill. For safely testable behavior require RED -> GREEN -> REFACTOR when practical and observed RED before production changes; Do not claim TDD without observed failing evidence. For Go changes affecting installation, permissions, durability, or shared contracts require the repository-confined go fmt ./... command and focused tests before freeze, then direct verifier to run go test ./... and go vet ./... when authorized.",
-			"After general returns inspect exact diff, changed paths, status identity, and command evidence. For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude IMPLEMENTED; do not automatically freeze, invoke verifier/review, or claim VERIFIED. Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs. A source change creates a new candidate and invalidates validation and review evidence. Freeze one exact candidate identity before final validation and review without inventing a digest that excludes untracked files. Define one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria. Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation; missing, mismatched, or stale binding is INCONCLUSIVE. Verifier mission schema: the Review Binding, frozen candidate digest, digest procedure, exact changed paths, acceptance criteria, evidence scope, exact permitted commands, expected environment, and stop condition; accept only PASS, FAIL, or INCONCLUSIVE evidence echoing the complete binding and reporting the same digest before and after. Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, exact skills, verificationEvidence, and lens-specific goal, scope, nonGoals, acceptance, evidence, stop, and return contract; every reviewer and refuter echoes the complete binding unchanged, and missing evidence is not success.",
-			"Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use risk, readability, reliability, and resilience reviewers only on the same candidate; send only supplied severe inferential finding IDs to refuter in one batch; permit at most one correction transaction and one scoped validation. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet.",
+			strictCAREAssurance,
+			strictCAREReviewDepth,
 		},
 		"sdd":                {"Use SDD only after the user explicitly requests or accepts it. Load sdd-lifecycle before creating an accepted SDD change. Verify the managed global portable catalog marker <!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->; Block if provenance, source, scope, marker, or loading cannot be verified, or if a same-name/project-local skill collides; never fall back inline or accept a local skill with the same name. If sdd-lifecycle is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. Route accepted SDD apply directly to sdd-apply must bind task revision ID/digest, accepted inputs, expectedStateVersion, mission identity/replay nonce, and for every target its repository-relative allowed path, current SHA-256, and no-symlink constraint; stale, mismatched, replayed, changed, or symlinked inputs block before a write. Require exact post-write readback SHA-256. These checks reduce but do not eliminate TOCTOU risk; do not claim atomic host enforcement. Research, proposal, spec, design, and tasks phase agents are read-only; sdd-apply alone writes authorized SDD workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the sdd-lifecycle skill is the sole detailed lifecycle policy."},
 		"delivery-reporting": {"The manager is the sole Git and GitHub actor. Managed general must never branch, stage, commit, push, create a pull request, merge, return a branch, or clean delivery branches. After freeze, verification, and review, perform only native Git/GitHub operations authorized by the loaded skill and current-task authorization. Stop on ambiguity or a failed skill gate; do not invent a fallback delivery procedure. Report only observed labels IMPLEMENTED, VERIFIED, DELIVERED, MERGED, and INSTALLED: IMPLEMENTED: intended workspace changes complete and developmental checks observed; not independently verified. VERIFIED: exact frozen candidate passed independent verifier and required review. DELIVERED: exact commit was published and a new current-task PR was created and read back. MERGED: that PR was verified merged and base containment/readback succeeded. INSTALLED: merged version was installed and installation/handshake readback succeeded. Never infer a later state; never present an earlier state as a later one. Report changed files, RED/GREEN evidence, validation, review, limitations, identities when created, and Git status without raw logs. Never use destructive Git cleanup or discard unrelated work."},

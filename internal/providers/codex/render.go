@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
@@ -295,6 +296,9 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 	if !releaseVersion.MatchString(version) {
 		return Package{}, errors.New("version must be a strict v-prefixed SemVer release")
 	}
+	if err := validateCurrentManagerAnchors(managerInstructions); err != nil {
+		return Package{}, err
+	}
 	artifacts := []Artifact{{Path: "AGENTS.md", Bytes: []byte(activeManagerInstructions())}}
 	for _, item := range selected {
 		artifacts = append(artifacts, Artifact{Path: item.path, Bytes: []byte(renderProfile(item))})
@@ -311,12 +315,38 @@ func OrchestrationContractIdentity() string { return orchestration.ContractIdent
 
 func activeManagerInstructions() string {
 	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 16; parity: opencode-v56", 1)
+	value = strings.Replace(value, historicalFixedLensReviewDepth, strictCAREReviewDepth, 1)
+	value = strings.Replace(value, historicalCodexCAREBypass, strictCAREAssurance, 1)
+	value = strings.Replace(value, historicalCodexRefuterRouting, currentCodexCAREChallengerRouting, 1)
+	value = strings.Replace(value, historicalCodexRefuterBinding, currentCodexCAREBinding, 1)
+	value = strings.Replace(value, historicalCodexRefuterHandoff, currentCodexCAREHandoff, 1)
 	value = strings.Replace(value, "An SDD apply handoff to general", "Route accepted SDD apply directly to sdd-apply", 1)
 	value = strings.Replace(value, "SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections", "Research, proposal, spec, design, and tasks phase agents are read-only; sdd-apply alone writes authorized SDD workspace, OpenSpec, or hybrid projections", 1)
 	return value + "\n\n" + currentCodexContextCapsule + "\n\n" + currentCodexExpertEnsemble + nativeDelegationPolicy + "\n\n" + currentCodexCandidateCapsuleContract + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n\n" + orchestration.ReadinessManagerContract + "\n"
 }
 
+func validateCurrentManagerAnchors(value string) error {
+	if strings.Count(value, historicalCodexCAREBypass) != 1 || strings.Count(value, historicalFixedLensReviewDepth) != 1 || strings.Count(value, historicalCodexRefuterRouting) != 1 || strings.Count(value, historicalCodexRefuterBinding) != 1 || strings.Count(value, historicalCodexRefuterHandoff) != 1 {
+		return integration.ErrInvalid
+	}
+	return nil
+}
+
 const currentCodexCandidateCapsuleContract = "For every frozen, risky, verification, or SDD delegation, require one complete Candidate Capsule v1 bound to the candidate identity: candidateDigest, digestProcedure, changedPaths, baseIdentity, criterion IDs, verificationState, evidenceRefs, and openBlockers. Reject a missing, stale, malformed, oversized, or scope-mismatched capsule before launch; preserve the complete capsule unchanged in every frozen-candidate handoff."
+
+const historicalFixedLensReviewDepth = "Choose review depth after freeze: Zero lenses for proven passive documentation or images; One dominant lens for ordinary code or configuration, default reliability; Four lenses for permissions, authentication, secrets, security, payments, installers, data exposure or loss, shell/process boundaries, durability, or another concrete hot path. Use risk, readability, reliability, and resilience reviewers only on the same candidate; send only supplied severe inferential finding IDs to refuter in one batch; permit at most one correction transaction and one scoped validation. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet."
+
+const strictCAREReviewDepth = "Current CARE review is strict: only proven passive documentation or images are exempt. Each non-exempt candidate uses matrix: standard requires CARE reviewer; elevated requires CARE reviewer and CARE specialist; critical requires CARE reviewer, CARE specialist, and CARE challenger. Verifier and CARE reviewers assess same candidate. At most one correction transaction and one scoped validation are permitted. A correction changes the candidate digest and invalidates all prior validation and review evidence. Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding; never loop until reviewers become quiet."
+
+const historicalCodexCAREBypass = "For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude IMPLEMENTED; do not automatically freeze, invoke verifier/review, or claim VERIFIED. Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs."
+
+const strictCAREAssurance = "Every non-exempt implementation must freeze, pass the native verifier, and complete its applicable CARE matrix before terminal success; IMPLEMENTED may be reported only as an intermediate state. Static proof must establish that the entire change is passive documentation or images with no behavior, configuration, permission, or generated-output effect; extension or location alone is insufficient. A non-exempt candidate is VERIFIED only with same-candidate verifier and applicable CARE evidence."
+const historicalCodexRefuterRouting = "reviewers analyze that same candidate and the refuter handles only severe inferential findings."
+const currentCodexCAREChallengerRouting = "reviewers analyze that same candidate and the CARE challenger handles severe inferential findings."
+const historicalCodexRefuterBinding = "every reviewer and refuter echoes the complete binding unchanged, and missing evidence is not success."
+const currentCodexCAREBinding = "every selected CARE role echoes the complete binding unchanged, and missing evidence is not success."
+const historicalCodexRefuterHandoff = "Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation;"
+const currentCodexCAREHandoff = "Copy that exact Review Binding unchanged to verifier, every selected CARE role, and scoped validation;"
 
 func activeV14ManagerInstructions() string {
 	value := strings.Replace(activeV15ManagerInstructions(), "artifact: codex-agent/manager; version: 15; parity: opencode-v55", "artifact: codex-agent/manager; version: 14; parity: opencode-v54", 1)
@@ -324,7 +354,12 @@ func activeV14ManagerInstructions() string {
 }
 
 func activeV15ManagerInstructions() string {
-	return strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 16; parity: opencode-v56", "artifact: codex-agent/manager; version: 15; parity: opencode-v55", 1)
+	value := strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 16; parity: opencode-v56", "artifact: codex-agent/manager; version: 15; parity: opencode-v55", 1)
+	value = strings.Replace(value, strictCAREAssurance, historicalCodexCAREBypass, 1)
+	value = strings.Replace(value, currentCodexCAREChallengerRouting, historicalCodexRefuterRouting, 1)
+	value = strings.Replace(value, currentCodexCAREBinding, historicalCodexRefuterBinding, 1)
+	value = strings.Replace(value, currentCodexCAREHandoff, historicalCodexRefuterHandoff, 1)
+	return strings.Replace(value, strictCAREReviewDepth, historicalFixedLensReviewDepth, 1)
 }
 
 func activeV13ManagerInstructions() string {
