@@ -105,12 +105,12 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v58 marker", "artifact: opencode-agent/vgxness-manager; version: 58"},
+		{"active v59 marker", "artifact: opencode-agent/vgxness-manager; version: 59"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
 		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
 		{"context digest ownership", "The Manager is the sole digest-computation owner for every non-SDD repository delegation."},
-		{"stacked-pr", "automatically load `stacked-pr`"},
+		{"git-delivery", "automatically load `git-delivery`"},
 		{"pre-write gate", "Before delegating any workspace write"},
 		{"global permission", "permission:\n  \"*\": allow"},
 		{"sdd-lifecycle", "Load `sdd-lifecycle` before creating an accepted SDD change"},
@@ -126,8 +126,8 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 			t.Errorf("installed manager is missing %s clause %q", required.name, required.value)
 		}
 	}
-	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 58")); got != 1 {
-		t.Fatalf("installed current manager v58 marker count=%d, want 1", got)
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 59")); got != 1 {
+		t.Fatalf("installed current manager v59 marker count=%d, want 1", got)
 	}
 	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 0 {
 		t.Fatalf("installed current manager retains v57 marker count=%d, want 0", got)
@@ -167,6 +167,12 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(configDirectory, "agents", name), predecessor, 0o600); err != nil {
 			t.Fatalf("seed exact CARE-v1 role %s: %v", name, err)
 		}
+	}
+	managerV57 := []byte(exactV57Manager(t, repository))
+	managerDigest := sha256.Sum256(managerV57)
+	predecessorManifest.Artifacts["agents/vgxness-manager.md"] = hex.EncodeToString(managerDigest[:])
+	if err := os.WriteFile(manager, managerV57, 0o600); err != nil {
+		t.Fatalf("seed exact Manager57: %v", err)
 	}
 	predecessorManifestData, err := json.MarshalIndent(predecessorManifest, "", "  ")
 	if err != nil {

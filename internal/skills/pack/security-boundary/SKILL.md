@@ -45,7 +45,7 @@ Establish the target and version, authorized scope, environment, assets, actors,
 - `agent-evaluation` owns evaluation design and grading for these invariants; this skill defines the threats and invariants to evaluate.
 - `ci-triage` owns a failing CI-run diagnosis even when logs contain injection or credentials; route repair of its underlying trust boundary here.
 - `installer-lifecycle` owns installer state, rollback, and permission repair; `cross-platform` owns OS or runtime portability repair. Supply constraints when relevant.
-- `stacked-pr` owns delivery after a validated repair. Application authentication or cryptography implementation belongs to its relevant domain owner after requirements are established.
+- `git-delivery` owns delivery after a validated repair. Application authentication or cryptography implementation belongs to its relevant domain owner after requirements are established.
 
 ## Authorization gates
 

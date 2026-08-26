@@ -96,8 +96,23 @@ func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
 	return pkg, nil
 }
 
+// renderActiveV17 retains the complete v17 package exclusively for lifecycle recognition.
+func renderActiveV17(version string, plan sdd.Plan) (Package, error) {
+	selected, err := profilesForPlan(plan)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg, err := renderPackage(version, selected, plan, false)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg.Artifacts[0].Bytes = []byte(activeV17ManagerInstructions())
+	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
+	return pkg, nil
+}
+
 // renderActiveV16 retains the complete v16 package exclusively for lifecycle
-// recognition. It is the exact predecessor of the current v17 package.
+// recognition. It is a historical predecessor.
 func renderActiveV16(version string, plan sdd.Plan) (Package, error) {
 	selected, err := profilesForPlan(plan)
 	if err != nil {
@@ -330,6 +345,16 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
 func activeManagerInstructions() string {
+	value := activeV17ManagerInstructions()
+	if strings.Count(value, "artifact: codex-agent/manager; version: 17; parity: opencode-v57") != 1 || strings.Count(value, "stacked-pr") == 0 {
+		return ""
+	}
+	value = strings.Replace(value, "artifact: codex-agent/manager; version: 17; parity: opencode-v57", "artifact: codex-agent/manager; version: 18; parity: opencode-v59", 1)
+	return strings.ReplaceAll(value, "stacked-pr", "git-delivery")
+}
+
+// activeV17ManagerInstructions independently preserves the full v17 artifact.
+func activeV17ManagerInstructions() string {
 	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 17; parity: opencode-v57", 1)
 	value = strings.Replace(value, historicalFixedLensReviewDepth, strictCAREReviewDepth, 1)
 	value = strings.Replace(value, historicalCodexCAREBypass, strictCAREAssurance, 1)
@@ -379,7 +404,7 @@ func activeV15ManagerInstructions() string {
 }
 
 func activeV16ManagerInstructions() string {
-	return strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 17; parity: opencode-v57", "artifact: codex-agent/manager; version: 16; parity: opencode-v56", 1)
+	return strings.Replace(activeV17ManagerInstructions(), "artifact: codex-agent/manager; version: 17; parity: opencode-v57", "artifact: codex-agent/manager; version: 16; parity: opencode-v56", 1)
 }
 
 func activeV13ManagerInstructions() string {
