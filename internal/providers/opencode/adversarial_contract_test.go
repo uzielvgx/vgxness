@@ -171,7 +171,7 @@ func TestGeneratedManagerGeneralVerifierContractClauses(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, clauses := range map[string][]string{
-		managerAgentName:  {"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority", "Route accepted SDD apply directly to vgxness-sdd-apply", "one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria"},
+		managerAgentName:  {"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority", "Route accepted SDD apply directly to vgxness-sdd-apply", "The verifier runs first; each applicable CARE role then reviews that same candidate.", "missing, stale, or mismatched evidence is INCONCLUSIVE"},
 		generalAgentName:  {"Reject SDD implementation or projection missions", "non-SDD implementation worker"},
 		sddApplyName:      {"Immediately before each write recheck", "exact post-write SHA-256", "do not eliminate TOCTOU risk", "Do not accept revisions, transition phases, or record projections"},
 		verifierAgentName: {"verification remains non-mutating", "Never edit, fix, format, delegate", "A validation command that unexpectedly changes the candidate makes the result INCONCLUSIVE"},

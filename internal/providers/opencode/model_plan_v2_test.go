@@ -3,6 +3,8 @@ package opencode
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
@@ -26,6 +28,55 @@ func TestSchemaV2ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
 	mutated := mutateManifestDigest(t, v47, managerAgentName)
 	if _, _, err := parseInstalledModelPlanManifest(mutated); !errors.Is(err, integration.ErrDrift) {
 		t.Fatalf("mutated v47 schema-v2 manifest error=%v, want drift", err)
+	}
+}
+
+func TestSchemaV2ManifestRecognizesExactV57AndUpgradesToCurrent(t *testing.T) {
+	config := schemaV2TestConfig(t)
+	current := mustBuildModelPlanV2(t, config)
+	v57, err := previousV57ModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recognized, err := parseInstalledModelPlanManifest(v57.manifest); err != nil || !bytes.Equal(recognized.manifest, v57.manifest) {
+		t.Fatalf("v57 schema-v2 manifest rejected: %v", err)
+	}
+
+	configDirectory := t.TempDir()
+	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, v57.manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := requestedModelPlan(integration.Options{}, configDirectory)
+	if err != nil || !bytes.Equal(upgraded.manifest, current.manifest) || !bytes.Contains(upgraded.agents[managerAgentName], []byte(managerCurrentMarker)) {
+		t.Fatalf("v57 schema-v2 upgrade = err=%v current=%t", err, bytes.Equal(upgraded.manifest, current.manifest))
+	}
+}
+
+func TestSchemaV2V57DriftFailsClosed(t *testing.T) {
+	current := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
+	v57, err := previousV57ModelPlanBundle(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := parseInstalledModelPlanManifest(mutateManifestDigest(t, v57, managerAgentName)); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("one-byte v57 schema-v2 manifest error=%v, want drift", err)
+	}
+	v56, err := previousV56ModelPlanBundle(v57)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := cloneAgents(v57.agents)
+	agents[managerAgentName] = append(agents[managerAgentName], v56.agents[managerAgentName][0])
+	mixed, err := encodeLike(v57, agents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := parseInstalledModelPlanManifest(mixed.manifest); !errors.Is(err, integration.ErrDrift) {
+		t.Fatalf("mixed v57 schema-v2 manifest error=%v, want drift", err)
 	}
 }
 

@@ -24,8 +24,8 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 57",
-		currentManagerCandidateCapsuleContract,
+		"artifact: opencode-agent/vgxness-manager; version: 58",
+		"For frozen, risky, verification, or SDD work require the complete Candidate Capsule",
 		"Load `sdd-lifecycle` before creating an accepted SDD change.",
 		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
 		"managed global portable catalog",
@@ -37,10 +37,9 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
 		"sole Git and GitHub actor", "delegated implementation worker",
 		"Stop on ambiguity or a failed skill gate", "Do not commit or push without an explicit current-task request",
-		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
-		"Copy that exact Review Binding unchanged to verifier, every selected CARE role, and scoped validation",
-		"A correction changes the candidate digest and invalidates all prior validation and review evidence",
-		"Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding",
+		"Keep one exact Review Binding with candidate identity, changed paths, scope, and acceptance criteria",
+		"verifier runs first; each applicable CARE role then reviews that same candidate",
+		"Permit at most one correction and one scoped revalidation",
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("canonical current manager missing %q", required)
@@ -55,7 +54,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 			t.Errorf("canonical current manager retains forbidden cleanup %q", forbidden)
 		}
 	}
-	if got := strings.Count(manager, "A correction changes the candidate digest and invalidates all prior validation and review evidence."); got != 1 {
+	if got := strings.Count(manager, "a correction creates a new candidate and invalidates prior evidence"); got != 1 {
 		t.Errorf("correction invalidation rule count=%d, want 1", got)
 	}
 	if strings.Contains(manager, "A correction creates a new candidate digest and invalidates all prior validation and review evidence.") {
@@ -69,12 +68,15 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 }
 
-func TestVersionEvolutionImmediatePredecessorIsExactV56Package(t *testing.T) {
+func TestVersionEvolutionImmediatePredecessorIsExactV57Package(t *testing.T) {
+	if !bytes.Equal([]byte(previousManagerPromptV57), []byte(previousManagerPromptV56)) {
+		t.Fatal("frozen v57 template differs from the v57 canonical source snapshot")
+	}
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
-	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 57")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 56")) {
+	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 58")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 57")) {
 		t.Fatal("immediate predecessor did not retain the exact prior CARE package")
 	}
 	for _, required := range []string{
@@ -84,37 +86,17 @@ func TestVersionEvolutionImmediatePredecessorIsExactV56Package(t *testing.T) {
 		"Every non-exempt implementation must freeze, pass the native verifier, and complete its applicable CARE matrix before terminal success; IMPLEMENTED may be reported only as an intermediate state.",
 		"Static proof must establish that the entire change is passive documentation or images with no behavior, configuration, permission, or generated-output effect; extension or location alone is insufficient.",
 	} {
-		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
-			t.Errorf("current manager missing strict CARE clause %q", required)
-		}
 		if !bytes.Contains(predecessor.agents[managerAgentName], []byte(required)) {
-			t.Errorf("v56 predecessor lost current CARE clause %q", required)
+			t.Errorf("v57 predecessor lost strict CARE clause %q", required)
 		}
 	}
-	if bytes.Contains(current.agents[managerAgentName], []byte("one General mission plus Manager readback may conclude IMPLEMENTED; do not automatically freeze")) {
-		t.Error("current manager retains the low-risk IMPLEMENTED terminal bypass")
+	if !bytes.Contains(current.agents[managerAgentName], []byte("CARE risk tiers: passive documentation or images are exempt")) {
+		t.Error("current manager lacks concise CARE tiers")
 	}
-	if bytes.Contains(predecessor.agents[managerAgentName], []byte("one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze")) {
-		t.Error("v56 predecessor gained the historical IMPLEMENTED bypass")
-	}
-	for _, forbidden := range []string{"the refuter handles only severe inferential findings", "every reviewer and refuter echoes"} {
-		if bytes.Contains(current.agents[managerAgentName], []byte(forbidden)) {
-			t.Errorf("current manager retains legacy refuter routing %q", forbidden)
-		}
-	}
-	if bytes.Contains(bytes.ToLower(current.agents[managerAgentName]), []byte("refuter")) {
-		t.Error("current manager retains a refuter token")
-	}
-	if !bytes.Contains(current.agents[managerAgentName], []byte("CARE challenger handles severe inferential findings")) || !bytes.Contains(current.agents[managerAgentName], []byte("every selected CARE role echoes")) {
-		t.Error("current manager lacks CARE-only review routing")
-	}
-	if bytes.Contains(predecessor.agents[managerAgentName], []byte("the refuter handles only severe inferential findings")) || bytes.Contains(predecessor.agents[managerAgentName], []byte("every reviewer and refuter echoes")) {
-		t.Error("v56 predecessor gained legacy refuter routing")
-	}
-	expectedManager, err := bindManagerV56(current.resolved.Roles[sdd.RoleManager])
+	expectedManager, err := bindManagerV57(current.resolved.Roles[sdd.RoleManager])
 	testutil.NoError(t, err)
 	if !bytes.Equal(predecessor.agents[managerAgentName], expectedManager) {
-		t.Fatal("immediate predecessor does not match the frozen v56 binder output")
+		t.Fatal("immediate predecessor does not match the frozen v57 binder output")
 	}
 	for name, want := range current.agents {
 		if name != managerAgentName && !bytes.Equal(predecessor.agents[name], want) {
@@ -125,16 +107,16 @@ func TestVersionEvolutionImmediatePredecessorIsExactV56Package(t *testing.T) {
 
 func TestCurrentManagerAnchorValidationRejectsAbsentAndDuplicateAnchors(t *testing.T) {
 	for name, prompt := range map[string][]byte{
-		"absent assurance":          bytes.Replace([]byte(canonicalManagerPrompt), []byte(currentManagerAssurance), nil, 1),
-		"duplicate assurance":       append([]byte(canonicalManagerPrompt), []byte(currentManagerAssurance)...),
-		"absent review":             bytes.Replace([]byte(canonicalManagerPrompt), []byte(managerReviewDepthV56Previous), nil, 1),
-		"duplicate review":          append([]byte(canonicalManagerPrompt), []byte(managerReviewDepthV56Previous)...),
-		"absent refuter route":      bytes.Replace([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterRouting), nil, 1),
-		"duplicate refuter route":   append([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterRouting)...),
-		"absent refuter binding":    bytes.Replace([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterBinding), nil, 1),
-		"duplicate refuter binding": append([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterBinding)...),
-		"absent refuter handoff":    bytes.Replace([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterHandoff), nil, 1),
-		"duplicate refuter handoff": append([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterHandoff)...),
+		"absent assurance":          bytes.Replace([]byte(previousManagerPromptV57), []byte(currentManagerAssurance), nil, 1),
+		"duplicate assurance":       append([]byte(previousManagerPromptV57), []byte(currentManagerAssurance)...),
+		"absent review":             bytes.Replace([]byte(previousManagerPromptV57), []byte(managerReviewDepthV56Previous), nil, 1),
+		"duplicate review":          append([]byte(previousManagerPromptV57), []byte(managerReviewDepthV56Previous)...),
+		"absent refuter route":      bytes.Replace([]byte(previousManagerPromptV57), []byte(historicalOpenCodeRefuterRouting), nil, 1),
+		"duplicate refuter route":   append([]byte(previousManagerPromptV57), []byte(historicalOpenCodeRefuterRouting)...),
+		"absent refuter binding":    bytes.Replace([]byte(previousManagerPromptV57), []byte(historicalOpenCodeRefuterBinding), nil, 1),
+		"duplicate refuter binding": append([]byte(previousManagerPromptV57), []byte(historicalOpenCodeRefuterBinding)...),
+		"absent refuter handoff":    bytes.Replace([]byte(previousManagerPromptV57), []byte(historicalOpenCodeRefuterHandoff), nil, 1),
+		"duplicate refuter handoff": append([]byte(previousManagerPromptV57), []byte(historicalOpenCodeRefuterHandoff)...),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateCurrentManagerAnchors(prompt); err == nil {
@@ -168,7 +150,7 @@ func TestV54UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	historical := mustLegacyFixedLensBundle(t, current)
-	for _, required := range []string{"version: 57", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
+	for _, required := range []string{"version: 58", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
 		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
 			t.Errorf("manager missing compact protocol %q", required)
 		}
@@ -545,10 +527,10 @@ func TestReadinessV54RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 57",
+		"artifact: opencode-agent/vgxness-manager; version: 58",
 		"bounded simple exact reads use at most three total tool attempts and no delegation or todo",
 		"complex evidence research may use at most one read-only delegation",
-		strictOpenCodeCAREAssurance,
+		"CARE risk tiers: passive documentation or images are exempt",
 		"A second task call for the same goal requires an explicit blocker, new evidence, correction, or independent assurance; resume the same child where applicable and send only the delta.",
 	} {
 		if !strings.Contains(manager, required) {
@@ -623,7 +605,7 @@ func TestReadinessV54ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV53The
 	testutil.NoError(t, err)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 57",
+		"artifact: opencode-agent/vgxness-manager; version: 58",
 		"adaptive general-purpose partner",
 		"When the engineering route activates",
 		orchestration.ContractPolicy,
@@ -639,11 +621,11 @@ func TestReadinessV54ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV53The
 		}
 	}
 	predecessors := managerPredecessorsMust(t, bundle)
-	if len(predecessors) < 8 || !bytes.Contains(predecessors[0], []byte("artifact: opencode-agent/vgxness-manager; version: 56")) || !bytes.Contains(predecessors[1], []byte("artifact: opencode-agent/vgxness-manager; version: 55")) || !bytes.Contains(predecessors[2], []byte("artifact: opencode-agent/vgxness-manager; version: 54")) || !bytes.Contains(predecessors[3], []byte("artifact: opencode-agent/vgxness-manager; version: 53")) || !bytes.Contains(predecessors[4], []byte("artifact: opencode-agent/vgxness-manager; version: 52")) || !bytes.Contains(predecessors[4], []byte(adaptiveManagerMemoryPolicy)) || !bytes.Contains(predecessors[4], []byte("Context Capsule v1")) {
-		t.Fatal("exact v56, v55, v54, v53, then v52 predecessors with context continuity are not first")
+	if len(predecessors) < 9 || !bytes.Contains(predecessors[0], []byte("artifact: opencode-agent/vgxness-manager; version: 57")) || !bytes.Contains(predecessors[1], []byte("artifact: opencode-agent/vgxness-manager; version: 56")) || !bytes.Contains(predecessors[2], []byte("artifact: opencode-agent/vgxness-manager; version: 55")) || !bytes.Contains(predecessors[3], []byte("artifact: opencode-agent/vgxness-manager; version: 54")) || !bytes.Contains(predecessors[4], []byte("artifact: opencode-agent/vgxness-manager; version: 53")) || !bytes.Contains(predecessors[5], []byte("artifact: opencode-agent/vgxness-manager; version: 52")) || !bytes.Contains(predecessors[5], []byte(adaptiveManagerMemoryPolicy)) || !bytes.Contains(predecessors[5], []byte("Context Capsule v1")) {
+		t.Fatal("exact v57, v56, v55, v54, v53, then v52 predecessors with context continuity are not first")
 	}
-	if !bytes.Contains(predecessors[7], []byte("artifact: opencode-agent/vgxness-manager; version: 49")) || !bytes.Contains(predecessors[7], []byte(adaptiveManagerMemoryPolicy)) || bytes.Contains(predecessors[7], []byte("Context Capsule v1")) {
-		t.Fatal("exact context-free v49 predecessor with intent-triggered memory semantics is not eighth")
+	if !bytes.Contains(predecessors[8], []byte("artifact: opencode-agent/vgxness-manager; version: 49")) || !bytes.Contains(predecessors[8], []byte(adaptiveManagerMemoryPolicy)) || bytes.Contains(predecessors[8], []byte("Context Capsule v1")) {
+		t.Fatal("exact context-free v49 predecessor with intent-triggered memory semantics is not ninth")
 	}
 }
 
@@ -653,7 +635,7 @@ func TestVersionEvolutionUsesOnlyManagedHEADPredecessors(t *testing.T) {
 	historical, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for name, marker := range map[string]string{
-		managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 57",
+		managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 58",
 		generalAgentName:  "artifact: opencode-agent/general; version: 10",
 		exploreAgentName:  "artifact: opencode-agent/explore; version: 4",
 		verifierAgentName: "artifact: opencode-agent/vgxness-verifier; version: 7",

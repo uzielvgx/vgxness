@@ -16,7 +16,7 @@ func TestOpenCodeV56PackageIsExactUpgradeablePredecessorAndRejectsDrift(t *testi
 	testutil.NoError(t, err)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
-	testutil.Require(t, bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 56")), "v56 predecessor marker changed")
+	testutil.Require(t, bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 57")), "v57 predecessor marker changed")
 
 	configDirectory := t.TempDir()
 	writeModelPlanBundleFixture(t, configDirectory, predecessor)

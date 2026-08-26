@@ -29,6 +29,9 @@ var canonicalManagerPrompt string
 //go:embed templates/manager.v56.md
 var previousManagerPromptV56 string
 
+//go:embed templates/manager.v57.md
+var previousManagerPromptV57 string
+
 //go:embed templates/manager.v49.md
 var previousManagerPromptV49 string
 
@@ -1162,10 +1165,20 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	var historicalReviewBundle modelPlanBundle
 	historicalReviewBundleMatched := false
 	if plan.configV3 != nil {
-		var historicalErr error
-		historicalReviewBundle, historicalReviewBundleMatched, historicalErr = completeHistoricalReviewBundle(configDirectory, plan)
-		if historicalErr != nil {
-			return inspection{}, historicalErr
+		if installedPlanOK && len(installedPlan.agents[reviewRiskName]) != 0 {
+			complete, completeErr := installedLegacyReviewersComplete(configDirectory, installedPlan)
+			if completeErr != nil {
+				return inspection{}, completeErr
+			}
+			if complete {
+				historicalReviewBundle, historicalReviewBundleMatched = installedPlan, true
+			}
+		} else {
+			var historicalErr error
+			historicalReviewBundle, historicalReviewBundleMatched, historicalErr = completeHistoricalReviewBundle(configDirectory, plan)
+			if historicalErr != nil {
+				return inspection{}, historicalErr
+			}
 		}
 	}
 	preConsolidation, predecessorErr := preConsolidationV1MediumBundle()
