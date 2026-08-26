@@ -11,6 +11,24 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
+func TestOpenCodeV56PackageIsExactUpgradeablePredecessorAndRejectsDrift(t *testing.T) {
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	predecessor, err := immediatePredecessor(current)
+	testutil.NoError(t, err)
+	testutil.Require(t, bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 56")), "v56 predecessor marker changed")
+
+	configDirectory := t.TempDir()
+	writeModelPlanBundleFixture(t, configDirectory, predecessor)
+	service := NewIntegration()
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.Require(t, err == nil && status.State == integration.StatePartial, "v56 status=%+v err=%v", status, err)
+	managerPath := configDirectory + "/agents/" + managerAgentName
+	testutil.NoError(t, os.WriteFile(managerPath, append(predecessor.agents[managerAgentName], '\n'), 0o600))
+	status, err = service.Status(context.Background(), integration.Options{ConfigDir: configDirectory})
+	testutil.Require(t, err == nil && status.State == integration.StateDrifted, "one-byte v56 drift status=%+v err=%v", status, err)
+}
+
 func TestOpenCodeV54PackageIsExactUpgradeablePredecessor(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)

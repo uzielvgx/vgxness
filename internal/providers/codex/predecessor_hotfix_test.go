@@ -12,6 +12,21 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
+func TestCodexV16PackageIsExactPredecessorAndRejectsDrift(t *testing.T) {
+	predecessor, err := renderActiveV16("v1.2.3", sdd.PlanMedium)
+	if err != nil || predecessor.Validate() != nil {
+		t.Fatalf("v16 predecessor = %v", err)
+	}
+	if !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 16; parity: opencode-v56") {
+		t.Fatal("v16 predecessor marker changed")
+	}
+	predecessor.Artifacts[0].Bytes = append(predecessor.Artifacts[0].Bytes, '\n')
+	predecessor.SHA256 = aggregate(predecessor.Artifacts)
+	if predecessor.Validate() == nil {
+		t.Fatal("Validate accepted one-byte v16 drift")
+	}
+}
+
 func TestCodexV14PackageIsExactPredecessorAndMixedBytesDrift(t *testing.T) {
 	predecessor, err := renderActiveV14("v1.2.3", sdd.PlanMedium)
 	if err != nil {
