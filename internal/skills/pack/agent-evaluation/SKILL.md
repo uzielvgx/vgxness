@@ -37,7 +37,7 @@ Establish the evaluated target and version, intended users and decisions, succes
 
 - Use `skills-creator` to author, restructure, package, or security-review an Agent Skill; use `agent-evaluation` to evaluate an existing skill, agent, prompt, or workflow.
 - Use `ci-triage` to diagnose the failing CI run, job, configuration, infrastructure, or cascade even when the job executes evaluations. This skill may define evaluation semantics for that diagnosis.
-- Use `cross-platform` or `installer-lifecycle` for their repairs, and `stacked-pr` only after the evaluation-backed change is ready for delivery.
+- Use `cross-platform` or `installer-lifecycle` for their repairs, and `git-delivery` only after the evaluation-backed change is ready for delivery.
 
 ## Decision gates
 

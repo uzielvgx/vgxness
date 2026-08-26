@@ -123,7 +123,11 @@ func TestCAREV1PackageDriftFailsClosedWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	predecessor, err := immediatePredecessor(current)
+	immediate, err := immediatePredecessor(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err := previousCAREV1ModelPlanBundle(immediate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +147,7 @@ func TestCAREV1PackageDriftFailsClosedWithoutMutation(t *testing.T) {
 						writeModelPlanBundleFixture(t, root, predecessor)
 						role := filepath.Join(root, "agents", roleName)
 						if mixed {
-							if err := os.WriteFile(role, current.agents[roleName], 0o600); err != nil {
+							if err := os.WriteFile(role, immediate.agents[roleName], 0o600); err != nil {
 								t.Fatal(err)
 							}
 						} else {
@@ -223,25 +227,36 @@ func TestCAREV2LifecyclePreservesOnlyRoleDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := previousV57ModelPlanBundle(immediate)
+	careV1, err := previousCAREV1ModelPlanBundle(immediate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := previousV57ModelPlanBundle(careV1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	care := map[string]bool{"vgxness-care-reviewer.md": true, "vgxness-care-specialist.md": true, "vgxness-care-challenger.md": true}
 	for name, currentBytes := range current.agents {
-		if changed := !bytes.Equal(currentBytes, immediate.agents[name]); changed != care[name] {
-			t.Errorf("current to immediate change for %s=%t, want %t", name, changed, care[name])
+		if changed := !bytes.Equal(currentBytes, immediate.agents[name]); changed != (name == managerAgentName) {
+			t.Errorf("current M59 to immediate M58 change for %s=%t, want manager-only", name, changed)
 		}
 	}
 	for name, immediateBytes := range immediate.agents {
-		if changed := !bytes.Equal(immediateBytes, next.agents[name]); changed != (name == managerAgentName) {
-			t.Errorf("immediate to Manager57 change for %s=%t, want %t", name, changed, name == managerAgentName)
-		}
-		if care[name] && !bytes.Equal(immediateBytes, next.agents[name]) {
-			t.Errorf("CARE-v1 role %s changed into Manager57", name)
+		if changed := !bytes.Equal(immediateBytes, careV1.agents[name]); changed != care[name] {
+			t.Errorf("CARE-v2 M58 to CARE-v1 M58 change for %s=%t, want role-only", name, changed)
 		}
 	}
-	if !bytes.Contains(immediate.agents[managerAgentName], []byte(managerCurrentMarker)) || !bytes.Contains(next.agents[managerAgentName], []byte(managerV57Marker)) {
-		t.Fatal("CARE-v1/Manager58 then CARE-v1/Manager57 lifecycle is not retained")
+	for name, careV1Bytes := range careV1.agents {
+		if changed := !bytes.Equal(careV1Bytes, next.agents[name]); changed != (name == managerAgentName) {
+			t.Errorf("CARE-v1 M58 to CARE-v1 M57 change for %s=%t, want manager-only", name, changed)
+		}
+	}
+	if !bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || !bytes.Contains(immediate.agents[managerAgentName], []byte(managerV58Marker)) || !bytes.Contains(careV1.agents[managerAgentName], []byte(managerV58Marker)) || !bytes.Contains(next.agents[managerAgentName], []byte(managerV57Marker)) {
+		t.Fatal("CARE-v2 M59 -> CARE-v2 M58 -> CARE-v1 M58 -> CARE-v1 M57 manager markers are not retained")
+	}
+	for name := range care {
+		if !bytes.Contains(immediate.agents[name], []byte("; version: 2")) || !bytes.Contains(careV1.agents[name], []byte("; version: 1")) {
+			t.Fatalf("CARE role marker for %s does not transition from v2 to v1", name)
+		}
 	}
 }

@@ -397,7 +397,7 @@ func (s *Service) inspectLegacy(r *os.Root, entries map[string][]byte) (bool, er
 			if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 				return false, ErrConflict
 			}
-			for relative, oldDigest := range legacy.digests {
+			for relative := range legacy.digests {
 				parent, err := openRelativeRoot(context.Background(), r, filepath.Join(native(legacy.name), filepath.Dir(native(relative))), false)
 				if errors.Is(err, os.ErrNotExist) {
 					continue
@@ -413,8 +413,7 @@ func (s *Service) inspectLegacy(r *os.Root, entries map[string][]byte) (bool, er
 				if err != nil {
 					return false, ErrConflict
 				}
-				identity := definition.name + "/" + relative
-				if !bytes.Equal(actual, entries[identity]) && digest(actual) != oldDigest && definition.predecessors[relative] != digest(actual) {
+				if !acceptsLegacy(definition, legacy, relative, actual, entries) {
 					return false, ErrDrift
 				}
 				present = true
@@ -422,6 +421,14 @@ func (s *Service) inspectLegacy(r *os.Root, entries map[string][]byte) (bool, er
 		}
 	}
 	return present, nil
+}
+
+func acceptsLegacy(definition skillDefinition, legacy legacyDefinition, relative string, actual []byte, entries map[string][]byte) bool {
+	identity := definition.name + "/" + relative
+	actualDigest := digest(actual)
+	return actualDigest == legacy.digests[relative] ||
+		actualDigest == definition.predecessors[relative] ||
+		!legacy.exactOnly && bytes.Equal(actual, entries[identity])
 }
 
 func regular(r *os.Root, name string) ([]byte, os.FileInfo, error) {
@@ -524,14 +531,24 @@ func (s *Service) Compatibility(ctx context.Context, options Options) ([]Compati
 			report[index].State = CompatibilityConflict
 			continue
 		}
-		identity := legacyIdentity(c, report[index].Path)
-		if bytes.Equal(actual, entries[identity]) || s.predecessor(identity, actual) || digest(actual) == report[index].Digest {
+		if legacyRecognized(c, legacy, relative, actual, entries) {
 			report[index].State = CompatibilityRecognized
 		} else {
 			report[index].State = CompatibilityModifiedOrUnknown
 		}
 	}
 	return report, nil
+}
+
+func legacyRecognized(c catalog, name, relative string, actual []byte, entries map[string][]byte) bool {
+	for _, definition := range c.definitions {
+		for _, legacy := range definition.legacy {
+			if legacy.name == name {
+				return acceptsLegacy(definition, legacy, relative, actual, entries)
+			}
+		}
+	}
+	return false
 }
 
 func legacyIdentity(c catalog, path string) string {
@@ -773,8 +790,7 @@ func (s *Service) migrateLegacy(ctx context.Context, r *os.Root, entries map[str
 					_ = sourceParent.Close()
 					return rollback(ErrConflict)
 				}
-				identity := definition.name + "/" + relative
-				if !bytes.Equal(data, entries[identity]) && digest(data) != legacy.digests[relative] && digest(data) != definition.predecessors[relative] {
+				if !acceptsLegacy(definition, legacy, relative, data, entries) {
 					_ = sourceParent.Close()
 					return rollback(ErrDrift)
 				}

@@ -1,5 +1,7 @@
 # CARE architecture
 
+Current identities: OpenCode CARE-v2 Manager59, immediate CARE-v2 Manager58, then CARE-v1 Manager58/Manager57 and deeper v56; Codex Manager18, immediate Manager17, then Manager16/15/14.
+
 CARE is the repository-visible contract for choosing and assessing engineering work. It records architecture and deterministic development checks; it does not add a runtime, schema, transport, dataset, custody service, or protected-holdout execution.
 
 ## Authority and activation
@@ -12,7 +14,7 @@ The ledger binds target identity, route, risk, required checks, observed outcome
 
 ## Provider inventory and limits
 
-OpenCode currently has 13 agents: manager, explore, general, verifier, three CARE v2 roles, and six SDD roles. OpenCode current identity is CARE v2 with Manager58; OpenCode immediate predecessor is CARE-v1 with Manager58; OpenCode next predecessor is CARE-v1 with Manager57; OpenCode v56 is deeper. Codex currently has `AGENTS.md` plus 12 delegated profiles, including three CARE roles; Codex current identity is Manager17, Codex immediate predecessor is Manager16, and Codex Manager15/v14 are deeper. These inventories describe managed documentation identities, not a claim that a host ran them.
+OpenCode currently has 13 agents: manager, explore, general, verifier, three CARE v2 roles, and six SDD roles. OpenCode current identity is CARE v2 with Manager59; its immediate predecessor is CARE-v2 with Manager58, then CARE-v1 with Manager58 and CARE-v1 with Manager57; OpenCode v56 is deeper. Codex currently has `AGENTS.md` plus 12 delegated profiles, including three CARE roles; Codex current identity is Manager18, its immediate predecessor is Manager17, then Manager16 and Codex Manager15/v14 are deeper. These inventories describe managed documentation identities, not a claim that a host ran them.
 
 CARE lifecycle transitions remain Manager-owned; repository writers do not mutate lifecycle state. Runtime evidence is observed on macOS only. Target-native Windows and Linux behavior remains unverified.
 

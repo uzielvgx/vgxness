@@ -27,19 +27,21 @@ func windowsRootRenameBlocked(err error) bool {
 		(errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation))
 }
 
-func TestKnownPackagesOrderCurrentThenV16ThenV15ForEveryPlan(t *testing.T) {
+func TestKnownPackagesOrderCurrentThenV17ThenV16ForEveryPlan(t *testing.T) {
 	known, err := knownPackages()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(known) != 46 {
-		t.Fatalf("known packages length = %d, want 46", len(known))
+	if len(known) != 50 {
+		t.Fatalf("known packages length = %d, want 50", len(known))
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
 		}
+		v17, err := renderActiveV17("v0.0.0", plan)
+		require(t, err == nil)
 		v16, err := renderActiveV16("v0.0.0", plan)
 		require(t, err == nil)
 		v15, err := renderActiveV15("v0.0.0", plan)
@@ -72,14 +74,14 @@ func TestKnownPackagesOrderCurrentThenV16ThenV15ForEveryPlan(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []string{current.SHA256, v16.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
+		want := []string{current.SHA256, v17.SHA256, v16.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
 		foundV12 := 0
 		for index, pkg := range known {
 			if pkg.SHA256 == v12.SHA256 {
 				foundV12++
 			}
-			if index >= int(planIndex(plan))*11 && index < int(planIndex(plan))*11+11 && pkg.SHA256 != want[index-int(planIndex(plan))*11] {
-				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*11])
+			if index >= int(planIndex(plan))*12 && index < int(planIndex(plan))*12+12 && pkg.SHA256 != want[index-int(planIndex(plan))*12] {
+				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*12])
 			}
 		}
 		if foundV12 != 1 {

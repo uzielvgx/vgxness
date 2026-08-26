@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"bytes"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -15,8 +16,9 @@ type skillDefinition struct {
 }
 
 type legacyDefinition struct {
-	name    string
-	digests map[string]string
+	name      string
+	digests   map[string]string
+	exactOnly bool
 }
 
 type catalog struct{ definitions []skillDefinition }
@@ -89,8 +91,8 @@ func bundledCatalog() (catalog, error) {
 		return catalog{}, err
 	}
 	creator.files = entries
-	stackedPR := skillDefinition{name: "stacked-pr", source: "stacked-pr"}
-	stackedPR.files, err = bundledFiles(stackedPR.source)
+	gitDelivery := skillDefinition{name: "git-delivery", source: "git-delivery", legacy: []legacyDefinition{{name: "stacked-pr", exactOnly: true, digests: map[string]string{"SKILL.md": "43d30fc18b5bf23c1ec450248bad2ba9283f5f63c9c5946733a4f5d2971c197f"}}}}
+	gitDelivery.files, err = bundledFiles(gitDelivery.source)
 	if err != nil {
 		return catalog{}, err
 	}
@@ -179,7 +181,7 @@ func bundledCatalog() (catalog, error) {
 	if err != nil {
 		return catalog{}, err
 	}
-	return catalog{definitions: []skillDefinition{creator, stackedPR, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary, documentationStrategy, productRequirements, softwareArchitectureDocs, userDocumentation, apiDocumentation, qualityTestDocumentation, operationsRunbooks, governanceComplianceDocs, releaseLifecycleDocs, endToEndTesting, memorySync, sddLifecycle}}, nil
+	return catalog{definitions: []skillDefinition{creator, gitDelivery, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary, documentationStrategy, productRequirements, softwareArchitectureDocs, userDocumentation, apiDocumentation, qualityTestDocumentation, operationsRunbooks, governanceComplianceDocs, releaseLifecycleDocs, endToEndTesting, memorySync, sddLifecycle}}, nil
 }
 
 func validSkillName(name string) bool {
@@ -222,7 +224,7 @@ func (s *Service) predecessor(identity string, content []byte) bool {
 				return true
 			}
 			for _, legacy := range definition.legacy {
-				if legacy.digests[relative] == actual {
+				if legacy.digests[relative] == actual || !legacy.exactOnly && bytes.Equal(content, definition.files[relative]) {
 					return true
 				}
 			}

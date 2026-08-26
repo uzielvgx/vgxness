@@ -37,7 +37,7 @@ Bind the report to exact run, check, workflow, commit, attempt, matrix variant, 
 
 - Use `cross-platform` for the platform-semantics repair and `installer-lifecycle` for an installer lifecycle repair; `ci-triage` retains diagnosis and orchestration.
 - Use `agent-evaluation` to design agent or skill evaluation semantics; triage the CI failure here when an evaluation job fails.
-- Use `stacked-pr` only for authorized delivery after the diagnosis and fix are validated.
+- Use `git-delivery` only for authorized delivery after the diagnosis and fix are validated.
 
 ## Authorization gates
 
