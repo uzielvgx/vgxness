@@ -363,9 +363,10 @@ func setupPlanFixture(ready bool) setupflow.Plan {
 func TestSetupWizardAcceptsCodexPreviewThroughMultiCoordinator(t *testing.T) {
 	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
 	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	codexHome := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"codex", "--preview", "--codex-home", "/tmp/codex"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
-	if code != 0 || codex.calls != 1 || stderr.Len() != 0 || codex.options.HomeDir != "/tmp/codex" || !strings.Contains(stdout.String(), "codex") {
+	code := runSetup(context.Background(), []string{"codex", "--preview", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	if code != 0 || codex.calls != 1 || stderr.Len() != 0 || codex.options.HomeDir != codexHome || !strings.Contains(stdout.String(), "codex") {
 		t.Fatalf("code=%d calls=%d codex=%+v stdout=%q stderr=%q", code, codex.calls, codex.options, stdout.String(), stderr.String())
 	}
 }
@@ -373,8 +374,10 @@ func TestSetupWizardAcceptsCodexPreviewThroughMultiCoordinator(t *testing.T) {
 func TestSetupWizardAllSanitizesOpenCodeOptionsForCodex(t *testing.T) {
 	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
 	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	openCodeConfigDir := t.TempDir()
+	codexHome := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"all", "--preview", "--config-dir", "/tmp/opencode", "--codex-home", "/tmp/codex", "--model-efficient", "openai/a", "--model-balanced", "openai/b", "--model-frontier", "openai/c"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	code := runSetup(context.Background(), []string{"all", "--preview", "--config-dir", openCodeConfigDir, "--codex-home", codexHome, "--model-efficient", "openai/a", "--model-balanced", "openai/b", "--model-frontier", "openai/c"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
 	if code != 0 || stderr.Len() != 0 || codex.options.ModelEfficient != "" || codex.options.ModelBalanced != "" || codex.options.ModelFrontier != "" {
 		t.Fatalf("code=%d codex=%+v stdout=%q stderr=%q", code, codex.options, stdout.String(), stderr.String())
 	}
@@ -386,8 +389,9 @@ func TestSetupWizardAllSanitizesOpenCodeOptionsForCodex(t *testing.T) {
 func TestSetupWizardCodexPreviewFailureReportsWithoutApply(t *testing.T) {
 	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
 	codex := &fakeIntegrationRuntime{err: errors.New("codex unavailable")}
+	codexHome := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"codex", "--preview", "--codex-home", "/tmp/codex"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	code := runSetup(context.Background(), []string{"codex", "--preview", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
 	if code != 1 || codex.calls != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "io:") {
 		t.Fatalf("code=%d calls=%d stdout=%q stderr=%q", code, codex.calls, stdout.String(), stderr.String())
 	}
@@ -396,9 +400,11 @@ func TestSetupWizardCodexPreviewFailureReportsWithoutApply(t *testing.T) {
 func TestSetupWizardAllRoutesIndependentProviderRoots(t *testing.T) {
 	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
 	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	openCodeConfigDir := t.TempDir()
+	codexHome := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"all", "--preview", "--config-dir", "/tmp/opencode", "--codex-home", "/tmp/codex"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
-	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != "/tmp/opencode" || codex.options.HomeDir != "/tmp/codex" {
+	code := runSetup(context.Background(), []string{"all", "--preview", "--config-dir", openCodeConfigDir, "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != openCodeConfigDir || codex.options.HomeDir != codexHome {
 		t.Fatalf("code=%d opencode=%+v codex=%+v stderr=%q", code, setup.openCodeOptions, codex.options, stderr.String())
 	}
 }
@@ -407,9 +413,10 @@ func TestSetupWizardOpenCodeRetainsConfigDirInMultiFlow(t *testing.T) {
 	plan := setupPlanFixture(true)
 	plan.Integration.State = integration.StateInstalled
 	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: plan}}
+	openCodeConfigDir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"opencode", "--status", "--config-dir", "/tmp/opencode"}, strings.NewReader(""), &stdout, &stderr, setup, nil)
-	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != "/tmp/opencode" || !strings.Contains(stdout.String(), "Provider opencode") || !strings.Contains(stdout.String(), "Launcher: state=installed") || !strings.Contains(stdout.String(), "Handshake: ok=true status=healthy") || !strings.Contains(stdout.String(), "Plan de modelos:  provider=mixed manifest=") {
+	code := runSetup(context.Background(), []string{"opencode", "--status", "--config-dir", openCodeConfigDir}, strings.NewReader(""), &stdout, &stderr, setup, nil)
+	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != openCodeConfigDir || !strings.Contains(stdout.String(), "Provider opencode") || !strings.Contains(stdout.String(), "Launcher: state=installed") || !strings.Contains(stdout.String(), "Handshake: ok=true status=healthy") || !strings.Contains(stdout.String(), "Plan de modelos:  provider=mixed manifest=") {
 		t.Fatalf("code=%d opencode=%+v stdout=%q stderr=%q", code, setup.openCodeOptions, stdout.String(), stderr.String())
 	}
 }
@@ -449,6 +456,8 @@ func TestSetupWizardRejectsProviderInapplicableRootFlagsBeforePlanning(t *testin
 }
 
 func TestSetupWizardStatusRequiresInstalledProviderHealth(t *testing.T) {
+	openCodeConfigDir := t.TempDir()
+	codexHome := t.TempDir()
 	for _, test := range []struct {
 		name  string
 		state integration.State
@@ -466,7 +475,7 @@ func TestSetupWizardStatusRequiresInstalledProviderHealth(t *testing.T) {
 			setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: plan}}
 			codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: test.state, ArtifactSHA256: "codex-plan", ArtifactCount: 2}, err: test.err}
 			var stdout, stderr bytes.Buffer
-			code := runSetup(context.Background(), []string{"all", "--status", "--config-dir", "/tmp/opencode", "--codex-home", "/tmp/codex"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+			code := runSetup(context.Background(), []string{"all", "--status", "--config-dir", openCodeConfigDir, "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
 			if code != test.code {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
@@ -484,8 +493,9 @@ func TestSetupWizardCodexStatusRequiresSharedHealth(t *testing.T) {
 	shared := setupflow.SharedPlan{Ready: false, Blocker: "shared launcher or skills are unhealthy"}
 	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}, sharedStatus: &shared}
 	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	codexHome := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"codex", "--status", "--codex-home", "/tmp/codex"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	code := runSetup(context.Background(), []string{"codex", "--status", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
 	if code != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "requires attention") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -494,8 +504,9 @@ func TestSetupWizardCodexStatusRequiresSharedHealth(t *testing.T) {
 func TestSetupWizardApplyFailureRendersPartialOutcomesAndRecovery(t *testing.T) {
 	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
 	codex := &installFailingRuntime{fakeIntegrationRuntime: fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2, Changed: true}}, installErr: errors.New("install failed")}
+	codexHome := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"codex", "--yes", "--codex-home", "/tmp/codex"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	code := runSetup(context.Background(), []string{"codex", "--yes", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
 	if code != 1 || !strings.Contains(stdout.String(), "Provider codex: verified=false changed=true") || !strings.Contains(stdout.String(), "Recovery codex:") || !strings.Contains(stdout.String(), "vgxness integrate codex status") || strings.Contains(stdout.String(), "repair shared") || !strings.Contains(stderr.String(), "io:") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
