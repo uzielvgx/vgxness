@@ -1874,7 +1874,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 56"), []byte("version: 53"), 1)
+	older := bytes.Replace(current, []byte("version: 57"), []byte("version: 53"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -2111,6 +2111,127 @@ func TestIntegrationRejectsMixedManifestlessV3Predecessors(t *testing.T) {
 	testutil.Require(t, previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && readErr == nil && afterErr == nil && bytes.Equal(before, after), "preview=%+v install=%+v err=%v", preview, installed, installErr)
 }
 
+func TestIntegrationRejectsMixedManifestlessV56ManagerV6Verifier(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	v56, err := previousV56ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	v53, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	for name, content := range current.agents {
+		if name == managerAgentName {
+			content = v56.agents[name]
+		} else if name == verifierAgentName {
+			content = v53.agents[name]
+		}
+		path := filepath.Join(root, "agents", name)
+		testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		testutil.NoError(t, os.WriteFile(path, content, 0o600))
+	}
+	service := NewIntegration()
+	preview, previewErr := service.Preview(context.Background(), integration.Options{ConfigDir: root})
+	installed, installErr := service.Install(context.Background(), integration.Options{ConfigDir: root})
+	testutil.Require(t, previewErr == nil && preview.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict), "preview=%+v install=%+v err=%v", preview, installed, installErr)
+}
+
+func TestIntegrationUpgradesCompleteManifestlessV55Bundle(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	options := integration.Options{ConfigDir: root}
+	current, err := requestedModelPlan(options, root)
+	testutil.NoError(t, err)
+	v55, err := previousV55ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	for _, identity := range modelAgentInventoryV3 {
+		name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
+		content := v55.agents[name]
+		path := filepath.Join(root, "agents", name)
+		testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		testutil.NoError(t, os.WriteFile(path, content, 0o600))
+	}
+	service := NewIntegration()
+	preview, previewErr := service.Preview(context.Background(), options)
+	installed, installErr := service.Install(context.Background(), options)
+	status, statusErr := service.Status(context.Background(), options)
+	testutil.Require(t,
+		previewErr == nil && preview.State == integration.StatePartial &&
+			installErr == nil && installed.State == integration.StateInstalled &&
+			statusErr == nil && status.State == integration.StateInstalled,
+		"preview=%+v previewErr=%v installed=%+v installErr=%v status=%+v statusErr=%v", preview, previewErr, installed, installErr, status, statusErr,
+	)
+}
+
+func TestIntegrationUpgradesCompleteManifestlessV54Bundle(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	options := integration.Options{ConfigDir: root}
+	current, err := requestedModelPlan(options, root)
+	testutil.NoError(t, err)
+	v54, err := previousV54ModelPlanBundle(current)
+	testutil.NoError(t, err)
+	for _, identity := range modelAgentInventoryV3 {
+		name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
+		path := filepath.Join(root, "agents", name)
+		testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		testutil.NoError(t, os.WriteFile(path, v54.agents[name], 0o600))
+	}
+	service := NewIntegration()
+	preview, previewErr := service.Preview(context.Background(), options)
+	installed, installErr := service.Install(context.Background(), options)
+	status, statusErr := service.Status(context.Background(), options)
+	testutil.Require(t,
+		previewErr == nil && preview.State == integration.StatePartial &&
+			installErr == nil && installed.State == integration.StateInstalled &&
+			statusErr == nil && status.State == integration.StateInstalled,
+		"preview=%+v previewErr=%v installed=%+v installErr=%v status=%+v statusErr=%v", preview, previewErr, installed, installErr, status, statusErr,
+	)
+}
+
+func TestIntegrationUpgradesCompleteManifestlessHistoricalBundles(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(modelPlanBundle) (modelPlanBundle, error)
+	}{
+		{name: "v56", build: previousV56ModelPlanBundle},
+		{name: "v55", build: previousV55ModelPlanBundle},
+		{name: "v54", build: previousV54ModelPlanBundle},
+		{name: "v53", build: previousV53ModelPlanBundle},
+		{name: "v52", build: previousV52ModelPlanBundle},
+		{name: "v51", build: previousV51ModelPlanBundle},
+		{name: "v50", build: previousV50ModelPlanBundle},
+		{name: "v49", build: previousV49ModelPlanBundle},
+		{name: "v48", build: previousV48ModelPlanBundle},
+		{name: "v47", build: previousV47ModelPlanBundle},
+		{name: "v46", build: previousV46ModelPlanBundle},
+		{name: "v45", build: previousV45ModelPlanBundle},
+		{name: "v44", build: previousV44ModelPlanBundle},
+		{name: "v43", build: previousV43ModelPlanBundle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "opencode")
+			options := integration.Options{ConfigDir: root}
+			current, err := requestedModelPlan(options, root)
+			testutil.NoError(t, err)
+			historical, err := tc.build(current)
+			testutil.NoError(t, err)
+			for name, content := range historical.agents {
+				path := filepath.Join(root, "agents", name)
+				testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+				testutil.NoError(t, os.WriteFile(path, content, 0o600))
+			}
+			service := NewIntegration()
+			preview, previewErr := service.Preview(context.Background(), options)
+			installed, installErr := service.Install(context.Background(), options)
+			status, statusErr := service.Status(context.Background(), options)
+			testutil.Require(t,
+				previewErr == nil && preview.State == integration.StatePartial &&
+					installErr == nil && installed.State == integration.StateInstalled &&
+					statusErr == nil && status.State == integration.StateInstalled,
+				"preview=%+v previewErr=%v installed=%+v installErr=%v status=%+v statusErr=%v", preview, previewErr, installed, installErr, status, statusErr,
+			)
+		})
+	}
+}
+
 func TestIntegrationRecoversCompleteV43BundleWithoutManifest(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	historical := mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
@@ -2252,7 +2373,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 56",
+		"artifact: opencode-agent/vgxness-manager; version: 57",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native adaptive general-purpose partner",
 		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",

@@ -27,19 +27,21 @@ func windowsRootRenameBlocked(err error) bool {
 		(errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation))
 }
 
-func TestKnownPackagesOrderCurrentThenV15ThenV14ForEveryPlan(t *testing.T) {
+func TestKnownPackagesOrderCurrentThenV16ThenV15ForEveryPlan(t *testing.T) {
 	known, err := knownPackages()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(known) != 42 {
-		t.Fatalf("known packages length = %d, want 42", len(known))
+	if len(known) != 46 {
+		t.Fatalf("known packages length = %d, want 46", len(known))
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
 		}
+		v16, err := renderActiveV16("v0.0.0", plan)
+		require(t, err == nil)
 		v15, err := renderActiveV15("v0.0.0", plan)
 		require(t, err == nil)
 		v14, err := renderActiveV14("v0.0.0", plan)
@@ -70,19 +72,58 @@ func TestKnownPackagesOrderCurrentThenV15ThenV14ForEveryPlan(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []string{current.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
+		want := []string{current.SHA256, v16.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
 		foundV12 := 0
 		for index, pkg := range known {
 			if pkg.SHA256 == v12.SHA256 {
 				foundV12++
 			}
-			if index >= int(planIndex(plan))*10 && index < int(planIndex(plan))*10+10 && pkg.SHA256 != want[index-int(planIndex(plan))*10] {
-				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*10])
+			if index >= int(planIndex(plan))*11 && index < int(planIndex(plan))*11+11 && pkg.SHA256 != want[index-int(planIndex(plan))*11] {
+				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*11])
 			}
 		}
 		if foundV12 != 1 {
 			t.Fatalf("known packages v12 count for %s = %d, want 1", plan, foundV12)
 		}
+	}
+}
+
+func TestActiveV16LifecycleStatusUpgradeAndDrift(t *testing.T) {
+	plan := sdd.PlanMedium
+	v16, err := renderActiveV16("v0.0.0", plan)
+	require(t, err == nil)
+	for name, mutate := range map[string]func(*Package){
+		"exact":    func(*Package) {},
+		"one-byte": func(pkg *Package) { pkg.Artifacts[0].Bytes = append(pkg.Artifacts[0].Bytes, '\n') },
+		"mixed": func(pkg *Package) {
+			current, renderErr := renderActiveV16("v0.0.0", sdd.PlanUltra)
+			require(t, renderErr == nil)
+			for index := range pkg.Artifacts {
+				if pkg.Artifacts[index].Path == "agents/general.toml" {
+					pkg.Artifacts[index] = artifact(t, current, "agents/general.toml")
+					return
+				}
+			}
+			t.Fatal("v16 package lacks general profile")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "codex")
+			candidate := clonePackage(v16)
+			mutate(&candidate)
+			writePackage(t, root, candidate)
+			service := NewIntegration()
+			status, statusErr := service.Status(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
+			if name != "exact" {
+				if statusErr != nil || status.State != integration.StateDrifted {
+					t.Fatalf("Status(%s) = %+v, %v; want drifted", name, status, statusErr)
+				}
+				return
+			}
+			require(t, statusErr == nil && status.State == integration.StatePartial && status.RestartRequired)
+			upgraded, reinstallErr := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
+			require(t, reinstallErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed)
+		})
 	}
 }
 

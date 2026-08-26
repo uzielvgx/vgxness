@@ -96,8 +96,24 @@ func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
 	return pkg, nil
 }
 
+// renderActiveV16 retains the complete v16 package exclusively for lifecycle
+// recognition. It is the exact predecessor of the current v17 package.
+func renderActiveV16(version string, plan sdd.Plan) (Package, error) {
+	selected, err := profilesForPlan(plan)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg, err := renderPackage(version, selected, plan, false)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg.Artifacts[0].Bytes = []byte(activeV16ManagerInstructions())
+	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
+	return pkg, nil
+}
+
 // renderActiveV15 retains the complete v15 package exclusively for lifecycle
-// recognition. It is the exact predecessor of the current v16 package.
+// recognition.
 func renderActiveV15(version string, plan sdd.Plan) (Package, error) {
 	selected, err := profilesForPlan(plan)
 	if err != nil {
@@ -314,7 +330,7 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
 func activeManagerInstructions() string {
-	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 16; parity: opencode-v56", 1)
+	value := strings.Replace(managerInstructions, "artifact: codex-agent/manager; version: 5; parity: opencode-v46", "artifact: codex-agent/manager; version: 17; parity: opencode-v57", 1)
 	value = strings.Replace(value, historicalFixedLensReviewDepth, strictCAREReviewDepth, 1)
 	value = strings.Replace(value, historicalCodexCAREBypass, strictCAREAssurance, 1)
 	value = strings.Replace(value, historicalCodexRefuterRouting, currentCodexCAREChallengerRouting, 1)
@@ -354,12 +370,16 @@ func activeV14ManagerInstructions() string {
 }
 
 func activeV15ManagerInstructions() string {
-	value := strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 16; parity: opencode-v56", "artifact: codex-agent/manager; version: 15; parity: opencode-v55", 1)
+	value := strings.Replace(activeV16ManagerInstructions(), "artifact: codex-agent/manager; version: 16; parity: opencode-v56", "artifact: codex-agent/manager; version: 15; parity: opencode-v55", 1)
 	value = strings.Replace(value, strictCAREAssurance, historicalCodexCAREBypass, 1)
 	value = strings.Replace(value, currentCodexCAREChallengerRouting, historicalCodexRefuterRouting, 1)
 	value = strings.Replace(value, currentCodexCAREBinding, historicalCodexRefuterBinding, 1)
 	value = strings.Replace(value, currentCodexCAREHandoff, historicalCodexRefuterHandoff, 1)
 	return strings.Replace(value, strictCAREReviewDepth, historicalFixedLensReviewDepth, 1)
+}
+
+func activeV16ManagerInstructions() string {
+	return strings.Replace(activeManagerInstructions(), "artifact: codex-agent/manager; version: 17; parity: opencode-v57", "artifact: codex-agent/manager; version: 16; parity: opencode-v56", 1)
 }
 
 func activeV13ManagerInstructions() string {
@@ -790,6 +810,7 @@ func (pkg Package) Validate() error {
 		matchesCurrent = currentErr == nil && packageMatches(pkg, current, activeManagerInstructions())
 	}
 	matchesKnown := matchesCurrent ||
+		(currentErr == nil && packageMatches(pkg, current, activeV16ManagerInstructions())) ||
 		(preCAREErr == nil && packageMatches(pkg, preCARE, activeV13ManagerInstructions())) ||
 		(activeV12Err == nil && packageMatches(pkg, activeV12, activeV12ManagerInstructions())) ||
 		(activeV11Err == nil && packageMatches(pkg, activeV11, activeV11ManagerInstructions())) ||

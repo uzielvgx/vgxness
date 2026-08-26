@@ -39,7 +39,7 @@ The envelope is invalid on any change to its mission, task, accepted input, stat
 
 Copied observations are bounded and privacy-safe: only class, status, controlled reason/risk categories, invalidation trigger, elapsed bucket, and write-launched flag may be observed. They exclude mission, source, path, credentials, authorization, and identity; never persist, launch work, or influence readiness, delegation, or lifecycle state.
 
-Rollback removes the new contract projection or returns to exact recognized predecessor artifacts (OpenCode manager v55; Codex manager v15). Those labels are predecessor-only, not current runtime identities. It does not claim automatic runtime rollback. These contracts are prompt and source behavior, not host enforcement, prevention proof, or effectiveness proof.
+Rollback removes the new contract projection or returns to exact recognized predecessor artifacts (OpenCode manager v56; Codex manager v16). Those labels are predecessor-only, not current runtime identities. It does not claim automatic runtime rollback. These contracts are prompt and source behavior, not host enforcement, prevention proof, or effectiveness proof.
 
 Baseline and controlled pilot work are deferred and separately authorized; no pilot or external holdout runs here. Any future matched cohorts require external opaque holdout custody and stop on: activation coverage <100%, binding-safety >0%, invalidation recall <100%, accidental exempt ceremony, seeded verifier/reviewer recall <100%, pilot recall below matched baseline, false-block >10%, p95 overhead >15 minutes, or unknown metric provenance. No proven-effectiveness claim follows from this documentation.
 

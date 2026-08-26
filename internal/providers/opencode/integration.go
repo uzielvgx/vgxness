@@ -26,6 +26,9 @@ import (
 //go:embed templates/manager.md
 var canonicalManagerPrompt string
 
+//go:embed templates/manager.v56.md
+var previousManagerPromptV56 string
+
 //go:embed templates/manager.v49.md
 var previousManagerPromptV49 string
 
@@ -1160,7 +1163,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	historicalReviewBundleMatched := false
 	if plan.configV3 != nil {
 		var historicalErr error
-		historicalReviewBundle, historicalReviewBundleMatched, historicalErr = completeHistoricalReviewBundle(configDirectory)
+		historicalReviewBundle, historicalReviewBundleMatched, historicalErr = completeHistoricalReviewBundle(configDirectory, plan)
 		if historicalErr != nil {
 			return inspection{}, historicalErr
 		}
@@ -1242,6 +1245,14 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		return inspection{}, integration.ErrInvalid
 	}
 	state := inspection{result: result, artifacts: make([]artifact, 0, len(modelAgentInventoryV3)+3)}
+	manifestlessCoherent := false
+	if !installedPlanOK && errors.Is(predecessorManifestErr, os.ErrNotExist) {
+		bundle, _, coherenceErr := manifestlessModelGeneration(configDirectory, plan)
+		if coherenceErr != nil {
+			return inspection{}, coherenceErr
+		}
+		manifestlessCoherent = len(bundle.agents) != 0
+	}
 	for _, identity := range modelAgentInventoryV3 {
 		name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
 		content := plan.agents[name]
@@ -1388,6 +1399,11 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 			item.exact = bytes.Equal(current, item.content)
 		}
 		if !item.exact {
+			if manifestlessCoherent && strings.HasPrefix(item.path, filepath.Join(configDirectory, "agents")+string(os.PathSeparator)) {
+				item.upgrade = true
+				item.prior = append([]byte(nil), current...)
+				continue
+			}
 			if installedPlanOK && len(installedPlanBytes[item.path]) != 0 && !bytes.Equal(current, installedPlanBytes[item.path]) && !isManagedPredecessor(current, item.content, item.predecessors, item.recognize) {
 				state.result.State = integration.StateDrifted
 				return state, nil
@@ -1434,39 +1450,113 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	if len(state.retired) != 0 && state.result.State == integration.StateInstalled {
 		state.result.State = integration.StatePartial
 	}
+	if !installedPlanOK && errors.Is(predecessorManifestErr, os.ErrNotExist) {
+		coherent, coherenceErr := coherentManifestlessModelGeneration(configDirectory, plan)
+		if coherenceErr != nil {
+			return inspection{}, coherenceErr
+		}
+		if !coherent {
+			state.result.State = integration.StateDrifted
+		}
+	}
 	return state, nil
 }
 
-func completeHistoricalReviewBundle(configDirectory string) (modelPlanBundle, bool, error) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+func coherentManifestlessModelGeneration(configDirectory string, current modelPlanBundle) (bool, error) {
+	_, coherent, err := manifestlessModelGeneration(configDirectory, current)
+	return coherent, err
+}
+
+func manifestlessModelGeneration(configDirectory string, current modelPlanBundle) (modelPlanBundle, bool, error) {
+	candidates, err := supportedHistoricalModelPlanBundles(current)
 	if err != nil {
 		return modelPlanBundle{}, false, err
 	}
-	v45, err := previousV45ModelPlanBundle(current)
+	known := make(map[string]struct{})
+	for _, candidate := range candidates {
+		for name := range candidate.agents {
+			known[name] = struct{}{}
+		}
+	}
+	complete := false
+	for _, candidate := range candidates {
+		matched := true
+		inventoryComplete := true
+		for name, expected := range candidate.agents {
+			content, readErr := readRegularFile(filepath.Join(configDirectory, "agents", name))
+			if errors.Is(readErr, os.ErrNotExist) {
+				matched = false
+				inventoryComplete = false
+				continue
+			}
+			if readErr != nil {
+				if errors.Is(readErr, integration.ErrDrift) {
+					matched = false
+					inventoryComplete = false
+					continue
+				}
+				return modelPlanBundle{}, false, readErr
+			}
+			if !bytes.Equal(content, expected) {
+				matched = false
+			}
+		}
+		if inventoryComplete {
+			complete = true
+		}
+		if !matched {
+			continue
+		}
+		for name := range known {
+			if _, expected := candidate.agents[name]; expected {
+				continue
+			}
+			if _, readErr := readRegularFile(filepath.Join(configDirectory, "agents", name)); readErr == nil {
+				matched = false
+				break
+			} else if errors.Is(readErr, integration.ErrDrift) {
+				matched = false
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				return modelPlanBundle{}, false, readErr
+			}
+		}
+		if matched {
+			return candidate, true, nil
+		}
+	}
+	return modelPlanBundle{}, !complete, nil
+}
+
+func completeHistoricalReviewBundle(configDirectory string, current modelPlanBundle) (modelPlanBundle, bool, error) {
+	bundle, coherent, err := manifestlessModelGeneration(configDirectory, current)
 	if err != nil {
 		return modelPlanBundle{}, false, err
 	}
-	v44, err := previousV44ModelPlanBundle(current)
+	if coherent && len(bundle.agents[reviewRiskName]) != 0 {
+		return bundle, true, nil
+	}
+	candidates, err := supportedHistoricalModelPlanBundles(current)
 	if err != nil {
 		return modelPlanBundle{}, false, err
 	}
-	v43, err := previousV43ModelPlanBundle(current)
-	if err != nil {
-		return modelPlanBundle{}, false, err
-	}
-	for _, bundle := range []modelPlanBundle{v45, v44, v43} {
+	for _, candidate := range candidates {
+		if len(candidate.agents[reviewRiskName]) == 0 {
+			continue
+		}
 		matched := true
 		for _, name := range append([]string{managerAgentName}, compactProtocolAgentNames...) {
-			expected := bundle.agents[name]
-			actual, readErr := readRegularFile(filepath.Join(configDirectory, "agents", name))
-			if readErr != nil || !bytes.Equal(actual, expected) {
+			content, readErr := readRegularFile(filepath.Join(configDirectory, "agents", name))
+			if readErr != nil || !bytes.Equal(content, candidate.agents[name]) {
 				matched = false
 				break
 			}
 		}
 		if matched {
-			return bundle, true, nil
+			return candidate, true, nil
 		}
+	}
+	if !coherent {
+		return modelPlanBundle{}, false, err
 	}
 	return modelPlanBundle{}, false, nil
 }
