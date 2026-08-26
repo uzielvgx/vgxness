@@ -150,6 +150,17 @@ func (provider *openCodeProvider) Plan(ctx context.Context, shared SharedPlan) (
 	return plan, nil
 }
 
+func (provider *openCodeProvider) Status(ctx context.Context, _ SharedPlan) (ProviderPlan, error) {
+	if provider == nil || provider.service == nil {
+		return ProviderPlan{}, ErrInvalid
+	}
+	status, err := provider.service.Status(ctx, provider.options)
+	if err != nil {
+		return ProviderPlan{}, err
+	}
+	return ProviderPlan{Provider: ProviderOpenCode, Ready: status.Ready, Installed: status.Integration.State == integration.StateInstalled, State: status.Integration.State, ArtifactCount: status.Integration.ArtifactCount, Blocker: status.Blocker}, nil
+}
+
 func (provider *openCodeProvider) Apply(ctx context.Context, plan ProviderPlan, shared SharedResult) (ProviderResult, error) {
 	result := ProviderResult{Provider: ProviderOpenCode}
 	if provider == nil || provider.service == nil || provider.previews == nil || provider.service.managedIntegrations == nil || provider.service.prober == nil || !plan.Ready || !shared.Verified || shared.Launcher.State != selfinstall.StateInstalled || shared.Launcher.LauncherPath == "" {
@@ -177,17 +188,21 @@ func (provider *openCodeProvider) Apply(ctx context.Context, plan ProviderPlan, 
 	installed, err := managed.Install(ctx, provider.options.Integration)
 	result.Changed = installed.Changed
 	if err != nil {
+		result.Recovery = providerRecovery(ProviderOpenCode, "installation may be partial")
 		return result, err
 	}
 	status, err := managed.Status(ctx, provider.options.Integration)
 	if err != nil {
+		result.Recovery = providerRecovery(ProviderOpenCode, "installation completed but status failed")
 		return result, err
 	}
 	if status.Provider != string(ProviderOpenCode) || status.State != integration.StateInstalled || status.ArtifactSHA256 != plan.ArtifactSHA256 || status.ArtifactCount != plan.ArtifactCount {
+		result.Recovery = providerRecovery(ProviderOpenCode, "installation identity verification failed")
 		return result, fmt.Errorf("%w: opencode integration identity", ErrVerification)
 	}
 	handshake, err = provider.service.prober.Probe(ctx, provider.options.Workspace)
 	if err != nil || !handshake.OK {
+		result.Recovery = providerRecovery(ProviderOpenCode, "installation completed but the health handshake failed")
 		return result, fmt.Errorf("%w: opencode handshake", ErrVerification)
 	}
 	result.Verified = true
@@ -213,6 +228,26 @@ func (shared serviceShared) Plan(ctx context.Context) (SharedPlan, error) {
 	if launcher.State == selfinstall.StateDrifted || plan.Skills.State == skills.StateDrifted || plan.Skills.State == skills.StateConflict {
 		plan.Ready = false
 		plan.Blocker = "Managed launcher or shared skills have drift or a conflict."
+	}
+	return plan, nil
+}
+
+func (shared serviceShared) Status(ctx context.Context) (SharedPlan, error) {
+	if shared.service == nil || shared.service.installer == nil || shared.service.skills == nil {
+		return SharedPlan{}, ErrInvalid
+	}
+	launcher, err := shared.service.installer.Status(ctx, shared.options.SelfInstall)
+	if err != nil {
+		return SharedPlan{}, err
+	}
+	plan := SharedPlan{Launcher: launcher}
+	plan.Skills, err = shared.service.skills.Status(ctx, shared.options.Skills)
+	if err != nil && !errors.Is(err, skills.ErrDrift) && !errors.Is(err, skills.ErrConflict) {
+		return plan, err
+	}
+	plan.Ready = launcher.State == selfinstall.StateInstalled && plan.Skills.State == skills.StateInstalled
+	if !plan.Ready {
+		plan.Blocker = "Shared launcher or global skills are not installed or have drift."
 	}
 	return plan, nil
 }

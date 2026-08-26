@@ -1,6 +1,6 @@
-# Guided OpenCode setup
+# Guided OpenCode and Codex setup
 
-The wizard explains and verifies the complete OpenCode setup before changing anything. Current ownership is 16 OpenCode-managed artifacts plus the separate global 47-file, 19-skill catalog, which adds `memory-sync` and `sdd-lifecycle`; the latter activates only after explicit SDD request/acceptance and fails closed when unavailable. The legacy provider skill is not an active artifact.
+The unified `setup opencode|codex|all` flow explains and verifies selected providers before changing anything. OpenCode owns 16 OpenCode-managed artifacts; Codex retains ownership of its `config.toml` and VGXNESS manages only its documented profiles. Shared setup work covers the launcher and separate global 47-file, 19-skill catalog, which adds `memory-sync` and `sdd-lifecycle`; the latter activates only after explicit SDD request/acceptance and fails closed when unavailable. The legacy provider skill is not an active artifact.
 
 1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
 2. Install or update the permanent versioned launcher.
@@ -21,9 +21,11 @@ vgxness setup opencode --preview
 vgxness setup opencode
 vgxness setup opencode --yes
 vgxness setup opencode --status
+vgxness setup codex --preview --codex-home /absolute/path/to/home
+vgxness setup all --preview --config-dir /absolute/path/to/opencode --codex-home /absolute/path/to/codex-home
 ```
 
-Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explicit absolute destinations. Setup publishes portable skills to OpenCode's discoverable global root; use the lower-level `vgxness skills --skills-dir PATH` lifecycle only for isolated custom roots. Use `--model-plan low|medium|high|ultra` for a homogeneous preset, or set the efficient, balanced, and frontier provider/model slots independently. A mixed-provider setup must include all three `--model-efficient`, `--model-balanced`, and `--model-frontier` references plus all three `--model-efficient-effort`, `--model-balanced-effort`, and `--model-frontier-effort` values. For example:
+`vgxness setup opencode` supports `--config-dir` and the model flags. Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explicit OpenCode destinations. Use `--codex-home` for the independent Codex home; it is never inferred from or routed through `--config-dir`. Setup publishes portable skills to OpenCode's discoverable global root; use the lower-level `vgxness skills --skills-dir PATH` lifecycle only for isolated custom roots. Use `--model-plan low|medium|high|ultra` for a homogeneous preset, or set the efficient, balanced, and frontier provider/model slots independently. A mixed-provider setup must include all three `--model-efficient`, `--model-balanced`, and `--model-frontier` references plus all three `--model-efficient-effort`, `--model-balanced-effort`, and `--model-frontier-effort` values. For example:
 
 ```sh
 vgxness setup opencode --yes \
@@ -46,6 +48,8 @@ Preview is ready to apply when OpenCode responds healthily and no managed destin
 - the separate global 47-file, 19-skill `skills-creator`, `stacked-pr`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, `memory-sync`, and `sdd-lifecycle` catalog is installed without drift; OpenCode uninstall does not own it;
 - `opencode.json` semantically selects `vgxness-manager` as the default agent while preserving unrelated JSON values, existing `opencode.jsonc` bytes unchanged, and bounded `default-agent.json` restoration metadata recording whether the config existed and any prior explicit default;
 - the bounded OpenCode handshake succeeds in the workspace.
+
+`setup codex --status` and `setup all --status` apply the same shared launcher and global-skills health requirements, then require every selected provider to be installed and healthy. If a provider fails after a possible mutation, setup reports its partial outcome and directs the user to `vgxness integrate <provider> status` before retrying; shared recovery guidance remains separate.
 
 The wizard never edits `PATH`, downloads packages, silently initializes skills or CodeGraph, overwrites foreign content, commits, pushes, or performs destructive Git cleanup. It updates `opencode.json` only through the semantic merge above, leaves existing `opencode.jsonc` bytes unchanged, and owns only the bounded `default-agent.json` restoration metadata.
 

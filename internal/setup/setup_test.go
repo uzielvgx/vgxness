@@ -183,6 +183,40 @@ func TestSharedBoundaryPlansAndAppliesLauncherAndSkills(t *testing.T) {
 	}
 }
 
+func TestSharedBoundaryStatusRequiresLauncherAndSkillsHealth(t *testing.T) {
+	tests := []struct {
+		name      string
+		launcher  selfinstall.Result
+		skills    skills.Result
+		skillsErr error
+		wantErr   bool
+	}{
+		{name: "launcher absent", launcher: selfinstall.Result{State: selfinstall.StateAbsent}, skills: skills.Result{State: skills.StateInstalled}},
+		{name: "skills drifted", launcher: selfinstall.Result{State: selfinstall.StateInstalled}, skills: skills.Result{State: skills.StateDrifted}, skillsErr: skills.ErrDrift},
+		{name: "skills unavailable", launcher: selfinstall.Result{State: selfinstall.StateInstalled}, skillsErr: errors.New("skills unavailable"), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := New(&fakeInstaller{statusResult: test.launcher}, nil, nil, nil)
+			service.skills = &fakeSkills{status: test.skills, statusErr: test.skillsErr}
+			plan, err := service.Shared(Options{}).Status(context.Background())
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("expected status error")
+				}
+				return
+			}
+			if err != nil || plan.Ready || plan.Blocker == "" {
+				t.Fatalf("plan=%+v err=%v", plan, err)
+			}
+		})
+	}
+	service := New(&fakeInstaller{statusResult: selfinstall.Result{State: selfinstall.StateInstalled}}, nil, nil, nil)
+	if _, err := service.Shared(Options{}).Status(context.Background()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing skills runtime err=%v", err)
+	}
+}
+
 func TestOpenCodeProviderStopsBeforeInstallWhenPreWriteHandshakeFlips(t *testing.T) {
 	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "frozen", ArtifactCount: 18}}
 	managed := &fakeIntegration{}
@@ -224,6 +258,23 @@ func TestOpenCodeProviderUsesVerifiedLauncherAndHandshakeGates(t *testing.T) {
 	result, err := provider.Apply(context.Background(), plan, SharedResult{Verified: true, Launcher: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/verified/vgxness"}})
 	if err != nil || !result.Verified || managedPath != "/verified/vgxness" || strings.Join(previewPaths, ",") != "/planned/vgxness,/verified/vgxness" || health.calls != 3 {
 		t.Fatalf("result=%+v err=%v managed=%q previews=%v probes=%d", result, err, managedPath, previewPaths, health.calls)
+	}
+}
+
+func TestOpenCodeProviderReportsRecoveryAfterPartialInstallFailure(t *testing.T) {
+	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "frozen", ArtifactCount: 18}}
+	failure := errors.New("install failed after mutation")
+	managed := &fakeIntegration{installResult: integration.Result{Provider: "opencode", State: integration.StatePartial, Changed: true}, installErr: failure}
+	service := New(&fakeInstaller{}, nil, nil, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	service.managedIntegrations = func(string) (integration.ManagedRuntime, error) { return managed, nil }
+	provider := service.OpenCodeProvider(Options{Workspace: "/workspace"}, func(string) (integration.Runtime, error) { return preview, nil })
+	plan, err := provider.Plan(context.Background(), SharedPlan{Ready: true, Launcher: selfinstall.Result{LauncherPath: "/planned/vgxness"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := provider.Apply(context.Background(), plan, SharedResult{Verified: true, Launcher: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/verified/vgxness"}})
+	if !errors.Is(err, failure) || !result.Changed || !strings.Contains(result.Recovery, "vgxness integrate opencode status") {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 

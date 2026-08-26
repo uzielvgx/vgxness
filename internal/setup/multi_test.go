@@ -11,6 +11,8 @@ import (
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/selfinstall"
+	"github.com/vgxness/vgxness/internal/skills"
 )
 
 type fakeMultiProvider struct {
@@ -24,6 +26,7 @@ type fakeMultiProvider struct {
 
 type fakeShared struct {
 	plan        SharedPlan
+	statusErr   error
 	applyErr    error
 	finalizeErr error
 	calls       *[]string
@@ -40,6 +43,7 @@ type fakeIntegrationRuntime struct {
 	protectedInstallCalls               int
 	protectedReinstallCalls             int
 	events                              *[]string
+	installErr, statusErr               error
 }
 
 type fakeSourceIdentity struct{}
@@ -56,11 +60,11 @@ func (f *fakeIntegrationRuntime) Install(_ context.Context, options integration.
 		*f.events = append(*f.events, "install")
 	}
 	f.installOptions = options
-	return f.install, nil
+	return f.install, f.installErr
 }
 func (f *fakeIntegrationRuntime) Status(_ context.Context, options integration.Options) (integration.Result, error) {
 	f.statusOptions = options
-	return f.status, nil
+	return f.status, f.statusErr
 }
 func (f *fakeIntegrationRuntime) Uninstall(context.Context, integration.Options) (integration.Result, error) {
 	return integration.Result{}, nil
@@ -149,6 +153,10 @@ func (f fakeShared) Plan(context.Context) (SharedPlan, error) {
 	*f.calls = append(*f.calls, "shared:plan")
 	return f.plan, nil
 }
+func (f fakeShared) Status(context.Context) (SharedPlan, error) {
+	*f.calls = append(*f.calls, "shared:status")
+	return f.plan, f.statusErr
+}
 func (f fakeShared) Apply(context.Context, SharedPlan) (SharedResult, error) {
 	*f.calls = append(*f.calls, "shared:apply")
 	return SharedResult{Verified: f.applyErr == nil}, f.applyErr
@@ -161,6 +169,9 @@ func (f fakeShared) Finalize(context.Context, SharedPlan, SharedResult) (SharedR
 func (f fakeMultiProvider) Provider() Provider { return f.name }
 func (f fakeMultiProvider) Plan(context.Context, SharedPlan) (ProviderPlan, error) {
 	*f.calls = append(*f.calls, string(f.name)+":plan")
+	return f.plan, f.planErr
+}
+func (f fakeMultiProvider) Status(context.Context, SharedPlan) (ProviderPlan, error) {
 	return f.plan, f.planErr
 }
 func (f fakeMultiProvider) Apply(ctx context.Context, _ ProviderPlan, _ SharedResult) (ProviderResult, error) {
@@ -197,6 +208,40 @@ func TestMultiApplyOrdersProvidersAndSharesWorkOnce(t *testing.T) {
 	}
 	if len(result.Providers) != 2 || !result.Providers[0].Verified || !result.Providers[1].Verified {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestMultiStatusRequiresSharedHealthForCodexAndAll(t *testing.T) {
+	states := []struct {
+		name string
+		plan SharedPlan
+		err  error
+	}{
+		{name: "launcher-absent", plan: SharedPlan{Launcher: selfinstall.Result{State: selfinstall.StateAbsent}, Skills: skills.Result{State: skills.StateInstalled}, Blocker: "shared launcher is absent"}},
+		{name: "skills-drifted", plan: SharedPlan{Launcher: selfinstall.Result{State: selfinstall.StateInstalled}, Skills: skills.Result{State: skills.StateDrifted}, Blocker: "shared skills have drift"}},
+		{name: "shared-unavailable", err: errors.New("shared status unavailable")},
+	}
+	for _, providers := range [][]Provider{{ProviderCodex}, {ProviderOpenCode, ProviderCodex}} {
+		for _, state := range states {
+			t.Run(state.name+"/"+string(providers[len(providers)-1]), func(t *testing.T) {
+				calls := []string{}
+				multi := NewMultiWithShared(
+					fakeShared{plan: state.plan, statusErr: state.err, calls: &calls},
+					fakeMultiProvider{name: ProviderOpenCode, plan: ProviderPlan{Ready: true, Installed: true}, calls: &calls},
+					fakeMultiProvider{name: ProviderCodex, plan: ProviderPlan{Ready: true, Installed: true}, calls: &calls},
+				)
+				plan, err := multi.Status(context.Background(), MultiOptions{Providers: providers})
+				if state.err != nil {
+					if !errors.Is(err, state.err) {
+						t.Fatalf("err=%v", err)
+					}
+					return
+				}
+				if err != nil || plan.Ready || plan.Blocker == "" {
+					t.Fatalf("plan=%+v err=%v", plan, err)
+				}
+			})
+		}
 	}
 }
 
@@ -377,8 +422,18 @@ func TestIntegrationProviderRejectsUnverifiedStatusIdentity(t *testing.T) {
 		t.Fatalf("opencode slot override was lost: %#v", runtime.previewOptions)
 	}
 	result, err := adapter.Apply(context.Background(), plan, SharedResult{})
-	if !errors.Is(err, ErrVerification) || result.Verified {
+	if !errors.Is(err, ErrVerification) || result.Verified || !strings.Contains(result.Recovery, "vgxness integrate opencode status") {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestIntegrationProviderReportsRecoveryAfterPartialInstallFailure(t *testing.T) {
+	failure := errors.New("install failed after mutation")
+	runtime := &fakeIntegrationRuntime{install: integration.Result{Provider: "codex", State: integration.StatePartial, Changed: true}, installErr: failure}
+	adapter := NewIntegrationProvider(ProviderCodex, runtime, integration.Options{HomeDir: "/home"})
+	result, err := adapter.Apply(context.Background(), ProviderPlan{Provider: ProviderCodex, Ready: true, State: integration.StateAbsent}, SharedResult{})
+	if !errors.Is(err, failure) || !result.Changed || !strings.Contains(result.Recovery, "vgxness integrate codex status") {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 

@@ -13,13 +13,27 @@ import (
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
+	"github.com/vgxness/vgxness/internal/providers/opencode"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 	"github.com/vgxness/vgxness/internal/skills"
 )
 
-func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime) int {
+type multiSetupRuntime interface {
+	setupflow.Runtime
+	Shared(setupflow.Options) setupflow.SharedRuntime
+	OpenCodeProvider(setupflow.Options, setupflow.PreviewIntegrationFactory) setupflow.ProviderRuntime
+}
+
+func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime, providers ...integration.Runtime) int {
+	if len(providers) == 1 && len(args) > 0 && (args[0] == "opencode" || args[0] == "codex" || args[0] == "all") {
+		return runMultiSetup(ctx, args, stdin, stdout, stderr, runtime, providers[0])
+	}
+	return runOpenCodeSetup(ctx, args, stdin, stdout, stderr, runtime)
+}
+
+func runOpenCodeSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime) int {
 	if len(args) == 0 || args[0] != "opencode" {
 		fmt.Fprintln(stderr, "usage: vgxness setup opencode [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--model-plan low|medium|high|ultra] [--model-efficient PROVIDER/MODEL --model-efficient-effort EFFORT] [--model-balanced PROVIDER/MODEL --model-balanced-effort EFFORT] [--model-frontier PROVIDER/MODEL --model-frontier-effort EFFORT]")
 		return 2
@@ -159,6 +173,231 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	}
 	fmt.Fprintf(stdout, "\nResultado: configuración completa; changed=%t. Reinicia OpenCode para cargar vgxness-manager como agente predeterminado.\n", result.Changed)
 	return 0
+}
+
+func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime, codex integration.Runtime) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|all> [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--codex-home PATH] [--model-plan low|medium|high|ultra]")
+		return 2
+	}
+	providers, ok := setupProviders(args[0])
+	if !ok {
+		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|all> [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--codex-home PATH] [--model-plan low|medium|high|ultra]")
+		return 2
+	}
+	flags := flag.NewFlagSet("setup "+args[0], flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var preview, status, yes bool
+	var workspace string
+	var codexHome string
+	var deprecatedModel string
+	var options setupflow.Options
+	flags.BoolVar(&preview, "preview", false, "explain the complete plan without writing")
+	flags.BoolVar(&status, "status", false, "inspect the complete setup without writing")
+	flags.BoolVar(&yes, "yes", false, "approve the explained plan non-interactively")
+	flags.StringVar(&workspace, "workspace", "", "workspace used for the OpenCode handshake")
+	flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
+	flags.Var((*planFlag)(&options.Integration.ModelPlan), "model-plan", "active model plan: low, medium, high, or ultra")
+	flags.StringVar(&options.Integration.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
+	flags.StringVar(&options.Integration.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
+	flags.StringVar(&options.Integration.ModelFrontier, "model-frontier", "", "exact provider/model for the frontier slot")
+	flags.Var(effortFlag{target: &options.Integration.ModelEfficientEffort}, "model-efficient-effort", "effort for the efficient mixed slot")
+	flags.Var(effortFlag{target: &options.Integration.ModelBalancedEffort}, "model-balanced-effort", "effort for the balanced mixed slot")
+	flags.Var(effortFlag{target: &options.Integration.ModelFrontierEffort}, "model-frontier-effort", "effort for the frontier mixed slot")
+	flags.StringVar(&options.SelfInstall.BinDir, "bin-dir", "", "stable launcher directory")
+	flags.StringVar(&options.SelfInstall.DataDir, "data-dir", "", "version data directory")
+	flags.StringVar(&options.Integration.ConfigDir, "config-dir", "", "OpenCode configuration directory")
+	flags.StringVar(&codexHome, "codex-home", "", "Codex home directory")
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || preview && status || yes && (preview || status) {
+		fmt.Fprintln(stderr, "invalid setup arguments")
+		return 2
+	}
+	if !includesOpenCode(providers) && (hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration)) {
+		fmt.Fprintln(stderr, "invalid: model slots apply only to OpenCode")
+		return 2
+	}
+	if !includesOpenCode(providers) && options.Integration.ConfigDir != "" {
+		fmt.Fprintln(stderr, "invalid: --config-dir applies only to OpenCode")
+		return 2
+	}
+	if !includesCodex(providers) && codexHome != "" {
+		fmt.Fprintln(stderr, "invalid: --codex-home applies only to Codex")
+		return 2
+	}
+	if includesOpenCode(providers) && (hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration)) {
+		if options.Integration.ModelEfficient == "" || options.Integration.ModelBalanced == "" || options.Integration.ModelFrontier == "" || !validSetupModelReference(options.Integration.ModelEfficient) || !validSetupModelReference(options.Integration.ModelBalanced) || !validSetupModelReference(options.Integration.ModelFrontier) {
+			fmt.Fprintln(stderr, "invalid: model slots must be valid provider/model references")
+			return 2
+		}
+		mixed := modelProvider(options.Integration.ModelEfficient) != modelProvider(options.Integration.ModelBalanced) || modelProvider(options.Integration.ModelEfficient) != modelProvider(options.Integration.ModelFrontier)
+		if mixed && (options.Integration.ModelEfficientEffort == "" || options.Integration.ModelBalancedEffort == "" || options.Integration.ModelFrontierEffort == "") {
+			fmt.Fprintln(stderr, "invalid: mixed model slots require all refs and efforts")
+			return 2
+		}
+		if !mixed && hasSetupSlotEffort(options.Integration) {
+			fmt.Fprintln(stderr, "invalid: per-slot efforts require mixed providers")
+			return 2
+		}
+	}
+	if runtime == nil || (!includesOpenCode(providers) && codex == nil) || (len(providers) == 2 && codex == nil) {
+		fmt.Fprintln(stderr, "operational: setup runtime is unavailable")
+		return 1
+	}
+	composite, ok := runtime.(multiSetupRuntime)
+	if !ok {
+		fmt.Fprintln(stderr, "operational: multi-provider setup runtime is unavailable")
+		return 1
+	}
+	if workspace == "" {
+		current, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(stderr, "operational: current workspace is unavailable")
+			return 1
+		}
+		workspace = current
+	}
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		fmt.Fprintln(stderr, "invalid: workspace is invalid")
+		return 2
+	}
+	options.Workspace = filepath.Clean(absWorkspace)
+	runtimes := make([]setupflow.ProviderRuntime, 0, len(providers))
+	for _, provider := range providers {
+		if provider == setupflow.ProviderOpenCode {
+			runtimes = append(runtimes, composite.OpenCodeProvider(options, func(path string) (integration.Runtime, error) {
+				return opencode.NewPreviewIntegration(path)
+			}))
+			continue
+		}
+		codexOptions, err := codexSetupOptions(options.Integration, codexHome)
+		if err != nil {
+			fmt.Fprintln(stderr, "operational: resolve Codex home directory")
+			return 1
+		}
+		runtimes = append(runtimes, setupflow.NewIntegrationProvider(provider, codex, codexOptions))
+	}
+	multi := setupflow.NewMultiWithShared(composite.Shared(options), runtimes...)
+	if status {
+		plan, err := multi.Status(ctx, setupflow.MultiOptions{Providers: providers})
+		if err != nil {
+			code, message := failure(err)
+			fmt.Fprintln(stderr, message)
+			return code
+		}
+		renderMultiSetupPlan(stdout, plan)
+		if !plan.Ready {
+			fmt.Fprintln(stdout, "Resultado: requires attention.")
+			return 1
+		}
+		fmt.Fprintln(stdout, "Resultado: configuration is healthy.")
+		return 0
+	}
+	plan, err := multi.Plan(ctx, setupflow.MultiOptions{Providers: providers})
+	if err != nil {
+		code, message := failure(err)
+		fmt.Fprintln(stderr, message)
+		return code
+	}
+	renderMultiSetupPlan(stdout, plan)
+	if !plan.Ready {
+		fmt.Fprintf(stdout, "\nResultado: bloqueado sin cambios. %s\n", terminalSafe(plan.Blocker))
+		return 1
+	}
+	if preview {
+		fmt.Fprintln(stdout, "\nResultado: preview completo; no se modificó ningún archivo.")
+		return 0
+	}
+	if yes {
+		fmt.Fprintln(stdout, "\nConfirmación: aceptada mediante --yes.")
+	} else {
+		fmt.Fprint(stdout, "\n¿Aplicar exactamente este plan? [s/N]: ")
+		approved, approvalErr := setupApproval(stdin)
+		if approvalErr != nil {
+			fmt.Fprintln(stderr, "invalid: confirmation must be s/si/sí or n/no")
+			return 2
+		}
+		if !approved {
+			fmt.Fprintln(stdout, "Resultado: cancelado por el usuario; no se modificó ningún archivo.")
+			return 0
+		}
+	}
+	result, err := multi.Apply(ctx, setupflow.MultiOptions{Providers: providers, ExpectedPlanDigest: plan.Digest})
+	if err != nil {
+		renderMultiSetupResult(stdout, result)
+		if result.Shared.Recovery != "" {
+			fmt.Fprintf(stdout, "Recovery: %s\n", terminalSafe(result.Shared.Recovery))
+		}
+		code, message := failure(err)
+		fmt.Fprintln(stderr, message)
+		return code
+	}
+	fmt.Fprintf(stdout, "Resultado: configuración completa; changed=%t.\n", result.Plan.Changed)
+	renderMultiSetupResult(stdout, result)
+	return 0
+}
+
+func setupProviders(value string) ([]setupflow.Provider, bool) {
+	switch value {
+	case "opencode":
+		return []setupflow.Provider{setupflow.ProviderOpenCode}, true
+	case "codex":
+		return []setupflow.Provider{setupflow.ProviderCodex}, true
+	case "all":
+		return []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex}, true
+	default:
+		return nil, false
+	}
+}
+
+func includesOpenCode(providers []setupflow.Provider) bool {
+	for _, provider := range providers {
+		if provider == setupflow.ProviderOpenCode {
+			return true
+		}
+	}
+	return false
+}
+
+func includesCodex(providers []setupflow.Provider) bool {
+	for _, provider := range providers {
+		if provider == setupflow.ProviderCodex {
+			return true
+		}
+	}
+	return false
+}
+
+func codexSetupOptions(options integration.Options, home string) (integration.Options, error) {
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil || home == "" {
+			return integration.Options{}, fmt.Errorf("resolve Codex home directory")
+		}
+	}
+	if !filepath.IsAbs(home) {
+		return integration.Options{}, fmt.Errorf("resolve Codex home directory")
+	}
+	return integration.Options{HomeDir: home, ModelPlan: options.ModelPlan}, nil
+}
+
+func renderMultiSetupPlan(writer io.Writer, plan setupflow.MultiPlan) {
+	fmt.Fprintln(writer, "VGXNESS · Setup unificado")
+	fmt.Fprintf(writer, "Plan digest: %s\n", terminalSafe(plan.Digest))
+	fmt.Fprintln(writer, "Preflight compartido: launcher y skills")
+	for _, provider := range plan.Providers {
+		fmt.Fprintf(writer, "Provider %s: ready=%t changed=%t state=%s artifacts=%d\n", provider.Provider, provider.Ready, provider.Changed, provider.State, provider.ArtifactCount)
+	}
+}
+
+func renderMultiSetupResult(writer io.Writer, result setupflow.MultiResult) {
+	for _, provider := range result.Providers {
+		fmt.Fprintf(writer, "Provider %s: verified=%t changed=%t skipped=%t\n", provider.Provider, provider.Verified, provider.Changed, provider.Skipped)
+		if provider.Recovery != "" {
+			fmt.Fprintf(writer, "Recovery %s: %s\n", provider.Provider, terminalSafe(provider.Recovery))
+		}
+	}
 }
 
 func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
