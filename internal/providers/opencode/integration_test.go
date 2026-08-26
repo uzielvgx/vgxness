@@ -2451,14 +2451,15 @@ func TestCAREChallengerRequiresBoundTypedOutcomes(t *testing.T) {
 		"matching candidate identity",
 		"Reject a missing, mismatched, or stale Review Binding or candidate identity as INCONCLUSIVE.",
 		"Echo the complete Review Binding unchanged",
-		"Each result is corroborated, refuted, or inconclusive.",
+		"Return PASS|FAIL|INCONCLUSIVE with evidence, findings, claim recommendations, uncertainty, and blockers.",
+		"Each typed target result must be corroborated, refuted, or inconclusive.",
 	} {
 		if !strings.Contains(challenger, required) {
 			t.Errorf("CARE challenger is missing bound outcome contract %q", required)
 		}
 	}
 	if strings.Contains(challenger, "Each result is PASS, FAIL, or INCONCLUSIVE.") {
-		t.Error("CARE challenger retains the generic verification outcome vocabulary")
+		t.Error("CARE challenger uses generic wording for typed target results")
 	}
 }
 

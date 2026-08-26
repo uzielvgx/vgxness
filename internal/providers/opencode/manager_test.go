@@ -68,7 +68,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 }
 
-func TestVersionEvolutionImmediatePredecessorIsExactV57Package(t *testing.T) {
+func TestVersionEvolutionImmediatePredecessorIsExactCAREV1ManagerV58Package(t *testing.T) {
 	if !bytes.Equal([]byte(previousManagerPromptV57), []byte(previousManagerPromptV56)) {
 		t.Fatal("frozen v57 template differs from the v57 canonical source snapshot")
 	}
@@ -76,30 +76,14 @@ func TestVersionEvolutionImmediatePredecessorIsExactV57Package(t *testing.T) {
 	testutil.NoError(t, err)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
-	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 58")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 57")) {
-		t.Fatal("immediate predecessor did not retain the exact prior CARE package")
-	}
-	for _, required := range []string{
-		"Current CARE review is strict: only proven passive documentation or images",
-		"standard requires CARE reviewer; elevated requires CARE reviewer and CARE specialist; critical requires CARE reviewer, CARE specialist, and CARE challenger",
-		"A non-exempt candidate is VERIFIED only with same-candidate verifier and applicable CARE evidence.",
-		"Every non-exempt implementation must freeze, pass the native verifier, and complete its applicable CARE matrix before terminal success; IMPLEMENTED may be reported only as an intermediate state.",
-		"Static proof must establish that the entire change is passive documentation or images with no behavior, configuration, permission, or generated-output effect; extension or location alone is insufficient.",
-	} {
-		if !bytes.Contains(predecessor.agents[managerAgentName], []byte(required)) {
-			t.Errorf("v57 predecessor lost strict CARE clause %q", required)
-		}
+	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 58")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 58")) {
+		t.Fatal("immediate predecessor did not retain Manager58")
 	}
 	if !bytes.Contains(current.agents[managerAgentName], []byte("CARE risk tiers: passive documentation or images are exempt")) {
 		t.Error("current manager lacks concise CARE tiers")
 	}
-	expectedManager, err := bindManagerV57(current.resolved.Roles[sdd.RoleManager])
-	testutil.NoError(t, err)
-	if !bytes.Equal(predecessor.agents[managerAgentName], expectedManager) {
-		t.Fatal("immediate predecessor does not match the frozen v57 binder output")
-	}
 	for name, want := range current.agents {
-		if name != managerAgentName && !bytes.Equal(predecessor.agents[name], want) {
+		if name != "vgxness-care-reviewer.md" && name != "vgxness-care-specialist.md" && name != "vgxness-care-challenger.md" && !bytes.Equal(predecessor.agents[name], want) {
 			t.Fatalf("non-manager agent %s changed in immediate predecessor", name)
 		}
 	}
