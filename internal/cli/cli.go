@@ -74,7 +74,7 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		return runSelfInstall(ctx, args[1:], stdout, stderr, installer)
 	}
 	if len(args) > 0 && args[0] == "setup" {
-		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup)
+		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup, codexIntegration)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
 		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|sdd|integrate|self|skills|setup>")

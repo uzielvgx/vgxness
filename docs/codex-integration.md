@@ -1,6 +1,6 @@
 # Codex integration
 
-This guide is for a local Codex user who wants VGXNESS-managed agent profiles while retaining ownership of Codex configuration. It applies to the standalone `integrate codex` lifecycle; there is no `setup codex` command and VGXNESS installs no Codex plugin.
+This guide is for a local Codex user who wants VGXNESS-managed agent profiles while retaining ownership of Codex configuration. Use the unified `setup codex` entrypoint for guided setup; `integrate codex` remains available for provider-only lifecycle work. VGXNESS installs no Codex plugin.
 
 ## Prerequisites and ownership
 
@@ -32,13 +32,16 @@ For other versions, first confirm that `codex --help` lists `--strict-config`. D
 
 ## Lifecycle
 
-Preview is read-only:
+Preview is read-only. Setup is the unified entrypoint and may select either host or both in deterministic order:
 
 ```sh
-vgxness integrate codex preview
+vgxness setup codex --preview
+vgxness setup all --preview
 ```
 
-Install, inspect, repair an exact partial installation, and uninstall with:
+`setup all` applies OpenCode-only model slot options only to OpenCode. `--config-dir` remains the OpenCode root and `--codex-home` independently selects Codex's home. Codex continues to own `config.toml` and accepts only its own configuration root and model plan.
+
+The lower-level provider lifecycle remains available for install, inspect, repair an exact partial installation, and uninstall:
 
 ```sh
 vgxness integrate codex install --model-plan medium

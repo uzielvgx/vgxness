@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -357,4 +358,220 @@ func setupPlanFixture(ready bool) setupflow.Plan {
 		Skills:      skills.Result{State: skills.StateAbsent, Path: "/shared/skills", FileCount: 22},
 		Handshake:   integration.Handshake{OK: ready, Status: integration.HandshakeHealthy},
 	}
+}
+
+func TestSetupWizardAcceptsCodexPreviewThroughMultiCoordinator(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	codexHome := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"codex", "--preview", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	if code != 0 || codex.calls != 1 || stderr.Len() != 0 || codex.options.HomeDir != codexHome || !strings.Contains(stdout.String(), "codex") {
+		t.Fatalf("code=%d calls=%d codex=%+v stdout=%q stderr=%q", code, codex.calls, codex.options, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardAllSanitizesOpenCodeOptionsForCodex(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	openCodeConfigDir := t.TempDir()
+	codexHome := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"all", "--preview", "--config-dir", openCodeConfigDir, "--codex-home", codexHome, "--model-efficient", "openai/a", "--model-balanced", "openai/b", "--model-frontier", "openai/c"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	if code != 0 || stderr.Len() != 0 || codex.options.ModelEfficient != "" || codex.options.ModelBalanced != "" || codex.options.ModelFrontier != "" {
+		t.Fatalf("code=%d codex=%+v stdout=%q stderr=%q", code, codex.options, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Provider opencode") || !strings.Contains(stdout.String(), "Provider codex") {
+		t.Fatalf("missing deterministic provider report: %q", stdout.String())
+	}
+}
+
+func TestSetupWizardCodexPreviewFailureReportsWithoutApply(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	codex := &fakeIntegrationRuntime{err: errors.New("codex unavailable")}
+	codexHome := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"codex", "--preview", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	if code != 1 || codex.calls != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "io:") {
+		t.Fatalf("code=%d calls=%d stdout=%q stderr=%q", code, codex.calls, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardAllRoutesIndependentProviderRoots(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	openCodeConfigDir := t.TempDir()
+	codexHome := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"all", "--preview", "--config-dir", openCodeConfigDir, "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != openCodeConfigDir || codex.options.HomeDir != codexHome {
+		t.Fatalf("code=%d opencode=%+v codex=%+v stderr=%q", code, setup.openCodeOptions, codex.options, stderr.String())
+	}
+}
+
+func TestSetupWizardOpenCodeRetainsConfigDirInMultiFlow(t *testing.T) {
+	plan := setupPlanFixture(true)
+	plan.Integration.State = integration.StateInstalled
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: plan}}
+	openCodeConfigDir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--status", "--config-dir", openCodeConfigDir}, strings.NewReader(""), &stdout, &stderr, setup, nil)
+	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != openCodeConfigDir || !strings.Contains(stdout.String(), "Provider opencode") || !strings.Contains(stdout.String(), "Launcher: state=installed") || !strings.Contains(stdout.String(), "Handshake: ok=true status=healthy") || !strings.Contains(stdout.String(), "Plan de modelos:  provider=mixed manifest=") {
+		t.Fatalf("code=%d opencode=%+v stdout=%q stderr=%q", code, setup.openCodeOptions, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardOpenCodeStatusKeepsHandshakeIndependentFromSharedHealth(t *testing.T) {
+	shared := setupflow.SharedPlan{Ready: false, Blocker: "shared launcher or skills are unhealthy", Launcher: selfinstall.Result{State: selfinstall.StateDrifted}}
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}, sharedStatus: &shared}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--status", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, setup, nil)
+	if code != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "Launcher: state=drifted") || !strings.Contains(stdout.String(), "Handshake: ok=true status=healthy") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardOpenCodeRendersGuidedCompatibilityThroughMultiCoordinator(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, setup, nil)
+	output := stdout.String()
+	if code != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 7") || !strings.Contains(output, "Paso 7 de 7") || !strings.Contains(output, "handshake OpenCode=healthy") || !strings.Contains(output, "Reinicia OpenCode") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, output, stderr.String())
+	}
+}
+
+func TestSetupWizardRejectsProviderInapplicableRootFlagsBeforePlanning(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	for _, args := range [][]string{
+		{"codex", "--preview", "--config-dir", "/tmp/opencode"},
+		{"opencode", "--preview", "--codex-home", "/tmp/codex"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := runSetup(context.Background(), args, strings.NewReader(""), &stdout, &stderr, setup, codex); code != 2 || codex.calls != 0 || !strings.Contains(stderr.String(), "only") {
+			t.Fatalf("args=%v code=%d calls=%d stdout=%q stderr=%q", args, code, codex.calls, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestSetupWizardStatusRequiresInstalledProviderHealth(t *testing.T) {
+	openCodeConfigDir := t.TempDir()
+	codexHome := t.TempDir()
+	for _, test := range []struct {
+		name  string
+		state integration.State
+		err   error
+		code  int
+	}{
+		{name: "absent", state: integration.StateAbsent, code: 1},
+		{name: "installed", state: integration.StateInstalled, code: 0},
+		{name: "drifted", state: integration.StateDrifted, code: 1},
+		{name: "unavailable", err: errors.New("unavailable"), code: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := setupPlanFixture(true)
+			plan.Integration.State = integration.StateInstalled
+			setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: plan}}
+			codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: test.state, ArtifactSHA256: "codex-plan", ArtifactCount: 2}, err: test.err}
+			var stdout, stderr bytes.Buffer
+			code := runSetup(context.Background(), []string{"all", "--status", "--config-dir", openCodeConfigDir, "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+			if code != test.code {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if test.code == 0 && !strings.Contains(stdout.String(), "configuration is healthy") {
+				t.Fatalf("healthy status=%q", stdout.String())
+			}
+			if test.code == 1 && test.err == nil && !strings.Contains(stdout.String(), "requires attention") {
+				t.Fatalf("unhealthy status=%q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestSetupWizardCodexStatusRequiresSharedHealth(t *testing.T) {
+	shared := setupflow.SharedPlan{Ready: false, Blocker: "shared launcher or skills are unhealthy"}
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}, sharedStatus: &shared}
+	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "codex-plan", ArtifactCount: 2}}
+	codexHome := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"codex", "--status", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	if code != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "requires attention") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardApplyFailureRendersPartialOutcomesAndRecovery(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	codex := &installFailingRuntime{fakeIntegrationRuntime: fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex-plan", ArtifactCount: 2, Changed: true}}, installErr: errors.New("install failed")}
+	codexHome := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"codex", "--yes", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	if code != 1 || !strings.Contains(stdout.String(), "Provider codex: verified=false changed=true") || !strings.Contains(stdout.String(), "Recovery codex:") || !strings.Contains(stdout.String(), "vgxness integrate codex status") || strings.Contains(stdout.String(), "repair shared") || !strings.Contains(stderr.String(), "io:") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+type installFailingRuntime struct {
+	fakeIntegrationRuntime
+	installErr error
+}
+
+func (runtime *installFailingRuntime) Install(_ context.Context, options integration.Options) (integration.Result, error) {
+	runtime.calls++
+	runtime.action = "install"
+	runtime.options = options
+	return runtime.result, runtime.installErr
+}
+
+type fakeUnifiedSetup struct {
+	*fakeSetupRuntime
+	openCodeOptions integration.Options
+	sharedStatus    *setupflow.SharedPlan
+	sharedStatusErr error
+}
+
+func (fake *fakeUnifiedSetup) Shared(setupflow.Options) setupflow.SharedRuntime {
+	return fakeSetupShared{status: fake.sharedStatus, statusErr: fake.sharedStatusErr}
+}
+func (fake *fakeUnifiedSetup) OpenCodeProvider(options setupflow.Options, _ setupflow.PreviewIntegrationFactory) setupflow.ProviderRuntime {
+	fake.openCodeOptions = options.Integration
+	return fakeSetupProvider{}
+}
+
+type fakeSetupShared struct {
+	status    *setupflow.SharedPlan
+	statusErr error
+}
+
+func (fakeSetupShared) Plan(context.Context) (setupflow.SharedPlan, error) {
+	return setupflow.SharedPlan{Ready: true, Launcher: selfinstall.Result{LauncherPath: "/stable/vgxness"}}, nil
+}
+func (fake fakeSetupShared) Status(context.Context) (setupflow.SharedPlan, error) {
+	if fake.status != nil || fake.statusErr != nil {
+		if fake.status == nil {
+			return setupflow.SharedPlan{}, fake.statusErr
+		}
+		return *fake.status, fake.statusErr
+	}
+	return setupflow.SharedPlan{Ready: true, Launcher: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness"}}, nil
+}
+func (fakeSetupShared) Apply(context.Context, setupflow.SharedPlan) (setupflow.SharedResult, error) {
+	return setupflow.SharedResult{Verified: true, Launcher: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness"}}, nil
+}
+func (fakeSetupShared) Finalize(context.Context, setupflow.SharedPlan, setupflow.SharedResult) (setupflow.SharedResult, error) {
+	return setupflow.SharedResult{Verified: true}, nil
+}
+
+type fakeSetupProvider struct{}
+
+func (fakeSetupProvider) Provider() setupflow.Provider { return setupflow.ProviderOpenCode }
+func (fakeSetupProvider) Plan(context.Context, setupflow.SharedPlan) (setupflow.ProviderPlan, error) {
+	return setupflow.ProviderPlan{Provider: setupflow.ProviderOpenCode, Ready: true}, nil
+}
+func (fakeSetupProvider) Status(context.Context, setupflow.SharedPlan) (setupflow.ProviderPlan, error) {
+	return setupflow.ProviderPlan{Provider: setupflow.ProviderOpenCode, Ready: true, Installed: true, State: integration.StateInstalled, Integration: integration.Result{ModelProvider: "mixed"}, Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}}, nil
+}
+func (fakeSetupProvider) Apply(context.Context, setupflow.ProviderPlan, setupflow.SharedResult) (setupflow.ProviderResult, error) {
+	return setupflow.ProviderResult{Provider: setupflow.ProviderOpenCode, Verified: true}, nil
 }

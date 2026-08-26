@@ -44,6 +44,7 @@ The SDD tools store structured changes and immutable accepted revisions or trans
 vgxness setup opencode --preview
 vgxness setup opencode
 vgxness setup opencode --status
+vgxness setup all --preview
 ```
 
 The lower-level lifecycle remains available:
@@ -55,7 +56,7 @@ vgxness integrate opencode status
 vgxness integrate opencode uninstall
 ```
 
-`vgxness setup opencode` supports `--config-dir` and the model flags, then publishes global skills to the default discoverable root. Only lower-level `vgxness skills <preview|install|status|uninstall> --skills-dir PATH` supports isolated custom roots. `--model-plan low|medium|high|ultra` selects the active matrix. OpenCode supports a provider/model reference per efficient, balanced, and frontier slot. Homogeneous presets use the v1 manifest. With no model override flags, planning can retain the installed configuration or default selection. Once any slot reference or effort override is supplied, the public setup command requires all three `--model-efficient`, `--model-balanced`, and `--model-frontier` references; when those references use mixed providers, it also requires all three `--model-*-effort` values. Mixed profiles use manifest v2. Custom references report availability as `unknown`: setup does not authenticate or probe provider availability. Restart OpenCode after any artifact, plan, slot, or effort change. The deprecated singular `--model` flag remains a no-op compatibility option and never overrides the plan.
+`vgxness setup opencode|codex|all` is the unified setup entrypoint. `--config-dir` is the OpenCode configuration root; `--codex-home` is the independent Codex home root. `vgxness setup opencode` supports `--config-dir` and the model flags, then publishes global skills to the default discoverable root. `setup all` uses the same shared preflight and reports providers in deterministic OpenCode-then-Codex order; OpenCode model slot options are never passed to Codex. Only lower-level `vgxness skills <preview|install|status|uninstall> --skills-dir PATH` supports isolated custom roots. `--model-plan low|medium|high|ultra` selects the active matrix. OpenCode supports a provider/model reference per efficient, balanced, and frontier slot. Homogeneous presets use the v1 manifest. With no model override flags, planning can retain the installed configuration or default selection. Once any slot reference or effort override is supplied, the public setup command requires all three `--model-efficient`, `--model-balanced`, and `--model-frontier` references; when those references use mixed providers, it also requires all three `--model-*-effort` values. Mixed profiles use manifest v2. Custom references report availability as `unknown`: setup does not authenticate or probe provider availability. Restart OpenCode after any artifact, plan, slot, or effort change. The deprecated singular `--model` flag remains a no-op compatibility option and never overrides the plan.
 
 Self-install version cleanup is separate from this integration. `vgxness self gc preview`, `apply`, and `recover` manage only verified immutable application versions and never delete OpenCode-managed artifacts, configuration, model plans, agents, global skills, backups, or restoration metadata.
 

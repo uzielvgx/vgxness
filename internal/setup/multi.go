@@ -34,6 +34,8 @@ type ProviderPlan struct {
 	ArtifactSHA256 string
 	ArtifactCount  int
 	State          integration.State
+	Integration    integration.Result
+	Handshake      integration.Handshake
 }
 
 type ProviderResult struct {
@@ -66,6 +68,7 @@ type SharedResult struct {
 
 type SharedRuntime interface {
 	Plan(context.Context) (SharedPlan, error)
+	Status(context.Context) (SharedPlan, error)
 	Apply(context.Context, SharedPlan) (SharedResult, error)
 	Finalize(context.Context, SharedPlan, SharedResult) (SharedResult, error)
 }
@@ -97,7 +100,24 @@ type MultiResult struct {
 type ProviderRuntime interface {
 	Provider() Provider
 	Plan(context.Context, SharedPlan) (ProviderPlan, error)
+	Status(context.Context, SharedPlan) (ProviderPlan, error)
 	Apply(context.Context, ProviderPlan, SharedResult) (ProviderResult, error)
+}
+
+func (adapter *IntegrationProvider) Status(ctx context.Context, _ SharedPlan) (ProviderPlan, error) {
+	if adapter == nil || adapter.runtime == nil {
+		return ProviderPlan{}, ErrInvalid
+	}
+	status, err := adapter.runtime.Status(ctx, adapter.options)
+	if err != nil {
+		return ProviderPlan{}, err
+	}
+	plan := ProviderPlan{Provider: adapter.provider, Installed: status.State == integration.StateInstalled, State: status.State, ArtifactSHA256: status.ArtifactSHA256, ArtifactCount: status.ArtifactCount, Integration: status}
+	plan.Ready = plan.Installed && (status.Provider == "" || status.Provider == string(adapter.provider))
+	if !plan.Ready {
+		plan.Blocker = string(adapter.provider) + " integration is not installed or is unhealthy"
+	}
+	return plan, nil
 }
 
 // IntegrationProvider adapts one provider-owned integration without exposing
@@ -145,7 +165,7 @@ func (adapter *IntegrationProvider) Plan(ctx context.Context, _ SharedPlan) (Pro
 	if err != nil {
 		return ProviderPlan{}, err
 	}
-	plan := ProviderPlan{Provider: adapter.provider, Installed: preview.State == integration.StateInstalled, Changed: preview.Changed || preview.State != integration.StateInstalled, ArtifactSHA256: preview.ArtifactSHA256, ArtifactCount: preview.ArtifactCount, State: preview.State}
+	plan := ProviderPlan{Provider: adapter.provider, Installed: preview.State == integration.StateInstalled, Changed: preview.Changed || preview.State != integration.StateInstalled, ArtifactSHA256: preview.ArtifactSHA256, ArtifactCount: preview.ArtifactCount, State: preview.State, Integration: preview}
 	if preview.Provider != "" && preview.Provider != string(adapter.provider) {
 		plan.Blocker = "provider preview identity does not match selection"
 	} else if preview.State != integration.StateAbsent && preview.State != integration.StateInstalled && preview.State != integration.StatePartial {
@@ -198,17 +218,24 @@ func (adapter *IntegrationProvider) Apply(ctx context.Context, plan ProviderPlan
 	}
 	result.Changed = installed.Changed
 	if err != nil {
+		result.Recovery = providerRecovery(adapter.provider, "installation may be partial")
 		return result, err
 	}
 	status, err := adapter.runtime.Status(ctx, adapter.options)
 	if err != nil {
+		result.Recovery = providerRecovery(adapter.provider, "installation completed but status failed")
 		return result, err
 	}
 	if status.Provider != string(adapter.provider) || status.State != integration.StateInstalled || status.ArtifactSHA256 != plan.ArtifactSHA256 || status.ArtifactCount != plan.ArtifactCount {
+		result.Recovery = providerRecovery(adapter.provider, "installation identity verification failed")
 		return result, fmt.Errorf("%w: %s integration identity", ErrVerification, adapter.provider)
 	}
 	result.Verified = true
 	return result, nil
+}
+
+func providerRecovery(provider Provider, condition string) string {
+	return fmt.Sprintf("%s %s; run `vgxness integrate %s status` before retrying.", provider, condition, provider)
 }
 
 // Multi is the UI-facing domain coordinator. Provider runtimes retain all
@@ -273,6 +300,42 @@ func (m *Multi) Plan(ctx context.Context, options MultiOptions) (MultiPlan, erro
 		}
 	}
 	plan.Changed = plan.Changed || plan.SharedPlan.Changed
+	plan.Ready = plan.Blocker == ""
+	plan.Digest = multiPlanDigest(plan)
+	return plan, nil
+}
+
+// Status checks installed shared and provider state without treating an install plan as health.
+func (m *Multi) Status(ctx context.Context, options MultiOptions) (MultiPlan, error) {
+	selected, err := selectedProviders(options.Providers)
+	if err != nil || m == nil {
+		return MultiPlan{}, ErrInvalid
+	}
+	plan := MultiPlan{Shared: []SharedPhase{{Name: "shared launcher and skills verification"}}, SharedPlan: SharedPlan{Ready: true}}
+	if m.shared != nil {
+		plan.SharedPlan, err = m.shared.Status(ctx)
+		if err != nil {
+			return plan, err
+		}
+		if !plan.SharedPlan.Ready {
+			plan.Blocker = plan.SharedPlan.Blocker
+		}
+	}
+	for _, provider := range selected {
+		runtime := m.providers[provider]
+		if runtime == nil {
+			return plan, fmt.Errorf("%w: %s runtime", ErrPrerequisite, provider)
+		}
+		item, err := runtime.Status(ctx, plan.SharedPlan)
+		if err != nil {
+			return plan, err
+		}
+		item.Provider = provider
+		plan.Providers = append(plan.Providers, item)
+		if !item.Ready && plan.Blocker == "" {
+			plan.Blocker = item.Blocker
+		}
+	}
 	plan.Ready = plan.Blocker == ""
 	plan.Digest = multiPlanDigest(plan)
 	return plan, nil

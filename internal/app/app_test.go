@@ -200,6 +200,9 @@ type recordingShared struct{ applies int }
 func (shared *recordingShared) Plan(context.Context) (setupflow.SharedPlan, error) {
 	return setupflow.SharedPlan{Ready: true}, nil
 }
+func (shared *recordingShared) Status(context.Context) (setupflow.SharedPlan, error) {
+	return setupflow.SharedPlan{Ready: true}, nil
+}
 func (shared *recordingShared) Apply(context.Context, setupflow.SharedPlan) (setupflow.SharedResult, error) {
 	shared.applies++
 	return setupflow.SharedResult{Verified: true}, nil
