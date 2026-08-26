@@ -92,11 +92,20 @@ var previousVerifierPromptV4 string
 //go:embed templates/vgxness-care-reviewer.md
 var careReviewerPrompt string
 
+//go:embed templates/vgxness-care-reviewer.v1.md
+var previousCAREReviewerPromptV1 string
+
 //go:embed templates/vgxness-care-specialist.md
 var careSpecialistPrompt string
 
+//go:embed templates/vgxness-care-specialist.v1.md
+var previousCARESpecialistPromptV1 string
+
 //go:embed templates/vgxness-care-challenger.md
 var careChallengerPrompt string
+
+//go:embed templates/vgxness-care-challenger.v1.md
+var previousCAREChallengerPromptV1 string
 
 //go:embed templates/review-risk.v2.md
 var previousReviewRiskPromptV2 string
@@ -1448,6 +1457,10 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		}
 		exact++
 	}
+	if mixedCAREGeneration(state.artifacts) {
+		state.result.State = integration.StateDrifted
+		return state, nil
+	}
 	switch present {
 	case 0:
 		state.result.State = integration.StateAbsent
@@ -1473,6 +1486,27 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		}
 	}
 	return state, nil
+}
+
+func mixedCAREGeneration(artifacts []artifact) bool {
+	current, previous := 0, 0
+	for _, item := range artifacts {
+		if !strings.HasPrefix(filepath.Base(item.path), "vgxness-care-") || !item.present {
+			continue
+		}
+		data, err := readRegularFile(item.path)
+		if err != nil {
+			return false
+		}
+		if bytes.Contains(data, []byte("artifact: opencode-agent/vgxness-care-")) && bytes.Contains(data, []byte("; version: 2")) {
+			current++
+			continue
+		}
+		if bytes.Contains(data, []byte("artifact: opencode-agent/vgxness-care-")) && bytes.Contains(data, []byte("; version: 1")) {
+			previous++
+		}
+	}
+	return current != 0 && previous != 0
 }
 
 func coherentManifestlessModelGeneration(configDirectory string, current modelPlanBundle) (bool, error) {

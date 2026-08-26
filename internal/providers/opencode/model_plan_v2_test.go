@@ -34,7 +34,11 @@ func TestSchemaV2ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
 func TestSchemaV2ManifestRecognizesExactV57AndUpgradesToCurrent(t *testing.T) {
 	config := schemaV2TestConfig(t)
 	current := mustBuildModelPlanV2(t, config)
-	v57, err := previousV57ModelPlanBundle(current)
+	v1, err := immediatePredecessor(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v57, err := previousV57ModelPlanBundle(v1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +62,11 @@ func TestSchemaV2ManifestRecognizesExactV57AndUpgradesToCurrent(t *testing.T) {
 
 func TestSchemaV2V57DriftFailsClosed(t *testing.T) {
 	current := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
-	v57, err := previousV57ModelPlanBundle(current)
+	v1, err := immediatePredecessor(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v57, err := previousV57ModelPlanBundle(v1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,6 @@
 # Codex integration
 
-This guide is for a local Codex user who wants VGXNESS-managed agent profiles while retaining ownership of Codex configuration. Use the unified `setup codex` entrypoint for guided setup; `integrate codex` remains available for provider-only lifecycle work. VGXNESS installs no Codex plugin.
+This guide is for a local Codex user who wants VGXNESS-managed agent profiles while retaining ownership of Codex configuration. Codex current identity is Manager17, Codex immediate predecessor is Manager16, and Codex Manager15/v14 are deeper lifecycle identities. OpenCode current identity is CARE v2 with Manager58; OpenCode immediate predecessor is CARE-v1 with Manager58; OpenCode next predecessor is CARE-v1 with Manager57; OpenCode v56 is deeper. Use the unified `setup codex` entrypoint for guided setup; `integrate codex` remains available for provider-only lifecycle work. VGXNESS installs no Codex plugin.
 
 ## Prerequisites and ownership
 

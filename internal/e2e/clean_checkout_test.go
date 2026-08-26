@@ -141,7 +141,6 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 			t.Fatalf("setup did not install the expected v3 manifest content %q: %v\n%s", expected, err, manifestData)
 		}
 	}
-	predecessorManager := exactV57Manager(t, repository)
 	type manifest struct {
 		SchemaVersion int                    `json:"schemaVersion"`
 		ManagedBy     string                 `json:"managedBy"`
@@ -157,16 +156,23 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &predecessorManifest); err != nil {
 		t.Fatalf("decode current manifest: %v", err)
 	}
-	digest := sha256.Sum256([]byte(predecessorManager))
-	predecessorManifest.Artifacts["agents/vgxness-manager.md"] = hex.EncodeToString(digest[:])
+	for _, name := range reviewers {
+		current, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", name))
+		if readErr != nil {
+			t.Fatalf("read current CARE role %s: %v", name, readErr)
+		}
+		predecessor := exactCAREV1Agent(t, repository, name, current)
+		digest := sha256.Sum256(predecessor)
+		predecessorManifest.Artifacts["agents/"+name] = hex.EncodeToString(digest[:])
+		if err := os.WriteFile(filepath.Join(configDirectory, "agents", name), predecessor, 0o600); err != nil {
+			t.Fatalf("seed exact CARE-v1 role %s: %v", name, err)
+		}
+	}
 	predecessorManifestData, err := json.MarshalIndent(predecessorManifest, "", "  ")
 	if err != nil {
 		t.Fatalf("encode exact v57 manifest: %v", err)
 	}
 	predecessorManifestData = append(predecessorManifestData, '\n')
-	if err := os.WriteFile(manager, []byte(predecessorManager), 0o600); err != nil {
-		t.Fatalf("seed exact v57 manager: %v", err)
-	}
 	manifestPath := filepath.Join(configDirectory, "vgxness", "model-plan.json")
 	if err := os.WriteFile(manifestPath, predecessorManifestData, 0o600); err != nil {
 		t.Fatalf("seed exact v57 manifest: %v", err)
@@ -271,6 +277,24 @@ func exactV57Manager(t *testing.T, repository string) string {
 		t.Fatal("exact v57 fixture retains v58 marker")
 	}
 	return string(fixture)
+}
+
+func exactCAREV1Agent(t *testing.T, repository, name string, current []byte) []byte {
+	t.Helper()
+	base, err := os.ReadFile(filepath.Join(repository, "internal", "providers", "opencode", "templates", strings.TrimSuffix(name, ".md")+".v1.md"))
+	if err != nil {
+		t.Fatalf("read CARE-v1 snapshot %s: %v", name, err)
+	}
+	start := bytes.Index(current, []byte("model: "))
+	if start < 0 {
+		t.Fatalf("current CARE role %s lacks model binding", name)
+	}
+	end := bytes.Index(current[start:], []byte("permission:\n"))
+	if end < 0 {
+		t.Fatalf("current CARE role %s lacks model binding", name)
+	}
+	binding := current[start : start+end]
+	return bytes.Replace(base, []byte("hidden: true\n"), append([]byte("hidden: true\n"), binding...), 1)
 }
 
 func reviewerPaths(configDirectory string, names []string) []string {

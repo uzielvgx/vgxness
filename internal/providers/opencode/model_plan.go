@@ -674,7 +674,11 @@ func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (mo
 	if err == nil && bytes.Equal(legacy.manifest, data) {
 		return legacy, nil
 	}
-	predecessor, err := previousV57ModelPlanBundle(current)
+	predecessor, err := previousCAREV1ModelPlanBundle(current)
+	if err == nil && bytes.Equal(predecessor.manifest, data) {
+		return predecessor, nil
+	}
+	predecessor, err = previousV57ModelPlanBundle(predecessor)
 	if err == nil && bytes.Equal(predecessor.manifest, data) {
 		return predecessor, nil
 	}
@@ -729,7 +733,11 @@ func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (mo
 	if err == nil && bytes.Equal(legacy.manifest, data) {
 		return legacy, nil
 	}
-	predecessor, err := previousV57ModelPlanBundle(current)
+	predecessor, err := previousCAREV1ModelPlanBundle(current)
+	if err == nil && bytes.Equal(predecessor.manifest, data) {
+		return predecessor, nil
+	}
+	predecessor, err = previousV57ModelPlanBundle(predecessor)
 	if err == nil && bytes.Equal(predecessor.manifest, data) {
 		return predecessor, nil
 	}
@@ -842,7 +850,15 @@ func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlan
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
-	v57, err := previousV57ModelPlanBundle(current)
+	v1 := current
+	var err error
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+		v1, err = previousCAREV1ModelPlanBundle(current)
+		if err != nil {
+			return nil, err
+		}
+	}
+	v57, err := previousV57ModelPlanBundle(v1)
 	if err != nil {
 		return nil, err
 	}
@@ -935,7 +951,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		}
 		withExplore = append(withExplore, explore)
 	}
-	candidates := []modelPlanBundle{v57, v56, v55, v54, v53, v52, v51, v50, activeProfiles}
+	candidates := []modelPlanBundle{v1, v57, v56, v55, v54, v53, v52, v51, v50, activeProfiles}
 	for _, candidate := range withExplore {
 		candidates = append(candidates, candidate)
 		sddBundle, err := previousSDDModelPlanBundle(candidate)
@@ -999,7 +1015,11 @@ func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBu
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
-	v57, err := previousV57ModelPlanBundle(current)
+	v1, err := previousCAREV1ModelPlanBundle(current)
+	if err != nil {
+		return nil, err
+	}
+	v57, err := previousV57ModelPlanBundle(v1)
 	if err != nil {
 		return nil, err
 	}
@@ -1427,7 +1447,7 @@ func encodeLike(current modelPlanBundle, agents map[string][]byte) (modelPlanBun
 
 func immediatePredecessor(current modelPlanBundle) (modelPlanBundle, error) {
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
-		return previousV57ModelPlanBundle(current)
+		return previousCAREV1ModelPlanBundle(current)
 	}
 	return current, nil
 }
@@ -2288,8 +2308,12 @@ func previousV51ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 // a trusted predecessor while v52 remains the active identity. Recognition is
 // package-wide: a manager, general, or apply substitution is not accepted.
 func previousV52ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	var err error
+	current, err = normalizeCAREV1(current)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
-		var err error
 		current, err = previousV53ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
@@ -2315,8 +2339,12 @@ func previousV52ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV53ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	var err error
+	current, err = normalizeCAREV1(current)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
-		var err error
 		current, err = previousV55ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
@@ -2344,8 +2372,12 @@ func previousV53ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 // predecessor of v55. It changes only the manager identity and removes the
 // v55 Candidate Capsule contract, preserving every other artifact byte.
 func previousV54ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	var err error
+	current, err = normalizeCAREV1(current)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
 	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
-		var err error
 		current, err = previousV55ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
@@ -2363,15 +2395,18 @@ func previousV54ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	var err error
+	current, err = normalizeCAREV1(current)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
 	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
-		var err error
 		current, err = previousV57ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
 		}
 	}
 	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 {
-		var err error
 		current, err = previousV56ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
@@ -2402,6 +2437,10 @@ func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 func previousV56ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
 		var err error
+		current, err = previousCAREV1ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
 		current, err = previousV57ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
@@ -2428,6 +2467,11 @@ func previousV57ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
+	var err error
+	current, err = normalizeCAREV1(current)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
 	agents := cloneAgents(current.agents)
 	agents[managerAgentName] = previousManagerV57(agents[managerAgentName])
 	if len(agents[managerAgentName]) == 0 {
@@ -2436,9 +2480,60 @@ func previousV57ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	return encodeLike(current, agents)
 }
 
+func previousCAREV1ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	return normalizeCAREV1(current)
+}
+
+func normalizeCAREV1(current modelPlanBundle) (modelPlanBundle, error) {
+	agents := cloneAgents(current.agents)
+	present := 0
+	for _, item := range []struct {
+		name string
+		role sdd.Role
+		base string
+	}{
+		{"vgxness-care-reviewer.md", sdd.RoleCAREReviewer, previousCAREReviewerPromptV1},
+		{"vgxness-care-specialist.md", sdd.RoleCARESpecialist, previousCARESpecialistPromptV1},
+		{"vgxness-care-challenger.md", sdd.RoleCAREChallenger, previousCAREChallengerPromptV1},
+	} {
+		content, ok := agents[item.name]
+		if !ok {
+			continue
+		}
+		present++
+		assignment, err := promptAssignment(content)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+		bound, err := bindAgent(item.base, item.role, assignment)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+		if bytes.Equal(content, bound) {
+			continue
+		}
+		marker := "artifact: opencode-agent/vgxness-care-" + strings.TrimSuffix(strings.TrimPrefix(item.name, "vgxness-care-"), ".md") + "; version: 2"
+		if bytes.Count(content, []byte(marker)) != 1 {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+		agents[item.name] = bound
+	}
+	if present != 0 && present != 3 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	if present == 0 {
+		return current, nil
+	}
+	return encodeLike(current, agents)
+}
+
 func supportedHistoricalModelPlanBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 	bundles := []modelPlanBundle{current}
 	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
+		previousCAREV1ModelPlanBundle,
 		previousV57ModelPlanBundle,
 		previousV56ModelPlanBundle,
 		previousV55ModelPlanBundle,
