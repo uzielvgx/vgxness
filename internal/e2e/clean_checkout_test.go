@@ -105,7 +105,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v57 marker", "artifact: opencode-agent/vgxness-manager; version: 57"},
+		{"active v58 marker", "artifact: opencode-agent/vgxness-manager; version: 58"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
 		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
@@ -116,18 +116,21 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		{"sdd-lifecycle", "Load `sdd-lifecycle` before creating an accepted SDD change"},
 		{"managed catalog", "managed global portable catalog"},
 		{"same-name collision", "same-name/project-local skill collides"},
-		{"strict CARE terminal rule", "A non-exempt candidate is VERIFIED only with same-candidate verifier and applicable CARE evidence."},
-		{"strict CARE implementation rule", "Every non-exempt implementation must freeze, pass the native verifier, and complete its applicable CARE matrix before terminal success; IMPLEMENTED may be reported only as an intermediate state."},
+		{"verifier and CARE order", "The verifier runs first; each applicable CARE role then reviews that same candidate."},
+		{"candidate-bound outcomes", "Require PASS, FAIL, or INCONCLUSIVE with candidate-bound evidence;"},
+		{"CARE risk tiers", "CARE risk tiers: passive documentation or images are exempt; standard uses reviewer; elevated uses reviewer then specialist; critical uses reviewer, specialist, then challenger."},
+		{"correction invalidation", "Permit at most one correction and one scoped revalidation; a correction creates a new candidate and invalidates prior evidence."},
+		{"Manager authority", "The Manager alone decides completion."},
 	} {
 		if !bytes.Contains(managerData, []byte(required.value)) {
 			t.Errorf("installed manager is missing %s clause %q", required.name, required.value)
 		}
 	}
-	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 1 {
-		t.Fatalf("installed current manager v57 marker count=%d, want 1", got)
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 58")); got != 1 {
+		t.Fatalf("installed current manager v58 marker count=%d, want 1", got)
 	}
-	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 56")); got != 0 {
-		t.Fatalf("installed current manager retains v56 marker count=%d, want 0", got)
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 0 {
+		t.Fatalf("installed current manager retains v57 marker count=%d, want 0", got)
 	}
 	if bytes.Contains(managerData, []byte("automatically load `vgxness-autonomous-stacked-pr`")) {
 		t.Fatal("installed manager retains retired vgxness-autonomous-stacked-pr loading")
@@ -138,7 +141,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 			t.Fatalf("setup did not install the expected v3 manifest content %q: %v\n%s", expected, err, manifestData)
 		}
 	}
-	predecessorManager := deriveExactV56Manager(t, managerData)
+	predecessorManager := exactV57Manager(t, repository)
 	type manifest struct {
 		SchemaVersion int                    `json:"schemaVersion"`
 		ManagedBy     string                 `json:"managedBy"`
@@ -158,15 +161,15 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	predecessorManifest.Artifacts["agents/vgxness-manager.md"] = hex.EncodeToString(digest[:])
 	predecessorManifestData, err := json.MarshalIndent(predecessorManifest, "", "  ")
 	if err != nil {
-		t.Fatalf("encode exact v56 manifest: %v", err)
+		t.Fatalf("encode exact v57 manifest: %v", err)
 	}
 	predecessorManifestData = append(predecessorManifestData, '\n')
 	if err := os.WriteFile(manager, []byte(predecessorManager), 0o600); err != nil {
-		t.Fatalf("seed exact v56 manager: %v", err)
+		t.Fatalf("seed exact v57 manager: %v", err)
 	}
 	manifestPath := filepath.Join(configDirectory, "vgxness", "model-plan.json")
 	if err := os.WriteFile(manifestPath, predecessorManifestData, 0o600); err != nil {
-		t.Fatalf("seed exact v56 manifest: %v", err)
+		t.Fatalf("seed exact v57 manifest: %v", err)
 	}
 	run(t, environment, workspace, sourceExecutable,
 		"setup", "opencode", "--yes", "--workspace", workspace,
@@ -174,11 +177,11 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	)
 	upgradedManager, err := os.ReadFile(manager)
 	if err != nil || !bytes.Equal(upgradedManager, managerData) {
-		t.Fatalf("exact v56 manager did not upgrade to captured v57 bytes: %v", err)
+		t.Fatalf("exact v57 manager did not upgrade to captured v58 bytes: %v", err)
 	}
 	upgradedManifest, err := os.ReadFile(manifestPath)
 	if err != nil || !bytes.Equal(upgradedManifest, manifestData) {
-		t.Fatalf("exact v56 manifest did not upgrade to captured v57 bytes: %v", err)
+		t.Fatalf("exact v57 manifest did not upgrade to captured v58 bytes: %v", err)
 	}
 	generalData, generalErr := os.ReadFile(general)
 	exploreData, exploreErr := os.ReadFile(explore)
@@ -255,19 +258,19 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	}
 }
 
-func deriveExactV56Manager(t *testing.T, current []byte) string {
+func exactV57Manager(t *testing.T, repository string) string {
 	t.Helper()
-	value := string(current)
-	replacements := [][2]string{
-		{"artifact: opencode-agent/vgxness-manager; version: 57", "artifact: opencode-agent/vgxness-manager; version: 56"},
+	fixture, err := os.ReadFile(filepath.Join(repository, "internal", "e2e", "testdata", "opencode-manager.v57.acme-frontier-xhigh.md"))
+	if err != nil {
+		t.Fatalf("read exact v57 manager fixture: %v", err)
 	}
-	for _, replacement := range replacements {
-		if got := strings.Count(value, replacement[0]); got != 1 {
-			t.Fatalf("exact v56 derivation anchor %q count=%d, want 1", replacement[0], got)
-		}
-		value = strings.Replace(value, replacement[0], replacement[1], 1)
+	if got := bytes.Count(fixture, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 1 {
+		t.Fatalf("exact v57 fixture marker count=%d, want 1", got)
 	}
-	return value
+	if bytes.Contains(fixture, []byte("artifact: opencode-agent/vgxness-manager; version: 58")) {
+		t.Fatal("exact v57 fixture retains v58 marker")
+	}
+	return string(fixture)
 }
 
 func reviewerPaths(configDirectory string, names []string) []string {

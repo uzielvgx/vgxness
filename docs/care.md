@@ -12,7 +12,7 @@ The ledger binds target identity, route, risk, required checks, observed outcome
 
 ## Provider inventory and limits
 
-OpenCode currently has 13 agents: manager, explore, general, verifier, three CARE roles, and six SDD roles. Its manager is v57 and verifier v7; v56 is its exact immediate predecessor and v55 remains historical. Codex currently has `AGENTS.md` plus 12 delegated profiles, including three CARE roles; its manager is v17 with OpenCode v57 parity, with v16 then v15 retained historically. OpenCode v57 and Codex v17 are the current parity identities. These inventories describe managed documentation identities, not a claim that a host ran them.
+OpenCode currently has 13 agents: manager, explore, general, verifier, three CARE roles, and six SDD roles. Its manager is v58 and verifier v7; v57 is its exact immediate predecessor and v56 remains historical. Codex currently has `AGENTS.md` plus 12 delegated profiles, including three CARE roles; its manager is v17 with OpenCode v58 parity, with v16 then v15 retained historically. OpenCode v58 and Codex v17 are the current parity identities. These inventories describe managed documentation identities, not a claim that a host ran them.
 
 CARE lifecycle transitions remain Manager-owned; repository writers do not mutate lifecycle state. Runtime evidence is observed on macOS only. Target-native Windows and Linux behavior remains unverified.
 

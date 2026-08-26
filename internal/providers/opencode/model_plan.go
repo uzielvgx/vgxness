@@ -24,7 +24,8 @@ const (
 	sddApplyName                                            = "vgxness-sdd-apply.md"
 	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 4, 3
 	sddApplyTargetVersion, sddApplyPredecessorVersion       = 7, 6
-	managerCurrentMarker                                    = "artifact: opencode-agent/vgxness-manager; version: 57"
+	managerCurrentMarker                                    = "artifact: opencode-agent/vgxness-manager; version: 58"
+	managerV57Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 57"
 	managerV56Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 56"
 	managerPreviousMarker                                   = "artifact: opencode-agent/vgxness-manager; version: 55"
 	managerV54Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 54"
@@ -105,7 +106,7 @@ func fixedLensV53ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, e
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	managerTemplate := strings.Replace(strings.Replace(canonicalManagerPrompt, managerPreviousMarker, managerV53Marker, 1), managerReviewDepthV56Previous, currentManagerReviewDepth, 1)
+	managerTemplate := strings.Replace(strings.Replace(previousManagerPromptV56, managerPreviousMarker, managerV53Marker, 1), managerReviewDepthV56Previous, currentManagerReviewDepth, 1)
 	manager, err := bindManagerTemplate(managerTemplate, managerV53Marker, resolved.Roles[sdd.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
@@ -669,7 +670,15 @@ func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (mo
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
-	predecessor, err := previousV56ModelPlanBundle(current)
+	legacy, err := legacyFixedLensBundle(current)
+	if err == nil && bytes.Equal(legacy.manifest, data) {
+		return legacy, nil
+	}
+	predecessor, err := previousV57ModelPlanBundle(current)
+	if err == nil && bytes.Equal(predecessor.manifest, data) {
+		return predecessor, nil
+	}
+	predecessor, err = previousV56ModelPlanBundle(predecessor)
 	if err == nil && bytes.Equal(predecessor.manifest, data) {
 		return predecessor, nil
 	}
@@ -716,7 +725,15 @@ func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (mo
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
-	predecessor, err := previousV56ModelPlanBundle(current)
+	legacy, err := legacyFixedLensBundle(current)
+	if err == nil && bytes.Equal(legacy.manifest, data) {
+		return legacy, nil
+	}
+	predecessor, err := previousV57ModelPlanBundle(current)
+	if err == nil && bytes.Equal(predecessor.manifest, data) {
+		return predecessor, nil
+	}
+	predecessor, err = previousV56ModelPlanBundle(predecessor)
 	if err == nil && bytes.Equal(predecessor.manifest, data) {
 		return predecessor, nil
 	}
@@ -779,6 +796,10 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 			return candidate, nil
 		}
 	}
+	legacy, err := legacyFixedLensBundle(current)
+	if err == nil && bytes.Equal(legacy.manifest, data) {
+		return legacy, nil
+	}
 	fixedLensV53, err := fixedLensV53ModelPlanBundle(config)
 	if err == nil && bytes.Equal(fixedLensV53.manifest, data) {
 		return fixedLensV53, nil
@@ -821,33 +842,37 @@ func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlan
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
-	v56, err := previousV56ModelPlanBundle(current)
+	v57, err := previousV57ModelPlanBundle(current)
 	if err != nil {
 		return nil, err
+	}
+	v56, err := previousV56ModelPlanBundle(v57)
+	if err != nil {
+		return nil, fmt.Errorf("manager v56 predecessor: %w", err)
 	}
 	v55, err := previousV55ModelPlanBundle(v56)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v55 predecessor: %w", err)
 	}
 	v54, err := previousV54ModelPlanBundle(v55)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v54 predecessor: %w", err)
 	}
 	v53, err := previousV53ModelPlanBundle(v54)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v53 predecessor: %w", err)
 	}
 	v52, err := previousV52ModelPlanBundle(v53)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v52 predecessor: %w", err)
 	}
 	v51, err := previousV51ModelPlanBundle(v52)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v51 predecessor: %w", err)
 	}
 	v50, err := previousV50ModelPlanBundle(v51)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v50 predecessor: %w", err)
 	}
 	activeProfiles, err := previousActiveProfilesModelPlanBundle(current)
 	if err != nil {
@@ -910,7 +935,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 		}
 		withExplore = append(withExplore, explore)
 	}
-	candidates := []modelPlanBundle{v56, v55, v54, v53, v52, v51, v50, activeProfiles}
+	candidates := []modelPlanBundle{v57, v56, v55, v54, v53, v52, v51, v50, activeProfiles}
 	for _, candidate := range withExplore {
 		candidates = append(candidates, candidate)
 		sddBundle, err := previousSDDModelPlanBundle(candidate)
@@ -974,29 +999,33 @@ func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBu
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
-	v56, err := previousV56ModelPlanBundle(current)
+	v57, err := previousV57ModelPlanBundle(current)
 	if err != nil {
 		return nil, err
+	}
+	v56, err := previousV56ModelPlanBundle(v57)
+	if err != nil {
+		return nil, fmt.Errorf("manager v56 predecessor: %w", err)
 	}
 	v55, err := previousV55ModelPlanBundle(v56)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v55 predecessor: %w", err)
 	}
 	v54, err := previousV54ModelPlanBundle(v55)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v54 predecessor: %w", err)
 	}
 	v53, err := previousV53ModelPlanBundle(v54)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v53 predecessor: %w", err)
 	}
 	v52, err := previousV52ModelPlanBundle(v53)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v52 predecessor: %w", err)
 	}
 	v51, err := previousV51ModelPlanBundle(v52)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("manager v51 predecessor: %w", err)
 	}
 	v50, err := previousV50ModelPlanBundle(v51)
 	if err != nil {
@@ -1022,7 +1051,7 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := [][]byte{v56.agents[managerAgentName], v55.agents[managerAgentName], v54.agents[managerAgentName], v53.agents[managerAgentName], v52.agents[managerAgentName], v51.agents[managerAgentName], v50.agents[managerAgentName], v49.agents[managerAgentName], v48.agents[managerAgentName], v47.agents[managerAgentName], v46.agents[managerAgentName]}
+	result := [][]byte{v57.agents[managerAgentName], v56.agents[managerAgentName], v55.agents[managerAgentName], v54.agents[managerAgentName], v53.agents[managerAgentName], v52.agents[managerAgentName], v51.agents[managerAgentName], v50.agents[managerAgentName], v49.agents[managerAgentName], v48.agents[managerAgentName], v47.agents[managerAgentName], v46.agents[managerAgentName]}
 	for _, prior := range []struct {
 		base, marker string
 	}{
@@ -1053,7 +1082,13 @@ func previousV49ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 			}
 		}
 	}
-	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerV57Marker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerV56Marker)) {
+		current, err = previousV55ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+	}
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
 		current, err = previousV54ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
@@ -1134,6 +1169,8 @@ func legacyFixedLensBundle(current modelPlanBundle) (modelPlanBundle, error) {
 		if err != nil {
 			return modelPlanBundle{}, err
 		}
+		agents[managerAgentName] = previousManagerV57(agents[managerAgentName])
+		agents[managerAgentName] = previousManagerV56(agents[managerAgentName])
 		agents[managerAgentName] = previousManagerV55(agents[managerAgentName])
 		if len(agents[managerAgentName]) == 0 {
 			return modelPlanBundle{}, integration.ErrInvalid
@@ -1149,6 +1186,8 @@ func legacyFixedLensBundle(current modelPlanBundle) (modelPlanBundle, error) {
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
+	agents[managerAgentName] = previousManagerV57(agents[managerAgentName])
+	agents[managerAgentName] = previousManagerV56(agents[managerAgentName])
 	agents[managerAgentName] = previousManagerV55(agents[managerAgentName])
 	if len(agents[managerAgentName]) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
@@ -1388,13 +1427,20 @@ func encodeLike(current modelPlanBundle, agents map[string][]byte) (modelPlanBun
 
 func immediatePredecessor(current modelPlanBundle) (modelPlanBundle, error) {
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
-		return previousV56ModelPlanBundle(current)
+		return previousV57ModelPlanBundle(current)
 	}
 	return current, nil
 }
 
 func legacyV49Baseline(current modelPlanBundle) (modelPlanBundle, error) {
-	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerV57Marker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerV56Marker)) {
+		var err error
+		current, err = previousV55ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+	}
+	if bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
 		return previousV49ModelPlanBundle(current)
 	}
 	return current, nil
@@ -1634,7 +1680,8 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 	if err != nil {
 		return nil, err
 	}
-	v56 := previousManagerV56(current)
+	v57 := previousManagerV57(current)
+	v56 := previousManagerV56(v57)
 	v55 := previousManagerV55(v56)
 	v54 := previousManagerV54(v55)
 	v53 := previousManagerV53(v54)
@@ -1645,10 +1692,10 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 	v48 := previousManagerV48(v49)
 	v47 := previousManagerV47(v49)
 	v46 := []byte(legacyManagerPrompt(string(v49)))
-	if len(v56) == 0 || len(v55) == 0 || len(v54) == 0 || len(v53) == 0 || len(v52) == 0 || len(v51) == 0 || len(v50) == 0 || len(v49) == 0 || len(v48) == 0 || len(v47) == 0 || len(v46) == 0 {
+	if len(v57) == 0 || len(v56) == 0 || len(v55) == 0 || len(v54) == 0 || len(v53) == 0 || len(v52) == 0 || len(v51) == 0 || len(v50) == 0 || len(v49) == 0 || len(v48) == 0 || len(v47) == 0 || len(v46) == 0 {
 		return nil, integration.ErrInvalid
 	}
-	predecessors[managerAgentName] = [][]byte{v56, v55, v54, v53, v52, v51, v50, v49, v48, v47, v46, v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
+	predecessors[managerAgentName] = [][]byte{v57, v56, v55, v54, v53, v52, v51, v50, v49, v48, v47, v46, v45[managerAgentName], v44[managerAgentName], v43[managerAgentName]}
 	for _, prior := range []struct {
 		base   string
 		marker string
@@ -1975,7 +2022,7 @@ func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return activateManager(value, managerCurrentMarker)
+	return activateManagerV58(value)
 }
 
 func bindManagerV56(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
@@ -1983,10 +2030,18 @@ func bindManagerV56(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return activateManager(value, managerV56Marker)
+	return activateManagerV57(value, managerV56Marker)
 }
 
-func activateManager(value []byte, marker string) ([]byte, error) {
+func bindManagerV57(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	value, err := bindManagerTemplate(previousManagerPromptV57, managerPreviousMarker, assignment)
+	if err != nil {
+		return nil, err
+	}
+	return activateManagerV57(value, managerV57Marker)
+}
+
+func activateManagerV57(value []byte, marker string) ([]byte, error) {
 	if err := validateCurrentManagerAnchors(value); err != nil {
 		return nil, err
 	}
@@ -1996,6 +2051,14 @@ func activateManager(value []byte, marker string) ([]byte, error) {
 	value = bytes.Replace(value, []byte(managerPreviousMarker), []byte(marker), 1)
 	value = bytes.Replace(value, []byte("Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, exact skills, verificationEvidence"), []byte(managerReviewerCandidateCapsule), 1)
 	value = append(value, []byte("\n\n"+currentManagerCandidateCapsuleContract)...)
+	return activeManagerPrompt(value), nil
+}
+
+func activateManagerV58(value []byte) ([]byte, error) {
+	if bytes.Count(value, []byte(managerPreviousMarker)) != 1 {
+		return nil, integration.ErrInvalid
+	}
+	value = bytes.Replace(value, []byte(managerPreviousMarker), []byte(managerCurrentMarker), 1)
 	return activeManagerPrompt(value), nil
 }
 
@@ -2025,6 +2088,15 @@ func activeManagerPromptWithPolicy(value []byte, policy string) []byte {
 
 func previousManagerV49(current []byte) []byte {
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+		current = previousManagerV57(current)
+	}
+	if bytes.Count(current, []byte(managerV57Marker)) == 1 {
+		current = previousManagerV56(current)
+	}
+	if bytes.Count(current, []byte(managerV56Marker)) == 1 {
+		current = previousManagerV55(current)
+	}
+	if bytes.Count(current, []byte(managerPreviousMarker)) == 1 {
 		current = previousManagerV54(current)
 	}
 	if bytes.Count(current, []byte(managerV54Marker)) == 1 {
@@ -2094,16 +2166,19 @@ func previousManagerV54(current []byte) []byte {
 
 func previousManagerV55(current []byte) []byte {
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
-		current = previousManagerV56(current)
+		current = previousManagerV57(current)
 	}
 	if bytes.Count(current, []byte(managerV56Marker)) != 1 || bytes.Count(current, []byte(managerPreviousMarker)) > 0 {
 		return nil
 	}
-	return derivePredecessor(current, []textReplacement{{old: managerV56Marker, new: managerPreviousMarker}, {old: strictOpenCodeCAREAssurance, new: historicalOpenCodeCAREBypass}, {old: currentOpenCodeCAREBinding, new: historicalOpenCodeRefuterBinding}, {old: currentOpenCodeCAREHandoff, new: historicalOpenCodeRefuterHandoff}, {old: currentOpenCodeCAREChallengerRouting, new: historicalOpenCodeRefuterRouting}, {old: managerReviewDepthV56, new: currentManagerReviewDepth}})
+	return derivePredecessor(current, []textReplacement{{old: managerV56Marker, new: managerPreviousMarker}, {old: strictOpenCodeCAREAssurance, new: historicalOpenCodeCAREBypass}, {old: currentOpenCodeCAREChallengerRouting, new: historicalOpenCodeRefuterRouting}, {old: currentOpenCodeCAREBinding, new: historicalOpenCodeRefuterBinding}, {old: currentOpenCodeCAREHandoff, new: historicalOpenCodeRefuterHandoff}, {old: managerReviewDepthV56, new: currentManagerReviewDepth}})
 }
 
 func previousManagerV56(current []byte) []byte {
-	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 {
+	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+		current = previousManagerV57(current)
+	}
+	if bytes.Count(current, []byte(managerV57Marker)) != 1 {
 		return nil
 	}
 	assignment, err := promptAssignment(current)
@@ -2111,6 +2186,21 @@ func previousManagerV56(current []byte) []byte {
 		return nil
 	}
 	value, err := bindManagerV56(assignment)
+	if err != nil {
+		return nil
+	}
+	return preserveVariantShape(current, value)
+}
+
+func previousManagerV57(current []byte) []byte {
+	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 {
+		return nil
+	}
+	assignment, err := promptAssignment(current)
+	if err != nil {
+		return nil
+	}
+	value, err := bindManagerV57(assignment)
 	if err != nil {
 		return nil
 	}
@@ -2141,11 +2231,55 @@ func previousV51ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		}
 		current.agents = legacy
 	}
+	if current.configV2 != nil || current.resolvedV2 != nil {
+		if current.configV2 == nil || current.resolvedV2 == nil {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+		legacy := *current.resolvedV2
+		legacy.Roles = make(map[sdd.Role]sdd.OpenCodeRoleAssignmentV2, len(current.resolvedV2.Roles)+2)
+		for role, assignment := range current.resolvedV2.Roles {
+			legacy.Roles[role] = assignment
+		}
+		for _, role := range []sdd.Role{sdd.RoleCAREReviewer, sdd.RoleCARESpecialist, sdd.RoleCAREChallenger} {
+			delete(legacy.Roles, role)
+		}
+		for role, assignment := range legacyReviewAssignmentsV2(*current.resolvedV2) {
+			legacy.Roles[role] = sdd.OpenCodeRoleAssignmentV2{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
+		}
+		plan := sdd.OpenCodePlan{Roles: make(map[sdd.Role]sdd.OpenCodeRoleAssignment, len(legacy.Roles))}
+		for role, assignment := range legacy.Roles {
+			plan.Roles[role] = sdd.OpenCodeRoleAssignment{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
+		}
+		agents, err := legacyModelBoundAgents(plan)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+		for name, content := range current.agents {
+			agents[name] = content
+		}
+		current.agents, current.resolvedV2 = agents, &legacy
+	} else {
+		if _, ok := current.agents[reviewReliabilityName]; !ok {
+			plan := current.resolved
+			populateLegacyReviewAssignments(&plan)
+			legacy, err := legacyModelBoundAgents(plan)
+			if err != nil {
+				return modelPlanBundle{}, fmt.Errorf("v51 legacy review bindings: %w", err)
+			}
+			for name, content := range current.agents {
+				legacy[name] = content
+			}
+			current.agents = legacy
+		}
+	}
 	agents := cloneAgents(current.agents)
 	agents[managerAgentName] = previousManagerV51(agents[managerAgentName])
 	agents[reviewReliabilityName] = previousReliabilityV4(agents[reviewReliabilityName])
-	if len(agents[managerAgentName]) == 0 || len(agents[reviewReliabilityName]) == 0 {
-		return modelPlanBundle{}, integration.ErrInvalid
+	if len(agents[managerAgentName]) == 0 {
+		return modelPlanBundle{}, fmt.Errorf("v51 manager: %w", integration.ErrInvalid)
+	}
+	if len(agents[reviewReliabilityName]) == 0 {
+		return modelPlanBundle{}, fmt.Errorf("v51 reliability: %w", integration.ErrInvalid)
 	}
 	return encodeLike(current, agents)
 }
@@ -2229,10 +2363,24 @@ func previousV54ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+		var err error
+		current, err = previousV57ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+	}
+	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 {
+		var err error
+		current, err = previousV56ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+	}
 	if bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
 		return current, nil
 	}
-	if current.configV3 == nil && current.resolvedV3 == nil {
+	if current.configV3 == nil && current.resolvedV3 == nil && bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) == 0 {
 		if _, ok := current.agents[reviewRiskName]; !ok {
 			return legacyFixedLensBundle(current)
 		}
@@ -2240,7 +2388,7 @@ func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 			return current, nil
 		}
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	agents := cloneAgents(current.agents)
@@ -2252,10 +2400,17 @@ func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV56ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+		var err error
+		current, err = previousV57ModelPlanBundle(current)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+	}
 	if bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
 		return current, nil
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	agents := cloneAgents(current.agents)
@@ -2266,9 +2421,25 @@ func previousV56ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	return encodeLike(current, agents)
 }
 
+func previousV57ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
+		return current, nil
+	}
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	agents := cloneAgents(current.agents)
+	agents[managerAgentName] = previousManagerV57(agents[managerAgentName])
+	if len(agents[managerAgentName]) == 0 {
+		return modelPlanBundle{}, integration.ErrInvalid
+	}
+	return encodeLike(current, agents)
+}
+
 func supportedHistoricalModelPlanBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 	bundles := []modelPlanBundle{current}
 	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
+		previousV57ModelPlanBundle,
 		previousV56ModelPlanBundle,
 		previousV55ModelPlanBundle,
 		previousV54ModelPlanBundle,

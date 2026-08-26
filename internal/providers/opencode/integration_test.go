@@ -1874,7 +1874,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 57"), []byte("version: 53"), 1)
+	older := bytes.Replace(current, []byte("version: 58"), []byte("version: 53"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -2373,7 +2373,7 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
-		"artifact: opencode-agent/vgxness-manager; version: 57",
+		"artifact: opencode-agent/vgxness-manager; version: 58",
 		"model: openai/gpt-5.6-sol", "variant: high",
 		"user's OpenCode-native adaptive general-purpose partner",
 		"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority",
@@ -2398,13 +2398,12 @@ func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 		"the delegated worker continues with native reads and search without blocking",
 		"Search with vgxness_memory_search using all-term matching first; retry with any-term matching only when all-term results are insufficient.",
 		"Call vgxness_memory_recent only for an explicit recent-work, session, or compaction-recovery request; never use it as a routine first action.",
-		"CARE reviewer", "CARE specialist", "CARE challenger",
-		"one correction transaction and one scoped validation",
-		"Current CARE review is strict: only proven passive documentation or images",
-		"A non-exempt candidate is VERIFIED only with same-candidate verifier and applicable CARE evidence.",
-		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
-		"Copy that exact Review Binding unchanged to verifier, every selected CARE role, and scoped validation",
-		"A correction changes the candidate digest and invalidates all prior validation and review evidence",
+		"The verifier runs first; each applicable CARE role then reviews that same candidate.",
+		"Require PASS, FAIL, or INCONCLUSIVE with candidate-bound evidence",
+		"missing, stale, or mismatched evidence is INCONCLUSIVE",
+		"CARE risk tiers: passive documentation or images are exempt",
+		"All assess the same frozen candidate.",
+		"a correction creates a new candidate and invalidates prior evidence",
 		"installation, permissions, durability, or shared contracts",
 		"repository-confined `go fmt ./...` command and focused tests before freeze",
 		"verifier to run go test ./... and go vet ./...",
@@ -2588,12 +2587,11 @@ func TestManagerPromptDefinesInstalledChildMissionSchemas(t *testing.T) {
 	testutil.NoError(t, err)
 	prompt := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"Verifier mission schema",
-		"frozen candidate digest", "digest procedure", "exact changed paths", "acceptance criteria", "evidence scope",
-		"exact permitted commands", "expected environment", "stop condition",
-		"Reviewer mission schema",
-		"mode", "candidate identity", "exact changedPaths", "diffScope", "complete Candidate Capsule", "exact skills", "verificationEvidence",
-		"lens-specific goal", "scope", "nonGoals", "acceptance", "evidence", "stop", "return contract",
+		"freeze one identity before assurance",
+		"verifier runs first", "applicable CARE role", "same candidate",
+		"PASS, FAIL, or INCONCLUSIVE", "candidate-bound evidence",
+		"one exact Review Binding with candidate identity, changed paths, scope, and acceptance criteria",
+		"complete Candidate Capsule", "preserve it unchanged in each handoff",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Errorf("manager prompt is missing child mission field %q", required)
