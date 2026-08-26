@@ -38,7 +38,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 		"sole Git and GitHub actor", "delegated implementation worker",
 		"Stop on ambiguity or a failed skill gate", "Do not commit or push without an explicit current-task request",
 		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
-		"Copy that exact Review Binding unchanged to verifier, every reviewer, refuter, and scoped validation",
+		"Copy that exact Review Binding unchanged to verifier, every selected CARE role, and scoped validation",
 		"A correction changes the candidate digest and invalidates all prior validation and review evidence",
 		"Scoped validation receives correctionDelta only with the frozenLedger and the new exact Review Binding",
 	} {
@@ -78,10 +78,65 @@ func TestVersionEvolutionImmediatePredecessorIsExactV55Package(t *testing.T) {
 	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 56")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 55")) {
 		t.Fatal("immediate predecessor did not convert CARE to the historical fixed-lens package")
 	}
+	for _, required := range []string{
+		"Current CARE review is strict: only proven passive documentation or images",
+		"standard requires CARE reviewer; elevated requires CARE reviewer and CARE specialist; critical requires CARE reviewer, CARE specialist, and CARE challenger",
+		"A non-exempt candidate is VERIFIED only with same-candidate verifier and applicable CARE evidence.",
+		"Every non-exempt implementation must freeze, pass the native verifier, and complete its applicable CARE matrix before terminal success; IMPLEMENTED may be reported only as an intermediate state.",
+		"Static proof must establish that the entire change is passive documentation or images with no behavior, configuration, permission, or generated-output effect; extension or location alone is insufficient.",
+	} {
+		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
+			t.Errorf("current manager missing strict CARE clause %q", required)
+		}
+		if bytes.Contains(predecessor.agents[managerAgentName], []byte(required)) {
+			t.Errorf("v55 predecessor retained current CARE clause %q", required)
+		}
+	}
+	if bytes.Contains(current.agents[managerAgentName], []byte("one General mission plus Manager readback may conclude IMPLEMENTED; do not automatically freeze")) {
+		t.Error("current manager retains the low-risk IMPLEMENTED terminal bypass")
+	}
+	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze")) {
+		t.Error("v55 predecessor lost the historical IMPLEMENTED bypass")
+	}
+	for _, forbidden := range []string{"the refuter handles only severe inferential findings", "every reviewer and refuter echoes"} {
+		if bytes.Contains(current.agents[managerAgentName], []byte(forbidden)) {
+			t.Errorf("current manager retains legacy refuter routing %q", forbidden)
+		}
+	}
+	if bytes.Contains(bytes.ToLower(current.agents[managerAgentName]), []byte("refuter")) {
+		t.Error("current manager retains a refuter token")
+	}
+	if !bytes.Contains(current.agents[managerAgentName], []byte("CARE challenger handles severe inferential findings")) || !bytes.Contains(current.agents[managerAgentName], []byte("every selected CARE role echoes")) {
+		t.Error("current manager lacks CARE-only review routing")
+	}
+	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("the refuter handles only severe inferential findings")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("every reviewer and refuter echoes")) {
+		t.Error("v55 predecessor lost legacy refuter routing")
+	}
 	for name, want := range historical.agents {
 		if !bytes.Equal(predecessor.agents[name], want) {
 			t.Fatalf("historical agent %s changed in immediate predecessor", name)
 		}
+	}
+}
+
+func TestCurrentManagerAnchorValidationRejectsAbsentAndDuplicateAnchors(t *testing.T) {
+	for name, prompt := range map[string][]byte{
+		"absent assurance":          bytes.Replace([]byte(canonicalManagerPrompt), []byte(currentManagerAssurance), nil, 1),
+		"duplicate assurance":       append([]byte(canonicalManagerPrompt), []byte(currentManagerAssurance)...),
+		"absent review":             bytes.Replace([]byte(canonicalManagerPrompt), []byte(managerReviewDepthV56Previous), nil, 1),
+		"duplicate review":          append([]byte(canonicalManagerPrompt), []byte(managerReviewDepthV56Previous)...),
+		"absent refuter route":      bytes.Replace([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterRouting), nil, 1),
+		"duplicate refuter route":   append([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterRouting)...),
+		"absent refuter binding":    bytes.Replace([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterBinding), nil, 1),
+		"duplicate refuter binding": append([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterBinding)...),
+		"absent refuter handoff":    bytes.Replace([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterHandoff), nil, 1),
+		"duplicate refuter handoff": append([]byte(canonicalManagerPrompt), []byte(historicalOpenCodeRefuterHandoff)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateCurrentManagerAnchors(prompt); err == nil {
+				t.Fatal("current manager accepted malformed historical anchors")
+			}
+		})
 	}
 }
 
@@ -489,8 +544,7 @@ func TestReadinessV54RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.
 		"artifact: opencode-agent/vgxness-manager; version: 56",
 		"bounded simple exact reads use at most three total tool attempts and no delegation or todo",
 		"complex evidence research may use at most one read-only delegation",
-		"For a disposable/local-only, non-delivery, low-risk bounded change with deterministic readback, one General mission plus Manager readback may conclude `IMPLEMENTED`; do not automatically freeze, invoke verifier/review, or claim `VERIFIED`.",
-		"Full frozen-candidate verifier/review assurance remains mandatory for delivery, risk/hot paths, explicit independent-verification requests, contradictory evidence, and SDD handoffs.",
+		strictOpenCodeCAREAssurance,
 		"A second task call for the same goal requires an explicit blocker, new evidence, correction, or independent assurance; resume the same child where applicable and send only the delta.",
 	} {
 		if !strings.Contains(manager, required) {
