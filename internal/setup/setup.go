@@ -123,9 +123,11 @@ func (provider *openCodeProvider) Plan(ctx context.Context, shared SharedPlan) (
 		return plan, err
 	}
 	if !handshake.OK {
+		plan.Handshake = handshake
 		plan.Blocker = "OpenCode is unavailable or unhealthy."
 		return plan, nil
 	}
+	plan.Handshake = handshake
 	preview, err := provider.previews(shared.Launcher.LauncherPath)
 	if err != nil {
 		return plan, err
@@ -139,6 +141,7 @@ func (provider *openCodeProvider) Plan(ctx context.Context, shared SharedPlan) (
 	plan.ArtifactSHA256 = result.ArtifactSHA256
 	plan.ArtifactCount = result.ArtifactCount
 	plan.State = result.State
+	plan.Integration = result
 	if result.Provider != "" && result.Provider != string(ProviderOpenCode) {
 		plan.Blocker = "provider preview identity does not match selection"
 	} else if result.State != integration.StateAbsent && result.State != integration.StateInstalled && result.State != integration.StatePartial {
@@ -158,7 +161,7 @@ func (provider *openCodeProvider) Status(ctx context.Context, _ SharedPlan) (Pro
 	if err != nil {
 		return ProviderPlan{}, err
 	}
-	return ProviderPlan{Provider: ProviderOpenCode, Ready: status.Ready, Installed: status.Integration.State == integration.StateInstalled, State: status.Integration.State, ArtifactCount: status.Integration.ArtifactCount, Blocker: status.Blocker}, nil
+	return ProviderPlan{Provider: ProviderOpenCode, Ready: status.Ready, Installed: status.Integration.State == integration.StateInstalled, State: status.Integration.State, ArtifactCount: status.Integration.ArtifactCount, Blocker: status.Blocker, Integration: status.Integration, Handshake: status.Handshake}, nil
 }
 
 func (provider *openCodeProvider) Apply(ctx context.Context, plan ProviderPlan, shared SharedResult) (ProviderResult, error) {

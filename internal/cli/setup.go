@@ -286,6 +286,9 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 			return code
 		}
 		renderMultiSetupPlan(stdout, plan)
+		if openCodeOnly(providers) {
+			renderOpenCodeCompatibilityStatus(stdout, plan)
+		}
 		if !plan.Ready {
 			fmt.Fprintln(stdout, "Resultado: requires attention.")
 			return 1
@@ -300,6 +303,9 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 		return code
 	}
 	renderMultiSetupPlan(stdout, plan)
+	if openCodeOnly(providers) {
+		renderOpenCodeCompatibilityPlan(stdout)
+	}
 	if !plan.Ready {
 		fmt.Fprintf(stdout, "\nResultado: bloqueado sin cambios. %s\n", terminalSafe(plan.Blocker))
 		return 1
@@ -334,6 +340,10 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	}
 	fmt.Fprintf(stdout, "Resultado: configuración completa; changed=%t.\n", result.Plan.Changed)
 	renderMultiSetupResult(stdout, result)
+	if openCodeOnly(providers) {
+		fmt.Fprintln(stdout, "Paso 6: handshake OpenCode=healthy")
+		fmt.Fprintln(stdout, "Reinicia OpenCode para cargar vgxness-manager como agente predeterminado.")
+	}
 	return 0
 }
 
@@ -368,6 +378,10 @@ func includesCodex(providers []setupflow.Provider) bool {
 	return false
 }
 
+func openCodeOnly(providers []setupflow.Provider) bool {
+	return len(providers) == 1 && providers[0] == setupflow.ProviderOpenCode
+}
+
 func codexSetupOptions(options integration.Options, home string) (integration.Options, error) {
 	if home == "" {
 		var err error
@@ -398,6 +412,34 @@ func renderMultiSetupResult(writer io.Writer, result setupflow.MultiResult) {
 			fmt.Fprintf(writer, "Recovery %s: %s\n", provider.Provider, terminalSafe(provider.Recovery))
 		}
 	}
+}
+
+func renderOpenCodeCompatibilityPlan(writer io.Writer) {
+	steps := []string{
+		"validar preflight y destinos",
+		"publicar y verificar el launcher",
+		"retirar artefactos heredados reconocidos",
+		"instalar y verificar la integración OpenCode",
+		"publicar y verificar las skills globales",
+		"verificar el handshake OpenCode",
+		"reportar recuperación y activación",
+	}
+	for index, step := range steps {
+		fmt.Fprintf(writer, "Paso %d de %d — %s.\n", index+1, len(steps), step)
+	}
+}
+
+func renderOpenCodeCompatibilityStatus(writer io.Writer, plan setupflow.MultiPlan) {
+	var provider setupflow.ProviderPlan
+	for _, item := range plan.Providers {
+		if item.Provider == setupflow.ProviderOpenCode {
+			provider = item
+			break
+		}
+	}
+	fmt.Fprintf(writer, "Launcher: state=%s\n", plan.SharedPlan.Launcher.State)
+	fmt.Fprintf(writer, "Handshake: ok=%t status=%s\n", provider.Handshake.OK, terminalSafe(provider.Handshake.Status.String()))
+	fmt.Fprintf(writer, "Plan de modelos: %s provider=%s manifest=%s\n", provider.Integration.ModelPlan, terminalSafe(provider.Integration.ModelProvider), terminalSafe(provider.Integration.ManifestPath))
 }
 
 func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {

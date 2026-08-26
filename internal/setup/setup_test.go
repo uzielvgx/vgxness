@@ -261,6 +261,17 @@ func TestOpenCodeProviderUsesVerifiedLauncherAndHandshakeGates(t *testing.T) {
 	}
 }
 
+func TestOpenCodeProviderStatusCarriesHandshakeIndependentFromAggregateReadiness(t *testing.T) {
+	integrationStatus := integration.Result{Provider: "opencode", State: integration.StateInstalled, ModelProvider: "mixed", ManifestPath: "/config/model-plan.json"}
+	managed := &fakeIntegration{statusResult: integrationStatus}
+	service := New(&fakeInstaller{statusResult: selfinstall.Result{State: selfinstall.StateAbsent}}, managed, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	provider := service.OpenCodeProvider(Options{Workspace: "/workspace"}, func(string) (integration.Runtime, error) { return managed, nil })
+	status, err := provider.Status(context.Background(), SharedPlan{Ready: false})
+	if err != nil || status.Ready || !status.Handshake.OK || status.Handshake.Status != integration.HandshakeHealthy || status.Integration.ModelProvider != "mixed" || status.Integration.ManifestPath != "/config/model-plan.json" {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+}
+
 func TestOpenCodeProviderReportsRecoveryAfterPartialInstallFailure(t *testing.T) {
 	preview := &fakeIntegration{previewResult: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "frozen", ArtifactCount: 18}}
 	failure := errors.New("install failed after mutation")

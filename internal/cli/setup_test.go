@@ -409,8 +409,28 @@ func TestSetupWizardOpenCodeRetainsConfigDirInMultiFlow(t *testing.T) {
 	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: plan}}
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--status", "--config-dir", "/tmp/opencode"}, strings.NewReader(""), &stdout, &stderr, setup, nil)
-	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != "/tmp/opencode" || !strings.Contains(stdout.String(), "Provider opencode") {
+	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != "/tmp/opencode" || !strings.Contains(stdout.String(), "Provider opencode") || !strings.Contains(stdout.String(), "Launcher: state=installed") || !strings.Contains(stdout.String(), "Handshake: ok=true status=healthy") || !strings.Contains(stdout.String(), "Plan de modelos:  provider=mixed manifest=") {
 		t.Fatalf("code=%d opencode=%+v stdout=%q stderr=%q", code, setup.openCodeOptions, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardOpenCodeStatusKeepsHandshakeIndependentFromSharedHealth(t *testing.T) {
+	shared := setupflow.SharedPlan{Ready: false, Blocker: "shared launcher or skills are unhealthy", Launcher: selfinstall.Result{State: selfinstall.StateDrifted}}
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}, sharedStatus: &shared}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--status", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, setup, nil)
+	if code != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "Launcher: state=drifted") || !strings.Contains(stdout.String(), "Handshake: ok=true status=healthy") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardOpenCodeRendersGuidedCompatibilityThroughMultiCoordinator(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, setup, nil)
+	output := stdout.String()
+	if code != 0 || stderr.Len() != 0 || !strings.Contains(output, "Paso 1 de 7") || !strings.Contains(output, "Paso 7 de 7") || !strings.Contains(output, "handshake OpenCode=healthy") || !strings.Contains(output, "Reinicia OpenCode") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, output, stderr.String())
 	}
 }
 
@@ -539,7 +559,7 @@ func (fakeSetupProvider) Plan(context.Context, setupflow.SharedPlan) (setupflow.
 	return setupflow.ProviderPlan{Provider: setupflow.ProviderOpenCode, Ready: true}, nil
 }
 func (fakeSetupProvider) Status(context.Context, setupflow.SharedPlan) (setupflow.ProviderPlan, error) {
-	return setupflow.ProviderPlan{Provider: setupflow.ProviderOpenCode, Ready: true, Installed: true, State: integration.StateInstalled}, nil
+	return setupflow.ProviderPlan{Provider: setupflow.ProviderOpenCode, Ready: true, Installed: true, State: integration.StateInstalled, Integration: integration.Result{ModelProvider: "mixed"}, Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}}, nil
 }
 func (fakeSetupProvider) Apply(context.Context, setupflow.ProviderPlan, setupflow.SharedResult) (setupflow.ProviderResult, error) {
 	return setupflow.ProviderResult{Provider: setupflow.ProviderOpenCode, Verified: true}, nil

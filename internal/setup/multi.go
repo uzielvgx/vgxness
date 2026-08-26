@@ -34,6 +34,8 @@ type ProviderPlan struct {
 	ArtifactSHA256 string
 	ArtifactCount  int
 	State          integration.State
+	Integration    integration.Result
+	Handshake      integration.Handshake
 }
 
 type ProviderResult struct {
@@ -110,7 +112,7 @@ func (adapter *IntegrationProvider) Status(ctx context.Context, _ SharedPlan) (P
 	if err != nil {
 		return ProviderPlan{}, err
 	}
-	plan := ProviderPlan{Provider: adapter.provider, Installed: status.State == integration.StateInstalled, State: status.State, ArtifactSHA256: status.ArtifactSHA256, ArtifactCount: status.ArtifactCount}
+	plan := ProviderPlan{Provider: adapter.provider, Installed: status.State == integration.StateInstalled, State: status.State, ArtifactSHA256: status.ArtifactSHA256, ArtifactCount: status.ArtifactCount, Integration: status}
 	plan.Ready = plan.Installed && (status.Provider == "" || status.Provider == string(adapter.provider))
 	if !plan.Ready {
 		plan.Blocker = string(adapter.provider) + " integration is not installed or is unhealthy"
@@ -163,7 +165,7 @@ func (adapter *IntegrationProvider) Plan(ctx context.Context, _ SharedPlan) (Pro
 	if err != nil {
 		return ProviderPlan{}, err
 	}
-	plan := ProviderPlan{Provider: adapter.provider, Installed: preview.State == integration.StateInstalled, Changed: preview.Changed || preview.State != integration.StateInstalled, ArtifactSHA256: preview.ArtifactSHA256, ArtifactCount: preview.ArtifactCount, State: preview.State}
+	plan := ProviderPlan{Provider: adapter.provider, Installed: preview.State == integration.StateInstalled, Changed: preview.Changed || preview.State != integration.StateInstalled, ArtifactSHA256: preview.ArtifactSHA256, ArtifactCount: preview.ArtifactCount, State: preview.State, Integration: preview}
 	if preview.Provider != "" && preview.Provider != string(adapter.provider) {
 		plan.Blocker = "provider preview identity does not match selection"
 	} else if preview.State != integration.StateAbsent && preview.State != integration.StateInstalled && preview.State != integration.StatePartial {
