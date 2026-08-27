@@ -3344,6 +3344,95 @@ export const VGXNESSMemoryPlugin = async ({ directory }) => {
 	return []byte(content)
 }
 
+// memoryLifecyclePluginContent validates bytes for a future installer without
+// registering or activating the lifecycle adapter.
+func memoryLifecyclePluginContent(executable string) ([]byte, error) {
+	if strings.TrimSpace(executable) == "" || !filepath.IsAbs(executable) {
+		return nil, fmt.Errorf("%w: VGXNESS executable path", integration.ErrInvalid)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(executable))
+	if err != nil {
+		return nil, fmt.Errorf("%w: VGXNESS executable unavailable", integration.ErrInvalid)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: VGXNESS executable is not a regular file", integration.ErrInvalid)
+	}
+	return renderMemoryLifecyclePlugin(resolved), nil
+}
+
+func renderMemoryLifecyclePlugin(resolved string) []byte {
+	quoted, _ := json.Marshal(resolved)
+	return []byte(`import { spawn } from "node:child_process"
+import { isAbsolute } from "node:path"
+
+// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory-lifecycle; version: 1
+const VGXNESS_EXECUTABLE = ` + string(quoted) + `
+const MAX_INPUT_BYTES = 64 * 1024
+const MAX_OUTPUT_BYTES = 8 * 1024
+const MAX_CONTEXT_BYTES = 4 * 1024
+const MAX_SESSIONS = 128
+const TIMEOUT_MS = 5_000
+const identifier = value => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,239}$/.test(String(value ?? "")) ? String(value) : ""
+const bounded = (value, limit) => {
+  const text = value, suffix = "\n[truncated by VGXNESS]"
+  if (Buffer.byteLength(text) <= limit) return text
+  let result = "", room = limit - Buffer.byteLength(suffix)
+  for (const character of text) { if (Buffer.byteLength(result) + Buffer.byteLength(character) > room) break; result += character }
+  return result + suffix
+}
+const untrusted = value => bounded(value, MAX_CONTEXT_BYTES).replace(/<\s*\/\s*(UNTRUSTED\s+DATA|VGXNESS\s+LIFECYCLE)\s*>/gi, "<\\/$1>")
+
+export const VGXNESSMemoryLifecyclePlugin = async ({ directory }) => {
+  const sessions = new Map(); let disposed = false
+  const invoke = (operation, payload) => new Promise((resolve, reject) => {
+    if ((disposed && operation !== "end") || !isAbsolute(directory)) return reject(new Error("VGXNESS lifecycle unavailable"))
+    const input = JSON.stringify({ schemaVersion: 1, operation, workspace: directory, ...payload })
+    if (Buffer.byteLength(input) > MAX_INPUT_BYTES) return reject(new Error("VGXNESS lifecycle request exceeded its bound"))
+    const child = spawn(VGXNESS_EXECUTABLE, ["memory", "hook", "--stdin"], { cwd: directory, shell: false, stdio: ["pipe", "pipe", "pipe"], env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, TMPDIR: process.env.TMPDIR, SystemRoot: process.env.SystemRoot } })
+    let stdout = "", stderrBytes = 0, settled = false
+    const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(timer); error ? reject(error) : resolve(value) }
+    const stop = () => { try { child.kill("SIGKILL") } catch {} }
+    const timer = setTimeout(() => { stop(); finish(new Error("VGXNESS lifecycle timed out")) }, TIMEOUT_MS)
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8")
+    child.stdout.on("data", chunk => { stdout += chunk; if (Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) { stop(); finish(new Error("VGXNESS lifecycle response exceeded its bound")) } })
+    child.stderr.on("data", chunk => { stderrBytes += Buffer.byteLength(chunk); if (stderrBytes > MAX_OUTPUT_BYTES) { stop(); finish(new Error("VGXNESS lifecycle failure exceeded its bound")) } })
+    child.on("error", () => finish(new Error("VGXNESS lifecycle unavailable")))
+    child.on("close", code => { if (settled) return; if (code !== 0) return finish(new Error("VGXNESS lifecycle failed")); try { const result = JSON.parse(stdout); if (result?.schemaVersion !== 1) throw new Error(); finish(undefined, result) } catch { finish(new Error("VGXNESS lifecycle response is invalid")) } })
+    child.stdin.on("error", () => { stop(); finish(new Error("VGXNESS lifecycle input failed")) })
+    try { child.stdin.end(input) } catch { stop(); finish(new Error("VGXNESS lifecycle input failed")) }
+  })
+  const end = state => invoke("end", { session_handle: state.handle, external_id: state.externalID, state: state.summaryCompleted ? "completed" : "interrupted" }).catch(() => {})
+  const begin = async externalID => { try {
+    const result = await invoke("start", { provider: "opencode", external_id: externalID }), handle = identifier(result?.session_handle)
+    if (!handle) return
+    if (!sessions.has(externalID)) { await end({ externalID, handle, summaryCompleted: false }); return }
+    sessions.set(externalID, { externalID, handle, summaryCompleted: false, contextLoaded: false })
+  } catch {} }
+  const forget = async externalID => { const state = sessions.get(externalID); sessions.delete(externalID); if (state) await end(state) }
+  return {
+    event: async input => { try {
+      const event = input?.event, info = event?.properties?.info, externalID = identifier(info?.id)
+      if (!externalID || info?.parentID) return
+      if (event?.type === "session.created" && !sessions.has(externalID)) { sessions.set(externalID, null); if (sessions.size > MAX_SESSIONS) { const oldest = sessions.keys().next().value, state = sessions.get(oldest); sessions.delete(oldest); if (state) void end(state) }; await begin(externalID) }
+      else if (event?.type === "session.deleted") await forget(externalID)
+    } catch {} },
+    "experimental.chat.system.transform": async (input, output) => { try {
+      const state = sessions.get(identifier(input?.sessionID)); if (!state || state.contextLoaded) return
+      state.contextLoaded = true
+      const result = await invoke("context", { session_handle: state.handle })
+      if (result?.session_handle !== state.handle || typeof result?.handoff !== "string") return
+      const block = "<VGXNESS LIFECYCLE session_handle=\"" + state.handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + untrusted(result.handoff) + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"
+      if (Array.isArray(output?.system)) output.system.push(block)
+    } catch {} },
+    "experimental.session.compacting": async input => { try { const state = sessions.get(identifier(input?.sessionID)); if (state) await invoke("checkpoint", { session_handle: state.handle }) } catch {} },
+    "tool.execute.after": async input => { try { const state = sessions.get(identifier(input?.sessionID)); if (state && input?.tool === "vgxness_memory_session_summary" && identifier(input?.callID)) state.summaryCompleted = true } catch {} },
+    dispose: async () => { try { disposed = true; const active = [...sessions.values()].filter(Boolean); sessions.clear(); await Promise.allSettled(active.map(end)) } catch {} },
+  }
+}
+`)
+}
+
 func inspectDirectory(path string) (exists, drifted bool, err error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
