@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -377,19 +378,21 @@ func TestMemoryCLI_SyncConfigureAndStatusAreStrictAndTokenFree(t *testing.T) {
 
 func TestMemoryCLI_HookLifecycleIsVersionedStrictAndPrivate(t *testing.T) {
 	workspace := t.TempDir()
+	workspaceJSON, err := json.Marshal(workspace)
+	testutil.NoError(t, err)
 	storageRoot := filepath.Join(t.TempDir(), "memory")
 	runtime := &fakeMemoryRuntime{project: "project-1"}
 	call := func(input string) (int, string, string) {
 		return runMemoryTest([]string{"memory", "hook", "--stdin", "--storage-root", storageRoot, "--project-local"}, input, runtime)
 	}
-	start := `{"schemaVersion":1,"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"secret-run"}`
+	start := `{"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"secret-run"}`
 	code, out, stderr := call(start)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && runtime.opts.StorageRoot == storageRoot && runtime.opts.ProjectLocal && runtime.start == (memory.ProviderSessionStart{Project: "project-1", Provider: "openai", ExternalID: "secret-run"}) && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"session_handle":"ps-test"`) && !strings.Contains(out, "secret-run"), "start=%d %q %q opts=%+v request=%+v", code, out, stderr, runtime.opts, runtime.start)
-	code, out, stderr = call(`{"schemaVersion":1,"operation":"checkpoint","workspace":"` + workspace + `","session_handle":"ps-test"}`)
+	code, out, stderr = call(`{"schemaVersion":1,"operation":"checkpoint","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test"}`)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.checkpoint == "ps-test" && strings.Contains(out, `"checkpointed":true`), "checkpoint=%d %q %q", code, out, stderr)
-	code, out, stderr = call(`{"schemaVersion":1,"operation":"end","workspace":"` + workspace + `","session_handle":"ps-test","external_id":"secret-run","state":"completed","summary":"safe"}`)
+	code, out, stderr = call(`{"schemaVersion":1,"operation":"end","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","external_id":"secret-run","state":"completed","summary":"safe"}`)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.ended == (memory.ProviderSessionEnd{Project: "project-1", Handle: "ps-test", ExternalID: "secret-run", State: memory.ProviderSessionCompleted, Summary: "safe"}) && strings.Contains(out, `"state":"completed"`) && !strings.Contains(out, "secret-run") && !strings.Contains(out, "safe"), "end=%d %q %q request=%+v", code, out, stderr, runtime.ended)
-	for _, input := range []string{`{"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"x"}`, `{"schemaVersion":2,"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"x"}`, `{"schemaVersion":1,"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"x","unknown":true}`, `{"schemaVersion":1,"schemaVersion":1,"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"x"}`, start + ` {}`} {
+	for _, input := range []string{`{"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, `{"schemaVersion":2,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, `{"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x","unknown":true}`, `{"schemaVersion":1,"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, start + ` {}`} {
 		before := runtime.calls
 		code, out, _ = call(input)
 		testutil.Require(t, code == 2 && out == "" && runtime.calls == before, "invalid hook=%d %q calls=%d", code, out, runtime.calls)
