@@ -2102,7 +2102,8 @@ func activateManagerV59(value []byte) ([]byte, error) {
 		return nil, integration.ErrInvalid
 	}
 	value = bytes.Replace(value, []byte(managerV58Marker), []byte(managerCurrentMarker), 1)
-	return bytes.Replace(value, []byte("`stacked-pr`"), []byte("`git-delivery`"), 1), nil
+	value = bytes.Replace(value, []byte("`stacked-pr`"), []byte("`git-delivery`"), 1)
+	return bytes.Replace(value, []byte(orchestration.PreviousContractPolicyV59), []byte(orchestration.ContractPolicy), 1), nil
 }
 
 // activateManagerV58 independently preserves the complete CARE-v2 Manager58 package.
@@ -2131,7 +2132,7 @@ const currentOpenCodeSkill = "Load a native skill through the skill tool only wh
 const previousOpenCodeSkillV48 = "Load every clearly applicable native skill through the skill tool."
 
 func activeManagerPrompt(value []byte) []byte {
-	return activeManagerPromptWithPolicy(value, orchestration.ContractPolicy)
+	return activeManagerPromptWithPolicy(value, orchestration.PreviousContractPolicyV59)
 }
 
 func activeManagerPromptWithPolicy(value []byte, policy string) []byte {
@@ -2182,7 +2183,7 @@ func previousManagerV50(current []byte) []byte {
 }
 
 func previousManagerV51(current []byte) []byte {
-	return derivePredecessor(current, []textReplacement{{old: managerV52Marker, new: managerV51Marker}, {old: orchestration.ContractPolicy, new: orchestration.PreviousContractPolicyV51}})
+	return derivePredecessor(current, []textReplacement{{old: managerV52Marker, new: managerV51Marker}, {old: orchestration.PreviousContractPolicyV59, new: orchestration.PreviousContractPolicyV51}})
 }
 
 func previousManagerV52(current []byte) []byte {
@@ -2259,6 +2260,7 @@ func previousManagerV58(current []byte) []byte {
 		return nil
 	}
 	value := bytes.Replace(current, []byte(managerCurrentMarker), []byte(managerV58Marker), 1)
+	value = bytes.Replace(value, []byte(orchestration.ContractPolicy), []byte(orchestration.PreviousContractPolicyV59), 1)
 	return bytes.ReplaceAll(value, []byte("`git-delivery`"), []byte("`stacked-pr`"))
 }
 
