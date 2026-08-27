@@ -418,24 +418,26 @@ func TestMemoryCLI_HookLifecycleIsVersionedStrictAndPrivate(t *testing.T) {
 
 func TestMemoryCLI_HookContextAndSummaryAreStrictAndPrivate(t *testing.T) {
 	workspace := t.TempDir()
+	workspaceJSON, err := json.Marshal(workspace)
+	testutil.NoError(t, err)
 	updated := "2026-08-27T12:34:56.123456789Z"
 	runtime := &fakeMemoryRuntime{project: "project-1", context: memory.ProviderSessionContext{Handoff: "untrusted prior handoff"}, draft: memory.ProviderSessionDraft{Project: "project-1", Handle: "ps-test"}}
 	call := func(input string) (int, string, string) {
 		return runMemoryTest([]string{"memory", "hook", "--stdin"}, input, runtime)
 	}
-	code, out, stderr := call(`{"schemaVersion":1,"operation":"context","workspace":"` + workspace + `","session_handle":"ps-test"}`)
+	code, out, stderr := call(`{"schemaVersion":1,"operation":"context","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test"}`)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && strings.Contains(out, `"handoff":"untrusted prior handoff"`) && !strings.Contains(out, "external") && !strings.Contains(out, "provider") && !strings.Contains(out, "draft"), "context=%d %q %q", code, out, stderr)
-	code, out, stderr = call(`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"pending draft","expected_updated_at":"` + updated + `"}`)
+	code, out, stderr = call(`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"pending draft","expected_updated_at":"` + updated + `"}`)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 4 && runtime.draftSave.Project == "project-1" && runtime.draftSave.Summary == "pending draft" && runtime.draftSave.ExpectedUpdatedAt.Format(time.RFC3339Nano) == updated && strings.Contains(out, `"session_handle":"ps-test"`) && strings.Contains(out, `"updated_at"`) && !strings.Contains(out, "pending draft") && !strings.Contains(out, "external") && !strings.Contains(out, "provider"), "summary=%d %q %q request=%+v", code, out, stderr, runtime.draftSave)
 	runtime.err = memory.ErrConflict
-	code, out, _ = call(`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"stale","expected_updated_at":"` + updated + `"}`)
+	code, out, _ = call(`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"stale","expected_updated_at":"` + updated + `"}`)
 	testutil.Require(t, code == 1 && out == "", "stale summary=%d %q", code, out)
 	runtime.err = nil
 	for _, input := range []string{
-		`{"schemaVersion":1,"operation":"context","workspace":"` + workspace + `","session_handle":"ps-test","summary":"x"}`,
-		`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"x","expected_updated_at":"not-a-time"}`,
-		`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"x","external_id":"x"}`,
-		`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"x"} {}`,
+		`{"schemaVersion":1,"operation":"context","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"x"}`,
+		`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"x","expected_updated_at":"not-a-time"}`,
+		`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"x","external_id":"x"}`,
+		`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"x"} {}`,
 	} {
 		before := runtime.calls
 		code, out, _ = call(input)
