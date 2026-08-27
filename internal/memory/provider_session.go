@@ -78,6 +78,56 @@ func (s *Store) MarkProviderSessionCheckpoint(ctx context.Context, project, hand
 	return value, commit(ctx, tx)
 }
 
+// SaveProviderSessionDraft stores one local-only optimistic draft. Its content
+// never enters the sync outbox and is returned only as metadata.
+func (s *Store) SaveProviderSessionDraft(ctx context.Context, request ProviderSessionDraftSave) (ProviderSessionDraft, error) {
+	if s == nil || s.readOnly || !validProviderSessionIdentity(request.Project, request.Handle) || !validText(request.Summary, 4096, false) || strings.Contains(request.Summary, request.Handle) {
+		return ProviderSessionDraft{}, fmt.Errorf("%w: provider session draft", ErrInvalid)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ProviderSessionDraft{}, writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	value, found, err := loadProviderSession(tx.QueryRowContext(ctx, providerSessionSelect+` WHERE project_id=? AND handle=?`, request.Project, request.Handle))
+	if err != nil {
+		return ProviderSessionDraft{}, err
+	}
+	if !found {
+		return ProviderSessionDraft{}, fmt.Errorf("%w: provider session", ErrNotFound)
+	}
+	if value.State != ProviderSessionActive {
+		return ProviderSessionDraft{}, fmt.Errorf("%w: provider session is closed", ErrConflict)
+	}
+	var old sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT updated_at FROM local_provider_session_drafts WHERE handle=? AND project_id=?`, request.Handle, request.Project).Scan(&old); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return ProviderSessionDraft{}, writeError(ctx, err)
+	}
+	if old.Valid != !request.ExpectedUpdatedAt.IsZero() || old.Valid && old.Int64 != request.ExpectedUpdatedAt.UnixNano() {
+		return ProviderSessionDraft{}, fmt.Errorf("%w: stale provider session draft", ErrConflict)
+	}
+	now := s.now().UTC()
+	if old.Valid && now.UnixNano() <= old.Int64 {
+		now = time.Unix(0, old.Int64).UTC().Add(time.Nanosecond)
+	}
+	if old.Valid {
+		result, updateErr := tx.ExecContext(ctx, `UPDATE local_provider_session_drafts SET summary=?,updated_at=? WHERE handle=? AND project_id=? AND updated_at=?`, request.Summary, now.UnixNano(), request.Handle, request.Project, old.Int64)
+		if updateErr != nil {
+			return ProviderSessionDraft{}, conflictOrWrite(ctx, updateErr)
+		}
+		changed, _ := result.RowsAffected()
+		if changed != 1 {
+			return ProviderSessionDraft{}, fmt.Errorf("%w: stale provider session draft", ErrConflict)
+		}
+	} else {
+		_, err = tx.ExecContext(ctx, `INSERT INTO local_provider_session_drafts(handle,project_id,summary,updated_at) VALUES(?,?,?,?)`, request.Handle, request.Project, request.Summary, now.UnixNano())
+		if err != nil {
+			return ProviderSessionDraft{}, conflictOrWrite(ctx, err)
+		}
+	}
+	return ProviderSessionDraft{Handle: request.Handle, Project: request.Project, UpdatedAt: now}, commit(ctx, tx)
+}
+
 func (s *Store) EndProviderSession(ctx context.Context, request ProviderSessionEnd) (ProviderSession, error) {
 	if err := cancelled(ctx); err != nil {
 		return ProviderSession{}, err
@@ -113,11 +163,22 @@ func (s *Store) EndProviderSession(ctx context.Context, request ProviderSessionE
 	}
 	now := s.now().UTC()
 	if request.State == ProviderSessionCompleted {
+		summary := request.Summary
+		if summary == "" {
+			if err = tx.QueryRowContext(ctx, `SELECT summary FROM local_provider_session_drafts WHERE handle=? AND project_id=?`, request.Handle, request.Project).Scan(&summary); errors.Is(err, sql.ErrNoRows) {
+				return ProviderSession{}, fmt.Errorf("%w: provider session draft", ErrNotFound)
+			} else if err != nil {
+				return ProviderSession{}, writeError(ctx, err)
+			}
+		}
+		if !validText(summary, 4096, false) || strings.Contains(summary, request.ExternalID) || strings.Contains(summary, request.Handle) {
+			return ProviderSession{}, fmt.Errorf("%w: provider session summary", ErrInvalid)
+		}
 		id, idErr := newID()
 		if idErr != nil {
 			return ProviderSession{}, idErr
 		}
-		item := Observation{ID: id, Project: request.Project, Scope: ScopeProject, Type: "summary", Content: request.Summary, TopicKey: providerSessionSummaryTopic(id), Provenance: Provenance{Producer: "provider-session"}, State: StateActive, CreatedAt: now, UpdatedAt: now}
+		item := Observation{ID: id, Project: request.Project, Scope: ScopeProject, Type: "summary", Content: summary, TopicKey: providerSessionSummaryTopic(id), Provenance: Provenance{Producer: "provider-session"}, State: StateActive, CreatedAt: now, UpdatedAt: now}
 		if err = insertObservation(ctx, tx, item); err != nil {
 			return ProviderSession{}, err
 		}
@@ -125,6 +186,9 @@ func (s *Store) EndProviderSession(ctx context.Context, request ProviderSessionE
 			return ProviderSession{}, err
 		}
 		value.FinalObservationID = id
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM local_provider_session_drafts WHERE handle=? AND project_id=?`, request.Handle, request.Project); err != nil {
+		return ProviderSession{}, writeError(ctx, err)
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE local_provider_sessions SET state=?,final_observation_id=?,updated_at=?,completed_at=? WHERE handle=? AND project_id=? AND state='active'`, request.State, nullable(value.FinalObservationID), now.UnixNano(), now.UnixNano(), request.Handle, request.Project)
 	if err != nil {
@@ -140,6 +204,9 @@ func (s *Store) EndProviderSession(ctx context.Context, request ProviderSessionE
 
 // ProviderSessionContext exposes only the newest completed, same-project summary.
 func (s *Store) ProviderSessionContext(ctx context.Context, project, handle string) (ProviderSessionContext, error) {
+	if err := cancelled(ctx); err != nil {
+		return ProviderSessionContext{}, err
+	}
 	if s == nil || !validProviderSessionIdentity(project, handle) {
 		return ProviderSessionContext{}, fmt.Errorf("%w: provider session", ErrInvalid)
 	}
@@ -213,6 +280,9 @@ func loadProviderSession(row scanner) (ProviderSession, bool, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return ProviderSession{}, false, nil
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return ProviderSession{}, false, err
+	}
 	if err != nil || checkpointed < 0 || checkpointed > 1 {
 		return ProviderSession{}, false, fmt.Errorf("%w: provider session", ErrCorrupt)
 	}
@@ -237,7 +307,7 @@ func validProviderSessionEnd(request ProviderSessionEnd) bool {
 	if request.State != ProviderSessionCompleted {
 		return request.Summary == ""
 	}
-	return validText(request.Summary, 4096, false) && !strings.Contains(request.Summary, request.ExternalID) && !strings.Contains(request.Summary, request.Handle)
+	return request.Summary == "" || validText(request.Summary, 4096, false)
 }
 func newProviderSessionHandle() (string, error) {
 	id, err := newID()

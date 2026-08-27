@@ -8,22 +8,24 @@ Current delivery policy is manager v59 and global `git-delivery` v1, migrated ex
 
 Delivery labels are evidence-only: IMPLEMENTED requires completed workspace changes and observed developmental checks, but not independent verification; VERIFIED requires the exact frozen candidate to pass independent verification and review; DELIVERED requires the exact commit to be published and a new current-task PR created and read back; MERGED requires that PR merge and base containment/readback; INSTALLED additionally requires installation and handshake readback. No later state is inferred.
 
-VGXNESS installs 16 OpenCode-managed artifacts: 13 agents (`vgxness-manager` v59; managed `general` v10; `explore` v4; verifier v7; three CARE v2 roles; and six hidden SDD profiles including `vgxness-sdd-apply` v7), one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. OpenCode current is CARE-v2 Manager59; its immediate predecessor is exact CARE-v2 Manager58, followed by CARE-v1 Manager58 and CARE-v1 Manager57; OpenCode v56/verifier-v6 is deeper. There is no installed plugin. The managed MCP launch command is `vgxness mcp --full`; it exposes the full read/write set of five memory and 13 SDD tools. Read-only managed profiles receive explicit non-mutating allowlists.
+VGXNESS installs 16 OpenCode-managed artifacts: 13 agents (`vgxness-manager` v59; managed `general` v10; `explore` v4; verifier v7; three CARE v2 roles; and six hidden SDD profiles including `vgxness-sdd-apply` v7), one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. OpenCode current is CARE-v2 Manager59; its immediate predecessor is exact CARE-v2 Manager58, followed by CARE-v1 Manager58 and CARE-v1 Manager57; OpenCode v56/verifier-v6 is deeper. SQLite schema v21 backs local provider-session drafts. There is no installed plugin. The managed MCP launch command is `vgxness mcp --full`; it exposes the full read/write set of eight memory and 13 SDD tools. Read-only managed profiles receive explicit non-mutating allowlists.
 
 MCP is local stdio for a trusted OpenCode host. It has no caller identity or session authentication: host tool allowlists, operator permissions, user authorization, and task scope are its authorization boundary. No capability token or additional authentication framework is provided.
 
 | Mode | Discovery | Contract |
 | --- | --- | --- |
-| `vgxness mcp` | `memory_recent`, `memory_search` | Default-deny read-only mode: this server does not register `memory_get` or mutating tools, and rejects calls to their unregistered names. |
-| `vgxness mcp --full` | 18 tools | Five memory tools and 13 SDD tools, including eight mutations: `memory_save`, `memory_forget`, `sdd_create`, `sdd_set_interaction_mode`, `sdd_transition`, `sdd_save_revision`, `sdd_accept_revision`, and `sdd_record_projection`. |
+| `vgxness mcp` | `memory_recent`, `memory_search`, `memory_context` | Default-deny read-only mode. |
+| `vgxness mcp --full` | 21 tools | Eight memory tools and 13 SDD tools, including local-only session-summary and optimistic update tools. |
 
-Full MCP exposes exactly 18 tools: five semantic-memory tools and 13 SDD tools.
+Full MCP exposes exactly 21 tools: eight semantic-memory tools and 13 SDD tools.
 
 - `vgxness_memory_search`
 - `vgxness_memory_recent`
 - `vgxness_memory_get`
 - `vgxness_memory_save`
 - `vgxness_memory_forget`
+- `vgxness_memory_context`
+- `vgxness_memory_session_summary`, `vgxness_memory_update`
 - `vgxness_sdd_create`
 - `vgxness_sdd_list`
 - `vgxness_sdd_get`
@@ -78,7 +80,7 @@ VGXNESS's SQLite/FTS5 `MemoryStore` is the only persistent memory authority. MCP
 
 The default database is `~/.vgxness/memory.db`. Records remain isolated by canonical workspace binding, project, scope, topic, type, state, session, provenance, and references.
 
-The current SQLite schema v20 contains separate structured SDD tables, per-project sync backup intents, and local-only provider-session rows; it does not make SDD content semantic memory or turn OpenSpec projections into canonical SQLite content. Immediately after a binary upgrade from an older supported schema, read-only opens cannot migrate: `status`, `doctor`, `setup opencode --status`, and read tools may report a storage/migration failure until one write-capable memory or SDD operation opens the database and atomically applies v20. Do not delete the database. Run the write-capable operation and rerun status; see [Native memory](memory.md#upgrade-migration-caveat).
+The current SQLite schema v21 contains separate structured SDD tables, per-project sync backup intents, local-only provider-session rows, and local drafts; it does not make SDD content semantic memory or turn OpenSpec projections into canonical SQLite content. Immediately after a binary upgrade from an older supported schema, read-only opens cannot migrate: `status`, `doctor`, `setup opencode --status`, and read tools may report a storage/migration failure until one write-capable memory or SDD operation opens the database and atomically applies v21. Do not delete the database. Run the write-capable operation and rerun status; see [Native memory](memory.md#upgrade-migration-caveat).
 
 Memory access is explicit through MCP tools. Recall is intent-triggered when the request indicates prior project context may matter:
 

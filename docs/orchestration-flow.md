@@ -1,6 +1,6 @@
 # VGXNESS native manager flow
 
-The active product has provider-native OpenCode and Codex managers sharing `vgxness-orchestration/v1`. OpenCode supplies workspace tools and Task workers; Codex retains its native profiles and MCP tool semantics. VGXNESS supplies managed profiles, model bindings, setup, lifecycle contracts, and MCP configuration. No plugin, automatic memory recall, compaction, observability, or session identity is installed.
+The active product has provider-native OpenCode and Codex managers sharing `vgxness-orchestration/v1`. OpenCode supplies workspace tools and Task workers; Codex retains its native profiles and MCP tool semantics. VGXNESS supplies managed profiles, model bindings, setup, lifecycle contracts, MCP configuration, and SQLite schema v21. No plugin, automatic memory recall, compaction, observability, or session identity is installed.
 
 ## Route selection
 
@@ -47,7 +47,7 @@ Baseline and controlled pilot work are deferred and separately authorized; no pi
 
 | Backend | Canonical content |
 | --- | --- |
-| `memory` | Structured SDD revision bodies in SQLite schema v20; they remain distinct from semantic-memory records and OpenSpec projections. |
+| `memory` | Structured SDD revision bodies in SQLite schema v21; they remain distinct from semantic-memory records and OpenSpec projections. |
 | `openspec` | Managed files under `openspec/changes/<safe-change-id>/`; SQLite stores identity, digest, bindings, and projection evidence. |
 | `hybrid` | SQLite revision content is canonical; OpenSpec is a deterministic projection. |
 

@@ -428,7 +428,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protectedTools := []string{"memory_save", "memory_forget", "sdd_create", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_accept_revision", "sdd_record_projection"}
+	protectedTools := []string{"memory_save", "memory_forget", "memory_session_summary", "memory_update", "sdd_create", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_accept_revision", "sdd_record_projection"}
 	for _, item := range pkg.Artifacts[1:] {
 		content := string(item.Bytes)
 		for _, field := range []string{"name = ", "description = ", "developer_instructions = ", "model = ", "model_reasoning_effort = ", "sandbox_mode = "} {

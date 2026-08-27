@@ -133,3 +133,84 @@ func TestProviderSessionRepeatedCompletionAndOptimisticUpdate(t *testing.T) {
 		testutil.Require(t, errors.Is(err, ErrConflict), "delta=%s stale update=%v", delta, err)
 	}
 }
+
+func TestProviderSessionDraftIsLocalOptimisticAndConsumedOnCompletion(t *testing.T) {
+	store := openTestStore(t)
+	enableSync(t, store)
+	ctx := context.Background()
+	started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "external"})
+	testutil.NoError(t, err)
+	draft, err := store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "local handoff"})
+	testutil.Require(t, err == nil && draft.UpdatedAt.After(time.Time{}), "draft=%+v err=%v", draft, err)
+	var outbox, afterDraft int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	updated, err := store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "replacement", ExpectedUpdatedAt: draft.UpdatedAt})
+	testutil.Require(t, err == nil && updated.UpdatedAt.After(draft.UpdatedAt), "override=%+v err=%v", updated, err)
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&afterDraft))
+	testutil.Require(t, afterDraft == outbox, "draft entered sync outbox %d -> %d", outbox, afterDraft)
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "stale", ExpectedUpdatedAt: draft.UpdatedAt.Add(-time.Nanosecond)})
+	testutil.Require(t, errors.Is(err, ErrConflict), "stale draft=%v", err)
+	closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCompleted})
+	testutil.Require(t, err == nil && closed.FinalObservationID != "", "close=%+v err=%v", closed, err)
+	item, err := store.Get(ctx, closed.FinalObservationID, "p", ScopeProject)
+	testutil.Require(t, err == nil && item.Content == "replacement", "item=%+v err=%v", item, err)
+	var drafts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts`).Scan(&drafts))
+	testutil.Require(t, drafts == 0, "drafts=%d", drafts)
+	interrupted, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "interrupted"})
+	testutil.NoError(t, err)
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: interrupted.Handle, Summary: "discarded"})
+	testutil.NoError(t, err)
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: interrupted.Handle, ExternalID: "interrupted", State: ProviderSessionInterrupted})
+	testutil.NoError(t, err)
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts WHERE handle=?`, interrupted.Handle).Scan(&drafts))
+	testutil.Require(t, drafts == 0, "noncompleted draft retained=%d", drafts)
+}
+
+func TestProviderSessionDraftUpdateChecksAffectedRowAndFinalizationRollsBack(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "external"})
+	testutil.NoError(t, err)
+	draft, err := store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "first"})
+	testutil.NoError(t, err)
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "stale", ExpectedUpdatedAt: draft.UpdatedAt.Add(-time.Nanosecond)})
+	testutil.Require(t, errors.Is(err, ErrConflict), "stale draft=%v", err)
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`CREATE TRIGGER ignore_draft_update BEFORE UPDATE ON local_provider_session_drafts BEGIN SELECT RAISE(IGNORE); END`)
+		return err
+	}())
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "lost", ExpectedUpdatedAt: draft.UpdatedAt})
+	testutil.Require(t, errors.Is(err, ErrConflict), "zero-row draft update=%v", err)
+	testutil.NoError(t, func() error { _, err := store.db.Exec(`DROP TRIGGER ignore_draft_update`); return err }())
+	updated, err := store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "second", ExpectedUpdatedAt: draft.UpdatedAt})
+	testutil.Require(t, err == nil && updated.UpdatedAt.After(draft.UpdatedAt), "success=%+v err=%v", updated, err)
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`UPDATE local_provider_session_drafts SET summary='external' WHERE handle=?`, started.Handle)
+		return err
+	}())
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCompleted})
+	testutil.Require(t, errors.Is(err, ErrInvalid), "invalid finalization=%v", err)
+	var drafts, active int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts WHERE handle=?`, started.Handle).Scan(&drafts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_sessions WHERE handle=? AND state='active'`, started.Handle).Scan(&active))
+	testutil.Require(t, drafts == 1 && active == 1, "failed finalization committed drafts=%d active=%d", drafts, active)
+}
+
+func TestProviderSessionPreservesCancellationIdentity(t *testing.T) {
+	store := openTestStore(t)
+	started, err := store.StartProviderSession(context.Background(), ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "external"})
+	testutil.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = store.ProviderSessionContext(ctx, "p", started.Handle)
+	testutil.Require(t, errors.Is(err, context.Canceled), "context cancellation=%v", err)
+	for _, want := range []error{context.Canceled, context.DeadlineExceeded} {
+		_, _, got := loadProviderSession(providerSessionScanError{want})
+		testutil.Require(t, errors.Is(got, want), "scan error=%v, want %v", got, want)
+	}
+}
+
+type providerSessionScanError struct{ error }
+
+func (value providerSessionScanError) Scan(...any) error { return value.error }

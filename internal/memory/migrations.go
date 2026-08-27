@@ -69,6 +69,9 @@ var schemaV19 string
 //go:embed migrations/020_provider_sessions.sql
 var schemaV20 string
 
+//go:embed migrations/021_provider_session_drafts.sql
+var schemaV21 string
+
 type migration struct {
 	version                     int
 	sql                         string
@@ -96,6 +99,7 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, sql: schemaV19},
 	{version: 20, sql: schemaV20},
+	{version: 21, sql: schemaV21},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {

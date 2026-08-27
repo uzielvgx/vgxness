@@ -1258,7 +1258,7 @@ func previousGeneralV6FromCurrent(current []byte) []byte {
 	if err != nil {
 		return nil
 	}
-	value, err := bindProfile(previousGeneralPromptV6, generalV6Marker, generalV6Marker, assignment, true)
+	value, err := bindProfile(previousGeneralPromptV6, generalV6Marker, generalV6Marker, assignment, true, false)
 	if err != nil {
 		return nil
 	}
@@ -1376,7 +1376,7 @@ func fullHistoricalModelPlanBundleV3(config sdd.ModelPlanConfigV3, resolved sdd.
 	managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 		return bindManagerTemplate(managerBase, managerMarker, assignment)
 	}
-	agents, err := fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, legacyReviewBindings(reviews), false)
+	agents, err := fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, legacyReviewBindings(reviews), false, false)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -1583,7 +1583,7 @@ func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 		}
 		assignments[strings.TrimPrefix(identity.ArtifactKey, "agents/")] = assignment
 	}
-	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, currentCAREReviewBindings(), true)
+	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, currentCAREReviewBindings(), true, true)
 }
 
 func legacyModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
@@ -1600,7 +1600,7 @@ func legacyModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 		}
 		assignments[review.name] = assignment
 	}
-	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, legacyReviewBindings(currentReviewPrompts()), true)
+	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, legacyReviewBindings(currentReviewPrompts()), true, false)
 }
 
 func modelBoundAgentsV2(plan sdd.OpenCodePlanV2) (map[string][]byte, error) {
@@ -1626,7 +1626,7 @@ func modelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	agents, err := fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, currentCAREReviewBindings(), true)
+	agents, err := fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, currentCAREReviewBindings(), true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1638,7 +1638,7 @@ func legacyModelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error
 	if err != nil {
 		return nil, err
 	}
-	agents, err := fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, legacyReviewBindings(currentReviewPrompts()), true)
+	agents, err := fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, legacyReviewBindings(currentReviewPrompts()), true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1692,7 +1692,7 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 		managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 			return bindManagerTemplate(managerBase, managerMarker, assignment)
 		}
-		agents, buildErr := fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, legacyReviewBindings(reviews), false)
+		agents, buildErr := fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, legacyReviewBindings(reviews), false, false)
 		if buildErr != nil {
 			return nil, buildErr
 		}
@@ -1918,7 +1918,7 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 	for _, review := range baseReviews {
 		assignments[review.name] = plan.Roles[review.role]
 	}
-	return fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, baseReviews, protectDurableMutations)
+	return fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, baseReviews, protectDurableMutations, true)
 }
 
 func populateLegacyReviewAssignments(plan *sdd.OpenCodePlan) {
@@ -2000,7 +2000,7 @@ func legacyReviewMatrix(plan sdd.Plan, role sdd.Role) (sdd.RoleAssignment, bool)
 	return assignment, ok
 }
 
-func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignment, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews []reviewBinding, protectDurableMutations bool) (map[string][]byte, error) {
+func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignment, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews []reviewBinding, protectDurableMutations, currentDurablePolicy bool) (map[string][]byte, error) {
 	agents := make(map[string][]byte, integration.ModelAssignmentCount)
 	manager, err := managerBinder(assignments[managerAgentName])
 	if err != nil {
@@ -2016,7 +2016,7 @@ func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignmen
 	if protectDurableMutations {
 		generalNext = generalCurrentMarker
 	}
-	general, err := bindProfile(generalBase, generalMarker, generalNext, assignments[generalAgentName], protectDurableMutations)
+	general, err := bindProfile(generalBase, generalMarker, generalNext, assignments[generalAgentName], protectDurableMutations, currentDurablePolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -2025,7 +2025,7 @@ func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignmen
 	if protectDurableMutations {
 		verifierNext = verifierCurrentMarker
 	}
-	verifier, err := bindProfile(verifierBase, verifierMarker, verifierNext, assignments[verifierAgentName], protectDurableMutations)
+	verifier, err := bindProfile(verifierBase, verifierMarker, verifierNext, assignments[verifierAgentName], protectDurableMutations, currentDurablePolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -2746,7 +2746,7 @@ func compactProtocolPredecessors(current map[string][]byte) (map[string][][]byte
 		if err != nil {
 			return err
 		}
-		content, err := bindProfile(base, marker, marker, assignment, false)
+		content, err := bindProfile(base, marker, marker, assignment, false, false)
 		if err != nil {
 			return err
 		}
@@ -2798,7 +2798,7 @@ func bindManagerTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignm
 	return []byte(value), nil
 }
 
-func bindProfile(base, marker, nextMarker string, assignment sdd.OpenCodeRoleAssignment, protectDurableMutations bool) ([]byte, error) {
+func bindProfile(base, marker, nextMarker string, assignment sdd.OpenCodeRoleAssignment, protectDurableMutations, currentDurablePolicy bool) ([]byte, error) {
 	if marker == generalCurrentMarker || marker == verifierCurrentMarker {
 		var err error
 		base, err = activeProfilePrompt(base)
@@ -2818,7 +2818,11 @@ func bindProfile(base, marker, nextMarker string, assignment sdd.OpenCodeRoleAss
 	}
 	// OpenCode has no trusted MCP caller identity. Host/operator full-mode choice
 	// remains the authority boundary; these managed profiles deny durable writes.
-	value = strings.Replace(value, permission, permission+durableMutationDenies, 1)
+	denies := durableMutationDenies
+	if !currentDurablePolicy {
+		denies = legacyDurableMutationDenies
+	}
+	value = strings.Replace(value, permission, permission+denies, 1)
 	return []byte(value), nil
 }
 
@@ -2873,7 +2877,14 @@ func previousGeneralV8(current []byte) []byte {
 }
 
 func previousGeneralV9(current []byte) []byte {
-	return derivePredecessor(current, []textReplacement{{old: generalCurrentMarker, new: generalV9Marker}, {old: "\n\n" + orchestration.ReadinessWriterContract, new: ""}})
+	return derivePredecessor(current, legacyMutationReplacements(current, []textReplacement{{old: generalCurrentMarker, new: generalV9Marker}, {old: "\n\n" + orchestration.ReadinessWriterContract, new: ""}}))
+}
+
+func legacyMutationReplacements(current []byte, replacements []textReplacement) []textReplacement {
+	if bytes.Contains(current, []byte(durableMutationDenies)) {
+		return append(replacements, textReplacement{old: durableMutationDenies, new: legacyDurableMutationDenies})
+	}
+	return replacements
 }
 
 func previousGeneralV6(current []byte) []byte {
@@ -2884,7 +2895,7 @@ func previousGeneralV6(current []byte) []byte {
 	if err != nil {
 		return nil
 	}
-	value, err := bindProfile(previousGeneralPromptV6, generalV6Marker, generalV6Marker, assignment, true)
+	value, err := bindProfile(previousGeneralPromptV6, generalV6Marker, generalV6Marker, assignment, true, false)
 	if err != nil {
 		return nil
 	}
@@ -2892,10 +2903,10 @@ func previousGeneralV6(current []byte) []byte {
 }
 
 func previousGeneralPredecessor(current []byte) []byte {
-	return derivePredecessor(current, []textReplacement{{old: generalV6Marker, new: generalPreviousMarker}, {old: durableMutationDenies, new: ""}})
+	return derivePredecessor(current, []textReplacement{{old: generalV6Marker, new: generalPreviousMarker}, {old: legacyDurableMutationDenies, new: ""}})
 }
 func previousVerifierPredecessor(current []byte) []byte {
-	return derivePredecessor(current, []textReplacement{{old: verifierV4Marker, new: verifierPreviousMarker}, {old: durableMutationDenies, new: ""}})
+	return derivePredecessor(current, []textReplacement{{old: verifierV4Marker, new: verifierPreviousMarker}, {old: legacyDurableMutationDenies, new: ""}})
 }
 
 func previousVerifierV4(current []byte) []byte {
@@ -2906,7 +2917,7 @@ func previousVerifierV4(current []byte) []byte {
 	if err != nil {
 		return nil
 	}
-	value, err := bindProfile(previousVerifierPromptV4, verifierV4Marker, verifierV4Marker, assignment, true)
+	value, err := bindProfile(previousVerifierPromptV4, verifierV4Marker, verifierV4Marker, assignment, true, false)
 	if err != nil {
 		return nil
 	}
@@ -2924,10 +2935,11 @@ func previousVerifierV6(current []byte) []byte {
 	if bytes.Count(current, []byte(verifierCurrentMarker)) != 1 || bytes.Count(current, []byte(verifierV6Marker)) != 0 {
 		return nil
 	}
-	return derivePredecessor(current, []textReplacement{{old: verifierCurrentMarker, new: verifierV6Marker}})
+	return derivePredecessor(current, legacyMutationReplacements(current, []textReplacement{{old: verifierCurrentMarker, new: verifierV6Marker}}))
 }
 
-const durableMutationDenies = "  vgxness_memory_save: deny\n  vgxness_memory_forget: deny\n  vgxness_sdd_create: deny\n  vgxness_sdd_set_interaction_mode: deny\n  vgxness_sdd_save_revision: deny\n  vgxness_sdd_accept_revision: deny\n  vgxness_sdd_transition: deny\n  vgxness_sdd_record_projection: deny\n"
+const durableMutationDenies = "  vgxness_memory_save: deny\n  vgxness_memory_forget: deny\n  vgxness_memory_session_summary: deny\n  vgxness_memory_update: deny\n  vgxness_sdd_create: deny\n  vgxness_sdd_set_interaction_mode: deny\n  vgxness_sdd_save_revision: deny\n  vgxness_sdd_accept_revision: deny\n  vgxness_sdd_transition: deny\n  vgxness_sdd_record_projection: deny\n"
+const legacyDurableMutationDenies = "  vgxness_memory_save: deny\n  vgxness_memory_forget: deny\n  vgxness_sdd_create: deny\n  vgxness_sdd_set_interaction_mode: deny\n  vgxness_sdd_save_revision: deny\n  vgxness_sdd_accept_revision: deny\n  vgxness_sdd_transition: deny\n  vgxness_sdd_record_projection: deny\n"
 
 func bindExplore(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	return bindExploreTemplate(explorePrompt, exploreCurrentMarker, assignment)

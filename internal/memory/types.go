@@ -78,6 +78,17 @@ type ProviderSessionContext struct {
 	Handoff string
 }
 
+// ProviderSessionDraft is local host-supplied text pending final validation.
+// Its summary is intentionally never returned or synchronized.
+type ProviderSessionDraft struct {
+	Handle, Project string
+	UpdatedAt       time.Time
+}
+type ProviderSessionDraftSave struct {
+	Project, Handle, Summary string
+	ExpectedUpdatedAt        time.Time
+}
+
 // ObservationUpdate is an optimistic content update. ExpectedUpdatedAt must
 // equal the persisted timestamp to prevent a stale writer from winning.
 type ObservationUpdate struct {

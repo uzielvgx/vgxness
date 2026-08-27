@@ -31,6 +31,9 @@ type fakeMemoryRuntime struct {
 	backfill   memory.SyncBackfillResult
 	repair     memory.SyncProjectRepairResult
 	transition memory.SyncProjectTransitionResult
+	start      memory.ProviderSessionStart
+	checkpoint string
+	ended      memory.ProviderSessionEnd
 }
 
 func TestMemorySyncTransitionCommandsRequireExactModeConfirmation(t *testing.T) {
@@ -90,8 +93,9 @@ func (f *fakeMemoryRuntime) Forget(context.Context, config.Options, memory.Forge
 	f.calls++
 	return f.result, f.err
 }
-func (f *fakeMemoryRuntime) ResolveProject(context.Context, config.Options, string) (string, error) {
+func (f *fakeMemoryRuntime) ResolveProject(_ context.Context, opts config.Options, _ string) (string, error) {
 	f.calls++
+	f.opts = opts
 	if f.project == "" {
 		return "resolved-project", f.err
 	}
@@ -159,6 +163,21 @@ func (f *fakeMemoryRuntime) TransitionSyncProject(_ context.Context, opts config
 	f.calls++
 	f.opts = opts
 	return f.transition, f.err
+}
+func (f *fakeMemoryRuntime) StartProviderSession(_ context.Context, _ config.Options, request memory.ProviderSessionStart) (memory.ProviderSession, error) {
+	f.calls++
+	f.start = request
+	return memory.ProviderSession{Project: request.Project, Handle: "ps-test", State: memory.ProviderSessionActive}, f.err
+}
+func (f *fakeMemoryRuntime) MarkProviderSessionCheckpoint(_ context.Context, _ config.Options, project, handle string) (memory.ProviderSession, error) {
+	f.calls++
+	f.checkpoint = handle
+	return memory.ProviderSession{Project: project, Handle: handle, State: memory.ProviderSessionActive, Checkpointed: true}, f.err
+}
+func (f *fakeMemoryRuntime) EndProviderSession(_ context.Context, _ config.Options, request memory.ProviderSessionEnd) (memory.ProviderSession, error) {
+	f.calls++
+	f.ended = request
+	return memory.ProviderSession{Project: request.Project, Handle: request.Handle, State: request.State}, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
@@ -354,4 +373,24 @@ func TestMemoryCLI_SyncConfigureAndStatusAreStrictAndTokenFree(t *testing.T) {
 	runtime = &fakeMemoryRuntime{}
 	code, out, stderr = runMemoryTest([]string{"memory", "sync", "status", "--json"}, bearer, runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"configured":false`) && !strings.Contains(out, bearer), "status: code=%d calls=%d out=%q stderr=%q", code, runtime.calls, out, stderr)
+}
+
+func TestMemoryCLI_HookLifecycleIsVersionedStrictAndPrivate(t *testing.T) {
+	workspace := t.TempDir()
+	runtime := &fakeMemoryRuntime{project: "project-1"}
+	call := func(input string) (int, string, string) {
+		return runMemoryTest([]string{"memory", "hook", "--stdin", "--storage-root", "/tmp/memory", "--project-local"}, input, runtime)
+	}
+	start := `{"schemaVersion":1,"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"secret-run"}`
+	code, out, stderr := call(start)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && runtime.opts.StorageRoot == "/tmp/memory" && runtime.opts.ProjectLocal && runtime.start == (memory.ProviderSessionStart{Project: "project-1", Provider: "openai", ExternalID: "secret-run"}) && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"session_handle":"ps-test"`) && !strings.Contains(out, "secret-run"), "start=%d %q %q opts=%+v request=%+v", code, out, stderr, runtime.opts, runtime.start)
+	code, out, stderr = call(`{"schemaVersion":1,"operation":"checkpoint","workspace":"` + workspace + `","session_handle":"ps-test"}`)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.checkpoint == "ps-test" && strings.Contains(out, `"checkpointed":true`), "checkpoint=%d %q %q", code, out, stderr)
+	code, out, stderr = call(`{"schemaVersion":1,"operation":"end","workspace":"` + workspace + `","session_handle":"ps-test","external_id":"secret-run","state":"completed","summary":"safe"}`)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.ended == (memory.ProviderSessionEnd{Project: "project-1", Handle: "ps-test", ExternalID: "secret-run", State: memory.ProviderSessionCompleted, Summary: "safe"}) && strings.Contains(out, `"state":"completed"`) && !strings.Contains(out, "secret-run") && !strings.Contains(out, "safe"), "end=%d %q %q request=%+v", code, out, stderr, runtime.ended)
+	for _, input := range []string{`{"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"x"}`, `{"schemaVersion":2,"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"x"}`, `{"schemaVersion":1,"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"x","unknown":true}`, `{"schemaVersion":1,"schemaVersion":1,"operation":"start","workspace":"` + workspace + `","provider":"openai","external_id":"x"}`, start + ` {}`} {
+		before := runtime.calls
+		code, out, _ = call(input)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == before, "invalid hook=%d %q calls=%d", code, out, runtime.calls)
+	}
 }
