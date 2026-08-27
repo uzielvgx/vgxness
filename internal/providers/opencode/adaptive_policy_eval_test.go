@@ -35,7 +35,7 @@ func TestAdaptivePolicyEvaluationAssets(t *testing.T) {
 		name, partition string
 		ids             []string
 	}{
-		{"adaptive-policy-dev-cases.json", "development", []string{"dev-long-trip-plan", "dev-email-draft", "dev-durable-preference-save", "dev-transient-chat-non-save", "dev-knowledge-lookup", "dev-complex-research", "dev-bounded-repository-read", "dev-repository-diagnosis", "dev-repository-edit"}},
+		{"adaptive-policy-dev-cases.json", "development", []string{"dev-long-trip-plan", "dev-email-draft", "dev-durable-preference-save", "dev-terminal-handoff-save", "dev-transient-chat-non-save", "dev-knowledge-lookup", "dev-complex-research", "dev-bounded-repository-read", "dev-repository-diagnosis", "dev-repository-edit"}},
 		{"adaptive-policy-holdout-cases.json", "holdout", []string{"holdout-001", "holdout-002", "holdout-003"}},
 	}
 	seenIDs, categories := map[string]bool{}, map[string]bool{}
@@ -89,7 +89,7 @@ func TestAdaptivePolicyEvaluationAssets(t *testing.T) {
 			}
 		}
 	}
-	for _, category := range []string{"daily-planning", "writing", "durable-memory", "transient-memory", "research", "repository"} {
+	for _, category := range []string{"daily-planning", "writing", "durable-memory", "terminal-memory", "transient-memory", "research", "repository"} {
 		if !categories[category] {
 			t.Errorf("development evaluation lacks %q coverage", category)
 		}

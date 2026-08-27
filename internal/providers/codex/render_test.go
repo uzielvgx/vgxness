@@ -256,7 +256,8 @@ func TestManager18DerivesFromExactManager17Package(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, want := string(artifact(t, current, "AGENTS.md").Bytes), string(artifact(t, predecessor, "AGENTS.md").Bytes)
-	if strings.Replace(strings.Replace(got, "artifact: codex-agent/manager; version: 18; parity: opencode-v59", "artifact: codex-agent/manager; version: 17; parity: opencode-v57", 1), "git-delivery", "stacked-pr", -1) != want {
+	got = strings.Replace(strings.Replace(got, "artifact: codex-agent/manager; version: 18; parity: opencode-v59", "artifact: codex-agent/manager; version: 17; parity: opencode-v57", 1), "git-delivery", "stacked-pr", -1)
+	if strings.Replace(got, orchestration.ContractPolicy, orchestration.PreviousContractPolicyV59, 1) != want {
 		t.Fatal("Manager18 is not the bounded Manager17 migration")
 	}
 }
@@ -579,6 +580,25 @@ func TestRenderUsesIntentTriggeredMemoryWithoutRoutineRecentFirst(t *testing.T) 
 	}
 	if strings.Contains(content, "make memory_recent the first project-context action") {
 		t.Fatal("manager retains routine recent-first replacement")
+	}
+}
+
+func TestManagerRequiresTerminalMemoryClosureBeforeTerminalReporting(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
+	for _, required := range []string{
+		"After significant work and immediately before reporting IMPLEMENTED, VERIFIED, DELIVERED, MERGED, or INSTALLED",
+		"Partial or interrupted work with durable handoff value is eligible",
+		"successful save never replaces that response",
+		"no automatic cloud sync",
+		"at most one autonomous save",
+	} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("manager missing terminal memory closure clause %q", required)
+		}
 	}
 }
 

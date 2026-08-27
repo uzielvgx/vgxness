@@ -49,6 +49,23 @@ func TestContractPolicyProjectsAdaptiveExecutionAndOrthogonalMemory(t *testing.T
 	}
 }
 
+func TestContractPolicyRequiresTerminalMemoryClosure(t *testing.T) {
+	for _, required := range []string{
+		"After significant work and immediately before reporting IMPLEMENTED, VERIFIED, DELIVERED, MERGED, or INSTALLED",
+		"assess whether durable, evidence-backed, safely assessed knowledge exists",
+		"save it before the final response",
+		"successful save never replaces that response",
+		"Partial or interrupted work with durable handoff value is eligible",
+		"Never save transient state, raw logs, secrets, personal data, or transcripts",
+		"no automatic cloud sync",
+		"at most one autonomous save",
+	} {
+		if !strings.Contains(ContractPolicy, required) {
+			t.Errorf("terminal memory closure contract missing %q", required)
+		}
+	}
+}
+
 func TestContractPolicyProjectsCanonicalNumericBudgets(t *testing.T) {
 	const want = "Canonical budgets: direct 0 tools/0 delegations; assisted simple 3 tools/0 delegations and complex 3 tools/1 delegation; action 6 tools/0 delegations; engineering 30 tools/5 delegations; assured 40 tools/5 delegations."
 	if ContractBudgetPolicy != want || !strings.Contains(ContractPolicy, want) {

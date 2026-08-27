@@ -350,7 +350,8 @@ func activeManagerInstructions() string {
 		return ""
 	}
 	value = strings.Replace(value, "artifact: codex-agent/manager; version: 17; parity: opencode-v57", "artifact: codex-agent/manager; version: 18; parity: opencode-v59", 1)
-	return strings.ReplaceAll(value, "stacked-pr", "git-delivery")
+	value = strings.ReplaceAll(value, "stacked-pr", "git-delivery")
+	return strings.Replace(value, orchestration.PreviousContractPolicyV59, orchestration.ContractPolicy, 1)
 }
 
 // activeV17ManagerInstructions independently preserves the full v17 artifact.
@@ -363,7 +364,7 @@ func activeV17ManagerInstructions() string {
 	value = strings.Replace(value, historicalCodexRefuterHandoff, currentCodexCAREHandoff, 1)
 	value = strings.Replace(value, "An SDD apply handoff to general", "Route accepted SDD apply directly to sdd-apply", 1)
 	value = strings.Replace(value, "SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections", "Research, proposal, spec, design, and tasks phase agents are read-only; sdd-apply alone writes authorized SDD workspace, OpenSpec, or hybrid projections", 1)
-	return value + "\n\n" + currentCodexContextCapsule + "\n\n" + currentCodexExpertEnsemble + nativeDelegationPolicy + "\n\n" + currentCodexCandidateCapsuleContract + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.ContractPolicy + "\n\n" + orchestration.ReadinessManagerContract + "\n"
+	return value + "\n\n" + currentCodexContextCapsule + "\n\n" + currentCodexExpertEnsemble + nativeDelegationPolicy + "\n\n" + currentCodexCandidateCapsuleContract + "\n\nContract identity: " + orchestration.ContractIdentity + ". " + orchestration.PreviousContractPolicyV59 + "\n\n" + orchestration.ReadinessManagerContract + "\n"
 }
 
 func validateCurrentManagerAnchors(value string) error {
@@ -419,7 +420,7 @@ func activeV12ManagerInstructions() string {
 
 func activeV11ManagerInstructions() string {
 	value := strings.Replace(activeV12ManagerInstructions(), "artifact: codex-agent/manager; version: 12; parity: opencode-v52", "artifact: codex-agent/manager; version: 11; parity: opencode-v51", 1)
-	return strings.Replace(value, orchestration.ContractPolicy, orchestration.PreviousContractPolicyV51, 1)
+	return strings.Replace(value, orchestration.PreviousContractPolicyV59, orchestration.PreviousContractPolicyV51, 1)
 }
 
 func activeV9ManagerInstructions() string {

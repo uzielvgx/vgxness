@@ -27,6 +27,12 @@
       "expected_memory": {"decision":"save","max_tools":1,"autonomous":false,"automatic_cloud_sync":false,"requires_engineering":false}
     },
     {
+      "id": "dev-terminal-handoff-save", "category": "terminal-memory",
+      "request": "The implementation was interrupted after verified findings; save the durable handoff decision before the final response.",
+      "memory_intent": "none", "memory_candidate": {"durable":true,"evidence_backed":true,"safety_assessed":true},
+      "expected_memory": {"decision":"save","max_tools":1,"autonomous":true,"automatic_cloud_sync":false,"requires_engineering":false}
+    },
+    {
       "id": "dev-transient-chat-non-save", "category": "transient-memory",
       "request": "I'm debugging for the next hour; don't remember this temporary context after our chat.",
       "memory_intent": "none", "memory_candidate": {"transient":true},

@@ -555,6 +555,23 @@ func TestManagerUsesIntentTriggeredMemoryWithAllThenAnyFallback(t *testing.T) {
 	}
 }
 
+func TestManagerRequiresTerminalMemoryClosureBeforeTerminalReporting(t *testing.T) {
+	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	testutil.NoError(t, err)
+	manager := string(bundle.agents[managerAgentName])
+	for _, required := range []string{
+		"After significant work and immediately before reporting IMPLEMENTED, VERIFIED, DELIVERED, MERGED, or INSTALLED",
+		"Partial or interrupted work with durable handoff value is eligible",
+		"successful save never replaces that response",
+		"no automatic cloud sync",
+		"at most one autonomous save",
+	} {
+		if !strings.Contains(manager, required) {
+			t.Errorf("manager missing terminal memory closure clause %q", required)
+		}
+	}
+}
+
 func TestReadinessGeneralV10UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
