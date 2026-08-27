@@ -2,7 +2,7 @@
 
 ## Current surface
 
-VGXNESS installs no OpenCode plugin and therefore has no installed hook surface. It does not install or manage OpenCode callbacks, shell hooks, Git hooks, automatic memory injection, compaction, observability, or plugin session identity.
+VGXNESS installs one exact auto-discovered OpenCode lifecycle plugin at `plugins/vgxness-memory-lifecycle.ts`; it has no `opencode.json` plugin entry. For each top-level session it starts one lifecycle record, adds one bounded isolated context handoff, performs a transcript-free compaction checkpoint, observes exact summary completion without retaining tool arguments, results, or status, and ends the record as `completed` or `interrupted`. It does not install shell or Git hooks, automatic memory injection, capture transcripts, add broad observability, or add another plugin.
 
 `vgxness memory hook --stdin` is a local host-only JSON lifecycle bridge, not an installed hook surface. Its single JSON request and output use `schemaVersion: 1`; unknown, duplicate, cross-operation, and trailing fields/documents are rejected. It supports `--storage-root` and `--project-local` consistently with other memory commands. Start, checkpoint, and end are supported; only end finalizes a provider session. `context` reads only the bounded, same-project prior completed handoff for an active handle. `summary` saves or replaces one local pending draft and accepts an optional RFC3339Nano `expected_updated_at` optimistic timestamp. Context may contain untrusted handoff text; summary output is metadata only. Neither output exposes draft text, external IDs, or provider hashes. Local drafts are never synchronized.
 
@@ -14,6 +14,6 @@ MCP uses local stdio and assumes its host is trusted. Requests carry no caller i
 
 ## Historical retirement context
 
-Plugin v1–v10 behavior is legacy retirement evidence, not current behavior. Exact historical `vgxness.ts` v1-v10 plugin bytes and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal. Historical descriptions of callbacks, memory injection, compaction, observability, or session correlation do not describe an installed current surface.
+Plugin v1–v10 behavior is legacy retirement evidence, not current behavior. Exact historical `vgxness.ts` v1-v10 plugin bytes and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal.
 
 VGXNESS does not accept shell hook commands and does not install or manage Git hooks.

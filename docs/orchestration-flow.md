@@ -1,6 +1,6 @@
 # VGXNESS native manager flow
 
-The active product has provider-native OpenCode and Codex managers sharing `vgxness-orchestration/v1`. OpenCode supplies workspace tools and Task workers; Codex retains its native profiles and MCP tool semantics. VGXNESS supplies managed profiles, model bindings, setup, lifecycle contracts, MCP configuration, and SQLite schema v21. No plugin, automatic memory recall, compaction, observability, or session identity is installed.
+The active product has provider-native OpenCode and Codex managers sharing `vgxness-orchestration/v1`. OpenCode supplies workspace tools and Task workers; Codex retains its native profiles and MCP tool semantics. VGXNESS supplies managed profiles, model bindings, setup, lifecycle contracts, MCP configuration, and SQLite schema v21. OpenCode installs one exact auto-discovered lifecycle plugin with no config plugin entry; it is limited to top-level lifecycle start, one bounded isolated handoff, transcript-free compaction checkpoint, exact summary-completion observation without tool payloads, and completed/interrupted end. It adds no shell or Git hooks, transcript capture, or broad observability.
 
 ## Route selection
 

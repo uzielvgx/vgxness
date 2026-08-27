@@ -4,7 +4,7 @@ The current delivery policy is global `git-delivery` v1 with exact `stacked-pr` 
 
 ## Current product boundary
 
-VGXNESS is an OpenCode-native manager with local SQLite/FTS5 memory and structured SDD storage. OpenCode owns engineering execution. The current MCP-only projection contains exactly 16 provider artifacts: 13 managed agents, a model-plan manifest, an `opencode.json` default-agent selection, and restoration metadata. No plugin is installed.
+VGXNESS is an OpenCode-native manager with local SQLite/FTS5 memory and structured SDD storage. OpenCode owns engineering execution. The current projection contains exactly 17 provider artifacts: 13 managed agents, the auto-discovered `plugins/vgxness-memory-lifecycle.ts` plugin, a model-plan manifest, an `opencode.json` default-agent selection, and restoration metadata. The plugin has no `opencode.json` plugin entry.
 
 Managed OpenCode CARE-v2 Manager59 and generated Codex Manager18 use `vgxness mcp --full`, exposing eight memory tools and 13 SDD tools. Their shared prompt contract silently selects the least-cost route without classification tools: no-effect conversation, writing, translation, summarization, brainstorming, and planning use a zero-execution-tool fast path; bounded exact reads allow at most three attempts without delegation or todos; complex evidence research may use one read-only delegation. Attempts include failures and retries and stop before budget exhaustion. This is prompt policy, not runtime enforcement.
 
@@ -20,6 +20,7 @@ Current delivery policy is manager v59 with global `git-delivery` v1, an exact `
 | Explore, General, SDD apply, and verifier | 4 | Explore is read-only, General implements ordinary authorized non-SDD work, SDD apply exclusively writes accepted SDD workspace/projections, and verifier is non-mutating. |
 | CARE reviewer, specialist, and challenger | 3 | Read-only assurance review; no fixed-lens aliases are current. |
 | Five read-only SDD phase profiles | 5 | Research, proposal, spec, design, and tasks. |
+| Lifecycle plugin | 1 | Auto-discovered `plugins/vgxness-memory-lifecycle.ts` lifecycle adapter. |
 | Model-plan manifest | 1 | Resolved model bindings. |
 | Default-agent selection | 1 | OpenCode default manager selection. |
 | Restoration metadata | 1 | Prior default-agent restoration state. |
@@ -36,11 +37,11 @@ MCP operations do not route work, invoke agents, access workspace files, run she
 
 ## Setup and retirement
 
-Setup previews changes, requires confirmation, installs the launcher and 16 exact OpenCode artifacts, configures `vgxness mcp --full`, and publishes the global catalog. Exact OpenCode manager v57 and Codex manager v16 artifacts remain recognized historical predecessors alongside older supported identities. Exact historical plugin `vgxness.ts` v1-v10 bytes and provider-skill `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal. OpenCode uninstall does not remove global skills.
+Setup previews changes, requires confirmation, installs the launcher and 17 exact OpenCode artifacts including the auto-discovered lifecycle plugin, configures `vgxness mcp --full` without a config plugin entry, and publishes the global catalog. Exact OpenCode manager v57 and Codex manager v16 artifacts remain recognized historical predecessors alongside older supported identities. Exact historical plugin `vgxness.ts` v1-v10 bytes and provider-skill `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal. OpenCode uninstall does not remove global skills.
 
 ## Non-goals
 
-- No installed plugin, hook surface, automatic memory injection, compaction, observability, or plugin session identity.
+- No additional installed plugin, hook surface, automatic memory injection, compaction, observability, or plugin session identity beyond the managed lifecycle plugin.
 - No shell or Git hooks.
 - No MCP-owned filesystem, execution, routing, delegation, or lifecycle authority.
 - No automatic network/package installation or legacy database import.

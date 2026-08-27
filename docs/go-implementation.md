@@ -45,14 +45,15 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 ## Managed projection
 
-The OpenCode projection contains 16 managed artifacts with exact identities:
+The OpenCode projection contains 17 managed artifacts with exact identities:
 
 - manager v59 with global tool permission, adaptive zero-ceremony fast paths, bounded attempt budgets, and a pre-write delivery gate;
 - managed `general` v10 and verifier v7 with global tool permission and distinct implementation/verification roles;
 - one CodeGraph-first, deny-by-default read-only `explore` override;
 - three hidden read-only CARE profiles;
 - six hidden read-only SDD profiles;
-- MCP configuration using `vgxness mcp --full` (no plugin is installed).
+- MCP configuration using `vgxness mcp --full` plus the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` plugin, with no `opencode.json` plugin entry.
+
 - one model-plan manifest;
 - one `opencode.json` default-agent selection using a semantic merge that preserves unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged;
 - one bounded `<config-dir>/vgxness/default-agent.json` restoration record of whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup;

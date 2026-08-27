@@ -143,6 +143,7 @@ const (
 	reviewResilienceName         = "vgxness-review-resilience.md"
 	reviewRefuterName            = "vgxness-review-refuter.md"
 	memoryPluginName             = "vgxness.ts"
+	memoryLifecyclePluginName    = "vgxness-memory-lifecycle.ts"
 	autonomousStackedPRSkillName = "vgxness-autonomous-stacked-pr"
 	defaultAgentName             = "vgxness-manager"
 	reinstallCheckpointMoved     = "moved"
@@ -298,6 +299,7 @@ Return exactly one compact Child Return Envelope v1 JSON object (<=16 KiB; <=32 
 type Integration struct {
 	now                       func() time.Time
 	executable                string
+	prospectiveLauncher       bool
 	reinstallCheckpoint       func(string, string) error
 	afterDefaultAgentSnapshot func()
 	afterReinstallAnchorPath  func(string)
@@ -414,7 +416,7 @@ func NewPreviewIntegration(executable string) (*Integration, error) {
 	if executable == "" || !filepath.IsAbs(executable) || executable != filepath.Clean(executable) {
 		return nil, fmt.Errorf("%w: preview VGXNESS launcher", integration.ErrInvalid)
 	}
-	return &Integration{now: time.Now, executable: executable}, nil
+	return &Integration{now: time.Now, executable: executable, prospectiveLauncher: true}, nil
 }
 
 func validateManagedLauncher(candidate string) (string, error) {
@@ -1104,6 +1106,11 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	}
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
 	legacyPluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+	lifecyclePluginPath := filepath.Join(configDirectory, "plugins", memoryLifecyclePluginName)
+	pluginContent, err := memoryLifecyclePluginContentForInspection(service.executable, service.prospectiveLauncher)
+	if err != nil {
+		return inspection{}, err
+	}
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
 	defaultAgentPath := filepath.Join(configDirectory, defaultAgentConfigName)
@@ -1266,7 +1273,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	if len(exploreV3) == 0 || len(exploreV2) == 0 || len(generalV7) == 0 || len(generalV6) == 0 || len(verifierV5) == 0 || len(verifierV4) == 0 {
 		return inspection{}, integration.ErrInvalid
 	}
-	state := inspection{result: result, artifacts: make([]artifact, 0, len(modelAgentInventoryV3)+3)}
+	state := inspection{result: result, artifacts: make([]artifact, 0, len(modelAgentInventoryV3)+4)}
 	manifestlessCoherent := false
 	if !installedPlanOK && errors.Is(predecessorManifestErr, os.ErrNotExist) {
 		bundle, _, coherenceErr := manifestlessModelGeneration(configDirectory, plan)
@@ -1299,6 +1306,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		path := filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey))
 		state.artifacts = append(state.artifacts, artifact{path: path, content: content, backup: strings.TrimSuffix(name, ".md"), predecessors: prior, regenerations: regeneration(path)})
 	}
+	state.artifacts = append(state.artifacts, artifact{path: lifecyclePluginPath, content: pluginContent, backup: "vgxness-memory-lifecycle-plugin"})
 	state.artifacts = append(state.artifacts, artifact{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)}, artifact{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState}, artifact{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent})
 	for index := range state.artifacts {
 		state.artifacts[index].retainedRoot = configDirectory
@@ -3359,6 +3367,16 @@ func memoryLifecyclePluginContent(executable string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: VGXNESS executable is not a regular file", integration.ErrInvalid)
 	}
 	return renderMemoryLifecyclePlugin(resolved), nil
+}
+
+func memoryLifecyclePluginContentForInspection(executable string, prospective bool) ([]byte, error) {
+	if !prospective {
+		return memoryLifecyclePluginContent(executable)
+	}
+	if strings.TrimSpace(executable) != executable || !filepath.IsAbs(executable) || filepath.Clean(executable) != executable {
+		return nil, fmt.Errorf("%w: preview VGXNESS launcher", integration.ErrInvalid)
+	}
+	return renderMemoryLifecyclePlugin(executable), nil
 }
 
 func renderMemoryLifecyclePlugin(resolved string) []byte {
