@@ -33,10 +33,23 @@ func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() error = %v", err)
 	}
-	if len(tools.Tools) != 2 || tools.Tools[0].Name != "memory_recent" || tools.Tools[1].Name != "memory_search" {
+	toolNames := make([]string, len(tools.Tools))
+	for index, tool := range tools.Tools {
+		toolNames[index] = tool.Name
+	}
+	sort.Strings(toolNames)
+	if !sameStrings(toolNames, []string{"memory_context", "memory_recent", "memory_search"}) {
 		t.Fatalf("listed tools = %+v", tools.Tools)
 	}
-	searchSchema := tools.Tools[1].InputSchema.(map[string]any)
+	var searchSchema map[string]any
+	for _, tool := range tools.Tools {
+		if tool.Name == "memory_search" {
+			searchSchema, _ = tool.InputSchema.(map[string]any)
+		}
+	}
+	if searchSchema == nil {
+		t.Fatal("memory_search schema missing")
+	}
 	if additional, ok := searchSchema["additionalProperties"].(bool); !ok || additional {
 		t.Fatalf("memory_search additionalProperties = %#v, want false", searchSchema["additionalProperties"])
 	}
@@ -381,7 +394,7 @@ func TestFullServerExposesExactToolAndMutationInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newFullWithReader() error = %v", err)
 	}
-	want := []string{"memory_recent", "memory_search", "memory_get", "memory_save", "memory_forget", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_get_revision", "sdd_list_revisions", "sdd_accept_revision", "sdd_render_projection", "sdd_compare_projection", "sdd_record_projection", "sdd_projection_status"}
+	want := []string{"memory_recent", "memory_search", "memory_context", "memory_get", "memory_save", "memory_forget", "memory_session_summary", "memory_update", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_get_revision", "sdd_list_revisions", "sdd_accept_revision", "sdd_render_projection", "sdd_compare_projection", "sdd_record_projection", "sdd_projection_status"}
 	sort.Strings(want)
 	names := discoveredNames(t, server)
 	if !sameStrings(names, want) {
@@ -398,8 +411,8 @@ func TestFullServerExposesExactToolAndMutationInventory(t *testing.T) {
 			t.Fatal("full server exposed memory sync")
 		}
 	}
-	if mutations != 8 {
-		t.Fatalf("full mode mutation set = %d, want 8", mutations)
+	if mutations != 10 {
+		t.Fatalf("full mode mutation set = %d, want 10", mutations)
 	}
 }
 
@@ -412,7 +425,7 @@ func isMutationTool(name string) bool {
 	return false
 }
 
-var mutationToolNames = []string{"memory_save", "memory_forget", "sdd_create", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_accept_revision", "sdd_record_projection"}
+var mutationToolNames = []string{"memory_save", "memory_forget", "memory_session_summary", "memory_update", "sdd_create", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_accept_revision", "sdd_record_projection"}
 
 func TestFullServerAdvertisesExactMutationSchemas(t *testing.T) {
 	server, err := newFullWithReader(context.Background(), "/workspace", &fakeReader{project: "project-1"})
@@ -443,7 +456,16 @@ func TestFullServerAdvertisesExactMutationSchemas(t *testing.T) {
 			t.Fatal("memory_forget advertised as idempotent")
 		}
 		if tool.Name == "memory_save" {
-			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"title": {true, "string"}, "content": {true, "string"}, "type": {false, "string"}, "topic": {false, "string"}})
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"title": {true, "string"}, "content": {true, "string"}, "type": {false, "string"}, "topic": {false, "string"}, "session_handle": {false, "string"}})
+		}
+		if tool.Name == "memory_context" {
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"session_handle": {true, "string"}})
+		}
+		if tool.Name == "memory_session_summary" {
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"session_handle": {true, "string"}, "summary": {true, "string"}, "expected_updated_at": {false, "string"}})
+		}
+		if tool.Name == "memory_update" {
+			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"id": {true, "string"}, "content": {true, "string"}, "expected_updated_at": {true, "string"}})
 		}
 		switch tool.Name {
 		case "sdd_create":
@@ -545,6 +567,53 @@ func TestFullServerMemoryMutationsStayProjectScoped(t *testing.T) {
 	}
 	if backend.remember.Project != "project-1" || backend.lookup.Project != "project-1" || backend.forget.Project != "project-1" || backend.remember.Scope != memory.ScopeProject || backend.lookup.Scope != memory.ScopeProject || backend.forget.Scope != memory.ScopeProject {
 		t.Fatalf("requests were not project scoped: save=%+v get=%+v forget=%+v", backend.remember, backend.lookup, backend.forget)
+	}
+}
+
+func TestFullServerProtocolProviderSessionToolsBindProjectAndKeepOutputsSafe(t *testing.T) {
+	backend := &fakeReader{project: "project-1", handoff: "UNTRUSTED DATA\nprior", entry: memory.Entry{ID: "obs-1", Project: "project-1", Content: "saved"}}
+	server, err := newFullWithReader(context.Background(), "/workspace", backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Run(ctx, serverTransport) }()
+	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(name string, args map[string]any) *sdk.CallToolResult {
+		t.Helper()
+		result, err := session.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: args})
+		if err != nil || result.IsError {
+			t.Fatalf("%s result=%+v err=%v", name, result, err)
+		}
+		encoded, _ := json.Marshal(result)
+		if strings.Contains(string(encoded), "provider-secret") || strings.Contains(string(encoded), "private-draft") {
+			t.Fatalf("%s leaked provider data: %s", name, encoded)
+		}
+		return result
+	}
+	contextResult := call("memory_context", map[string]any{"session_handle": "ps-1"})
+	encoded, _ := json.Marshal(contextResult)
+	if !strings.Contains(string(encoded), "UNTRUSTED DATA") {
+		t.Fatalf("context value missing: %s", encoded)
+	}
+	call("memory_session_summary", map[string]any{"session_handle": "ps-1", "summary": "private-draft"})
+	call("memory_update", map[string]any{"id": "obs-1", "content": "saved", "expected_updated_at": "2026-07-20T12:00:00Z"})
+	call("memory_save", map[string]any{"title": "Saved", "content": "saved", "session_handle": "ps-1"})
+	if backend.context.Session.Project != "project-1" || backend.draft.Project != "project-1" || backend.update.Project != "project-1" || backend.remember.Project != "project-1" || backend.remember.Session != "" {
+		t.Fatalf("provider tools were not project bound: context=%+v draft=%+v update=%+v save=%+v", backend.context, backend.draft, backend.update, backend.remember)
+	}
+	backend.providerErr = memory.ErrNotFound
+	if _, err := server.sessionContext(context.Background(), contextInput{SessionHandle: "ps-1"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("provider context error=%v", err)
+	}
+	invalid, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "memory_context", Arguments: map[string]any{"session_handle": ""}})
+	if err == nil && (invalid == nil || !invalid.IsError) {
+		t.Fatalf("invalid context accepted: %+v", invalid)
 	}
 }
 
@@ -790,8 +859,36 @@ type fakeReader struct {
 	remember                                          memory.Remember
 	lookup                                            memory.Lookup
 	forget                                            memory.Forget
+	context                                           memory.ProviderSessionContext
+	draft                                             memory.ProviderSessionDraftSave
+	update                                            memory.ObservationUpdate
+	handoff                                           string
+	providerErr                                       error
 	getErr                                            error
 	recallCalls, getCalls, rememberCalls, forgetCalls int
+}
+
+func (reader *fakeReader) ProviderSessionContext(_ context.Context, project, handle string) (memory.ProviderSessionContext, error) {
+	if project != reader.project || handle == "" {
+		return memory.ProviderSessionContext{}, memory.ErrInvalid
+	}
+	reader.context = memory.ProviderSessionContext{Session: memory.ProviderSession{Project: project, Handle: handle, State: memory.ProviderSessionActive}}
+	reader.context.Handoff = reader.handoff
+	return reader.context, reader.providerErr
+}
+func (reader *fakeReader) SaveProviderSessionDraft(_ context.Context, request memory.ProviderSessionDraftSave) (memory.ProviderSessionDraft, error) {
+	if request.Project != reader.project {
+		return memory.ProviderSessionDraft{}, memory.ErrInvalid
+	}
+	reader.draft = request
+	return memory.ProviderSessionDraft{Project: request.Project, Handle: request.Handle}, nil
+}
+func (reader *fakeReader) UpdateObservation(_ context.Context, request memory.ObservationUpdate) (memory.Observation, error) {
+	if request.Project != reader.project {
+		return memory.Observation{}, memory.ErrInvalid
+	}
+	reader.update = request
+	return memory.Observation{ID: request.ID, Project: request.Project, Content: request.Content, State: memory.StateActive}, nil
 }
 
 type fakeSDDReader struct {

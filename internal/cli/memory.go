@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -30,6 +31,9 @@ type MemoryRuntime interface {
 	BackfillSyncProject(context.Context, config.Options, string, int) (memory.SyncBackfillResult, error)
 	RepairSyncProject(context.Context, config.Options, string, bool) (memory.SyncProjectRepairResult, error)
 	TransitionSyncProject(context.Context, config.Options, string, memory.SyncProjectTransitionMode) (memory.SyncProjectTransitionResult, error)
+	StartProviderSession(context.Context, config.Options, memory.ProviderSessionStart) (memory.ProviderSession, error)
+	MarkProviderSessionCheckpoint(context.Context, config.Options, string, string) (memory.ProviderSession, error)
+	EndProviderSession(context.Context, config.Options, memory.ProviderSessionEnd) (memory.ProviderSession, error)
 }
 
 type memoryInput struct {
@@ -48,11 +52,14 @@ type memoryInput struct {
 }
 
 func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
-	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync" && args[0] != "project") || runtime == nil {
+	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync" && args[0] != "project" && args[0] != "hook") || runtime == nil {
 		fmt.Fprintln(stderr, "invalid: unsupported memory operation")
 		return 2
 	}
 	verb := args[0]
+	if verb == "hook" {
+		return runMemoryHook(ctx, args[1:], stdin, stdout, stderr, runtime)
+	}
 	if verb == "project" {
 		return runMemoryProjectInit(ctx, args[1:], stdout, stderr, runtime)
 	}
@@ -227,6 +234,103 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		}
 	}
 	_, _ = io.Copy(stdout, &output)
+	return 0
+}
+
+// runMemoryHook is a host-only, single-document lifecycle adapter. It emits no
+// external identity, draft text, or provider hash.
+func runMemoryHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
+	flags := flag.NewFlagSet("memory hook", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var fromStdin bool
+	var opts config.Options
+	flags.BoolVar(&fromStdin, "stdin", false, "read JSON from stdin")
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || !fromStdin {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	data, err := memoryInputBytes("", true, stdin)
+	if err != nil {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	var raw map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	raw = map[string]json.RawMessage{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		if err != nil || !ok || raw[key] != nil {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+		raw[key] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') || decoder.Decode(&struct{}{}) != io.EOF {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	allowed := map[string]bool{"schemaVersion": true, "operation": true, "workspace": true, "provider": true, "external_id": true, "session_handle": true, "state": true, "summary": true}
+	for key := range raw {
+		if !allowed[key] {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+	}
+	var input struct {
+		SchemaVersion int                         `json:"schemaVersion"`
+		Operation     string                      `json:"operation"`
+		Workspace     string                      `json:"workspace"`
+		Provider      string                      `json:"provider"`
+		ExternalID    string                      `json:"external_id"`
+		SessionHandle string                      `json:"session_handle"`
+		State         memory.ProviderSessionState `json:"state"`
+		Summary       string                      `json:"summary"`
+	}
+	if json.Unmarshal(data, &input) != nil || input.SchemaVersion != 1 || input.Workspace == "" || !filepath.IsAbs(input.Workspace) {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	project, err := runtime.ResolveProject(ctx, opts, filepath.Clean(input.Workspace))
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	var session memory.ProviderSession
+	switch input.Operation {
+	case "start":
+		if input.Provider == "" || input.ExternalID == "" || input.SessionHandle != "" || input.State != "" || input.Summary != "" {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+		session, err = runtime.StartProviderSession(ctx, opts, memory.ProviderSessionStart{Project: project, Provider: input.Provider, ExternalID: input.ExternalID})
+	case "checkpoint":
+		if input.SessionHandle == "" || input.Provider != "" || input.ExternalID != "" || input.State != "" || input.Summary != "" {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+		session, err = runtime.MarkProviderSessionCheckpoint(ctx, opts, project, input.SessionHandle)
+	case "end":
+		if input.SessionHandle == "" || input.ExternalID == "" || (input.State != memory.ProviderSessionCompleted && input.State != memory.ProviderSessionInterrupted && input.State != memory.ProviderSessionCancelled) || input.Provider != "" {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+		session, err = runtime.EndProviderSession(ctx, opts, memory.ProviderSessionEnd{Project: project, Handle: input.SessionHandle, ExternalID: input.ExternalID, State: input.State, Summary: input.Summary})
+	default:
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	_ = json.NewEncoder(stdout).Encode(struct {
+		SchemaVersion      int                         `json:"schemaVersion"`
+		State              memory.ProviderSessionState `json:"state"`
+		Handle             string                      `json:"session_handle"`
+		Checkpointed       bool                        `json:"checkpointed"`
+		FinalObservationID string                      `json:"final_observation_id,omitempty"`
+		CreatedAt          time.Time                   `json:"created_at"`
+		UpdatedAt          time.Time                   `json:"updated_at"`
+		CompletedAt        *time.Time                  `json:"completed_at,omitempty"`
+	}{1, session.State, session.Handle, session.Checkpointed, session.FinalObservationID, session.CreatedAt, session.UpdatedAt, session.CompletedAt})
 	return 0
 }
 

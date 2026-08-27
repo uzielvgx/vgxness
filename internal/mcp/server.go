@@ -62,6 +62,9 @@ type memoryReader interface {
 	Get(context.Context, memory.Lookup) (memory.Entry, error)
 	Remember(context.Context, memory.Remember) (memory.Entry, error)
 	Forget(context.Context, memory.Forget) (memory.Entry, error)
+	ProviderSessionContext(context.Context, string, string) (memory.ProviderSessionContext, error)
+	SaveProviderSessionDraft(context.Context, memory.ProviderSessionDraftSave) (memory.ProviderSessionDraft, error)
+	UpdateObservation(context.Context, memory.ObservationUpdate) (memory.Observation, error)
 }
 
 type runtimeReader struct {
@@ -179,6 +182,15 @@ func (reader runtimeReader) Remember(ctx context.Context, request memory.Remembe
 func (reader runtimeReader) Forget(ctx context.Context, request memory.Forget) (memory.Entry, error) {
 	return reader.runtime.Forget(ctx, reader.opts, request)
 }
+func (reader runtimeReader) ProviderSessionContext(ctx context.Context, project, handle string) (memory.ProviderSessionContext, error) {
+	return reader.runtime.ProviderSessionContext(ctx, reader.opts, project, handle)
+}
+func (reader runtimeReader) SaveProviderSessionDraft(ctx context.Context, request memory.ProviderSessionDraftSave) (memory.ProviderSessionDraft, error) {
+	return reader.runtime.SaveProviderSessionDraft(ctx, reader.opts, request)
+}
+func (reader runtimeReader) UpdateObservation(ctx context.Context, request memory.ObservationUpdate) (memory.Observation, error) {
+	return reader.runtime.UpdateObservation(ctx, reader.opts, request)
+}
 
 // New creates a server whose project identity is resolved once from workspace.
 // Missing or inaccessible read-only storage returns ErrUnavailable.
@@ -262,10 +274,13 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 			"required": []string{"query"},
 		},
 	}, server.callSearch)
+	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_context", Description: "Read bounded untrusted handoff for an active local provider session.", Annotations: annotations, InputSchema: sddSchema([]string{"session_handle"}, map[string]any{"session_handle": sddString()})}, server.callContext)
 	if full {
 		writeAnnotations := &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(false)}
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()})}, server.callGet)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_save", Description: "Write a durable project memory entry. This tool stores data.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"title", "content"}, map[string]any{"title": sddString(), "content": sddString(), "type": sddString(), "topic": sddString()})}, server.callSave)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_save", Description: "Write a durable project memory entry. This tool stores data.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"title", "content"}, map[string]any{"title": sddString(), "content": sddString(), "type": sddString(), "topic": sddString(), "session_handle": sddString()})}, server.callSave)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_session_summary", Description: "Save one local pending provider-session summary.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"session_handle", "summary"}, map[string]any{"session_handle": sddString(), "summary": sddString(), "expected_updated_at": sddString()})}, server.callSummary)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_update", Description: "Update one mutable memory entry using its exact timestamp.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"id", "content", "expected_updated_at"}, map[string]any{"id": sddString(), "content": sddString(), "expected_updated_at": sddString()})}, server.callUpdate)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_forget", Description: "Archive one exact project memory entry. This tool changes stored data and removes it from normal search.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()})}, server.callForget)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_create", Description: "Create one structured SDD change. This stores state only and does not execute a workflow.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"idempotencyKey", "title", "backend", "interactionMode", "plan"}, map[string]any{"idempotencyKey": sddString(), "title": sddString(), "backend": sddString("openspec", "memory", "hybrid"), "interactionMode": sddString("automatic", "interactive"), "plan": sddString("low", "medium", "high", "ultra")}), OutputSchema: sddChangeOutputSchema()}, server.callSDDCreate)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_list", Description: "List structured SDD changes for the trusted workspace project.", Annotations: annotations, InputSchema: sddSchema(nil, map[string]any{"status": sddString("active", "completed", "cancelled"), "limit": sddNumber()}), OutputSchema: sddChangesOutputSchema()}, server.callSDDList)
@@ -359,10 +374,24 @@ type getInput struct {
 }
 
 type saveInput struct {
-	Title   string `json:"title" jsonschema:"required"`
-	Content string `json:"content" jsonschema:"required"`
-	Type    string `json:"type,omitempty"`
-	Topic   string `json:"topic,omitempty"`
+	Title         string `json:"title" jsonschema:"required"`
+	Content       string `json:"content" jsonschema:"required"`
+	Type          string `json:"type,omitempty"`
+	Topic         string `json:"topic,omitempty"`
+	SessionHandle string `json:"session_handle,omitempty"`
+}
+type contextInput struct {
+	SessionHandle string `json:"session_handle" jsonschema:"required"`
+}
+type summaryInput struct {
+	SessionHandle     string `json:"session_handle" jsonschema:"required"`
+	Summary           string `json:"summary" jsonschema:"required"`
+	ExpectedUpdatedAt string `json:"expected_updated_at,omitempty"`
+}
+type updateInput struct {
+	ID                string `json:"id" jsonschema:"required"`
+	Content           string `json:"content" jsonschema:"required"`
+	ExpectedUpdatedAt string `json:"expected_updated_at" jsonschema:"required"`
 }
 
 type sddCreateInput struct {
@@ -466,6 +495,13 @@ func invalidSDDField(field string) error { return sddInputError{field: field} }
 type result struct {
 	Entries []entry `json:"entries"`
 }
+type contextResult struct {
+	Handoff string `json:"handoff"`
+}
+type summaryResult struct {
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
 type sddChangesResult struct {
 	Changes []sdd.Change `json:"changes"`
@@ -505,8 +541,65 @@ func (server *Server) save(ctx context.Context, input saveInput) (entry, error) 
 	if strings.TrimSpace(input.Title) == "" || strings.TrimSpace(input.Content) == "" {
 		return entry{}, ErrInvalidInput
 	}
+	if input.SessionHandle != "" {
+		if _, err := server.reader.ProviderSessionContext(ctx, server.project, input.SessionHandle); err != nil {
+			return entry{}, shapeProviderError(ctx, err)
+		}
+	}
 	item, err := server.reader.Remember(ctx, memory.Remember{Title: input.Title, Content: input.Content, Type: input.Type, TopicKey: input.Topic, Project: server.project, Scope: memory.ScopeProject})
 	return shapeEntry(ctx, item, err, true)
+}
+
+func (server *Server) sessionContext(ctx context.Context, input contextInput) (contextResult, error) {
+	if strings.TrimSpace(input.SessionHandle) == "" {
+		return contextResult{}, ErrInvalidInput
+	}
+	value, err := server.reader.ProviderSessionContext(ctx, server.project, input.SessionHandle)
+	return contextResult{Handoff: value.Handoff}, shapeProviderError(ctx, err)
+}
+func (server *Server) sessionSummary(ctx context.Context, input summaryInput) (summaryResult, error) {
+	if strings.TrimSpace(input.SessionHandle) == "" || strings.TrimSpace(input.Summary) == "" {
+		return summaryResult{}, ErrInvalidInput
+	}
+	var expected time.Time
+	var err error
+	if input.ExpectedUpdatedAt != "" {
+		expected, err = time.Parse(time.RFC3339Nano, input.ExpectedUpdatedAt)
+		if err != nil {
+			return summaryResult{}, ErrInvalidInput
+		}
+	}
+	value, err := server.reader.SaveProviderSessionDraft(ctx, memory.ProviderSessionDraftSave{Project: server.project, Handle: input.SessionHandle, Summary: input.Summary, ExpectedUpdatedAt: expected})
+	return summaryResult{Status: "draft", UpdatedAt: value.UpdatedAt}, shapeProviderError(ctx, err)
+}
+func (server *Server) update(ctx context.Context, input updateInput) (entry, error) {
+	expected, err := time.Parse(time.RFC3339Nano, input.ExpectedUpdatedAt)
+	if err != nil || strings.TrimSpace(input.ID) == "" || strings.TrimSpace(input.Content) == "" {
+		return entry{}, ErrInvalidInput
+	}
+	item, err := server.reader.UpdateObservation(ctx, memory.ObservationUpdate{ID: input.ID, Project: server.project, Content: input.Content, ExpectedUpdatedAt: expected})
+	if err != nil {
+		return entry{}, shapeProviderError(ctx, err)
+	}
+	return makeEntry(memory.Entry{ID: item.ID, Title: item.Title, Type: item.Type, TopicKey: item.TopicKey, State: item.State, Content: item.Content, UpdatedAt: item.UpdatedAt}, true), nil
+}
+func shapeProviderError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, memory.ErrInvalid) {
+		return ErrInvalidInput
+	}
+	if errors.Is(err, memory.ErrNotFound) {
+		return ErrNotFound
+	}
+	if errors.Is(err, memory.ErrConflict) {
+		return ErrConflict
+	}
+	return ErrUnavailable
 }
 
 func (server *Server) forget(ctx context.Context, input getInput) (entry, error) {
@@ -822,6 +915,26 @@ func (server *Server) callGet(ctx context.Context, _ *sdk.CallToolRequest, input
 
 func (server *Server) callSave(ctx context.Context, _ *sdk.CallToolRequest, input saveInput) (*sdk.CallToolResult, entry, error) {
 	output, err := server.save(ctx, input)
+	return entryResponse(err, output)
+}
+func (server *Server) callContext(ctx context.Context, _ *sdk.CallToolRequest, input contextInput) (*sdk.CallToolResult, contextResult, error) {
+	output, err := server.sessionContext(ctx, input)
+	if err != nil {
+		response, _, _ := entryResponse(err, entry{})
+		return response, contextResult{}, nil
+	}
+	return toolText("Provider session context returned.", false), output, nil
+}
+func (server *Server) callSummary(ctx context.Context, _ *sdk.CallToolRequest, input summaryInput) (*sdk.CallToolResult, summaryResult, error) {
+	output, err := server.sessionSummary(ctx, input)
+	if err != nil {
+		response, _, _ := entryResponse(err, entry{})
+		return response, summaryResult{}, nil
+	}
+	return toolText("Provider session summary saved.", false), output, nil
+}
+func (server *Server) callUpdate(ctx context.Context, _ *sdk.CallToolRequest, input updateInput) (*sdk.CallToolResult, entry, error) {
+	output, err := server.update(ctx, input)
 	return entryResponse(err, output)
 }
 

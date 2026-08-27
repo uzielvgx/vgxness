@@ -2466,7 +2466,7 @@ func TestCAREChallengerRequiresBoundTypedOutcomes(t *testing.T) {
 func TestManagedBroadPermissionAgentsDenyDurableVGXNESSMutations(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	denies := []string{"vgxness_memory_save", "vgxness_memory_forget", "vgxness_sdd_create", "vgxness_sdd_set_interaction_mode", "vgxness_sdd_save_revision", "vgxness_sdd_accept_revision", "vgxness_sdd_transition", "vgxness_sdd_record_projection"}
+	denies := []string{"vgxness_memory_save", "vgxness_memory_forget", "vgxness_memory_session_summary", "vgxness_memory_update", "vgxness_sdd_create", "vgxness_sdd_set_interaction_mode", "vgxness_sdd_save_revision", "vgxness_sdd_accept_revision", "vgxness_sdd_transition", "vgxness_sdd_record_projection"}
 	for _, name := range []string{generalAgentName, verifierAgentName} {
 		prompt := string(bundle.agents[name])
 		for _, tool := range denies {
@@ -3699,9 +3699,9 @@ func TestIntegrationV3RecognizesArtifactSpecificPredecessorsWithoutManifest(t *t
 	}
 	manager, err := bindManagerTemplate(previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", resolved["agents/"+managerAgentName])
 	testutil.NoError(t, err)
-	general, err := bindProfile(previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", "artifact: opencode-agent/general; version: 4", resolved["agents/"+generalAgentName], false)
+	general, err := bindProfile(previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", "artifact: opencode-agent/general; version: 4", resolved["agents/"+generalAgentName], false, false)
 	testutil.NoError(t, err)
-	verifier, err := bindProfile(previousVerifierPromptV3(), verifierPreviousMarker, verifierPreviousMarker, resolved["agents/"+verifierAgentName], false)
+	verifier, err := bindProfile(previousVerifierPromptV3(), verifierPreviousMarker, verifierPreviousMarker, resolved["agents/"+verifierAgentName], false, false)
 	testutil.NoError(t, err)
 	predecessors := map[string][]byte{managerAgentName: manager, generalAgentName: general, verifierAgentName: verifier}
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))
@@ -3745,7 +3745,7 @@ func TestIntegrationV3EditedSeedRecognizesExactLegacyModelsWithoutManifest(t *te
 	}
 	manager, err := bindManagerTemplate(previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", legacy["agents/"+managerAgentName])
 	testutil.NoError(t, err)
-	general, err := bindProfile(previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", "artifact: opencode-agent/general; version: 4", legacy["agents/"+generalAgentName], false)
+	general, err := bindProfile(previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", "artifact: opencode-agent/general; version: 4", legacy["agents/"+generalAgentName], false, false)
 	testutil.NoError(t, err)
 	legacyBytes := map[string][]byte{managerAgentName: manager, generalAgentName: general}
 	testutil.NoError(t, os.MkdirAll(filepath.Join(root, "agents"), 0o700))

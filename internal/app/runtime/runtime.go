@@ -91,6 +91,56 @@ func (runtime Memory) Get(ctx context.Context, opts config.Options, request memo
 	return memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Get(ctx, request)
 }
 
+func (runtime Memory) ProviderSessionContext(ctx context.Context, opts config.Options, project, handle string) (memory.ProviderSessionContext, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return memory.ProviderSessionContext{}, err
+	}
+	defer store.Close()
+	return store.ProviderSessionContext(ctx, project, handle)
+}
+
+func (runtime Memory) SaveProviderSessionDraft(ctx context.Context, opts config.Options, request memory.ProviderSessionDraftSave) (memory.ProviderSessionDraft, error) {
+	if runtime.readOnly {
+		return memory.ProviderSessionDraft{}, memory.ErrInvalid
+	}
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.ProviderSessionDraft, error) {
+		return store.SaveProviderSessionDraft(ctx, request)
+	})
+}
+
+func (runtime Memory) UpdateObservation(ctx context.Context, opts config.Options, request memory.ObservationUpdate) (memory.Observation, error) {
+	if runtime.readOnly {
+		return memory.Observation{}, memory.ErrInvalid
+	}
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.Observation, error) { return store.UpdateObservation(ctx, request) })
+}
+
+func (runtime Memory) StartProviderSession(ctx context.Context, opts config.Options, request memory.ProviderSessionStart) (memory.ProviderSession, error) {
+	if runtime.readOnly {
+		return memory.ProviderSession{}, memory.ErrInvalid
+	}
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.ProviderSession, error) {
+		return store.StartProviderSession(ctx, request)
+	})
+}
+func (runtime Memory) MarkProviderSessionCheckpoint(ctx context.Context, opts config.Options, project, handle string) (memory.ProviderSession, error) {
+	if runtime.readOnly {
+		return memory.ProviderSession{}, memory.ErrInvalid
+	}
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.ProviderSession, error) {
+		return store.MarkProviderSessionCheckpoint(ctx, project, handle)
+	})
+}
+func (runtime Memory) EndProviderSession(ctx context.Context, opts config.Options, request memory.ProviderSessionEnd) (memory.ProviderSession, error) {
+	if runtime.readOnly {
+		return memory.ProviderSession{}, memory.ErrInvalid
+	}
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.ProviderSession, error) {
+		return store.EndProviderSession(ctx, request)
+	})
+}
+
 func (runtime Memory) Forget(ctx context.Context, opts config.Options, request memory.Forget) (memory.Entry, error) {
 	if runtime.readOnly {
 		return memory.Entry{}, memory.ErrInvalid
