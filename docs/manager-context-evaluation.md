@@ -2,11 +2,11 @@
 
 ## Decision and target
 
-**Historical evaluation record — not current runtime documentation.** This contract compares the historical `vgxness-manager` v44 and plugin v9 against the aggregate Manager v43 baseline. It defines reproducible evidence for context hygiene; it is not a model result or self-grading claim. The baseline target was commit `ad948764d2b529474e7f6edf96513ac5d234442d` on OpenCode 1.18.14. Current runtime is MCP-only and installs no plugin.
+**Historical evaluation record — not current runtime documentation.** This contract compares the historical `vgxness-manager` v44 and plugin v9 against the aggregate Manager v43 baseline. It defines reproducible evidence for context hygiene; it is not a model result or self-grading claim. The baseline target was commit `ad948764d2b529474e7f6edf96513ac5d234442d` on OpenCode 1.18.14. Its plugin material is historical and does not describe the current lifecycle plugin.
 
 The v43 pre-change run used four development and four protected-holdout fresh sessions, with no retries or environment failures. It initially reported blocked solely because of unrelated or unconfirmed untracked presentation artifacts; the user restored a clean workspace before this implementation. That limitation remains part of the record.
 
-The current managed projections are OpenCode manager v49 and Codex manager v9. Deterministic source tests establish that both embed the same provider-neutral adaptive contract and preserve exact v48/v8 predecessors. The contract's classification and tool/delegation budgets are prompt instructions, not runtime broker enforcement. No external holdout, live provider, or NLP classification run was performed for this change; those evaluations remain pending and no behavioral pass rate is claimed.
+The evaluated v49/v9 projections embedded the same provider-neutral adaptive contract and preserved exact v48/v8 predecessors. The contract's classification and tool/delegation budgets are prompt instructions, not runtime broker enforcement. No external holdout, live provider, or NLP classification run was performed for this change; those evaluations remain pending and no behavioral pass rate is claimed.
 
 ## Dataset custody and assets
 
