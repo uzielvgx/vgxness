@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
@@ -35,6 +36,9 @@ type fakeMemoryRuntime struct {
 	start      memory.ProviderSessionStart
 	checkpoint string
 	ended      memory.ProviderSessionEnd
+	context    memory.ProviderSessionContext
+	draft      memory.ProviderSessionDraft
+	draftSave  memory.ProviderSessionDraftSave
 }
 
 func TestMemorySyncTransitionCommandsRequireExactModeConfirmation(t *testing.T) {
@@ -179,6 +183,19 @@ func (f *fakeMemoryRuntime) EndProviderSession(_ context.Context, _ config.Optio
 	f.calls++
 	f.ended = request
 	return memory.ProviderSession{Project: request.Project, Handle: request.Handle, State: request.State}, f.err
+}
+func (f *fakeMemoryRuntime) ProviderSessionContext(_ context.Context, _ config.Options, project, handle string) (memory.ProviderSessionContext, error) {
+	f.calls++
+	if project != f.project || handle == "" {
+		return memory.ProviderSessionContext{}, memory.ErrInvalid
+	}
+	return f.context, f.err
+}
+func (f *fakeMemoryRuntime) SaveProviderSessionDraft(_ context.Context, _ config.Options, request memory.ProviderSessionDraftSave) (memory.ProviderSessionDraft, error) {
+	f.calls++
+	f.draftSave = request
+	f.draft = memory.ProviderSessionDraft{Project: request.Project, Handle: request.Handle, UpdatedAt: request.ExpectedUpdatedAt}
+	return f.draft, f.err
 }
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
@@ -393,6 +410,33 @@ func TestMemoryCLI_HookLifecycleIsVersionedStrictAndPrivate(t *testing.T) {
 	code, out, stderr = call(`{"schemaVersion":1,"operation":"end","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","external_id":"secret-run","state":"completed","summary":"safe"}`)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.ended == (memory.ProviderSessionEnd{Project: "project-1", Handle: "ps-test", ExternalID: "secret-run", State: memory.ProviderSessionCompleted, Summary: "safe"}) && strings.Contains(out, `"state":"completed"`) && !strings.Contains(out, "secret-run") && !strings.Contains(out, "safe"), "end=%d %q %q request=%+v", code, out, stderr, runtime.ended)
 	for _, input := range []string{`{"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, `{"schemaVersion":2,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, `{"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x","unknown":true}`, `{"schemaVersion":1,"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, start + ` {}`} {
+		before := runtime.calls
+		code, out, _ = call(input)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == before, "invalid hook=%d %q calls=%d", code, out, runtime.calls)
+	}
+}
+
+func TestMemoryCLI_HookContextAndSummaryAreStrictAndPrivate(t *testing.T) {
+	workspace := t.TempDir()
+	updated := "2026-08-27T12:34:56.123456789Z"
+	runtime := &fakeMemoryRuntime{project: "project-1", context: memory.ProviderSessionContext{Handoff: "untrusted prior handoff"}, draft: memory.ProviderSessionDraft{Project: "project-1", Handle: "ps-test"}}
+	call := func(input string) (int, string, string) {
+		return runMemoryTest([]string{"memory", "hook", "--stdin"}, input, runtime)
+	}
+	code, out, stderr := call(`{"schemaVersion":1,"operation":"context","workspace":"` + workspace + `","session_handle":"ps-test"}`)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && strings.Contains(out, `"handoff":"untrusted prior handoff"`) && !strings.Contains(out, "external") && !strings.Contains(out, "provider") && !strings.Contains(out, "draft"), "context=%d %q %q", code, out, stderr)
+	code, out, stderr = call(`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"pending draft","expected_updated_at":"` + updated + `"}`)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 4 && runtime.draftSave.Project == "project-1" && runtime.draftSave.Summary == "pending draft" && runtime.draftSave.ExpectedUpdatedAt.Format(time.RFC3339Nano) == updated && strings.Contains(out, `"session_handle":"ps-test"`) && strings.Contains(out, `"updated_at"`) && !strings.Contains(out, "pending draft") && !strings.Contains(out, "external") && !strings.Contains(out, "provider"), "summary=%d %q %q request=%+v", code, out, stderr, runtime.draftSave)
+	runtime.err = memory.ErrConflict
+	code, out, _ = call(`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"stale","expected_updated_at":"` + updated + `"}`)
+	testutil.Require(t, code == 1 && out == "", "stale summary=%d %q", code, out)
+	runtime.err = nil
+	for _, input := range []string{
+		`{"schemaVersion":1,"operation":"context","workspace":"` + workspace + `","session_handle":"ps-test","summary":"x"}`,
+		`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"x","expected_updated_at":"not-a-time"}`,
+		`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"x","external_id":"x"}`,
+		`{"schemaVersion":1,"operation":"summary","workspace":"` + workspace + `","session_handle":"ps-test","summary":"x"} {}`,
+	} {
 		before := runtime.calls
 		code, out, _ = call(input)
 		testutil.Require(t, code == 2 && out == "" && runtime.calls == before, "invalid hook=%d %q calls=%d", code, out, runtime.calls)
