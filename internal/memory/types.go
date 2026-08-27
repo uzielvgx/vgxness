@@ -50,6 +50,41 @@ type Observation struct {
 	References  []string
 }
 
+type ProviderSessionState string
+
+const (
+	ProviderSessionActive      ProviderSessionState = "active"
+	ProviderSessionCompleted   ProviderSessionState = "completed"
+	ProviderSessionInterrupted ProviderSessionState = "interrupted"
+	ProviderSessionCancelled   ProviderSessionState = "cancelled"
+)
+
+// Provider sessions are local-only. ExternalID is accepted only to bind a
+// request to its local session; it is hashed immediately and never retained.
+type ProviderSession struct {
+	Handle, Project, Provider, FinalObservationID string
+	State                                         ProviderSessionState
+	Checkpointed                                  bool
+	CreatedAt, UpdatedAt                          time.Time
+	CompletedAt                                   *time.Time
+}
+type ProviderSessionStart struct{ Project, Provider, ExternalID string }
+type ProviderSessionEnd struct {
+	Project, Handle, ExternalID, Summary string
+	State                                ProviderSessionState
+}
+type ProviderSessionContext struct {
+	Session ProviderSession
+	Handoff string
+}
+
+// ObservationUpdate is an optimistic content update. ExpectedUpdatedAt must
+// equal the persisted timestamp to prevent a stale writer from winning.
+type ObservationUpdate struct {
+	ID, Project, Content string
+	ExpectedUpdatedAt    time.Time
+}
+
 // SyncBackfillResult describes a local-only, idempotent sync queue backfill.
 type SyncBackfillResult struct {
 	SchemaVersion int  `json:"schemaVersion"`

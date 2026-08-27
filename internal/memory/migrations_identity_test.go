@@ -29,6 +29,23 @@ func TestHealthRejectsWeakenedPortableBindingSchema(t *testing.T) {
 	testutil.Require(t, errors.Is(err, ErrCorrupt), "Health() error=%v", err)
 }
 
+func TestHealthRejectsMissingAndWeakenedProviderSessionSchema(t *testing.T) {
+	for _, statement := range []string{
+		`DROP TABLE local_provider_sessions`,
+		`DROP INDEX local_provider_sessions_project_state_updated_idx`,
+		`DROP INDEX local_provider_sessions_project_state_updated_idx; DROP TABLE local_provider_sessions; CREATE TABLE local_provider_sessions (handle TEXT PRIMARY KEY CHECK(length(handle) BETWEEN 8 AND 128), project_id TEXT NOT NULL REFERENCES projects(id), provider TEXT NOT NULL CHECK(length(provider) BETWEEN 1 AND 128), external_id_hash BLOB NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','completed','interrupted','cancelled')), checkpointed INTEGER NOT NULL DEFAULT 0 CHECK(checkpointed IN (0,1)), final_observation_id TEXT NULL REFERENCES observations(id), created_at INTEGER NOT NULL CHECK(created_at > 0), updated_at INTEGER NOT NULL CHECK(updated_at >= created_at), completed_at INTEGER NULL CHECK(completed_at IS NULL OR completed_at >= created_at), UNIQUE(project_id,provider,external_id_hash), CHECK((state='completed') = (final_observation_id IS NOT NULL))); CREATE INDEX local_provider_sessions_project_state_updated_idx ON local_provider_sessions(project_id,state,updated_at DESC,handle)`,
+	} {
+		t.Run(statement, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			_, err := store.db.Exec(statement)
+			testutil.NoError(t, err)
+			_, err = store.Health(context.Background())
+			testutil.Require(t, errors.Is(err, ErrCorrupt), "Health() error=%v", err)
+		})
+	}
+}
+
 func TestRepairProjectSchemaHealth(t *testing.T) {
 	for _, statement := range []string{`DROP TABLE sync_project_repairs`, `DROP INDEX sync_project_repairs_pending_idx`} {
 		t.Run(statement, func(t *testing.T) {
@@ -57,7 +74,7 @@ func TestProjectRepairMigrationFromV16PreservesMemory(t *testing.T) {
 	defer store.Close()
 	version, err := store.Health(context.Background())
 	item, itemErr := store.Get(context.Background(), "existing", "project", ScopeProject)
-	testutil.Require(t, err == nil && version == 19 && itemErr == nil && item.Content == "preserved", "version=%d err=%v item=%+v itemErr=%v", version, err, item, itemErr)
+	testutil.Require(t, err == nil && version == 20 && itemErr == nil && item.Content == "preserved", "version=%d err=%v item=%+v itemErr=%v", version, err, item, itemErr)
 }
 func TestProjectIdentityMigrationFromV12Fixture(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
@@ -71,7 +88,7 @@ func TestProjectIdentityMigrationFromV12Fixture(t *testing.T) {
 	store = openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 19, "version=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 20, "version=%d err=%v", version, err)
 }
 
 func TestProjectCursorMigrationFromV15Fixture(t *testing.T) {
@@ -89,7 +106,7 @@ func TestProjectCursorMigrationFromV15Fixture(t *testing.T) {
 	var cursor, inbox int
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor`).Scan(&cursor))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox`).Scan(&inbox))
-	testutil.Require(t, err == nil && version == 19 && cursor == 0 && inbox == 0, "version=%d cursor=%d inbox=%d err=%v", version, cursor, inbox, err)
+	testutil.Require(t, err == nil && version == 20 && cursor == 0 && inbox == 0, "version=%d cursor=%d inbox=%d err=%v", version, cursor, inbox, err)
 }
 
 func TestHealthRejectsWeakenedSyncPortableIdentitySchema(t *testing.T) {
@@ -134,5 +151,5 @@ func TestSyncPortableIdentityAdoptionMigrationFromV14PreservesMappings(t *testin
 	inverse, found, inverseErr := store.LocalSyncPortableIdentity(context.Background(), project, "session", wire)
 	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440303", RecordID: local, RecordKind: "session", Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: local, ProjectID: "local"}}
 	translated, translateErr := store.TranslateSyncMutations(context.Background(), project, "local", []syncservice.Mutation{mutation})
-	testutil.Require(t, err == nil && version == 19 && mappings == 1 && adoptions == 0 && inverseErr == nil && found && inverse == local && translateErr == nil && len(translated) == 1 && translated[0].RecordID == wire, "version=%d mappings=%d adoptions=%d inverse=%q/%t/%v translated=%+v err=%v", version, mappings, adoptions, inverse, found, inverseErr, translated, err)
+	testutil.Require(t, err == nil && version == 20 && mappings == 1 && adoptions == 0 && inverseErr == nil && found && inverse == local && translateErr == nil && len(translated) == 1 && translated[0].RecordID == wire, "version=%d mappings=%d adoptions=%d inverse=%q/%t/%v translated=%+v err=%v", version, mappings, adoptions, inverse, found, inverseErr, translated, err)
 }

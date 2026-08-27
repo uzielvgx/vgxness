@@ -47,7 +47,7 @@ Baseline and controlled pilot work are deferred and separately authorized; no pi
 
 | Backend | Canonical content |
 | --- | --- |
-| `memory` | Structured SDD revision bodies in SQLite schema v19; they remain distinct from semantic-memory records and OpenSpec projections. |
+| `memory` | Structured SDD revision bodies in SQLite schema v20; they remain distinct from semantic-memory records and OpenSpec projections. |
 | `openspec` | Managed files under `openspec/changes/<safe-change-id>/`; SQLite stores identity, digest, bindings, and projection evidence. |
 | `hybrid` | SQLite revision content is canonical; OpenSpec is a deterministic projection. |
 

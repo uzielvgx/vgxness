@@ -28,9 +28,9 @@ and removes its FTS row. The observation row and relationships remain available
 to `Get` for durable history and persisted-data compatibility, while normal
 `Recall` cannot return forgotten content.
 
-## Schema v19 domains
+## Schema v20 domains
 
-**Implemented:** SQLite schema v19 keeps semantic observations, references,
+**Implemented:** SQLite schema v20 keeps semantic observations, references,
 sessions, and FTS rows isolated from structured SDD changes, artifacts,
 immutable revisions, input bindings, idempotency records, and OpenSpec projection
 evidence. Both domains share canonical workspace/project identity and the same
@@ -48,7 +48,7 @@ ownership, permissions, and Windows limitations. For existing project data,
 run `memory sync backfill --workspace /absolute/workspace` before the first
 sync. Backfill is local-only, bounded, and idempotent.
 
-Schema v19 retains durable project transition snapshots and one per-project backup intent. For a new cloud, reset it first, then on the Mac/source device run `memory sync reseed --workspace /absolute/workspace --confirm-cloud-empty`; cloud emptiness is checked exactly. Each later Linux or Windows device runs `memory sync rejoin --workspace /absolute/workspace --confirm-merge`. These are per-project operations, never run `git pull`, and retries resume the same transition. A pending intent blocks only that project. A retry reuses a sealed SHA-256-verified backup, or may seal and reuse an extant healthy same-parent private backup only when its embedded intent exactly matches the portable project, local project, mode, intent ID, and random backup path; any different healthy database fails closed without replacement.
+Schema v20 retains durable project transition snapshots and one per-project backup intent. It also has local-only provider-session rows: only an SHA-256 external-ID hash and local handle are retained, never synchronized. A completed provider session writes one sessionless project observation with internally generated identity and host-supplied summary content. The summary rejects the exact session handle and external ID; this is not generic DLP or authentication. Final provider-session summaries are immutable through both Store update APIs. For a new cloud, reset it first, then on the Mac/source device run `memory sync reseed --workspace /absolute/workspace --confirm-cloud-empty`; cloud emptiness is checked exactly. Each later Linux or Windows device runs `memory sync rejoin --workspace /absolute/workspace --confirm-merge`. These are per-project operations, never run `git pull`, and retries resume the same transition. A pending intent blocks only that project. A retry reuses a sealed SHA-256-verified backup, or may seal and reuse an extant healthy same-parent private backup only when its embedded intent exactly matches the portable project, local project, mode, intent ID, and random backup path; any different healthy database fails closed without replacement.
 
 Foreground sync is explicitly project-scoped: use `memory sync --workspace
 /absolute/workspace`. The workspace must already have a valid
@@ -67,7 +67,7 @@ execution authority.
 
 ## Upgrade migration caveat
 
-**Implemented:** A read-only database open cannot migrate an older supported schema to v19.
+**Implemented:** A read-only database open cannot migrate an older supported schema to v20.
 Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
 another read operation may therefore report a migration/storage failure. Do not delete or
 recreate the database; the existing data is the migration source and remains authoritative.

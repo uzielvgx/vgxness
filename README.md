@@ -2,7 +2,7 @@
 
 Current delivery is global `git-delivery` v1 (exact `stacked-pr` v3 migration), policy-only isolated worktrees, and no Go/runtime writer, daemon, or durable delivery state. OpenCode is CARE-v2 Manager59 with immediate CARE-v2 Manager58, then CARE-v1 Manager58/Manager57; Codex is Manager18 with immediate Manager17, then Manager16/15/14.
 
-VGXNESS is a local OpenCode-native manager product. The Go 1.26 repository delivers the `vgxness` executable, versioned self-installation, a keyboard-first TUI, SQLite/FTS5 schema v19, native memory and SDD storage, OpenSpec backends, guided setup, and release tooling. The SQLite schema is storage infrastructure; semantic memory, structured SDD records, and OpenSpec projections remain distinct domains.
+VGXNESS is a local OpenCode-native manager product. The Go 1.26 repository delivers the `vgxness` executable, versioned self-installation, a keyboard-first TUI, SQLite/FTS5 schema v20, native memory and SDD storage, OpenSpec backends, guided setup, and release tooling. The SQLite schema is storage infrastructure; semantic memory, structured SDD records, and OpenSpec projections remain distinct domains.
 
 The installed OpenCode projection has 16 managed artifacts: 13 model-bound agents headed by `vgxness-manager` v59, `general` v10, verifier v7, three CARE v2 profiles, and six SDD profiles; the model-plan manifest; an `opencode.json` default-agent selection; and bounded `<config-dir>/vgxness/default-agent.json` restoration metadata. Generated Codex Manager18 provides the equivalent provider-native contract. Both require a complete Candidate Capsule for frozen, risky, verification, and SDD delegations. No plugin is installed. MCP is local stdio for a trusted host: it has no caller identity or session authentication, so host tool allowlists, operator permissions, user authorization, and task scope form the authorization boundary. `vgxness mcp` exposes only `memory_recent` and `memory_search`; only an explicit `vgxness mcp --full` exposes the full five memory and 13 SDD tools read/write set. `memory_search` accepts `match_mode` `all` or `any`, defaulting to all-term matching.
 
@@ -20,7 +20,7 @@ The read-only `status` and `doctor` commands report storage root, database, and 
 | [Plan maestro de producto — Español](docs/product-blueprint.es.md) | Complete version 1.0 Spanish companion; explicitly non-canonical, with English controlling conflicts. |
 | [Go Implementation Architecture](docs/go-implementation.md) | Current Go packages, storage, setup, integration, and testing boundaries. |
 | [Orchestration Flow](docs/orchestration-flow.md) | Active OpenCode-native manager and SDD lifecycle. |
-| [Native Memory and Structured Storage](docs/memory.md) | SQLite schema v19 domains, isolation, memory lifecycle, and upgrade migration caveat. |
+| [Native Memory and Structured Storage](docs/memory.md) | SQLite schema v20 domains, isolation, memory lifecycle, and upgrade migration caveat. |
 | [Synchronization service boundary](docs/sync.md) | Loopback-only daemon operation, HTTPS termination boundary, and runtime configuration. |
 | [Versioned Self-installation](docs/self-install.md) | Permanent launcher, immutable SHA-256 versions, atomic activation, rollback, and safety behavior. |
 | [Alpha releases](docs/release.md) | Release artifacts, support matrix, checksum verification, installation, and release rollback boundaries. |
