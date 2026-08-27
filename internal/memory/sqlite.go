@@ -341,7 +341,7 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if version != migrations[len(migrations)-1].version {
 		return 0, fmt.Errorf("%w: unsupported database schema version %d", ErrCorrupt, version)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','portable_project_identities','sync_portable_identities','sync_portable_identity_adoptions','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims','sync_project_cursor','sync_project_inbox','sync_project_repairs','sync_project_transitions','sync_project_transition_records','sync_project_backup_intents')`).Scan(&probe); err != nil || probe != 29 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','sessions','observations','observation_refs','legacy_imports','project_roots','portable_project_identities','sync_portable_identities','sync_portable_identity_adoptions','sdd_changes','sdd_artifacts','sdd_revisions','sdd_revision_links','sdd_projections','sync_profiles','sync_outbox','sync_inbox','sync_cursor','sync_tombstones','sync_conflicts','sync_bootstrap','sync_push_results','sync_outbox_claims','sync_project_cursor','sync_project_inbox','sync_project_repairs','sync_project_transitions','sync_project_transition_records','sync_project_backup_intents','local_provider_sessions')`).Scan(&probe); err != nil || probe != 30 {
 		if contextErr := cancelled(ctx); contextErr != nil {
 			return 0, contextErr
 		}
@@ -374,6 +374,9 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 	if !s.syncPortableIdentityAdoptionSchemaHealthy(ctx) {
 		return 0, fmt.Errorf("%w: sync portable identity adoption schema unavailable", ErrCorrupt)
 	}
+	if !s.providerSessionSchemaHealthy(ctx) {
+		return 0, fmt.Errorf("%w: provider session schema unavailable", ErrCorrupt)
+	}
 	if !s.sddSchemaHealthy(ctx) {
 		if err := cancelled(ctx); err != nil {
 			return 0, err
@@ -384,6 +387,17 @@ func (s *Store) Health(ctx context.Context) (int, error) {
 		return 0, healthError(ctx, "FTS5 unavailable")
 	}
 	return version, nil
+}
+
+func (s *Store) providerSessionSchemaHealthy(ctx context.Context) bool {
+	normalize := func(value string) string { return strings.ReplaceAll(normalizeSchemaSQL(value), "if not exists ", "") }
+	parts := strings.Split(schemaV20, ";")
+	table, ok := s.schemaSQL(ctx, "table", "local_provider_sessions")
+	if !ok || normalize(table) != normalize(parts[0]) || !s.schemaColumns(ctx, "local_provider_sessions", "handle", "project_id", "provider", "external_id_hash", "state", "checkpointed", "final_observation_id", "created_at", "updated_at", "completed_at") {
+		return false
+	}
+	index, ok := s.schemaSQL(ctx, "index", "local_provider_sessions_project_state_updated_idx")
+	return ok && normalize(index) == normalize(parts[1]) && s.schemaIndexColumns(ctx, "local_provider_sessions_project_state_updated_idx", "project_id", "state", "updated_at", "handle")
 }
 
 func (s *Store) syncProjectBackupIntentSchemaHealthy(ctx context.Context) bool {
@@ -928,6 +942,9 @@ func (s *Store) Update(ctx context.Context, item Observation) (Observation, erro
 	return s.updateTx(ctx, tx, existing, item)
 }
 func (s *Store) updateTx(ctx context.Context, tx *sql.Tx, existing, item Observation) (Observation, error) {
+	if isProviderSessionSummary(existing) {
+		return Observation{}, fmt.Errorf("%w: provider session summary is immutable", ErrConflict)
+	}
 	if err := rejectTombstoned(ctx, tx, existing.ID); err != nil {
 		return Observation{}, err
 	}
@@ -965,6 +982,10 @@ func (s *Store) updateTx(ctx context.Context, tx *sql.Tx, existing, item Observa
 		return Observation{}, err
 	}
 	return item, nil
+}
+
+func isProviderSessionSummary(item Observation) bool {
+	return strings.HasPrefix(item.TopicKey, "provider-session-summary-")
 }
 func (s *Store) Search(ctx context.Context, filter Search) ([]Observation, error) {
 	if err := cancelled(ctx); err != nil {

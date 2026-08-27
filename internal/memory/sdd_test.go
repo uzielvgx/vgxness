@@ -27,7 +27,7 @@ func TestMigrateV4ToV5PreservesMemoryAndAddsIsolatedSDD(t *testing.T) {
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 19, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 20, "health=%d err=%v", version, err)
 	found, err := store.Search(context.Background(), Search{Project: "project-a", Query: "preserved", Scope: ScopeProject})
 	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "obs-old", "memory changed: %+v %v", found, err)
 	var tables int
