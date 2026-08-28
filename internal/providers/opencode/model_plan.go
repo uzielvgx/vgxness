@@ -51,6 +51,29 @@ const (
 	verifierPreviousMarker                                  = "artifact: opencode-agent/vgxness-verifier; version: 3"
 )
 
+const alpha2ModelPlanManifestSHA256 = "8de048b17f30be8b86c6a6471c1ce3038b45f47557240b6db8de8987783ed63c"
+
+var alpha2ManagedArtifactSHA256 = map[string]string{
+	managerAgentName:  "bcdcb298669d970cf1d2dbeb3f2eaf769198a37bc466fd9c145b92fa78829603",
+	generalAgentName:  "38d0d32e620c15820d05a1aaebf553aef032d243b7442a5e1b359913d182678b",
+	verifierAgentName: "34c6210c6128d2aa4034a005bbe8cce5c57e981f433b4732774d471c713be50f",
+}
+
+func isAlpha2ModelPlanManifestSHA256(digest string) bool {
+	return digest == alpha2ModelPlanManifestSHA256
+}
+
+func isAlpha2ModelPlanManifest(data []byte) bool {
+	return isAlpha2ModelPlanManifestSHA256(artifactSHA256(data))
+}
+
+func alpha2ManagedArtifactRecognizer(name string) func([]byte) bool {
+	digest := alpha2ManagedArtifactSHA256[name]
+	return func(candidate []byte) bool {
+		return digest != "" && artifactSHA256(candidate) == digest
+	}
+}
+
 type modelPlanManifest struct {
 	SchemaVersion int                    `json:"schemaVersion"`
 	ManagedBy     string                 `json:"managedBy"`
@@ -669,6 +692,11 @@ func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (mo
 		return modelPlanBundle{}, integration.ErrDrift
 	}
 	if bytes.Equal(current.manifest, data) {
+		return current, nil
+	}
+	// alpha.2 shipped these exact package bytes under the same agent markers.
+	// Accept them only when the complete manifest and artifact hashes agree.
+	if isAlpha2ModelPlanManifest(data) {
 		return current, nil
 	}
 	immediate, err := immediatePredecessor(current)

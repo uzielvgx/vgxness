@@ -1572,6 +1572,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		return inspection{}, fixedLensV53Err
 	}
 	predecessorManifest, predecessorManifestErr := readRegularFile(manifestPath)
+	alpha2ManifestInstalled := predecessorManifestErr == nil && isAlpha2ModelPlanManifest(predecessorManifest)
 	predecessorManifestInstalled := predecessorManifestErr == nil && bytes.Equal(predecessorManifest, preConsolidation.manifest)
 	fixedLensV53ManifestInstalled := predecessorManifestErr == nil && bytes.Equal(predecessorManifest, fixedLensV53.manifest)
 	legacyFixedLens, legacyFixedLensErr := legacyFixedLensBundle(plan)
@@ -1594,6 +1595,11 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	}
 	predecessors := map[string][][]byte{}
 	predecessorRecognizers := map[string]func([]byte) bool{}
+	if alpha2ManifestInstalled {
+		for name := range alpha2ManagedArtifactSHA256 {
+			predecessorRecognizers[name] = alpha2ManagedArtifactRecognizer(name)
+		}
+	}
 	if !installedPlanOK || predecessorManifestInstalled {
 		if plan.configV3 != nil {
 			predecessors, err = modelBoundAgentPredecessorsV3(*plan.resolvedV3)
@@ -4934,8 +4940,11 @@ func derivePredecessor(current []byte, replacements []textReplacement) []byte {
 func isManagedPredecessor(candidate, current []byte, predecessors [][]byte, recognize func([]byte) bool) bool {
 	currentIdentity, currentVersion, currentOK := managedArtifactMarker(current)
 	candidateIdentity, candidateVersion, candidateOK := managedArtifactMarker(candidate)
-	if !currentOK || !candidateOK || candidateIdentity != currentIdentity || candidateVersion >= currentVersion {
+	if !currentOK || !candidateOK || candidateIdentity != currentIdentity || candidateVersion > currentVersion {
 		return false
+	}
+	if candidateVersion == currentVersion {
+		return recognize != nil && recognize(candidate)
 	}
 	for _, predecessor := range predecessors {
 		if len(predecessor) != 0 && bytes.Equal(candidate, predecessor) {
