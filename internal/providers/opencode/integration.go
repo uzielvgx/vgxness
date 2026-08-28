@@ -1678,7 +1678,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		path := filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey))
 		state.artifacts = append(state.artifacts, artifact{path: path, content: content, backup: strings.TrimSuffix(name, ".md"), predecessors: prior, regenerations: regeneration(path)})
 	}
-	state.artifacts = append(state.artifacts, artifact{path: lifecyclePluginPath, content: pluginContent, backup: "vgxness-memory-lifecycle-plugin"})
+	state.artifacts = append(state.artifacts, artifact{path: lifecyclePluginPath, content: pluginContent, backup: "vgxness-memory-lifecycle-plugin", recognize: isPreviousMemoryLifecyclePlugin})
 	state.artifacts = append(state.artifacts, artifact{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)}, artifact{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState}, artifact{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent})
 	for index := range state.artifacts {
 		state.artifacts[index].retainedRoot = configDirectory
@@ -3994,8 +3994,10 @@ export const VGXNESSMemoryLifecyclePlugin = async ({ directory }) => {
       const state = sessions.get(identifier(input?.sessionID)); if (!live(state) || state.contextLoaded) return
       state.contextLoaded = true
       const result = await invoke("context", { session_handle: state.handle })
-      if (sessions.get(identifier(input?.sessionID)) !== state || result?.session_handle !== state.handle || typeof result?.handoff !== "string") return
-      const block = "<VGXNESS LIFECYCLE session_handle=\"" + state.handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + untrusted(result.handoff) + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"
+      const hasHandoff = Object.prototype.hasOwnProperty.call(result, "handoff")
+      if (sessions.get(identifier(input?.sessionID)) !== state || result?.session_handle !== state.handle || (hasHandoff && typeof result.handoff !== "string")) return
+      const handoff = typeof result?.handoff === "string" ? result.handoff : ""
+      const block = "<VGXNESS LIFECYCLE session_handle=\"" + state.handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + untrusted(handoff) + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"
       if (Array.isArray(output?.system)) output.system.push(block)
     } catch {} },
     "experimental.session.compacting": async input => { try { const state = sessions.get(identifier(input?.sessionID)); if (live(state)) await invoke("checkpoint", { session_handle: state.handle }) } catch {} },
@@ -4976,6 +4978,37 @@ func isPreviousMemoryPlugin(candidate []byte) bool {
 	v2 := previousMemoryPluginV2(v3)
 	v1 := previousMemoryPluginV1(v2)
 	return bytes.Equal(candidate, v9) || bytes.Equal(candidate, v8) || bytes.Equal(candidate, v7) || bytes.Equal(candidate, v6) || bytes.Equal(candidate, v5) || bytes.Equal(candidate, v4) || bytes.Equal(candidate, v3) || bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
+}
+
+func isPreviousMemoryLifecyclePlugin(candidate []byte) bool {
+	executable, ok := memoryPluginExecutable(candidate)
+	if !ok {
+		return false
+	}
+	current := renderMemoryLifecyclePlugin(executable)
+	return bytes.Equal(candidate, previousMemoryLifecyclePluginV1(current))
+}
+
+func previousMemoryLifecyclePluginV1(current []byte) []byte {
+	return derivePredecessor(previousMemoryLifecyclePluginColdStart(current), []textReplacement{{
+		old: `      if (sessions.get(identifier(input?.sessionID)) !== state || result?.session_handle !== state.handle || (typeof result?.handoff !== "string" && result?.handoff != null)) return
+      const handoff = typeof result?.handoff === "string" ? result.handoff : ""
+      const block = "<VGXNESS LIFECYCLE session_handle=\"" + state.handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + untrusted(handoff) + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"`,
+		new: `      if (sessions.get(identifier(input?.sessionID)) !== state || result?.session_handle !== state.handle || typeof result?.handoff !== "string") return
+      const block = "<VGXNESS LIFECYCLE session_handle=\"" + state.handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + untrusted(result.handoff) + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"`,
+	}})
+}
+
+func previousMemoryLifecyclePluginColdStart(current []byte) []byte {
+	return derivePredecessor(current, []textReplacement{{
+		old: `      const hasHandoff = Object.prototype.hasOwnProperty.call(result, "handoff")
+      if (sessions.get(identifier(input?.sessionID)) !== state || result?.session_handle !== state.handle || (hasHandoff && typeof result.handoff !== "string")) return
+      const handoff = typeof result?.handoff === "string" ? result.handoff : ""
+      const block = "<VGXNESS LIFECYCLE session_handle=\"" + state.handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + untrusted(handoff) + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"`,
+		new: `      if (sessions.get(identifier(input?.sessionID)) !== state || result?.session_handle !== state.handle || (typeof result?.handoff !== "string" && result?.handoff != null)) return
+      const handoff = typeof result?.handoff === "string" ? result.handoff : ""
+      const block = "<VGXNESS LIFECYCLE session_handle=\"" + state.handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + untrusted(handoff) + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"`,
+	}})
 }
 
 func memoryPluginExecutable(content []byte) (string, bool) {
