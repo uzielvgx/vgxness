@@ -66,3 +66,34 @@ func TestOpenCodeV54PackageIsExactUpgradeablePredecessor(t *testing.T) {
 	drifted, err := service.Status(context.Background(), integration.Options{ConfigDir: v53Directory})
 	testutil.Require(t, err == nil && drifted.State == integration.StateDrifted, "one-byte v53 drift status=%+v err=%v", drifted, err)
 }
+
+func TestAlpha2ManagedArtifactRecognizersRequireExactHashes(t *testing.T) {
+	want := map[string]string{
+		managerAgentName:  "bcdcb298669d970cf1d2dbeb3f2eaf769198a37bc466fd9c145b92fa78829603",
+		generalAgentName:  "38d0d32e620c15820d05a1aaebf553aef032d243b7442a5e1b359913d182678b",
+		verifierAgentName: "34c6210c6128d2aa4034a005bbe8cce5c57e981f433b4732774d471c713be50f",
+	}
+	if !isAlpha2ModelPlanManifestSHA256("8de048b17f30be8b86c6a6471c1ce3038b45f47557240b6db8de8987783ed63c") {
+		t.Fatal("alpha.2 model plan identity is not recognized")
+	}
+	for name, digest := range want {
+		if alpha2ManagedArtifactSHA256[name] != digest {
+			t.Fatalf("%s digest=%q want %q", name, alpha2ManagedArtifactSHA256[name], digest)
+		}
+		if alpha2ManagedArtifactRecognizer(name)([]byte("one-byte drift")) {
+			t.Fatalf("%s accepted foreign bytes", name)
+		}
+	}
+}
+
+func TestSameVersionManagedArtifactRequiresExactRecognizer(t *testing.T) {
+	current := []byte("<!-- managed-by: vgxness; artifact: opencode-agent/general; version: 10 -->\ncurrent")
+	predecessor := []byte("<!-- managed-by: vgxness; artifact: opencode-agent/general; version: 10 -->\nalpha.2")
+	recognize := func(candidate []byte) bool { return bytes.Equal(candidate, predecessor) }
+	if !isManagedPredecessor(predecessor, current, nil, recognize) {
+		t.Fatal("exact same-version predecessor was not recognized")
+	}
+	if isManagedPredecessor(append(predecessor, '\n'), current, nil, recognize) {
+		t.Fatal("one-byte same-version drift was recognized")
+	}
+}
