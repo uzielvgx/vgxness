@@ -4153,6 +4153,24 @@ func TestMemoryLifecyclePluginRuntimeLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryLifecyclePluginRuntimeOutputOverflowReleasesStdoutImmediately(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	plugin := string(renderMemoryLifecyclePlugin("/vgxness-test-bin"))
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryLifecyclePlugin`, `const VGXNESSMemoryLifecyclePlugin`, 1)
+	script := `const a=(x,m)=>{if(!x)throw Error(m)},children=[];function stream(){const h=new Map();return{destroyed:false,emits:0,on:(n,f)=>h.set(n,f),emit(n,v){if(this.destroyed)return;this.emits++;h.get(n)?.(v)},setEncoding(){},destroy(){this.destroyed=true}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map()}on(n,f){this.h.set(n,f);return this}emit(n,...v){this.h.get(n)?.(...v)}kill(){this.killed=true;return true}}globalThis.__test={spawn:()=>{const c=new Child();children.push(c);return c},isAbsolute:x=>x.startsWith("/")};` + plugin + `
+const settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve()},p=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"}),pending=p.event({event:{type:"session.created",properties:{info:{id:"overflow"}}}});await settle();const child=children[0];child.stdout.emit("data","x".repeat(8193));await settle();a(child.killed,"overflow did not stop child");a(child.stdout.destroyed,"overflow did not release stdout immediately");const delivered=child.stdout.emits;child.stdout.emit("data","later");a(child.stdout.emits===delivered,"later stdout grew retained state");child.emit("close",1);await pending;`
+	path := filepath.Join(t.TempDir(), "memory-lifecycle-output-bound.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	if output, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("lifecycle output bound runtime: %v: %s", err, output)
+	}
+}
+
 func TestMemoryLifecyclePluginRuntimePendingStartsDoNotBecomeLive(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

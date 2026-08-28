@@ -3954,14 +3954,14 @@ export const VGXNESSMemoryLifecyclePlugin = async ({ directory }) => {
     const input = JSON.stringify({ schemaVersion: 1, operation, workspace: directory, ...payload })
     if (Buffer.byteLength(input) > MAX_INPUT_BYTES) return reject(new Error("VGXNESS lifecycle request exceeded its bound"))
     const child = spawn(VGXNESS_EXECUTABLE, ["memory", "hook", "--stdin"], { cwd: directory, shell: false, stdio: ["pipe", "pipe", "pipe"], env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, TMPDIR: process.env.TMPDIR, SystemRoot: process.env.SystemRoot } })
-    let stdout = "", stderrBytes = 0, settled = false, failure, cleanupTimer
+    let stdout = "", stdoutBytes = 0, stderrBytes = 0, settled = false, failure, cleanupTimer
     const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(timer); if (cleanupTimer) clearTimeout(cleanupTimer); error ? reject(error) : resolve(value) }
     const stop = () => { try { return child.kill("SIGKILL") !== false } catch { return false } }
     const release = () => { for (const stream of [child.stdin, child.stdout, child.stderr]) try { stream?.destroy?.() } catch {}; try { child.unref?.() } catch {} }
-    const fail = error => { if (settled || failure) return; failure = error; cleanupTimer = setTimeout(() => { release(); finish(failure) }, CLEANUP_MS); if (!stop()) try { child.unref?.() } catch {} }
+    const fail = error => { if (settled || failure) return; failure = error; if (!stop()) try { child.unref?.() } catch {}; release(); cleanupTimer = setTimeout(() => { release(); finish(failure) }, CLEANUP_MS) }
     const timer = setTimeout(() => fail(new Error("VGXNESS lifecycle timed out")), TIMEOUT_MS)
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8")
-    child.stdout.on("data", chunk => { stdout += chunk; if (Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) fail(new Error("VGXNESS lifecycle response exceeded its bound")) })
+    child.stdout.on("data", chunk => { if (settled || failure) return; const chunkBytes = Buffer.byteLength(chunk); if (stdoutBytes + chunkBytes > MAX_OUTPUT_BYTES) return fail(new Error("VGXNESS lifecycle response exceeded its bound")); stdoutBytes += chunkBytes; stdout += chunk })
     child.stderr.on("data", chunk => { stderrBytes += Buffer.byteLength(chunk); if (stderrBytes > MAX_OUTPUT_BYTES) fail(new Error("VGXNESS lifecycle failure exceeded its bound")) })
     child.on("error", () => fail(new Error("VGXNESS lifecycle unavailable")))
     child.on("close", code => { if (settled) return; if (failure) return finish(failure); if (code !== 0) return finish(new Error("VGXNESS lifecycle failed")); try { const result = JSON.parse(stdout); if (result?.schemaVersion !== 1) throw new Error(); finish(undefined, result) } catch { finish(new Error("VGXNESS lifecycle response is invalid")) } })

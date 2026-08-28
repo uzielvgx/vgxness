@@ -94,7 +94,7 @@ Memory access is explicit through MCP tools. Recall is intent-triggered when the
 
 Reviewers may search and read memory as non-authoritative context. They cannot save or forget. Memory never proves a candidate diff and never overrides exact source, tests, or Git evidence.
 
-Current setup installs the exact auto-discovered lifecycle plugin only, without an `opencode.json` plugin entry. It starts top-level lifecycle records, adds one bounded isolated context handoff, checkpoints compaction without transcript capture, observes exact summary completion without tool arguments, results, or status, and ends records as completed or interrupted. It does not install shell or Git hooks, automatic memory injection, broad observability, or another plugin. Plugin v1–v10 material is historical retirement evidence only; see [Safe hooks](hooks.md).
+Current setup installs the exact auto-discovered lifecycle plugin only, without an `opencode.json` plugin entry. It starts top-level lifecycle records and, at the first eligible top-level system transform, its only automatic memory injection is one bounded same-project prior completed handoff as untrusted data, never instructions; it checkpoints compaction without transcript capture, observes exact summary completion without tool arguments, results, or status, and ends records as completed or interrupted. It does not install shell or Git hooks, broadly inject recent memories or transcripts into every prompt, capture transcript content in lifecycle events, add broad observability, or add another plugin. Plugin v1–v10 material is historical retirement evidence only; see [Safe hooks](hooks.md).
 
 Engram is not part of this integration.
 

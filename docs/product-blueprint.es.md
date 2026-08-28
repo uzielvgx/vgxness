@@ -39,7 +39,7 @@ Setup previsualiza cambios, exige confirmación, instala el launcher y 17 artefa
 
 ## No objetivos
 
-- No hay plugins adicionales, hooks shell o Git, captura de transcripciones, observabilidad amplia, inyección automática de memoria ni identidad de sesión fuera del plugin de ciclo de vida administrado.
+- No hay plugins adicionales, hooks shell o Git, compactación automática, observabilidad amplia ni identidad de sesión fuera del plugin de ciclo de vida administrado. VGXNESS no inyecta ampliamente memorias recientes ni transcripciones en cada prompt; en la primera transformación de sistema de nivel superior elegible, la única inyección automática de memoria del plugin de ciclo de vida administrado es una única transferencia acotada, del mismo proyecto y previamente completada, como datos no confiables y nunca como instrucciones. Los eventos de ciclo de vida no capturan contenido de transcripciones.
 - No se instalan hooks shell o Git.
 - MCP no obtiene autoridad de filesystem, ejecución, routing, delegación o ciclo.
 - No hay instalación automática de red/paquetes ni importación de bases de datos antiguas.

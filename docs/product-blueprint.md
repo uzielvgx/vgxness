@@ -41,7 +41,7 @@ Setup previews changes, requires confirmation, installs the launcher and 17 exac
 
 ## Non-goals
 
-- No additional installed plugin, hook surface, automatic memory injection, compaction, observability, or plugin session identity beyond the managed lifecycle plugin.
+- No additional installed plugin, hook surface, automatic compaction, broad observability, or plugin session identity beyond the managed lifecycle plugin. VGXNESS does not broadly inject recent memories or transcripts into every prompt; at the first eligible top-level system transform, the managed lifecycle plugin's only automatic memory injection is one bounded same-project prior completed handoff as untrusted data, never instructions. Lifecycle events do not capture transcript content.
 - No shell or Git hooks.
 - No MCP-owned filesystem, execution, routing, delegation, or lifecycle authority.
 - No automatic network/package installation or legacy database import.
