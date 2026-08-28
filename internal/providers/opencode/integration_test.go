@@ -146,7 +146,7 @@ func writeManagedLauncher(root string) (string, error) {
 	}
 	dataDir := filepath.Join(root, "data")
 	activePath := launcher.VersionPath(dataDir, digest)
-	launcherPath := filepath.Join(root, "bin", "vgxness")
+	launcherPath := filepath.Join(root, "bin", filepath.Base(activePath))
 	for _, path := range []string{filepath.Dir(activePath), filepath.Dir(launcherPath)} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return "", err
