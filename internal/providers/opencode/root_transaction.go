@@ -19,6 +19,8 @@ type rootTransaction struct {
 	root               *os.Root
 	beforeRemoveRename func(string)
 	afterRemoveRename  func(string, string)
+	afterPublishLink   func(string) error
+	beforePublishSync  func(string) error
 }
 
 type rootFile struct {
@@ -34,10 +36,41 @@ type rootStagedArtifact struct {
 	content       []byte
 }
 
+type rootPublicationState uint8
+
+const (
+	rootPublicationNone rootPublicationState = iota
+	rootPublicationActive
+	rootPublicationPending
+)
+
+// rootPublication records whether a post-link failure was fully compensated.
+// info is retained for pending publication so its owner can remove only the
+// expected hard-link identity.
+type rootPublication struct {
+	state rootPublicationState
+	info  os.FileInfo
+}
+
 type rootArtifactBackup struct {
 	name    string
 	info    os.FileInfo
 	content []byte
+	hold    *rootIdentityHold
+}
+
+// rootIdentityHold keeps the observed file allocated while its pathname is
+// used as a rollback anchor. This prevents a removed inode from being reused
+// and mistaken for the observed file.
+type rootIdentityHold struct{ file *os.File }
+
+func (hold *rootIdentityHold) release() error {
+	if hold == nil || hold.file == nil {
+		return nil
+	}
+	err := hold.file.Close()
+	hold.file = nil
+	return err
 }
 
 func (file *rootFile) Name() string { return file.name }
@@ -331,27 +364,49 @@ func writeAndSyncRootFile(file *rootFile, content []byte) error {
 	return err
 }
 
-func (transaction *rootTransaction) PublishStaged(staged rootStagedArtifact, name string) (os.FileInfo, error) {
+func (transaction *rootTransaction) PublishStaged(staged rootStagedArtifact, name string) (rootPublication, error) {
 	if !validRelative(name) {
-		return nil, fmt.Errorf("invalid relative name")
+		return rootPublication{}, fmt.Errorf("invalid relative name")
 	}
 	data, info, err := transaction.ReadRegularInfo(staged.temporary)
 	if err != nil || staged.temporaryInfo == nil || !os.SameFile(info, staged.temporaryInfo) || !bytes.Equal(data, staged.content) {
-		return nil, fmt.Errorf("staged artifact changed before publish")
+		return rootPublication{}, fmt.Errorf("staged artifact changed before publish")
 	}
 	if err := transaction.root.Link(staged.temporary, name); err != nil {
-		return nil, err
+		return rootPublication{}, err
+	}
+	if transaction.afterPublishLink != nil {
+		if err := transaction.afterPublishLink(name); err != nil {
+			return transaction.compensatePublication(name, info, staged.content, err)
+		}
 	}
 	published, publishedInfo, err := transaction.ReadRegularInfo(name)
 	if err != nil || !bytes.Equal(published, staged.content) || !os.SameFile(info, publishedInfo) {
-		cleanupErr := transaction.RemoveExact(name, info, staged.content)
-		return nil, errors.Join(fmt.Errorf("published artifact changed during publish"), cleanupErr)
+		return transaction.compensatePublication(name, info, staged.content, fmt.Errorf("published artifact changed during publish"))
+	}
+	if transaction.beforePublishSync != nil {
+		if err := transaction.beforePublishSync(name); err != nil {
+			return transaction.compensatePublication(name, info, staged.content, err)
+		}
 	}
 	if err := transaction.SyncDirectory(filepath.Dir(name)); err != nil {
-		cleanupErr := transaction.RemoveExact(name, publishedInfo, staged.content)
-		return nil, errors.Join(err, cleanupErr)
+		return transaction.compensatePublication(name, info, staged.content, err)
 	}
-	return publishedInfo, nil
+	return rootPublication{state: rootPublicationActive, info: publishedInfo}, nil
+}
+
+func (transaction *rootTransaction) compensatePublication(name string, info os.FileInfo, content []byte, publishErr error) (rootPublication, error) {
+	if cleanupErr := transaction.RemoveExact(name, info, content); cleanupErr != nil {
+		return rootPublication{state: rootPublicationPending, info: info}, errors.Join(publishErr, cleanupErr)
+	}
+	return rootPublication{state: rootPublicationNone}, publishErr
+}
+
+func (transaction *rootTransaction) RollbackPendingPublication(publication rootPublication, name string, content []byte) error {
+	if publication.state != rootPublicationPending || publication.info == nil {
+		return fmt.Errorf("invalid recovery-pending publication")
+	}
+	return transaction.RemoveExact(name, publication.info, content)
 }
 
 func (transaction *rootTransaction) RemoveExact(name string, expected os.FileInfo, content []byte) error {
@@ -406,35 +461,23 @@ func (transaction *rootTransaction) Backup(name string, content []byte) (rootArt
 }
 
 func (transaction *rootTransaction) BackupIn(name, directory string, content []byte) (rootArtifactBackup, error) {
-	data, info, err := transaction.ReadRegularInfo(name)
+	data, info, hold, err := transaction.readRegularInfoHeld(name)
 	if err != nil || !bytes.Equal(data, content) {
-		return rootArtifactBackup{}, fmt.Errorf("artifact changed before backup")
+		return rootArtifactBackup{}, errors.Join(fmt.Errorf("artifact changed before backup"), hold.release())
 	}
 	temporary, err := transaction.CreateTempIn(directory, ".vgxness-previous-*.tmp")
 	if err != nil {
-		return rootArtifactBackup{}, err
+		return rootArtifactBackup{}, errors.Join(err, hold.release())
 	}
 	temporaryInfo, statErr := temporary.Stat()
 	closeErr := temporary.Close()
 	if statErr != nil || closeErr != nil || temporaryInfo == nil {
-		return rootArtifactBackup{}, fmt.Errorf("inspect backup placeholder")
+		return rootArtifactBackup{}, errors.Join(fmt.Errorf("inspect backup placeholder"), hold.release())
 	}
 	if err := transaction.RemoveExact(temporary.Name(), temporaryInfo, nil); err != nil {
-		return rootArtifactBackup{}, err
+		return rootArtifactBackup{}, errors.Join(err, hold.release())
 	}
-	if err := transaction.root.Link(name, temporary.Name()); err != nil {
-		return rootArtifactBackup{}, err
-	}
-	backupData, backupInfo, err := transaction.ReadRegularInfo(temporary.Name())
-	if err != nil || !bytes.Equal(backupData, content) || !os.SameFile(info, backupInfo) {
-		cleanupErr := transaction.RemoveExact(temporary.Name(), info, content)
-		return rootArtifactBackup{}, errors.Join(fmt.Errorf("backup changed while creating"), cleanupErr)
-	}
-	if err := transaction.SyncDirectory(directory); err != nil {
-		cleanupErr := transaction.RemoveExact(temporary.Name(), backupInfo, content)
-		return rootArtifactBackup{}, errors.Join(err, cleanupErr)
-	}
-	return rootArtifactBackup{name: temporary.Name(), info: backupInfo, content: append([]byte(nil), content...)}, nil
+	return transaction.linkHeldBackup(name, temporary.Name(), directory, info, hold, content)
 }
 
 // BackupAs creates a durable, caller-named hard-link backup within the held
@@ -444,61 +487,96 @@ func (transaction *rootTransaction) BackupAs(name, backupName string, content []
 	if !validRelative(name) || !validRelative(backupName) {
 		return rootArtifactBackup{}, fmt.Errorf("invalid relative name")
 	}
-	data, info, err := transaction.ReadRegularInfo(name)
+	data, info, hold, err := transaction.readRegularInfoHeld(name)
 	if err != nil || !bytes.Equal(data, content) {
-		return rootArtifactBackup{}, fmt.Errorf("artifact changed before backup")
+		return rootArtifactBackup{}, errors.Join(fmt.Errorf("artifact changed before backup"), hold.release())
 	}
 	if _, err := transaction.root.Lstat(backupName); !errors.Is(err, os.ErrNotExist) {
-		return rootArtifactBackup{}, fmt.Errorf("backup already exists")
+		return rootArtifactBackup{}, errors.Join(fmt.Errorf("backup already exists"), hold.release())
 	}
-	if err := transaction.root.Link(name, backupName); err != nil {
-		return rootArtifactBackup{}, err
-	}
-	backupData, backupInfo, err := transaction.ReadRegularInfo(backupName)
-	if err != nil || !bytes.Equal(backupData, content) || !os.SameFile(info, backupInfo) {
-		cleanupErr := transaction.RemoveExact(backupName, info, content)
-		return rootArtifactBackup{}, errors.Join(fmt.Errorf("backup changed while creating"), cleanupErr)
-	}
-	if err := transaction.SyncDirectory(filepath.Dir(backupName)); err != nil {
-		cleanupErr := transaction.RemoveExact(backupName, backupInfo, content)
-		return rootArtifactBackup{}, errors.Join(err, cleanupErr)
-	}
-	return rootArtifactBackup{name: backupName, info: backupInfo, content: append([]byte(nil), content...)}, nil
+	return transaction.linkHeldBackup(name, backupName, filepath.Dir(backupName), info, hold, content)
 }
 
 // Anchor creates a durable hard-link predecessor under the artifact's held
 // parent using the legacy reinstall anchor name pattern.
 func (transaction *rootTransaction) Anchor(name string, content []byte) (rootArtifactBackup, error) {
 	directory := filepath.Dir(name)
-	data, info, err := transaction.ReadRegularInfo(name)
+	data, info, hold, err := transaction.readRegularInfoHeld(name)
 	if err != nil || !bytes.Equal(data, content) {
-		return rootArtifactBackup{}, fmt.Errorf("artifact changed before anchor")
+		return rootArtifactBackup{}, errors.Join(fmt.Errorf("artifact changed before anchor"), hold.release())
 	}
 	temporary, err := transaction.CreateTempIn(directory, ".vgxness-reinstall-old-*.tmp")
 	if err != nil {
-		return rootArtifactBackup{}, err
+		return rootArtifactBackup{}, errors.Join(err, hold.release())
 	}
 	temporaryInfo, statErr := temporary.Stat()
 	closeErr := temporary.Close()
 	if statErr != nil || closeErr != nil || temporaryInfo == nil || transaction.RemoveExact(temporary.Name(), temporaryInfo, nil) != nil {
-		return rootArtifactBackup{}, fmt.Errorf("inspect anchor placeholder")
+		return rootArtifactBackup{}, errors.Join(fmt.Errorf("inspect anchor placeholder"), hold.release())
 	}
-	if err := transaction.root.Link(name, temporary.Name()); err != nil {
-		return rootArtifactBackup{}, err
-	}
-	anchor, anchorInfo, err := transaction.ReadRegularInfo(temporary.Name())
-	if err != nil || !bytes.Equal(anchor, content) || !os.SameFile(info, anchorInfo) {
-		cleanupErr := transaction.RemoveExact(temporary.Name(), info, content)
-		return rootArtifactBackup{}, errors.Join(fmt.Errorf("anchor changed while creating"), cleanupErr)
-	}
-	if err := transaction.SyncDirectory(directory); err != nil {
-		cleanupErr := transaction.RemoveExact(temporary.Name(), anchorInfo, content)
-		return rootArtifactBackup{}, errors.Join(err, cleanupErr)
-	}
-	return rootArtifactBackup{name: temporary.Name(), info: anchorInfo, content: append([]byte(nil), content...)}, nil
+	return transaction.linkHeldBackup(name, temporary.Name(), directory, info, hold, content)
 }
 
-func (transaction *rootTransaction) RestoreBackup(backup rootArtifactBackup, name string) error {
+func (transaction *rootTransaction) linkHeldBackup(source, name, directory string, info os.FileInfo, hold *rootIdentityHold, content []byte) (rootArtifactBackup, error) {
+	backup := rootArtifactBackup{name: name, info: info, content: append([]byte(nil), content...), hold: hold}
+	if err := transaction.root.Link(source, name); err != nil {
+		return rootArtifactBackup{}, errors.Join(err, hold.release())
+	}
+	data, backupInfo, err := transaction.ReadRegularInfo(name)
+	if err != nil || !bytes.Equal(data, content) || !backup.held(backupInfo) {
+		return rootArtifactBackup{}, errors.Join(fmt.Errorf("backup changed while creating"), transaction.discardHeldBackup(backup))
+	}
+	backup.info = backupInfo
+	if err := transaction.SyncDirectory(directory); err != nil {
+		return rootArtifactBackup{}, errors.Join(err, transaction.discardHeldBackup(backup))
+	}
+	return backup, nil
+}
+
+func (transaction *rootTransaction) discardHeldBackup(backup rootArtifactBackup) error {
+	return errors.Join(transaction.RemoveExact(backup.name, backup.info, backup.content), backup.hold.release())
+}
+
+func (transaction *rootTransaction) readRegularInfoHeld(name string) ([]byte, os.FileInfo, *rootIdentityHold, error) {
+	if !validRelative(name) {
+		return nil, nil, nil, fmt.Errorf("invalid relative name")
+	}
+	before, err := transaction.root.Lstat(name)
+	if err != nil || !before.Mode().IsRegular() || before.Size() > maxArtifactBytes {
+		return nil, nil, nil, fmt.Errorf("not a regular file: %w", err)
+	}
+	file, err := transaction.root.Open(name)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	fail := func(err error) ([]byte, os.FileInfo, *rootIdentityHold, error) {
+		return nil, nil, nil, errors.Join(err, file.Close())
+	}
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || opened.Size() > maxArtifactBytes || !os.SameFile(before, opened) {
+		return fail(fmt.Errorf("file changed while opening"))
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxArtifactBytes+1))
+	if err != nil || len(data) > maxArtifactBytes {
+		return fail(fmt.Errorf("read regular file: %w", err))
+	}
+	final, err := transaction.root.Lstat(name)
+	if err != nil || !final.Mode().IsRegular() || !os.SameFile(before, final) {
+		return fail(fmt.Errorf("file changed while reading"))
+	}
+	return data, final, &rootIdentityHold{file: file}, nil
+}
+
+func (transaction *rootTransaction) cleanupBackup(backup rootArtifactBackup) error {
+	return recoveryFailure("clean up root backup", errors.Join(transaction.RemoveExact(backup.name, backup.info, backup.content), backup.hold.release()))
+}
+
+func (transaction *rootTransaction) releaseBackup(backup rootArtifactBackup) error {
+	return recoveryFailure("release root backup", backup.hold.release())
+}
+
+func (transaction *rootTransaction) RestoreBackup(backup rootArtifactBackup, name string) (returnErr error) {
+	defer func() { returnErr = errors.Join(returnErr, backup.hold.release()) }()
 	if !validRelative(name) || !validRelative(backup.name) {
 		return fmt.Errorf("invalid relative name")
 	}
@@ -506,7 +584,7 @@ func (transaction *rootTransaction) RestoreBackup(backup rootArtifactBackup, nam
 		return fmt.Errorf("target exists before restore")
 	}
 	data, info, err := transaction.ReadRegularInfo(backup.name)
-	if err != nil || backup.info == nil || !os.SameFile(info, backup.info) || !bytes.Equal(data, backup.content) {
+	if err != nil || backup.info == nil || !os.SameFile(info, backup.info) || !bytes.Equal(data, backup.content) || !backup.held(info) {
 		return fmt.Errorf("backup changed before restore")
 	}
 	if err := transaction.root.Link(backup.name, name); err != nil {
@@ -515,17 +593,50 @@ func (transaction *rootTransaction) RestoreBackup(backup rootArtifactBackup, nam
 	if err := transaction.RemoveExact(backup.name, info, backup.content); err != nil {
 		return err
 	}
+	if err := transaction.SyncDirectory(filepath.Dir(name)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RestoreRetainedBackup restores a durable retained predecessor without
+// consuming its anchor. The retained marker continues to describe the anchor
+// after rollback, while the live identity hold is consumed by this attempt.
+func (transaction *rootTransaction) RestoreRetainedBackup(backup rootArtifactBackup, name string) (returnErr error) {
+	defer func() { returnErr = errors.Join(returnErr, backup.hold.release()) }()
+	if !validRelative(name) || !validRelative(backup.name) {
+		return fmt.Errorf("invalid relative name")
+	}
+	if _, err := transaction.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("target exists before restore")
+	}
+	data, info, err := transaction.ReadRegularInfo(backup.name)
+	if err != nil || backup.info == nil || !os.SameFile(info, backup.info) || !bytes.Equal(data, backup.content) || !backup.held(info) {
+		return fmt.Errorf("backup changed before restore")
+	}
+	if err := transaction.root.Link(backup.name, name); err != nil {
+		return err
+	}
+	restored, restoredInfo, err := transaction.ReadRegularInfo(name)
+	if err != nil || !os.SameFile(restoredInfo, info) || !bytes.Equal(restored, data) {
+		return fmt.Errorf("restored target changed during restore")
+	}
+	current, currentInfo, err := transaction.ReadRegularInfo(backup.name)
+	if err != nil || !os.SameFile(currentInfo, info) || !bytes.Equal(current, data) {
+		return fmt.Errorf("backup changed during restore")
+	}
 	return transaction.SyncDirectory(filepath.Dir(name))
 }
 
 // RestoreObservedAnchor restores an anchor whose content may have changed after
 // it was observed, but whose inode must still be the one originally anchored.
-func (transaction *rootTransaction) RestoreObservedAnchor(anchor rootArtifactBackup, name string) error {
+func (transaction *rootTransaction) RestoreObservedAnchor(anchor rootArtifactBackup, name string) (returnErr error) {
+	defer func() { returnErr = errors.Join(returnErr, anchor.hold.release()) }()
 	if !validRelative(name) || !validRelative(anchor.name) {
 		return fmt.Errorf("invalid relative name")
 	}
 	data, info, err := transaction.ReadRegularInfo(anchor.name)
-	if err != nil || anchor.info == nil || !os.SameFile(info, anchor.info) {
+	if err != nil || anchor.info == nil || !os.SameFile(info, anchor.info) || !anchor.held(info) {
 		return fmt.Errorf("anchor changed before restore")
 	}
 	if _, err := transaction.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
@@ -545,7 +656,18 @@ func (transaction *rootTransaction) RestoreObservedAnchor(anchor rootArtifactBac
 	if err := transaction.RemoveExact(anchor.name, info, data); err != nil {
 		return err
 	}
-	return transaction.SyncDirectory(filepath.Dir(name))
+	if err := transaction.SyncDirectory(filepath.Dir(name)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (backup rootArtifactBackup) held(info os.FileInfo) bool {
+	if backup.hold == nil || backup.hold.file == nil {
+		return false
+	}
+	held, err := backup.hold.file.Stat()
+	return err == nil && os.SameFile(held, info)
 }
 
 func (transaction *rootTransaction) RollbackPublished(staged rootStagedArtifact, name string, published os.FileInfo, backup *rootArtifactBackup) error {
@@ -562,7 +684,8 @@ func (transaction *rootTransaction) RollbackPublished(staged rootStagedArtifact,
 	return nil
 }
 
-func (transaction *rootTransaction) CleanupStaged(staged rootStagedArtifact) error {
+func (transaction *rootTransaction) CleanupStaged(staged rootStagedArtifact) (returnErr error) {
+	defer func() { returnErr = recoveryFailure("clean up staged root artifact", returnErr) }()
 	if staged.temporary != "" {
 		if _, err := transaction.root.Lstat(staged.temporary); err == nil {
 			if err := transaction.RemoveExact(staged.temporary, staged.temporaryInfo, staged.content); err != nil {
@@ -625,6 +748,9 @@ func (transaction *rootTransaction) SyncDirectory(name string) error {
 	}
 	if err := transaction.requireDirectory(name); err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
 	}
 	directory, err := transaction.root.Open(name)
 	if err != nil {

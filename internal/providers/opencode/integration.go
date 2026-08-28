@@ -367,11 +367,12 @@ type installedArtifact struct {
 }
 
 type rootInstalledArtifact struct {
-	name      string
-	staged    rootStagedArtifact
-	published os.FileInfo
-	backup    *rootArtifactBackup
-	retained  bool
+	name        string
+	staged      rootStagedArtifact
+	published   os.FileInfo
+	publication rootPublication
+	backup      *rootArtifactBackup
+	retained    bool
 }
 
 type rootRetiredArtifact struct {
@@ -620,11 +621,11 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 			returnErr = errors.Join(returnErr, recoveryErr)
 		} else {
 			for _, item := range retired {
-				returnErr = errors.Join(returnErr, root.RemoveExact(item.backup.name, item.backup.info, item.backup.content))
+				returnErr = errors.Join(returnErr, root.cleanupBackup(item.backup))
 			}
 			for _, item := range created {
 				if item.backup != nil {
-					returnErr = errors.Join(returnErr, root.RemoveExact(item.backup.name, item.backup.info, item.backup.content))
+					returnErr = errors.Join(returnErr, root.cleanupBackup(*item.backup))
 				}
 				returnErr = errors.Join(returnErr, root.CleanupStaged(item.staged))
 			}
@@ -686,11 +687,14 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 				return integration.Result{}, err
 			}
 		}
-		published, publishErr := root.PublishStaged(installed.staged, installed.name)
+		publication, publishErr := root.PublishStaged(installed.staged, installed.name)
 		if publishErr != nil {
+			if publication.state == rootPublicationPending {
+				installed.publication = publication
+			}
 			return integration.Result{}, fmt.Errorf("publish OpenCode reinstall artifact: %w", publishErr)
 		}
-		installed.published = published
+		installed.published = publication.info
 		if service.reinstallCheckpoint != nil {
 			if err := service.reinstallCheckpoint(reinstallCheckpointPublished, item.path); err != nil {
 				return integration.Result{}, err
@@ -1046,17 +1050,15 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 	rollback := true
 	defer func() {
 		if rollback {
-			for index := len(retired) - 1; index >= 0; index-- {
-				returnErr = errors.Join(returnErr, root.RestoreBackup(retired[index].backup, retired[index].name))
-			}
-			for index := len(created) - 1; index >= 0; index-- {
-				returnErr = errors.Join(returnErr, rollbackRootInstalledArtifact(root, created[index]))
-			}
+			returnErr = errors.Join(returnErr, rollbackRootInstall(root, retired, created))
 		} else {
 			for _, item := range retired {
-				returnErr = errors.Join(returnErr, root.RemoveExact(item.backup.name, item.backup.info, item.backup.content))
+				returnErr = errors.Join(returnErr, root.cleanupBackup(item.backup))
 			}
 			for _, item := range created {
+				if item.retained && item.backup != nil {
+					returnErr = errors.Join(returnErr, root.releaseBackup(*item.backup))
+				}
 				returnErr = errors.Join(returnErr, root.CleanupStaged(item.staged))
 			}
 		}
@@ -1105,7 +1107,29 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	if err := service.validateMutableLauncher(); err != nil {
 		return integration.Result{}, err
 	}
-	if pending, err := service.ReinstallPending(ctx, options); err != nil {
+	configDirectory, err := integrationConfigDirectory(options)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	root, err := openRootTransaction(configDirectory, false)
+	if errors.Is(err, os.ErrNotExist) {
+		state, inspectErr := service.inspect(ctx, options)
+		if inspectErr != nil {
+			return integration.Result{}, inspectErr
+		}
+		if state.result.State != integration.StateAbsent {
+			return integration.Result{}, fmt.Errorf("%w: OpenCode config root appeared during preflight", integration.ErrConflict)
+		}
+		return state.result, nil
+	}
+	if err != nil {
+		return integration.Result{}, fmt.Errorf("%w: open OpenCode config root: %v", integration.ErrConflict, err)
+	}
+	defer func() { returnErr = errors.Join(returnErr, root.Close()) }()
+	if service.afterUninstallRoot != nil {
+		service.afterUninstallRoot(root)
+	}
+	if pending, err := service.reinstallPendingAtRoot(ctx, options, root); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, integration.ErrInvalid) {
 			return integration.Result{}, err
 		}
@@ -1117,6 +1141,10 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	if err != nil {
 		return integration.Result{}, err
 	}
+	held, err := root.HeldAtPath()
+	if err != nil || !held {
+		return integration.Result{}, fmt.Errorf("%w: OpenCode config root changed after preflight", integration.ErrConflict)
+	}
 	if state.result.State == integration.StateAbsent {
 		return state.result, nil
 	}
@@ -1125,22 +1153,6 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	}
 	if err := ctx.Err(); err != nil {
 		return integration.Result{}, err
-	}
-	configDirectory, err := integrationConfigDirectory(options)
-	if err != nil {
-		return integration.Result{}, err
-	}
-	root, err := openRootTransaction(configDirectory, false)
-	if err != nil {
-		return integration.Result{}, fmt.Errorf("%w: open OpenCode config root: %v", integration.ErrConflict, err)
-	}
-	defer func() { returnErr = errors.Join(returnErr, root.Close()) }()
-	if service.afterUninstallRoot != nil {
-		service.afterUninstallRoot(root)
-	}
-	held, err := root.HeldAtPath()
-	if err != nil || !held {
-		return integration.Result{}, fmt.Errorf("%w: OpenCode config root changed after preflight", integration.ErrConflict)
 	}
 	backupDirectory := ".vgxness-backups"
 	if err := root.EnsureDirectory(backupDirectory); err != nil {
@@ -1275,9 +1287,12 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	}
 	rollback = false
 	for _, item := range retired {
-		returnErr = errors.Join(returnErr, recoveryFailure("clean up retired OpenCode artifact", root.RemoveExact(item.backup.name, item.backup.info, item.backup.content)))
+		returnErr = errors.Join(returnErr, recoveryFailure("clean up retired OpenCode artifact", root.cleanupBackup(item.backup)))
 	}
 	returnErr = errors.Join(returnErr, recoveryFailure("clean up default-agent predecessor", defaultChange.cleanup(root)))
+	for _, item := range backups {
+		returnErr = errors.Join(returnErr, recoveryFailure("release uninstalled OpenCode backup", root.releaseBackup(item.backup)))
+	}
 	state.result.State = integration.StateAbsent
 	state.result.Changed = len(backups) != 0 || len(retired) != 0 || defaultChange.replacement != nil || defaultChange.removal != nil
 	state.result.RestartRequired = state.result.Changed
@@ -1381,13 +1396,18 @@ func replaceRootArtifact(ctx context.Context, root *rootTransaction, name string
 	}
 	installed.backup = &anchor
 	if err := root.RemoveExact(name, anchor.info, current); err != nil {
-		return rootInstalledArtifact{}, errors.Join(err, root.CleanupStaged(staged))
-	}
-	published, err := root.PublishStaged(staged, name)
-	if err != nil {
 		return rootInstalledArtifact{}, errors.Join(err, recoveryFailure("restore default-agent configuration", root.RestoreObservedAnchor(anchor, name)), recoveryFailure("clean up default-agent staging", root.CleanupStaged(staged)))
 	}
-	installed.published = published
+	publication, err := root.PublishStaged(staged, name)
+	if err != nil {
+		if publication.state == rootPublicationPending {
+			if rollbackErr := root.RollbackPendingPublication(publication, name, staged.content); rollbackErr != nil {
+				return rootInstalledArtifact{}, errors.Join(err, recoveryFailure("remove uncertain default-agent publication", rollbackErr), fmt.Errorf("%w: default-agent predecessor anchor retained at %q", integration.ErrRecovery, filepath.Join(root.path, anchor.name)), root.releaseBackup(anchor), recoveryFailure("clean up default-agent staging", root.CleanupStaged(staged)))
+			}
+		}
+		return rootInstalledArtifact{}, errors.Join(err, recoveryFailure("restore default-agent configuration", root.RestoreObservedAnchor(anchor, name)), recoveryFailure("clean up default-agent staging", root.CleanupStaged(staged)))
+	}
+	installed.published = publication.info
 	return installed, nil
 }
 
@@ -1405,12 +1425,12 @@ func (change rootDefaultAgentUninstall) cleanup(root *rootTransaction) error {
 	if change.replacement != nil {
 		var err error
 		if change.replacement.backup != nil {
-			err = errors.Join(err, root.RemoveExact(change.replacement.backup.name, change.replacement.backup.info, change.replacement.backup.content))
+			err = errors.Join(err, root.cleanupBackup(*change.replacement.backup))
 		}
 		return errors.Join(err, root.CleanupStaged(change.replacement.staged))
 	}
 	if change.removal != nil {
-		return root.RemoveExact(change.removal.backup.name, change.removal.backup.info, change.removal.backup.content)
+		return root.cleanupBackup(change.removal.backup)
 	}
 	return nil
 }
@@ -2536,27 +2556,74 @@ func installRootArtifact(ctx context.Context, root *rootTransaction, name string
 		}
 		installed.backup = &backup
 		if err := persistRootRetainedPredecessor(root, name, backup, item.prior); err != nil {
-			return rootInstalledArtifact{}, errors.Join(retainedPredecessorPersistError(filepath.Join(root.path, "vgxness", retainedPredecessorDirectory), filepath.Join(root.path, backup.name), err), root.CleanupStaged(staged))
+			return rootInstalledArtifact{}, errors.Join(retainedPredecessorPersistError(filepath.Join(root.path, "vgxness", retainedPredecessorDirectory), filepath.Join(root.path, backup.name), err), root.releaseBackup(backup), root.CleanupStaged(staged))
 		}
 		installed.retained = true
 		if err := root.RemoveExact(name, backup.info, item.prior); err != nil {
-			return rootInstalledArtifact{}, errors.Join(fmt.Errorf("remove OpenCode integration predecessor: %w", err), root.CleanupStaged(staged))
+			return rootInstalledArtifact{}, errors.Join(fmt.Errorf("remove OpenCode integration predecessor: %w", err), root.releaseBackup(backup), root.CleanupStaged(staged))
 		}
 	}
-	published, err := root.PublishStaged(staged, name)
+	publication, err := root.PublishStaged(staged, name)
 	if err != nil {
-		if installed.backup != nil {
-			_ = root.RestoreBackup(*installed.backup, name)
+		var recoveryErr error
+		if publication.state == rootPublicationPending {
+			if rollbackErr := root.RollbackPendingPublication(publication, name, staged.content); rollbackErr != nil {
+				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove uncertain OpenCode integration publication", rollbackErr))
+				if installed.backup != nil {
+					recoveryErr = errors.Join(recoveryErr, root.releaseBackup(*installed.backup))
+				}
+				return rootInstalledArtifact{}, errors.Join(fmt.Errorf("publish OpenCode integration artifact: %w", err), recoveryErr, root.CleanupStaged(staged))
+			}
 		}
-		return rootInstalledArtifact{}, errors.Join(fmt.Errorf("publish OpenCode integration artifact: %w", err), root.CleanupStaged(staged))
+		if installed.backup != nil {
+			if installed.retained {
+				recoveryErr = recoveryFailure("restore retained OpenCode integration predecessor", root.RestoreRetainedBackup(*installed.backup, name))
+			} else {
+				recoveryErr = recoveryFailure("restore OpenCode integration predecessor", root.RestoreBackup(*installed.backup, name))
+			}
+		}
+		return rootInstalledArtifact{}, errors.Join(fmt.Errorf("publish OpenCode integration artifact: %w", err), recoveryErr, root.CleanupStaged(staged))
 	}
-	installed.published = published
+	installed.published = publication.info
 	return installed, nil
+}
+
+func rollbackRootInstall(root *rootTransaction, retired []rootRetiredArtifact, created []rootInstalledArtifact) error {
+	var recoveryErr error
+	for index := len(retired) - 1; index >= 0; index-- {
+		recoveryErr = errors.Join(recoveryErr, recoveryFailure("restore retired OpenCode artifact", root.RestoreBackup(retired[index].backup, retired[index].name)))
+	}
+	for index := len(created) - 1; index >= 0; index-- {
+		recoveryErr = errors.Join(recoveryErr, recoveryFailure("restore OpenCode integration artifact", rollbackRootInstalledArtifact(root, created[index])))
+	}
+	return recoveryErr
 }
 
 func rollbackRootInstalledArtifact(root *rootTransaction, item rootInstalledArtifact) error {
 	var err error
-	if item.published != nil {
+	if item.publication.state == rootPublicationPending {
+		if rollbackErr := root.RollbackPendingPublication(item.publication, item.name, item.staged.content); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+			if item.backup != nil {
+				err = errors.Join(err, root.releaseBackup(*item.backup))
+			}
+		} else if item.backup != nil {
+			if item.retained {
+				err = errors.Join(err, root.RestoreRetainedBackup(*item.backup, item.name))
+			} else {
+				err = errors.Join(err, root.RestoreBackup(*item.backup, item.name))
+			}
+		}
+	} else if item.published != nil && item.retained && item.backup != nil {
+		data, current, readErr := root.ReadRegularInfo(item.name)
+		if readErr != nil || !os.SameFile(current, item.published) || !bytes.Equal(data, item.staged.content) {
+			err = errors.Join(err, fmt.Errorf("published artifact changed before rollback"), root.releaseBackup(*item.backup))
+		} else if removeErr := root.RemoveExact(item.name, current, item.staged.content); removeErr != nil {
+			err = errors.Join(err, removeErr, root.releaseBackup(*item.backup))
+		} else {
+			err = errors.Join(err, root.RestoreRetainedBackup(*item.backup, item.name))
+		}
+	} else if item.published != nil {
 		err = errors.Join(err, root.RollbackPublished(item.staged, item.name, item.published, item.backup))
 	} else if item.backup != nil && !item.retained {
 		err = errors.Join(err, root.RestoreBackup(*item.backup, item.name))
@@ -2566,7 +2633,15 @@ func rollbackRootInstalledArtifact(root *rootTransaction, item rootInstalledArti
 
 func rollbackRootReinstalledArtifact(root *rootTransaction, item rootInstalledArtifact) error {
 	var err error
-	if item.published != nil {
+	if item.publication.state == rootPublicationPending {
+		if rollbackErr := root.RollbackPendingPublication(item.publication, item.name, item.staged.content); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+			if item.backup != nil {
+				err = errors.Join(err, root.releaseBackup(*item.backup))
+			}
+			return errors.Join(err, root.CleanupStaged(item.staged))
+		}
+	} else if item.published != nil {
 		err = errors.Join(err, root.RemoveExact(item.name, item.published, item.staged.content))
 	}
 	if item.backup != nil {

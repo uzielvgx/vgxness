@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -182,6 +183,7 @@ func TestRootTransactionRestoreObservedAnchor(t *testing.T) {
 		testutil.NoError(t, root.RestoreObservedAnchor(anchor, "artifact"))
 		data, info, err := root.ReadRegularInfo("artifact")
 		testutil.Require(t, err == nil && bytes.Equal(data, []byte("mutated")) && os.SameFile(info, anchor.info), "restored=%q err=%v", data, err)
+		testutil.Require(t, anchor.hold.file == nil, "anchor hold retained after successful restore")
 		_, err = root.Lstat(anchor.name)
 		testutil.Require(t, errors.Is(err, os.ErrNotExist), "anchor retained: %v", err)
 	})
@@ -196,6 +198,7 @@ func TestRootTransactionRestoreObservedAnchor(t *testing.T) {
 
 		err = root.RestoreObservedAnchor(anchor, "artifact")
 		testutil.Require(t, err != nil, "restored from replaced anchor")
+		testutil.Require(t, anchor.hold.file == nil, "anchor hold retained after failed restore")
 		data, err := root.ReadRegular(anchor.name)
 		testutil.Require(t, err == nil && bytes.Equal(data, []byte("competing anchor")), "anchor=%q err=%v", data, err)
 		_, err = root.Lstat("artifact")
@@ -211,6 +214,7 @@ func TestRootTransactionRestoreObservedAnchor(t *testing.T) {
 
 		err = root.RestoreObservedAnchor(anchor, "artifact")
 		testutil.Require(t, err != nil, "overwrote existing target")
+		testutil.Require(t, anchor.hold.file == nil, "anchor hold retained after target conflict")
 		data, err := root.ReadRegular("artifact")
 		testutil.Require(t, err == nil && bytes.Equal(data, []byte("competing target")), "target=%q err=%v", data, err)
 		data, err = root.ReadRegular(anchor.name)
@@ -223,8 +227,209 @@ func TestRootTransactionRestoreObservedAnchor(t *testing.T) {
 
 		err := root.RestoreObservedAnchor(anchor, "../outside")
 		testutil.Require(t, err != nil, "accepted escaping target")
+		testutil.Require(t, anchor.hold.file == nil, "anchor hold retained after invalid target")
 		data, err := root.ReadRegular(anchor.name)
 		testutil.Require(t, err == nil && bytes.Equal(data, []byte("original")), "anchor=%q err=%v", data, err)
+	})
+}
+
+func TestRootTransactionBackupHoldRelease(t *testing.T) {
+	newBackup := func(t *testing.T) (*rootTransaction, rootArtifactBackup) {
+		t.Helper()
+		root, err := openRootTransaction(t.TempDir(), false)
+		testutil.NoError(t, err)
+		file, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("original")))
+		backup, err := root.Backup("artifact", []byte("original"))
+		testutil.NoError(t, err)
+		return root, backup
+	}
+
+	t.Run("restore consumes hold on success", func(t *testing.T) {
+		root, backup := newBackup(t)
+		defer root.Close()
+		testutil.NoError(t, root.RemoveExact("artifact", backup.info, backup.content))
+		testutil.NoError(t, root.RestoreBackup(backup, "artifact"))
+		testutil.Require(t, backup.hold.file == nil, "backup hold retained after successful restore")
+	})
+
+	t.Run("restore consumes hold on target conflict", func(t *testing.T) {
+		root, backup := newBackup(t)
+		defer root.Close()
+		err := root.RestoreBackup(backup, "artifact")
+		testutil.Require(t, err != nil, "restored over existing target")
+		testutil.Require(t, backup.hold.file == nil, "backup hold retained after failed restore")
+	})
+
+	t.Run("cleanup consumes hold on exact-removal conflict", func(t *testing.T) {
+		root, backup := newBackup(t)
+		defer root.Close()
+		testutil.NoError(t, root.RemoveExact(backup.name, backup.info, backup.content))
+		file, err := root.CreateExclusive(backup.name, 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("competing backup")))
+		initiating := errors.New("initiating operation error")
+		err = errors.Join(initiating, root.cleanupBackup(backup))
+		testutil.Require(t, errors.Is(err, initiating) && errors.Is(err, integration.ErrRecovery), "cleanup err=%v", err)
+		testutil.Require(t, backup.hold.file == nil, "backup hold retained after failed cleanup")
+	})
+
+	t.Run("release classifies a held-close failure as recovery", func(t *testing.T) {
+		root, backup := newBackup(t)
+		defer root.Close()
+		testutil.NoError(t, backup.hold.file.Close())
+		err := root.releaseBackup(backup)
+		testutil.Require(t, errors.Is(err, integration.ErrRecovery), "release err=%v", err)
+		testutil.Require(t, backup.hold.file == nil, "backup hold retained after failed release")
+	})
+
+	t.Run("preserves an initiating error when cleanup succeeds", func(t *testing.T) {
+		root, backup := newBackup(t)
+		defer root.Close()
+		initiating := errors.New("initiating operation error")
+		err := errors.Join(initiating, root.cleanupBackup(backup))
+		testutil.Require(t, errors.Is(err, initiating) && !errors.Is(err, integration.ErrRecovery), "cleanup err=%v", err)
+		testutil.Require(t, backup.hold.file == nil, "backup hold retained after successful cleanup")
+	})
+}
+
+func TestRootTransactionCleanupStagedClassification(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	staged, err := root.StageArtifact("artifact", []byte("managed"), 0o600)
+	testutil.NoError(t, err)
+	foreign, err := root.CreateExclusive(filepath.Join(staged.staging, "retained"), 0o600)
+	testutil.NoError(t, err)
+	testutil.NoError(t, writeAndSyncRootFile(foreign, []byte("foreign")))
+
+	err = root.CleanupStaged(staged)
+	testutil.Require(t, errors.Is(err, integration.ErrRecovery), "cleanup err=%v", err)
+	testutil.NoError(t, root.Remove(filepath.Join(staged.staging, "retained")))
+	testutil.NoError(t, root.CleanupStaged(staged))
+}
+
+func TestRootTransactionRestoreRetainedBackup(t *testing.T) {
+	newRetained := func(t *testing.T) (*rootTransaction, rootArtifactBackup) {
+		t.Helper()
+		root, err := openRootTransaction(t.TempDir(), false)
+		testutil.NoError(t, err)
+		file, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("predecessor")))
+		anchorDirectory := filepath.Join("vgxness", retainedPredecessorDirectory, retainedAnchorDirectory)
+		testutil.NoError(t, root.EnsureDirectory(anchorDirectory))
+		backup, err := root.BackupIn("artifact", anchorDirectory, []byte("predecessor"))
+		testutil.NoError(t, err)
+		return root, backup
+	}
+
+	t.Run("restores while retaining anchor", func(t *testing.T) {
+		root, backup := newRetained(t)
+		defer root.Close()
+		testutil.NoError(t, root.RemoveExact("artifact", backup.info, backup.content))
+		testutil.NoError(t, root.RestoreRetainedBackup(backup, "artifact"))
+		testutil.Require(t, backup.hold.file == nil, "retained backup hold retained after restore")
+		target, targetInfo, err := root.ReadRegularInfo("artifact")
+		testutil.NoError(t, err)
+		anchor, anchorInfo, err := root.ReadRegularInfo(backup.name)
+		testutil.Require(t, err == nil && bytes.Equal(target, backup.content) && bytes.Equal(anchor, backup.content) && os.SameFile(targetInfo, anchorInfo), "retained restore target=%q anchor=%q err=%v", target, anchor, err)
+	})
+
+	t.Run("preserves target conflict and anchor", func(t *testing.T) {
+		root, backup := newRetained(t)
+		defer root.Close()
+		testutil.NoError(t, root.RemoveExact("artifact", backup.info, backup.content))
+		file, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("competing target")))
+		err = root.RestoreRetainedBackup(backup, "artifact")
+		testutil.Require(t, err != nil && backup.hold.file == nil, "retained conflict err=%v hold=%v", err, backup.hold.file)
+		target, err := root.ReadRegular("artifact")
+		testutil.NoError(t, err)
+		anchor, err := root.ReadRegular(backup.name)
+		testutil.Require(t, err == nil && bytes.Equal(target, []byte("competing target")) && bytes.Equal(anchor, backup.content), "target=%q anchor=%q err=%v", target, anchor, err)
+	})
+
+	t.Run("rollback retains marker and anchor", func(t *testing.T) {
+		root, backup := newRetained(t)
+		defer root.Close()
+		testutil.NoError(t, persistRootRetainedPredecessor(root, "artifact", backup, backup.content))
+		testutil.NoError(t, root.RemoveExact("artifact", backup.info, backup.content))
+		staged, err := root.StageArtifact("artifact", []byte("replacement"), 0o600)
+		testutil.NoError(t, err)
+		published, err := root.PublishStaged(staged, "artifact")
+		testutil.NoError(t, err)
+		testutil.NoError(t, rollbackRootInstalledArtifact(root, rootInstalledArtifact{name: "artifact", staged: staged, published: published.info, backup: &backup, retained: true}))
+		testutil.Require(t, backup.hold.file == nil, "retained backup hold retained after rollback")
+		target, err := root.ReadRegular("artifact")
+		testutil.NoError(t, err)
+		anchor, err := root.ReadRegular(backup.name)
+		testutil.Require(t, err == nil && bytes.Equal(target, backup.content) && bytes.Equal(anchor, backup.content), "target=%q anchor=%q err=%v", target, anchor, err)
+		inventoryRoot := root.path
+		if runtime.GOOS == "darwin" && strings.HasPrefix(inventoryRoot, "/private/var/") {
+			inventoryRoot = strings.TrimPrefix(inventoryRoot, "/private")
+		}
+		inventory, err := retainedPredecessorInventory(inventoryRoot)
+		testutil.Require(t, err == nil && inventory.evidenceCount == 1, "retained inventory=%+v err=%v", inventory, err)
+	})
+}
+
+func TestRollbackRootInstallClassification(t *testing.T) {
+	newRoot := func(t *testing.T) *rootTransaction {
+		t.Helper()
+		root, err := openRootTransaction(t.TempDir(), false)
+		testutil.NoError(t, err)
+		file, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("predecessor")))
+		return root
+	}
+
+	t.Run("successful cancellation rollback is not recovery", func(t *testing.T) {
+		root := newRoot(t)
+		defer root.Close()
+		backup, err := root.Backup("artifact", []byte("predecessor"))
+		testutil.NoError(t, err)
+		testutil.NoError(t, root.RemoveExact("artifact", backup.info, backup.content))
+		staged, err := root.StageArtifact("artifact", []byte("replacement"), 0o600)
+		testutil.NoError(t, err)
+		published, err := root.PublishStaged(staged, "artifact")
+		testutil.NoError(t, err)
+		err = errors.Join(context.Canceled, rollbackRootInstall(root, nil, []rootInstalledArtifact{{name: "artifact", staged: staged, published: published.info, backup: &backup}}))
+		testutil.Require(t, errors.Is(err, context.Canceled) && !errors.Is(err, integration.ErrRecovery), "rollback err=%v", err)
+	})
+
+	t.Run("retained conflict preserves evidence and is recovery", func(t *testing.T) {
+		root := newRoot(t)
+		defer root.Close()
+		anchorDirectory := filepath.Join("vgxness", retainedPredecessorDirectory, retainedAnchorDirectory)
+		testutil.NoError(t, root.EnsureDirectory(anchorDirectory))
+		backup, err := root.BackupIn("artifact", anchorDirectory, []byte("predecessor"))
+		testutil.NoError(t, err)
+		testutil.NoError(t, persistRootRetainedPredecessor(root, "artifact", backup, backup.content))
+		testutil.NoError(t, root.RemoveExact("artifact", backup.info, backup.content))
+		staged, err := root.StageArtifact("artifact", []byte("replacement"), 0o600)
+		testutil.NoError(t, err)
+		published, err := root.PublishStaged(staged, "artifact")
+		testutil.NoError(t, err)
+		testutil.NoError(t, root.RemoveExact("artifact", published.info, staged.content))
+		file, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("competing target")))
+		initiating := errors.New("injected operation error")
+		err = errors.Join(initiating, rollbackRootInstall(root, nil, []rootInstalledArtifact{{name: "artifact", staged: staged, published: published.info, backup: &backup, retained: true}}))
+		testutil.Require(t, errors.Is(err, initiating) && errors.Is(err, integration.ErrRecovery), "rollback err=%v", err)
+		target, targetErr := root.ReadRegular("artifact")
+		anchor, anchorErr := root.ReadRegular(backup.name)
+		testutil.Require(t, targetErr == nil && anchorErr == nil && bytes.Equal(target, []byte("competing target")) && bytes.Equal(anchor, backup.content), "target=%q targetErr=%v anchor=%q anchorErr=%v", target, targetErr, anchor, anchorErr)
+		inventoryRoot := root.path
+		if runtime.GOOS == "darwin" && strings.HasPrefix(inventoryRoot, "/private/var/") {
+			inventoryRoot = strings.TrimPrefix(inventoryRoot, "/private")
+		}
+		inventory, inventoryErr := retainedPredecessorInventory(inventoryRoot)
+		testutil.Require(t, inventoryErr == nil && inventory.evidenceCount == 1, "retained inventory=%+v err=%v", inventory, inventoryErr)
 	})
 }
 
@@ -250,8 +455,8 @@ func TestRootTransactionStagesNestedArtifactInRenamedRoot(t *testing.T) {
 	published, err := root.PublishStaged(staged, filepath.Join("nested", "artifact"))
 	testutil.NoError(t, err)
 	data, readInfo, err := root.ReadRegularInfo(filepath.Join("nested", "artifact"))
-	testutil.Require(t, err == nil && bytes.Equal(data, []byte("anchored")) && os.SameFile(published, readInfo), "published artifact=%q err=%v", data, err)
-	testutil.NoError(t, root.RollbackPublished(staged, filepath.Join("nested", "artifact"), published, nil))
+	testutil.Require(t, err == nil && bytes.Equal(data, []byte("anchored")) && os.SameFile(published.info, readInfo), "published artifact=%q err=%v", data, err)
+	testutil.NoError(t, root.RollbackPublished(staged, filepath.Join("nested", "artifact"), published.info, nil))
 	testutil.NoError(t, root.CleanupStaged(staged))
 	_, temporaryErr := root.Lstat(staged.temporary)
 	_, stagingErr := root.Lstat(staged.staging)
@@ -315,10 +520,213 @@ func TestRootTransactionStagedPublishDoesNotOverwriteAndPreservesConcurrentRepla
 	_, err = replacement.Write([]byte("concurrent"))
 	testutil.NoError(t, err)
 	testutil.NoError(t, replacement.Close())
-	err = root.RollbackPublished(staged, name, published, nil)
+	err = root.RollbackPublished(staged, name, published.info, nil)
 	data, readErr = root.ReadRegular(name)
 	testutil.Require(t, err != nil && readErr == nil && bytes.Equal(data, []byte("concurrent")), "concurrent replacement changed: rollback=%v data=%q read=%v", err, data, readErr)
 	testutil.NoError(t, root.CleanupStaged(staged))
+}
+
+func TestRootTransactionPublishReportsPostLinkCompensationState(t *testing.T) {
+	newPublish := func(t *testing.T) (*rootTransaction, rootStagedArtifact) {
+		t.Helper()
+		root, err := openRootTransaction(t.TempDir(), false)
+		testutil.NoError(t, err)
+		staged, err := root.StageArtifact("artifact", []byte("managed"), 0o600)
+		testutil.NoError(t, err)
+		return root, staged
+	}
+	t.Run("readback failure compensates", func(t *testing.T) {
+		root, staged := newPublish(t)
+		defer root.Close()
+		root.afterPublishLink = func(string) error { return errors.New("post-link readback failure") }
+		published, err := root.PublishStaged(staged, "artifact")
+		testutil.Require(t, err != nil && published.state == rootPublicationNone, "publication=%+v err=%v", published, err)
+		_, statErr := root.Lstat("artifact")
+		testutil.Require(t, errors.Is(statErr, os.ErrNotExist), "compensated artifact retained: %v", statErr)
+	})
+	t.Run("sync failure compensates", func(t *testing.T) {
+		root, staged := newPublish(t)
+		defer root.Close()
+		root.beforePublishSync = func(string) error { return errors.New("publication sync failure") }
+		published, err := root.PublishStaged(staged, "artifact")
+		testutil.Require(t, err != nil && published.state == rootPublicationNone, "publication=%+v err=%v", published, err)
+		_, statErr := root.Lstat("artifact")
+		testutil.Require(t, errors.Is(statErr, os.ErrNotExist), "compensated artifact retained: %v", statErr)
+	})
+	t.Run("concurrent replacement is recovery pending", func(t *testing.T) {
+		root, staged := newPublish(t)
+		defer root.Close()
+		root.afterPublishLink = func(name string) error {
+			_, info, err := root.ReadRegularInfo(name)
+			if err != nil {
+				return err
+			}
+			if err := root.RemoveExact(name, info, staged.content); err != nil {
+				return err
+			}
+			file, err := root.CreateExclusive(name, 0o600)
+			if err != nil {
+				return err
+			}
+			if err := writeAndSyncRootFile(file, []byte("competitor")); err != nil {
+				return err
+			}
+			return errors.New("post-link readback failure")
+		}
+		published, err := root.PublishStaged(staged, "artifact")
+		data, readErr := root.ReadRegular("artifact")
+		testutil.Require(t, err != nil && published.state == rootPublicationPending && published.info != nil && readErr == nil && bytes.Equal(data, []byte("competitor")), "publication=%+v err=%v data=%q read=%v", published, err, data, readErr)
+	})
+	t.Run("sync failure with competing replacement is recovery pending", func(t *testing.T) {
+		root, staged := newPublish(t)
+		defer root.Close()
+		publishErr := errors.New("publication sync failure")
+		compensationErr := errors.New("compensation replacement")
+		root.beforePublishSync = func(name string) error {
+			_, info, err := root.ReadRegularInfo(name)
+			if err != nil {
+				return err
+			}
+			if err := root.RemoveExact(name, info, staged.content); err != nil {
+				return err
+			}
+			file, err := root.CreateExclusive(name, 0o600)
+			if err != nil {
+				return err
+			}
+			if err := writeAndSyncRootFile(file, []byte("sync competitor")); err != nil {
+				return err
+			}
+			return errors.Join(publishErr, compensationErr)
+		}
+		publication, err := root.PublishStaged(staged, "artifact")
+		data, readErr := root.ReadRegular("artifact")
+		testutil.Require(t, publication.state == rootPublicationPending && publication.info != nil && errors.Is(err, publishErr) && errors.Is(err, compensationErr) && readErr == nil && bytes.Equal(data, []byte("sync competitor")), "publication=%+v err=%v data=%q read=%v", publication, err, data, readErr)
+	})
+}
+
+func TestInstallRootArtifactPendingPublicationOwnership(t *testing.T) {
+	newCompetitor := func(root *rootTransaction, content []byte, cause error) {
+		root.afterPublishLink = func(name string) error {
+			_, info, err := root.ReadRegularInfo(name)
+			testutil.NoError(t, err)
+			testutil.NoError(t, root.RemoveExact(name, info, content))
+			file, err := root.CreateExclusive(name, 0o600)
+			testutil.NoError(t, err)
+			testutil.NoError(t, writeAndSyncRootFile(file, []byte("competitor")))
+			return cause
+		}
+	}
+
+	t.Run("new artifact preserves competitor and cleans staging", func(t *testing.T) {
+		root, err := openRootTransaction(t.TempDir(), false)
+		testutil.NoError(t, err)
+		defer root.Close()
+		initiating := errors.New("new artifact post-link failure")
+		managed := []byte("managed")
+		newCompetitor(root, managed, initiating)
+		_, err = installRootArtifact(context.Background(), root, "artifact", artifact{content: managed})
+		data, readErr := root.ReadRegular("artifact")
+		entries, entriesErr := os.ReadDir(root.path)
+		testutil.Require(t, errors.Is(err, initiating) && errors.Is(err, integration.ErrRecovery) && readErr == nil && bytes.Equal(data, []byte("competitor")) && entriesErr == nil && len(entries) == 1 && entries[0].Name() == "artifact", "install err=%v data=%q read=%v entries=%v entriesErr=%v", err, data, readErr, entries, entriesErr)
+	})
+
+	t.Run("retained upgrade preserves predecessor evidence", func(t *testing.T) {
+		root, err := openRootTransaction(t.TempDir(), false)
+		testutil.NoError(t, err)
+		defer root.Close()
+		predecessor := []byte("predecessor")
+		file, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, predecessor))
+		initiating := errors.New("retained upgrade post-link failure")
+		managed := []byte("managed")
+		newCompetitor(root, managed, initiating)
+		_, err = installRootArtifact(context.Background(), root, "artifact", artifact{content: managed, prior: predecessor, upgrade: true})
+		data, readErr := root.ReadRegular("artifact")
+		inventoryRoot := root.path
+		if runtime.GOOS == "darwin" && strings.HasPrefix(inventoryRoot, "/private/var/") {
+			inventoryRoot = strings.TrimPrefix(inventoryRoot, "/private")
+		}
+		inventory, inventoryErr := retainedPredecessorInventory(inventoryRoot)
+		var anchor []byte
+		if len(inventory.markers) == 1 {
+			anchor, _ = os.ReadFile(inventory.markers[0].Anchor)
+		}
+		testutil.Require(t, errors.Is(err, initiating) && errors.Is(err, integration.ErrRecovery) && readErr == nil && bytes.Equal(data, []byte("competitor")) && inventoryErr == nil && inventory.evidenceCount == 1 && len(inventory.markers) == 1 && bytes.Equal(anchor, predecessor), "install err=%v data=%q read=%v inventory=%+v inventoryErr=%v anchor=%q", err, data, readErr, inventory, inventoryErr, anchor)
+	})
+}
+
+func TestRollbackRootReinstalledArtifactPendingPublicationOwnership(t *testing.T) {
+	newPending := func(t *testing.T) (*rootTransaction, rootInstalledArtifact, rootArtifactBackup) {
+		t.Helper()
+		root, err := openRootTransaction(t.TempDir(), false)
+		testutil.NoError(t, err)
+		file, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("predecessor")))
+		anchor, err := root.Anchor("artifact", []byte("predecessor"))
+		testutil.NoError(t, err)
+		testutil.NoError(t, root.RemoveExact("artifact", anchor.info, anchor.content))
+		staged, err := root.StageArtifact("artifact", []byte("managed"), 0o600)
+		testutil.NoError(t, err)
+		publication, err := root.PublishStaged(staged, "artifact")
+		testutil.NoError(t, err)
+		return root, rootInstalledArtifact{name: "artifact", staged: staged, publication: rootPublication{state: rootPublicationPending, info: publication.info}, backup: &anchor}, anchor
+	}
+
+	t.Run("successful cleanup restores predecessor", func(t *testing.T) {
+		root, item, anchor := newPending(t)
+		defer root.Close()
+		testutil.NoError(t, rollbackRootReinstalledArtifact(root, item))
+		data, readErr := root.ReadRegular("artifact")
+		_, anchorErr := root.Lstat(anchor.name)
+		testutil.Require(t, readErr == nil && bytes.Equal(data, []byte("predecessor")) && errors.Is(anchorErr, os.ErrNotExist) && anchor.hold.file == nil, "data=%q read=%v anchor=%v hold=%v", data, readErr, anchorErr, anchor.hold.file)
+	})
+
+	t.Run("failed cleanup preserves competitor and anchor", func(t *testing.T) {
+		root, item, anchor := newPending(t)
+		defer root.Close()
+		testutil.NoError(t, root.RemoveExact(item.name, item.publication.info, item.staged.content))
+		file, err := root.CreateExclusive(item.name, 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("competitor")))
+		err = rollbackRootReinstalledArtifact(root, item)
+		data, readErr := root.ReadRegular(item.name)
+		anchored, anchorErr := root.ReadRegular(anchor.name)
+		testutil.Require(t, err != nil && readErr == nil && bytes.Equal(data, []byte("competitor")) && anchorErr == nil && bytes.Equal(anchored, []byte("predecessor")) && anchor.hold.file == nil, "rollback err=%v data=%q read=%v anchor=%q anchorErr=%v hold=%v", err, data, readErr, anchored, anchorErr, anchor.hold.file)
+	})
+}
+
+func TestReplaceRootArtifactPendingPublicationPreservesAnchor(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	predecessor := []byte("predecessor")
+	file, err := root.CreateExclusive("artifact", 0o600)
+	testutil.NoError(t, err)
+	testutil.NoError(t, writeAndSyncRootFile(file, predecessor))
+	initiating := errors.New("default-agent post-link failure")
+	root.afterPublishLink = func(name string) error {
+		_, info, readErr := root.ReadRegularInfo(name)
+		testutil.NoError(t, readErr)
+		testutil.NoError(t, root.RemoveExact(name, info, []byte("managed")))
+		competitor, createErr := root.CreateExclusive(name, 0o600)
+		testutil.NoError(t, createErr)
+		testutil.NoError(t, writeAndSyncRootFile(competitor, []byte("competitor")))
+		return initiating
+	}
+	_, err = replaceRootArtifact(context.Background(), root, "artifact", []byte("managed"), predecessor)
+	data, readErr := root.ReadRegular("artifact")
+	entries, entriesErr := os.ReadDir(root.path)
+	anchorName := ""
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".vgxness-reinstall-old-") {
+			anchorName = entry.Name()
+		}
+	}
+	anchored, anchorErr := root.ReadRegular(anchorName)
+	testutil.Require(t, errors.Is(err, initiating) && errors.Is(err, integration.ErrRecovery) && anchorName != "" && errorContainsEquivalentPath(err, filepath.Join(root.path, anchorName)) && readErr == nil && bytes.Equal(data, []byte("competitor")) && anchorErr == nil && bytes.Equal(anchored, predecessor) && entriesErr == nil, "replace err=%v data=%q read=%v anchor=%q anchorErr=%v entries=%v entriesErr=%v", err, data, readErr, anchored, anchorErr, entries, entriesErr)
 }
 
 func TestRootTransactionRemoveExactPreservesReplacementDuringQuarantine(t *testing.T) {
@@ -426,7 +834,7 @@ func TestRootTransactionBacksUpRestoresAndRejectsEscapingArtifactPaths(t *testin
 	testutil.NoError(t, err)
 	published, err := root.PublishStaged(staged, name)
 	testutil.NoError(t, err)
-	testutil.NoError(t, root.RollbackPublished(staged, name, published, &backup))
+	testutil.NoError(t, root.RollbackPublished(staged, name, published.info, &backup))
 	data, err := root.ReadRegular(name)
 	testutil.Require(t, err == nil && bytes.Equal(data, []byte("original")), "rollback did not restore backup: %q err=%v", data, err)
 	testutil.NoError(t, root.CleanupStaged(staged))
@@ -481,6 +889,51 @@ func TestIntegrationUninstallRejectsRenamedRootRedirect(t *testing.T) {
 	entries, readErr := os.ReadDir(foreign)
 	_, originalErr := os.Stat(filepath.Join(renamed, "agents", managerAgentName))
 	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && len(entries) == 0 && originalErr == nil, "uninstall redirect err=%v foreign=%v original=%v", err, entries, originalErr)
+}
+
+func TestIntegrationUninstallRejectsRootReplacementDuringInspection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("renaming an open directory is unsupported on Windows")
+	}
+	parent := t.TempDir()
+	selected := filepath.Join(parent, "opencode")
+	original := filepath.Join(parent, "original")
+	service := managedIntegrationForTest(t)
+	options := integration.Options{ConfigDir: selected}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	originalManager, err := os.ReadFile(filepath.Join(selected, "agents", managerAgentName))
+	testutil.NoError(t, err)
+	replacementSentinel := []byte("replacement namespace")
+	service.afterDefaultAgentSnapshot = func() {
+		testutil.NoError(t, os.Rename(selected, original))
+		testutil.NoError(t, filepath.WalkDir(original, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			relative, err := filepath.Rel(original, path)
+			if err != nil {
+				return err
+			}
+			destination := filepath.Join(selected, relative)
+			if entry.IsDir() {
+				return os.MkdirAll(destination, 0o700)
+			}
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(destination, contents, 0o600)
+		}))
+		testutil.NoError(t, os.WriteFile(filepath.Join(selected, "replacement-sentinel"), replacementSentinel, 0o600))
+	}
+
+	_, err = service.Uninstall(context.Background(), options)
+	originalAfter, originalErr := os.ReadFile(filepath.Join(original, "agents", managerAgentName))
+	replacementAfter, replacementErr := os.ReadFile(filepath.Join(selected, "agents", managerAgentName))
+	sentinelAfter, sentinelErr := os.ReadFile(filepath.Join(selected, "replacement-sentinel"))
+	_, backupErr := os.Stat(filepath.Join(selected, ".vgxness-backups"))
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && originalErr == nil && bytes.Equal(originalAfter, originalManager) && replacementErr == nil && bytes.Equal(replacementAfter, originalManager) && sentinelErr == nil && bytes.Equal(sentinelAfter, replacementSentinel) && errors.Is(backupErr, os.ErrNotExist), "uninstall root replacement err=%v original=%q originalErr=%v replacement=%q replacementErr=%v sentinel=%q sentinelErr=%v backup=%v", err, originalAfter, originalErr, replacementAfter, replacementErr, sentinelAfter, sentinelErr, backupErr)
 }
 
 func TestIntegrationUninstallCancellationIsNotRecoveryFailure(t *testing.T) {
