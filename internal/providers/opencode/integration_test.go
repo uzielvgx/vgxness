@@ -68,6 +68,9 @@ type lifecycleFixtureEvent struct {
 // runLifecycleHookFixture implements only the sanitized stdin/stdout boundary
 // used below. It neither starts the application runtime nor retains payload text.
 func runLifecycleHookFixture(stdin io.Reader, stdout io.Writer) int {
+	if os.Getenv("VGXNESS_SLICE7_SECRET") != "" {
+		return 2
+	}
 	data, err := io.ReadAll(io.LimitReader(stdin, 65537))
 	if err != nil || len(data) == 0 || len(data) > 65536 {
 		return 2
@@ -4314,7 +4317,7 @@ func TestLifecycleE2EInstalledPluginWithCompiledHookFixture(t *testing.T) {
 	runner := filepath.Join(root, "run-lifecycle.mjs")
 	script := `import { pathToFileURL } from "node:url"
 const fail = message => { throw new Error(message) }
-if (process.env.VGXNESS_SLICE7_SECRET) fail("parent secret inherited")
+if (process.env.VGXNESS_SLICE7_SECRET !== "slice7-parent-secret-sentinel") fail("node runner secret missing")
 const { VGXNESSMemoryLifecyclePlugin } = await import(pathToFileURL(process.argv[2]).href)
 const session = async id => { const plugin = await VGXNESSMemoryLifecyclePlugin({ directory: process.argv[3] }); await plugin.event({ event: { type: "session.created", properties: { info: { id } } } }); return plugin }
 const deleted = (plugin, id) => plugin.event({ event: { type: "session.deleted", properties: { info: { id } } } })
@@ -4337,7 +4340,7 @@ const failing = await session("failing"); await deleted(failing, "failing")
 	runnerContext, cancel := context.WithTimeout(context.Background(), nodeRunnerTimeout)
 	defer cancel()
 	command := exec.CommandContext(runnerContext, node, runner, pluginPath, workspace)
-	command.Env = []string{"HOME=" + homeDirectory, "USERPROFILE=" + homeDirectory, "TMPDIR=" + stateDirectory}
+	command.Env = []string{"HOME=" + homeDirectory, "USERPROFILE=" + homeDirectory, "TMPDIR=" + stateDirectory, "VGXNESS_SLICE7_SECRET=" + secretSentinel}
 	if systemRoot, present := os.LookupEnv("SystemRoot"); present && systemRoot != "" {
 		command.Env = append(command.Env, "SystemRoot="+systemRoot)
 	}
