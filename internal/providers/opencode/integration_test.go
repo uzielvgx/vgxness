@@ -87,6 +87,410 @@ func writeManagedLauncher(root string) (string, error) {
 	return launcherPath, nil
 }
 
+func TestRootTransactionAnchorsRenamedSelectedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	selected := filepath.Join(parent, "selected")
+	renamed := filepath.Join(parent, "renamed")
+	foreign := filepath.Join(parent, "foreign")
+	for _, directory := range []string{selected, foreign} {
+		testutil.NoError(t, os.Mkdir(directory, 0o700))
+	}
+
+	root, err := openRootTransaction(selected, false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	relative, err := root.Relative(filepath.Join(selected, "artifact"))
+	testutil.NoError(t, err)
+	testutil.Require(t, relative == "artifact", "relative=%q", relative)
+	testutil.NoError(t, os.Rename(selected, renamed))
+	testutil.NoError(t, os.Symlink(foreign, selected))
+
+	temporary, err := root.CreateTemp(".artifact-*")
+	testutil.NoError(t, err)
+	_, err = temporary.WriteString("anchored")
+	testutil.NoError(t, err)
+	testutil.NoError(t, temporary.Close())
+	testutil.NoError(t, root.Publish(temporary.Name(), "artifact"))
+
+	contents, err := root.ReadRegular("artifact")
+	testutil.NoError(t, err)
+	testutil.Require(t, string(contents) == "anchored", "contents=%q", contents)
+	contents, err = os.ReadFile(filepath.Join(renamed, "artifact"))
+	testutil.NoError(t, err)
+	testutil.Require(t, string(contents) == "anchored", "renamed contents=%q", contents)
+	_, err = os.Lstat(filepath.Join(foreign, "artifact"))
+	testutil.Require(t, errors.Is(err, os.ErrNotExist), "foreign storage modified: %v", err)
+}
+
+func TestRootTransactionRejectsSymlinkComponentsAndEscapes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	created := filepath.Join(parent, "created", "selected")
+	createdRoot, err := openRootTransaction(created, true)
+	testutil.NoError(t, err)
+	testutil.NoError(t, createdRoot.Close())
+	info, err := os.Stat(created)
+	testutil.NoError(t, err)
+	testutil.Require(t, info.IsDir(), "created root is not a directory")
+	foreign := filepath.Join(parent, "foreign")
+	testutil.NoError(t, os.Mkdir(foreign, 0o700))
+	testutil.NoError(t, os.Symlink(foreign, filepath.Join(parent, "link")))
+	_, err = openRootTransaction(filepath.Join(parent, "link", "selected"), true)
+	testutil.Require(t, err != nil, "opened selected root through symlink")
+
+	selected := filepath.Join(parent, "selected")
+	testutil.NoError(t, os.Mkdir(selected, 0o700))
+	root, err := openRootTransaction(selected, false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	for _, path := range []string{"../escape", filepath.Join(selected, "..", "escape"), filepath.Join(parent, "escape")} {
+		_, err := root.Relative(path)
+		testutil.Require(t, err != nil, "accepted escaping path %q", path)
+	}
+	_, err = root.ReadRegular(".")
+	testutil.Require(t, err != nil, "accepted root as a regular filename")
+}
+
+func TestRootTransactionRestoreObservedAnchor(t *testing.T) {
+	newAnchor := func(t *testing.T) (*rootTransaction, rootArtifactBackup) {
+		t.Helper()
+		root, err := openRootTransaction(t.TempDir(), false)
+		testutil.NoError(t, err)
+		artifact, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(artifact, []byte("original")))
+		_, info, err := root.ReadRegularInfo("artifact")
+		testutil.NoError(t, err)
+		anchor, err := root.Anchor("artifact", []byte("original"))
+		testutil.NoError(t, err)
+		testutil.NoError(t, root.RemoveExact("artifact", info, []byte("original")))
+		return root, anchor
+	}
+
+	t.Run("restores current bytes when anchor inode is unchanged", func(t *testing.T) {
+		root, anchor := newAnchor(t)
+		defer root.Close()
+		file, err := root.root.OpenFile(anchor.name, os.O_WRONLY|os.O_TRUNC, 0)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(&rootFile{File: file, name: anchor.name}, []byte("mutated")))
+
+		testutil.NoError(t, root.RestoreObservedAnchor(anchor, "artifact"))
+		data, info, err := root.ReadRegularInfo("artifact")
+		testutil.Require(t, err == nil && bytes.Equal(data, []byte("mutated")) && os.SameFile(info, anchor.info), "restored=%q err=%v", data, err)
+		_, err = root.Lstat(anchor.name)
+		testutil.Require(t, errors.Is(err, os.ErrNotExist), "anchor retained: %v", err)
+	})
+
+	t.Run("rejects replaced anchor and preserves competing bytes", func(t *testing.T) {
+		root, anchor := newAnchor(t)
+		defer root.Close()
+		testutil.NoError(t, root.RemoveExact(anchor.name, anchor.info, []byte("original")))
+		file, err := root.CreateExclusive(anchor.name, 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("competing anchor")))
+
+		err = root.RestoreObservedAnchor(anchor, "artifact")
+		testutil.Require(t, err != nil, "restored from replaced anchor")
+		data, err := root.ReadRegular(anchor.name)
+		testutil.Require(t, err == nil && bytes.Equal(data, []byte("competing anchor")), "anchor=%q err=%v", data, err)
+		_, err = root.Lstat("artifact")
+		testutil.Require(t, errors.Is(err, os.ErrNotExist), "target created: %v", err)
+	})
+
+	t.Run("preserves an existing target", func(t *testing.T) {
+		root, anchor := newAnchor(t)
+		defer root.Close()
+		file, err := root.CreateExclusive("artifact", 0o600)
+		testutil.NoError(t, err)
+		testutil.NoError(t, writeAndSyncRootFile(file, []byte("competing target")))
+
+		err = root.RestoreObservedAnchor(anchor, "artifact")
+		testutil.Require(t, err != nil, "overwrote existing target")
+		data, err := root.ReadRegular("artifact")
+		testutil.Require(t, err == nil && bytes.Equal(data, []byte("competing target")), "target=%q err=%v", data, err)
+		data, err = root.ReadRegular(anchor.name)
+		testutil.Require(t, err == nil && bytes.Equal(data, []byte("original")), "anchor=%q err=%v", data, err)
+	})
+
+	t.Run("rejects an escaping target path", func(t *testing.T) {
+		root, anchor := newAnchor(t)
+		defer root.Close()
+
+		err := root.RestoreObservedAnchor(anchor, "../outside")
+		testutil.Require(t, err != nil, "accepted escaping target")
+		data, err := root.ReadRegular(anchor.name)
+		testutil.Require(t, err == nil && bytes.Equal(data, []byte("original")), "anchor=%q err=%v", data, err)
+	})
+}
+
+func TestRootTransactionStagesNestedArtifactInRenamedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	selected := filepath.Join(parent, "selected")
+	renamed := filepath.Join(parent, "renamed")
+	foreign := filepath.Join(parent, "foreign")
+	for _, directory := range []string{selected, foreign} {
+		testutil.NoError(t, os.Mkdir(directory, 0o700))
+	}
+	root, err := openRootTransaction(selected, false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	testutil.NoError(t, os.Rename(selected, renamed))
+	testutil.NoError(t, os.Symlink(foreign, selected))
+
+	staged, err := root.StageArtifact(filepath.Join("nested", "artifact"), []byte("anchored"), 0o600)
+	testutil.NoError(t, err)
+	published, err := root.PublishStaged(staged, filepath.Join("nested", "artifact"))
+	testutil.NoError(t, err)
+	data, readInfo, err := root.ReadRegularInfo(filepath.Join("nested", "artifact"))
+	testutil.Require(t, err == nil && bytes.Equal(data, []byte("anchored")) && os.SameFile(published, readInfo), "published artifact=%q err=%v", data, err)
+	testutil.NoError(t, root.RollbackPublished(staged, filepath.Join("nested", "artifact"), published, nil))
+	testutil.NoError(t, root.CleanupStaged(staged))
+	_, temporaryErr := root.Lstat(staged.temporary)
+	_, stagingErr := root.Lstat(staged.staging)
+	testutil.Require(t, errors.Is(temporaryErr, os.ErrNotExist) && errors.Is(stagingErr, os.ErrNotExist), "staging retained: temporary=%v staging=%v", temporaryErr, stagingErr)
+	entries, err := os.ReadDir(foreign)
+	testutil.Require(t, err == nil && len(entries) == 0, "foreign destination changed: entries=%v err=%v", entries, err)
+}
+
+func TestRootTransactionRejectsNestedAncestorReplacementDuringPublish(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	selected := filepath.Join(parent, "selected")
+	foreign := filepath.Join(parent, "foreign")
+	testutil.NoError(t, os.Mkdir(selected, 0o700))
+	testutil.NoError(t, os.Mkdir(foreign, 0o700))
+	root, err := openRootTransaction(selected, false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	name := filepath.Join("nested", "artifact")
+	staged, err := root.StageArtifact(name, []byte("anchored"), 0o600)
+	testutil.NoError(t, err)
+	renamed := filepath.Join(selected, "renamed")
+	testutil.NoError(t, os.Rename(filepath.Join(selected, "nested"), renamed))
+	testutil.NoError(t, os.Symlink(foreign, filepath.Join(selected, "nested")))
+	_, err = root.PublishStaged(staged, name)
+	testutil.Require(t, err != nil, "published through replaced nested ancestor")
+	entries, err := os.ReadDir(foreign)
+	testutil.NoError(t, err)
+	testutil.Require(t, len(entries) == 0, "foreign nested destination changed: %v", entries)
+}
+
+func TestRootTransactionStagedPublishDoesNotOverwriteAndPreservesConcurrentReplacement(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	name := filepath.Join("nested", "artifact")
+	testutil.NoError(t, root.EnsureDirectory(filepath.Dir(name)))
+	existing, err := root.CreateExclusive(name, 0o600)
+	testutil.NoError(t, err)
+	_, err = existing.Write([]byte("existing"))
+	testutil.NoError(t, err)
+	testutil.NoError(t, existing.Sync())
+	testutil.NoError(t, existing.Close())
+	staged, err := root.StageArtifact(name, []byte("managed"), 0o600)
+	testutil.NoError(t, err)
+	_, publishErr := root.PublishStaged(staged, name)
+	data, readErr := root.ReadRegular(name)
+	testutil.Require(t, publishErr != nil && readErr == nil && bytes.Equal(data, []byte("existing")), "existing artifact overwritten: publish=%v data=%q read=%v", publishErr, data, readErr)
+	testutil.NoError(t, root.CleanupStaged(staged))
+
+	testutil.NoError(t, root.Remove(name))
+	staged, err = root.StageArtifact(name, []byte("managed"), 0o600)
+	testutil.NoError(t, err)
+	published, err := root.PublishStaged(staged, name)
+	testutil.NoError(t, err)
+	testutil.NoError(t, root.Remove(name))
+	replacement, err := root.CreateExclusive(name, 0o600)
+	testutil.NoError(t, err)
+	_, err = replacement.Write([]byte("concurrent"))
+	testutil.NoError(t, err)
+	testutil.NoError(t, replacement.Close())
+	err = root.RollbackPublished(staged, name, published, nil)
+	data, readErr = root.ReadRegular(name)
+	testutil.Require(t, err != nil && readErr == nil && bytes.Equal(data, []byte("concurrent")), "concurrent replacement changed: rollback=%v data=%q read=%v", err, data, readErr)
+	testutil.NoError(t, root.CleanupStaged(staged))
+}
+
+func TestRootTransactionRemoveExactPreservesReplacementDuringQuarantine(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	file, err := root.CreateExclusive("artifact", 0o600)
+	testutil.NoError(t, err)
+	testutil.NoError(t, writeAndSyncRootFile(file, []byte("managed")))
+	_, managedInfo, err := root.ReadRegularInfo("artifact")
+	testutil.NoError(t, err)
+	replacement := []byte("concurrent replacement")
+	root.beforeRemoveRename = func(name string) {
+		testutil.NoError(t, root.root.Remove(name))
+		file, createErr := root.CreateExclusive(name, 0o600)
+		testutil.NoError(t, createErr)
+		testutil.NoError(t, writeAndSyncRootFile(file, replacement))
+	}
+
+	err = root.RemoveExact("artifact", managedInfo, []byte("managed"))
+	current, readErr := root.ReadRegular("artifact")
+	testutil.Require(t, err != nil && readErr == nil && bytes.Equal(current, replacement), "replacement was deleted: err=%v current=%q read=%v", err, current, readErr)
+	directory, openErr := root.root.Open(".")
+	testutil.NoError(t, openErr)
+	entries, readDirErr := directory.ReadDir(-1)
+	testutil.NoError(t, errors.Join(readDirErr, directory.Close()))
+	retained := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".vgxness-remove-") && entry.IsDir() {
+			retained = true
+		}
+	}
+	testutil.Require(t, retained, "changed quarantine was not retained: %v", entries)
+}
+
+func TestRootTransactionRemoveExactRetainsReplacementWhenRestoreConflicts(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	file, err := root.CreateExclusive("artifact", 0o600)
+	testutil.NoError(t, err)
+	testutil.NoError(t, writeAndSyncRootFile(file, []byte("managed")))
+	_, managedInfo, err := root.ReadRegularInfo("artifact")
+	testutil.NoError(t, err)
+	replacement := []byte("concurrent replacement")
+	competing := []byte("second concurrent target")
+	root.beforeRemoveRename = func(name string) {
+		testutil.NoError(t, root.root.Remove(name))
+		file, createErr := root.CreateExclusive(name, 0o600)
+		testutil.NoError(t, createErr)
+		testutil.NoError(t, writeAndSyncRootFile(file, replacement))
+	}
+	quarantine := ""
+	root.afterRemoveRename = func(name, retained string) {
+		quarantine = retained
+		file, createErr := root.CreateExclusive(name, 0o600)
+		testutil.NoError(t, createErr)
+		testutil.NoError(t, writeAndSyncRootFile(file, competing))
+	}
+
+	err = root.RemoveExact("artifact", managedInfo, []byte("managed"))
+	current, currentErr := root.ReadRegular("artifact")
+	retained, retainedErr := root.ReadRegular(quarantine)
+	testutil.Require(t, err != nil && currentErr == nil && retainedErr == nil && bytes.Equal(current, competing) && bytes.Equal(retained, replacement), "concurrent files were not preserved: err=%v current=%q currentErr=%v retained=%q retainedErr=%v", err, current, currentErr, retained, retainedErr)
+}
+
+func TestRootTransactionRemoveExactReportsRecreatedTarget(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	file, err := root.CreateExclusive("artifact", 0o600)
+	testutil.NoError(t, err)
+	testutil.NoError(t, writeAndSyncRootFile(file, []byte("managed")))
+	_, managedInfo, err := root.ReadRegularInfo("artifact")
+	testutil.NoError(t, err)
+	replacement := []byte("concurrent replacement")
+	root.afterRemoveRename = func(name, _ string) {
+		file, createErr := root.CreateExclusive(name, 0o600)
+		testutil.NoError(t, createErr)
+		testutil.NoError(t, writeAndSyncRootFile(file, replacement))
+	}
+
+	err = root.RemoveExact("artifact", managedInfo, []byte("managed"))
+	current, readErr := root.ReadRegular("artifact")
+	testutil.Require(t, err != nil && readErr == nil && bytes.Equal(current, replacement), "recreated target was deleted or accepted: err=%v current=%q read=%v", err, current, readErr)
+}
+
+func TestRootTransactionBacksUpRestoresAndRejectsEscapingArtifactPaths(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	testutil.NoError(t, err)
+	defer root.Close()
+	name := filepath.Join("nested", "artifact")
+	testutil.NoError(t, root.EnsureDirectory(filepath.Dir(name)))
+	file, err := root.CreateExclusive(name, 0o600)
+	testutil.NoError(t, err)
+	_, err = file.Write([]byte("original"))
+	testutil.NoError(t, err)
+	testutil.NoError(t, file.Close())
+	backup, err := root.Backup(name, []byte("original"))
+	testutil.NoError(t, err)
+	current, err := root.Lstat(name)
+	testutil.NoError(t, err)
+	testutil.NoError(t, root.RemoveExact(name, current, []byte("original")))
+	staged, err := root.StageArtifact(name, []byte("managed"), 0o600)
+	testutil.NoError(t, err)
+	published, err := root.PublishStaged(staged, name)
+	testutil.NoError(t, err)
+	testutil.NoError(t, root.RollbackPublished(staged, name, published, &backup))
+	data, err := root.ReadRegular(name)
+	testutil.Require(t, err == nil && bytes.Equal(data, []byte("original")), "rollback did not restore backup: %q err=%v", data, err)
+	testutil.NoError(t, root.CleanupStaged(staged))
+
+	for _, escaped := range []string{"../artifact", filepath.Join("nested", "..", "..", "artifact")} {
+		_, err := root.StageArtifact(escaped, []byte("nope"), 0o600)
+		testutil.Require(t, err != nil, "accepted escaping artifact path %q", escaped)
+	}
+}
+
+func TestIntegrationInstallAnchorsSelectedRootAfterAcquisition(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	selected := filepath.Join(parent, "opencode")
+	renamed := filepath.Join(parent, "original")
+	foreign := filepath.Join(parent, "foreign")
+	testutil.NoError(t, os.Mkdir(selected, 0o700))
+	testutil.NoError(t, os.Mkdir(foreign, 0o700))
+	service := managedIntegrationForTest(t)
+	service.afterInstallRoot = func(root *rootTransaction) {
+		testutil.NoError(t, os.Rename(selected, renamed))
+		testutil.NoError(t, os.Symlink(foreign, selected))
+	}
+
+	_, _ = service.Install(context.Background(), integration.Options{ConfigDir: selected})
+	entries, err := os.ReadDir(foreign)
+	testutil.NoError(t, err)
+	testutil.Require(t, len(entries) == 0, "foreign root was modified: %v", entries)
+}
+
+func TestIntegrationUninstallRejectsRenamedRootRedirect(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	selected := filepath.Join(parent, "opencode")
+	renamed := filepath.Join(parent, "original")
+	foreign := filepath.Join(parent, "foreign")
+	testutil.NoError(t, os.Mkdir(foreign, 0o700))
+	service := managedIntegrationForTest(t)
+	options := integration.Options{ConfigDir: selected}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	service.afterUninstallRoot = func(root *rootTransaction) {
+		testutil.NoError(t, os.Rename(selected, renamed))
+		testutil.NoError(t, os.Symlink(foreign, selected))
+	}
+
+	_, err = service.Uninstall(context.Background(), options)
+	entries, readErr := os.ReadDir(foreign)
+	_, originalErr := os.Stat(filepath.Join(renamed, "agents", managerAgentName))
+	testutil.Require(t, errors.Is(err, integration.ErrConflict) && readErr == nil && len(entries) == 0 && originalErr == nil, "uninstall redirect err=%v foreign=%v original=%v", err, entries, originalErr)
+}
+
+func TestIntegrationUninstallCancellationIsNotRecoveryFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	service := managedIntegrationForTest(t)
+	_, err := service.Uninstall(ctx, integration.Options{ConfigDir: filepath.Join(t.TempDir(), "opencode")})
+	testutil.Require(t, errors.Is(err, context.Canceled) && !errors.Is(err, integration.ErrRecovery), "uninstall cancellation err=%v", err)
+}
+
 func managedIntegrationForTest(t *testing.T) *Integration {
 	t.Helper()
 	service, err := NewManagedIntegration(managedLauncherForTest(t))
@@ -508,7 +912,8 @@ func TestIntegration_UninstallRestoresPriorDefaultAgent(t *testing.T) {
 	var restored map[string]any
 	testutil.NoError(t, json.Unmarshal(after, &restored))
 	_, stateErr := os.Stat(filepath.Join(configDirectory, "vgxness", defaultAgentStateName))
-	testutil.Require(t, removed.State == integration.StateAbsent && removed.RestartRequired && restored["default_agent"] == "build" && restored["share"] == "disabled" && os.IsNotExist(stateErr), "uninstall did not restore user config: result=%+v config=%q stateErr=%v", removed, after, stateErr)
+	anchors, globErr := filepath.Glob(filepath.Join(configDirectory, ".vgxness-reinstall-old-*.tmp"))
+	testutil.Require(t, removed.State == integration.StateAbsent && removed.RestartRequired && restored["default_agent"] == "build" && restored["share"] == "disabled" && os.IsNotExist(stateErr) && globErr == nil && len(anchors) == 0, "uninstall did not restore user config cleanly: result=%+v config=%q stateErr=%v anchors=%v globErr=%v", removed, after, stateErr, anchors, globErr)
 }
 
 func TestIntegration_UninstallRemovesFreshDefaultAgentConfig(t *testing.T) {

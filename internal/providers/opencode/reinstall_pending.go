@@ -54,7 +54,19 @@ func (service *Integration) ReinstallPending(ctx context.Context, options integr
 	if err != nil {
 		return false, err
 	}
-	marker, _, err := readReinstallPending(root)
+	held, err := openRootTransaction(root, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer held.Close()
+	return service.reinstallPendingAtRoot(ctx, options, held)
+}
+
+func (service *Integration) reinstallPendingAtRoot(ctx context.Context, options integration.Options, root *rootTransaction) (bool, error) {
+	marker, _, err := readReinstallPendingAtRoot(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -65,11 +77,93 @@ func (service *Integration) ReinstallPending(ctx context.Context, options integr
 	if err != nil {
 		return false, err
 	}
-	layout, err := managedLayout(root, state.artifacts)
+	held, heldErr := root.HeldAtPath()
+	if heldErr != nil || !held {
+		return false, fmt.Errorf("OpenCode config root changed during pending inspection")
+	}
+	layout, err := managedLayout(pendingMarkerRoot(root), state.artifacts)
 	if err != nil || !pendingInventoryMatches(marker, layout) {
 		return false, fmt.Errorf("invalid reinstall pending inventory")
 	}
 	return true, nil
+}
+
+func (service *Integration) writeReinstallPendingAtRoot(ctx context.Context, root *rootTransaction, layout integration.ManagedLayout) (reinstallPendingEvidence, error) {
+	if err := ctx.Err(); err != nil {
+		return reinstallPendingEvidence{}, err
+	}
+	operation := make([]byte, 16)
+	if _, err := rand.Read(operation); err != nil {
+		return reinstallPendingEvidence{}, err
+	}
+	markerRoot := pendingMarkerRoot(root)
+	marker := reinstallPendingMarker{Version: reinstallPendingVersion, Operation: hex.EncodeToString(operation), Root: markerRoot, StartedAt: service.now().UTC().Format(time.RFC3339Nano), Artifacts: make([]reinstallPendingEntry, len(layout.Artifacts))}
+	for index, artifact := range layout.Artifacts {
+		marker.Artifacts[index] = reinstallPendingEntry{Path: artifact.RelativePath, SHA256: artifact.SHA256}
+	}
+	if err := validateReinstallPending(markerRoot, marker); err != nil {
+		return reinstallPendingEvidence{}, err
+	}
+	body, err := json.Marshal(marker)
+	if err != nil || len(body)+1 > maxReinstallPendingBytes {
+		return reinstallPendingEvidence{}, fmt.Errorf("encode reinstall pending marker")
+	}
+	body = append(body, '\n')
+	file, err := root.CreateExclusive(reinstallPendingName, 0o600)
+	if err != nil {
+		return reinstallPendingEvidence{}, fmt.Errorf("create reinstall pending marker at %q: %w", filepath.Join(root.path, reinstallPendingName), err)
+	}
+	if err := writeAndSyncRootFile(file, body); err != nil {
+		return reinstallPendingEvidence{}, err
+	}
+	info, err := root.Lstat(reinstallPendingName)
+	if err != nil || !privatePendingFile(info) {
+		return reinstallPendingEvidence{}, fmt.Errorf("verify reinstall pending marker")
+	}
+	if err := root.SyncDirectory("."); err != nil {
+		return reinstallPendingEvidence{}, err
+	}
+	return reinstallPendingEvidence{info: info, digest: sha256.Sum256(body)}, nil
+}
+
+func readReinstallPendingAtRoot(root *rootTransaction) (reinstallPendingMarker, os.FileInfo, error) {
+	var marker reinstallPendingMarker
+	body, info, err := root.ReadRegularInfo(reinstallPendingName)
+	if err != nil {
+		return marker, nil, err
+	}
+	if !privatePendingFile(info) || info.Size() <= 0 || info.Size() > maxReinstallPendingBytes || rejectDuplicateJSONKeys(body) != nil {
+		return marker, nil, fmt.Errorf("invalid reinstall pending marker")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&marker); err != nil {
+		return marker, nil, fmt.Errorf("invalid reinstall pending marker: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) || validateReinstallPending(pendingMarkerRoot(root), marker) != nil {
+		return marker, nil, fmt.Errorf("invalid reinstall pending marker")
+	}
+	return marker, info, nil
+}
+
+func pendingMarkerRoot(root *rootTransaction) string {
+	path := root.path
+	if runtime.GOOS == "darwin" && strings.HasPrefix(path, "/private/var/") {
+		return strings.TrimPrefix(path, "/private")
+	}
+	return path
+}
+
+func clearReinstallPendingAtRoot(root *rootTransaction, expected reinstallPendingEvidence) error {
+	body, info, err := root.ReadRegularInfo(reinstallPendingName)
+	if err != nil || expected.info == nil || !privatePendingFile(info) || !os.SameFile(info, expected.info) || sha256.Sum256(body) != expected.digest {
+		return fmt.Errorf("%w: reinstall pending marker changed before cleanup at %q", integration.ErrRecovery, filepath.Join(root.path, reinstallPendingName))
+	}
+	if err := root.RemoveExact(reinstallPendingName, info, body); err != nil {
+		return fmt.Errorf("%w: remove reinstall pending marker: %v", integration.ErrRecovery, err)
+	}
+	return nil
 }
 
 func (service *Integration) writeReinstallPending(ctx context.Context, root string, layout integration.ManagedLayout) (reinstallPendingEvidence, error) {
