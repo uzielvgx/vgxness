@@ -3,6 +3,7 @@ package opencode
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -303,6 +305,8 @@ type Integration struct {
 	afterReinstallAnchorPath  func(string)
 	afterReinstallStaging     func([]installedArtifact)
 	afterRetirement           func() error
+	afterInstallRoot          func(*rootTransaction)
+	afterUninstallRoot        func(*rootTransaction)
 }
 
 var currentExecutable = os.Executable
@@ -362,6 +366,20 @@ type installedArtifact struct {
 	content       []byte
 }
 
+type rootInstalledArtifact struct {
+	name        string
+	staged      rootStagedArtifact
+	published   os.FileInfo
+	publication rootPublication
+	backup      *rootArtifactBackup
+	retained    bool
+}
+
+type rootRetiredArtifact struct {
+	name   string
+	backup rootArtifactBackup
+}
+
 type backedUpArtifact struct {
 	target  string
 	backup  string
@@ -372,6 +390,16 @@ type backedUpArtifact struct {
 type defaultAgentUninstall struct {
 	replacement *installedArtifact
 	removal     *backedUpArtifact
+}
+
+type rootBackedUpArtifact struct {
+	name   string
+	backup rootArtifactBackup
+}
+
+type rootDefaultAgentUninstall struct {
+	replacement *rootInstalledArtifact
+	removal     *rootBackedUpArtifact
 }
 
 type reinstallAnchor struct {
@@ -523,6 +551,200 @@ func managedLayout(root string, artifacts []artifact) (integration.ManagedLayout
 // Reinstall atomically regenerates the recognized managed set without touching
 // unrelated OpenCode files or creating the legacy uninstall backup directory.
 func (service *Integration) Reinstall(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
+	if err := service.validateMutableLauncher(); err != nil {
+		return integration.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return integration.Result{}, err
+	}
+	configDirectory, err := integrationConfigDirectory(options)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	root, err := openRootTransaction(configDirectory, false)
+	if err != nil {
+		return integration.Result{}, fmt.Errorf("%w: open OpenCode config root: %v", integration.ErrConflict, err)
+	}
+	defer func() { returnErr = errors.Join(returnErr, root.Close()) }()
+	if pending, err := service.reinstallPendingAtRoot(ctx, options, root); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, integration.ErrInvalid) {
+			return integration.Result{}, err
+		}
+		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
+	} else if pending {
+		return integration.Result{}, fmt.Errorf("%w: interrupted OpenCode reinstall evidence is present", integration.ErrRecovery)
+	}
+	state, err := service.inspect(ctx, options)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	switch state.result.State {
+	case integration.StateInstalled, integration.StatePartial:
+	case integration.StateAbsent:
+		return integration.Result{}, fmt.Errorf("%w: managed OpenCode artifacts are absent", integration.ErrInvalid)
+	default:
+		return integration.Result{}, fmt.Errorf("%w: managed OpenCode artifacts", integration.ErrDrift)
+	}
+	if err := ctx.Err(); err != nil {
+		return integration.Result{}, err
+	}
+	held, err := root.HeldAtPath()
+	if err != nil || !held {
+		return integration.Result{}, fmt.Errorf("%w: OpenCode config root changed after preflight", integration.ErrConflict)
+	}
+	expectedLayout, err := managedLayout(configDirectory, state.artifacts)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	created := make([]rootInstalledArtifact, 0, len(state.artifacts))
+	retired := make([]rootRetiredArtifact, 0, len(state.retired))
+	var pendingEvidence reinstallPendingEvidence
+	rollback := true
+	defer func() {
+		if rollback {
+			var recoveryErr error
+			for index := len(retired) - 1; index >= 0; index-- {
+				if err := root.RestoreBackup(retired[index].backup, retired[index].name); err != nil {
+					recoveryErr = errors.Join(recoveryErr, recoveryFailure("restore retired OpenCode artifact", err))
+				}
+			}
+			for index := len(created) - 1; index >= 0; index-- {
+				if err := rollbackRootReinstalledArtifact(root, created[index]); err != nil {
+					recoveryErr = errors.Join(recoveryErr, recoveryFailure("restore OpenCode reinstall predecessor", err))
+				}
+			}
+			if recoveryErr == nil && pendingEvidence.info != nil {
+				recoveryErr = clearReinstallPendingAtRoot(root, pendingEvidence)
+			} else if recoveryErr != nil && pendingEvidence.info != nil {
+				recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: reinstall pending marker retained at %q", integration.ErrRecovery, filepath.Join(root.path, reinstallPendingName)))
+			}
+			returnErr = errors.Join(returnErr, recoveryErr)
+		} else {
+			for _, item := range retired {
+				returnErr = errors.Join(returnErr, root.cleanupBackup(item.backup))
+			}
+			for _, item := range created {
+				if item.backup != nil {
+					returnErr = errors.Join(returnErr, root.cleanupBackup(*item.backup))
+				}
+				returnErr = errors.Join(returnErr, root.CleanupStaged(item.staged))
+			}
+			if pendingEvidence.info != nil {
+				returnErr = errors.Join(returnErr, clearReinstallPendingAtRoot(root, pendingEvidence))
+			}
+		}
+	}()
+	for _, item := range state.artifacts {
+		name, relativeErr := root.Relative(item.path)
+		if relativeErr != nil {
+			return integration.Result{}, fmt.Errorf("%w: OpenCode artifact outside config root", integration.ErrInvalid)
+		}
+		staged, stageErr := root.StageArtifact(name, item.content, 0o600)
+		if stageErr != nil {
+			return integration.Result{}, fmt.Errorf("stage OpenCode reinstall artifact: %w", stageErr)
+		}
+		created = append(created, rootInstalledArtifact{name: name, staged: staged})
+	}
+	if service.afterReinstallStaging != nil {
+		staged := make([]installedArtifact, 0, len(created))
+		for _, item := range created {
+			staged = append(staged, installedArtifact{path: filepath.Join(root.path, item.name), temporary: filepath.Join(root.path, item.staged.temporary), temporaryInfo: item.staged.temporaryInfo, staging: filepath.Join(root.path, item.staged.staging), stagingInfo: item.staged.stagingInfo, content: item.staged.content})
+		}
+		service.afterReinstallStaging(staged)
+	}
+	held, err = root.HeldAtPath()
+	if err != nil || !held {
+		return integration.Result{}, fmt.Errorf("%w: OpenCode config root changed before mutation", integration.ErrConflict)
+	}
+	pendingEvidence, err = service.writeReinstallPendingAtRoot(ctx, root, expectedLayout)
+	if err != nil {
+		return integration.Result{}, errors.Join(integration.ErrRecovery, fmt.Errorf("write reinstall pending marker: %w", err))
+	}
+	for index, item := range state.artifacts {
+		if err := ctx.Err(); err != nil {
+			return integration.Result{}, err
+		}
+		installed := &created[index]
+		if item.present {
+			expected := item.content
+			if item.upgrade || item.defaultAgent != nil && item.prior != nil {
+				expected = item.prior
+			}
+			backup, backupErr := root.Anchor(installed.name, expected)
+			if backupErr != nil {
+				return integration.Result{}, fmt.Errorf("%w: protect OpenCode reinstall predecessor", integration.ErrConflict)
+			}
+			installed.backup = &backup
+			if service.afterReinstallAnchorPath != nil {
+				service.afterReinstallAnchorPath(filepath.Join(root.path, backup.name))
+			}
+			if err := root.RemoveExact(installed.name, backup.info, expected); err != nil {
+				return integration.Result{}, fmt.Errorf("%w: remove OpenCode reinstall predecessor: %v", integration.ErrConflict, err)
+			}
+		}
+		if service.reinstallCheckpoint != nil {
+			if err := service.reinstallCheckpoint(reinstallCheckpointMoved, item.path); err != nil {
+				return integration.Result{}, err
+			}
+		}
+		publication, publishErr := root.PublishStaged(installed.staged, installed.name)
+		if publishErr != nil {
+			if publication.state == rootPublicationPending {
+				installed.publication = publication
+			}
+			return integration.Result{}, fmt.Errorf("publish OpenCode reinstall artifact: %w", publishErr)
+		}
+		installed.published = publication.info
+		if service.reinstallCheckpoint != nil {
+			if err := service.reinstallCheckpoint(reinstallCheckpointPublished, item.path); err != nil {
+				return integration.Result{}, err
+			}
+		}
+	}
+	for _, item := range state.retired {
+		name, relativeErr := root.Relative(item.path)
+		if relativeErr != nil {
+			return integration.Result{}, fmt.Errorf("%w: retired OpenCode artifact outside config root", integration.ErrInvalid)
+		}
+		retiredItem, retireErr := retireRootArtifact(root, name, item)
+		if retireErr != nil {
+			return integration.Result{}, retireErr
+		}
+		retired = append(retired, retiredItem)
+		if service.afterRetirement != nil {
+			if err := service.afterRetirement(); err != nil {
+				return integration.Result{}, err
+			}
+		}
+	}
+	if err := verifyRootInstall(root, state); err != nil {
+		return integration.Result{}, fmt.Errorf("read back OpenCode reinstall artifacts: %w", integration.ErrDrift)
+	}
+	for _, item := range state.artifacts {
+		if service.reinstallCheckpoint != nil {
+			if err := service.reinstallCheckpoint(reinstallCheckpointVerified, item.path); err != nil {
+				return integration.Result{}, err
+			}
+		}
+	}
+	for _, item := range created {
+		if item.backup == nil {
+			continue
+		}
+		data, info, err := root.ReadRegularInfo(item.backup.name)
+		if err != nil || item.backup.info == nil || !os.SameFile(info, item.backup.info) || !bytes.Equal(data, item.backup.content) {
+			return integration.Result{}, fmt.Errorf("%w: reinstall predecessor anchor changed before cleanup", integration.ErrDrift)
+		}
+	}
+	rollback = false
+	state.result.State = integration.StateInstalled
+	state.result.Changed, state.result.RestartRequired = true, true
+	return state.result, nil
+}
+
+// reinstallLegacy is retained temporarily as a behavioral reference while the
+// held-root implementation preserves compatibility with existing recovery evidence.
+func (service *Integration) reinstallLegacy(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
 	if err := service.validateMutableLauncher(); err != nil {
 		return integration.Result{}, err
 	}
@@ -780,14 +1002,36 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 	if err := service.validateMutableLauncher(); err != nil {
 		return integration.Result{}, err
 	}
-	if pending, err := service.ReinstallPending(ctx, options); err != nil || pending {
+	configDirectory, err := integrationConfigDirectory(options)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return integration.Result{}, err
+	}
+	if _, err := requestedModelPlan(options, configDirectory); err != nil {
+		return integration.Result{}, err
+	}
+	root, err := openRootTransaction(configDirectory, true)
+	if err != nil {
+		return integration.Result{}, fmt.Errorf("%w: open OpenCode config root: %v", integration.ErrConflict, err)
+	}
+	defer func() { returnErr = errors.Join(returnErr, root.Close()) }()
+	if service.afterInstallRoot != nil {
+		service.afterInstallRoot(root)
+	}
+	if pending, err := service.ReinstallPending(ctx, options); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, integration.ErrInvalid) {
+			return integration.Result{}, err
+		}
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
+	} else if pending {
+		return integration.Result{}, fmt.Errorf("%w: interrupted OpenCode reinstall evidence is present", integration.ErrRecovery)
 	}
 	state, err := service.inspectWithV1Migration(ctx, options, true)
 	if err != nil {
 		return integration.Result{}, err
 	}
-	migrateInstalledV1 := state.result.ModelSchemaVersion == 3
 	if state.result.State == integration.StateInstalled {
 		return state.result, nil
 	}
@@ -797,35 +1041,25 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 	if err := ctx.Err(); err != nil {
 		return integration.Result{}, err
 	}
-	configDirectory := filepath.Dir(filepath.Dir(state.result.Path))
-	if err := prepareDirectory(configDirectory); err != nil {
-		return integration.Result{}, fmt.Errorf("prepare OpenCode config directory: %w", err)
+	held, err := root.HeldAtPath()
+	if err != nil || !held {
+		return integration.Result{}, fmt.Errorf("%w: OpenCode config root changed after preflight", integration.ErrConflict)
 	}
-	for _, item := range state.artifacts {
-		directory := filepath.Dir(item.path)
-		if err := prepareDirectory(directory); err != nil {
-			return integration.Result{}, fmt.Errorf("prepare OpenCode integration directory: %w", err)
-		}
-	}
-	created := make([]installedArtifact, 0, len(state.artifacts))
-	retired := state.retired
+	created := make([]rootInstalledArtifact, 0, len(state.artifacts))
+	retired := make([]rootRetiredArtifact, 0, len(state.retired))
 	rollback := true
 	defer func() {
 		if rollback {
-			for index := len(retired) - 1; index >= 0; index-- {
-				if retired[index].backup != "" {
-					returnErr = errors.Join(returnErr, restoreRetiredArtifact(retired[index]))
-				}
-			}
-			for index := len(created) - 1; index >= 0; index-- {
-				returnErr = errors.Join(returnErr, rollbackInstalledArtifact(created[index]))
-			}
+			returnErr = errors.Join(returnErr, rollbackRootInstall(root, retired, created))
 		} else {
 			for _, item := range retired {
-				returnErr = errors.Join(returnErr, cleanupRetiredArtifact(item))
+				returnErr = errors.Join(returnErr, root.cleanupBackup(item.backup))
 			}
 			for _, item := range created {
-				returnErr = errors.Join(returnErr, cleanupInstalledArtifact(item))
+				if item.retained && item.backup != nil {
+					returnErr = errors.Join(returnErr, root.releaseBackup(*item.backup))
+				}
+				returnErr = errors.Join(returnErr, root.CleanupStaged(item.staged))
 			}
 		}
 	}()
@@ -833,48 +1067,83 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 		if item.exact {
 			continue
 		}
-		var installed installedArtifact
-		var installErr error
-		if item.upgrade {
-			installed, installErr = upgradeArtifact(ctx, item)
-		} else {
-			installed, installErr = installArtifact(ctx, item)
+		name, relativeErr := root.Relative(item.path)
+		if relativeErr != nil {
+			return integration.Result{}, fmt.Errorf("%w: OpenCode artifact outside config root", integration.ErrInvalid)
 		}
+		installed, installErr := installRootArtifact(ctx, root, name, item)
 		if installErr != nil {
 			return integration.Result{}, installErr
 		}
 		created = append(created, installed)
 	}
-	for index := range retired {
-		if err := retireArtifact(&retired[index]); err != nil {
-			return integration.Result{}, err
+	for _, item := range state.retired {
+		name, relativeErr := root.Relative(item.path)
+		if relativeErr != nil {
+			return integration.Result{}, fmt.Errorf("%w: retired OpenCode artifact outside config root", integration.ErrInvalid)
 		}
+		retiredItem, retireErr := retireRootArtifact(root, name, item)
+		if retireErr != nil {
+			return integration.Result{}, retireErr
+		}
+		retired = append(retired, retiredItem)
 		if service.afterRetirement != nil {
 			if err := service.afterRetirement(); err != nil {
 				return integration.Result{}, err
 			}
 		}
 	}
-	verified, err := service.inspectWithV1Migration(ctx, options, migrateInstalledV1)
-	if err != nil || verified.result.State != integration.StateInstalled {
+	if err := verifyRootInstall(root, state); err != nil {
 		return integration.Result{}, fmt.Errorf("read back OpenCode integration artifacts: %w", integration.ErrDrift)
 	}
 	rollback = false
-	verified.result.Changed = len(created) != 0 || len(retired) != 0
-	verified.result.RestartRequired = verified.result.Changed
-	return verified.result, nil
+	state.result.State = integration.StateInstalled
+	state.result.Changed = len(created) != 0 || len(retired) != 0
+	state.result.RestartRequired = state.result.Changed
+	return state.result, nil
 }
 
 func (service *Integration) Uninstall(ctx context.Context, options integration.Options) (_ integration.Result, returnErr error) {
 	if err := service.validateMutableLauncher(); err != nil {
 		return integration.Result{}, err
 	}
-	if pending, err := service.ReinstallPending(ctx, options); err != nil || pending {
+	configDirectory, err := integrationConfigDirectory(options)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	root, err := openRootTransaction(configDirectory, false)
+	if errors.Is(err, os.ErrNotExist) {
+		state, inspectErr := service.inspect(ctx, options)
+		if inspectErr != nil {
+			return integration.Result{}, inspectErr
+		}
+		if state.result.State != integration.StateAbsent {
+			return integration.Result{}, fmt.Errorf("%w: OpenCode config root appeared during preflight", integration.ErrConflict)
+		}
+		return state.result, nil
+	}
+	if err != nil {
+		return integration.Result{}, fmt.Errorf("%w: open OpenCode config root: %v", integration.ErrConflict, err)
+	}
+	defer func() { returnErr = errors.Join(returnErr, root.Close()) }()
+	if service.afterUninstallRoot != nil {
+		service.afterUninstallRoot(root)
+	}
+	if pending, err := service.reinstallPendingAtRoot(ctx, options, root); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, integration.ErrInvalid) {
+			return integration.Result{}, err
+		}
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
+	} else if pending {
+		return integration.Result{}, fmt.Errorf("%w: interrupted OpenCode reinstall evidence is present", integration.ErrRecovery)
 	}
 	state, err := service.inspect(ctx, options)
 	if err != nil {
 		return integration.Result{}, err
+	}
+	held, err := root.HeldAtPath()
+	if err != nil || !held {
+		return integration.Result{}, fmt.Errorf("%w: OpenCode config root changed after preflight", integration.ErrConflict)
 	}
 	if state.result.State == integration.StateAbsent {
 		return state.result, nil
@@ -885,9 +1154,8 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	if err := ctx.Err(); err != nil {
 		return integration.Result{}, err
 	}
-	configDirectory := filepath.Dir(filepath.Dir(state.result.Path))
-	backupDirectory := filepath.Join(filepath.Dir(filepath.Dir(state.result.Path)), ".vgxness-backups")
-	if err := prepareDirectory(backupDirectory); err != nil {
+	backupDirectory := ".vgxness-backups"
+	if err := root.EnsureDirectory(backupDirectory); err != nil {
 		return integration.Result{}, fmt.Errorf("prepare OpenCode integration backup: %w", err)
 	}
 	now := time.Now().UTC()
@@ -897,7 +1165,11 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 	stamp := fmt.Sprintf("%s.%09d", now.Format("20060102T150405"), now.Nanosecond())
 	backupPaths := make(map[string]string, len(state.artifacts))
 	for _, item := range state.artifacts {
-		backupPaths[item.path] = filepath.Join(backupDirectory, item.backup+"."+stamp+filepath.Ext(item.path))
+		name, relativeErr := root.Relative(item.path)
+		if relativeErr != nil {
+			return integration.Result{}, fmt.Errorf("%w: OpenCode artifact outside config root", integration.ErrInvalid)
+		}
+		backupPaths[item.path] = filepath.Join(backupDirectory, item.backup+"."+stamp+filepath.Ext(name))
 	}
 	for _, item := range state.artifacts {
 		if item.defaultAgent != nil {
@@ -906,33 +1178,37 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 		if !item.exact && !item.upgrade {
 			continue
 		}
-		if _, statErr := os.Lstat(backupPaths[item.path]); statErr == nil {
+		if _, statErr := root.Lstat(backupPaths[item.path]); statErr == nil {
 			return integration.Result{}, fmt.Errorf("%w: backup already exists", integration.ErrConflict)
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return integration.Result{}, fmt.Errorf("inspect OpenCode integration backup: %w", statErr)
 		}
 	}
-	backups := make([]backedUpArtifact, 0, len(state.artifacts))
-	retired := state.retired
-	var defaultChange defaultAgentUninstall
+	backups := make([]rootBackedUpArtifact, 0, len(state.artifacts))
+	retired := make([]rootRetiredArtifact, 0, len(state.retired))
+	var defaultChange rootDefaultAgentUninstall
 	rollback := true
 	defer func() {
 		if rollback {
 			for index := len(retired) - 1; index >= 0; index-- {
-				if retired[index].backup != "" {
-					returnErr = errors.Join(returnErr, restoreRetiredArtifact(retired[index]))
-				}
+				returnErr = errors.Join(returnErr, recoveryFailure("restore retired OpenCode artifact", root.RestoreObservedAnchor(retired[index].backup, retired[index].name)))
 			}
 			for index := len(backups) - 1; index >= 0; index-- {
-				returnErr = errors.Join(returnErr, restoreWithoutOverwrite(backups[index].backup, backups[index].target))
+				returnErr = errors.Join(returnErr, recoveryFailure("restore uninstalled OpenCode artifact", root.RestoreObservedAnchor(backups[index].backup, backups[index].name)))
 			}
-			returnErr = errors.Join(returnErr, defaultChange.rollback())
+			returnErr = errors.Join(returnErr, recoveryFailure("restore default-agent configuration", defaultChange.rollback(root)))
 		}
 	}()
-	for index := range retired {
-		if err := retireArtifact(&retired[index]); err != nil {
-			return integration.Result{}, err
+	for _, item := range state.retired {
+		name, relativeErr := root.Relative(item.path)
+		if relativeErr != nil {
+			return integration.Result{}, fmt.Errorf("%w: retired OpenCode artifact outside config root", integration.ErrInvalid)
 		}
+		retiredItem, retireErr := retireRootArtifact(root, name, item)
+		if retireErr != nil {
+			return integration.Result{}, retireErr
+		}
+		retired = append(retired, retiredItem)
 		if service.afterRetirement != nil {
 			if err := service.afterRetirement(); err != nil {
 				return integration.Result{}, err
@@ -947,24 +1223,19 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 		if item.upgrade {
 			expected = item.prior
 		}
-		backupPath := backupPaths[item.path]
-		if err := os.Link(item.path, backupPath); err != nil {
-			return fmt.Errorf("backup OpenCode integration artifact: %w", err)
+		name, relativeErr := root.Relative(item.path)
+		if relativeErr != nil {
+			return fmt.Errorf("%w: OpenCode artifact outside config root", integration.ErrInvalid)
 		}
-		if err := syncDirectory(filepath.Dir(backupPath)); err != nil {
-			cleanupErr := removeSameFileDurably(backupPath, item.path)
-			return errors.Join(fmt.Errorf("sync OpenCode integration backup: %w", err), recoveryFailure("remove unsynced integration backup", cleanupErr))
+		backup, backupErr := root.BackupAs(name, backupPaths[item.path], expected)
+		if backupErr != nil {
+			return fmt.Errorf("backup OpenCode integration artifact: %w", backupErr)
 		}
-		backup, readErr := readRegularFile(backupPath)
-		if readErr != nil || !bytes.Equal(backup, expected) {
-			cleanupErr := removeSameFileDurably(backupPath, item.path)
-			return errors.Join(fmt.Errorf("read back OpenCode integration backup: %w", integration.ErrDrift), recoveryFailure("remove invalid integration backup", cleanupErr))
-		}
-		backups = append(backups, backedUpArtifact{target: item.path, backup: backupPath})
-		if err := removeSameFileDurably(item.path, backupPath); err != nil {
+		backups = append(backups, rootBackedUpArtifact{name: name, backup: backup})
+		if err := root.RemoveExact(name, backup.info, expected); err != nil {
 			return fmt.Errorf("sync OpenCode integration removal: %w", err)
 		}
-		if _, statErr := os.Lstat(item.path); !errors.Is(statErr, os.ErrNotExist) {
+		if _, statErr := root.Lstat(name); !errors.Is(statErr, os.ErrNotExist) {
 			return fmt.Errorf("%w: integration artifact changed during uninstall", integration.ErrConflict)
 		}
 		return ctx.Err()
@@ -977,7 +1248,11 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 			continue
 		}
 		if item.defaultAgent != nil {
-			change, err := uninstallDefaultAgent(ctx, item, service.executable)
+			name, relativeErr := root.Relative(item.path)
+			if relativeErr != nil {
+				return integration.Result{}, fmt.Errorf("%w: default-agent configuration outside config root", integration.ErrInvalid)
+			}
+			change, err := uninstallDefaultAgentAtRoot(ctx, root, name, item, service.executable)
 			if err != nil {
 				return integration.Result{}, err
 			}
@@ -993,35 +1268,40 @@ func (service *Integration) Uninstall(ctx context.Context, options integration.O
 			return integration.Result{}, err
 		}
 	}
-	remaining, readbackErr := inspectRetiredArtifacts(
-		retiredArtifact{path: filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md"), recognize: isRetiredSkill},
-		retiredArtifact{path: filepath.Join(configDirectory, "plugins", memoryPluginName), recognize: isPreviousMemoryPlugin},
-	)
-	if readbackErr != nil || len(remaining) != 0 {
-		return integration.Result{}, fmt.Errorf("read back OpenCode uninstall artifacts: %w", integration.ErrDrift)
+	for _, item := range retired {
+		if _, err := root.Lstat(item.name); !errors.Is(err, os.ErrNotExist) {
+			return integration.Result{}, fmt.Errorf("read back OpenCode uninstall artifacts: %w", integration.ErrDrift)
+		}
 	}
 	for _, item := range state.artifacts {
 		if item.defaultAgent != nil || item.defaultState {
 			continue
 		}
-		if _, err := os.Lstat(item.path); !errors.Is(err, os.ErrNotExist) {
+		name, relativeErr := root.Relative(item.path)
+		if relativeErr != nil {
+			return integration.Result{}, fmt.Errorf("%w: OpenCode artifact outside config root", integration.ErrInvalid)
+		}
+		if _, err := root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return integration.Result{}, fmt.Errorf("read back OpenCode uninstall artifacts: %w", integration.ErrDrift)
 		}
 	}
 	rollback = false
 	for _, item := range retired {
-		returnErr = errors.Join(returnErr, cleanupRetiredArtifact(item))
+		returnErr = errors.Join(returnErr, recoveryFailure("clean up retired OpenCode artifact", root.cleanupBackup(item.backup)))
 	}
-	returnErr = errors.Join(returnErr, defaultChange.cleanup())
+	returnErr = errors.Join(returnErr, recoveryFailure("clean up default-agent predecessor", defaultChange.cleanup(root)))
+	for _, item := range backups {
+		returnErr = errors.Join(returnErr, recoveryFailure("release uninstalled OpenCode backup", root.releaseBackup(item.backup)))
+	}
 	state.result.State = integration.StateAbsent
 	state.result.Changed = len(backups) != 0 || len(retired) != 0 || defaultChange.replacement != nil || defaultChange.removal != nil
 	state.result.RestartRequired = state.result.Changed
 	for _, item := range backups {
-		if item.target == state.result.Path {
-			state.result.BackupPath = item.backup
+		if filepath.Join(configDirectory, item.name) == state.result.Path {
+			state.result.BackupPath = filepath.Join(configDirectory, item.backup.name)
 		}
-		if item.target == state.result.ToolPath {
-			state.result.ToolBackupPath = item.backup
+		if filepath.Join(configDirectory, item.name) == state.result.ToolPath {
+			state.result.ToolBackupPath = filepath.Join(configDirectory, item.backup.name)
 		}
 	}
 	return state.result, nil
@@ -1067,6 +1347,92 @@ func uninstallDefaultAgent(ctx context.Context, item artifact, executable string
 		return defaultAgentUninstall{}, err
 	}
 	return defaultAgentUninstall{replacement: &installed}, nil
+}
+
+func uninstallDefaultAgentAtRoot(ctx context.Context, root *rootTransaction, name string, item artifact, executable string) (rootDefaultAgentUninstall, error) {
+	if item.defaultAgent == nil {
+		return rootDefaultAgentUninstall{}, integration.ErrInvalid
+	}
+	current, _, err := root.ReadRegularInfo(name)
+	if errors.Is(err, os.ErrNotExist) && !item.defaultAgent.ConfigExisted {
+		return rootDefaultAgentUninstall{}, nil
+	}
+	if err != nil {
+		return rootDefaultAgentUninstall{}, fmt.Errorf("inspect OpenCode default-agent configuration: %w", err)
+	}
+	replacement, changed, remove, err := withoutDefaultAgent(current, *item.defaultAgent, executable)
+	if err != nil || !changed {
+		return rootDefaultAgentUninstall{}, err
+	}
+	if remove {
+		anchor, err := root.Anchor(name, current)
+		if err != nil {
+			return rootDefaultAgentUninstall{}, err
+		}
+		if err := root.RemoveExact(name, anchor.info, current); err != nil {
+			return rootDefaultAgentUninstall{}, errors.Join(err, recoveryFailure("restore default-agent configuration", root.RestoreObservedAnchor(anchor, name)))
+		}
+		return rootDefaultAgentUninstall{removal: &rootBackedUpArtifact{name: name, backup: anchor}}, nil
+	}
+	installed, err := replaceRootArtifact(ctx, root, name, replacement, current)
+	if err != nil {
+		return rootDefaultAgentUninstall{}, err
+	}
+	return rootDefaultAgentUninstall{replacement: &installed}, nil
+}
+
+func replaceRootArtifact(ctx context.Context, root *rootTransaction, name string, replacement, current []byte) (rootInstalledArtifact, error) {
+	if err := ctx.Err(); err != nil {
+		return rootInstalledArtifact{}, err
+	}
+	staged, err := root.StageArtifact(name, replacement, 0o600)
+	if err != nil {
+		return rootInstalledArtifact{}, fmt.Errorf("stage OpenCode default-agent configuration: %w", err)
+	}
+	installed := rootInstalledArtifact{name: name, staged: staged}
+	anchor, err := root.Anchor(name, current)
+	if err != nil {
+		return rootInstalledArtifact{}, errors.Join(err, root.CleanupStaged(staged))
+	}
+	installed.backup = &anchor
+	if err := root.RemoveExact(name, anchor.info, current); err != nil {
+		return rootInstalledArtifact{}, errors.Join(err, recoveryFailure("restore default-agent configuration", root.RestoreObservedAnchor(anchor, name)), recoveryFailure("clean up default-agent staging", root.CleanupStaged(staged)))
+	}
+	publication, err := root.PublishStaged(staged, name)
+	if err != nil {
+		if publication.state == rootPublicationPending {
+			if rollbackErr := root.RollbackPendingPublication(publication, name, staged.content); rollbackErr != nil {
+				return rootInstalledArtifact{}, errors.Join(err, recoveryFailure("remove uncertain default-agent publication", rollbackErr), fmt.Errorf("%w: default-agent predecessor anchor retained at %q", integration.ErrRecovery, filepath.Join(root.path, anchor.name)), root.releaseBackup(anchor), recoveryFailure("clean up default-agent staging", root.CleanupStaged(staged)))
+			}
+		}
+		return rootInstalledArtifact{}, errors.Join(err, recoveryFailure("restore default-agent configuration", root.RestoreObservedAnchor(anchor, name)), recoveryFailure("clean up default-agent staging", root.CleanupStaged(staged)))
+	}
+	installed.published = publication.info
+	return installed, nil
+}
+
+func (change rootDefaultAgentUninstall) rollback(root *rootTransaction) error {
+	if change.replacement != nil {
+		return rollbackRootReinstalledArtifact(root, *change.replacement)
+	}
+	if change.removal != nil {
+		return root.RestoreObservedAnchor(change.removal.backup, change.removal.name)
+	}
+	return nil
+}
+
+func (change rootDefaultAgentUninstall) cleanup(root *rootTransaction) error {
+	if change.replacement != nil {
+		var err error
+		if change.replacement.backup != nil {
+			err = errors.Join(err, root.cleanupBackup(*change.replacement.backup))
+		}
+		return errors.Join(err, root.CleanupStaged(change.replacement.staged))
+	}
+	if change.removal != nil {
+		return root.cleanupBackup(change.removal.backup)
+	}
+	return nil
 }
 
 func (change defaultAgentUninstall) rollback() error {
@@ -2168,6 +2534,185 @@ func readOpenCodeConfigFromBytes(data []byte) (map[string]json.RawMessage, bool,
 		return nil, false, fmt.Errorf("%w: opencode.json must contain a JSON object", integration.ErrInvalid)
 	}
 	return values, true, nil
+}
+
+func installRootArtifact(ctx context.Context, root *rootTransaction, name string, item artifact) (rootInstalledArtifact, error) {
+	if err := ctx.Err(); err != nil {
+		return rootInstalledArtifact{}, err
+	}
+	staged, err := root.StageArtifact(name, item.content, 0o600)
+	if err != nil {
+		return rootInstalledArtifact{}, fmt.Errorf("stage OpenCode integration artifact: %w", err)
+	}
+	installed := rootInstalledArtifact{name: name, staged: staged}
+	if item.upgrade {
+		anchorDirectory := filepath.Join("vgxness", retainedPredecessorDirectory, retainedAnchorDirectory)
+		if err := root.EnsureDirectory(anchorDirectory); err != nil {
+			return rootInstalledArtifact{}, errors.Join(fmt.Errorf("%w: prepare retained predecessor directory", integration.ErrConflict), root.CleanupStaged(staged))
+		}
+		backup, backupErr := root.BackupIn(name, anchorDirectory, item.prior)
+		if backupErr != nil {
+			return rootInstalledArtifact{}, errors.Join(fmt.Errorf("%w: protect OpenCode integration predecessor", integration.ErrConflict), root.CleanupStaged(staged))
+		}
+		installed.backup = &backup
+		if err := persistRootRetainedPredecessor(root, name, backup, item.prior); err != nil {
+			return rootInstalledArtifact{}, errors.Join(retainedPredecessorPersistError(filepath.Join(root.path, "vgxness", retainedPredecessorDirectory), filepath.Join(root.path, backup.name), err), root.releaseBackup(backup), root.CleanupStaged(staged))
+		}
+		installed.retained = true
+		if err := root.RemoveExact(name, backup.info, item.prior); err != nil {
+			return rootInstalledArtifact{}, errors.Join(fmt.Errorf("remove OpenCode integration predecessor: %w", err), root.releaseBackup(backup), root.CleanupStaged(staged))
+		}
+	}
+	publication, err := root.PublishStaged(staged, name)
+	if err != nil {
+		var recoveryErr error
+		if publication.state == rootPublicationPending {
+			if rollbackErr := root.RollbackPendingPublication(publication, name, staged.content); rollbackErr != nil {
+				recoveryErr = errors.Join(recoveryErr, recoveryFailure("remove uncertain OpenCode integration publication", rollbackErr))
+				if installed.backup != nil {
+					recoveryErr = errors.Join(recoveryErr, root.releaseBackup(*installed.backup))
+				}
+				return rootInstalledArtifact{}, errors.Join(fmt.Errorf("publish OpenCode integration artifact: %w", err), recoveryErr, root.CleanupStaged(staged))
+			}
+		}
+		if installed.backup != nil {
+			if installed.retained {
+				recoveryErr = recoveryFailure("restore retained OpenCode integration predecessor", root.RestoreRetainedBackup(*installed.backup, name))
+			} else {
+				recoveryErr = recoveryFailure("restore OpenCode integration predecessor", root.RestoreBackup(*installed.backup, name))
+			}
+		}
+		return rootInstalledArtifact{}, errors.Join(fmt.Errorf("publish OpenCode integration artifact: %w", err), recoveryErr, root.CleanupStaged(staged))
+	}
+	installed.published = publication.info
+	return installed, nil
+}
+
+func rollbackRootInstall(root *rootTransaction, retired []rootRetiredArtifact, created []rootInstalledArtifact) error {
+	var recoveryErr error
+	for index := len(retired) - 1; index >= 0; index-- {
+		recoveryErr = errors.Join(recoveryErr, recoveryFailure("restore retired OpenCode artifact", root.RestoreBackup(retired[index].backup, retired[index].name)))
+	}
+	for index := len(created) - 1; index >= 0; index-- {
+		recoveryErr = errors.Join(recoveryErr, recoveryFailure("restore OpenCode integration artifact", rollbackRootInstalledArtifact(root, created[index])))
+	}
+	return recoveryErr
+}
+
+func rollbackRootInstalledArtifact(root *rootTransaction, item rootInstalledArtifact) error {
+	var err error
+	if item.publication.state == rootPublicationPending {
+		if rollbackErr := root.RollbackPendingPublication(item.publication, item.name, item.staged.content); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+			if item.backup != nil {
+				err = errors.Join(err, root.releaseBackup(*item.backup))
+			}
+		} else if item.backup != nil {
+			if item.retained {
+				err = errors.Join(err, root.RestoreRetainedBackup(*item.backup, item.name))
+			} else {
+				err = errors.Join(err, root.RestoreBackup(*item.backup, item.name))
+			}
+		}
+	} else if item.published != nil && item.retained && item.backup != nil {
+		data, current, readErr := root.ReadRegularInfo(item.name)
+		if readErr != nil || !os.SameFile(current, item.published) || !bytes.Equal(data, item.staged.content) {
+			err = errors.Join(err, fmt.Errorf("published artifact changed before rollback"), root.releaseBackup(*item.backup))
+		} else if removeErr := root.RemoveExact(item.name, current, item.staged.content); removeErr != nil {
+			err = errors.Join(err, removeErr, root.releaseBackup(*item.backup))
+		} else {
+			err = errors.Join(err, root.RestoreRetainedBackup(*item.backup, item.name))
+		}
+	} else if item.published != nil {
+		err = errors.Join(err, root.RollbackPublished(item.staged, item.name, item.published, item.backup))
+	} else if item.backup != nil && !item.retained {
+		err = errors.Join(err, root.RestoreBackup(*item.backup, item.name))
+	}
+	return errors.Join(err, root.CleanupStaged(item.staged))
+}
+
+func rollbackRootReinstalledArtifact(root *rootTransaction, item rootInstalledArtifact) error {
+	var err error
+	if item.publication.state == rootPublicationPending {
+		if rollbackErr := root.RollbackPendingPublication(item.publication, item.name, item.staged.content); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+			if item.backup != nil {
+				err = errors.Join(err, root.releaseBackup(*item.backup))
+			}
+			return errors.Join(err, root.CleanupStaged(item.staged))
+		}
+	} else if item.published != nil {
+		err = errors.Join(err, root.RemoveExact(item.name, item.published, item.staged.content))
+	}
+	if item.backup != nil {
+		err = errors.Join(err, root.RestoreObservedAnchor(*item.backup, item.name))
+	}
+	return errors.Join(err, root.CleanupStaged(item.staged))
+}
+
+func persistRootRetainedPredecessor(root *rootTransaction, target string, backup rootArtifactBackup, predecessor []byte) error {
+	directory := filepath.Join("vgxness", retainedPredecessorDirectory)
+	if err := root.EnsureDirectory(directory); err != nil {
+		return err
+	}
+	operation := make([]byte, 16)
+	if _, err := rand.Read(operation); err != nil {
+		return err
+	}
+	markerRoot := root.path
+	if runtime.GOOS == "darwin" && strings.HasPrefix(markerRoot, "/private/var/") {
+		markerRoot = strings.TrimPrefix(markerRoot, "/private")
+	}
+	marker := retainedPredecessorMarker{Version: retainedPredecessorVersion, Operation: hex.EncodeToString(operation), Root: markerRoot, Target: filepath.Join(markerRoot, target), Anchor: filepath.Join(markerRoot, backup.name), SHA256: artifactSHA256(predecessor)}
+	body, err := json.Marshal(marker)
+	if err != nil || len(body)+1 > maxRetainedPredecessorBytes {
+		return fmt.Errorf("encode retained predecessor")
+	}
+	file, err := root.CreateTempIn(directory, ".vgxness-retained-*.tmp")
+	if err != nil {
+		return err
+	}
+	if err := writeAndSyncRootFile(file, append(body, '\n')); err != nil {
+		return err
+	}
+	if err := root.Publish(file.Name(), filepath.Join(directory, marker.Operation+".json")); err != nil {
+		return err
+	}
+	return root.SyncDirectory(directory)
+}
+
+func retireRootArtifact(root *rootTransaction, name string, item retiredArtifact) (rootRetiredArtifact, error) {
+	backup, err := root.Backup(name, item.content)
+	if err != nil {
+		return rootRetiredArtifact{}, fmt.Errorf("%w: protect retired OpenCode artifact", integration.ErrConflict)
+	}
+	if err := root.RemoveExact(name, backup.info, item.content); err != nil {
+		return rootRetiredArtifact{}, errors.Join(fmt.Errorf("retire OpenCode artifact: %w", err), recoveryFailure("restore retired OpenCode artifact", root.RestoreBackup(backup, name)))
+	}
+	return rootRetiredArtifact{name: name, backup: backup}, nil
+}
+
+func verifyRootInstall(root *rootTransaction, state inspection) error {
+	for _, item := range state.artifacts {
+		name, err := root.Relative(item.path)
+		if err != nil {
+			return err
+		}
+		data, err := root.ReadRegular(name)
+		if err != nil || (item.defaultAgent == nil && !bytes.Equal(data, item.content)) || (item.defaultAgent != nil && !sameJSONValue(data, item.content)) {
+			return fmt.Errorf("artifact readback failed")
+		}
+	}
+	for _, item := range state.retired {
+		name, err := root.Relative(item.path)
+		if err != nil {
+			return err
+		}
+		if _, err := root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("retired artifact remains")
+		}
+	}
+	return nil
 }
 
 func installArtifact(ctx context.Context, item artifact) (installedArtifact, error) {
