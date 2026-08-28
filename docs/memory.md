@@ -61,7 +61,7 @@ the owner-global cursor. Its result mode is `project_bidirectional`.
 
 The default database is `~/.vgxness/memory.db`. Explicit `--storage-root` and
 `--project-local` modes use isolated databases. The OpenCode integration exposes
-both domains through the [MCP-only integration](opencode-integration.md); MCP
+both domains through the [MCP and lifecycle-adapter integration](opencode-integration.md); MCP
 has no scheduler, delegation, edit, or
 execution authority.
 
@@ -104,7 +104,7 @@ inactivity as permission to delete them.
 
 Engram is not part of the active architecture. Startup, `vgxness status`,
 OpenCode setup, and normal memory operations do not install, probe, invoke,
-import, require, or synchronize it. The owned `MemoryStore` is the sole
+import, require, or synchronize it. OpenCode setup instead owns the exact auto-discovered lifecycle plugin, which has no config plugin entry and handles bounded provider-session lifecycle only. The owned `MemoryStore` is the sole
 persistent semantic-memory authority.
 
 ## Project sync identity

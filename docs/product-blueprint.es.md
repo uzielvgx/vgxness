@@ -2,7 +2,7 @@
 
 ## Límite actual del producto
 
-VGXNESS es un manager nativo de OpenCode con memoria local SQLite/FTS5 y almacenamiento SDD estructurado. OpenCode conserva la ejecución de ingeniería. La proyección actual solo MCP contiene exactamente 16 artefactos del proveedor: 13 agentes administrados, un manifiesto de plan de modelos, la selección predeterminada en `opencode.json` y metadatos de restauración. No se instala plugin.
+VGXNESS es un manager nativo de OpenCode con memoria local SQLite/FTS5 y almacenamiento SDD estructurado. OpenCode conserva la ejecución de ingeniería. La proyección actual contiene exactamente 17 artefactos del proveedor: 13 agentes administrados, el plugin de ciclo de vida auto-descubierto `plugins/vgxness-memory-lifecycle.ts`, un manifiesto de plan de modelos, la selección predeterminada en `opencode.json` y metadatos de restauración. El plugin no tiene entrada `plugin` en `opencode.json`.
 
 OpenCode administrado CARE-v2 Manager59 y Codex generado Manager18 usan `vgxness mcp --full`, que expone ocho herramientas de memoria y 13 de SDD. Su contrato de prompt compartido selecciona silenciosamente la ruta de menor costo sin herramientas de clasificación: conversación, escritura, traducción, resumen, brainstorming y planificación sin efectos usan una ruta rápida sin herramientas de ejecución; las lecturas exactas delimitadas permiten como máximo tres intentos sin delegación ni listas de tareas; la investigación compleja de evidencia puede usar una delegación de solo lectura. Los intentos fallidos y reintentos cuentan y la ejecución se detiene antes de agotar el presupuesto. Es política de prompt, no enforcement de runtime.
 
@@ -18,6 +18,7 @@ La política actual de entrega usa manager v59 con `git-delivery` v1 global, mig
 | Explore, General, SDD apply y verifier | 4 | Explore es solo lectura, General implementa trabajo autorizado no SDD, SDD apply escribe exclusivamente workspace/proyecciones SDD aceptados y verifier no muta. |
 | CARE reviewer, specialist y challenger | 3 | Revisión de aseguramiento de solo lectura; no hay aliases fixed-lens actuales. |
 | Cinco perfiles de fase SDD de solo lectura | 5 | Research, proposal, spec, design y tasks. |
+| Plugin de ciclo de vida | 1 | Inicio superior, un handoff aislado acotado, checkpoint de compactación sin transcripción, observación exacta del resumen y fin completado/interrumpido. |
 | Manifiesto de plan de modelos | 1 | Bindings de modelos resueltos. |
 | Selección de agente predeterminado | 1 | Selección del manager predeterminado. |
 | Metadatos de restauración | 1 | Estado de restauración del agente previo. |
@@ -34,11 +35,11 @@ Las operaciones MCP no enrutan trabajo, invocan agentes, acceden archivos del wo
 
 ## Setup y retiro
 
-Setup previsualiza cambios, exige confirmación, instala el launcher y 16 artefactos exactos de OpenCode, configura `vgxness mcp --full` y publica el catálogo global. El manager v57 de OpenCode y el manager v16 de Codex se conservan únicamente como predecesores históricos exactos reconocidos, junto con identidades anteriores compatibles. Reconoce y retira únicamente bytes históricos exactos del plugin `vgxness.ts` v1-v10 y del provider skill `vgxness-autonomous-stacked-pr` v1/v2/v3. Bytes modificados, malformados, extranjeros, desconocidos o más nuevos bloquean sin eliminación. La desinstalación de OpenCode no elimina skills globales.
+Setup previsualiza cambios, exige confirmación, instala el launcher y 17 artefactos exactos de OpenCode incluido el plugin de ciclo de vida auto-descubierto, configura `vgxness mcp --full` sin entrada de plugin en la configuración y publica el catálogo global. El manager v57 de OpenCode y el manager v16 de Codex se conservan únicamente como predecesores históricos exactos reconocidos, junto con identidades anteriores compatibles. Reconoce y retira únicamente bytes históricos exactos del plugin `vgxness.ts` v1-v10 y del provider skill `vgxness-autonomous-stacked-pr` v1/v2/v3. Bytes modificados, malformados, extranjeros, desconocidos o más nuevos bloquean sin eliminación. La desinstalación de OpenCode no elimina skills globales.
 
 ## No objetivos
 
-- No hay plugin instalado, superficie de hooks, inyección automática de memoria, compactación, observabilidad ni identidad de sesión de plugin.
+- No hay plugins adicionales, hooks shell o Git, compactación automática, observabilidad amplia ni identidad de sesión fuera del plugin de ciclo de vida administrado. VGXNESS no inyecta ampliamente memorias recientes ni transcripciones en cada prompt; en la primera transformación de sistema de nivel superior elegible, la única inyección automática de memoria del plugin de ciclo de vida administrado es una única transferencia acotada, del mismo proyecto y previamente completada, como datos no confiables y nunca como instrucciones. Los eventos de ciclo de vida no capturan contenido de transcripciones.
 - No se instalan hooks shell o Git.
 - MCP no obtiene autoridad de filesystem, ejecución, routing, delegación o ciclo.
 - No hay instalación automática de red/paquetes ni importación de bases de datos antiguas.

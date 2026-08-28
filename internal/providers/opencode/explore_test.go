@@ -248,7 +248,7 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 			installed, installErr := service.Install(context.Background(), options)
 			status, statusErr := NewIntegration().Status(context.Background(), options)
 			idempotent, idempotentErr := service.Install(context.Background(), options)
-			testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled && status.RetainedPredecessorCount > 0 && status.RetainedPredecessorPath != "" && idempotentErr == nil && idempotent.State == integration.StateInstalled && idempotent.ModelSchemaVersion == 3 && idempotent.ArtifactCount == 16 && idempotent.Changed && idempotent.RestartRequired, "preview=%+v install=%v status=%+v idempotent=%+v", preview, installErr, status, idempotent)
+			testutil.Require(t, previewErr == nil && preview.State == integration.StatePartial && installErr == nil && installed.State == integration.StateInstalled && statusErr == nil && status.State == integration.StateInstalled && status.RetainedPredecessorCount > 0 && status.RetainedPredecessorPath != "" && idempotentErr == nil && idempotent.State == integration.StateInstalled && idempotent.ModelSchemaVersion == 3 && idempotent.ArtifactCount == 17 && idempotent.Changed && idempotent.RestartRequired, "preview=%+v install=%v status=%+v idempotent=%+v", preview, installErr, status, idempotent)
 		})
 	}
 }
@@ -289,7 +289,7 @@ func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 				previewErr == nil && preview.State == integration.StatePartial &&
 					installErr == nil && installed.State == integration.StateInstalled &&
 					statusErr == nil && status.State == integration.StateInstalled &&
-					idempotentErr == nil && idempotent.State == integration.StateInstalled && idempotent.ModelSchemaVersion == 3 && idempotent.ArtifactCount == 16 && idempotent.Changed && idempotent.RestartRequired && readErr == nil && bytes.Equal(readback, currentV3.agents[managerAgentName]),
+					idempotentErr == nil && idempotent.State == integration.StateInstalled && idempotent.ModelSchemaVersion == 3 && idempotent.ArtifactCount == 17 && idempotent.Changed && idempotent.RestartRequired && readErr == nil && bytes.Equal(readback, currentV3.agents[managerAgentName]),
 				"preview=%+v install=%v status=%+v idempotent=%+v read=%v", preview, installErr, status, idempotent, readErr,
 			)
 		})

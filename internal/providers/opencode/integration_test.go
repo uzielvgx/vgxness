@@ -1016,7 +1016,7 @@ func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 			result.State == integration.StateAbsent &&
 			result.Path == expected &&
 			result.ToolPath == "" &&
-			result.ToolSHA256 == "" && result.ModelSchemaVersion == 3 && result.ModelAssignments != nil && result.ArtifactCount == 16 &&
+			result.ToolSHA256 == "" && result.ModelSchemaVersion == 3 && result.ModelAssignments != nil && result.ArtifactCount == 17 &&
 			result.Changed &&
 			len(result.ArtifactSHA256) == 64,
 		"unexpected preview: %#v", result,
@@ -1088,6 +1088,21 @@ func TestNewPreviewIntegrationAcceptsOnlyAbsoluteCleanLauncherPath(t *testing.T)
 	}
 }
 
+func TestNewPreviewIntegrationRendersProspectiveLifecyclePluginWithoutWrites(t *testing.T) {
+	launcherPath := filepath.Join(t.TempDir(), "launcher", "vgxness")
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service, err := NewPreviewIntegration(launcherPath)
+	testutil.NoError(t, err)
+
+	result, previewErr := service.Preview(context.Background(), integration.Options{ConfigDir: configDirectory})
+	_, launcherErr := os.Stat(launcherPath)
+	_, configErr := os.Stat(configDirectory)
+	testutil.Require(t,
+		previewErr == nil && result.State == integration.StateAbsent && result.ArtifactCount == 17 && result.Changed && result.RestartRequired &&
+			os.IsNotExist(launcherErr) && os.IsNotExist(configErr),
+		"preview=%+v err=%v launcher=%v config=%v", result, previewErr, launcherErr, configErr)
+}
+
 func TestManagedMCPUsesFullMode(t *testing.T) {
 	config, err := managedMCPConfig("/opt/vgxness")
 	testutil.NoError(t, err)
@@ -1141,7 +1156,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolPath == "" &&
 			installed.ToolSHA256 == "" &&
 			installed.ModelSchemaVersion == 3 && installed.ModelProvider == "openai" && installed.ModelAssignments != nil &&
-			installed.ArtifactCount == 16 &&
+			installed.ArtifactCount == 17 &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired &&
 			installed.DefaultAgent == defaultAgentName &&
 			installed.DefaultAgentPath == filepath.Join(configDirectory, defaultAgentConfigName) &&
@@ -1167,9 +1182,31 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 	second, err := service.Install(context.Background(), options)
 	testutil.NoError(t, err)
 	testutil.Require(t, second.State == integration.StateInstalled && !second.Changed, "install was not idempotent: %#v", second)
-	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
-	_, err = os.Stat(skillPath)
-	testutil.Require(t, os.IsNotExist(err), "retired provider skill remains active: %v", err)
+	plugin, err := memoryLifecyclePluginContent(service.executable)
+	testutil.NoError(t, err)
+	pluginPath := filepath.Join(configDirectory, "plugins", memoryLifecyclePluginName)
+	installedPlugin, err := os.ReadFile(pluginPath)
+	testutil.Require(t, err == nil && bytes.Equal(installedPlugin, plugin), "memory plugin is not installed: %v", err)
+}
+
+func TestIntegration_RepairsOnlyMissingLifecyclePlugin(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	pluginPath := filepath.Join(configDirectory, "plugins", memoryLifecyclePluginName)
+	testutil.NoError(t, os.Remove(pluginPath))
+
+	status, statusErr := service.Status(context.Background(), options)
+	repaired, repairErr := service.Install(context.Background(), options)
+	plugin, readErr := os.ReadFile(pluginPath)
+	want, contentErr := memoryLifecyclePluginContent(service.executable)
+	second, secondErr := service.Install(context.Background(), options)
+	testutil.Require(t,
+		statusErr == nil && status.State == integration.StatePartial && repairErr == nil && repaired.State == integration.StateInstalled && repaired.Changed && repaired.RestartRequired &&
+			readErr == nil && contentErr == nil && bytes.Equal(plugin, want) && secondErr == nil && second.State == integration.StateInstalled && !second.Changed,
+		"status=%+v repair=%+v repairErr=%v read=%v content=%v second=%+v secondErr=%v", status, repaired, repairErr, readErr, contentErr, second, secondErr)
 }
 
 func TestIntegration_DefaultAgentConfigPreservesOpenCodeJSONAndJSONC(t *testing.T) {
@@ -1202,6 +1239,22 @@ func TestIntegration_DefaultAgentConfigPreservesOpenCodeJSONAndJSONC(t *testing.
 			installed.DefaultAgent == defaultAgentName && installed.DefaultAgentPath == configPath,
 		"shared config or JSONC changed incorrectly: installed=%+v config=%q jsonc=%q", installed, after, afterJSONC,
 	)
+}
+
+func TestIntegration_LifecyclePluginDriftBlocksInstallAndUninstall(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	path := filepath.Join(configDirectory, "plugins", memoryLifecyclePluginName)
+	foreign := []byte("user-owned lifecycle plugin\n")
+	testutil.NoError(t, os.WriteFile(path, foreign, 0o600))
+	status, statusErr := service.Status(context.Background(), options)
+	_, installErr := service.Install(context.Background(), options)
+	_, uninstallErr := service.Uninstall(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	testutil.Require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(installErr, integration.ErrConflict) && errors.Is(uninstallErr, integration.ErrDrift) && readErr == nil && bytes.Equal(after, foreign), "status=%+v install=%v uninstall=%v plugin=%q", status, installErr, uninstallErr, after)
 }
 
 func TestIntegration_AddsManagedMCPWithoutMutatingUnrelatedMCP(t *testing.T) {
@@ -2422,7 +2475,7 @@ func TestIntegrationMigratesExactCurrentV1ToCAREWithoutOverrides(t *testing.T) {
 					t.Errorf("exact current V1 reviewer %s was not retired: %v", name, err)
 				}
 			}
-			testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 1 && installed.ArtifactCount == 16 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+			testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 1 && installed.ArtifactCount == 17 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
 		})
 	}
 }
@@ -2449,7 +2502,7 @@ func TestIntegrationMigratesCustomV1ToCARE(t *testing.T) {
 	testutil.Require(t,
 		statusBeforeErr == nil && statusBefore.ModelSchemaVersion == 1 && statusBefore.ModelPlan == sdd.PlanHigh && statusBefore.ModelEfficient == "acme/fast" && statusBefore.ModelBalanced == "acme/balanced" && statusBefore.ModelFrontier == "acme/frontier" &&
 			previewBeforeErr == nil && previewBefore.ModelSchemaVersion == 1 &&
-			installErr == nil && installed.ModelSchemaVersion == 1 && installed.ModelPlan == sdd.PlanHigh && installed.ModelEfficient == "acme/fast" && installed.ModelBalanced == "acme/balanced" && installed.ModelFrontier == "acme/frontier" && installed.ArtifactCount == 16 &&
+			installErr == nil && installed.ModelSchemaVersion == 1 && installed.ModelPlan == sdd.PlanHigh && installed.ModelEfficient == "acme/fast" && installed.ModelBalanced == "acme/balanced" && installed.ModelFrontier == "acme/frontier" && installed.ArtifactCount == 17 &&
 			careErr == nil && os.IsNotExist(reviewerErr),
 		"status before=%+v statusErr=%v preview before=%+v previewErr=%v installed=%+v install=%v care=%v reviewer=%v",
 		statusBefore, statusBeforeErr, previewBefore, previewBeforeErr, installed, installErr, careErr, reviewerErr)
@@ -2566,10 +2619,13 @@ func TestIntegrationRestoresRetiredSkillAfterLaterFailure(t *testing.T) {
 	legacy := []byte(previousAutonomousStackedPRSkillV2)
 	testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	testutil.NoError(t, os.WriteFile(path, legacy, 0o600))
+	lifecyclePluginPath := filepath.Join(configDirectory, "plugins", memoryLifecyclePluginName)
+	testutil.NoError(t, os.Remove(lifecyclePluginPath))
 	service.afterRetirement = func() error { return errors.New("injected later failure") }
 	_, err = service.Install(context.Background(), options)
 	after, readErr := os.ReadFile(path)
-	testutil.Require(t, err != nil && readErr == nil && bytes.Equal(after, legacy), "retirement rollback err=%v read=%v after=%q", err, readErr, after)
+	_, pluginErr := os.Stat(lifecyclePluginPath)
+	testutil.Require(t, err != nil && readErr == nil && bytes.Equal(after, legacy) && os.IsNotExist(pluginErr), "retirement rollback err=%v read=%v after=%q plugin=%v", err, readErr, after, pluginErr)
 }
 
 func TestIntegration_ReinstallAndUninstallRetireLegacyArtifacts(t *testing.T) {
@@ -4097,6 +4153,24 @@ func TestMemoryLifecyclePluginRuntimeLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryLifecyclePluginRuntimeOutputOverflowReleasesStdoutImmediately(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	plugin := string(renderMemoryLifecyclePlugin("/vgxness-test-bin"))
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryLifecyclePlugin`, `const VGXNESSMemoryLifecyclePlugin`, 1)
+	script := `const a=(x,m)=>{if(!x)throw Error(m)},children=[];function stream(){const h=new Map();return{destroyed:false,emits:0,on:(n,f)=>h.set(n,f),emit(n,v){if(this.destroyed)return;this.emits++;h.get(n)?.(v)},setEncoding(){},destroy(){this.destroyed=true}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map()}on(n,f){this.h.set(n,f);return this}emit(n,...v){this.h.get(n)?.(...v)}kill(){this.killed=true;return true}}globalThis.__test={spawn:()=>{const c=new Child();children.push(c);return c},isAbsolute:x=>x.startsWith("/")};` + plugin + `
+const settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve()},p=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"}),pending=p.event({event:{type:"session.created",properties:{info:{id:"overflow"}}}});await settle();const child=children[0];child.stdout.emit("data","x".repeat(8193));await settle();a(child.killed,"overflow did not stop child");a(child.stdout.destroyed,"overflow did not release stdout immediately");const delivered=child.stdout.emits;child.stdout.emit("data","later");a(child.stdout.emits===delivered,"later stdout grew retained state");child.emit("close",1);await pending;`
+	path := filepath.Join(t.TempDir(), "memory-lifecycle-output-bound.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	if output, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("lifecycle output bound runtime: %v: %s", err, output)
+	}
+}
+
 func TestMemoryLifecyclePluginRuntimePendingStartsDoNotBecomeLive(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -4473,7 +4547,7 @@ func TestIntegrationV3InstallStatusChangeAndUninstall(t *testing.T) {
 	resolved, err := ResolveModelPlanV3(*parsed.ConfigV3)
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired && installed.ArtifactCount == 16 &&
+		installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired && installed.ArtifactCount == 17 &&
 			parsed.SchemaVersion == 3 && parsed.Config == nil && parsed.Resolved == nil && parsed.ConfigV2 == nil && parsed.ResolvedV2 == nil &&
 			len(parsed.ConfigV3.Assignments) == integration.ModelAssignmentCount && len(parsed.ResolvedV3.Assignments) == integration.ModelAssignmentCount &&
 			status.State == integration.StateInstalled && status.ModelProvider == "acme" && status.ModelAssignments != nil && reflect.DeepEqual(status.ModelAssignments[:], resolved.Assignments) &&

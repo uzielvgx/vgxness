@@ -145,6 +145,7 @@ const (
 	reviewResilienceName         = "vgxness-review-resilience.md"
 	reviewRefuterName            = "vgxness-review-refuter.md"
 	memoryPluginName             = "vgxness.ts"
+	memoryLifecyclePluginName    = "vgxness-memory-lifecycle.ts"
 	autonomousStackedPRSkillName = "vgxness-autonomous-stacked-pr"
 	defaultAgentName             = "vgxness-manager"
 	reinstallCheckpointMoved     = "moved"
@@ -300,6 +301,7 @@ Return exactly one compact Child Return Envelope v1 JSON object (<=16 KiB; <=32 
 type Integration struct {
 	now                       func() time.Time
 	executable                string
+	prospectiveLauncher       bool
 	reinstallCheckpoint       func(string, string) error
 	afterDefaultAgentSnapshot func()
 	afterReinstallAnchorPath  func(string)
@@ -442,7 +444,7 @@ func NewPreviewIntegration(executable string) (*Integration, error) {
 	if executable == "" || !filepath.IsAbs(executable) || executable != filepath.Clean(executable) {
 		return nil, fmt.Errorf("%w: preview VGXNESS launcher", integration.ErrInvalid)
 	}
-	return &Integration{now: time.Now, executable: executable}, nil
+	return &Integration{now: time.Now, executable: executable, prospectiveLauncher: true}, nil
 }
 
 func validateManagedLauncher(candidate string) (string, error) {
@@ -1470,6 +1472,11 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	}
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
 	legacyPluginPath := filepath.Join(configDirectory, "plugins", memoryPluginName)
+	lifecyclePluginPath := filepath.Join(configDirectory, "plugins", memoryLifecyclePluginName)
+	pluginContent, err := memoryLifecyclePluginContentForInspection(service.executable, service.prospectiveLauncher)
+	if err != nil {
+		return inspection{}, err
+	}
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
 	skillPath := filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")
 	defaultAgentPath := filepath.Join(configDirectory, defaultAgentConfigName)
@@ -1632,7 +1639,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	if len(exploreV3) == 0 || len(exploreV2) == 0 || len(generalV7) == 0 || len(generalV6) == 0 || len(verifierV5) == 0 || len(verifierV4) == 0 {
 		return inspection{}, integration.ErrInvalid
 	}
-	state := inspection{result: result, artifacts: make([]artifact, 0, len(modelAgentInventoryV3)+3)}
+	state := inspection{result: result, artifacts: make([]artifact, 0, len(modelAgentInventoryV3)+4)}
 	manifestlessCoherent := false
 	if !installedPlanOK && errors.Is(predecessorManifestErr, os.ErrNotExist) {
 		bundle, _, coherenceErr := manifestlessModelGeneration(configDirectory, plan)
@@ -1665,6 +1672,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		path := filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey))
 		state.artifacts = append(state.artifacts, artifact{path: path, content: content, backup: strings.TrimSuffix(name, ".md"), predecessors: prior, regenerations: regeneration(path)})
 	}
+	state.artifacts = append(state.artifacts, artifact{path: lifecyclePluginPath, content: pluginContent, backup: "vgxness-memory-lifecycle-plugin"})
 	state.artifacts = append(state.artifacts, artifact{path: manifestPath, content: plan.manifest, backup: "vgxness-model-plan", regenerations: regeneration(manifestPath)}, artifact{path: defaultAgentStatePath, content: defaultAgentStateContent, backup: "vgxness-default-agent-state", defaultState: true, recognize: isLegacyDefaultAgentState}, artifact{path: defaultAgentPath, content: defaultAgentConfig, backup: "vgxness-default-agent", prior: defaultAgentSnapshot, defaultAgent: &defaultAgentState, defaultAgentSnapshotPresent: defaultAgentSnapshotPresent})
 	for index := range state.artifacts {
 		state.artifacts[index].retainedRoot = configDirectory
@@ -3906,6 +3914,16 @@ func memoryLifecyclePluginContent(executable string) ([]byte, error) {
 	return renderMemoryLifecyclePlugin(resolved), nil
 }
 
+func memoryLifecyclePluginContentForInspection(executable string, prospective bool) ([]byte, error) {
+	if !prospective {
+		return memoryLifecyclePluginContent(executable)
+	}
+	if strings.TrimSpace(executable) != executable || !filepath.IsAbs(executable) || filepath.Clean(executable) != executable {
+		return nil, fmt.Errorf("%w: preview VGXNESS launcher", integration.ErrInvalid)
+	}
+	return renderMemoryLifecyclePlugin(executable), nil
+}
+
 func renderMemoryLifecyclePlugin(resolved string) []byte {
 	quoted, _ := json.Marshal(resolved)
 	return []byte(`import { spawn } from "node:child_process"
@@ -3936,14 +3954,14 @@ export const VGXNESSMemoryLifecyclePlugin = async ({ directory }) => {
     const input = JSON.stringify({ schemaVersion: 1, operation, workspace: directory, ...payload })
     if (Buffer.byteLength(input) > MAX_INPUT_BYTES) return reject(new Error("VGXNESS lifecycle request exceeded its bound"))
     const child = spawn(VGXNESS_EXECUTABLE, ["memory", "hook", "--stdin"], { cwd: directory, shell: false, stdio: ["pipe", "pipe", "pipe"], env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, TMPDIR: process.env.TMPDIR, SystemRoot: process.env.SystemRoot } })
-    let stdout = "", stderrBytes = 0, settled = false, failure, cleanupTimer
+    let stdout = "", stdoutBytes = 0, stderrBytes = 0, settled = false, failure, cleanupTimer
     const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(timer); if (cleanupTimer) clearTimeout(cleanupTimer); error ? reject(error) : resolve(value) }
     const stop = () => { try { return child.kill("SIGKILL") !== false } catch { return false } }
     const release = () => { for (const stream of [child.stdin, child.stdout, child.stderr]) try { stream?.destroy?.() } catch {}; try { child.unref?.() } catch {} }
-    const fail = error => { if (settled || failure) return; failure = error; cleanupTimer = setTimeout(() => { release(); finish(failure) }, CLEANUP_MS); if (!stop()) try { child.unref?.() } catch {} }
+    const fail = error => { if (settled || failure) return; failure = error; if (!stop()) try { child.unref?.() } catch {}; release(); cleanupTimer = setTimeout(() => { release(); finish(failure) }, CLEANUP_MS) }
     const timer = setTimeout(() => fail(new Error("VGXNESS lifecycle timed out")), TIMEOUT_MS)
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8")
-    child.stdout.on("data", chunk => { stdout += chunk; if (Buffer.byteLength(stdout) > MAX_OUTPUT_BYTES) fail(new Error("VGXNESS lifecycle response exceeded its bound")) })
+    child.stdout.on("data", chunk => { if (settled || failure) return; const chunkBytes = Buffer.byteLength(chunk); if (stdoutBytes + chunkBytes > MAX_OUTPUT_BYTES) return fail(new Error("VGXNESS lifecycle response exceeded its bound")); stdoutBytes += chunkBytes; stdout += chunk })
     child.stderr.on("data", chunk => { stderrBytes += Buffer.byteLength(chunk); if (stderrBytes > MAX_OUTPUT_BYTES) fail(new Error("VGXNESS lifecycle failure exceeded its bound")) })
     child.on("error", () => fail(new Error("VGXNESS lifecycle unavailable")))
     child.on("close", code => { if (settled) return; if (failure) return finish(failure); if (code !== 0) return finish(new Error("VGXNESS lifecycle failed")); try { const result = JSON.parse(stdout); if (result?.schemaVersion !== 1) throw new Error(); finish(undefined, result) } catch { finish(new Error("VGXNESS lifecycle response is invalid")) } })
