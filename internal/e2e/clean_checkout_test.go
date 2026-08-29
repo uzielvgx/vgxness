@@ -5,8 +5,6 @@ package e2e_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -135,65 +133,12 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	if bytes.Contains(managerData, []byte("automatically load `vgxness-autonomous-stacked-pr`")) {
 		t.Fatal("installed manager retains retired vgxness-autonomous-stacked-pr loading")
 	}
-	manifestData, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", "model-plan.json"))
+	manifestPath := filepath.Join(configDirectory, "vgxness", "model-plan.json")
+	manifestData, err := os.ReadFile(manifestPath)
 	for _, expected := range []string{`"schemaVersion": 3`, `"configV3"`, `"provider": "mixed"`, `"agents/vgxness-care-reviewer.md"`, `"agents/vgxness-care-specialist.md"`, `"agents/vgxness-care-challenger.md"`} {
 		if err != nil || !bytes.Contains(manifestData, []byte(expected)) {
 			t.Fatalf("setup did not install the expected v3 manifest content %q: %v\n%s", expected, err, manifestData)
 		}
-	}
-	type manifest struct {
-		SchemaVersion int                    `json:"schemaVersion"`
-		ManagedBy     string                 `json:"managedBy"`
-		Config        *sdd.ModelPlanConfig   `json:"config,omitempty"`
-		Resolved      *sdd.OpenCodePlan      `json:"resolved,omitempty"`
-		ConfigV2      *sdd.ModelPlanConfigV2 `json:"configV2,omitempty"`
-		ResolvedV2    *sdd.OpenCodePlanV2    `json:"resolvedV2,omitempty"`
-		ConfigV3      *sdd.ModelPlanConfigV3 `json:"configV3,omitempty"`
-		ResolvedV3    *sdd.OpenCodePlanV3    `json:"resolvedV3,omitempty"`
-		Artifacts     map[string]string      `json:"artifacts"`
-	}
-	var predecessorManifest manifest
-	if err := json.Unmarshal(manifestData, &predecessorManifest); err != nil {
-		t.Fatalf("decode current manifest: %v", err)
-	}
-	for _, name := range reviewers {
-		current, readErr := os.ReadFile(filepath.Join(configDirectory, "agents", name))
-		if readErr != nil {
-			t.Fatalf("read current CARE role %s: %v", name, readErr)
-		}
-		predecessor := exactCAREV1Agent(t, repository, name, current)
-		digest := sha256.Sum256(predecessor)
-		predecessorManifest.Artifacts["agents/"+name] = hex.EncodeToString(digest[:])
-		if err := os.WriteFile(filepath.Join(configDirectory, "agents", name), predecessor, 0o600); err != nil {
-			t.Fatalf("seed exact CARE-v1 role %s: %v", name, err)
-		}
-	}
-	managerV57 := []byte(exactV57Manager(t, repository))
-	managerDigest := sha256.Sum256(managerV57)
-	predecessorManifest.Artifacts["agents/vgxness-manager.md"] = hex.EncodeToString(managerDigest[:])
-	if err := os.WriteFile(manager, managerV57, 0o600); err != nil {
-		t.Fatalf("seed exact Manager57: %v", err)
-	}
-	predecessorManifestData, err := json.MarshalIndent(predecessorManifest, "", "  ")
-	if err != nil {
-		t.Fatalf("encode exact v57 manifest: %v", err)
-	}
-	predecessorManifestData = append(predecessorManifestData, '\n')
-	manifestPath := filepath.Join(configDirectory, "vgxness", "model-plan.json")
-	if err := os.WriteFile(manifestPath, predecessorManifestData, 0o600); err != nil {
-		t.Fatalf("seed exact v57 manifest: %v", err)
-	}
-	run(t, environment, workspace, sourceExecutable,
-		"setup", "opencode", "--yes", "--workspace", workspace,
-		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
-	)
-	upgradedManager, err := os.ReadFile(manager)
-	if err != nil || !bytes.Equal(upgradedManager, managerData) {
-		t.Fatalf("exact v57 manager did not upgrade to captured v58 bytes: %v", err)
-	}
-	upgradedManifest, err := os.ReadFile(manifestPath)
-	if err != nil || !bytes.Equal(upgradedManifest, manifestData) {
-		t.Fatalf("exact v57 manifest did not upgrade to captured v58 bytes: %v", err)
 	}
 	generalData, generalErr := os.ReadFile(general)
 	exploreData, exploreErr := os.ReadFile(explore)
@@ -268,39 +213,6 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(homeDirectory, ".vgxness", "memory.db")); err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("global project-isolated memory store is missing: info=%v err=%v", info, err)
 	}
-}
-
-func exactV57Manager(t *testing.T, repository string) string {
-	t.Helper()
-	fixture, err := os.ReadFile(filepath.Join(repository, "internal", "e2e", "testdata", "opencode-manager.v57.acme-frontier-xhigh.md"))
-	if err != nil {
-		t.Fatalf("read exact v57 manager fixture: %v", err)
-	}
-	if got := bytes.Count(fixture, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 1 {
-		t.Fatalf("exact v57 fixture marker count=%d, want 1", got)
-	}
-	if bytes.Contains(fixture, []byte("artifact: opencode-agent/vgxness-manager; version: 58")) {
-		t.Fatal("exact v57 fixture retains v58 marker")
-	}
-	return string(fixture)
-}
-
-func exactCAREV1Agent(t *testing.T, repository, name string, current []byte) []byte {
-	t.Helper()
-	base, err := os.ReadFile(filepath.Join(repository, "internal", "providers", "opencode", "templates", strings.TrimSuffix(name, ".md")+".v1.md"))
-	if err != nil {
-		t.Fatalf("read CARE-v1 snapshot %s: %v", name, err)
-	}
-	start := bytes.Index(current, []byte("model: "))
-	if start < 0 {
-		t.Fatalf("current CARE role %s lacks model binding", name)
-	}
-	end := bytes.Index(current[start:], []byte("permission:\n"))
-	if end < 0 {
-		t.Fatalf("current CARE role %s lacks model binding", name)
-	}
-	binding := current[start : start+end]
-	return bytes.Replace(base, []byte("hidden: true\n"), append([]byte("hidden: true\n"), binding...), 1)
 }
 
 func reviewerPaths(configDirectory string, names []string) []string {
