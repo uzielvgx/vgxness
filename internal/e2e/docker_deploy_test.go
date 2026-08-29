@@ -50,6 +50,25 @@ func TestDockerDeployPackageContract(t *testing.T) {
 			t.Errorf("backup service is missing %q", want)
 		}
 	}
+	syncd := composeServiceBlock(t, string(compose), "vgxness-syncd")
+	const allowedPortsBlock = "    ports:\n      - \"${VGXNESS_TAILSCALE_IP:?set the canonical Tailscale IP}:8788:8788\""
+	if got := composePortsBlock(syncd); got != allowedPortsBlock {
+		t.Errorf("syncd ports block = %q, want %q", got, allowedPortsBlock)
+	}
+	for name, ports := range map[string]string{
+		"extra sync API":       allowedPortsBlock + "\n      - \"127.0.0.1:8787:8787\"",
+		"wildcard admin API":   "    ports:\n      - \"0.0.0.0:8788:8788\"",
+		"alternate admin host": "    ports:\n      - \"127.0.0.1:8788:8788\"",
+		"duplicate admin API":  allowedPortsBlock + "\n      - \"${VGXNESS_TAILSCALE_IP:?set the canonical Tailscale IP}:8788:8788\"",
+		"long form sync API":   "    ports:\n      - target: 8787\n        published: 8787\n        host_ip: 127.0.0.1",
+		"inline ports":         "    ports: [\"${VGXNESS_TAILSCALE_IP:?set the canonical Tailscale IP}:8788:8788\"]",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := composePortsBlock(ports + "\n    image: test"); got == allowedPortsBlock {
+				t.Errorf("unsafe ports block matched allowed block: %q", got)
+			}
+		})
+	}
 	init, err := os.ReadFile(filepath.Join(repository, "deploy", "docker", "postgres-init.sh"))
 	if err != nil || !strings.Contains(string(init), "admin_password") || !strings.Contains(string(init), "DEFAULT PRIVILEGES FOR ROLE vgxness_syncd IN SCHEMA public GRANT SELECT ON SEQUENCES") || !strings.Contains(string(init), "DEFAULT PRIVILEGES FOR ROLE vgxness_syncd IN SCHEMA public GRANT SELECT ON TABLES") {
 		t.Error("postgres init privilege or admin validation contract is incomplete")
@@ -113,10 +132,29 @@ func composeServiceBlock(t *testing.T, compose, name string) string {
 	return block
 }
 
+func composePortsBlock(service string) string {
+	lines := strings.Split(service, "\n")
+	for start, line := range lines {
+		if !strings.HasPrefix(line, "    ports:") {
+			continue
+		}
+		end := start + 1
+		for end < len(lines) {
+			line = lines[end]
+			if len(line) > 4 && strings.HasPrefix(line, "    ") && line[4] != ' ' {
+				break
+			}
+			end++
+		}
+		return strings.Join(lines[start:end], "\n")
+	}
+	return ""
+}
+
 func forbiddenDockerDeployText(relative string) []string {
 	switch relative {
 	case "deploy/docker/compose.yaml":
-		return []string{"ports:", "VGXNESS_SYNC_POSTGRES_DSN:", "./syncd.env", "./syncd-dsn", "./postgres-password"}
+		return []string{"VGXNESS_SYNC_POSTGRES_DSN:", "./syncd.env", "./syncd-dsn", "./postgres-password"}
 	case "deploy/docker/Dockerfile":
 		return []string{"USER root"}
 	case "deploy/docker/backup.sh":
