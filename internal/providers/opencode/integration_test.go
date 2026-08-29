@@ -4453,7 +4453,7 @@ func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 }
 
 func TestMemoryLifecyclePluginRecognizesExactAlpha3Predecessor(t *testing.T) {
-	current := renderMemoryLifecyclePlugin("/vgxness-test-bin")
+	current := renderMemoryLifecyclePlugin(filepath.Join(t.TempDir(), "vgxness-test-bin"))
 	predecessor := previousMemoryLifecyclePluginV1(current)
 	if len(predecessor) == 0 || !isManagedPredecessor(predecessor, current, nil, isPreviousMemoryLifecyclePlugin) {
 		t.Fatal("exact alpha.3 lifecycle plugin predecessor was not recognized")
