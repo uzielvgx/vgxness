@@ -144,9 +144,12 @@ func (s *Store) ImportLegacy(ctx context.Context, path string, targetProjects ..
 		FROM legacy.observations l`, title), nil},
 		{`INSERT OR IGNORE INTO main.observation_refs(observation_id,target_id)
 		 SELECT observation_id,target_id FROM legacy.observation_refs`, nil},
-		{`INSERT INTO main.observations_fts(id,content)
-		 SELECT l.id,l.content FROM legacy.observations l
-		 WHERE NOT EXISTS (SELECT 1 FROM main.observations_fts f WHERE f.id=l.id)`, nil},
+		{`INSERT INTO main.observations_fts(id,title,topic_key,type,content)
+			 SELECT m.id,m.title,COALESCE(m.topic_key,''),m.type,m.content FROM main.observations m
+			 JOIN legacy.observations l ON l.id=m.id
+			 WHERE m.state='active'
+			   AND l.id IN (SELECT id FROM legacy.observations_fts)
+			   AND NOT EXISTS (SELECT 1 FROM main.observations_fts f WHERE f.id=m.id)`, nil},
 	}
 	if targetProject != "" {
 		statements[0] = statement{`INSERT OR IGNORE INTO main.projects(id) VALUES(?)`, []any{targetProject}}

@@ -3910,7 +3910,7 @@ func ordinaryPulledMutation(m syncservice.Mutation) bool {
 	if m.RecordKind == syncservice.RecordKindProject || m.RecordKind == syncservice.RecordKindSession {
 		return m.Kind == syncservice.MutationCreate || m.Kind == syncservice.MutationUpdate
 	}
-	if m.RecordKind != syncservice.RecordKindObservation || m.Observation == nil || m.Observation.Review != syncservice.ReviewClear {
+	if m.RecordKind != syncservice.RecordKindObservation || m.Observation == nil || m.Observation.Review != syncservice.ReviewClear && m.Observation.Review != syncservice.ReviewNeedsReview {
 		return false
 	}
 	switch m.Kind {
@@ -4364,8 +4364,8 @@ func applyPulledObservation(ctx context.Context, tx *sql.Tx, observation *syncse
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `DELETE FROM observations_fts WHERE id=?`, item.ID)
 		}
-		if err == nil && item.State == StateActive {
-			_, err = tx.ExecContext(ctx, `INSERT INTO observations_fts(id,content) VALUES(?,?)`, item.ID, item.Content)
+		if err == nil && item.State != StateArchived {
+			_, err = tx.ExecContext(ctx, `INSERT INTO observations_fts(id,title,topic_key,type,content) VALUES(?,?,?,?,?)`, item.ID, item.Title, item.TopicKey, item.Type, item.Content)
 		}
 		if err != nil {
 			return conflictOrWrite(ctx, err)
@@ -4393,6 +4393,8 @@ func pulledObservation(value *syncservice.Observation) (Observation, error) {
 	state := StateActive
 	if value.Lifecycle == syncservice.LifecycleArchived {
 		state = StateArchived
+	} else if value.Review == syncservice.ReviewNeedsReview {
+		state = StateNeedsReview
 	}
 	return Observation{ID: value.ID, Title: value.Title, Project: value.ProjectID, Session: value.SessionID, Scope: Scope(value.Scope), Type: value.Type, Content: value.Content, TopicKey: value.TopicKey, References: append([]string(nil), value.References...), Provenance: Provenance{Producer: value.Provenance.Producer, SourceProvider: value.Provenance.SourceProvider, SourceID: value.Provenance.SourceID}, State: state, CreatedAt: time.Unix(0, created).UTC(), UpdatedAt: time.Unix(0, updated).UTC(), ReviewAfter: reviewAfter}, nil
 }

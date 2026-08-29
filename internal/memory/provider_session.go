@@ -259,8 +259,17 @@ func (s *Store) UpdateObservation(ctx context.Context, request ObservationUpdate
 	if changed != 1 {
 		return Observation{}, fmt.Errorf("%w: stale observation", ErrConflict)
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM observations_fts WHERE id=?; INSERT INTO observations_fts(id,content) VALUES(?,?)`, item.ID, request.Content); err != nil {
+	var indexed int
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM observations_fts WHERE id=?)`, item.ID).Scan(&indexed); err != nil {
 		return Observation{}, writeError(ctx, err)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM observations_fts WHERE id=?`, item.ID); err != nil {
+		return Observation{}, writeError(ctx, err)
+	}
+	if indexed == 1 {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO observations_fts(id,title,topic_key,type,content) VALUES(?,?,?,?,?)`, item.ID, item.Title, item.TopicKey, item.Type, request.Content); err != nil {
+			return Observation{}, writeError(ctx, err)
+		}
 	}
 	item.Content, item.UpdatedAt = request.Content, now
 	if err = s.enqueueLocalWrite(ctx, tx, item); err != nil {

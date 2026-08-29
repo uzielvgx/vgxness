@@ -68,7 +68,7 @@ func TestMemoryRuntime_LiteralV1UpgradeRestartPreservesDataAndTitles(t *testing.
 		testutil.Require(t, err == nil && got.ID == id && got.Title == title && (id != "old" || got.Content == "literal old token"), "get %s: %+v %v", id, got, err)
 	}
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 21, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 22, "health=%d %v", version, err)
 }
 
 func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
@@ -76,7 +76,7 @@ func TestMigrate_FreshRepeatedAndRestartSafe(t *testing.T) {
 	store := openPath(t, path)
 	mustSave(t, store, observation("obs-1", "project-a", "restart token"))
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 21, "health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 22, "health=%d %v", version, err)
 	_ = store.Close()
 	store = openPath(t, path)
 	defer store.Close()
@@ -322,6 +322,32 @@ func TestImportLegacy_RemapsSameNamedWorkspacesToResolvedProjects(t *testing.T) 
 	testutil.Require(t, err == nil && len(second) == 1 && second[0].ID == "second-observation", "second import=%+v err=%v", second, err)
 }
 
+func TestImportLegacy_PreservesForgottenFTSMembership(t *testing.T) {
+	store := openTestStore(t)
+	_, err := store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at) VALUES('archived-target','p','project','learning','archived target','test','archived',1,1)`)
+	testutil.NoError(t, err)
+	legacyPath := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", legacyPath)
+	testutil.NoError(t, err)
+	_, err = legacy.Exec(schemaV1 + ` PRAGMA user_version=1;
+		INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at) VALUES
+		('archived-target','p','project','learning','archived target','test','archived',1,1),
+		('legacy-forgotten','p','project','learning','forgotten source','test','archived',1,1),
+		('legacy-unindexed-active','p','project','learning','unindexed active source','test','active',1,1),
+		('legacy-active','p','project','learning','active source','test','active',1,1);
+		INSERT INTO observations_fts(id,content) VALUES('legacy-active','active source');`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, legacy.Close())
+	testutil.NoError(t, store.ImportLegacy(context.Background(), legacyPath))
+	for _, id := range []string{"archived-target", "legacy-forgotten", "legacy-unindexed-active"} {
+		var count int
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations_fts WHERE id=?`, id).Scan(&count))
+		testutil.Require(t, count == 0, "unindexed row %q restored to FTS", id)
+	}
+	found, err := store.Search(context.Background(), Search{Query: "active", Project: "p", Scope: ScopeProject})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "legacy-active", "active legacy row was not indexed: %+v %v", found, err)
+}
+
 func TestMigrate_RejectsNewerSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	store := openPath(t, path)
@@ -365,7 +391,7 @@ func TestSyncEnrollmentRecoveryMigrationAndMislabeledSchema(t *testing.T) {
 	store = openPath(t, path)
 	profile, found, err := store.GetSyncProfile(context.Background())
 	version, healthErr := store.Health(context.Background())
-	testutil.Require(t, err == nil && found && profile.CredentialRef == "secret://keychain/legacy" && profile.PreviousCredentialRef == "" && healthErr == nil && version == 21, "profile=%+v found=%t errors=%v/%v version=%d", profile, found, err, healthErr, version)
+	testutil.Require(t, err == nil && found && profile.CredentialRef == "secret://keychain/legacy" && profile.PreviousCredentialRef == "" && healthErr == nil && version == 22, "profile=%+v found=%t errors=%v/%v version=%d", profile, found, err, healthErr, version)
 	testutil.NoError(t, store.Close())
 	db, err = sql.Open("sqlite", path)
 	testutil.NoError(t, err)
@@ -622,7 +648,7 @@ func TestOpen_V10ToV11RestoresForeignKeysAfterRestart(t *testing.T) {
 	var id, projectID, idempotencyKey, title, backend, interactionMode, modelPlan, phase, status string
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT id,project_id,idempotency_key,title,backend,interaction_mode,model_plan,phase,status,state_version,created_at,updated_at FROM sdd_changes WHERE id='change-v10'`).Scan(&id, &projectID, &idempotencyKey, &title, &backend, &interactionMode, &modelPlan, &phase, &status, &stateVersion, &createdAt, &updatedAt))
-	testutil.Require(t, version == 21 && id == "change-v10" && projectID == "project-v10" && idempotencyKey == "key-v10" && title == "V10 change" && backend == "memory" && interactionMode == "automatic" && modelPlan == "high" && phase == "explore" && status == "active" && stateVersion == 7 && createdAt == 100 && updatedAt == 200, "migration did not preserve V10 change: version=%d id=%q project=%q key=%q title=%q backend=%q mode=%q plan=%q phase=%q status=%q state=%d created=%d updated=%d", version, id, projectID, idempotencyKey, title, backend, interactionMode, modelPlan, phase, status, stateVersion, createdAt, updatedAt)
+	testutil.Require(t, version == 22 && id == "change-v10" && projectID == "project-v10" && idempotencyKey == "key-v10" && title == "V10 change" && backend == "memory" && interactionMode == "automatic" && modelPlan == "high" && phase == "explore" && status == "active" && stateVersion == 7 && createdAt == 100 && updatedAt == 200, "migration did not preserve V10 change: version=%d id=%q project=%q key=%q title=%q backend=%q mode=%q plan=%q phase=%q status=%q state=%d created=%d updated=%d", version, id, projectID, idempotencyKey, title, backend, interactionMode, modelPlan, phase, status, stateVersion, createdAt, updatedAt)
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
 	testutil.Require(t, foreignKeys == 1, "foreign_keys=%d after restart", foreignKeys)
 	_, err = store.db.Exec(`INSERT INTO sdd_changes(id,project_id,idempotency_key,title,backend,interaction_mode,model_plan,phase,status,state_version,created_at,updated_at) VALUES('invalid','missing','key','title','memory','automatic','ultra','explore','active',1,1,1)`)
@@ -734,6 +760,69 @@ func TestStore_MetadataRoundTrip(t *testing.T) {
 	testutil.Require(t, err == nil && len(got) == 1 && got[0].Session == item.Session && got[0].Provenance == item.Provenance && got[0].ReviewAfter.Equal(review), "metadata mismatch: %+v %v", got, err)
 }
 
+func TestStore_FTSV22IndexesMetadataAndMigratesExistingRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	testutil.NoError(t, applyMigrations(context.Background(), db, migrations[:21]))
+	_, err = db.Exec(`INSERT INTO observations(id,title,project_id,scope,type,content,topic_key,producer,state,created_at,updated_at) VALUES('legacy','Legacy title','p','project','legacy-type','legacy body','legacy/topic','test','active',1,1); INSERT INTO observations_fts(id,content) VALUES('legacy','legacy body')`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+
+	store := openPath(t, path)
+	defer store.Close()
+	for _, query := range []string{"Legacy", "topic", "type", "body"} {
+		found, err := store.Search(context.Background(), Search{Query: query, Project: "p", Scope: ScopeProject})
+		testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "legacy", "migration query %q: %+v %v", query, found, err)
+	}
+	version, err := store.Health(context.Background())
+	testutil.Require(t, err == nil && version == 22, "version=%d err=%v", version, err)
+
+	fresh := observation("fresh", "p", "body")
+	fresh.Title, fresh.TopicKey, fresh.Type = "Fresh title", "fresh/topicword", "fresh-typeword"
+	fresh = mustSave(t, store, fresh)
+	fresh.Title, fresh.TopicKey, fresh.Type = "Updated title", "updated/topicword", "updated-typeword"
+	_, err = store.Update(context.Background(), fresh)
+	testutil.NoError(t, err)
+	for _, query := range []string{"Updated", "topicword", "typeword"} {
+		found, err := store.Search(context.Background(), Search{Query: query, Project: "p", Scope: ScopeProject})
+		testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "fresh", "update query %q: %+v %v", query, found, err)
+	}
+	_, err = store.Forget(context.Background(), "fresh", "p", ScopeProject)
+	testutil.NoError(t, err)
+	found, err := store.Search(context.Background(), Search{Query: "Updated", Project: "p", Scope: ScopeProject})
+	testutil.Require(t, err == nil && len(found) == 0, "forgotten metadata remained searchable: %+v %v", found, err)
+}
+
+func TestStore_FTSV22FreshSchemaIndexesMetadata(t *testing.T) {
+	store := openTestStore(t)
+	item := observation("metadata", "p", "bodyword")
+	item.Title, item.TopicKey, item.Type = "titleword", "topicword", "typeword"
+	mustSave(t, store, item)
+	for _, query := range []string{"titleword", "topicword", "typeword", "bodyword"} {
+		found, err := store.Search(context.Background(), Search{Query: query, Project: "p", Scope: ScopeProject})
+		testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == item.ID, "fresh query %q: %+v %v", query, found, err)
+	}
+}
+
+func TestStore_FTSV22PreservesAbsentMembership(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	db, err := sql.Open("sqlite", path)
+	testutil.NoError(t, err)
+	testutil.NoError(t, applyMigrations(context.Background(), db, migrations[:21]))
+	_, err = db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at) VALUES
+		('indexed','p','project','learning','indexed token','test','active',1,1),
+		('forgotten','p','project','learning','forgotten token','test','archived',1,1);
+		INSERT INTO observations_fts(id,content) VALUES('indexed','indexed token')`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, db.Close())
+	store := openPath(t, path)
+	defer store.Close()
+	var count int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations_fts WHERE id='forgotten'`).Scan(&count))
+	testutil.Require(t, count == 0, "migration restored absent FTS membership")
+}
+
 func TestStore_RejectsLifecycleAndReferenceViolations(t *testing.T) {
 	store := openTestStore(t)
 	target := mustSave(t, store, observation("target", "project-a", "target token"))
@@ -750,6 +839,22 @@ func TestStore_RejectsLifecycleAndReferenceViolations(t *testing.T) {
 	archived.State = StateNeedsReview
 	_, err = store.Update(context.Background(), archived)
 	testutil.Require(t, errors.Is(err, ErrInvalid), "expected lifecycle rejection, got %v", err)
+}
+
+func TestStore_UpdateMaintainsLifecycleFTSMembership(t *testing.T) {
+	store := openTestStore(t)
+	active := mustSave(t, store, observation("active", "p", "active token"))
+	active.State = StateArchived
+	_, err := store.Update(context.Background(), active)
+	testutil.NoError(t, err)
+	found, err := store.Search(context.Background(), Search{Query: "active", Project: "p", Scope: ScopeProject, States: []State{StateArchived}})
+	testutil.Require(t, err == nil && len(found) == 0, "archived update remained searchable: %+v %v", found, err)
+	review := mustSave(t, store, Observation{ID: "review", Project: "p", Scope: ScopeProject, Type: "learning", Content: "review token", Provenance: Provenance{Producer: "test"}, State: StateNeedsReview})
+	review.Content = "review updated"
+	_, err = store.Update(context.Background(), review)
+	testutil.NoError(t, err)
+	found, err = store.Search(context.Background(), Search{Query: "updated", Project: "p", Scope: ScopeProject, States: []State{StateNeedsReview}})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == review.ID, "needs-review update lost searchability: %+v %v", found, err)
 }
 
 func TestStore_SearchFiltersAndStableTies(t *testing.T) {
@@ -831,7 +936,7 @@ func TestEnvironmentIsolation_NoAmbientHomeOrNetwork(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 21, "isolated health=%d %v", version, err)
+	testutil.Require(t, err == nil && version == 22, "isolated health=%d %v", version, err)
 }
 
 // durableStorageSnapshot hashes durable SQLite state. Read-only SQLite may
@@ -878,7 +983,7 @@ func healthWithoutDurableMutation(t *testing.T, path string) (int, error) {
 func TestHealthFile_HealthyDatabaseWithoutMutation(t *testing.T) {
 	path := migratedPath(t)
 	version, err := healthWithoutDurableMutation(t, path)
-	testutil.Require(t, err == nil && version == 21, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 22, "health=%d err=%v", version, err)
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	version, err = HealthFile(context.Background(), missing)
 	testutil.Require(t, err == nil && version == 0, "missing health=%d err=%v", version, err)
@@ -893,7 +998,7 @@ func TestHealthFile_SeesCommittedWALState(t *testing.T) {
 	mustSave(t, store, observation("wal-observation", "project-a", "WAL health token"))
 
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, err == nil && version == 21, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 22, "health=%d err=%v", version, err)
 }
 
 func TestSQLiteReadURI_IsReadOnly(t *testing.T) {
@@ -995,7 +1100,7 @@ func TestOpen_ConcurrentFreshProcesses(t *testing.T) {
 		testutil.NoError(t, command.Wait())
 	}
 	version, err := HealthFile(context.Background(), path)
-	testutil.Require(t, err == nil && version == 21, "concurrent health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 22, "concurrent health=%d err=%v", version, err)
 }
 
 func TestOpen_MigrationRetryBoundAndCancellation(t *testing.T) {
