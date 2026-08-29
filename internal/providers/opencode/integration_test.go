@@ -2906,9 +2906,9 @@ func TestIntegration_RejectsForeignMalformedMismatchedAndNewerArtifacts(t *testi
 	testutil.NoError(t, err)
 	cases := map[string][]byte{
 		"foreign":       []byte("user-owned plugin\n"),
-		"malformed":     bytes.Replace(currentPlugin, []byte("version: 10"), []byte("version: old"), 1),
+		"malformed":     bytes.Replace(currentPlugin, []byte("version: 11"), []byte("version: old"), 1),
 		"name mismatch": bytes.Replace(currentPlugin, []byte("artifact: opencode-plugin/vgxness-memory"), []byte("artifact: opencode-plugin/other"), 1),
-		"newer":         bytes.Replace(currentPlugin, []byte("version: 10"), []byte("version: 11"), 1),
+		"newer":         bytes.Replace(currentPlugin, []byte("version: 11"), []byte("version: 12"), 1),
 	}
 	for name, candidate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -3618,7 +3618,7 @@ func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 10",
+		"artifact: opencode-plugin/vgxness-memory; version: 11",
 		"vgxness_memory_recent", "vgxness_memory_search", "vgxness_memory_get", "vgxness_memory_save", "vgxness_memory_forget",
 		`["memory", operation, "--stdin", "--json", "--workspace", workspace]`,
 		"shell: false", "MAX_INPUT_BYTES", "MAX_OUTPUT_BYTES", "TIMEOUT_MS",
@@ -3642,12 +3642,78 @@ func TestMemoryPluginExposesOnlyBoundedOwnedMemoryTools(t *testing.T) {
 	}
 }
 
+func TestMemoryPluginExposesBoundedSessionSummaryTool(t *testing.T) {
+	plugin := string(renderMemoryPlugin("/vgxness-test-bin"))
+	for _, required := range []string{
+		"vgxness_memory_session_summary: tool({",
+		`["memory", "hook", "--stdin"]`,
+		`operation: "summary"`,
+		"session_handle: sessionHandle",
+		"expected_updated_at: expectedUpdatedAt",
+		"summary: summary",
+		"workspace, ...payload",
+		"MAX_SESSION_SUMMARY_BYTES",
+		"return JSON.stringify({ session_handle: result.session_handle, updated_at: result.updated_at })",
+	} {
+		if !strings.Contains(plugin, required) {
+			t.Errorf("session summary tool missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"provider_id", "providerId", "result.summary", "result.provider",
+	} {
+		if strings.Contains(plugin, forbidden) {
+			t.Errorf("session summary tool leaks %q", forbidden)
+		}
+	}
+}
+
+func TestMemoryPluginRuntimeSessionSummaryUsesBoundedMetadataHook(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	plugin := string(renderMemoryPlugin("/vgxness-test-bin"))
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { createHash } from "node:crypto"`, `const { createHash } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { tool } from "@opencode-ai/plugin"`, `const { tool } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryPlugin`, `const VGXNESSMemoryPlugin`, 1)
+	script := `const a=(v,m)=>{if(!v)throw Error(m)},calls=[],children=[];function stream(){const h=new Map();return{on:(n,f)=>h.set(n,f),emit:(n,...v)=>h.get(n)?.(...v),setEncoding(){}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map();this.stdin.end=input=>queueMicrotask(()=>{const p=JSON.parse(input);calls.push(p);if(p.expected_updated_at==="not-a-timestamp"){this.h.get("close")?.(1);return}if(p.summary==="malformed")this.stdout.emit("data",JSON.stringify({schemaVersion:1,session_handle:"session-1"}));else if(p.summary==="output")this.stdout.emit("data","x".repeat(131073));else if(p.summary==="failure")this.stderr.emit("data","x".repeat(131073));else this.stdout.emit("data",JSON.stringify({schemaVersion:1,session_handle:"session-1",updated_at:"2026-08-29T00:00:00Z",summary:"hidden",provider_id:"hidden"}));this.h.get("close")?.(0)})}on(n,f){this.h.set(n,f);return this}kill(){this.killed=true;return true}}const schema=new Proxy({}, {get:()=>()=>({optional(){return this},describe(){return this}})}),fakeTool=x=>x;fakeTool.schema=schema;globalThis.__test={spawn:(file,args,options)=>{a(file==="/vgxness-test-bin"&&args.join(" ")==="memory hook --stdin"&&options.cwd==="/workspace"&&options.shell===false,"spawn");const child=new Child();children.push(child);return child},createHash:()=>({update(){return this},digest(){return "0".repeat(64)}}),isAbsolute:x=>x.startsWith("/"),tool:fakeTool};` + plugin + `
+	const p=await VGXNESSMemoryPlugin({directory:"/workspace"}),run=(args,context={directory:"/workspace"})=>p.tool.vgxness_memory_session_summary.execute(args,context),updatedAt="2026-08-29T00:00:00.123456789Z";const response=JSON.parse(await run({session_handle:"session-1",summary:"durable summary",expected_updated_at:updatedAt}));a(JSON.stringify(response)==='{"session_handle":"session-1","updated_at":"2026-08-29T00:00:00Z"}',"metadata response");a(calls.length===1&&calls[0].schemaVersion===1&&calls[0].operation==="summary"&&calls[0].workspace==="/workspace"&&calls[0].session_handle==="session-1"&&calls[0].summary==="durable summary"&&calls[0].expected_updated_at===updatedAt,"input");let invalidTimestamp=false;try{await run({session_handle:"session-1",summary:"ok",expected_updated_at:"not-a-timestamp"})}catch{invalidTimestamp=true}a(invalidTimestamp&&calls.length===2,"invalid timestamp");for(const bad of [{session_handle:"bad handle",summary:"ok"},{session_handle:"session-1",summary:""},{session_handle:"session-1",summary:"x".repeat(16385)},{session_handle:"session-1",summary:"ok",expected_updated_at:""},{session_handle:"session-1",summary:"ok",expected_updated_at:"x".repeat(129)}]){let failed=false;try{await run(bad)}catch{failed=true}a(failed,"invalid input")};for(const summary of ["malformed","output","failure"]){let failed=false;try{await run({session_handle:"session-1",summary})}catch{failed=true}a(failed,summary)}a(children[3].killed&&children[4].killed,"output bounds");let cancelled=false;try{await run({session_handle:"session-1",summary:"ok"},{directory:"/workspace",abort:{aborted:true}})}catch{cancelled=true}a(cancelled&&calls.length===5,"cancellation");`
+	path := filepath.Join(t.TempDir(), "memory-summary.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	if output, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("session summary runtime: %v: %s", err, output)
+	}
+}
+
+func TestMemoryPluginRuntimeSessionSummaryCleansUpInputFailures(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	plugin := string(renderMemoryPlugin("/vgxness-test-bin"))
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { createHash } from "node:crypto"`, `const { createHash } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { tool } from "@opencode-ai/plugin"`, `const { tool } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryPlugin`, `const VGXNESSMemoryPlugin`, 1)
+	script := `const a=(v,m)=>{if(!v)throw Error(m)},timers=[],children=[];let mode="";globalThis.setTimeout=(f,ms)=>{const t={f,ms,cleared:false};timers.push(t);return t};globalThis.clearTimeout=t=>{t.cleared=true};const settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve()};function stream(){const h=new Map();return{destroyed:false,on:(n,f)=>h.set(n,f),emit(n,...v){const f=h.get(n);if(f)return f(...v);if(n==="error")throw v[0]},setEncoding(){},destroy(){this.destroyed=true}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map();this.stdin.end=input=>{if(mode==="throw")throw Error("input throw");queueMicrotask(()=>{if(mode==="error")return this.stdin.emit("error",Error("input error"));if(mode==="overflow")return this.stdout.emit("data","x".repeat(131073))})}}on(n,f){this.h.set(n,f);return this}kill(){this.killed=true;return mode!=="overflow"}unref(){this.unrefed=true}}const schema=new Proxy({}, {get:()=>()=>({optional(){return this},describe(){return this}})}),fakeTool=x=>x;fakeTool.schema=schema;globalThis.__test={spawn:()=>{const c=new Child();children.push(c);return c},createHash:()=>({update(){return this},digest(){return "0".repeat(64)}}),isAbsolute:x=>x.startsWith("/"),tool:fakeTool};` + plugin + `
+const p=await VGXNESSMemoryPlugin({directory:"/workspace"}),run=()=>p.tool.vgxness_memory_session_summary.execute({session_handle:"session-1",summary:"ok"},{directory:"/workspace"}),fail=async kind=>{mode=kind;const pending=run();await settle();const child=children.at(-1),cleanup=timers.at(-1);cleanup.f();let failed=false;try{await pending}catch{failed=true}a(failed&&child.stdin.destroyed&&child.stdout.destroyed&&child.stderr.destroyed&&child.unrefed,"cleanup "+kind)};await fail("error");await fail("throw");await fail("overflow");`
+	path := filepath.Join(t.TempDir(), "memory-summary-cleanup.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	if output, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("session summary cleanup runtime: %v: %s", err, output)
+	}
+}
+
 func TestMemoryPluginDefinesDefaultOffLocalManagerObservability(t *testing.T) {
 	content, err := memoryPluginContent(NewIntegration().executable)
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 10",
+		"artifact: opencode-plugin/vgxness-memory; version: 11",
 		`process.env.VGXNESS_MANAGER_OBSERVABILITY === "1"`,
 		"MAX_OBSERVABILITY_WORKFLOWS = 128",
 		"MAX_OBSERVABILITY_RECORDS_PER_WORKFLOW = 32",
@@ -3884,7 +3950,7 @@ func TestMemoryPluginDefinesSafeOpenCodeHookContracts(t *testing.T) {
 func TestMemoryPluginCompactsRecentMemoryToBoundedIndex(t *testing.T) {
 	plugin := string(renderMemoryPlugin("/vgxness-test-bin"))
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 10",
+		"artifact: opencode-plugin/vgxness-memory; version: 11",
 		"const MAX_CONTEXT_BYTES = 4 * 1024",
 		"const MAX_RECENT_MEMORIES = 5",
 		"const MAX_MEMORY_PREVIEW_CHARACTERS = 128",
@@ -3959,7 +4025,7 @@ func TestMemoryPluginDefinesOptInFailOpenSyncHooks(t *testing.T) {
 	testutil.NoError(t, err)
 	plugin := string(content)
 	for _, required := range []string{
-		"artifact: opencode-plugin/vgxness-memory; version: 10",
+		"artifact: opencode-plugin/vgxness-memory; version: 11",
 		`const SYNC_ON_SESSION_START = process.env.VGXNESS_SYNC_ON_SESSION_START === "1"`,
 		`const SYNC_ON_SESSION_END = process.env.VGXNESS_SYNC_ON_SESSION_END === "1"`,
 		`const SYNC_START_TIMEOUT_MS = 2_000`,
@@ -4506,8 +4572,10 @@ func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 		t.Fatal("validated production plugin bytes differ from pure renderer")
 	}
 	canonical := renderMemoryPlugin("/vgxness-test-bin")
-	canonicalV9 := previousMemoryPluginV9(canonical)
-	pluginV9 := previousMemoryPluginV9(currentPlugin)
+	canonicalV10 := previousMemoryPluginV10(canonical)
+	pluginV10 := previousMemoryPluginV10(currentPlugin)
+	canonicalV9 := previousMemoryPluginV9(canonicalV10)
+	pluginV9 := previousMemoryPluginV9(pluginV10)
 	canonicalV8 := previousMemoryPluginV8(canonicalV9)
 	pluginV8 := previousMemoryPluginV8(pluginV9)
 	canonicalV7 := previousMemoryPluginV7(canonicalV8)
@@ -4524,8 +4592,8 @@ func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 	pluginV3 := previousMemoryPluginV3(pluginV4)
 	pluginV2 := previousMemoryPluginV2(pluginV3)
 	pluginV1 := previousMemoryPluginV1(pluginV2)
-	if !isPreviousMemoryPlugin(pluginV9) || !isPreviousMemoryPlugin(pluginV8) || !isPreviousMemoryPlugin(pluginV7) || !isPreviousMemoryPlugin(pluginV6) || !isPreviousMemoryPlugin(pluginV5) || !isPreviousMemoryPlugin(pluginV4) || !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
-		t.Fatalf("plugin v9/v8/v7/v6/v5/v4/v3/v2/v1 predecessors were not recognized")
+	if !isPreviousMemoryPlugin(pluginV10) || !isPreviousMemoryPlugin(pluginV9) || !isPreviousMemoryPlugin(pluginV8) || !isPreviousMemoryPlugin(pluginV7) || !isPreviousMemoryPlugin(pluginV6) || !isPreviousMemoryPlugin(pluginV5) || !isPreviousMemoryPlugin(pluginV4) || !isPreviousMemoryPlugin(pluginV3) || !isPreviousMemoryPlugin(pluginV2) || !isPreviousMemoryPlugin(pluginV1) {
+		t.Fatalf("plugin v10/v9/v8/v7/v6/v5/v4/v3/v2/v1 predecessors were not recognized")
 	}
 	if isPreviousMemoryPlugin(append(append([]byte(nil), pluginV8...), '\n')) {
 		t.Fatal("whitespace-modified v8 predecessor was recognized")
