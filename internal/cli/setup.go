@@ -293,7 +293,11 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 			fmt.Fprintln(stdout, "Resultado: requires attention.")
 			return 1
 		}
-		fmt.Fprintln(stdout, "Resultado: configuration is healthy.")
+		if includesCodex(providers) {
+			fmt.Fprintln(stdout, "Resultado: managed artifacts and shared setup are healthy; Codex MCP/runtime health remains unobserved.")
+		} else {
+			fmt.Fprintln(stdout, "Resultado: configuration is healthy.")
+		}
 		return 0
 	}
 	plan, err := multi.Plan(ctx, setupflow.MultiOptions{Providers: providers})
@@ -402,7 +406,18 @@ func renderMultiSetupPlan(writer io.Writer, plan setupflow.MultiPlan) {
 	fmt.Fprintln(writer, "Preflight compartido: launcher y skills")
 	for _, provider := range plan.Providers {
 		fmt.Fprintf(writer, "Provider %s: ready=%t changed=%t state=%s artifacts=%d\n", provider.Provider, provider.Ready, provider.Changed, provider.State, provider.ArtifactCount)
+		if provider.Provider == setupflow.ProviderCodex {
+			renderCodexDiagnostics(writer, provider)
+		}
 	}
+}
+
+// renderCodexDiagnostics reports only the managed projection inspected by this
+// command. Codex's MCP/runtime configuration is operator-owned and unobserved.
+func renderCodexDiagnostics(writer io.Writer, provider setupflow.ProviderPlan) {
+	fmt.Fprintf(writer, "Provider codex: managed-artifacts state=%s count=%d\n", provider.State, provider.ArtifactCount)
+	fmt.Fprintln(writer, "Provider codex: MCP/runtime health=unobserved (operator-managed config.toml; not inspected)")
+	fmt.Fprintln(writer, "Recovery codex: repair managed artifacts with `vgxness integrate codex reinstall --config-dir <same-codex-home>`; review config.toml and restart Codex yourself.")
 }
 
 func renderMultiSetupResult(writer io.Writer, result setupflow.MultiResult) {
