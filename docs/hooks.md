@@ -12,6 +12,8 @@ During an interactive TUI session only, the internal process may show a best-eff
 
 MCP uses local stdio and assumes its host is trusted. Requests carry no caller identity or session authentication. `vgxness mcp` is default-deny and exposes only `memory_recent`, `memory_search`, and `memory_context`; only the explicit `vgxness mcp --full` command exposes the full read/write set. Managed OpenCode and generated Codex use that explicit command, but their read-only agent/tool allowlists exclude every mutating MCP tool. Those host allowlists, operator permissions, user authorization, and task scope are part of the authorization boundary. This document makes no runtime-security claim.
 
+Codex managed-artifact setup/status does not inspect `config.toml` or observe MCP startup, connectivity, a runtime handshake, or memory injection. It reports that runtime health as unobserved and limits recovery guidance to repairing managed artifacts, then asking the operator to review their own configuration and restart Codex.
+
 ## Historical retirement context
 
 Plugin v1–v10 behavior is legacy retirement evidence, not current behavior. Exact historical `vgxness.ts` v1-v10 plugin bytes and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal.

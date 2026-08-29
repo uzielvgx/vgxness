@@ -366,7 +366,8 @@ func TestSetupWizardAcceptsCodexPreviewThroughMultiCoordinator(t *testing.T) {
 	codexHome := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"codex", "--preview", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
-	if code != 0 || codex.calls != 1 || stderr.Len() != 0 || codex.options.HomeDir != codexHome || !strings.Contains(stdout.String(), "codex") {
+	output := stdout.String()
+	if code != 0 || codex.calls != 1 || stderr.Len() != 0 || codex.options.HomeDir != codexHome || !strings.Contains(output, "Provider codex: MCP/runtime health=unobserved") || !strings.Contains(output, "reinstall --config-dir <same-codex-home>") || strings.Contains(output, "configuration is healthy") {
 		t.Fatalf("code=%d calls=%d codex=%+v stdout=%q stderr=%q", code, codex.calls, codex.options, stdout.String(), stderr.String())
 	}
 }
@@ -416,7 +417,7 @@ func TestSetupWizardOpenCodeRetainsConfigDirInMultiFlow(t *testing.T) {
 	openCodeConfigDir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--status", "--config-dir", openCodeConfigDir}, strings.NewReader(""), &stdout, &stderr, setup, nil)
-	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != openCodeConfigDir || !strings.Contains(stdout.String(), "Provider opencode") || !strings.Contains(stdout.String(), "Launcher: state=installed") || !strings.Contains(stdout.String(), "Handshake: ok=true status=healthy") || !strings.Contains(stdout.String(), "Plan de modelos:  provider=mixed manifest=") {
+	if code != 0 || stderr.Len() != 0 || setup.openCodeOptions.ConfigDir != openCodeConfigDir || !strings.Contains(stdout.String(), "Provider opencode") || !strings.Contains(stdout.String(), "Launcher: state=installed") || !strings.Contains(stdout.String(), "Handshake: ok=true status=healthy") || !strings.Contains(stdout.String(), "Plan de modelos:  provider=mixed manifest=") || !strings.Contains(stdout.String(), "Resultado: configuration is healthy.") {
 		t.Fatalf("code=%d opencode=%+v stdout=%q stderr=%q", code, setup.openCodeOptions, stdout.String(), stderr.String())
 	}
 }
@@ -479,7 +480,7 @@ func TestSetupWizardStatusRequiresInstalledProviderHealth(t *testing.T) {
 			if code != test.code {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
-			if test.code == 0 && !strings.Contains(stdout.String(), "configuration is healthy") {
+			if test.code == 0 && (!strings.Contains(stdout.String(), "managed artifacts and shared setup are healthy") || !strings.Contains(stdout.String(), "Codex MCP/runtime health remains unobserved")) {
 				t.Fatalf("healthy status=%q", stdout.String())
 			}
 			if test.code == 1 && test.err == nil && !strings.Contains(stdout.String(), "requires attention") {
@@ -498,6 +499,29 @@ func TestSetupWizardCodexStatusRequiresSharedHealth(t *testing.T) {
 	code := runSetup(context.Background(), []string{"codex", "--status", "--codex-home", codexHome}, strings.NewReader(""), &stdout, &stderr, setup, codex)
 	if code != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "requires attention") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestSetupWizardCodexStatusSeparatesManagedArtifactsFromUnobservedRuntime(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "codex-plan", ArtifactCount: 13}}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"codex", "--status", "--codex-home", t.TempDir()}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	output := stdout.String()
+	for _, want := range []string{
+		"Provider codex: managed-artifacts state=installed count=13",
+		"Provider codex: MCP/runtime health=unobserved (operator-managed config.toml; not inspected)",
+		"Recovery codex: repair managed artifacts with `vgxness integrate codex reinstall --config-dir <same-codex-home>`; review config.toml and restart Codex yourself.",
+		"Resultado: managed artifacts and shared setup are healthy; Codex MCP/runtime health remains unobserved.",
+	} {
+		if code != 0 || stderr.Len() != 0 || !strings.Contains(output, want) {
+			t.Fatalf("code=%d stdout=%q stderr=%q missing=%q", code, output, stderr.String(), want)
+		}
+	}
+	for _, forbidden := range []string{"configuration is healthy", "codex handshake=healthy", "codex connectivity=healthy", "automatic memory injection"} {
+		if strings.Contains(strings.ToLower(output), forbidden) {
+			t.Fatalf("Codex status overclaims %q: %q", forbidden, output)
+		}
 	}
 }
 
