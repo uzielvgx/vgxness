@@ -96,12 +96,10 @@ func TestMemoryService_GetMissingHidesForeignMetadata(t *testing.T) {
 	testutil.Require(t, errors.Is(err, ErrNotFound) && !strings.Contains(err.Error(), "foreign-secret"), "missing get leaked metadata: %v", err)
 }
 
-func TestMemoryService_SearchRejectsUnsafeFTSBeforeStore(t *testing.T) {
-	for _, query := range []string{"", `"broken`, "topic:*"} {
-		store := &fakeMemoryStore{}
-		_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: query, Project: "p", Scope: ScopeProject})
-		testutil.Require(t, errors.Is(err, ErrInvalid) && store.calls == 0, "query %q reached store: %v", query, err)
-	}
+func TestMemoryService_SearchRejectsEmptyQueryBeforeStore(t *testing.T) {
+	store := &fakeMemoryStore{}
+	_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: "", Project: "p", Scope: ScopeProject})
+	testutil.Require(t, errors.Is(err, ErrInvalid) && store.calls == 0, "empty query reached store: %v", err)
 }
 
 func TestMemoryService_SearchQuotesOperatorsAndConservativeTerms(t *testing.T) {
@@ -120,12 +118,29 @@ func TestMemoryService_SearchQuotesOperatorsAndConservativeTerms(t *testing.T) {
 	}
 }
 
-func TestMemoryService_SearchKeepsConservativeCharacterPolicy(t *testing.T) {
-	for _, query := range []string{"alpha-beta", "v1.2"} {
+func TestMemoryService_SearchNeutralizesFTSOperators(t *testing.T) {
+	for _, test := range []struct{ query, want string }{{`"broken`, `"broken"`}, {"topic:*", `"topic"`}} {
 		store := &fakeMemoryStore{}
-		_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: query, Project: "p", Scope: ScopeProject})
-		testutil.Require(t, errors.Is(err, ErrInvalid) && store.calls == 0, "query %q reached store: %v", query, err)
+		_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: test.query, Project: "p", Scope: ScopeProject})
+		testutil.Require(t, err == nil && store.search.Query == test.want, "query %q parsed as %q: %v", test.query, store.search.Query, err)
 	}
+}
+
+func TestMemoryService_SearchParsesHumanPunctuationSafely(t *testing.T) {
+	for _, test := range []struct {
+		query, want string
+	}{
+		{"slice 9/10", `"slice" "9" "10"`},
+		{"Alpha.4", `"Alpha" "4"`},
+		{"cold-start", `"cold" "start"`},
+	} {
+		store := &fakeMemoryStore{}
+		_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: test.query, Project: "p", Scope: ScopeProject})
+		testutil.Require(t, err == nil && store.calls == 1 && store.search.Query == test.want, "query %q parsed as %q: %v", test.query, store.search.Query, err)
+	}
+	store := &fakeMemoryStore{}
+	_, err := NewMemoryService(store, "cli", nil).Recall(context.Background(), Recall{Query: "---/...", Project: "p", Scope: ScopeProject})
+	testutil.Require(t, errors.Is(err, ErrInvalid) && store.calls == 0, "punctuation-only query reached store: %v", err)
 }
 
 func TestMemoryService_RecallFindsQuotedAndTermInStore(t *testing.T) {

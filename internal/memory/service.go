@@ -206,16 +206,13 @@ func validateLookup(ctx context.Context, request Lookup) error {
 }
 
 func safeQuery(value string, matchAny bool) (string, bool) {
-	terms := strings.Fields(value)
+	terms := strings.FieldsFunc(value, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_'
+	})
 	if len(terms) == 0 {
 		return "", false
 	}
 	for i, term := range terms {
-		for _, r := range term {
-			if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' {
-				return "", false
-			}
-		}
 		terms[i] = `"` + term + `"`
 	}
 	separator := " "

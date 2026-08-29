@@ -983,8 +983,8 @@ func (s *Store) updateTx(ctx context.Context, tx *sql.Tx, existing, item Observa
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `DELETE FROM observations_fts WHERE id=?`, item.ID)
 	}
-	if err == nil {
-		_, err = tx.ExecContext(ctx, `INSERT INTO observations_fts(id,content) VALUES(?,?)`, item.ID, item.Content)
+	if err == nil && item.State != StateArchived {
+		_, err = tx.ExecContext(ctx, `INSERT INTO observations_fts(id,title,topic_key,type,content) VALUES(?,?,?,?,?)`, item.ID, item.Title, item.TopicKey, item.Type, item.Content)
 	}
 	if err != nil {
 		return Observation{}, writeError(ctx, err)
@@ -1175,7 +1175,7 @@ func insertObservation(ctx context.Context, tx *sql.Tx, item Observation) error 
 	if err != nil {
 		return conflictOrWrite(ctx, err)
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO observations_fts(id,content) VALUES(?,?)`, item.ID, item.Content); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO observations_fts(id,title,topic_key,type,content) VALUES(?,?,?,?,?)`, item.ID, item.Title, item.TopicKey, item.Type, item.Content); err != nil {
 		return writeError(ctx, err)
 	}
 	return insertReferences(ctx, tx, item)

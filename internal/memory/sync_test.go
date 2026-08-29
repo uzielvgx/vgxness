@@ -33,7 +33,7 @@ func TestSyncMigrationPreservesExistingMemory(t *testing.T) {
 			store := openPath(t, path)
 			defer store.Close()
 			gotVersion, err := store.Health(context.Background())
-			testutil.Require(t, err == nil && gotVersion == 21, "health=%d err=%v", gotVersion, err)
+			testutil.Require(t, err == nil && gotVersion == 22, "health=%d err=%v", gotVersion, err)
 			got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 			testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 		})
@@ -1154,7 +1154,7 @@ func TestSyncOutboxClaimsMigrationV9PreservesDataAndOutbox(t *testing.T) {
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 21, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 22, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var outbox, claims int
@@ -1236,7 +1236,7 @@ func TestSyncOutboxClaimsConstraintsCascadeAndHealth(t *testing.T) {
 func TestSyncOutboxClaimsMigrationFreshSchema(t *testing.T) {
 	store := openTestStore(t)
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 21, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 22, "health=%d err=%v", version, err)
 	var table, index string
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='table' AND name='sync_outbox_claims'`).Scan(&table))
 	testutil.NoError(t, store.db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='index' AND name='sync_outbox_claims_lease_idx'`).Scan(&index))
@@ -1259,7 +1259,7 @@ func TestSyncMigrationV8PreservesV7DataAndStartsSyncPrimitivesEmpty(t *testing.T
 	store := openPath(t, path)
 	defer store.Close()
 	version, err := store.Health(context.Background())
-	testutil.Require(t, err == nil && version == 21, "health=%d err=%v", version, err)
+	testutil.Require(t, err == nil && version == 22, "health=%d err=%v", version, err)
 	got, err := store.Get(context.Background(), "existing", "project", ScopeProject)
 	testutil.Require(t, err == nil && got.Content == "durable memory", "memory=%+v err=%v", got, err)
 	var count int
@@ -2296,6 +2296,112 @@ func TestApplyProjectPulledPageIsolatedAndIdempotent(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_project_cursor WHERE portable_project_id=?`, projectA).Scan(&position))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_cursor WHERE portable_project_id=?`, projectB).Scan(&otherCursor))
 	testutil.Require(t, sessions == 1 && inbox == 1 && position == 7 && otherCursor == 0, "sessions=%d inbox=%d position=%d other=%d", sessions, inbox, position, otherCursor)
+}
+
+func TestApplyProjectPulledPageReviewLifecycleRegressions(t *testing.T) {
+	ctx := context.Background()
+	t.Run("needs review create and update", func(t *testing.T) {
+		store, portable, history := projectPulledReviewStore(t)
+		defer store.Close()
+		wire := "550e8400-e29b-41d4-a716-4466554403d1"
+		create := pulledProjectObservationMutation(wire, "550e8400-e29b-41d4-a716-4466554403d2", syncservice.MutationCreate, 0, syncservice.LifecycleActive, syncservice.ReviewNeedsReview, "project review create", portable)
+		testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "local", projectPulledPage(history, 1, 1, pulledChange(t, 1, 1, create))))
+		update := pulledProjectObservationMutation(wire, "550e8400-e29b-41d4-a716-4466554403d3", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, syncservice.ReviewNeedsReview, "project review update", portable)
+		update.Observation.UpdatedAt = fixedTime.Add(time.Nanosecond)
+		testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "local", projectPulledPage(history, 2, 2, pulledChange(t, 2, 2, update))))
+		local := adoptedSyncLocalID(syncservice.RecordKindObservation, wire)
+		found, err := store.Search(ctx, Search{Query: "update", Project: "local", Scope: ScopeProject, States: []State{StateNeedsReview}})
+		var state, content string
+		var inbox, position int
+		testutil.NoError(t, store.db.QueryRow(`SELECT state,content FROM observations WHERE id=?`, local).Scan(&state, &content))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, portable).Scan(&inbox))
+		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_project_cursor WHERE portable_project_id=?`, portable).Scan(&position))
+		testutil.Require(t, err == nil && state == string(StateNeedsReview) && content == "project review update" && len(found) == 1 && found[0].ID == local && inbox == 2 && position == 2, "state=%q content=%q search=%+v err=%v inbox=%d cursor=%d", state, content, found, err, inbox, position)
+	})
+	t.Run("archive clear removes fts", func(t *testing.T) {
+		store, portable, history := projectPulledReviewStore(t)
+		defer store.Close()
+		wire := "550e8400-e29b-41d4-a716-4466554403d4"
+		create := pulledProjectObservationMutation(wire, "550e8400-e29b-41d4-a716-4466554403d5", syncservice.MutationCreate, 0, syncservice.LifecycleActive, syncservice.ReviewClear, "project archive create", portable)
+		archive := pulledProjectObservationMutation(wire, "550e8400-e29b-41d4-a716-4466554403d6", syncservice.MutationArchive, 1, syncservice.LifecycleArchived, syncservice.ReviewClear, "project archive clear", portable)
+		archive.Observation.UpdatedAt = fixedTime.Add(time.Nanosecond)
+		page := projectPulledPage(history, 2, 2, pulledChange(t, 1, 1, create), pulledChange(t, 2, 2, archive))
+		testutil.NoError(t, store.ApplyProjectPulledPage(ctx, portable, "local", page))
+		local := adoptedSyncLocalID(syncservice.RecordKindObservation, wire)
+		found, err := store.Search(ctx, Search{Query: "archive", Project: "local", Scope: ScopeProject})
+		var state string
+		var fts, inbox, position int
+		testutil.NoError(t, store.db.QueryRow(`SELECT state FROM observations WHERE id=?`, local).Scan(&state))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations_fts WHERE id=?`, local).Scan(&fts))
+		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_project_inbox WHERE portable_project_id=?`, portable).Scan(&inbox))
+		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_project_cursor WHERE portable_project_id=?`, portable).Scan(&position))
+		testutil.Require(t, err == nil && state == string(StateArchived) && fts == 0 && len(found) == 0 && inbox == 2 && position == 2, "state=%q fts=%d search=%+v err=%v inbox=%d cursor=%d", state, fts, found, err, inbox, position)
+	})
+}
+
+func TestApplyProjectPulledPageRejectsReviewAndHashWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		kind   syncservice.MutationKind
+		life   syncservice.Lifecycle
+		review syncservice.Review
+		mutate func(*syncservice.Change)
+	}{
+		{name: "archived needs review", kind: syncservice.MutationCreate, life: syncservice.LifecycleArchived, review: syncservice.ReviewNeedsReview},
+		{name: "unknown review", kind: syncservice.MutationCreate, life: syncservice.LifecycleActive, review: "unknown", mutate: func(change *syncservice.Change) { change.ChangeHash, _ = syncservice.CanonicalChangeHash(*change) }},
+		{name: "tampered hash", kind: syncservice.MutationCreate, life: syncservice.LifecycleActive, review: syncservice.ReviewClear, mutate: func(change *syncservice.Change) { change.ChangeHash = strings.Repeat("0", 64) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, portable, history := projectPulledReviewStore(t)
+			defer store.Close()
+			mutation := pulledProjectObservationMutation("550e8400-e29b-41d4-a716-4466554403d7", "550e8400-e29b-41d4-a716-4466554403d8", tc.kind, 0, tc.life, tc.review, "rejected durable state", portable)
+			change := pulledChange(t, 1, 1, mutation)
+			if tc.mutate != nil {
+				tc.mutate(&change)
+			}
+			before := projectPulledDurableState(t, store, portable)
+			err := store.ApplyProjectPulledPage(ctx, portable, "local", projectPulledPage(history, 1, 1, change))
+			after := projectPulledDurableState(t, store, portable)
+			testutil.Require(t, errors.Is(err, ErrInvalid) && before == after, "err=%v before=%q after=%q", err, before, after)
+		})
+	}
+}
+
+func projectPulledReviewStore(t *testing.T) (*Store, string, string) {
+	t.Helper()
+	store := openTestStore(t)
+	store.now = func() time.Time { return fixedTime }
+	const portable = "550e8400-e29b-41d4-a716-4466554403d0"
+	const history = "550e8400-e29b-41d4-a716-4466554403cf"
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('local',1);
+		INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,?,?,?,?);
+		INSERT INTO sync_profiles(singleton,enabled,endpoint,device_id,credential_ref,created_at,updated_at) VALUES(1,1,'https://example.test','550e8400-e29b-41d4-a716-446655440399','secret://keychain/sync/test',1,1)`, portable, "local", "review-hash", "test", fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	return store, portable, history
+}
+
+func pulledProjectObservationMutation(id, mutationID string, kind syncservice.MutationKind, base int64, lifecycle syncservice.Lifecycle, review syncservice.Review, content, project string) syncservice.Mutation {
+	mutation := pulledObservationMutation(id, kind, base, lifecycle, content, nil)
+	mutation.MutationID = mutationID
+	mutation.Observation.ProjectID = project
+	mutation.Observation.Review = review
+	return mutation
+}
+
+func projectPulledPage(history string, position, watermark int64, changes ...syncservice.Change) syncservice.PullPage {
+	return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: position, Watermark: watermark}, Changes: changes}
+}
+
+func projectPulledDurableState(t *testing.T, store *Store, portable string) string {
+	t.Helper()
+	var observations, fts, inbox, cursor string
+	testutil.NoError(t, store.db.QueryRow(`SELECT
+		COALESCE((SELECT group_concat(row, '|') FROM (SELECT id || ':' || project_id || ':' || state || ':' || content AS row FROM observations ORDER BY id)), ''),
+		COALESCE((SELECT group_concat(row, '|') FROM (SELECT id || ':' || content AS row FROM observations_fts ORDER BY id)), ''),
+		COALESCE((SELECT group_concat(row, '|') FROM (SELECT history_id || ':' || seq || ':' || hex(change_hash) AS row FROM sync_project_inbox WHERE portable_project_id=? ORDER BY history_id,seq)), ''),
+		COALESCE((SELECT history_id || ':' || position || ':' || watermark FROM sync_project_cursor WHERE portable_project_id=?), '')`, portable, portable).Scan(&observations, &fts, &inbox, &cursor))
+	return observations + "/" + fts + "/" + inbox + "/" + cursor
 }
 
 func TestApplyProjectPulledPageEmptyEOFPersistsAndRolloverAdvances(t *testing.T) {
@@ -3426,7 +3532,7 @@ func TestSyncLocalWriteRestartAndConcurrency(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, version == 21 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
+	testutil.Require(t, version == 22 && observations == 4 && outbox == 5, "version=%d observations=%d outbox=%d", version, observations, outbox)
 }
 
 func enableSync(t *testing.T, store *Store) {
@@ -3770,6 +3876,63 @@ func timePtr(value time.Time) *time.Time { return &value }
 
 func pulledObservationMutation(id string, kind syncservice.MutationKind, base int64, lifecycle syncservice.Lifecycle, content string, refs []string) syncservice.Mutation {
 	return syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440199", RecordID: id, RecordKind: syncservice.RecordKindObservation, Kind: kind, BaseVersion: base, Observation: &syncservice.Observation{ID: id, ProjectID: "project", SessionID: "", Scope: "project", Type: "learning", Content: content, References: refs, Provenance: syncservice.Provenance{Producer: "test"}, Lifecycle: lifecycle, Review: syncservice.ReviewClear, CreatedAt: fixedTime, UpdatedAt: fixedTime}}
+}
+
+func TestPulledObservationMapsReviewLifecycle(t *testing.T) {
+	value := pulledObservationMutation("review", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "review token", nil).Observation
+	value.Review = syncservice.ReviewNeedsReview
+	item, err := pulledObservation(value)
+	testutil.Require(t, err == nil && item.State == StateNeedsReview, "needs-review=%+v err=%v", item, err)
+	value.Lifecycle = syncservice.LifecycleArchived
+	item, err = pulledObservation(value)
+	testutil.Require(t, err == nil && item.State == StateArchived, "archived precedence=%+v err=%v", item, err)
+}
+
+func TestApplyPulledObservationIndexesNeedsReviewAndExcludesArchived(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	_, err := store.db.Exec(`INSERT INTO projects(id) VALUES('project')`)
+	testutil.NoError(t, err)
+	apply := func(change syncservice.Change) {
+		tx, err := store.db.BeginTx(ctx, nil)
+		testutil.NoError(t, err)
+		defer tx.Rollback()
+		testutil.NoError(t, applyPulledObservation(ctx, tx, change.Mutation.Observation, change))
+		testutil.NoError(t, tx.Commit())
+	}
+	create := pulledChange(t, 1, 1, pulledObservationMutation("materialized", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "active token", nil))
+	apply(create)
+	update := pulledChange(t, 2, 2, pulledObservationMutation("materialized", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "review token", nil))
+	update.Mutation.Observation.Review = syncservice.ReviewNeedsReview
+	update.Mutation.Observation.UpdatedAt = fixedTime.Add(time.Nanosecond)
+	update.ChangeHash, _ = syncservice.CanonicalChangeHash(update)
+	apply(update)
+	found, err := store.Search(ctx, Search{Query: "review", Project: "project", Scope: ScopeProject, States: []State{StateNeedsReview}})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "materialized", "needs-review search=%+v err=%v", found, err)
+	archived := pulledChange(t, 3, 3, pulledObservationMutation("materialized", syncservice.MutationUpdate, 2, syncservice.LifecycleArchived, "archived token", nil))
+	archived.Mutation.Observation.Review = syncservice.ReviewNeedsReview
+	archived.Mutation.Observation.UpdatedAt = fixedTime.Add(2 * time.Nanosecond)
+	archived.ChangeHash, _ = syncservice.CanonicalChangeHash(archived)
+	apply(archived)
+	found, err = store.Search(ctx, Search{Query: "archived", Project: "project", Scope: ScopeProject, States: []State{StateArchived}})
+	testutil.Require(t, err == nil && len(found) == 0, "archived search=%+v err=%v", found, err)
+}
+
+func TestApplyPulledChangeMaterializesNeedsReview(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	history := "550e8400-e29b-41d4-a716-446655440250"
+	testutil.NoError(t, store.ApplyPulledChange(ctx, history, pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440251", "project"))))
+	mutation := pulledObservationMutation("public-review", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "public review", nil)
+	mutation.Observation.Review = syncservice.ReviewNeedsReview
+	change := pulledChange(t, 2, 1, mutation)
+	testutil.NoError(t, store.ApplyPulledChange(ctx, history, change))
+	found, err := store.Search(ctx, Search{Query: "review", Project: "project", Scope: ScopeProject, States: []State{StateNeedsReview}})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == "public-review", "search=%+v err=%v", found, err)
+	var inbox, position int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox WHERE history_id=?`, history).Scan(&inbox))
+	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor WHERE singleton=1`).Scan(&position))
+	testutil.Require(t, inbox == 2 && position == 2, "inbox=%d cursor=%d", inbox, position)
 }
 
 func pulledChange(t *testing.T, sequence, version int64, mutation syncservice.Mutation) syncservice.Change {

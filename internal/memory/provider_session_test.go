@@ -134,6 +134,30 @@ func TestProviderSessionRepeatedCompletionAndOptimisticUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateObservationDoesNotRestoreForgottenFTSRow(t *testing.T) {
+	store := openTestStore(t)
+	item := mustSave(t, store, observation("forgotten", "p", "before token"))
+	forgotten, err := store.Forget(context.Background(), item.ID, item.Project, item.Scope)
+	testutil.NoError(t, err)
+	_, err = store.UpdateObservation(context.Background(), ObservationUpdate{ID: item.ID, Project: item.Project, ExpectedUpdatedAt: forgotten.UpdatedAt, Content: "after token"})
+	testutil.NoError(t, err)
+	found, err := store.Search(context.Background(), Search{Query: "after", Project: item.Project, Scope: item.Scope, States: []State{StateArchived}})
+	testutil.Require(t, err == nil && len(found) == 0, "forgotten update restored FTS row: %+v %v", found, err)
+}
+
+func TestUpdateObservationPreservesNeedsReviewFTSMembership(t *testing.T) {
+	store := openTestStore(t)
+	item := observation("review", "p", "before review token")
+	item.State = StateNeedsReview
+	item = mustSave(t, store, item)
+	found, err := store.Search(context.Background(), Search{Query: "before", Project: item.Project, Scope: item.Scope, States: []State{StateNeedsReview}})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == item.ID, "needs-review row was not searchable: %+v %v", found, err)
+	updated, err := store.UpdateObservation(context.Background(), ObservationUpdate{ID: item.ID, Project: item.Project, ExpectedUpdatedAt: item.UpdatedAt, Content: "after review token"})
+	testutil.NoError(t, err)
+	found, err = store.Search(context.Background(), Search{Query: "after", Project: item.Project, Scope: item.Scope, States: []State{StateNeedsReview}})
+	testutil.Require(t, err == nil && len(found) == 1 && found[0].ID == item.ID && found[0].Content == updated.Content, "needs-review update lost FTS membership: %+v %v", found, err)
+}
+
 func TestProviderSessionDraftIsLocalOptimisticAndConsumedOnCompletion(t *testing.T) {
 	store := openTestStore(t)
 	enableSync(t, store)
