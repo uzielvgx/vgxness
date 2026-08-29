@@ -4233,6 +4233,24 @@ func TestMemoryLifecyclePluginRuntimeLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryLifecyclePluginRuntimeInjectsColdStartLifecycleBlock(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	plugin := string(renderMemoryLifecyclePlugin("/vgxness-test-bin"))
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryLifecyclePlugin`, `const VGXNESSMemoryLifecyclePlugin`, 1)
+	script := `const a=(x,m)=>{if(!x)throw Error(m)},calls=[];function stream(){const h=new Map();return{on:(n,f)=>h.set(n,f),emit:(n,v)=>h.get(n)?.(v),setEncoding(){}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map();this.stdin.end=input=>queueMicrotask(()=>{const p=JSON.parse(input);calls.push(p);const result={schemaVersion:1,session_handle:p.operation==="start"?p.external_id:p.session_handle};if(p.operation==="context"&&p.session_handle==="empty")result.handoff="";if(p.operation==="context"&&p.session_handle==="null")result.handoff=null;this.stdout.emit("data",JSON.stringify(result));this.h.get("close")?.(0)})}on(n,f){this.h.set(n,f);return this}kill(){return true}}globalThis.__test={spawn:()=>new Child(),isAbsolute:x=>x.startsWith("/")};` + plugin + `
+const p=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"}),create=id=>p.event({event:{type:"session.created",properties:{info:{id}}}}),inject=async id=>{await create(id);const out={system:[]};await p["experimental.chat.system.transform"]({sessionID:id},out);return out.system};for(const id of ["omitted","empty"]){const system=await inject(id);a(system.length===1&&system[0].includes('session_handle="'+id+'"')&&system[0].includes("Before your terminal response")&&system[0].includes("<UNTRUSTED DATA>\n\n</UNTRUSTED DATA>"),id+" cold start")}a((await inject("null")).length===0,"null handoff accepted");a(calls.filter(x=>x.operation==="context").length===3,"context count");`
+	path := filepath.Join(t.TempDir(), "memory-lifecycle-cold-start.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	if output, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("cold-start lifecycle runtime: %v: %s", err, output)
+	}
+}
+
 func TestMemoryLifecyclePluginRuntimeOutputOverflowReleasesStdoutImmediately(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -4431,6 +4449,21 @@ func TestMemoryPluginRecognizesExactPredecessorVersions(t *testing.T) {
 	modified := append(append([]byte(nil), pluginV2...), []byte("\nmodified\n")...)
 	if isPreviousMemoryPlugin(modified) {
 		t.Fatal("modified predecessor was recognized")
+	}
+}
+
+func TestMemoryLifecyclePluginRecognizesExactAlpha3Predecessor(t *testing.T) {
+	current := renderMemoryLifecyclePlugin(filepath.Join(t.TempDir(), "vgxness-test-bin"))
+	predecessor := previousMemoryLifecyclePluginV1(current)
+	if len(predecessor) == 0 || !isManagedPredecessor(predecessor, current, nil, isPreviousMemoryLifecyclePlugin) {
+		t.Fatal("exact alpha.3 lifecycle plugin predecessor was not recognized")
+	}
+	intermediate := previousMemoryLifecyclePluginColdStart(current)
+	if isManagedPredecessor(intermediate, current, nil, isPreviousMemoryLifecyclePlugin) {
+		t.Fatal("unshipped null-accepting lifecycle plugin predecessor was recognized")
+	}
+	if isManagedPredecessor(append(predecessor, '\n'), current, nil, isPreviousMemoryLifecyclePlugin) {
+		t.Fatal("modified alpha.3 lifecycle plugin predecessor was recognized")
 	}
 }
 
