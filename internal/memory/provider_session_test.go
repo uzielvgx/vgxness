@@ -221,6 +221,29 @@ func TestProviderSessionDraftUpdateChecksAffectedRowAndFinalizationRollsBack(t *
 	testutil.Require(t, drafts == 1 && active == 1, "failed finalization committed drafts=%d active=%d", drafts, active)
 }
 
+func TestProviderSessionFinalizationRollbackLeavesNoObservationFTSOrOutboxResidue(t *testing.T) {
+	store := openTestStore(t)
+	enableSync(t, store)
+	ctx := context.Background()
+	started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "external"})
+	testutil.NoError(t, err)
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "draft handoff"})
+	testutil.NoError(t, err)
+	testutil.NoError(t, func() error {
+		_, err := store.db.Exec(`CREATE TRIGGER reject_provider_session_close BEFORE UPDATE ON local_provider_sessions WHEN NEW.state <> 'active' BEGIN SELECT RAISE(ABORT, 'injected close failure'); END`)
+		return err
+	}())
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCompleted})
+	testutil.Require(t, err != nil, "finalization unexpectedly succeeded")
+	var active, drafts, observations, fts, outbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_sessions WHERE handle=? AND state='active'`, started.Handle).Scan(&active))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts WHERE handle=?`, started.Handle).Scan(&drafts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations_fts`).Scan(&fts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.Require(t, active == 1 && drafts == 1 && observations == 0 && fts == 0 && outbox == 0, "failed finalization left active=%d drafts=%d observations=%d fts=%d outbox=%d", active, drafts, observations, fts, outbox)
+}
+
 func TestProviderSessionPreservesCancellationIdentity(t *testing.T) {
 	store := openTestStore(t)
 	started, err := store.StartProviderSession(context.Background(), ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "external"})

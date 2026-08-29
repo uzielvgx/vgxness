@@ -3975,21 +3975,29 @@ export const VGXNESSMemoryLifecyclePlugin = async ({ directory }) => {
     try { child.stdin.end(input) } catch { fail(new Error("VGXNESS lifecycle input failed")) }
   })
   const live = state => !!state?.handle
-  const end = state => live(state) ? invoke("end", { session_handle: state.handle, external_id: state.externalID, state: state.summaryCompleted ? "completed" : "interrupted" }).catch(() => {}) : Promise.resolve()
+  const committedCompletion = (state, receipt) => receipt?.state === "completed" && receipt?.session_handle === state.handle && typeof receipt?.final_observation_id === "string" && receipt.final_observation_id.trim() !== ""
+  const end = async state => {
+    if (!live(state)) return
+    const terminalState = state.summaryCompleted ? "completed" : "interrupted"
+    const receipt = await invoke("end", { session_handle: state.handle, external_id: state.externalID, state: terminalState })
+    if (terminalState === "completed" && !committedCompletion(state, receipt)) throw new Error("VGXNESS lifecycle completion was not committed")
+  }
   const begin = async (externalID, placeholder) => { try {
     const result = await invoke("start", { provider: "opencode", external_id: externalID }), handle = identifier(result?.session_handle)
     if (!handle) return
     if (sessions.get(externalID) !== placeholder) { await end({ externalID, handle, summaryCompleted: false }); return }
     sessions.set(externalID, { externalID, generation: placeholder.generation, handle, summaryCompleted: false, contextLoaded: false })
   } catch {} }
-  const forget = async externalID => { const state = sessions.get(externalID); sessions.delete(externalID); if (state?.handle) await end(state) }
+  const forget = async externalID => { const state = sessions.get(externalID); if (!live(state)) { sessions.delete(externalID); return }; await end(state); if (sessions.get(externalID) === state) sessions.delete(externalID) }
   return {
-    event: async input => { try {
+    event: async input => {
       const event = input?.event, info = event?.properties?.info, externalID = identifier(info?.id)
       if (!externalID || info?.parentID) return
-      if (event?.type === "session.created" && !sessions.has(externalID)) { const placeholder = { externalID, generation: ++nextGeneration }; sessions.set(externalID, placeholder); if (sessions.size > MAX_SESSIONS) { const oldest = sessions.keys().next().value, state = sessions.get(oldest); sessions.delete(oldest); if (state?.handle) void end(state) }; await begin(externalID, placeholder) }
-      else if (event?.type === "session.deleted") await forget(externalID)
-    } catch {} },
+      if (event?.type === "session.deleted") return await forget(externalID)
+      try {
+      if (event?.type === "session.created" && !sessions.has(externalID)) { const placeholder = { externalID, generation: ++nextGeneration }; sessions.set(externalID, placeholder); if (sessions.size > MAX_SESSIONS) { const oldest = sessions.keys().next().value, state = sessions.get(oldest); sessions.delete(oldest); if (state?.handle) void end(state).catch(() => {}) }; await begin(externalID, placeholder) }
+      } catch {}
+    },
     "experimental.chat.system.transform": async (input, output) => { try {
       const state = sessions.get(identifier(input?.sessionID)); if (!live(state) || state.contextLoaded) return
       state.contextLoaded = true
