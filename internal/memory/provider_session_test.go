@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -28,11 +29,11 @@ func TestProviderSessionCompletedSummaryIsSanitizedAndSynced(t *testing.T) {
 	ctx := context.Background()
 	started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: " OpenAI ", ExternalID: "remote-run"})
 	testutil.NoError(t, err)
-	marked, err := store.MarkProviderSessionCheckpoint(ctx, "p", started.Handle)
+	marked, err := store.MarkProviderSessionCheckpoint(ctx, "p", started.Handle, started.LeaseToken)
 	testutil.Require(t, err == nil && marked.Checkpointed, "checkpoint=%+v err=%v", marked, err)
-	_, err = store.MarkProviderSessionCheckpoint(ctx, "other", started.Handle)
+	_, err = store.MarkProviderSessionCheckpoint(ctx, "other", started.Handle, started.LeaseToken)
 	testutil.Require(t, errors.Is(err, ErrNotFound), "cross-project checkpoint=%v", err)
-	closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "remote-run", State: ProviderSessionCompleted, Summary: "durable handoff"})
+	closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: "remote-run", State: ProviderSessionCompleted, Summary: "durable handoff"})
 	testutil.Require(t, err == nil && closed.State == ProviderSessionCompleted && closed.FinalObservationID != "", "close=%+v err=%v", closed, err)
 	item, err := store.Get(ctx, closed.FinalObservationID, "p", ScopeProject)
 	testutil.Require(t, err == nil && item.Session == "" && item.Type == "summary" && item.TopicKey == providerSessionSummaryTopic(item.ID) && item.Provenance == (Provenance{Producer: "provider-session"}) && item.State == StateActive, "summary=%+v err=%v", item, err)
@@ -78,11 +79,11 @@ func TestProviderSessionEndValidatesIdentitySummaryAndAtomicity(t *testing.T) {
 	testutil.NoError(t, store.db.QueryRow(`SELECT state FROM local_provider_sessions WHERE handle=?`, started.Handle).Scan(&state))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
 	testutil.Require(t, state == string(ProviderSessionActive) && observations == 0, "partial close state=%q observations=%d", state, observations)
-	closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCompleted, Summary: "ok"})
+	closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: "external", State: ProviderSessionCompleted, Summary: "ok"})
 	testutil.NoError(t, err)
-	repeated, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCompleted, Summary: "ok"})
+	repeated, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: "external", State: ProviderSessionCompleted, Summary: "ok"})
 	testutil.Require(t, err == nil && repeated.FinalObservationID == closed.FinalObservationID, "repeat=%+v err=%v", repeated, err)
-	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCancelled})
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: "external", State: ProviderSessionCancelled})
 	testutil.Require(t, errors.Is(err, ErrConflict), "incompatible close=%v", err)
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -95,12 +96,12 @@ func TestProviderSessionTerminalHandoffAndIsolation(t *testing.T) {
 	ctx := context.Background()
 	prior, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "prior"})
 	testutil.NoError(t, err)
-	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: prior.Handle, ExternalID: "prior", State: ProviderSessionCompleted, Summary: strings.Repeat("x", 4096)})
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: prior.Handle, LeaseToken: prior.LeaseToken, ExternalID: "prior", State: ProviderSessionCompleted, Summary: strings.Repeat("x", 4096)})
 	testutil.NoError(t, err)
 	for _, state := range []ProviderSessionState{ProviderSessionInterrupted, ProviderSessionCancelled} {
 		started, startErr := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: string(state)})
 		testutil.NoError(t, startErr)
-		closed, closeErr := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: string(state), State: state})
+		closed, closeErr := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: string(state), State: state})
 		testutil.Require(t, closeErr == nil && closed.FinalObservationID == "", "terminal=%+v err=%v", closed, closeErr)
 	}
 	current, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "current"})
@@ -120,7 +121,7 @@ func TestProviderSessionRepeatedCompletionAndOptimisticUpdate(t *testing.T) {
 	for _, external := range []string{"one", "two"} {
 		started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: external})
 		testutil.NoError(t, err)
-		closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: external, State: ProviderSessionCompleted, Summary: "durable handoff"})
+		closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: external, State: ProviderSessionCompleted, Summary: "durable handoff"})
 		testutil.Require(t, err == nil && !ids[closed.FinalObservationID], "close=%+v err=%v", closed, err)
 		ids[closed.FinalObservationID] = true
 	}
@@ -174,7 +175,7 @@ func TestProviderSessionDraftIsLocalOptimisticAndConsumedOnCompletion(t *testing
 	testutil.Require(t, afterDraft == outbox, "draft entered sync outbox %d -> %d", outbox, afterDraft)
 	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "stale", ExpectedUpdatedAt: draft.UpdatedAt.Add(-time.Nanosecond)})
 	testutil.Require(t, errors.Is(err, ErrConflict), "stale draft=%v", err)
-	closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCompleted})
+	closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: "external", State: ProviderSessionCompleted})
 	testutil.Require(t, err == nil && closed.FinalObservationID != "", "close=%+v err=%v", closed, err)
 	item, err := store.Get(ctx, closed.FinalObservationID, "p", ScopeProject)
 	testutil.Require(t, err == nil && item.Content == "replacement", "item=%+v err=%v", item, err)
@@ -185,7 +186,7 @@ func TestProviderSessionDraftIsLocalOptimisticAndConsumedOnCompletion(t *testing
 	testutil.NoError(t, err)
 	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: interrupted.Handle, Summary: "discarded"})
 	testutil.NoError(t, err)
-	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: interrupted.Handle, ExternalID: "interrupted", State: ProviderSessionInterrupted})
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: interrupted.Handle, LeaseToken: interrupted.LeaseToken, ExternalID: "interrupted", State: ProviderSessionInterrupted})
 	testutil.NoError(t, err)
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts WHERE handle=?`, interrupted.Handle).Scan(&drafts))
 	testutil.Require(t, drafts == 0, "noncompleted draft retained=%d", drafts)
@@ -213,7 +214,7 @@ func TestProviderSessionDraftUpdateChecksAffectedRowAndFinalizationRollsBack(t *
 		_, err := store.db.Exec(`UPDATE local_provider_session_drafts SET summary='external' WHERE handle=?`, started.Handle)
 		return err
 	}())
-	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCompleted})
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: "external", State: ProviderSessionCompleted})
 	testutil.Require(t, errors.Is(err, ErrInvalid), "invalid finalization=%v", err)
 	var drafts, active int
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts WHERE handle=?`, started.Handle).Scan(&drafts))
@@ -233,7 +234,7 @@ func TestProviderSessionFinalizationRollbackLeavesNoObservationFTSOrOutboxResidu
 		_, err := store.db.Exec(`CREATE TRIGGER reject_provider_session_close BEFORE UPDATE ON local_provider_sessions WHEN NEW.state <> 'active' BEGIN SELECT RAISE(ABORT, 'injected close failure'); END`)
 		return err
 	}())
-	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, ExternalID: "external", State: ProviderSessionCompleted})
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: "external", State: ProviderSessionCompleted})
 	testutil.Require(t, err != nil, "finalization unexpectedly succeeded")
 	var active, drafts, observations, fts, outbox int
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_sessions WHERE handle=? AND state='active'`, started.Handle).Scan(&active))
@@ -256,6 +257,124 @@ func TestProviderSessionPreservesCancellationIdentity(t *testing.T) {
 		_, _, got := loadProviderSession(providerSessionScanError{want})
 		testutil.Require(t, errors.Is(got, want), "scan error=%v, want %v", got, want)
 	}
+}
+
+func TestProviderSessionLeaseTakeoverFencesPriorOwnerAndReconcilesExpiredRows(t *testing.T) {
+	store := openTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	ctx := context.Background()
+	first, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "same"})
+	testutil.NoError(t, err)
+	testutil.Require(t, first.LeaseToken != "" && first.LeaseUntil != nil && first.LeaseUntil.Equal(now.Add(24*time.Hour)), "first lease=%+v", first)
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: first.Handle, Summary: "durable draft"})
+	testutil.NoError(t, err)
+	takeover, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "same"})
+	testutil.Require(t, err == nil && takeover.Handle == first.Handle && takeover.LeaseToken != first.LeaseToken && takeover.DraftPresent && takeover.LeaseUntil != nil && takeover.LeaseUntil.Equal(takeover.UpdatedAt.Add(providerSessionLeaseTTL)), "takeover=%+v err=%v", takeover, err)
+	_, err = store.RenewProviderSession(ctx, "p", first.Handle, first.LeaseToken)
+	testutil.Require(t, errors.Is(err, ErrConflict), "stale renew=%v", err)
+	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: first.Handle, ExternalID: "same", LeaseToken: first.LeaseToken, State: ProviderSessionInterrupted})
+	testutil.Require(t, errors.Is(err, ErrConflict), "stale end=%v", err)
+	expired, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "expired"})
+	testutil.NoError(t, err)
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: expired.Handle, Summary: "discarded"})
+	testutil.NoError(t, err)
+	now = now.Add(24 * time.Hour)
+	_, err = store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "new"})
+	testutil.NoError(t, err)
+	var state string
+	var drafts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT state FROM local_provider_sessions WHERE handle=?`, expired.Handle).Scan(&state))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts WHERE handle=?`, expired.Handle).Scan(&drafts))
+	testutil.Require(t, state == string(ProviderSessionInterrupted) && drafts == 0, "expired state=%s drafts=%d", state, drafts)
+}
+
+func TestProviderSessionTakeoverReacquiresLegacyNullLease(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "legacy"})
+	testutil.NoError(t, err)
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: started.Handle, Summary: "legacy draft"})
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`UPDATE local_provider_sessions SET lease_token=NULL,lease_until=NULL WHERE handle=?`, started.Handle)
+	testutil.NoError(t, err)
+	takeover, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "legacy"})
+	testutil.Require(t, err == nil && takeover.Handle == started.Handle && takeover.LeaseToken != "" && takeover.LeaseUntil != nil && takeover.DraftPresent, "legacy takeover=%+v err=%v", takeover, err)
+}
+
+func TestProviderSessionRejectsNonPositiveLeaseUntil(t *testing.T) {
+	store := openTestStore(t)
+	started, err := store.StartProviderSession(context.Background(), ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "invalid-lease"})
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE local_provider_sessions SET lease_until=0 WHERE handle=?`, started.Handle)
+	testutil.NoError(t, err)
+	_, _, err = loadProviderSession(store.db.QueryRow(providerSessionSelect+` WHERE handle=?`, started.Handle))
+	testutil.Require(t, errors.Is(err, ErrCorrupt), "load lease error=%v", err)
+}
+
+func TestProviderSessionReconciliationExpiresSameExternalOtherProvider(t *testing.T) {
+	store := openTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	ctx := context.Background()
+	prior, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "openai", ExternalID: "shared"})
+	testutil.NoError(t, err)
+	_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: prior.Handle, Summary: "stale draft"})
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`UPDATE local_provider_sessions SET lease_until=? WHERE handle=?`, now.Add(-time.Nanosecond).UnixNano(), prior.Handle)
+	testutil.NoError(t, err)
+	current, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "shared"})
+	testutil.NoError(t, err)
+	var state string
+	var drafts int
+	testutil.NoError(t, store.db.QueryRow(`SELECT state FROM local_provider_sessions WHERE handle=?`, prior.Handle).Scan(&state))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts WHERE handle=?`, prior.Handle).Scan(&drafts))
+	testutil.Require(t, current.Provider == "opencode" && state == string(ProviderSessionInterrupted) && drafts == 0, "current=%+v state=%s drafts=%d", current, state, drafts)
+}
+
+func TestProviderSessionCurrentTokenRenewAndCheckpointExtendLease(t *testing.T) {
+	store := openTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	ctx := context.Background()
+	started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "current"})
+	testutil.NoError(t, err)
+	now = now.Add(time.Hour)
+	checkpointed, err := store.MarkProviderSessionCheckpoint(ctx, "p", started.Handle, started.LeaseToken)
+	testutil.Require(t, err == nil && checkpointed.Checkpointed && checkpointed.LeaseUntil != nil && checkpointed.LeaseUntil.Equal(now.Add(providerSessionLeaseTTL)), "checkpoint=%+v err=%v", checkpointed, err)
+	now = now.Add(time.Hour)
+	renewed, err := store.RenewProviderSession(ctx, "p", started.Handle, started.LeaseToken)
+	testutil.Require(t, err == nil && renewed.LeaseUntil != nil && renewed.LeaseUntil.Equal(now.Add(providerSessionLeaseTTL)) && renewed.LeaseUntil.After(*checkpointed.LeaseUntil), "renewed=%+v checkpoint=%+v err=%v", renewed, checkpointed, err)
+}
+
+func TestProviderSessionReconciliationIsBoundedAndLeavesNoObservationResidue(t *testing.T) {
+	store := openTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	ctx := context.Background()
+	for index := 0; index < 130; index++ {
+		session, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: fmt.Sprintf("expired-%d", index)})
+		testutil.NoError(t, err)
+		_, err = store.SaveProviderSessionDraft(ctx, ProviderSessionDraftSave{Project: "p", Handle: session.Handle, Summary: "draft"})
+		testutil.NoError(t, err)
+	}
+	_, err := store.db.Exec(`UPDATE local_provider_sessions SET lease_until=? WHERE project_id=? AND state='active'`, now.Add(-time.Nanosecond).UnixNano(), "p")
+	testutil.NoError(t, err)
+	_, err = store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "trigger-one"})
+	testutil.NoError(t, err)
+	var interrupted, active, drafts, observations, fts, outbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_sessions WHERE project_id=? AND state='interrupted'`, "p").Scan(&interrupted))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_sessions WHERE project_id=? AND state='active'`, "p").Scan(&active))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts`).Scan(&drafts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations`).Scan(&observations))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM observations_fts`).Scan(&fts))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.Require(t, interrupted == 128 && active == 3 && drafts == 2 && observations == 0 && fts == 0 && outbox == 0, "first reconciliation interrupted=%d active=%d drafts=%d observations=%d fts=%d outbox=%d", interrupted, active, drafts, observations, fts, outbox)
+	_, err = store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "trigger-two"})
+	testutil.NoError(t, err)
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_sessions WHERE project_id=? AND state='interrupted'`, "p").Scan(&interrupted))
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts`).Scan(&drafts))
+	testutil.Require(t, interrupted == 130 && drafts == 0, "second reconciliation interrupted=%d drafts=%d", interrupted, drafts)
 }
 
 type providerSessionScanError struct{ error }

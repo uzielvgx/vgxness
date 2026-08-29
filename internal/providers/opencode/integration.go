@@ -3974,32 +3974,59 @@ export const VGXNESSMemoryLifecyclePlugin = async ({ directory }) => {
     child.stdin.on("error", () => fail(new Error("VGXNESS lifecycle input failed")))
     try { child.stdin.end(input) } catch { fail(new Error("VGXNESS lifecycle input failed")) }
   })
-  const live = state => !!state?.handle
+  const live = state => !!state?.handle && !!state?.leaseToken
+  const activeReceipt = (state, receipt) => receipt?.state === "active" && receipt?.session_handle === state.handle && receipt?.lease_token === state.leaseToken
   const committedCompletion = (state, receipt) => receipt?.state === "completed" && receipt?.session_handle === state.handle && typeof receipt?.final_observation_id === "string" && receipt.final_observation_id.trim() !== ""
+  const terminalStartReceipt = receipt => {
+    const handle = identifier(receipt?.session_handle)
+    if (!handle) return undefined
+    if (receipt?.state === "completed") return typeof receipt?.final_observation_id === "string" && receipt.final_observation_id.trim() !== "" ? { terminal: true, handle } : undefined
+    return receipt?.state === "interrupted" || receipt?.state === "cancelled" ? { terminal: true, handle } : undefined
+  }
   const end = async state => {
     if (!live(state)) return
     const terminalState = state.summaryCompleted ? "completed" : "interrupted"
-    const receipt = await invoke("end", { session_handle: state.handle, external_id: state.externalID, state: terminalState })
+    const receipt = await invoke("end", { session_handle: state.handle, lease_token: state.leaseToken, external_id: state.externalID, state: terminalState })
     if (terminalState === "completed" && !committedCompletion(state, receipt)) throw new Error("VGXNESS lifecycle completion was not committed")
   }
-  const begin = async (externalID, placeholder) => { try {
-    const result = await invoke("start", { provider: "opencode", external_id: externalID }), handle = identifier(result?.session_handle)
-    if (!handle) return
-    if (sessions.get(externalID) !== placeholder) { await end({ externalID, handle, summaryCompleted: false }); return }
-    sessions.set(externalID, { externalID, generation: placeholder.generation, handle, summaryCompleted: false, contextLoaded: false })
-  } catch {} }
-  const forget = async externalID => { const state = sessions.get(externalID); if (!live(state)) { sessions.delete(externalID); return }; await end(state); if (sessions.get(externalID) === state) sessions.delete(externalID) }
+  const acquire = (externalID, strict = false) => {
+    const existing = sessions.get(externalID)
+    if (live(existing)) return Promise.resolve(existing)
+    if (existing?.pending) return existing.pending
+    const placeholder = { externalID, generation: ++nextGeneration }
+    sessions.set(externalID, placeholder)
+    placeholder.pending = (async () => {
+      try {
+        const result = await invoke("start", { provider: "opencode", external_id: externalID }), handle = identifier(result?.session_handle), leaseToken = identifier(result?.lease_token)
+        const terminal = terminalStartReceipt(result)
+        if (terminal) { if (sessions.get(externalID) === placeholder) sessions.delete(externalID); return terminal }
+        if (!handle || !leaseToken) throw new Error("VGXNESS lifecycle acquisition failed")
+        const state = { externalID, generation: placeholder.generation, handle, leaseToken, summaryCompleted: result?.draft_present === true, contextLoaded: false }
+        if (sessions.get(externalID) !== placeholder) { await end(state); return undefined }
+        sessions.set(externalID, state)
+        return state
+      } catch (error) {
+        if (sessions.get(externalID) === placeholder) sessions.delete(externalID)
+        if (strict) throw error
+      }
+    })()
+    return placeholder.pending
+  }
+  const forget = async externalID => { let state = sessions.get(externalID); if (!live(state)) { let acquired = await acquire(externalID); if (acquired?.terminal) return; state = sessions.get(externalID); if (!live(state)) { acquired = await acquire(externalID, true); if (acquired?.terminal) return; state = acquired; if (!live(state)) throw new Error("VGXNESS lifecycle reacquisition failed") } }; await end(state); if (sessions.get(externalID) === state) sessions.delete(externalID) }
   return {
     event: async input => {
       const event = input?.event, info = event?.properties?.info, externalID = identifier(info?.id)
       if (!externalID || info?.parentID) return
       if (event?.type === "session.deleted") return await forget(externalID)
       try {
-      if (event?.type === "session.created" && !sessions.has(externalID)) { const placeholder = { externalID, generation: ++nextGeneration }; sessions.set(externalID, placeholder); if (sessions.size > MAX_SESSIONS) { const oldest = sessions.keys().next().value, state = sessions.get(oldest); sessions.delete(oldest); if (state?.handle) void end(state).catch(() => {}) }; await begin(externalID, placeholder) }
+      if (event?.type?.startsWith("session.") && !sessions.has(externalID)) { await acquire(externalID); if (sessions.size > MAX_SESSIONS) { const oldest = sessions.keys().next().value, state = sessions.get(oldest); sessions.delete(oldest); if (state?.handle) void end(state).catch(() => {}) } }
       } catch {}
     },
     "experimental.chat.system.transform": async (input, output) => { try {
-      const state = sessions.get(identifier(input?.sessionID)); if (!live(state) || state.contextLoaded) return
+      const state = sessions.get(identifier(input?.sessionID)); if (!live(state)) return
+      const renewal = await invoke("renew", { session_handle: state.handle, lease_token: state.leaseToken })
+      if (sessions.get(identifier(input?.sessionID)) !== state || !activeReceipt(state, renewal)) return
+      if (state.contextLoaded) return
       state.contextLoaded = true
       const result = await invoke("context", { session_handle: state.handle })
       const hasHandoff = Object.prototype.hasOwnProperty.call(result, "handoff")
@@ -4008,7 +4035,7 @@ export const VGXNESSMemoryLifecyclePlugin = async ({ directory }) => {
       const block = "<VGXNESS LIFECYCLE session_handle=\"" + state.handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + untrusted(handoff) + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"
       if (Array.isArray(output?.system)) output.system.push(block)
     } catch {} },
-    "experimental.session.compacting": async input => { try { const state = sessions.get(identifier(input?.sessionID)); if (live(state)) await invoke("checkpoint", { session_handle: state.handle }) } catch {} },
+    "experimental.session.compacting": async input => { try { const state = sessions.get(identifier(input?.sessionID)); if (live(state)) await invoke("checkpoint", { session_handle: state.handle, lease_token: state.leaseToken }) } catch {} },
     "tool.execute.after": async input => { try { const state = sessions.get(identifier(input?.sessionID)); if (live(state) && input?.tool === "vgxness_memory_session_summary" && identifier(input?.callID)) state.summaryCompleted = true } catch {} },
     dispose: async () => { try { disposed = true; const active = [...sessions.values()].filter(live); sessions.clear(); await Promise.allSettled(active.map(end)) } catch {} },
   }

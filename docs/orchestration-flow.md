@@ -1,6 +1,6 @@
 # VGXNESS native manager flow
 
-The active product has provider-native OpenCode and Codex managers sharing `vgxness-orchestration/v1`. OpenCode supplies workspace tools and Task workers; Codex retains its native profiles and MCP tool semantics. VGXNESS supplies managed profiles, model bindings, setup, lifecycle contracts, MCP configuration, and SQLite schema v22. OpenCode installs one exact auto-discovered lifecycle plugin with no config plugin entry; it is limited to top-level lifecycle start, one bounded isolated handoff, transcript-free compaction checkpoint, exact summary-completion observation without tool payloads, and completed/interrupted end. It adds no shell or Git hooks, transcript capture, or broad observability.
+The active product has provider-native OpenCode and Codex managers sharing `vgxness-orchestration/v1`. OpenCode supplies workspace tools and Task workers; Codex retains its native profiles and MCP tool semantics. VGXNESS supplies managed profiles, model bindings, setup, lifecycle contracts, MCP configuration, and SQLite schema v23. OpenCode installs one exact auto-discovered lifecycle plugin with no config plugin entry; it is limited to top-level lifecycle start, one bounded isolated handoff, transcript-free compaction checkpoint, exact summary-completion observation without tool payloads, and completed/interrupted end. It adds no shell or Git hooks, transcript capture, or broad observability.
 
 ## Route selection
 
@@ -47,7 +47,7 @@ Baseline and controlled pilot work are deferred and separately authorized; no pi
 
 | Backend | Canonical content |
 | --- | --- |
-| `memory` | Structured SDD revision bodies in SQLite schema v22; they remain distinct from semantic-memory records and OpenSpec projections. |
+| `memory` | Structured SDD revision bodies in SQLite schema v23; they remain distinct from semantic-memory records and OpenSpec projections. |
 | `openspec` | Managed files under `openspec/changes/<safe-change-id>/`; SQLite stores identity, digest, bindings, and projection evidence. |
 | `hybrid` | SQLite revision content is canonical; OpenSpec is a deterministic projection. |
 

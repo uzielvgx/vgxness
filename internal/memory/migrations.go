@@ -75,6 +75,9 @@ var schemaV21 string
 //go:embed migrations/022_observation_fts_metadata.sql
 var schemaV22 string
 
+//go:embed migrations/023_provider_session_leases.sql
+var schemaV23 string
+
 type migration struct {
 	version                     int
 	sql                         string
@@ -104,6 +107,7 @@ var migrations = []migration{
 	{version: 20, sql: schemaV20},
 	{version: 21, sql: schemaV21},
 	{version: 22, sql: schemaV22},
+	{version: 23, sql: schemaV23},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, steps []migration) error {
