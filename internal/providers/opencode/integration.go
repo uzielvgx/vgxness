@@ -2979,7 +2979,7 @@ import { createHash } from "node:crypto"
 import { isAbsolute } from "node:path"
 import { tool } from "@opencode-ai/plugin"
 
-// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 10
+// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory; version: 11
 const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 const MAX_INPUT_BYTES = 64 * 1024
 const MAX_OUTPUT_BYTES = ` + fmt.Sprintf("%d", maxMemoryOutputBytes) + `
@@ -2999,6 +2999,8 @@ const MAX_COMPACTION_TOOL_RECORDS = 16
 const MAX_COMPACTION_TOOL_BYTES = 2 * 1024
 const MAX_TOOL_STARTS = 256
 const TOOL_TTL_MS = 5 * 60_000
+const MAX_SESSION_SUMMARY_BYTES = 16 * 1024
+const MAX_SESSION_UPDATED_AT_BYTES = 128
 const MAX_OBSERVABILITY_WORKFLOWS = 128
 const MAX_OBSERVABILITY_RECORDS_PER_WORKFLOW = 32
 const MAX_OBSERVABILITY_RECORDS = 256
@@ -3086,6 +3088,78 @@ async function invokeMemory(operation, payload, context) {
       }
     })
     child.stdin.end(input)
+  })
+}
+
+async function invokeMemoryHook(payload, context) {
+  const workspace = String(context?.directory ?? "")
+  if (!workspace || !isAbsolute(workspace)) throw new Error("VGXNESS memory workspace is unavailable")
+  const input = JSON.stringify({ schemaVersion: 1, workspace, ...payload })
+  if (Buffer.byteLength(input) > MAX_INPUT_BYTES) throw new Error("VGXNESS memory request exceeded its bound")
+  if (context?.abort?.aborted) throw new Error("VGXNESS memory request was cancelled")
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(
+      VGXNESS_EXECUTABLE,
+      ["memory", "hook", "--stdin"],
+      {
+        cwd: workspace,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          HOME: process.env.HOME,
+          USERPROFILE: process.env.USERPROFILE,
+          TMPDIR: process.env.TMPDIR,
+          SystemRoot: process.env.SystemRoot,
+        },
+      },
+    )
+    let stdout = "", stdoutBytes = 0, stderrBytes = 0, settled = false, failure, cleanupTimer
+    const finish = (error, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (cleanupTimer) clearTimeout(cleanupTimer)
+      context?.abort?.removeEventListener?.("abort", abort)
+      if (error) reject(error)
+      else resolve(value)
+    }
+    const stop = () => { try { return child.kill("SIGKILL") !== false } catch { return false } }
+    const release = () => { for (const stream of [child.stdin, child.stdout, child.stderr]) try { stream?.destroy?.() } catch {}; try { child.unref?.() } catch {} }
+    const fail = error => { if (settled || failure) return; failure = error; if (!stop()) try { child.unref?.() } catch {}; release(); cleanupTimer = setTimeout(() => { release(); finish(failure) }, 1_000) }
+    const abort = () => fail(new Error("VGXNESS memory request was cancelled"))
+    const timer = setTimeout(() => fail(new Error("VGXNESS memory request timed out")), TIMEOUT_MS)
+    context?.abort?.addEventListener?.("abort", abort, { once: true })
+    if (context?.abort?.aborted) return abort()
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
+    child.stdout.on("data", (chunk) => {
+      if (settled || failure) return
+      const chunkBytes = Buffer.byteLength(chunk)
+      if (stdoutBytes + chunkBytes > MAX_OUTPUT_BYTES) return fail(new Error("VGXNESS memory response exceeded its bound"))
+      stdoutBytes += chunkBytes
+      stdout += chunk
+    })
+    child.stderr.on("data", (chunk) => {
+      if (settled || failure) return
+      stderrBytes += Buffer.byteLength(chunk)
+      if (stderrBytes > MAX_OUTPUT_BYTES) fail(new Error("VGXNESS memory failure exceeded its bound"))
+    })
+    child.on("error", () => fail(new Error("VGXNESS memory process is unavailable")))
+    child.on("close", (code) => {
+      if (settled) return
+      if (failure) return finish(failure)
+      if (code !== 0) return finish(new Error("VGXNESS memory request failed"))
+      try {
+        const result = JSON.parse(stdout)
+        if (result?.schemaVersion !== 1) return finish(new Error("VGXNESS memory response is invalid"))
+        finish(undefined, result)
+      } catch {
+        finish(new Error("VGXNESS memory response is invalid"))
+      }
+    })
+    child.stdin.on("error", () => fail(new Error("VGXNESS memory input failed")))
+    try { child.stdin.end(input) } catch { fail(new Error("VGXNESS memory input failed")) }
   })
 }
 
@@ -3727,6 +3801,25 @@ export const VGXNESSMemoryPlugin = async ({ directory }) => {
       },
       async execute(args, context) {
         return await invokeMemory("forget", { id: args.id }, context)
+      },
+    }),
+    vgxness_memory_session_summary: tool({
+      description: "Save a bounded durable summary for this session after completing the requested work. Never include secrets, personal data, raw transcripts, or provider identifiers.",
+      args: {
+        session_handle: tool.schema.string().describe("Exact durable session handle"),
+        summary: tool.schema.string().describe("Bounded durable session summary"),
+        expected_updated_at: tool.schema.string().optional().describe("Optional optimistic updated-at value"),
+      },
+      async execute(args, context) {
+        const sessionHandle = safeIdentifier(args.session_handle)
+        const summary = String(args.summary ?? "")
+        const expectedUpdatedAt = args.expected_updated_at === undefined ? undefined : String(args.expected_updated_at)
+        if (!sessionHandle) throw new Error("VGXNESS session handle is invalid")
+        if (!summary.trim() || Buffer.byteLength(summary) > MAX_SESSION_SUMMARY_BYTES) throw new Error("VGXNESS session summary is invalid")
+        if (expectedUpdatedAt !== undefined && (!expectedUpdatedAt || Buffer.byteLength(expectedUpdatedAt) > MAX_SESSION_UPDATED_AT_BYTES)) throw new Error("VGXNESS expected updated-at value is invalid")
+        const result = await invokeMemoryHook({ operation: "summary", session_handle: sessionHandle, summary: summary, ...(expectedUpdatedAt === undefined ? {} : { expected_updated_at: expectedUpdatedAt }) }, context)
+        if (result?.session_handle !== sessionHandle || typeof result?.updated_at !== "string" || !result.updated_at || Buffer.byteLength(result.updated_at) > MAX_SESSION_UPDATED_AT_BYTES) throw new Error("VGXNESS memory response is invalid")
+        return JSON.stringify({ session_handle: result.session_handle, updated_at: result.updated_at })
       },
     }),
     vgxness_sdd_create: tool({
@@ -4470,6 +4563,31 @@ func readRegularFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+// previousMemoryPluginV10 reconstructs the immutable v10 bytes exactly.
+func previousMemoryPluginV10(current []byte) []byte {
+	value := string(current)
+	const hookStart = "async function invokeMemoryHook(payload, context) {\n"
+	const hookEnd = "\nasync function invokeSync(timeoutMs, abort, workspace) {\n"
+	start, end := strings.Index(value, hookStart), strings.Index(value, hookEnd)
+	if strings.Count(value, "artifact: opencode-plugin/vgxness-memory; version: 11") != 1 || start < 0 || end < start || strings.Count(value, "    vgxness_memory_session_summary: tool({\n") != 1 {
+		return nil
+	}
+	value = value[:start] + value[end+1:]
+	toolStart := strings.Index(value, "    vgxness_memory_session_summary: tool({\n")
+	if toolStart < 0 {
+		return nil
+	}
+	toolEnd := strings.Index(value[toolStart:], "    vgxness_sdd_create: tool({\n")
+	if toolEnd < 0 {
+		return nil
+	}
+	value = value[:toolStart] + value[toolStart+toolEnd:]
+	return derivePredecessor([]byte(value), []textReplacement{
+		{old: "artifact: opencode-plugin/vgxness-memory; version: 11", new: "artifact: opencode-plugin/vgxness-memory; version: 10"},
+		{old: "const MAX_SESSION_SUMMARY_BYTES = 16 * 1024\nconst MAX_SESSION_UPDATED_AT_BYTES = 128\n", new: ""},
+	})
+}
+
 // previousMemoryPluginV9 reconstructs the immutable v9 bytes exactly. It is
 // deliberately whitespace-sensitive: only the exact generated v10 structure is
 // accepted as an upgrade predecessor.
@@ -4490,6 +4608,9 @@ func previousMemoryPluginV9(current []byte) []byte {
 // deliberately whitespace-sensitive: only the exact generated v9 structure is
 // accepted as an upgrade predecessor.
 func previousMemoryPluginV8(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 11")) {
+		current = previousMemoryPluginV10(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
 		current = previousMemoryPluginV9(current)
 	}
@@ -4618,6 +4739,9 @@ function recentMemoryBlock(raw) {
 // deliberately whitespace-sensitive: only the exact generated v8 structure is
 // accepted as an upgrade predecessor.
 func previousMemoryPluginV7(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 11")) {
+		current = previousMemoryPluginV10(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
 		current = previousMemoryPluginV9(current)
 	}
@@ -4681,6 +4805,9 @@ const MAX_OBSERVABILITY_OFFSET_MS = Number.MAX_SAFE_INTEGER
 }
 
 func previousMemoryPluginV6(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 11")) {
+		current = previousMemoryPluginV10(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
 		current = previousMemoryPluginV9(current)
 	}
@@ -4719,6 +4846,9 @@ func previousMemoryPluginV6(current []byte) []byte {
 }
 
 func previousMemoryPluginV5(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 11")) {
+		current = previousMemoryPluginV10(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
 		current = previousMemoryPluginV9(current)
 	}
@@ -4851,6 +4981,9 @@ function sddFailureCategory(value) {
 }
 
 func previousMemoryPluginV3(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 11")) {
+		current = previousMemoryPluginV10(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
 		current = previousMemoryPluginV9(current)
 	}
@@ -4894,6 +5027,9 @@ func previousMemoryPluginV3(current []byte) []byte {
 }
 
 func previousMemoryPluginV2(current []byte) []byte {
+	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 11")) {
+		current = previousMemoryPluginV10(current)
+	}
 	if bytes.Contains(current, []byte("artifact: opencode-plugin/vgxness-memory; version: 10")) {
 		current = previousMemoryPluginV9(current)
 	}
@@ -5003,7 +5139,8 @@ func isPreviousMemoryPlugin(candidate []byte) bool {
 	if bytes.Equal(candidate, generated) {
 		return true
 	}
-	v9 := previousMemoryPluginV9(generated)
+	v10 := previousMemoryPluginV10(generated)
+	v9 := previousMemoryPluginV9(v10)
 	v8 := previousMemoryPluginV8(v9)
 	v7 := previousMemoryPluginV7(v8)
 	v6 := previousMemoryPluginV6(v7)
@@ -5012,7 +5149,7 @@ func isPreviousMemoryPlugin(candidate []byte) bool {
 	v3 := previousMemoryPluginV3(v4)
 	v2 := previousMemoryPluginV2(v3)
 	v1 := previousMemoryPluginV1(v2)
-	return bytes.Equal(candidate, v9) || bytes.Equal(candidate, v8) || bytes.Equal(candidate, v7) || bytes.Equal(candidate, v6) || bytes.Equal(candidate, v5) || bytes.Equal(candidate, v4) || bytes.Equal(candidate, v3) || bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
+	return bytes.Equal(candidate, v10) || bytes.Equal(candidate, v9) || bytes.Equal(candidate, v8) || bytes.Equal(candidate, v7) || bytes.Equal(candidate, v6) || bytes.Equal(candidate, v5) || bytes.Equal(candidate, v4) || bytes.Equal(candidate, v3) || bytes.Equal(candidate, v2) || bytes.Equal(candidate, v1)
 }
 
 func isPreviousMemoryLifecyclePlugin(candidate []byte) bool {
