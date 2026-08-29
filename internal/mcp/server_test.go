@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/vgxness/vgxness/internal/config"
@@ -178,6 +179,75 @@ func TestFullServerProtocolListResultsUseObjectEnvelopes(t *testing.T) {
 			var values []json.RawMessage
 			if err := json.Unmarshal(envelope[test.key], &values); err != nil {
 				t.Fatalf("structured content field %q=%s is not an array: %v", test.key, envelope[test.key], err)
+			}
+		})
+	}
+}
+
+func TestFullServerProtocolMemoryResultsExposeCanonicalJSONTextAndSchemas(t *testing.T) {
+	updatedAt := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.UTC)
+	entry := memory.Entry{ID: "entry-1", Title: "Decision", Type: "observation", TopicKey: "testing", State: memory.StateActive, Content: "private content", Preview: "private preview", References: []string{"ref-1"}, UpdatedAt: updatedAt}
+	backend := &fakeReader{project: "project-1", entries: []memory.Entry{entry}, entry: entry, handoff: "UNTRUSTED DATA\nprior"}
+	server, err := newFullWithReader(context.Background(), "/workspace", backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if strings.HasPrefix(tool.Name, "memory_") && tool.OutputSchema == nil {
+			t.Errorf("%s omits output schema", tool.Name)
+		}
+		switch tool.Name {
+		case "memory_recent", "memory_search":
+			assertSchemaProperties(t, tool.OutputSchema, map[string]schemaExpectation{"entries": {required: true, kind: "array"}})
+		case "memory_get", "memory_save", "memory_update", "memory_forget":
+			assertSchemaProperties(t, tool.OutputSchema, map[string]schemaExpectation{"id": {true, "string"}, "title": {true, "string"}, "type": {true, "string"}, "topicKey": {false, "string"}, "state": {true, "string"}, "preview": {true, "string"}, "updatedAt": {true, "string"}, "content": {false, "string"}, "references": {false, "array"}})
+		case "memory_context":
+			assertSchemaProperties(t, tool.OutputSchema, map[string]schemaExpectation{"handoff": {required: true, kind: "string"}})
+		case "memory_session_summary":
+			assertSchemaProperties(t, tool.OutputSchema, map[string]schemaExpectation{"status": {true, "string"}, "updated_at": {true, "string"}})
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		args   map[string]any
+		secret string
+	}{
+		{"memory_recent", nil, "private content"},
+		{"memory_search", map[string]any{"query": "decision"}, "private content"},
+		{"memory_get", map[string]any{"id": "entry-1"}, ""},
+		{"memory_save", map[string]any{"title": "Decision", "content": "private content"}, ""},
+		{"memory_update", map[string]any{"id": "entry-1", "content": "private content", "expected_updated_at": updatedAt.Format(time.RFC3339)}, ""},
+		{"memory_forget", map[string]any{"id": "entry-1"}, ""},
+		{"memory_context", map[string]any{"session_handle": "ps-1"}, ""},
+		{"memory_session_summary", map[string]any{"session_handle": "ps-1", "summary": "draft"}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, callErr := session.CallTool(ctx, &sdk.CallToolParams{Name: test.name, Arguments: test.args})
+			if callErr != nil || got.IsError {
+				t.Fatalf("CallTool() result=%+v err=%v", got, callErr)
+			}
+			text, ok := got.Content[0].(*sdk.TextContent)
+			if !ok || !json.Valid([]byte(text.Text)) {
+				t.Fatalf("content=%#v", got.Content)
+			}
+			encoded, err := json.Marshal(got.StructuredContent)
+			if err != nil || string(encoded) != text.Text {
+				t.Fatalf("text=%q structured=%s err=%v", text.Text, encoded, err)
+			}
+			if test.secret != "" && strings.Contains(text.Text, test.secret) {
+				t.Fatalf("text leaked full content: %q", text.Text)
 			}
 		})
 	}
@@ -865,6 +935,7 @@ type fakeReader struct {
 	handoff                                           string
 	providerErr                                       error
 	getErr                                            error
+	entries                                           []memory.Entry
 	recallCalls, getCalls, rememberCalls, forgetCalls int
 }
 
@@ -1006,13 +1077,13 @@ func (reader *fakeReader) ResolveProject(_ context.Context, workspace string) (s
 
 func (reader *fakeReader) Recent(_ context.Context, request memory.Recent) ([]memory.Entry, error) {
 	reader.recent = request
-	return nil, reader.recentErr
+	return reader.entries, reader.recentErr
 }
 
 func (reader *fakeReader) Recall(_ context.Context, request memory.Recall) ([]memory.Entry, error) {
 	reader.recallCalls++
 	reader.recall = request
-	return nil, reader.recallErr
+	return reader.entries, reader.recallErr
 }
 
 func sameAnyStrings(value any, want []string) bool {

@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -258,7 +257,7 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 	server := &Server{reader: reader, project: project, full: full}
 	server.server = sdk.NewServer(&sdk.Implementation{Name: "vgxness-memory", Version: "0.1.0"}, nil)
 	annotations := &sdk.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
-	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_recent", Description: "Read recent project memory entries. This tool never writes data.", Annotations: annotations, InputSchema: sddSchema(nil, map[string]any{"limit": sddNumber()})}, server.callRecent)
+	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_recent", Description: "Read recent project memory entries. This tool never writes data.", Annotations: annotations, InputSchema: sddSchema(nil, map[string]any{"limit": sddNumber()}), OutputSchema: memoryEntriesOutputSchema()}, server.callRecent)
 	sdk.AddTool(server.server, &sdk.Tool{
 		Name:        "memory_search",
 		Description: "Search project memory entries. This tool never writes data.",
@@ -273,15 +272,16 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 			},
 			"required": []string{"query"},
 		},
+		OutputSchema: memoryEntriesOutputSchema(),
 	}, server.callSearch)
-	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_context", Description: "Read bounded untrusted handoff for an active local provider session.", Annotations: annotations, InputSchema: sddSchema([]string{"session_handle"}, map[string]any{"session_handle": sddString()})}, server.callContext)
+	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_context", Description: "Read bounded untrusted handoff for an active local provider session.", Annotations: annotations, InputSchema: sddSchema([]string{"session_handle"}, map[string]any{"session_handle": sddString()}), OutputSchema: memoryContextOutputSchema()}, server.callContext)
 	if full {
 		writeAnnotations := &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(false)}
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()})}, server.callGet)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_save", Description: "Write a durable project memory entry. This tool stores data.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"title", "content"}, map[string]any{"title": sddString(), "content": sddString(), "type": sddString(), "topic": sddString(), "session_handle": sddString()})}, server.callSave)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_session_summary", Description: "Save one local pending provider-session summary.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"session_handle", "summary"}, map[string]any{"session_handle": sddString(), "summary": sddString(), "expected_updated_at": sddString()})}, server.callSummary)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_update", Description: "Update one mutable memory entry using its exact timestamp.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"id", "content", "expected_updated_at"}, map[string]any{"id": sddString(), "content": sddString(), "expected_updated_at": sddString()})}, server.callUpdate)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_forget", Description: "Archive one exact project memory entry. This tool changes stored data and removes it from normal search.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()})}, server.callForget)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()}), OutputSchema: memoryEntryOutputSchema()}, server.callGet)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_save", Description: "Write a durable project memory entry. This tool stores data.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"title", "content"}, map[string]any{"title": sddString(), "content": sddString(), "type": sddString(), "topic": sddString(), "session_handle": sddString()}), OutputSchema: memoryEntryOutputSchema()}, server.callSave)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_session_summary", Description: "Save one local pending provider-session summary.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"session_handle", "summary"}, map[string]any{"session_handle": sddString(), "summary": sddString(), "expected_updated_at": sddString()}), OutputSchema: memorySummaryOutputSchema()}, server.callSummary)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_update", Description: "Update one mutable memory entry using its exact timestamp.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"id", "content", "expected_updated_at"}, map[string]any{"id": sddString(), "content": sddString(), "expected_updated_at": sddString()}), OutputSchema: memoryEntryOutputSchema()}, server.callUpdate)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_forget", Description: "Archive one exact project memory entry. This tool changes stored data and removes it from normal search.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()}), OutputSchema: memoryEntryOutputSchema()}, server.callForget)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_create", Description: "Create one structured SDD change. This stores state only and does not execute a workflow.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"idempotencyKey", "title", "backend", "interactionMode", "plan"}, map[string]any{"idempotencyKey": sddString(), "title": sddString(), "backend": sddString("openspec", "memory", "hybrid"), "interactionMode": sddString("automatic", "interactive"), "plan": sddString("low", "medium", "high", "ultra")}), OutputSchema: sddChangeOutputSchema()}, server.callSDDCreate)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_list", Description: "List structured SDD changes for the trusted workspace project.", Annotations: annotations, InputSchema: sddSchema(nil, map[string]any{"status": sddString("active", "completed", "cancelled"), "limit": sddNumber()}), OutputSchema: sddChangesOutputSchema()}, server.callSDDList)
 		sdk.AddTool(server.server, &sdk.Tool{Name: "sdd_get", Description: "Get one structured SDD change by exact ID.", Annotations: annotations, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()}), OutputSchema: sddChangeOutputSchema()}, server.callSDDGet)
@@ -329,6 +329,21 @@ func sddRevisionBindingSchema() map[string]any {
 }
 func sddGetRevisionInputSchema() map[string]any {
 	return sddSchema([]string{"changeId", "revisionId"}, map[string]any{"changeId": sddString(), "revisionId": sddString()})
+}
+func memoryEntryOutputSchema() map[string]any {
+	return sddSchema([]string{"id", "title", "type", "state", "preview", "updatedAt"}, map[string]any{"id": sddString(), "title": sddString(), "type": sddString(), "topicKey": sddString(), "state": sddString(), "preview": sddString(), "updatedAt": sddString(), "content": sddString(), "references": sddArray(sddString())})
+}
+func memoryEntriesOutputSchema() map[string]any {
+	entries := memoryEntryOutputSchema()
+	delete(entries["properties"].(map[string]any), "content")
+	delete(entries["properties"].(map[string]any), "references")
+	return sddSchema([]string{"entries"}, map[string]any{"entries": map[string]any{"type": "array", "items": entries, "maxItems": maxLimit}})
+}
+func memoryContextOutputSchema() map[string]any {
+	return sddSchema([]string{"handoff"}, map[string]any{"handoff": sddString()})
+}
+func memorySummaryOutputSchema() map[string]any {
+	return sddSchema([]string{"status", "updated_at"}, map[string]any{"status": sddString(), "updated_at": sddString()})
 }
 func sddChangeOutputSchema() map[string]any {
 	return sddSchema(nil, map[string]any{"id": sddString(), "project": sddString(), "title": sddString(), "backend": sddString(), "interactionMode": sddString(), "plan": sddString(), "phase": sddString(), "status": sddString(), "stateVersion": sddNumber(), "createdAt": sddString(), "updatedAt": sddString()})
@@ -923,7 +938,7 @@ func (server *Server) callContext(ctx context.Context, _ *sdk.CallToolRequest, i
 		response, _, _ := entryResponse(err, entry{})
 		return response, contextResult{}, nil
 	}
-	return toolText("Provider session context returned.", false), output, nil
+	return memorySuccessResponse(output), output, nil
 }
 func (server *Server) callSummary(ctx context.Context, _ *sdk.CallToolRequest, input summaryInput) (*sdk.CallToolResult, summaryResult, error) {
 	output, err := server.sessionSummary(ctx, input)
@@ -931,7 +946,7 @@ func (server *Server) callSummary(ctx context.Context, _ *sdk.CallToolRequest, i
 		response, _, _ := entryResponse(err, entry{})
 		return response, summaryResult{}, nil
 	}
-	return toolText("Provider session summary saved.", false), output, nil
+	return memorySuccessResponse(output), output, nil
 }
 func (server *Server) callUpdate(ctx context.Context, _ *sdk.CallToolRequest, input updateInput) (*sdk.CallToolResult, entry, error) {
 	output, err := server.update(ctx, input)
@@ -998,7 +1013,7 @@ func (server *Server) callSDDProjectionStatus(ctx context.Context, _ *sdk.CallTo
 
 func toolResponse(err error, output result) (*sdk.CallToolResult, result, error) {
 	if err == nil {
-		return toolText(fmt.Sprintf("Returned %d memory entries.", len(output.Entries)), false), output, nil
+		return memorySuccessResponse(output), output, nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return toolText("request cancelled", true), result{}, nil
@@ -1011,7 +1026,7 @@ func toolResponse(err error, output result) (*sdk.CallToolResult, result, error)
 
 func entryResponse(err error, output entry) (*sdk.CallToolResult, entry, error) {
 	if err == nil {
-		return toolText("Memory entry returned.", false), output, nil
+		return memorySuccessResponse(output), output, nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return toolText("request cancelled", true), entry{}, nil
@@ -1051,6 +1066,21 @@ func sddSuccessResponse(output any) *sdk.CallToolResult {
 	encoded, err := json.Marshal(output)
 	if err != nil {
 		return toolText("SDD service unavailable", true)
+	}
+	return toolText(string(encoded), false)
+}
+func memorySuccessResponse(output any) *sdk.CallToolResult {
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		return toolText("memory service unavailable", true)
+	}
+	var canonical any
+	if err := json.Unmarshal(encoded, &canonical); err != nil {
+		return toolText("memory service unavailable", true)
+	}
+	encoded, err = json.Marshal(canonical)
+	if err != nil {
+		return toolText("memory service unavailable", true)
 	}
 	return toolText(string(encoded), false)
 }
