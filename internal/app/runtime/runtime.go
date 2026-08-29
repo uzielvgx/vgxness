@@ -124,12 +124,20 @@ func (runtime Memory) StartProviderSession(ctx context.Context, opts config.Opti
 		return store.StartProviderSession(ctx, request)
 	})
 }
-func (runtime Memory) MarkProviderSessionCheckpoint(ctx context.Context, opts config.Options, project, handle string) (memory.ProviderSession, error) {
+func (runtime Memory) MarkProviderSessionCheckpoint(ctx context.Context, opts config.Options, project, handle, token string) (memory.ProviderSession, error) {
 	if runtime.readOnly {
 		return memory.ProviderSession{}, memory.ErrInvalid
 	}
 	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.ProviderSession, error) {
-		return store.MarkProviderSessionCheckpoint(ctx, project, handle)
+		return store.MarkProviderSessionCheckpoint(ctx, project, handle, token)
+	})
+}
+func (runtime Memory) RenewProviderSession(ctx context.Context, opts config.Options, project, handle, token string) (memory.ProviderSession, error) {
+	if runtime.readOnly {
+		return memory.ProviderSession{}, memory.ErrInvalid
+	}
+	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.ProviderSession, error) {
+		return store.RenewProviderSession(ctx, project, handle, token)
 	})
 }
 func (runtime Memory) EndProviderSession(ctx context.Context, opts config.Options, request memory.ProviderSessionEnd) (memory.ProviderSession, error) {

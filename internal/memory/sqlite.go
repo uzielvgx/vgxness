@@ -406,12 +406,19 @@ func (s *Store) providerSessionDraftSchemaHealthy(ctx context.Context) bool {
 func (s *Store) providerSessionSchemaHealthy(ctx context.Context) bool {
 	normalize := func(value string) string { return strings.ReplaceAll(normalizeSchemaSQL(value), "if not exists ", "") }
 	parts := strings.Split(schemaV20, ";")
+	v23 := strings.Split(schemaV23, ";")
+	tokenDefinition := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v23[0]), "ALTER TABLE local_provider_sessions ADD COLUMN "))
+	untilDefinition := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v23[1]), "ALTER TABLE local_provider_sessions ADD COLUMN "))
 	table, ok := s.schemaSQL(ctx, "table", "local_provider_sessions")
-	if !ok || normalize(table) != normalize(parts[0]) || !s.schemaColumns(ctx, "local_provider_sessions", "handle", "project_id", "provider", "external_id_hash", "state", "checkpointed", "final_observation_id", "created_at", "updated_at", "completed_at") {
+	if !ok || !strings.Contains(normalize(table), normalize(tokenDefinition)) || !strings.Contains(normalize(table), normalize(untilDefinition)) || !s.schemaColumns(ctx, "local_provider_sessions", "handle", "project_id", "provider", "external_id_hash", "state", "checkpointed", "final_observation_id", "created_at", "updated_at", "completed_at", "lease_token", "lease_until") {
 		return false
 	}
 	index, ok := s.schemaSQL(ctx, "index", "local_provider_sessions_project_state_updated_idx")
-	return ok && normalize(index) == normalize(parts[1]) && s.schemaIndexColumns(ctx, "local_provider_sessions_project_state_updated_idx", "project_id", "state", "updated_at", "handle")
+	if !ok || normalize(index) != normalize(parts[1]) || !s.schemaIndexColumns(ctx, "local_provider_sessions_project_state_updated_idx", "project_id", "state", "updated_at", "handle") {
+		return false
+	}
+	index, ok = s.schemaSQL(ctx, "index", "local_provider_sessions_project_lease_reconcile_idx")
+	return ok && normalize(index) == normalize(strings.Split(schemaV23, ";")[2]) && s.schemaIndexColumns(ctx, "local_provider_sessions_project_lease_reconcile_idx", "project_id", "state", "lease_until", "handle")
 }
 
 func (s *Store) syncProjectBackupIntentSchemaHealthy(ctx context.Context) bool {

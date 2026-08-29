@@ -65,13 +65,16 @@ type ProviderSession struct {
 	Handle, Project, Provider, FinalObservationID string
 	State                                         ProviderSessionState
 	Checkpointed                                  bool
+	LeaseToken                                    string
+	LeaseUntil                                    *time.Time
+	DraftPresent                                  bool
 	CreatedAt, UpdatedAt                          time.Time
 	CompletedAt                                   *time.Time
 }
 type ProviderSessionStart struct{ Project, Provider, ExternalID string }
 type ProviderSessionEnd struct {
-	Project, Handle, ExternalID, Summary string
-	State                                ProviderSessionState
+	Project, Handle, ExternalID, Summary, LeaseToken string
+	State                                            ProviderSessionState
 }
 type ProviderSessionContext struct {
 	Session ProviderSession

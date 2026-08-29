@@ -25,26 +25,61 @@ func (s *Store) StartProviderSession(ctx context.Context, request ProviderSessio
 		return ProviderSession{}, writeError(ctx, err)
 	}
 	hash := sha256.Sum256([]byte(external))
+	now := s.now().UTC()
+	if err := reconcileProviderSessions(ctx, tx, project, provider, hash[:], now); err != nil {
+		return ProviderSession{}, err
+	}
 	value, found, err := loadProviderSession(tx.QueryRowContext(ctx, providerSessionSelect+` WHERE project_id=? AND provider=? AND external_id_hash=?`, project, provider, hash[:]))
 	if err != nil {
 		return ProviderSession{}, err
 	}
 	if found {
+		if value.State == ProviderSessionActive {
+			token, tokenErr := newProviderSessionToken()
+			if tokenErr != nil {
+				return ProviderSession{}, tokenErr
+			}
+			updated := monotonicProviderSessionTime(now, value.UpdatedAt)
+			until := updated.Add(providerSessionLeaseTTL)
+			query := `UPDATE local_provider_sessions SET lease_token=?,lease_until=?,updated_at=? WHERE handle=? AND project_id=? AND state='active' AND lease_token=?`
+			args := []any{token, until.UnixNano(), updated.UnixNano(), value.Handle, project, value.LeaseToken}
+			if value.LeaseToken == "" && value.LeaseUntil == nil {
+				query = `UPDATE local_provider_sessions SET lease_token=?,lease_until=?,updated_at=? WHERE handle=? AND project_id=? AND state='active' AND lease_token IS NULL AND lease_until IS NULL`
+				args = args[:5]
+			}
+			result, updateErr := tx.ExecContext(ctx, query, args...)
+			if updateErr != nil {
+				return ProviderSession{}, writeError(ctx, updateErr)
+			}
+			changed, _ := result.RowsAffected()
+			if changed != 1 {
+				return ProviderSession{}, fmt.Errorf("%w: provider session takeover", ErrConflict)
+			}
+			var draft int
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM local_provider_session_drafts WHERE handle=? AND project_id=?)`, value.Handle, project).Scan(&draft); err != nil {
+				return ProviderSession{}, writeError(ctx, err)
+			}
+			value.LeaseToken, value.LeaseUntil, value.UpdatedAt, value.DraftPresent = token, &until, updated, draft == 1
+		}
 		return value, commit(ctx, tx)
 	}
 	handle, err := newProviderSessionHandle()
 	if err != nil {
 		return ProviderSession{}, err
 	}
-	now := s.now().UTC()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO local_provider_sessions(handle,project_id,provider,external_id_hash,state,checkpointed,created_at,updated_at) VALUES(?,?,?,?,?,0,?,?)`, handle, project, provider, hash[:], ProviderSessionActive, now.UnixNano(), now.UnixNano()); err != nil {
+	token, err := newProviderSessionToken()
+	if err != nil {
+		return ProviderSession{}, err
+	}
+	until := now.Add(providerSessionLeaseTTL)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO local_provider_sessions(handle,project_id,provider,external_id_hash,state,checkpointed,lease_token,lease_until,created_at,updated_at) VALUES(?,?,?,?,?,0,?,?,?,?)`, handle, project, provider, hash[:], ProviderSessionActive, token, until.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
 		return ProviderSession{}, conflictOrWrite(ctx, err)
 	}
-	return ProviderSession{Handle: handle, Project: project, Provider: provider, State: ProviderSessionActive, CreatedAt: now, UpdatedAt: now}, commit(ctx, tx)
+	return ProviderSession{Handle: handle, Project: project, Provider: provider, State: ProviderSessionActive, LeaseToken: token, LeaseUntil: &until, CreatedAt: now, UpdatedAt: now}, commit(ctx, tx)
 }
 
-func (s *Store) MarkProviderSessionCheckpoint(ctx context.Context, project, handle string) (ProviderSession, error) {
-	if s == nil || s.readOnly || !validProviderSessionIdentity(project, handle) {
+func (s *Store) MarkProviderSessionCheckpoint(ctx context.Context, project, handle, token string) (ProviderSession, error) {
+	if s == nil || s.readOnly || !validProviderSessionIdentity(project, handle) || !validProviderSessionToken(token) {
 		return ProviderSession{}, fmt.Errorf("%w: provider session", ErrInvalid)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -59,14 +94,13 @@ func (s *Store) MarkProviderSessionCheckpoint(ctx context.Context, project, hand
 	if !found {
 		return ProviderSession{}, fmt.Errorf("%w: provider session", ErrNotFound)
 	}
-	if value.State != ProviderSessionActive {
+	if value.State != ProviderSessionActive || value.LeaseToken != token {
 		return ProviderSession{}, fmt.Errorf("%w: provider session is closed", ErrConflict)
 	}
-	if value.Checkpointed {
-		return value, commit(ctx, tx)
-	}
 	now := s.now().UTC()
-	result, err := tx.ExecContext(ctx, `UPDATE local_provider_sessions SET checkpointed=1,updated_at=? WHERE handle=? AND project_id=? AND state='active' AND checkpointed=0`, now.UnixNano(), handle, project)
+	now = monotonicProviderSessionTime(now, value.UpdatedAt)
+	until := now.Add(providerSessionLeaseTTL)
+	result, err := tx.ExecContext(ctx, `UPDATE local_provider_sessions SET checkpointed=1,lease_until=?,updated_at=? WHERE handle=? AND project_id=? AND state='active' AND lease_token=?`, until.UnixNano(), now.UnixNano(), handle, project, token)
 	if err != nil {
 		return ProviderSession{}, writeError(ctx, err)
 	}
@@ -74,7 +108,40 @@ func (s *Store) MarkProviderSessionCheckpoint(ctx context.Context, project, hand
 	if changed != 1 {
 		return ProviderSession{}, fmt.Errorf("%w: provider session checkpoint", ErrConflict)
 	}
-	value.Checkpointed, value.UpdatedAt = true, now
+	value.Checkpointed, value.UpdatedAt, value.LeaseUntil = true, now, &until
+	return value, commit(ctx, tx)
+}
+
+func (s *Store) RenewProviderSession(ctx context.Context, project, handle, token string) (ProviderSession, error) {
+	if s == nil || s.readOnly || !validProviderSessionIdentity(project, handle) || !validProviderSessionToken(token) {
+		return ProviderSession{}, fmt.Errorf("%w: provider session", ErrInvalid)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ProviderSession{}, writeError(ctx, err)
+	}
+	defer tx.Rollback()
+	value, found, err := loadProviderSession(tx.QueryRowContext(ctx, providerSessionSelect+` WHERE project_id=? AND handle=?`, project, handle))
+	if err != nil {
+		return ProviderSession{}, err
+	}
+	if !found {
+		return ProviderSession{}, fmt.Errorf("%w: provider session", ErrNotFound)
+	}
+	if value.State != ProviderSessionActive || value.LeaseToken != token {
+		return ProviderSession{}, fmt.Errorf("%w: provider session lease", ErrConflict)
+	}
+	now := monotonicProviderSessionTime(s.now().UTC(), value.UpdatedAt)
+	until := now.Add(providerSessionLeaseTTL)
+	result, updateErr := tx.ExecContext(ctx, `UPDATE local_provider_sessions SET lease_until=?,updated_at=? WHERE handle=? AND project_id=? AND state='active' AND lease_token=?`, until.UnixNano(), now.UnixNano(), handle, project, token)
+	if updateErr != nil {
+		return ProviderSession{}, writeError(ctx, updateErr)
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return ProviderSession{}, fmt.Errorf("%w: provider session lease", ErrConflict)
+	}
+	value.UpdatedAt, value.LeaseUntil = now, &until
 	return value, commit(ctx, tx)
 }
 
@@ -132,7 +199,7 @@ func (s *Store) EndProviderSession(ctx context.Context, request ProviderSessionE
 	if err := cancelled(ctx); err != nil {
 		return ProviderSession{}, err
 	}
-	if s == nil || s.readOnly || !validProviderSessionIdentity(request.Project, request.Handle) || !validText(request.ExternalID, 4096, false) || !validProviderSessionEnd(request) {
+	if s == nil || s.readOnly || !validProviderSessionIdentity(request.Project, request.Handle) || !validText(request.ExternalID, 4096, false) || !validProviderSessionEnd(request) || !validProviderSessionToken(request.LeaseToken) {
 		return ProviderSession{}, fmt.Errorf("%w: provider session end", ErrInvalid)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -160,6 +227,9 @@ func (s *Store) EndProviderSession(ctx context.Context, request ProviderSessionE
 			return value, commit(ctx, tx)
 		}
 		return ProviderSession{}, fmt.Errorf("%w: incompatible provider session close", ErrConflict)
+	}
+	if value.LeaseToken != request.LeaseToken {
+		return ProviderSession{}, fmt.Errorf("%w: provider session lease", ErrConflict)
 	}
 	now := s.now().UTC()
 	if request.State == ProviderSessionCompleted {
@@ -190,7 +260,7 @@ func (s *Store) EndProviderSession(ctx context.Context, request ProviderSessionE
 	if _, err = tx.ExecContext(ctx, `DELETE FROM local_provider_session_drafts WHERE handle=? AND project_id=?`, request.Handle, request.Project); err != nil {
 		return ProviderSession{}, writeError(ctx, err)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE local_provider_sessions SET state=?,final_observation_id=?,updated_at=?,completed_at=? WHERE handle=? AND project_id=? AND state='active'`, request.State, nullable(value.FinalObservationID), now.UnixNano(), now.UnixNano(), request.Handle, request.Project)
+	result, err := tx.ExecContext(ctx, `UPDATE local_provider_sessions SET state=?,final_observation_id=?,lease_token=NULL,lease_until=NULL,updated_at=?,completed_at=? WHERE handle=? AND project_id=? AND state='active' AND lease_token=?`, request.State, nullable(value.FinalObservationID), now.UnixNano(), now.UnixNano(), request.Handle, request.Project, request.LeaseToken)
 	if err != nil {
 		return ProviderSession{}, writeError(ctx, err)
 	}
@@ -278,14 +348,16 @@ func (s *Store) UpdateObservation(ctx context.Context, request ObservationUpdate
 	return item, commit(ctx, tx)
 }
 
-const providerSessionSelect = `SELECT handle,project_id,provider,state,checkpointed,COALESCE(final_observation_id,''),created_at,updated_at,completed_at FROM local_provider_sessions`
+const providerSessionLeaseTTL = 24 * time.Hour
+const providerSessionSelect = `SELECT handle,project_id,provider,state,checkpointed,COALESCE(final_observation_id,''),lease_token,lease_until,created_at,updated_at,completed_at FROM local_provider_sessions`
 
 func loadProviderSession(row scanner) (ProviderSession, bool, error) {
 	var value ProviderSession
 	var checkpointed int
 	var created, updated int64
-	var completed sql.NullInt64
-	err := row.Scan(&value.Handle, &value.Project, &value.Provider, &value.State, &checkpointed, &value.FinalObservationID, &created, &updated, &completed)
+	var completed, until sql.NullInt64
+	var token sql.NullString
+	err := row.Scan(&value.Handle, &value.Project, &value.Provider, &value.State, &checkpointed, &value.FinalObservationID, &token, &until, &created, &updated, &completed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ProviderSession{}, false, nil
 	}
@@ -296,6 +368,14 @@ func loadProviderSession(row scanner) (ProviderSession, bool, error) {
 		return ProviderSession{}, false, fmt.Errorf("%w: provider session", ErrCorrupt)
 	}
 	value.Checkpointed, value.CreatedAt, value.UpdatedAt = checkpointed == 1, time.Unix(0, created).UTC(), time.Unix(0, updated).UTC()
+	if token.Valid != until.Valid || token.Valid && !validProviderSessionToken(token.String) || until.Valid && until.Int64 <= 0 {
+		return ProviderSession{}, false, fmt.Errorf("%w: provider session lease", ErrCorrupt)
+	}
+	if token.Valid {
+		value.LeaseToken = token.String
+		at := time.Unix(0, until.Int64).UTC()
+		value.LeaseUntil = &at
+	}
 	if completed.Valid {
 		at := time.Unix(0, completed.Int64).UTC()
 		value.CompletedAt = &at
@@ -321,6 +401,64 @@ func validProviderSessionEnd(request ProviderSessionEnd) bool {
 func newProviderSessionHandle() (string, error) {
 	id, err := newID()
 	return strings.Replace(id, "obs-", "ps-", 1), err
+}
+func newProviderSessionToken() (string, error)    { return newID() }
+func validProviderSessionToken(token string) bool { return validText(token, 128, false) }
+func monotonicProviderSessionTime(now, previous time.Time) time.Time {
+	if !now.After(previous) {
+		return previous.Add(time.Nanosecond)
+	}
+	return now
+}
+func reconcileProviderSessions(ctx context.Context, tx *sql.Tx, project, provider string, excludedHash []byte, now time.Time) error {
+	rows, err := tx.QueryContext(ctx, `SELECT handle,updated_at,created_at FROM local_provider_sessions WHERE project_id=? AND state='active' AND NOT (provider=? AND external_id_hash=?) AND (lease_until IS NULL OR lease_until<=?) ORDER BY COALESCE(lease_until,0),handle LIMIT 128`, project, provider, excludedHash, now.UnixNano())
+	if err != nil {
+		return writeError(ctx, err)
+	}
+	type candidate struct {
+		handle           string
+		updated, created int64
+	}
+	candidates := make([]candidate, 0, 128)
+	for rows.Next() {
+		var handle string
+		var updated, created int64
+		if err := rows.Scan(&handle, &updated, &created); err != nil {
+			return writeError(ctx, err)
+		}
+		candidates = append(candidates, candidate{handle, updated, created})
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return writeError(ctx, err)
+	}
+	for _, candidate := range candidates {
+		at := now.UnixNano()
+		if at <= candidate.updated {
+			at = candidate.updated + 1
+		}
+		if at < candidate.created {
+			at = candidate.created
+		}
+		result, updateErr := tx.ExecContext(ctx, `UPDATE local_provider_sessions SET state='interrupted',lease_token=NULL,lease_until=NULL,updated_at=?,completed_at=? WHERE handle=? AND project_id=? AND state='active' AND (lease_until IS NULL OR lease_until<=?)`, at, at, candidate.handle, project, now.UnixNano())
+		if updateErr != nil {
+			return writeError(ctx, updateErr)
+		}
+		changed, _ := result.RowsAffected()
+		if changed == 0 {
+			continue
+		}
+		if changed != 1 {
+			return fmt.Errorf("%w: provider session reconciliation", ErrConflict)
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM local_provider_session_drafts WHERE handle=? AND project_id=?`, candidate.handle, project); err != nil {
+			return writeError(ctx, err)
+		}
+	}
+	return nil
 }
 func providerSessionSummaryTopic(id string) string { return "provider-session-summary-" + id }
 func boundedHandoff(id, content string) string {

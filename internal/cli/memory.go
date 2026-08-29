@@ -32,7 +32,8 @@ type MemoryRuntime interface {
 	RepairSyncProject(context.Context, config.Options, string, bool) (memory.SyncProjectRepairResult, error)
 	TransitionSyncProject(context.Context, config.Options, string, memory.SyncProjectTransitionMode) (memory.SyncProjectTransitionResult, error)
 	StartProviderSession(context.Context, config.Options, memory.ProviderSessionStart) (memory.ProviderSession, error)
-	MarkProviderSessionCheckpoint(context.Context, config.Options, string, string) (memory.ProviderSession, error)
+	MarkProviderSessionCheckpoint(context.Context, config.Options, string, string, string) (memory.ProviderSession, error)
+	RenewProviderSession(context.Context, config.Options, string, string, string) (memory.ProviderSession, error)
 	EndProviderSession(context.Context, config.Options, memory.ProviderSessionEnd) (memory.ProviderSession, error)
 	ProviderSessionContext(context.Context, config.Options, string, string) (memory.ProviderSessionContext, error)
 	SaveProviderSessionDraft(context.Context, config.Options, memory.ProviderSessionDraftSave) (memory.ProviderSessionDraft, error)
@@ -277,7 +278,7 @@ func runMemoryHook(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	if token, err := decoder.Token(); err != nil || token != json.Delim('}') || decoder.Decode(&struct{}{}) != io.EOF {
 		return memoryFailure(stderr, memory.ErrInvalid)
 	}
-	allowed := map[string]bool{"schemaVersion": true, "operation": true, "workspace": true, "provider": true, "external_id": true, "session_handle": true, "state": true, "summary": true, "expected_updated_at": true}
+	allowed := map[string]bool{"schemaVersion": true, "operation": true, "workspace": true, "provider": true, "external_id": true, "session_handle": true, "lease_token": true, "state": true, "summary": true, "expected_updated_at": true}
 	for key := range raw {
 		if !allowed[key] {
 			return memoryFailure(stderr, memory.ErrInvalid)
@@ -293,6 +294,7 @@ func runMemoryHook(ctx context.Context, args []string, stdin io.Reader, stdout, 
 		State             memory.ProviderSessionState `json:"state"`
 		Summary           string                      `json:"summary"`
 		ExpectedUpdatedAt string                      `json:"expected_updated_at"`
+		LeaseToken        string                      `json:"lease_token"`
 	}
 	if json.Unmarshal(data, &input) != nil || input.SchemaVersion != 1 || input.Workspace == "" || !filepath.IsAbs(input.Workspace) {
 		return memoryFailure(stderr, memory.ErrInvalid)
@@ -311,24 +313,28 @@ func runMemoryHook(ctx context.Context, args []string, stdin io.Reader, stdout, 
 			return memoryFailure(stderr, resolveErr)
 		}
 		result, err = runtime.StartProviderSession(ctx, opts, memory.ProviderSessionStart{Project: project, Provider: input.Provider, ExternalID: input.ExternalID})
-	case "checkpoint":
-		if !hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle") || input.SessionHandle == "" {
+	case "checkpoint", "renew":
+		if !hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "lease_token") || input.SessionHandle == "" || input.LeaseToken == "" {
 			return memoryFailure(stderr, memory.ErrInvalid)
 		}
 		project, resolveErr := resolveProject()
 		if resolveErr != nil {
 			return memoryFailure(stderr, resolveErr)
 		}
-		result, err = runtime.MarkProviderSessionCheckpoint(ctx, opts, project, input.SessionHandle)
+		if input.Operation == "checkpoint" {
+			result, err = runtime.MarkProviderSessionCheckpoint(ctx, opts, project, input.SessionHandle, input.LeaseToken)
+		} else {
+			result, err = runtime.RenewProviderSession(ctx, opts, project, input.SessionHandle, input.LeaseToken)
+		}
 	case "end":
-		if !(hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "external_id", "state") || hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "external_id", "state", "summary")) || input.SessionHandle == "" || input.ExternalID == "" || (input.State != memory.ProviderSessionCompleted && input.State != memory.ProviderSessionInterrupted && input.State != memory.ProviderSessionCancelled) {
+		if !(hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "lease_token", "external_id", "state") || hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "lease_token", "external_id", "state", "summary")) || input.SessionHandle == "" || input.LeaseToken == "" || input.ExternalID == "" || (input.State != memory.ProviderSessionCompleted && input.State != memory.ProviderSessionInterrupted && input.State != memory.ProviderSessionCancelled) {
 			return memoryFailure(stderr, memory.ErrInvalid)
 		}
 		project, resolveErr := resolveProject()
 		if resolveErr != nil {
 			return memoryFailure(stderr, resolveErr)
 		}
-		result, err = runtime.EndProviderSession(ctx, opts, memory.ProviderSessionEnd{Project: project, Handle: input.SessionHandle, ExternalID: input.ExternalID, State: input.State, Summary: input.Summary})
+		result, err = runtime.EndProviderSession(ctx, opts, memory.ProviderSessionEnd{Project: project, Handle: input.SessionHandle, LeaseToken: input.LeaseToken, ExternalID: input.ExternalID, State: input.State, Summary: input.Summary})
 	case "context":
 		if !hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle") || input.SessionHandle == "" {
 			return memoryFailure(stderr, memory.ErrInvalid)
@@ -371,7 +377,10 @@ func runMemoryHook(ctx context.Context, args []string, stdin io.Reader, stdout, 
 			CreatedAt          time.Time                   `json:"created_at"`
 			UpdatedAt          time.Time                   `json:"updated_at"`
 			CompletedAt        *time.Time                  `json:"completed_at,omitempty"`
-		}{1, value.State, value.Handle, value.Checkpointed, value.FinalObservationID, value.CreatedAt, value.UpdatedAt, value.CompletedAt})
+			LeaseToken         string                      `json:"lease_token,omitempty"`
+			LeaseUntil         *time.Time                  `json:"lease_until,omitempty"`
+			DraftPresent       bool                        `json:"draft_present,omitempty"`
+		}{1, value.State, value.Handle, value.Checkpointed, value.FinalObservationID, value.CreatedAt, value.UpdatedAt, value.CompletedAt, value.LeaseToken, value.LeaseUntil, value.DraftPresent})
 	case memory.ProviderSessionContext:
 		_ = json.NewEncoder(stdout).Encode(struct {
 			SchemaVersion int                         `json:"schemaVersion"`

@@ -172,12 +172,16 @@ func (f *fakeMemoryRuntime) TransitionSyncProject(_ context.Context, opts config
 func (f *fakeMemoryRuntime) StartProviderSession(_ context.Context, _ config.Options, request memory.ProviderSessionStart) (memory.ProviderSession, error) {
 	f.calls++
 	f.start = request
-	return memory.ProviderSession{Project: request.Project, Handle: "ps-test", State: memory.ProviderSessionActive}, f.err
+	return memory.ProviderSession{Project: request.Project, Handle: "ps-test", State: memory.ProviderSessionActive, LeaseToken: "lease-test"}, f.err
 }
-func (f *fakeMemoryRuntime) MarkProviderSessionCheckpoint(_ context.Context, _ config.Options, project, handle string) (memory.ProviderSession, error) {
+func (f *fakeMemoryRuntime) MarkProviderSessionCheckpoint(_ context.Context, _ config.Options, project, handle, _ string) (memory.ProviderSession, error) {
 	f.calls++
 	f.checkpoint = handle
 	return memory.ProviderSession{Project: project, Handle: handle, State: memory.ProviderSessionActive, Checkpointed: true}, f.err
+}
+func (f *fakeMemoryRuntime) RenewProviderSession(_ context.Context, _ config.Options, project, handle, _ string) (memory.ProviderSession, error) {
+	f.calls++
+	return memory.ProviderSession{Project: project, Handle: handle, State: memory.ProviderSessionActive, LeaseToken: "lease-test"}, f.err
 }
 func (f *fakeMemoryRuntime) EndProviderSession(_ context.Context, _ config.Options, request memory.ProviderSessionEnd) (memory.ProviderSession, error) {
 	f.calls++
@@ -405,10 +409,10 @@ func TestMemoryCLI_HookLifecycleIsVersionedStrictAndPrivate(t *testing.T) {
 	start := `{"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"secret-run"}`
 	code, out, stderr := call(start)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && runtime.opts.StorageRoot == storageRoot && runtime.opts.ProjectLocal && runtime.start == (memory.ProviderSessionStart{Project: "project-1", Provider: "openai", ExternalID: "secret-run"}) && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"session_handle":"ps-test"`) && !strings.Contains(out, "secret-run"), "start=%d %q %q opts=%+v request=%+v", code, out, stderr, runtime.opts, runtime.start)
-	code, out, stderr = call(`{"schemaVersion":1,"operation":"checkpoint","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test"}`)
+	code, out, stderr = call(`{"schemaVersion":1,"operation":"checkpoint","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","lease_token":"lease-test"}`)
 	testutil.Require(t, code == 0 && stderr == "" && runtime.checkpoint == "ps-test" && strings.Contains(out, `"checkpointed":true`), "checkpoint=%d %q %q", code, out, stderr)
-	code, out, stderr = call(`{"schemaVersion":1,"operation":"end","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","external_id":"secret-run","state":"completed","summary":"safe"}`)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.ended == (memory.ProviderSessionEnd{Project: "project-1", Handle: "ps-test", ExternalID: "secret-run", State: memory.ProviderSessionCompleted, Summary: "safe"}) && strings.Contains(out, `"state":"completed"`) && !strings.Contains(out, "secret-run") && !strings.Contains(out, "safe"), "end=%d %q %q request=%+v", code, out, stderr, runtime.ended)
+	code, out, stderr = call(`{"schemaVersion":1,"operation":"end","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","lease_token":"lease-test","external_id":"secret-run","state":"completed","summary":"safe"}`)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.ended == (memory.ProviderSessionEnd{Project: "project-1", Handle: "ps-test", LeaseToken: "lease-test", ExternalID: "secret-run", State: memory.ProviderSessionCompleted, Summary: "safe"}) && strings.Contains(out, `"state":"completed"`) && !strings.Contains(out, "secret-run") && !strings.Contains(out, "safe"), "end=%d %q %q request=%+v", code, out, stderr, runtime.ended)
 	for _, input := range []string{`{"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, `{"schemaVersion":2,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, `{"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x","unknown":true}`, `{"schemaVersion":1,"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, start + ` {}`} {
 		before := runtime.calls
 		code, out, _ = call(input)
