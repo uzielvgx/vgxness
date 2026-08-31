@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -174,23 +175,27 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatalf("decode installed OpenCode configuration: %v", err)
 	}
 	if _, configured := defaultAgentFields["plugin"]; configured {
-		t.Fatal("auto-discovered lifecycle plugin gained an explicit configuration entry")
+		t.Fatal("lifecycle plugin should remain unconfigured in installed OpenCode configuration")
 	}
 	lifecyclePluginData, err := os.ReadFile(memoryLifecyclePlugin)
 	if err != nil {
 		t.Fatalf("read installed lifecycle plugin: %v", err)
 	}
-	launcherJSON, err := json.Marshal(launcher)
+	launcherJSON, err := json.Marshal(canonicalPath(t, launcher))
 	if err != nil {
-		t.Fatalf("encode installed launcher path: %v", err)
+		t.Fatalf("encode canonical installed launcher path: %v", err)
 	}
 	for _, expected := range [][]byte{
 		[]byte("artifact: opencode-plugin/vgxness-memory-lifecycle; version: 1"),
 		append([]byte("const VGXNESS_EXECUTABLE = "), launcherJSON...),
+		[]byte("env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, TMPDIR: process.env.TMPDIR, SystemRoot: process.env.SystemRoot }"),
 	} {
 		if !bytes.Contains(lifecyclePluginData, expected) {
 			t.Fatalf("installed lifecycle plugin is missing provenance %q", expected)
 		}
+	}
+	if regexp.MustCompile(`env\s*:\s*process\.env\b`).Match(lifecyclePluginData) {
+		t.Fatal("installed lifecycle plugin inherits the full process environment")
 	}
 	if err := os.Rename(sourceExecutable, sourceExecutable+".offline"); err != nil {
 		t.Fatalf("retire source executable: %v", err)
@@ -251,7 +256,7 @@ func exerciseInstalledMemoryLifecycle(t *testing.T, environment []string, worksp
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node is required for the installed lifecycle E2E")
+		t.Fatalf("node is required for the installed lifecycle E2E: %v", err)
 	}
 	const (
 		parentSecret = "slice7-parent-secret-sentinel"
@@ -278,6 +283,7 @@ const finalToken = "slice7finalized durable runtime evidence"
 const failureToken = "slice7failure false finalization sentinel"
 const fail = message => { throw new Error(message) }
 if (parentSecret !== "slice7-parent-secret-sentinel") fail("parent environment missing")
+// Direct import exercises installed plugin bytes; it does not prove OpenCode host discovery.
 const { VGXNESSMemoryLifecyclePlugin } = await import(pathToFileURL(pluginPath).href)
 const childEnvironment = Object.fromEntries(Object.entries({
   HOME: process.env.HOME,
