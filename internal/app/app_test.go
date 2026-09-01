@@ -399,9 +399,18 @@ func TestCodexIntegrationRuntime_PreservesConfigToml(t *testing.T) {
 		out.Reset()
 		stderr.Reset()
 		code := Run(context.Background(), []string{"integrate", "codex", action, "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
-		testutil.Require(t, code == 0 && stderr.Len() == 0, "%s exit=%d out=%q stderr=%q", action, code, out.String(), stderr.String())
+		wantState := "state=installed"
+		if action == "uninstall" {
+			wantState = "state=absent"
+		}
+		testutil.Require(t, code == 0 && stderr.Len() == 0 && strings.Contains(out.String(), wantState), "%s exit=%d out=%q stderr=%q", action, code, out.String(), stderr.String())
 		got, err := os.ReadFile(filepath.Join(configDirectory, "config.toml"))
-		testutil.Require(t, err == nil && string(got) == string(config), "%s config=%q err=%v", action, got, err)
+		if action == "uninstall" {
+			testutil.Require(t, err == nil && bytes.Equal(got, config), "%s config=%q err=%v", action, got, err)
+			continue
+		}
+		value := string(got)
+		testutil.Require(t, err == nil && bytes.HasPrefix(got, config) && strings.Count(value, "[marketplaces.vgxness]") == 1 && strings.Count(value, `[plugins."vgxness@vgxness"]`) == 1 && strings.Contains(value, "enabled = true"), "%s config=%q err=%v", action, got, err)
 	}
 }
 
