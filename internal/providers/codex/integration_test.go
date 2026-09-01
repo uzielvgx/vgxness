@@ -840,6 +840,28 @@ func TestUninstallCleanupFailureReinstalls(t *testing.T) {
 	require(t, err == nil && recovered.State == integration.StateInstalled && recovered.Changed && recovered.RestartRequired)
 	assertNoEvidence(t, options.ConfigDir)
 }
+func TestReactivationKeepsDeactivateEvidenceUntilVerified(t *testing.T) {
+	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
+	pkg, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	require(t, err == nil)
+	writePackage(t, options.ConfigDir, pkg)
+	root, err := OpenRoot(context.Background(), options, false)
+	require(t, err == nil)
+	evidence := activationEvidence(pkg, "deactivate")
+	require(t, root.MarkActivationPending(evidence.body) == nil)
+	require(t, root.Close() == nil)
+
+	fake := &fakeCodexCLI{fail: map[string]error{"[plugin marketplace list --json]": errors.New("inspection")}}
+	_, err = fakeActivationIntegration(fake).Reinstall(context.Background(), options)
+	require(t, errors.Is(err, integration.ErrRecovery))
+	root, err = OpenRoot(context.Background(), options, false)
+	require(t, err == nil)
+	body, present, readErr := root.ActivationPending()
+	require(t, root.Close() == nil)
+	if readErr != nil || !present || !bytes.Equal(body, evidence.body) {
+		t.Fatalf("deactivate evidence after failed reactivation = %q, present=%t, err=%v", body, present, readErr)
+	}
+}
 func TestUninstallRejectsReplacedIdentityAndRetainsBackup(t *testing.T) {
 	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	s := NewIntegration()

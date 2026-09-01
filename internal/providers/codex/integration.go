@@ -647,18 +647,30 @@ func (s *Integration) recoverActivation(ctx context.Context, root *Root, pkg Pac
 			}
 			changed = true
 		}
-		if err := root.ClearActivationPending(evidence.body); err != nil {
-			return integration.Result{}, recovery(err)
-		}
 		state, err := inspectRoot(ctx, root, pkg)
 		if err != nil {
 			return integration.Result{}, recovery(err)
 		}
-		result, err := s.installAndActivate(ctx, root, pkg, state)
-		if err == nil && changed {
-			result.Changed, result.RestartRequired = true, true
+		if state.result.State != integration.StateInstalled {
+			return integration.Result{}, recovery(integration.ErrDrift)
 		}
-		return result, err
+		activation, activationErr := s.activation(ctx, root)
+		if activationErr != nil {
+			return integration.Result{}, recovery(activationErr)
+		}
+		if activation != activationActive {
+			if _, _, _, err := s.activate(ctx, root); err != nil {
+				return integration.Result{}, recovery(err)
+			}
+			changed = true
+		}
+		if err := root.ClearActivationPending(evidence.body); err != nil {
+			return integration.Result{}, recovery(err)
+		}
+		if changed {
+			state.result.Changed, state.result.RestartRequired = true, true
+		}
+		return state.result, nil
 	}
 	if p, err := root.Pending(); err != nil {
 		return integration.Result{}, recovery(err)

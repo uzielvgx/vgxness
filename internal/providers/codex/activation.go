@@ -98,11 +98,33 @@ type pluginRecord struct {
 	Name        string `json:"name"`
 	Marketplace string `json:"marketplaceName"`
 	Version     string `json:"version"`
-	Installed   bool   `json:"installed"`
-	Enabled     bool   `json:"enabled"`
+	Installed   *bool  `json:"installed"`
+	Enabled     *bool  `json:"enabled"`
 }
 type pluginList struct {
 	Installed []pluginRecord `json:"installed"`
+}
+
+func activationLists(markets, plugins []byte) (marketplaceList, pluginList, error) {
+	var market marketplaceList
+	if err := json.Unmarshal(markets, &market); err != nil || market.Marketplaces == nil {
+		return marketplaceList{}, pluginList{}, errors.New("invalid marketplace list JSON")
+	}
+	for _, item := range market.Marketplaces {
+		if item.Name == "" || (item.Root == "" && item.MarketplaceSource.Source == "") {
+			return marketplaceList{}, pluginList{}, errors.New("invalid marketplace record")
+		}
+	}
+	var listed pluginList
+	if err := json.Unmarshal(plugins, &listed); err != nil || listed.Installed == nil {
+		return marketplaceList{}, pluginList{}, errors.New("invalid plugin list JSON")
+	}
+	for _, item := range listed.Installed {
+		if item.ID == "" || item.Name == "" || item.Marketplace == "" || item.Version == "" || item.Installed == nil || item.Enabled == nil {
+			return marketplaceList{}, pluginList{}, errors.New("invalid plugin record")
+		}
+	}
+	return market, listed, nil
 }
 
 type activationPending struct {
@@ -176,17 +198,13 @@ func (s *Integration) activation(ctx context.Context, root *Root) (activationSta
 	if err != nil {
 		return activationAbsent, err
 	}
-	var market marketplaceList
-	if json.Unmarshal(markets, &market) != nil {
-		return activationAbsent, errors.New("invalid marketplace list JSON")
-	}
 	plugins, err := s.command(ctx, root, "plugin", "list", "--json")
 	if err != nil {
 		return activationAbsent, err
 	}
-	var listed pluginList
-	if json.Unmarshal(plugins, &listed) != nil {
-		return activationAbsent, errors.New("invalid plugin list JSON")
+	market, listed, err := activationLists(markets, plugins)
+	if err != nil {
+		return activationAbsent, err
 	}
 	if len(market.Marketplaces) == 0 && len(listed.Installed) == 0 {
 		return activationAbsent, nil
@@ -202,7 +220,7 @@ func (s *Integration) activation(ctx context.Context, root *Root) (activationSta
 		return activationDrifted, nil
 	}
 	p := listed.Installed[0]
-	if p.ID != pluginID || p.Name != marketplaceName || p.Marketplace != marketplaceName || p.Version != manifest.Version || !p.Installed || !p.Enabled {
+	if p.ID != pluginID || p.Name != marketplaceName || p.Marketplace != marketplaceName || p.Version != manifest.Version || !*p.Installed || !*p.Enabled {
 		return activationDrifted, nil
 	}
 	return activationActive, nil
@@ -213,17 +231,13 @@ func (s *Integration) marketplaceCreatedExactly(ctx context.Context, root *Root)
 	if err != nil {
 		return false, err
 	}
-	var market marketplaceList
-	if err := json.Unmarshal(markets, &market); err != nil {
-		return false, errors.New("invalid marketplace list JSON")
-	}
 	plugins, err := s.command(ctx, root, "plugin", "list", "--json")
 	if err != nil {
 		return false, err
 	}
-	var listed pluginList
-	if err := json.Unmarshal(plugins, &listed); err != nil {
-		return false, errors.New("invalid plugin list JSON")
+	market, listed, err := activationLists(markets, plugins)
+	if err != nil {
+		return false, err
 	}
 	return len(market.Marketplaces) == 1 && market.Marketplaces[0].Name == marketplaceName && hasRoot(market.Marketplaces[0], root.Path) && len(listed.Installed) == 0, nil
 }
@@ -237,10 +251,9 @@ func (s *Integration) pluginCreatedExactly(ctx context.Context, root *Root) (boo
 	if err != nil {
 		return false, err
 	}
-	var market marketplaceList
-	var listed pluginList
-	if json.Unmarshal(markets, &market) != nil || json.Unmarshal(plugins, &listed) != nil {
-		return false, errors.New("invalid Codex activation JSON")
+	market, listed, err := activationLists(markets, plugins)
+	if err != nil {
+		return false, err
 	}
 	body, _, err := root.Read("plugins/vgxness/.codex-plugin/plugin.json", maxArtifactBytes)
 	var manifest struct {
@@ -253,7 +266,7 @@ func (s *Integration) pluginCreatedExactly(ctx context.Context, root *Root) (boo
 		return false, nil
 	}
 	p := listed.Installed[0]
-	return p.ID == pluginID && p.Name == marketplaceName && p.Marketplace == marketplaceName && p.Version == manifest.Version && p.Installed && p.Enabled, nil
+	return p.ID == pluginID && p.Name == marketplaceName && p.Marketplace == marketplaceName && p.Version == manifest.Version && *p.Installed && *p.Enabled, nil
 }
 
 func (s *Integration) deactivateExact(ctx context.Context, root *Root) error {
@@ -288,10 +301,8 @@ func (s *Integration) deactivateExact(ctx context.Context, root *Root) error {
 
 func (s *Integration) activate(ctx context.Context, root *Root) (createdPlugin, createdMarket, safeRollback bool, err error) {
 	state, err := s.activation(ctx, root)
-	// Codex 0.147 rejects list while a rendered local marketplace is not yet
-	// registered. marketplace add is the authoritative conflict-safe preflight.
 	if err != nil {
-		state, err = activationAbsent, nil
+		return false, false, false, err
 	}
 	if state == activationDrifted {
 		return false, false, false, errors.Join(err, fmt.Errorf("%w: Codex marketplace/plugin identity", integration.ErrConflict))
