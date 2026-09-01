@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -39,6 +40,8 @@ type partialCandidate struct {
 }
 
 func NewIntegration() *Integration { return &Integration{} }
+
+func logicalArtifactDir(name string) string { return path.Dir(name) }
 func (s *Integration) openRoot(ctx context.Context, options integration.Options, create bool) (*Root, error) {
 	if s != nil && s.open != nil {
 		return s.open(ctx, options, create)
@@ -509,7 +512,7 @@ func (s *Integration) install(ctx context.Context, root *Root, pkg Package, stat
 		if item.exact {
 			continue
 		}
-		if dir := filepath.Dir(item.artifact.Path); dir != "." {
+		if dir := logicalArtifactDir(item.artifact.Path); dir != "." {
 			if err := root.Mkdir(dir); err != nil {
 				return fail(err)
 			}
@@ -733,7 +736,7 @@ func recoverInstalled(ctx context.Context, root *Root, pkg Package) (integration
 		b, _, err := root.Read(name, len(data)+1)
 		if errors.Is(err, os.ErrNotExist) {
 			changed = true
-			if dir := filepath.Dir(name); dir != "." {
+			if dir := logicalArtifactDir(name); dir != "." {
 				if err := root.Mkdir(dir); err != nil {
 					return integration.Result{}, recovery(err)
 				}
