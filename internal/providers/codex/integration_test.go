@@ -572,6 +572,7 @@ func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) 
 					return held, nil
 				}
 			},
+			want: integration.ErrConflict,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -585,26 +586,24 @@ func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) 
 			test.open(t, root, service, &replacementBlocked)
 
 			result, err := service.InstallProtected(context.Background(), integration.Options{ConfigDir: root}, sourceIdentity{info: info})
-			if test.want != nil {
-				require(t, errors.Is(err, test.want) && !result.Changed)
-				_, replacementErr := os.Stat(filepath.Join(root, "AGENTS.md"))
-				require(t, errors.Is(replacementErr, os.ErrNotExist))
-				return
-			}
-			if err != nil || result.State != integration.StateInstalled {
-				t.Fatalf("InstallProtected() = %+v, %v", result, err)
-			}
 			if replacementBlocked {
+				if err != nil || result.State != integration.StateInstalled {
+					t.Fatalf("InstallProtected() = %+v, %v", result, err)
+				}
 				_, originalErr := os.Stat(filepath.Join(root, "AGENTS.md"))
 				require(t, originalErr == nil)
 				_, priorErr := os.Stat(filepath.Join(root+"-protected", "AGENTS.md"))
 				require(t, errors.Is(priorErr, os.ErrNotExist))
 				return
 			}
-			_, replacementErr := os.Stat(filepath.Join(root, "AGENTS.md"))
-			require(t, errors.Is(replacementErr, os.ErrNotExist))
-			_, protectedErr := os.Stat(filepath.Join(root+"-protected", "AGENTS.md"))
-			require(t, protectedErr == nil)
+			if test.want != nil {
+				require(t, errors.Is(err, test.want) && !result.Changed)
+				_, replacementErr := os.Stat(filepath.Join(root, "AGENTS.md"))
+				require(t, errors.Is(replacementErr, os.ErrNotExist))
+				_, protectedErr := os.Stat(filepath.Join(root+"-protected", "AGENTS.md"))
+				require(t, errors.Is(protectedErr, os.ErrNotExist))
+				return
+			}
 		})
 	}
 }

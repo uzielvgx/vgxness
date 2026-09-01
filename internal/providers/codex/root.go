@@ -14,6 +14,7 @@ import (
 )
 
 const pendingName = ".vgxness-pending"
+const activationPendingName = ".vgxness-activation-pending"
 
 type Root struct {
 	Path                  string
@@ -164,25 +165,61 @@ func (r *Root) Mkdir(name string) error {
 	if err := r.name(name); err != nil {
 		return err
 	}
-	if info, err := r.fs.Lstat(name); err == nil {
-		if !ownedDir(filepath.Join(r.Path, name), info) {
+	current := r.fs
+	parts := strings.Split(name, "/")
+	created := false
+	for index, component := range parts {
+		info, err := current.Lstat(component)
+		if errors.Is(err, os.ErrNotExist) {
+			if err = current.Mkdir(component, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			created = true
+			parent := "."
+			if index > 0 {
+				parent = strings.Join(parts[:index], "/")
+			}
+			if err := r.sync(parent); err != nil {
+				return err
+			}
+			info, err = current.Lstat(component)
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return invalid("unsafe subdirectory")
 		}
+		next, err := current.OpenRoot(component)
+		if err != nil {
+			return err
+		}
+		opened, err := next.Stat(".")
+		if err != nil || !os.SameFile(info, opened) {
+			_ = next.Close()
+			return conflict("subdirectory changed while opening")
+		}
+		if created {
+			dir, syncErr := next.Open(".")
+			if syncErr != nil {
+				_ = next.Close()
+				return syncErr
+			}
+			syncErr = syncHeldDirectory(dir)
+			closeErr := dir.Close()
+			if syncErr != nil || closeErr != nil {
+				_ = next.Close()
+				return errors.Join(syncErr, closeErr)
+			}
+		}
+		if current != r.fs && current.Close() != nil {
+			_ = next.Close()
+			return errors.New("close held subdirectory")
+		}
+		current = next
+	}
+	if current != r.fs {
+		defer current.Close()
+	}
+	if !created {
 		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := r.fs.Mkdir(name, 0o700); err != nil {
-		return err
-	}
-	if info, err := r.fs.Lstat(name); err != nil || !ownedDir(filepath.Join(r.Path, name), info) {
-		return invalid("created unsafe subdirectory")
-	}
-	if err := r.sync(name); err != nil {
-		return recovery(err)
-	}
-	if err := r.sync(filepath.Dir(name)); err != nil {
-		return recovery(err)
 	}
 	return nil
 }
@@ -190,13 +227,108 @@ func (r *Root) sync(name string) error {
 	if r.syncHook != nil {
 		return r.syncHook(name)
 	}
-	return syncPath(filepath.Join(r.Path, name))
+	// Sync through the held root handle; the pathname comparison is only the
+	// replacement guard, never the object acknowledged for durability.
+	held, heldErr := r.fs.Lstat(".")
+	visible, visibleErr := os.Lstat(r.Path)
+	if heldErr != nil {
+		return heldErr
+	}
+	if visibleErr != nil || !os.SameFile(held, visible) {
+		return conflict("root replaced before durability sync")
+	}
+	dir, err := r.openDir(name)
+	if err != nil {
+		return err
+	}
+	file, err := dir.Open(".")
+	if err == nil {
+		err = syncHeldDirectory(file)
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}
+	closeErr := dir.Close()
+	if err != nil || closeErr != nil {
+		return errors.Join(err, closeErr)
+	}
+	visible, visibleErr = os.Lstat(r.Path)
+	if visibleErr != nil || !os.SameFile(held, visible) {
+		return conflict("root replaced during durability sync")
+	}
+	return nil
+}
+
+// parent holds the containing directory open and returns only a basename for
+// every artifact operation. os.Root deliberately does not create intermediate
+// directories for an OpenFile path; using a held parent also prevents a nested
+// directory replacement from redirecting a transaction sidecar.
+func (r *Root) parent(name string) (*os.Root, string, error) {
+	if err := r.name(name); err != nil {
+		return nil, "", err
+	}
+	dir, base := filepath.Dir(name), filepath.Base(name)
+	parent, err := r.openDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, "", fmt.Errorf("parent %q: %w", dir, os.ErrNotExist)
+		}
+		return nil, "", fmt.Errorf("open parent %q: %w", dir, err)
+	}
+	return parent, base, nil
+}
+
+func (r *Root) openDir(dir string) (*os.Root, error) {
+	if dir == "." {
+		return r.fs.OpenRoot(".")
+	}
+	current := r.fs
+	for _, component := range strings.Split(dir, "/") {
+		info, err := current.Lstat(component)
+		if err != nil {
+			if current != r.fs {
+				_ = current.Close()
+			}
+			return nil, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			if current != r.fs {
+				_ = current.Close()
+			}
+			return nil, invalid("unsafe subdirectory")
+		}
+		next, err := current.OpenRoot(component)
+		if err != nil {
+			if current != r.fs {
+				_ = current.Close()
+			}
+			return nil, err
+		}
+		opened, err := next.Stat(".")
+		if err != nil || !os.SameFile(info, opened) {
+			if current != r.fs {
+				_ = current.Close()
+			}
+			_ = next.Close()
+			return nil, conflict("subdirectory changed while opening")
+		}
+		if current != r.fs {
+			if err := current.Close(); err != nil {
+				_ = next.Close()
+				return nil, err
+			}
+		}
+		current = next
+	}
+	return current, nil
 }
 func (r *Root) Read(name string, limit int) ([]byte, os.FileInfo, error) {
-	if err := r.name(name); err != nil {
+	parent, base, err := r.parent(name)
+	if err != nil {
 		return nil, nil, err
 	}
-	info, err := r.fs.Lstat(name)
+	defer parent.Close()
+	info, err := parent.Lstat(base)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -206,7 +338,7 @@ func (r *Root) Read(name string, limit int) ([]byte, os.FileInfo, error) {
 	if info.Size() > int64(limit) {
 		return nil, nil, drift("read bound")
 	}
-	f, err := r.fs.Open(name)
+	f, err := parent.Open(base)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -232,11 +364,14 @@ func (r *Root) Publish(ctx context.Context, name string, data []byte) (Anchor, e
 	if err := ctx.Err(); err != nil {
 		return Anchor{}, err
 	}
-	if err := r.name(name); err != nil {
+	parent, base, err := r.parent(name)
+	if err != nil {
 		return Anchor{}, err
 	}
+	defer parent.Close()
 	tmp := r.side(name, ".vgxness-stage")
-	f, err := r.fs.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	tmpBase := filepath.Base(tmp)
+	f, err := parent.OpenFile(tmpBase, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return Anchor{}, recovery(conflict("stage exists"))
@@ -250,16 +385,16 @@ func (r *Root) Publish(ctx context.Context, name string, data []byte) (Anchor, e
 		err = close
 	}
 	if err != nil {
-		_ = r.fs.Remove(tmp)
+		_ = parent.Remove(tmpBase)
 		return Anchor{}, err
 	}
-	info, err := r.fs.Lstat(tmp)
+	info, err := parent.Lstat(tmpBase)
 	if err != nil || !info.Mode().IsRegular() {
 		return Anchor{}, recovery(errors.Join(err, drift("stage")))
 	}
 	a := Anchor{Name: name, Temp: tmp, Info: info, Bytes: append([]byte(nil), data...)}
-	if err = r.fs.Link(tmp, name); err != nil {
-		_ = r.fs.Remove(tmp)
+	if err = parent.Link(tmpBase, base); err != nil {
+		_ = parent.Remove(tmpBase)
 		if errors.Is(err, os.ErrExist) {
 			return Anchor{}, conflict("target exists")
 		}
@@ -281,11 +416,21 @@ func (r *Root) Publish(ctx context.Context, name string, data []byte) (Anchor, e
 	return a, nil
 }
 func (r *Root) same(a, b string, data []byte, want os.FileInfo) bool {
-	ai, e := r.fs.Lstat(a)
+	pa, ba, e := r.parent(a)
+	if e != nil {
+		return false
+	}
+	defer pa.Close()
+	pb, bb, e := r.parent(b)
+	if e != nil {
+		return false
+	}
+	defer pb.Close()
+	ai, e := pa.Lstat(ba)
 	if e != nil || !ai.Mode().IsRegular() || !os.SameFile(ai, want) {
 		return false
 	}
-	bi, e := r.fs.Lstat(b)
+	bi, e := pb.Lstat(bb)
 	if e != nil || !os.SameFile(ai, bi) {
 		return false
 	}
@@ -308,7 +453,12 @@ func (r *Root) BackupExact(name string, data []byte, expected os.FileInfo) (Back
 		return Backup{}, drift("backup bytes")
 	}
 	s := r.side(name, ".vgxness-remove")
-	if err := r.fs.Link(name, s); err != nil {
+	parent, base, err := r.parent(name)
+	if err != nil {
+		return Backup{}, err
+	}
+	defer parent.Close()
+	if err := parent.Link(base, filepath.Base(s)); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return Backup{}, conflict("backup exists")
 		}
@@ -326,13 +476,18 @@ func (r *Root) Restore(b Backup) error {
 	if !r.same(b.Sidecar, b.Sidecar, b.Bytes, b.Info) {
 		return recovery(conflict("backup replaced"))
 	}
-	if _, err := r.fs.Lstat(b.Name); !errors.Is(err, os.ErrNotExist) {
+	parent, base, err := r.parent(b.Name)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	if _, err := parent.Lstat(base); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
 			return conflict("restore target exists")
 		}
 		return err
 	}
-	if err := r.fs.Link(b.Sidecar, b.Name); err != nil {
+	if err := parent.Link(filepath.Base(b.Sidecar), base); err != nil {
 		return recovery(err)
 	}
 	if err := r.sync(filepath.Dir(b.Name)); err != nil {
@@ -350,7 +505,12 @@ func (r *Root) Quarantine(a Anchor) (Backup, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Backup{}, err
 	}
-	if err := r.fs.Rename(a.Name, s); err != nil {
+	parent, base, err := r.parent(a.Name)
+	if err != nil {
+		return Backup{}, err
+	}
+	defer parent.Close()
+	if err := parent.Rename(base, filepath.Base(s)); err != nil {
 		return Backup{}, err
 	}
 	if r.afterRename != nil {
@@ -361,7 +521,7 @@ func (r *Root) Quarantine(a Anchor) (Backup, error) {
 	if err := r.sync(filepath.Dir(a.Name)); err != nil {
 		return Backup{}, recovery(err)
 	}
-	info, err := r.fs.Lstat(s)
+	info, err := parent.Lstat(filepath.Base(s))
 	if err != nil || !r.same(s, s, a.Bytes, a.Info) {
 		return Backup{}, recovery(conflict("quarantine identity"))
 	}
@@ -371,13 +531,23 @@ func (r *Root) lstat(name string) (os.FileInfo, error) {
 	if r.stat != nil {
 		return r.stat(name)
 	}
-	return r.fs.Lstat(name)
+	parent, base, err := r.parent(name)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	return parent.Lstat(base)
 }
 func (r *Root) RemoveBackup(b Backup) error {
 	if !r.same(b.Sidecar, b.Sidecar, b.Bytes, b.Info) {
 		return recovery(conflict("backup replaced"))
 	}
-	if err := r.fs.Remove(b.Sidecar); err != nil {
+	parent, base, err := r.parent(b.Sidecar)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	if err := parent.Remove(base); err != nil {
 		return err
 	}
 	if err := r.sync(filepath.Dir(b.Name)); err != nil {
@@ -389,7 +559,12 @@ func (r *Root) RemoveAnchor(a Anchor) error {
 	if !r.same(a.Name, a.Temp, a.Bytes, a.Info) {
 		return recovery(conflict("anchor replaced"))
 	}
-	if err := r.fs.Remove(a.Name); err != nil {
+	parent, base, err := r.parent(a.Name)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	if err := parent.Remove(base); err != nil {
 		return recovery(err)
 	}
 	if err := r.sync(filepath.Dir(a.Name)); err != nil {
@@ -398,7 +573,7 @@ func (r *Root) RemoveAnchor(a Anchor) error {
 	if !r.same(a.Temp, a.Temp, a.Bytes, a.Info) {
 		return recovery(conflict("anchor replaced"))
 	}
-	if err := r.fs.Remove(a.Temp); err != nil {
+	if err := parent.Remove(filepath.Base(a.Temp)); err != nil {
 		return recovery(err)
 	}
 	return r.sync(filepath.Dir(a.Name))
@@ -407,13 +582,23 @@ func (r *Root) CommitAnchor(a Anchor) error {
 	if !r.same(a.Name, a.Temp, a.Bytes, a.Info) {
 		return recovery(conflict("anchor replaced"))
 	}
-	if err := r.fs.Remove(a.Temp); err != nil {
+	parent, base, err := r.parent(a.Temp)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	if err := parent.Remove(base); err != nil {
 		return recovery(err)
 	}
 	if err := r.sync(filepath.Dir(a.Name)); err != nil {
 		return recovery(err)
 	}
-	info, err := r.fs.Lstat(a.Name)
+	parent, base, err = r.parent(a.Name)
+	if err != nil {
+		return recovery(err)
+	}
+	defer parent.Close()
+	info, err := parent.Lstat(base)
 	if err != nil || !info.Mode().IsRegular() || !os.SameFile(info, a.Info) {
 		return recovery(errors.Join(err, conflict("committed target replaced")))
 	}
@@ -428,27 +613,41 @@ func (r *Root) RemoveTarget(b Backup) error {
 	if !r.same(b.Name, b.Sidecar, b.Bytes, b.Info) {
 		return recovery(conflict("target replaced"))
 	}
-	if err := r.fs.Remove(b.Name); err != nil {
+	parent, base, err := r.parent(b.Name)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	if err := parent.Remove(base); err != nil {
 		return recovery(err)
 	}
 	if err := r.sync(filepath.Dir(b.Name)); err != nil {
 		return recovery(err)
 	}
-	if _, err := r.fs.Lstat(b.Name); !errors.Is(err, os.ErrNotExist) {
+	if _, err := parent.Lstat(base); !errors.Is(err, os.ErrNotExist) {
 		return recovery(errors.Join(conflict("target retained"), err))
 	}
 	return nil
 }
 
-func (r *Root) MarkPending() error {
+func pendingEvidence(sha string) []byte { return []byte("codex-pending-v2\nsha256=" + sha + "\n") }
+
+func (r *Root) MarkPending(body []byte) error {
+	if !validPendingEvidence(body) || string(body) == "codex-pending\n" {
+		return recovery(drift("pending"))
+	}
 	f, err := r.fs.OpenFile(pendingName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
+			got, info, readErr := r.Read(pendingName, len(body)+1)
+			if readErr == nil && info.Mode().IsRegular() && bytes.Equal(got, body) {
+				return nil
+			}
 			return recovery(conflict("pending"))
 		}
 		return err
 	}
-	if _, err = f.Write([]byte("codex-pending\n")); err == nil {
+	if _, err = f.Write(body); err == nil {
 		err = f.Sync()
 	}
 	if close := f.Close(); err == nil {
@@ -460,31 +659,119 @@ func (r *Root) MarkPending() error {
 	return r.sync(".")
 }
 func (r *Root) Pending() (bool, error) {
-	b, _, err := r.Read(pendingName, 32)
+	_, present, err := r.PendingEvidence()
+	return present, err
+}
+func validPendingEvidence(b []byte) bool {
+	if string(b) == "codex-pending\n" {
+		return true
+	}
+	const prefix = "codex-pending-v2\nsha256="
+	if len(b) != len(prefix)+65 || !bytes.HasPrefix(b, []byte(prefix)) || b[len(b)-1] != '\n' {
+		return false
+	}
+	for _, c := range b[len(prefix) : len(prefix)+64] {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+func (r *Root) PendingEvidence() ([]byte, bool, error) {
+	b, _, err := r.Read(pendingName, 256)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return false, recovery(err)
+		return nil, false, recovery(err)
 	}
-	if string(b) != "codex-pending\n" {
-		return true, recovery(drift("pending"))
+	if !validPendingEvidence(b) {
+		return b, true, recovery(drift("pending"))
 	}
-	return true, nil
+	return b, true, nil
 }
 func (r *Root) ClearPending() error {
-	b, info, err := r.Read(pendingName, 32)
+	b, info, err := r.Read(pendingName, 256)
 	if err != nil {
 		return err
 	}
-	if string(b) != "codex-pending\n" || !info.Mode().IsRegular() {
+	if !validPendingEvidence(b) || !info.Mode().IsRegular() {
 		return recovery(drift("pending"))
 	}
 	if err = r.fs.Remove(pendingName); err != nil {
 		return recovery(err)
 	}
 	if err = r.sync("."); err != nil {
-		if again := r.MarkPending(); again != nil {
+		if again := r.restorePending(b); again != nil {
+			return recovery(errors.Join(err, again))
+		}
+		return recovery(err)
+	}
+	return nil
+}
+
+func (r *Root) restorePending(body []byte) error {
+	f, err := r.fs.OpenFile(pendingName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return recovery(err)
+	}
+	if _, err = f.Write(body); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return recovery(err)
+	}
+	return r.sync(".")
+}
+
+func (r *Root) MarkActivationPending(body []byte) error {
+	f, err := r.fs.OpenFile(activationPendingName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		got, info, readErr := r.Read(activationPendingName, len(body)+1)
+		if readErr != nil || !info.Mode().IsRegular() || !bytes.Equal(got, body) {
+			return recovery(errors.Join(readErr, drift("activation pending")))
+		}
+		return nil
+	}
+	if err != nil {
+		return recovery(err)
+	}
+	if _, err = f.Write(body); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return recovery(err)
+	}
+	return r.sync(".")
+}
+
+func (r *Root) ActivationPending() ([]byte, bool, error) {
+	body, info, err := r.Read(activationPendingName, 256)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, true, recovery(errors.Join(err, drift("activation pending")))
+	}
+	return body, true, nil
+}
+
+func (r *Root) ClearActivationPending(body []byte) error {
+	got, info, err := r.Read(activationPendingName, len(body)+1)
+	if err != nil || !info.Mode().IsRegular() || !bytes.Equal(got, body) {
+		return recovery(errors.Join(err, drift("activation pending")))
+	}
+	if err = r.fs.Remove(activationPendingName); err != nil {
+		return recovery(err)
+	}
+	if err = r.sync("."); err != nil {
+		if again := r.MarkActivationPending(body); again != nil {
 			return recovery(errors.Join(err, again))
 		}
 		return recovery(err)
