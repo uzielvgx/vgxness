@@ -13,12 +13,15 @@ import (
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/testutil"
 )
 
 const (
 	windowsErrorAccessDenied     syscall.Errno = 5
 	windowsErrorSharingViolation syscall.Errno = 32
 )
+
+func init() { defaultRunner = testutil.NewCodexRunner() }
 
 // windowsRootRenameBlocked recognizes only Windows errors caused by renaming
 // an opened root; unrelated rename failures must propagate and fail the test.

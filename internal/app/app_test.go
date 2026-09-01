@@ -35,7 +35,7 @@ func TestTUIBackendCodexRecoveryUsesSeparateManagedRoot(t *testing.T) {
 	t.Setenv("HOME", home)
 	// os.UserHomeDir reads USERPROFILE on Windows.
 	t.Setenv("USERPROFILE", home)
-	runtime := codex.NewIntegration()
+	runtime := codex.NewIntegrationWithRunner(testutil.NewCodexRunner())
 	if _, err := runtime.Install(context.Background(), integration.Options{HomeDir: home}); err != nil {
 		t.Fatal(err)
 	}
@@ -395,13 +395,26 @@ func TestCodexIntegrationRuntime_PreservesConfigToml(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, stderr bytes.Buffer
+	runtime := codex.NewIntegrationWithRunner(testutil.NewCodexRunner())
+	run := func(args []string) int {
+		return runWithMCPAndRuntimes(context.Background(), args, strings.NewReader(""), &out, &stderr, tui.Run, cli.RunMCP, appRuntimes{codex: runtime})
+	}
 	for _, action := range []string{"install", "status", "reinstall", "uninstall"} {
 		out.Reset()
 		stderr.Reset()
-		code := Run(context.Background(), []string{"integrate", "codex", action, "--config-dir", configDirectory}, strings.NewReader(""), &out, &stderr)
-		testutil.Require(t, code == 0 && stderr.Len() == 0, "%s exit=%d out=%q stderr=%q", action, code, out.String(), stderr.String())
+		code := run([]string{"integrate", "codex", action, "--config-dir", configDirectory})
+		wantState := "state=installed"
+		if action == "uninstall" {
+			wantState = "state=absent"
+		}
+		testutil.Require(t, code == 0 && stderr.Len() == 0 && strings.Contains(out.String(), wantState), "%s exit=%d out=%q stderr=%q", action, code, out.String(), stderr.String())
 		got, err := os.ReadFile(filepath.Join(configDirectory, "config.toml"))
-		testutil.Require(t, err == nil && string(got) == string(config), "%s config=%q err=%v", action, got, err)
+		if action == "uninstall" {
+			testutil.Require(t, err == nil && bytes.Equal(got, config), "%s config=%q err=%v", action, got, err)
+			continue
+		}
+		value := string(got)
+		testutil.Require(t, err == nil && bytes.HasPrefix(got, config) && strings.Count(value, "[marketplaces.vgxness]") == 1 && strings.Count(value, `[plugins."vgxness@vgxness"]`) == 1 && strings.Contains(value, "enabled = true"), "%s config=%q err=%v", action, got, err)
 	}
 }
 
