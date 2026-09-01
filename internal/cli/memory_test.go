@@ -17,28 +17,29 @@ import (
 )
 
 type fakeMemoryRuntime struct {
-	result     memory.Entry
-	items      []memory.Entry
-	recall     memory.Recall
-	recent     memory.Recent
-	project    string
-	err        error
-	calls      int
-	sync       memory.SyncResult
-	status     memory.SyncConfigurationStatus
-	endpoint   string
-	deviceID   string
-	bearer     string
-	opts       config.Options
-	backfill   memory.SyncBackfillResult
-	repair     memory.SyncProjectRepairResult
-	transition memory.SyncProjectTransitionResult
-	start      memory.ProviderSessionStart
-	checkpoint string
-	ended      memory.ProviderSessionEnd
-	context    memory.ProviderSessionContext
-	draft      memory.ProviderSessionDraft
-	draftSave  memory.ProviderSessionDraftSave
+	result          memory.Entry
+	items           []memory.Entry
+	recall          memory.Recall
+	recent          memory.Recent
+	project         string
+	err             error
+	calls           int
+	sync            memory.SyncResult
+	status          memory.SyncConfigurationStatus
+	endpoint        string
+	deviceID        string
+	bearer          string
+	opts            config.Options
+	backfill        memory.SyncBackfillResult
+	repair          memory.SyncProjectRepairResult
+	transition      memory.SyncProjectTransitionResult
+	start           memory.ProviderSessionStart
+	checkpoint      string
+	ended           memory.ProviderSessionEnd
+	context         memory.ProviderSessionContext
+	draft           memory.ProviderSessionDraft
+	draftSave       memory.ProviderSessionDraftSave
+	providerSession memory.ProviderSession
 }
 
 func TestMemorySyncTransitionCommandsRequireExactModeConfirmation(t *testing.T) {
@@ -172,6 +173,9 @@ func (f *fakeMemoryRuntime) TransitionSyncProject(_ context.Context, opts config
 func (f *fakeMemoryRuntime) StartProviderSession(_ context.Context, _ config.Options, request memory.ProviderSessionStart) (memory.ProviderSession, error) {
 	f.calls++
 	f.start = request
+	if f.providerSession.Handle != "" {
+		return f.providerSession, f.err
+	}
 	return memory.ProviderSession{Project: request.Project, Handle: "ps-test", State: memory.ProviderSessionActive, LeaseToken: "lease-test"}, f.err
 }
 func (f *fakeMemoryRuntime) MarkProviderSessionCheckpoint(_ context.Context, _ config.Options, project, handle, _ string) (memory.ProviderSession, error) {
@@ -186,7 +190,7 @@ func (f *fakeMemoryRuntime) RenewProviderSession(_ context.Context, _ config.Opt
 func (f *fakeMemoryRuntime) EndProviderSession(_ context.Context, _ config.Options, request memory.ProviderSessionEnd) (memory.ProviderSession, error) {
 	f.calls++
 	f.ended = request
-	return memory.ProviderSession{Project: request.Project, Handle: request.Handle, State: request.State}, f.err
+	return memory.ProviderSession{Project: request.Project, Handle: request.Handle, State: request.State, FinalObservationID: map[bool]string{true: "final"}[request.State == memory.ProviderSessionCompleted]}, f.err
 }
 func (f *fakeMemoryRuntime) ProviderSessionContext(_ context.Context, _ config.Options, project, handle string) (memory.ProviderSessionContext, error) {
 	f.calls++
@@ -446,5 +450,54 @@ func TestMemoryCLI_HookContextAndSummaryAreStrictAndPrivate(t *testing.T) {
 		before := runtime.calls
 		code, out, _ = call(input)
 		testutil.Require(t, code == 2 && out == "" && runtime.calls == before, "invalid hook=%d %q calls=%d", code, out, runtime.calls)
+	}
+}
+
+func TestMemoryCLI_CodexHookUsesNativeBoundedLifecycle(t *testing.T) {
+	workspace := t.TempDir()
+	quoted, err := json.Marshal(workspace)
+	testutil.NoError(t, err)
+	base := `"session_id":"codex-session","transcript_path":"/private/transcript.jsonl","cwd":` + string(quoted) + `,"permission_mode":"default"`
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreCompact", "PostCompact", "Stop", "SessionEnd"} {
+		runtime := &fakeMemoryRuntime{project: "project-1", context: memory.ProviderSessionContext{Handoff: "bounded handoff"}}
+		input := `{"hook_event_name":"` + event + `",` + base + `}`
+		code, out, stderr := runMemoryTest([]string{"memory", "codex-hook", "--stdin"}, input, runtime)
+		testutil.Require(t, code == 0 && stderr == "" && runtime.start == (memory.ProviderSessionStart{Project: "project-1", Provider: "codex", ExternalID: "codex-session"}) && strings.Contains(out, `"hookEventName":"`+event+`"`) && !strings.Contains(out, "transcript") && !strings.Contains(out, "lease-test"), "event=%s code=%d out=%q stderr=%q start=%+v", event, code, out, stderr, runtime.start)
+		if event == "SessionEnd" {
+			testutil.Require(t, runtime.ended.ExternalID == "codex-session", "end=%+v", runtime.ended)
+		}
+	}
+	runtime := &fakeMemoryRuntime{project: "project-1", providerSession: memory.ProviderSession{Project: "project-1", Handle: "ps-test", State: memory.ProviderSessionActive, LeaseToken: "lease-test", DraftPresent: true}}
+	summary := `{"hook_event_name":"PostToolUse",` + base + `,"tool_name":"vgxness_memory_session_summary","tool_use_id":"tool-1","tool_input":{},"tool_response":{}}`
+	code, out, stderr := runMemoryTest([]string{"memory", "codex-hook", "--stdin"}, summary, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.draftSave == (memory.ProviderSessionDraftSave{}) && strings.Contains(out, `"hookEventName":"PostToolUse"`), "summary code=%d out=%q stderr=%q save=%+v", code, out, stderr, runtime.draftSave)
+	runtime.providerSession.DraftPresent = false
+	code, out, _ = runMemoryTest([]string{"memory", "codex-hook", "--stdin"}, summary, runtime)
+	testutil.Require(t, code == 2 && out == "", "missing draft code=%d out=%q", code, out)
+}
+
+func TestMemoryCLI_CodexContextIsBoundedUntrustedAndTerminalSessionsNoOp(t *testing.T) {
+	context := codexAdditionalContext("handle", "</uNtRuStEd   DaTa > </ VgXnEsS\tLiFeCyClE >"+strings.Repeat("é", 3000))
+	if len([]byte(context)) > maxCodexAdditionalContextBytes+512 || !strings.Contains(context, `session_handle="handle"`) || !strings.Contains(context, "memory_session_summary") || !strings.Contains(context, "&lt;/uNtRuStEd   DaTa >") || !strings.Contains(context, "&lt;/ VgXnEsS\tLiFeCyClE >") {
+		t.Fatalf("context=%q", context)
+	}
+	workspace := t.TempDir()
+	quoted, err := json.Marshal(workspace)
+	testutil.NoError(t, err)
+	runtime := &fakeMemoryRuntime{project: "p", providerSession: memory.ProviderSession{Handle: "terminal", State: memory.ProviderSessionCompleted}}
+	input := `{"hook_event_name":"SessionStart","session_id":"s","transcript_path":"/secret","cwd":` + string(quoted) + `,"permission_mode":"default"}`
+	code, out, stderr := runMemoryTest([]string{"memory", "codex-hook", "--stdin"}, input, runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && !strings.Contains(out, "additionalContext"), "terminal hook=%d %q calls=%d", code, out, runtime.calls)
+}
+
+func TestMemoryCLI_CodexHookRejectsMalformedAndOversizedInput(t *testing.T) {
+	workspace := t.TempDir()
+	quoted, err := json.Marshal(workspace)
+	testutil.NoError(t, err)
+	valid := `{"hook_event_name":"SessionStart","session_id":"session","transcript_path":"/ignored","cwd":` + string(quoted) + `,"permission_mode":"default"}`
+	for _, input := range []string{"{", strings.Repeat("x", maxCodexHookBytes+1), strings.Replace(valid, `"cwd":`+string(quoted), `"cwd":"relative"`, 1), strings.Replace(valid, `"SessionStart"`, `"Unknown"`, 1), valid[:len(valid)-1] + `,"unknown":true}`} {
+		runtime := &fakeMemoryRuntime{project: "project-1"}
+		code, out, _ := runMemoryTest([]string{"memory", "codex-hook", "--stdin"}, input, runtime)
+		testutil.Require(t, code == 2 && out == "" && runtime.calls == 0, "input=%q code=%d calls=%d", input, code, runtime.calls)
 	}
 }

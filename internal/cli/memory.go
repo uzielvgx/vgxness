@@ -10,12 +10,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
 )
+
+const maxCodexAdditionalContextBytes = 4 << 10
+
+var codexClosingLifecycleTag = regexp.MustCompile(`(?i)</\s*(?:untrusted\s+data|vgxness\s+lifecycle)\s*>`)
+
+func codexAdditionalContext(handle, handoff string) string {
+	handoff = codexClosingLifecycleTag.ReplaceAllStringFunc(handoff, func(tag string) string { return "&lt;" + tag[1:] })
+	for len([]byte(handoff)) > maxCodexAdditionalContextBytes {
+		_, size := utf8.DecodeLastRuneInString(handoff)
+		handoff = handoff[:len(handoff)-size]
+	}
+	return "<VGXNESS LIFECYCLE session_handle=\"" + handle + "\">\nBefore your terminal response, use the existing MCP memory_session_summary to save a concise summary for this session.\n<UNTRUSTED DATA>\n" + handoff + "\n</UNTRUSTED DATA>\n</VGXNESS LIFECYCLE>"
+}
 
 type MemoryRuntime interface {
 	Remember(context.Context, config.Options, memory.Remember) (memory.Entry, error)
@@ -55,13 +70,16 @@ type memoryInput struct {
 }
 
 func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
-	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync" && args[0] != "project" && args[0] != "hook") || runtime == nil {
+	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync" && args[0] != "project" && args[0] != "hook" && args[0] != "codex-hook") || runtime == nil {
 		fmt.Fprintln(stderr, "invalid: unsupported memory operation")
 		return 2
 	}
 	verb := args[0]
 	if verb == "hook" {
 		return runMemoryHook(ctx, args[1:], stdin, stdout, stderr, runtime)
+	}
+	if verb == "codex-hook" {
+		return runCodexMemoryHook(ctx, args[1:], stdin, stdout, stderr, runtime)
 	}
 	if verb == "project" {
 		return runMemoryProjectInit(ctx, args[1:], stdout, stderr, runtime)
@@ -237,6 +255,141 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		}
 	}
 	_, _ = io.Copy(stdout, &output)
+	return 0
+}
+
+const maxCodexHookBytes = 16 << 10
+
+// runCodexMemoryHook adapts only Codex's native hook envelope to the existing
+// provider-session protocol. transcript_path is deliberately validated as an
+// opaque string and never opened or emitted.
+func runCodexMemoryHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
+	flags := flag.NewFlagSet("memory codex-hook", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var fromStdin bool
+	var opts config.Options
+	flags.BoolVar(&fromStdin, "stdin", false, "read native hook JSON from stdin")
+	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
+	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || !fromStdin {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	data, err := io.ReadAll(io.LimitReader(stdin, maxCodexHookBytes+1))
+	if err != nil || len(data) == 0 || len(data) > maxCodexHookBytes {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil || raw == nil {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	allowed := map[string]bool{"hook_event_name": true, "session_id": true, "transcript_path": true, "cwd": true, "permission_mode": true, "tool_name": true, "tool_input": true, "tool_response": true, "tool_use_id": true, "source": true, "model": true, "agent_type": true, "prompt": true, "trigger": true, "custom_instructions": true, "stop_hook_active": true, "last_assistant_message": true, "reason": true}
+	for key := range raw {
+		if !allowed[key] {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+	}
+	var input struct {
+		Event          string          `json:"hook_event_name"`
+		SessionID      string          `json:"session_id"`
+		TranscriptPath string          `json:"transcript_path"`
+		CWD            string          `json:"cwd"`
+		PermissionMode string          `json:"permission_mode"`
+		ToolName       string          `json:"tool_name"`
+		ToolInput      json.RawMessage `json:"tool_input"`
+		ToolResponse   json.RawMessage `json:"tool_response"`
+		ToolUseID      string          `json:"tool_use_id"`
+	}
+	baseFields := raw["hook_event_name"] != nil && raw["session_id"] != nil && raw["transcript_path"] != nil && raw["cwd"] != nil && raw["permission_mode"] != nil
+	if json.Unmarshal(data, &input) != nil || input.SessionID == "" || len(input.SessionID) > 256 || input.CWD == "" || !filepath.IsAbs(input.CWD) || filepath.Clean(input.CWD) != input.CWD || len(input.TranscriptPath) > 4096 || len(input.PermissionMode) > 128 {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	contextEvent := input.Event == "SessionStart" || input.Event == "UserPromptSubmit" || input.Event == "PostCompact"
+	validEvent := contextEvent || input.Event == "PreCompact" || input.Event == "PostToolUse" || input.Event == "Stop" || input.Event == "SessionEnd"
+	if !validEvent {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	common := map[string]bool{"hook_event_name": true, "session_id": true, "transcript_path": true, "cwd": true, "permission_mode": true, "source": true, "model": true, "agent_type": true, "prompt": true, "trigger": true, "custom_instructions": true, "stop_hook_active": true, "last_assistant_message": true, "reason": true}
+	for key := range raw {
+		if !common[key] && !(input.Event == "PostToolUse" && (key == "tool_name" || key == "tool_input" || key == "tool_response" || key == "tool_use_id")) {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+	}
+	if !baseFields {
+		return memoryFailure(stderr, memory.ErrInvalid)
+	}
+	project, err := runtime.ResolveProject(ctx, opts, input.CWD)
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	// Reacquiring by the immutable native session ID gives every hook invocation
+	// the current Store lease and exercises its takeover/stale-generation rules.
+	session, err := runtime.StartProviderSession(ctx, opts, memory.ProviderSessionStart{Project: project, Provider: "codex", ExternalID: input.SessionID})
+	if err != nil {
+		return memoryFailure(stderr, err)
+	}
+	if session.State == memory.ProviderSessionCompleted || session.State == memory.ProviderSessionInterrupted || session.State == memory.ProviderSessionCancelled {
+		output := struct {
+			HookSpecificOutput struct {
+				HookEventName string `json:"hookEventName"`
+			} `json:"hookSpecificOutput"`
+		}{}
+		output.HookSpecificOutput.HookEventName = input.Event
+		if err := json.NewEncoder(stdout).Encode(output); err != nil {
+			return memoryFailure(stderr, err)
+		}
+		return 0
+	}
+	var handoff string
+	switch input.Event {
+	case "SessionStart":
+		value, contextErr := runtime.ProviderSessionContext(ctx, opts, project, session.Handle)
+		if contextErr != nil {
+			return memoryFailure(stderr, contextErr)
+		}
+		handoff = value.Handoff
+	case "UserPromptSubmit", "PostCompact":
+		if _, err = runtime.RenewProviderSession(ctx, opts, project, session.Handle, session.LeaseToken); err != nil {
+			return memoryFailure(stderr, err)
+		}
+		value, contextErr := runtime.ProviderSessionContext(ctx, opts, project, session.Handle)
+		if contextErr != nil {
+			return memoryFailure(stderr, contextErr)
+		}
+		handoff = value.Handoff
+	case "PreCompact", "Stop":
+		if _, err = runtime.MarkProviderSessionCheckpoint(ctx, opts, project, session.Handle, session.LeaseToken); err != nil {
+			return memoryFailure(stderr, err)
+		}
+	case "PostToolUse":
+		if input.ToolName != "vgxness_memory_session_summary" || input.ToolUseID == "" || len(input.ToolUseID) > 256 || len(input.ToolInput) > 8192 || len(input.ToolResponse) > 8192 || !session.DraftPresent {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+	case "SessionEnd":
+		state := memory.ProviderSessionInterrupted
+		if session.DraftPresent {
+			state = memory.ProviderSessionCompleted
+		}
+		ended, endErr := runtime.EndProviderSession(ctx, opts, memory.ProviderSessionEnd{Project: project, Handle: session.Handle, LeaseToken: session.LeaseToken, ExternalID: input.SessionID, State: state})
+		if endErr != nil {
+			return memoryFailure(stderr, endErr)
+		}
+		if state == memory.ProviderSessionCompleted && ended.FinalObservationID == "" {
+			return memoryFailure(stderr, memory.ErrInvalid)
+		}
+	}
+	output := struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext,omitempty"`
+		} `json:"hookSpecificOutput"`
+	}{}
+	output.HookSpecificOutput.HookEventName = input.Event
+	if contextEvent {
+		output.HookSpecificOutput.AdditionalContext = codexAdditionalContext(session.Handle, handoff)
+	}
+	if err := json.NewEncoder(stdout).Encode(output); err != nil {
+		return memoryFailure(stderr, err)
+	}
 	return 0
 }
 
