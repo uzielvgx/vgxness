@@ -152,7 +152,9 @@ func TestActiveV12LifecycleStatusReinstallAndProtection(t *testing.T) {
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
 	require(t, err == nil && status.State == integration.StatePartial && status.RestartRequired && status.ArtifactSHA256 == v12.SHA256)
 	reinstalled, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
-	require(t, err == nil && reinstalled.State == integration.StateInstalled && reinstalled.Changed && reinstalled.ArtifactSHA256 != v12.SHA256)
+	if err != nil || reinstalled.State != integration.StateInstalled || !reinstalled.Changed || reinstalled.ArtifactSHA256 == v12.SHA256 {
+		t.Fatalf("upgrade=%+v err=%v", reinstalled, err)
+	}
 	preserved, err := os.ReadFile(sentinelPath)
 	require(t, err == nil && bytes.Equal(preserved, sentinel))
 
@@ -513,9 +515,11 @@ func TestIntegrationInstallAndIdempotence(t *testing.T) {
 	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	service := NewIntegration()
 	before, err := service.Status(context.Background(), options)
-	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 13)
+	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 16)
 	installed, err := service.Install(context.Background(), options)
-	require(t, err == nil && installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired)
+	if err != nil || installed.State != integration.StateInstalled || !installed.Changed || !installed.RestartRequired {
+		t.Fatalf("Install() = %+v, %v", installed, err)
+	}
 	again, err := service.Install(context.Background(), options)
 	require(t, err == nil && !again.Changed && !again.RestartRequired && again.State == integration.StateInstalled)
 }
@@ -669,7 +673,9 @@ func TestIntegrationReinstallsPartialAndPreservesUnrelatedFiles(t *testing.T) {
 	partial, err := service.Status(context.Background(), options)
 	require(t, err == nil && partial.State == integration.StatePartial)
 	result, err := service.Reinstall(context.Background(), options)
-	require(t, err == nil && result.State == integration.StateInstalled && result.Changed)
+	if err != nil || result.State != integration.StateInstalled || !result.Changed {
+		t.Fatalf("repair=%+v err=%v", result, err)
+	}
 	body, err := os.ReadFile(filepath.Join(options.ConfigDir, "config.toml"))
 	require(t, err == nil && string(body) == string(config))
 }
@@ -700,7 +706,8 @@ func TestStatusReportsRecoveryWhenClearPendingFails(t *testing.T) {
 			r.syncHook = func(name string) error {
 				if name == "." {
 					syncs++
-					if syncs == 5 {
+					// The native plugin projection adds two root-level lifecycle writes.
+					if syncs == 7 {
 						return errors.New("clear pending")
 					}
 				}
@@ -719,7 +726,7 @@ func TestStatusReportsRecoveryWhenClearPendingFails(t *testing.T) {
 }
 func TestManagedLayoutExcludesPluginArtifacts(t *testing.T) {
 	layout, err := NewIntegration().ManagedLayout(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")})
-	require(t, err == nil && len(layout.Artifacts) == 13)
+	require(t, err == nil && len(layout.Artifacts) == 16)
 	for _, item := range layout.Artifacts {
 		require(t, item.RelativePath != "config.toml" && item.RelativePath != ".mcp.json" && filepath.Ext(item.RelativePath) != ".plugin")
 	}
@@ -925,6 +932,7 @@ func mustInstall(t *testing.T, s *Integration, options integration.Options) {
 	require(t, err == nil)
 }
 func require(t *testing.T, ok bool) {
+	t.Helper()
 	if !ok {
 		t.Fatal("requirement failed")
 	}
