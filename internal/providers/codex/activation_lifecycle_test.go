@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -246,39 +247,119 @@ func TestPendingJournalsBindExactPlanAndRejectTamperingBeforeMutation(t *testing
 			}
 		})
 	}
-	for _, body := range [][]byte{[]byte("codex-pending\n"), pendingEvidence(strings.Repeat("f", 64)), []byte("codex-pending-v2\nsha256=bad\n")} {
-		path := filepath.Join(t.TempDir(), "codex")
-		if err := os.Mkdir(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(path, pendingName), body, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: path}
-		if _, err := fakeActivationIntegration(fake).Reinstall(context.Background(), integration.Options{ConfigDir: path}); !errors.Is(err, integration.ErrRecovery) || len(fake.calls) != 0 {
-			t.Fatalf("tampered recovery err=%v calls=%v", err, fake.calls)
-		}
-	}
 	pkg, err := RenderPlan("v0.0.0", sdd.PlanHigh)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, conflict := range []string{"AGENTS.md", "AGENTS.md.vgxness-stage"} {
-		path := filepath.Join(t.TempDir(), "codex")
-		if err := os.Mkdir(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(path, pendingName), pendingEvidence(pkg.SHA256), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(path, conflict), []byte("foreign\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: path}
-		if _, err := fakeActivationIntegration(fake).Reinstall(context.Background(), integration.Options{ConfigDir: path}); !errors.Is(err, integration.ErrRecovery) || len(fake.calls) != 0 {
-			t.Fatalf("conflict %s err=%v calls=%v", conflict, err, fake.calls)
-		}
+	legacy, err := renderLegacy("v0.0.0")
+	if err != nil {
+		t.Fatal(err)
 	}
+	for _, test := range []struct {
+		name  string
+		setup func(t *testing.T, path string)
+	}{
+		{"malformed", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(path, pendingName), []byte("codex-pending-v2\nsha256=bad\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"unknown", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(path, pendingName), pendingEvidence(strings.Repeat("f", 64)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"tampered sidecar", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(path, pendingName), pendingEvidence(pkg.SHA256), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "AGENTS.md.vgxness-stage"), []byte("tampered\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"ambiguous recovery package", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(path, pendingName), []byte("codex-pending\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "AGENTS.md.vgxness-stage"), pkg.Artifacts[0].Bytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "config.toml.vgxness-stage"), legacy.Artifacts[1].Bytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"target conflict", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(path, pendingName), pendingEvidence(pkg.SHA256), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "AGENTS.md"), []byte("foreign\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"stage conflict", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(path, pendingName), pendingEvidence(pkg.SHA256), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "AGENTS.md.vgxness-stage"), []byte("foreign\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "codex")
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			test.setup(t, path)
+			before := snapshotActivationTree(t, path)
+			fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: path}
+			_, err := fakeActivationIntegration(fake).Reinstall(context.Background(), integration.Options{ConfigDir: path})
+			if !errors.Is(err, integration.ErrRecovery) || len(fake.calls) != 0 {
+				t.Fatalf("Reinstall err=%v calls=%v", err, fake.calls)
+			}
+			if test.name == "ambiguous recovery package" && !strings.Contains(err.Error(), "ambiguous recovery package") {
+				t.Fatalf("Reinstall error=%v, want ambiguous recovery package branch", err)
+			}
+			if after := snapshotActivationTree(t, path); !reflect.DeepEqual(after, before) {
+				t.Fatalf("recovery evidence mutated filesystem: before=%#v after=%#v", before, after)
+			}
+		})
+	}
+}
+
+type activationTreeEntry struct {
+	mode    os.FileMode
+	modTime int64
+	bytes   []byte
+}
+
+func snapshotActivationTree(t *testing.T, root string) map[string]activationTreeEntry {
+	t.Helper()
+	entries := map[string]activationTreeEntry{}
+	if err := filepath.Walk(root, func(name string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, name)
+		if err != nil {
+			return err
+		}
+		entry := activationTreeEntry{mode: info.Mode(), modTime: info.ModTime().UnixNano()}
+		if info.Mode().IsRegular() {
+			entry.bytes, err = os.ReadFile(name)
+		}
+		entries[rel] = entry
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return entries
 }
 
 func TestCodexActivationRollbackMutatesOnlyProvenOwnedState(t *testing.T) {
@@ -287,15 +368,15 @@ func TestCodexActivationRollbackMutatesOnlyProvenOwnedState(t *testing.T) {
 		foreign        bool
 		want           []string
 	}{
-		{"marketplace", "[plugin marketplace add ", false, []string{"[plugin marketplace remove vgxness --json]"}},
-		{"plugin", "[plugin add vgxness@vgxness --json]", false, []string{"[plugin remove vgxness@vgxness --json]", "[plugin marketplace remove vgxness --json]"}},
+		{"marketplace", "[plugin marketplace add ", false, []string{"[plugin marketplace add ", "[plugin marketplace remove vgxness --json]"}},
+		{"plugin", "[plugin add vgxness@vgxness --json]", false, []string{"[plugin marketplace add ", "[plugin add vgxness@vgxness --json]", "[plugin remove vgxness@vgxness --json]", "[plugin marketplace remove vgxness --json]"}},
 		{"foreign marketplace", "[plugin marketplace add ", true, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "codex")
 			fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: path}
 			if test.foreign {
-				fake.root = path + "-foreign"
+				fake.market, fake.plugin, fake.enabled, fake.root = true, true, true, path+"-foreign"
 			}
 			if strings.HasPrefix(test.mutation, "[plugin marketplace") {
 				fake.afterMarket = errors.New("mutated")
@@ -306,16 +387,33 @@ func TestCodexActivationRollbackMutatesOnlyProvenOwnedState(t *testing.T) {
 			if !errors.Is(err, integration.ErrRecovery) {
 				t.Fatalf("Install=%v", err)
 			}
-			for _, want := range test.want {
-				if !containsCall(fake.calls, want) {
-					t.Fatalf("calls=%v missing %s", fake.calls, want)
+			got := activationMutationCalls(fake.calls)
+			want := append([]string(nil), test.want...)
+			if len(want) > 0 {
+				realPath, pathErr := filepath.EvalSymlinks(path)
+				if pathErr != nil {
+					t.Fatal(pathErr)
 				}
+				want[0] += realPath + " --json]"
 			}
-			if test.foreign && (containsCall(fake.calls, "[plugin remove vgxness@vgxness --json]") || containsCall(fake.calls, "[plugin marketplace remove vgxness --json]")) {
-				t.Fatalf("foreign state modified: %v", fake.calls)
+			if strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Fatalf("mutation calls=%v want=%v", got, test.want)
+			}
+			if test.foreign && len(got) != 0 {
+				t.Fatalf("foreign plugin state modified: %v", got)
 			}
 		})
 	}
+}
+
+func activationMutationCalls(calls []string) []string {
+	var mutations []string
+	for _, call := range calls {
+		if strings.HasPrefix(call, "[plugin marketplace add ") || call == "[plugin add vgxness@vgxness --json]" || call == "[plugin remove vgxness@vgxness --json]" || call == "[plugin marketplace remove vgxness --json]" {
+			mutations = append(mutations, call)
+		}
+	}
+	return mutations
 }
 
 func TestIntegrationRefreshesPluginVersionWithExactRemoveAddAndReadback(t *testing.T) {
