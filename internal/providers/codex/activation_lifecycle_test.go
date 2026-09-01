@@ -217,7 +217,7 @@ func TestCodexActivationRecoveryEvidenceSurvivesAbruptCLIMutations(t *testing.T)
 }
 
 func TestPendingJournalsBindExactPlanAndRejectTamperingBeforeMutation(t *testing.T) {
-	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanHigh, sdd.PlanUltra} {
+	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		t.Run("exact-"+string(plan), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "codex")
 			fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: path}
@@ -358,6 +358,10 @@ func TestIntegrationRefreshesPluginVersionWithExactRemoveAddAndReadback(t *testi
 	}
 	if strings.Join(mutations, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("mutation order=%v want=%v", mutations, want)
+	}
+	stateB, err = inspectRoot(ctx, root, pkgB)
+	if err != nil || stateB.result.State != integration.StateInstalled {
+		t.Fatalf("version B artifact readback=%+v err=%v", stateB.result, err)
 	}
 	if activation, err := s.activation(ctx, root); err != nil || activation != activationActive {
 		t.Fatalf("activation=%v err=%v", activation, err)
