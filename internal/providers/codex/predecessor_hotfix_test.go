@@ -106,7 +106,7 @@ func TestCodexV14CAREPackageRecoversPendingMarkerThenUpgrades(t *testing.T) {
 	if _, err := service.Reinstall(context.Background(), options); err != nil {
 		t.Fatalf("upgrade recovered v14 package: %v", err)
 	}
-	current, err := RenderPlan("v1.2.3", sdd.PlanMedium)
+	current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
