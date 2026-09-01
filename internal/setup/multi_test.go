@@ -13,6 +13,7 @@ import (
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	"github.com/vgxness/vgxness/internal/skills"
+	"github.com/vgxness/vgxness/internal/testutil"
 )
 
 type fakeMultiProvider struct {
@@ -472,7 +473,7 @@ func TestIntegrationProviderReinstallsPartialCodex(t *testing.T) {
 
 func TestIntegrationProviderPartialCodexPlanMatchesReinstallStatusIdentity(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
-	runtime := codex.NewIntegration()
+	runtime := codex.NewIntegrationWithRunner(testutil.NewCodexRunner())
 	medium := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium}
 	if _, err := runtime.Install(context.Background(), medium); err != nil {
 		t.Fatal(err)
