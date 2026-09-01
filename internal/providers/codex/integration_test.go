@@ -572,6 +572,7 @@ func TestIntegrationProtectedInstallBindsSnapshotSourceToHeldRoot(t *testing.T) 
 					return held, nil
 				}
 			},
+			want: integration.ErrConflict,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

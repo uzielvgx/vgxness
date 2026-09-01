@@ -2,6 +2,10 @@
 
 package codex
 
+import "os"
+
 // Windows flushes each regular file before publication. Directory namespace
 // flushing is unavailable, so lifecycle results label this best-effort.
 func syncPath(string) error { return nil }
+
+func syncHeldDirectory(*os.File) error { return nil }
