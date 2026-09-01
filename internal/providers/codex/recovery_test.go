@@ -18,7 +18,7 @@ func TestRecoveryManagedPathsAreExactAndOrdered(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := recovery.ManagedPaths()
-	expected := []string{"AGENTS.md", "agents/care-challenger.toml", "agents/care-reviewer.toml", "agents/care-specialist.toml", "agents/explore.toml", "agents/general.toml", "agents/sdd-apply.toml", "agents/sdd-design.toml", "agents/sdd-proposal.toml", "agents/sdd-research.toml", "agents/sdd-spec.toml", "agents/sdd-tasks.toml", "agents/verifier.toml"}
+	expected := []string{".agents/plugins/marketplace.json", "AGENTS.md", "agents/care-challenger.toml", "agents/care-reviewer.toml", "agents/care-specialist.toml", "agents/explore.toml", "agents/general.toml", "agents/sdd-apply.toml", "agents/sdd-design.toml", "agents/sdd-proposal.toml", "agents/sdd-research.toml", "agents/sdd-spec.toml", "agents/sdd-tasks.toml", "agents/verifier.toml", "plugins/vgxness/.codex-plugin/plugin.json", "plugins/vgxness/hooks.json"}
 	if !reflect.DeepEqual(paths, expected) {
 		t.Fatalf("paths=%v", paths)
 	}
@@ -63,7 +63,6 @@ func TestRecoveryUsesProviderSeparatedBackupAndRejectsManagedSymlink(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths := recovery.ManagedPaths()
 	if found, err := recovery.HasManagedFiles(context.Background()); err != nil || found {
 		t.Fatalf("found=%v err=%v", found, err)
 	}
@@ -76,7 +75,8 @@ func TestRecoveryUsesProviderSeparatedBackupAndRejectsManagedSymlink(t *testing.
 	if found, err := recovery.HasManagedFiles(context.Background()); err != nil || found {
 		t.Fatalf("excluded found=%v err=%v", found, err)
 	}
-	if err := os.WriteFile(filepath.Join(root, paths[0]), []byte("managed"), 0o600); err != nil {
+	managed := "AGENTS.md"
+	if err := os.WriteFile(filepath.Join(root, managed), []byte("managed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if found, err := recovery.HasManagedFiles(context.Background()); err != nil || !found {
@@ -89,10 +89,10 @@ func TestRecoveryUsesProviderSeparatedBackupAndRejectsManagedSymlink(t *testing.
 	if _, err := os.Stat(filepath.Join(home, ".local", "share", "vgxness", "backups", "codex", snapshot.ID)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(root, paths[0])); err != nil {
+	if err := os.Remove(filepath.Join(root, managed)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("elsewhere", filepath.Join(root, paths[0])); err != nil {
+	if err := os.Symlink("elsewhere", filepath.Join(root, managed)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := recovery.HasManagedFiles(context.Background()); err == nil {

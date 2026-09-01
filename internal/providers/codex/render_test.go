@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,29 @@ import (
 	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
+
+func TestPluginManifestNormalizesAndBindsSemanticVersion(t *testing.T) {
+	pkg, err := Render("v1.2.3-alpha.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(artifact(t, pkg, "plugins/vgxness/.codex-plugin/plugin.json").Bytes, &manifest); err != nil || manifest.Version != "1.2.3-alpha.1" {
+		t.Fatalf("manifest=%+v err=%v", manifest, err)
+	}
+	for _, version := range []string{"v1.2.3\"x", "v1.2.3\n", "v01.2.3"} {
+		if _, err := Render(version); err == nil {
+			t.Fatalf("Render(%q) accepted invalid version", version)
+		}
+	}
+	tampered := clonePackage(pkg)
+	tampered.version = "bad"
+	if tampered.Validate() == nil {
+		t.Fatal("Validate accepted invalid package version")
+	}
+}
 
 func TestCAREDelegationRendersOnlyCurrentProfiles(t *testing.T) {
 	pkg, err := Render("v1.2.3")
@@ -28,8 +52,8 @@ func TestCAREDelegationRendersOnlyCurrentProfiles(t *testing.T) {
 			t.Errorf("missing CARE profile %s", path)
 		}
 	}
-	if len(pkg.Artifacts) != 13 {
-		t.Errorf("Codex package artifact count = %d, want 13 including AGENTS.md", len(pkg.Artifacts))
+	if len(pkg.Artifacts) != 16 {
+		t.Errorf("Codex package artifact count = %d, want 16 including lifecycle artifacts", len(pkg.Artifacts))
 	}
 	for _, legacy := range []string{"risk", "readability", "reliability", "resilience", "refuter"} {
 		if paths["agents/"+legacy+".toml"] {
@@ -206,6 +230,9 @@ func TestRenderProducesNativeCodexProjection(t *testing.T) {
 		"agents/sdd-spec.toml",
 		"agents/sdd-tasks.toml",
 		"agents/verifier.toml",
+		".agents/plugins/marketplace.json",
+		"plugins/vgxness/.codex-plugin/plugin.json",
+		"plugins/vgxness/hooks.json",
 	}
 	if got := artifactPaths(pkg.Artifacts); !reflect.DeepEqual(got, wantPaths) {
 		t.Fatalf("paths = %v, want %v", got, wantPaths)
@@ -214,7 +241,7 @@ func TestRenderProducesNativeCodexProjection(t *testing.T) {
 		t.Fatal("manager instructions name an unavailable OpenCode tool")
 	}
 	for _, item := range pkg.Artifacts {
-		if strings.Contains(item.Path, ".codex-plugin") || item.Path == ".mcp.json" {
+		if item.Path == ".mcp.json" {
 			t.Fatalf("unexpected plugin artifact %q", item.Path)
 		}
 	}
@@ -430,6 +457,9 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 	}
 	protectedTools := []string{"memory_save", "memory_forget", "memory_session_summary", "memory_update", "sdd_create", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_accept_revision", "sdd_record_projection"}
 	for _, item := range pkg.Artifacts[1:] {
+		if !strings.HasPrefix(item.Path, "agents/") {
+			continue
+		}
 		content := string(item.Bytes)
 		for _, field := range []string{"name = ", "description = ", "developer_instructions = ", "model = ", "model_reasoning_effort = ", "sandbox_mode = "} {
 			if !strings.Contains(content, field) {
