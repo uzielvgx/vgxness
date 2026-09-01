@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -114,8 +115,11 @@ func TestRootPrimitives(t *testing.T) {
 	if err != nil || pending {
 		t.Fatalf("pending = %v, %v", pending, err)
 	}
-	if err := r.MarkPending(); err != nil {
+	if err := r.MarkPending(pendingEvidence(strings.Repeat("a", 64))); err != nil {
 		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(filepath.Join(r.Path, pendingName)); err != nil || !strings.Contains(string(body), "sha256=") {
+		t.Fatalf("pending is not package-bound: %q %v", body, err)
 	}
 	pending, err = r.Pending()
 	if err != nil || !pending {
@@ -124,7 +128,7 @@ func TestRootPrimitives(t *testing.T) {
 	if err := r.ClearPending(); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.MarkPending(); err != nil {
+	if err := r.MarkPending(pendingEvidence(strings.Repeat("a", 64))); err != nil {
 		t.Fatal(err)
 	}
 	n := 0
@@ -140,6 +144,102 @@ func TestRootPrimitives(t *testing.T) {
 	}
 	if pending, _ := r.Pending(); !pending {
 		t.Fatal("pending not recreated")
+	}
+	r.syncHook = nil
+	body := []byte("codex-activation-v1\nsha256=test\nphase=activate\n")
+	if err := r.MarkActivationPending(body); err != nil {
+		t.Fatal(err)
+	}
+	n = 0
+	r.syncHook = func(string) error {
+		n++
+		if n == 1 {
+			return errors.New("sync")
+		}
+		return nil
+	}
+	if err := r.ClearActivationPending(body); !errors.Is(err, integration.ErrRecovery) {
+		t.Fatal(err)
+	}
+	got, present, err := r.ActivationPending()
+	if err != nil || !present || string(got) != string(body) {
+		t.Fatalf("activation pending=%q present=%v err=%v", got, present, err)
+	}
+	for _, body := range [][]byte{[]byte("codex-pending\n"), pendingEvidence(strings.Repeat("b", 64))} {
+		if err := os.WriteFile(filepath.Join(r.Path, pendingName), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		n = 0
+		r.syncHook = func(string) error {
+			n++
+			if n == 1 {
+				return errors.New("sync")
+			}
+			return nil
+		}
+		if err := r.ClearPending(); !errors.Is(err, integration.ErrRecovery) {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(r.Path, pendingName))
+		if err != nil || string(got) != string(body) {
+			t.Fatalf("pending restore=%q err=%v", got, err)
+		}
+		if err := os.Remove(filepath.Join(r.Path, pendingName)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRootMkdirSyncsEachHeldParent(t *testing.T) {
+	r, err := OpenRoot(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var synced []string
+	r.syncHook = func(name string) error { synced = append(synced, name); return nil }
+	if err := r.Mkdir("one/two"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(synced, ","), ".,one"; got != want {
+		t.Fatalf("sync parents=%q want=%q", got, want)
+	}
+}
+
+func TestRootNestedSidecarsUseHeldParent(t *testing.T) {
+	r, err := OpenRoot(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.Mkdir("plugins/vgxness/.codex-plugin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Mkdir(".agents/plugins"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.Read(".agents/plugins/missing", 8); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("nested missing = %v", err)
+	}
+	a, err := r.Publish(context.Background(), "plugins/vgxness/.codex-plugin/plugin.json", []byte("owned"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CommitAnchor(a); err != nil {
+		t.Fatal(err)
+	}
+	b, err := r.Backup("plugins/vgxness/.codex-plugin/plugin.json", []byte("owned"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RemoveTarget(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Restore(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RemoveBackup(b); err != nil {
+		t.Fatal(err)
 	}
 }
 func TestRootOwnershipAndCancellation(t *testing.T) {
