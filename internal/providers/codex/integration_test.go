@@ -90,6 +90,12 @@ func TestKnownPackagesOrderCurrentThenV17ThenV16ForEveryPlan(t *testing.T) {
 	}
 }
 
+func TestLogicalArtifactDirUsesSlashSeparators(t *testing.T) {
+	if got := logicalArtifactDir(".agents/plugins/marketplace.json"); got != ".agents/plugins" {
+		t.Fatalf("logicalArtifactDir() = %q, want .agents/plugins", got)
+	}
+}
+
 func TestActiveV16LifecycleStatusUpgradeAndDrift(t *testing.T) {
 	plan := sdd.PlanMedium
 	v16, err := renderActiveV16("v0.0.0", plan)
