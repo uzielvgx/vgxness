@@ -2,8 +2,10 @@
 package codex
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -29,6 +31,7 @@ type Artifact struct {
 type Package struct {
 	Artifacts []Artifact
 	SHA256    string
+	version   string
 	profiles  []profile
 	plan      sdd.Plan
 	legacy    bool
@@ -63,11 +66,35 @@ func RenderPlan(version string, plan sdd.Plan) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
+	pkg.Artifacts = append(pkg.Artifacts, lifecycleArtifacts(pkg.version)...)
+	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
 	pkg.current = true
 	if err := pkg.Validate(); err != nil {
 		return Package{}, err
 	}
 	return clonePackage(pkg), nil
+}
+
+func lifecycleArtifacts(version string) []Artifact {
+	manifest, err := json.Marshal(struct {
+		Name        string `json:"name"`
+		Version     string `json:"version"`
+		Description string `json:"description"`
+		Author      struct {
+			Name string `json:"name"`
+		} `json:"author"`
+		License string `json:"license"`
+	}{Name: "vgxness", Version: version, Description: "VGXNESS memory lifecycle", Author: struct {
+		Name string `json:"name"`
+	}{Name: "VGXNESS"}, License: "Apache-2.0"})
+	if err != nil {
+		panic(err)
+	}
+	return []Artifact{
+		{Path: ".agents/plugins/marketplace.json", Bytes: []byte(`{"name":"vgxness","interface":{"displayName":"VGXNESS"},"plugins":[{"name":"vgxness","source":{"source":"local","path":"./plugins/vgxness"},"policy":{"installation":"AVAILABLE","authentication":"ON_USE"},"category":"Developer Tools"}]}` + "\n")},
+		{Path: "plugins/vgxness/.codex-plugin/plugin.json", Bytes: append(manifest, '\n')},
+		{Path: "plugins/vgxness/hooks.json", Bytes: []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PreCompact":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PostCompact":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PostToolUse":[{"matcher":"vgxness_memory_session_summary","hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"Stop":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}]}}` + "\n")},
+	}
 }
 
 func renderLegacy(version string) (Package, error) {
@@ -335,7 +362,7 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 		artifacts = append(artifacts, Artifact{Path: item.path, Bytes: []byte(renderProfile(item))})
 	}
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
-	pkg := Package{Artifacts: artifacts, profiles: append([]profile(nil), selected...), plan: plan, legacy: legacy}
+	pkg := Package{Artifacts: artifacts, version: strings.TrimPrefix(version, "v"), profiles: append([]profile(nil), selected...), plan: plan, legacy: legacy}
 	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
 	return clonePackage(pkg), nil
 }
@@ -804,25 +831,32 @@ func tomlStrings(values []string) string {
 // Validate rejects stale digests and content changes to a caller-owned package.
 // Callers must invoke it immediately before publishing the package.
 func (pkg Package) Validate() error {
+	if !releaseVersion.MatchString("v" + pkg.version) {
+		return errors.New("invalid package version")
+	}
 	selected := pkg.profiles
 	if len(selected) == 0 {
 		return errors.New("package has no profile identity")
 	}
-	if len(pkg.Artifacts) != len(selected)+1 {
+	want := len(selected) + 1
+	if pkg.current {
+		want += len(lifecycleArtifacts(pkg.version))
+	}
+	if len(pkg.Artifacts) != want {
 		return errors.New("package contains an unexpected artifact count")
 	}
-	previous := ""
+	seen := map[string]bool{}
 	for _, artifact := range pkg.Artifacts {
 		if err := validateRelativePath(artifact.Path); err != nil {
 			return err
 		}
-		if artifact.Path <= previous {
+		if seen[artifact.Path] {
 			return errors.New("artifact paths must be unique and lexical")
 		}
-		if strings.Contains(artifact.Path, ".codex-plugin") || artifact.Path == ".mcp.json" {
+		if artifact.Path == ".mcp.json" {
 			return errors.New("plugin artifacts are not permitted")
 		}
-		previous = artifact.Path
+		seen[artifact.Path] = true
 	}
 	current, currentErr := profilesForPlan(pkg.plan)
 	activeV12, activeV12Err := activeV12ProfilesForPlan(pkg.plan)
@@ -833,7 +867,7 @@ func (pkg Package) Validate() error {
 	preConsolidation, preConsolidationErr := preConsolidationProfilesForPlan(pkg.plan)
 	matchesCurrent := packageMatches(pkg, selected, activeManagerInstructions())
 	if pkg.current {
-		matchesCurrent = currentErr == nil && packageMatches(pkg, current, activeManagerInstructions())
+		matchesCurrent = currentErr == nil && packageMatchesWithLifecycle(pkg, current, activeManagerInstructions())
 	}
 	matchesKnown := matchesCurrent ||
 		(currentErr == nil && packageMatches(pkg, current, activeV16ManagerInstructions())) ||
@@ -851,6 +885,22 @@ func (pkg Package) Validate() error {
 		return errors.New("invalid package aggregate SHA-256")
 	}
 	return nil
+}
+
+func packageMatchesWithLifecycle(pkg Package, profiles []profile, manager string) bool {
+	n := len(lifecycleArtifacts(pkg.version))
+	if len(pkg.Artifacts) != len(profiles)+1+n {
+		return false
+	}
+	for i, want := range lifecycleArtifacts(pkg.version) {
+		got := pkg.Artifacts[len(pkg.Artifacts)-n+i]
+		if got.Path != want.Path || !bytes.Equal(got.Bytes, want.Bytes) {
+			return false
+		}
+	}
+	copy := pkg
+	copy.Artifacts = pkg.Artifacts[:len(pkg.Artifacts)-n]
+	return packageMatches(copy, profiles, manager)
 }
 
 func packageMatches(pkg Package, profiles []profile, manager string) bool {
@@ -899,7 +949,7 @@ func aggregateSHA256(artifacts []Artifact) string {
 }
 
 func clonePackage(source Package) Package {
-	result := Package{Artifacts: make([]Artifact, len(source.Artifacts)), SHA256: source.SHA256, profiles: append([]profile(nil), source.profiles...), plan: source.plan, legacy: source.legacy, current: source.current}
+	result := Package{Artifacts: make([]Artifact, len(source.Artifacts)), SHA256: source.SHA256, version: source.version, profiles: append([]profile(nil), source.profiles...), plan: source.plan, legacy: source.legacy, current: source.current}
 	for index, artifact := range source.Artifacts {
 		result.Artifacts[index] = Artifact{Path: artifact.Path, Bytes: append([]byte(nil), artifact.Bytes...)}
 	}
