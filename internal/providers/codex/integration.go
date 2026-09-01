@@ -485,7 +485,7 @@ func (s *Integration) install(ctx context.Context, root *Root, pkg Package, stat
 	if err := ctx.Err(); err != nil {
 		return integration.Result{}, err
 	}
-	if err := root.MarkPending(); err != nil {
+	if err := root.MarkPending(pendingEvidence(pkg.SHA256)); err != nil {
 		return integration.Result{}, recovery(err)
 	}
 	anchors := []Anchor{}
@@ -742,7 +742,7 @@ func (s *Integration) uninstall(ctx context.Context, root *Root, pkg Package, st
 	if state.result.State == integration.StateDrifted {
 		return integration.Result{}, fmt.Errorf("%w: managed Codex artifacts", integration.ErrDrift)
 	}
-	if err := root.MarkPending(); err != nil {
+	if err := root.MarkPending(pendingEvidence(pkg.SHA256)); err != nil {
 		return integration.Result{}, recovery(err)
 	}
 	backups := []Backup{}
