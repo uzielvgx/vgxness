@@ -62,6 +62,8 @@ Render and compare operate on supplied bounded bytes and never access the filesy
 - An interrupted SDD preserves its accepted revisions and current phase; missing work is never inferred.
 - Risky filesystem, Git, network, package, release, credential, or permission-expansion actions require explicit user authority.
 
+Provider integrations additionally follow the [provider-integration preflight](architecture/provider-integration-preflight.md): capability and stack records precede implementation, and exact frozen-candidate verifier/CARE evidence precedes publication. The current [Codex per-session memory-hook decision](architecture/codex-memory-hook-decision.md) remains blocked until its stated upstream evidence trigger is met.
+
 ## CARE routing
 
 CARE records the route, risk, evidence ledger, and invalidation markers for direct, assisted, action, engineering, and assured work; Manager retains lifecycle authority. See [CARE architecture](care.md) and the [development-visible evaluation plan](care-evaluation.md). Protected-holdout adjudication remains external to this flow.
