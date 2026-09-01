@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 
@@ -420,9 +421,12 @@ func pending(root *Root, pkg Package) (bool, error) {
 	}
 	for _, item := range pkg.Artifacts {
 		for _, suffix := range []string{".vgxness-stage", ".vgxness-remove"} {
-			_, err := root.fs.Lstat(item.Path + suffix)
+			_, err := root.lstat(item.Path + suffix)
 			if err == nil {
 				return true, nil
+			}
+			if errors.Is(err, integration.ErrInvalid) || errors.Is(err, integration.ErrDrift) {
+				continue // inspection reports unsafe managed paths as drift, not recovery evidence.
 			}
 			if !errors.Is(err, os.ErrNotExist) {
 				return false, recovery(err)
@@ -488,6 +492,9 @@ func (s *Integration) install(ctx context.Context, root *Root, pkg Package, stat
 	if err := root.MarkPending(pendingEvidence(pkg.SHA256)); err != nil {
 		return integration.Result{}, recovery(err)
 	}
+	if err := s.check("pending", pkg.SHA256); err != nil {
+		return integration.Result{}, recovery(err)
+	}
 	anchors := []Anchor{}
 	fail := func(err error) (integration.Result, error) {
 		for i := len(anchors) - 1; i >= 0; i-- {
@@ -501,6 +508,11 @@ func (s *Integration) install(ctx context.Context, root *Root, pkg Package, stat
 	for _, item := range state.artifacts {
 		if item.exact {
 			continue
+		}
+		if dir := filepath.Dir(item.artifact.Path); dir != "." {
+			if err := root.Mkdir(dir); err != nil {
+				return fail(err)
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return fail(err)
@@ -588,6 +600,33 @@ func recoveryPackage(root *Root, fallback Package, preferFallback bool) (Package
 	if err != nil {
 		return Package{}, err
 	}
+	if body, present, evidenceErr := root.PendingEvidence(); evidenceErr != nil {
+		return Package{}, evidenceErr
+	} else if present && string(body) != "codex-pending\n" {
+		sha := string(body[len("codex-pending-v2\nsha256=") : len("codex-pending-v2\nsha256=")+64])
+		matches := make([]Package, 0, 1)
+		for _, candidate := range packages {
+			if candidate.SHA256 == sha {
+				matches = append(matches, candidate)
+			}
+		}
+		if len(matches) != 1 {
+			return Package{}, recovery(conflict("unknown pending package"))
+		}
+		state, inspectErr := inspectRoot(context.Background(), root, matches[0])
+		if inspectErr != nil || state.result.State == integration.StateDrifted {
+			return Package{}, recovery(errors.Join(inspectErr, integration.ErrDrift))
+		}
+		for _, artifact := range matches[0].Artifacts {
+			for _, suffix := range []string{".vgxness-stage", ".vgxness-remove"} {
+				got, _, readErr := root.Read(artifact.Path+suffix, maxArtifactBytes)
+				if !errors.Is(readErr, os.ErrNotExist) && (readErr != nil || !bytes.Equal(got, artifact.Bytes)) {
+					return Package{}, recovery(errors.Join(readErr, integration.ErrDrift))
+				}
+			}
+		}
+		return matches[0], nil
+	}
 	matches := make([]Package, 0, len(packages))
 	for index := range packages {
 		pkg, matched := packages[index], false
@@ -622,7 +661,10 @@ func recoveryPackage(root *Root, fallback Package, preferFallback bool) (Package
 		}
 		return Package{}, recovery(conflict("ambiguous recovery package"))
 	}
-	return fallback, nil
+	if preferFallback {
+		return fallback, nil
+	}
+	return Package{}, recovery(conflict("unidentified legacy pending package"))
 }
 func recoverInstalled(ctx context.Context, root *Root, pkg Package) (integration.Result, error) {
 	state, err := inspectRoot(ctx, root, pkg)
@@ -640,8 +682,8 @@ func recoverInstalled(ctx context.Context, root *Root, pkg Package) (integration
 		name, data := item.Path, item.Bytes
 		remove := name + ".vgxness-remove"
 		stage := name + ".vgxness-stage"
-		if _, err := root.fs.Lstat(remove); err == nil {
-			if _, err := root.fs.Lstat(stage); err == nil {
+		if _, err := root.lstat(remove); err == nil {
+			if _, err := root.lstat(stage); err == nil {
 				return integration.Result{}, recovery(conflict("both sidecars"))
 			}
 			changed = true
@@ -664,14 +706,20 @@ func recoverInstalled(ctx context.Context, root *Root, pkg Package) (integration
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return integration.Result{}, recovery(err)
 		}
-		if _, err := root.fs.Lstat(stage); err == nil {
+		if _, err := root.lstat(stage); err == nil {
 			changed = true
 			b, info, err := root.Read(stage, len(data)+1)
 			if err != nil || !bytes.Equal(b, data) {
 				return integration.Result{}, recovery(errors.Join(err, integration.ErrDrift))
 			}
 			if _, _, err = root.Read(name, len(data)+1); errors.Is(err, os.ErrNotExist) {
-				err = root.fs.Link(stage, name)
+				parent, base, openErr := root.parent(name)
+				if openErr != nil {
+					err = openErr
+				} else {
+					err = parent.Link(filepath.Base(stage), base)
+					_ = parent.Close()
+				}
 			}
 			if err != nil {
 				return integration.Result{}, recovery(err)
@@ -685,6 +733,11 @@ func recoverInstalled(ctx context.Context, root *Root, pkg Package) (integration
 		b, _, err := root.Read(name, len(data)+1)
 		if errors.Is(err, os.ErrNotExist) {
 			changed = true
+			if dir := filepath.Dir(name); dir != "." {
+				if err := root.Mkdir(dir); err != nil {
+					return integration.Result{}, recovery(err)
+				}
+			}
 			a, err := root.Publish(ctx, name, data)
 			if err == nil {
 				err = root.CommitAnchor(a)
