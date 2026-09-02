@@ -11,12 +11,12 @@ import (
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
-func TestOpenCodeCAREV2Manager58PackageIsExactImmediatePredecessorAndRejectsDrift(t *testing.T) {
+func TestOpenCodeManager59PackageIsExactImmediatePredecessorAndRejectsDrift(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
-	testutil.Require(t, bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 58")), "CARE-v2/Manager58 predecessor marker changed")
+	testutil.Require(t, bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 59")), "Manager59 predecessor marker changed")
 
 	configDirectory := t.TempDir()
 	writeModelPlanBundleFixture(t, configDirectory, predecessor)

@@ -242,8 +242,8 @@ func TestCAREV2LifecyclePreservesOnlyRoleDelta(t *testing.T) {
 		}
 	}
 	for name, immediateBytes := range immediate.agents {
-		if changed := !bytes.Equal(immediateBytes, careV1.agents[name]); changed != care[name] {
-			t.Errorf("CARE-v2 M58 to CARE-v1 M58 change for %s=%t, want role-only", name, changed)
+		if changed := !bytes.Equal(immediateBytes, careV1.agents[name]); changed != (care[name] || name == managerAgentName) {
+			t.Errorf("CARE-v2 M59 to CARE-v1 M58 change for %s=%t, want manager-and-role-only", name, changed)
 		}
 	}
 	for name, careV1Bytes := range careV1.agents {
@@ -251,7 +251,7 @@ func TestCAREV2LifecyclePreservesOnlyRoleDelta(t *testing.T) {
 			t.Errorf("CARE-v1 M58 to CARE-v1 M57 change for %s=%t, want manager-only", name, changed)
 		}
 	}
-	if !bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || !bytes.Contains(immediate.agents[managerAgentName], []byte(managerV58Marker)) || !bytes.Contains(careV1.agents[managerAgentName], []byte(managerV58Marker)) || !bytes.Contains(next.agents[managerAgentName], []byte(managerV57Marker)) {
+	if !bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || !bytes.Contains(immediate.agents[managerAgentName], []byte(managerV59Marker)) || !bytes.Contains(careV1.agents[managerAgentName], []byte(managerV58Marker)) || !bytes.Contains(next.agents[managerAgentName], []byte(managerV57Marker)) {
 		t.Fatal("CARE-v2 M59 -> CARE-v2 M58 -> CARE-v1 M58 -> CARE-v1 M57 manager markers are not retained")
 	}
 	for name := range care {

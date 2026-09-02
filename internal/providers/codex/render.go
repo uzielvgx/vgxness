@@ -96,8 +96,8 @@ func renderActiveV18PreTerminalClosure(version string, plan sdd.Plan) (Package, 
 		if pkg.Artifacts[index].Path != "AGENTS.md" {
 			continue
 		}
-		manager := strings.Replace(activeManagerInstructions(), orchestration.ContractPolicy, orchestration.PreviousContractPolicyV59, 1)
-		if manager == activeManagerInstructions() {
+		manager := strings.Replace(activeV18ManagerInstructions(), orchestration.ContractPolicy, orchestration.PreviousContractPolicyV59, 1)
+		if manager == activeV18ManagerInstructions() {
 			return Package{}, integration.ErrInvalid
 		}
 		pkg.Artifacts[index].Bytes = []byte(manager)
@@ -392,7 +392,11 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 	if err := validateCurrentManagerAnchors(managerInstructions); err != nil {
 		return Package{}, err
 	}
-	artifacts := []Artifact{{Path: "AGENTS.md", Bytes: []byte(activeManagerInstructions())}}
+	manager := activeManagerInstructions()
+	if manager == "" {
+		return Package{}, integration.ErrInvalid
+	}
+	artifacts := []Artifact{{Path: "AGENTS.md", Bytes: []byte(manager)}}
 	for _, item := range selected {
 		artifacts = append(artifacts, Artifact{Path: item.path, Bytes: []byte(renderProfile(item))})
 	}
@@ -407,6 +411,20 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
 func activeManagerInstructions() string {
+	value := activeV18ManagerInstructions()
+	if strings.Count(value, "artifact: codex-agent/manager; version: 18; parity: opencode-v59") != 1 || strings.Count(value, nativeDelegationPolicy) != 1 || strings.Contains(value, orchestration.PedagogicalExecutionBrief) {
+		return ""
+	}
+	value = strings.Replace(value, "artifact: codex-agent/manager; version: 18; parity: opencode-v59", "artifact: codex-agent/manager; version: 19; parity: opencode-v60", 1)
+	value = strings.Replace(value, nativeDelegationPolicy, "\n\n"+orchestration.PedagogicalExecutionBrief+nativeDelegationPolicy, 1)
+	if strings.Count(value, "artifact: codex-agent/manager; version: 19; parity: opencode-v60") != 1 || strings.Count(value, orchestration.PedagogicalExecutionBrief) != 1 {
+		return ""
+	}
+	return value
+}
+
+// activeV18ManagerInstructions preserves the exact Manager18 projection for lifecycle recognition.
+func activeV18ManagerInstructions() string {
 	value := activeV17ManagerInstructions()
 	if strings.Count(value, "artifact: codex-agent/manager; version: 17; parity: opencode-v57") != 1 || strings.Count(value, "stacked-pr") == 0 {
 		return ""
@@ -905,6 +923,7 @@ func (pkg Package) Validate() error {
 		matchesCurrent = currentErr == nil && packageMatchesWithLifecycle(pkg, current, activeManagerInstructions())
 	}
 	matchesKnown := matchesCurrent ||
+		(currentErr == nil && packageMatches(pkg, current, activeV18ManagerInstructions())) ||
 		(currentErr == nil && packageMatches(pkg, current, activeV16ManagerInstructions())) ||
 		(preCAREErr == nil && packageMatches(pkg, preCARE, activeV13ManagerInstructions())) ||
 		(activeV12Err == nil && packageMatches(pkg, activeV12, activeV12ManagerInstructions())) ||

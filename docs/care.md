@@ -1,6 +1,6 @@
 # CARE architecture
 
-Current identities: OpenCode CARE-v2 Manager59, immediate CARE-v2 Manager58, then CARE-v1 Manager58/Manager57 and deeper v56; Codex Manager18, immediate Manager17, then Manager16/15/14.
+Current identities: OpenCode CARE-v2 Manager60, immediate Manager59, then CARE-v2 Manager58 and CARE-v1 Manager58/Manager57 and deeper v56; Codex Manager19 (parity OpenCode-v60), immediate Manager18, then Manager17/16/15/14.
 
 CARE is the repository-visible contract for choosing and assessing engineering work. It records architecture and deterministic development checks; it does not add a runtime, schema, transport, dataset, custody service, or protected-holdout execution.
 
@@ -14,7 +14,7 @@ The ledger binds target identity, route, risk, required checks, observed outcome
 
 ## Provider inventory and limits
 
-OpenCode currently has 13 agents: manager, explore, general, verifier, three CARE v2 roles, and six SDD roles. OpenCode current identity is CARE v2 with Manager59; its immediate predecessor is CARE-v2 with Manager58, then CARE-v1 with Manager58 and CARE-v1 with Manager57; OpenCode v56 is deeper. Codex currently has `AGENTS.md` plus 12 delegated profiles, including three CARE roles; Codex current identity is Manager18, its immediate predecessor is Manager17, then Manager16 and Codex Manager15/v14 are deeper. These inventories describe managed documentation identities, not a claim that a host ran them.
+OpenCode currently has 13 agents: manager, explore, general, verifier, three CARE v2 roles, and six SDD roles. OpenCode current identity is CARE v2 with Manager60; its immediate predecessor is Manager59, then CARE-v2 Manager58 and CARE-v1 Manager58/Manager57; OpenCode v56 is deeper. Codex currently has `AGENTS.md` plus 12 delegated profiles, including three CARE roles; Codex current identity is Manager19 (parity OpenCode-v60), its immediate predecessor is Manager18, then Manager17, Manager16, and Codex Manager15/v14 are deeper. The current managers use the shared pedagogical Execution Brief contract for non-trivial work without narrating every tool call or exposing private reasoning. These inventories describe managed documentation identities, not a claim that a host ran them.
 
 CARE lifecycle transitions remain Manager-owned; repository writers do not mutate lifecycle state. Runtime evidence is observed on macOS only. Target-native Windows and Linux behavior remains unverified.
 

@@ -128,8 +128,8 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 			t.Errorf("installed manager is missing %s clause %q", required.name, required.value)
 		}
 	}
-	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 59")); got != 1 {
-		t.Fatalf("installed current manager v59 marker count=%d, want 1", got)
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 60")); got != 1 {
+		t.Fatalf("installed current manager v60 marker count=%d, want 1", got)
 	}
 	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 0 {
 		t.Fatalf("installed current manager retains v57 marker count=%d, want 0", got)

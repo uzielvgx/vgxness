@@ -1,6 +1,6 @@
 # VGXNESS Go implementation architecture
 
-Global `git-delivery` v1, migrated exactly from `stacked-pr` v3, is a prompt policy including isolated-worktree gates; it introduces no Go/runtime writer, daemon, or durable delivery state. OpenCode current is CARE-v2 Manager59, immediately after CARE-v2 Manager58, then CARE-v1 Manager58 and CARE-v1 Manager57; Codex current is Manager18, immediately after Manager17, then Manager16 and deeper Manager15/v14.
+Global `git-delivery` v1, migrated exactly from `stacked-pr` v3, is a prompt policy including isolated-worktree gates; it introduces no Go/runtime writer, daemon, or durable delivery state. OpenCode current is CARE-v2 Manager60, immediately after Manager59, then CARE-v2 Manager58 and CARE-v1 Manager58/Manager57; Codex current is Manager19 (parity OpenCode-v60), immediately after Manager18, then Manager17, Manager16 and deeper Manager15/v14.
 
 This document describes the delivered OpenCode-native manager product. OpenCode owns engineering execution. Go owns installation, managed artifact generation, storage, inspection, memory and SDD APIs, and terminal surfaces.
 
@@ -15,8 +15,8 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | `internal/memory` | SQLite/FTS5 schema v23, canonical workspace identity, explicit portable-to-local provenance, semantic memory, local provider-session drafts and leases, structured SDD repository, migrations, and retained legacy importer. Portable metadata is not normal resolution or sync selection. |
 | `internal/hooks` | Internal-only best-effort lifecycle observation. Completed memory synchronization can emit synchronous invocation-correlation events for the effective canonical invocation workspace (empty project directory means current working directory; explicit paths are absolute, clean, symlink-resolved, and case-normalized); listeners can block, and global single-flight drops concurrent or reentrant events. There is no queue, retry, replay, persistence, or crash durability. |
 | `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
-| `internal/providers/opencode` | OpenCode current CARE-v2 Manager59 roles, 12 other model-bound agents (`general` v10, `explore` v4, verifier v7, and six SDD roles including `sdd-apply` v7), model-plan manifest, immediate CARE-v2/Manager58 predecessor, then CARE-v1/Manager58 and CARE-v1/Manager57 predecessors, OpenCode v56/verifier-v6 deeper lifecycle identity, historical plugin v1–v10 and provider-skill v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 47-file, 19-skill catalog includes `memory-sync` and `sdd-lifecycle`, the latter loaded only after explicit SDD acceptance. |
-| `internal/providers/codex` | Standalone Codex current Manager18 projection for `AGENTS.md` and 12 delegated profiles, with Codex Manager17 as immediate predecessor, then Manager16 and deeper Manager15/v14 lifecycle identities, plus exact `low`, `medium`, `high`, and `ultra` model-plan projections while preserving user-owned `config.toml`. |
+| `internal/providers/opencode` | OpenCode current CARE-v2 Manager60 roles, 12 other model-bound agents (`general` v10, `explore` v4, verifier v7, and six SDD roles including `sdd-apply` v7), model-plan manifest, immediate Manager59 predecessor, then CARE-v2/Manager58 and CARE-v1/Manager58/Manager57 predecessors, OpenCode v56/verifier-v6 deeper lifecycle identity, historical plugin v1–v10 and provider-skill v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 47-file, 19-skill catalog includes `memory-sync` and `sdd-lifecycle`, the latter loaded only after explicit SDD acceptance. |
+| `internal/providers/codex` | Standalone Codex current Manager19 (parity OpenCode-v60) projection for `AGENTS.md` and 12 delegated profiles, with Codex Manager18 as immediate predecessor, then Manager17, Manager16 and deeper Manager15/v14 lifecycle identities, plus exact `low`, `medium`, `high`, and `ultra` model-plan projections while preserving user-owned `config.toml`. |
 | `internal/integration`, `internal/setup`, `internal/skills` | Managed OpenCode lifecycle, independent global portable-skill lifecycle, and seven-step CLI/TUI setup workflow. |
 | `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
 | `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |
@@ -47,7 +47,7 @@ Semantic observations, references, sessions, and FTS rows are separate from SDD 
 
 The OpenCode projection contains 17 managed artifacts with exact identities:
 
-- manager v59 with global tool permission, adaptive zero-ceremony fast paths, bounded attempt budgets, and a pre-write delivery gate;
+- manager v60 with global tool permission, adaptive zero-ceremony fast paths, bounded attempt budgets, a pedagogical Execution Brief for non-trivial work, and a pre-write delivery gate;
 - managed `general` v10 and verifier v7 with global tool permission and distinct implementation/verification roles;
 - one CodeGraph-first, deny-by-default read-only `explore` override;
 - three hidden read-only CARE profiles;
