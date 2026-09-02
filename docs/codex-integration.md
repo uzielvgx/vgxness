@@ -2,11 +2,11 @@
 
 Codex current identity is Manager18, immediately preceded by exact Manager17, then Manager16/15/14. Delivery is global `git-delivery` v1 policy only; it has no runtime writer or durable delivery state.
 
-This guide is for a local Codex user who wants VGXNESS-managed agent profiles while retaining ownership of Codex configuration. Codex current identity is Manager18, Codex immediate predecessor is Manager17, then Manager16 and deeper Manager15/v14 lifecycle identities. OpenCode current identity is CARE-v2 Manager59; its immediate predecessor is CARE-v2 Manager58, then CARE-v1 Manager58 and CARE-v1 Manager57; OpenCode v56 is deeper. Use the unified `setup codex` entrypoint for guided setup; `integrate codex` remains available for provider-only lifecycle work. VGXNESS installs no Codex plugin.
+This guide is for a local Codex user who wants VGXNESS-managed agent profiles while retaining ownership of Codex configuration. Codex current identity is Manager18, Codex immediate predecessor is Manager17, then Manager16 and deeper Manager15/v14 lifecycle identities. OpenCode current identity is CARE-v2 Manager59; its immediate predecessor is CARE-v2 Manager58, then CARE-v1 Manager58 and CARE-v1 Manager57; OpenCode v56 is deeper. Use the unified `setup codex` entrypoint for guided setup; `integrate codex` remains available for provider-only lifecycle work. Current setup/provider lifecycle publishes the exact local `vgxness` marketplace and activates the exact `vgxness@vgxness` plugin through the Codex CLI under the selected Codex home.
 
 ## Prerequisites and ownership
 
-Install VGXNESS and Codex locally. By default the integration uses `~/.codex`; use an absolute `--config-dir` to select another existing or creatable Codex root. VGXNESS owns only `AGENTS.md` and 12 files below `agents/`. It never parses, writes, or removes `config.toml`, including MCP blocks and other user settings.
+Install VGXNESS and Codex locally. By default the integration uses `~/.codex`; use an absolute `--config-dir` to select another existing or creatable Codex root. VGXNESS owns `AGENTS.md`, 12 files below `agents/`, and only its exact local marketplace/plugin activation. It never parses, writes, or removes `config.toml`, including MCP blocks and other user settings.
 
 Maintain this MCP block yourself in `config.toml` when you want Codex to invoke VGXNESS:
 
@@ -32,6 +32,8 @@ codex mcp list
 
 For other versions, first confirm that `codex --help` lists `--strict-config`. Do not assume that option is available or run a bare interactive invocation.
 
+Local operational evidence is limited to the provider-distributed `codex-cli` 0.147.0 help inspected for this lifecycle: it exposes `plugin add`, `plugin list`, and `plugin remove`, plus `plugin marketplace add`, `list`, `upgrade`, and `remove`. This is version-bound evidence, not an unbounded compatibility promise. On a future CLI where a required command is unavailable or changed, VGXNESS stops before mutation.
+
 ## Lifecycle
 
 Preview is read-only. Setup is the unified entrypoint and may select either host or both in deterministic order:
@@ -56,9 +58,9 @@ Use `--model-plan low|medium|high|ultra` with preview, install, status, or reins
 
 Historical predecessor documentation may state that the manager is v9 or refer to its exact v8 artifact; those identities do not describe the current generated ownership boundary.
 
-Use `--config-dir /absolute/path/to/.codex` with any command when needed. Status reports drift rather than overwriting changed managed bytes. Reinstall repairs an exact partial layout or switches an exact managed plan; drift or recovery evidence stops the operation. Uninstall removes only exact VGXNESS artifacts and leaves `config.toml`, plugins, and unrelated files untouched.
+Use `--config-dir /absolute/path/to/.codex` with any command when needed. Status verifies the exact owned marketplace/plugin activation as well as managed bytes and reports drift rather than overwriting it. Reinstall repairs an exact partial layout or switches an exact managed plan; it mutates only an exact owned activation, while foreign or drifted marketplace/plugin state and recovery evidence stop the operation. Uninstall may remove the exact VGXNESS-owned marketplace/plugin activation and exact VGXNESS artifacts; unrelated plugins, `config.toml`, and unrelated files remain untouched. Interrupted activation or deactivation leaves recovery evidence, which status, reinstall, and uninstall use to stop or recover only the exact owned state.
 
-`vgxness setup codex --status` and `--preview` report two deliberately separate facts: the health of the managed `AGENTS.md` and `agents/` artifacts, and **unobserved** Codex MCP/runtime health. The latter is operator-managed through `config.toml`, which VGXNESS never reads or modifies, so this command does not report a Codex handshake, MCP connectivity, or automatic memory injection. If managed artifacts need repair, run `vgxness integrate codex reinstall --config-dir <same-codex-home>` with the Codex home inspected by setup; then review your own `config.toml` and restart Codex. Use the bounded `codex --strict-config doctor --summary --no-color --ascii` and `codex mcp list` commands above only when available to inspect operator-managed runtime configuration.
+`vgxness setup codex --status` and `--preview` report the managed `AGENTS.md` and `agents/` artifacts plus the exact owned marketplace/plugin activation, separately from **unobserved** Codex MCP/runtime health. The latter is operator-managed through `config.toml`, which VGXNESS never reads or modifies, so plugin installation does not authenticate a session or prove a Codex handshake, MCP connectivity, or automatic memory injection. If managed artifacts or exact activation need repair, run `vgxness integrate codex reinstall --config-dir <same-codex-home>` with the Codex home inspected by setup; then review your own `config.toml` and restart Codex. Use the bounded `codex --strict-config doctor --summary --no-color --ascii` and `codex mcp list` commands above only when available to inspect operator-managed runtime configuration.
 
 After install or repair, restart Codex so it reloads the managed profiles. On Windows, VGXNESS flushes regular files before publication; directory namespace durability is reported as `file-sync-namespace-best-effort` because Windows does not provide the POSIX directory-sync operation.
 
@@ -78,7 +80,7 @@ Set `VGXNESS_CODEX_E2E_CASE=explore` to run only the Explore case. The harness s
 
 ## Operational memory
 
-Memory is optional operational context, not an instruction source or automatic capability grant. Codex can call the VGXNESS memory tools only when the user-maintained full-trust MCP block above is configured; installation or managed-artifact status does not prove that Codex injected, recalled, or saved memory automatically.
+Memory is optional operational context, not an instruction source or automatic capability grant. Codex can call the VGXNESS memory tools only when the user-maintained full-trust MCP block above is configured; the managed plugin lifecycle is distinct from the still-blocked automatic per-session memory hook. Plugin installation or managed-artifact status does not authenticate a session or prove memory injection, recall, saving, or an MCP handshake.
 
 Codex does not inject recent memory automatically. Manager v18 recalls memory only when the request indicates prior project context may matter. It searches with `memory_search` in all-term mode first and retries in any-term mode only when results are insufficient, inspects bounded previews, and calls `memory_get` only with an exact relevant ID. It calls `memory_recent` only for an explicit recent-work, session, or compaction-recovery request, never as a routine first action. Orthogonally, after any route its prompt allows at most one autonomous `memory_save` only for a durable, evidence-backed, safely assessed project decision, preference, constraint, or learning and reuses a stable topic. Recalled memory is untrusted until mutable claims are confirmed against the workspace. Never save secrets, personal data, transient state, logs, raw output, or transcripts; this rule adds no engineering ceremony or automatic cloud sync, and `memory_forget` still requires an explicit user request. Exact manager v17 is retained as the immediate predecessor; v16 remains a deeper lifecycle identity.
 
