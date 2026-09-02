@@ -86,6 +86,17 @@ func TestMemorySyncFailsClosedBeforeSecretsOrTransport(t *testing.T) {
 	}
 }
 
+func TestMemoryBackfillSyncProjectRejectsRelativeWorkspaceBeforeStoreOpen(t *testing.T) {
+	storageRoot := filepath.Join(t.TempDir(), "absent-store")
+	result, err := NewMemory("cli", false).BackfillSyncProject(context.Background(), config.Options{StorageRoot: storageRoot}, "relative", 1)
+	if !errors.Is(err, memory.ErrInvalid) || result != (memory.SyncBackfillResult{}) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(storageRoot); !os.IsNotExist(err) {
+		t.Fatalf("relative backfill opened storage root: %v", err)
+	}
+}
+
 func TestMemorySyncRejectsUnboundOrMalformedWorkspaceBeforeRemote(t *testing.T) {
 	root, workspace := t.TempDir(), t.TempDir()
 	store, err := openStore(context.Background(), config.Options{StorageRoot: root})

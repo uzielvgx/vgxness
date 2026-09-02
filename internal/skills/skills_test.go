@@ -205,6 +205,178 @@ func TestBundledMemorySyncDefinesClientOnlyFailClosedContract(t *testing.T) {
 	}
 }
 
+func TestBundledMemorySyncV11PredecessorUpdatesToV12(t *testing.T) {
+	bundled, err := bundledCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := bundled.definitions[17]
+	want := map[string]string{
+		"LICENSE.txt":                   "904c73d094910aff6f8e7f0bd06ab953f55f879264680363095d03e64e9a28d7",
+		"SKILL.md":                      "eee909e04794e5d8e8a0dd9c6a4e6b81ce58e200c0e2a740933dec2e7eaf3a57",
+		"agents/openai.yaml":            "8603b91c3c8a3290658d2a9b695ecffd456475e2649471bada5e3f071c7afb1f",
+		"references/client-workflow.md": "40e029c0ba126b48546608d5c3efac9a41ed02b2f4d721a739b63e71b07e7239",
+		"skill-manifest.json":           "e4458bec256408c591700e65ec413037c6c69ad2c6f0843f4e9d6676e85571be",
+	}
+	if !definition.packageExact || !mapsEqual(definition.predecessors, want) {
+		t.Fatalf("memory-sync v1.1 predecessor digests=%v want=%v", definition.predecessors, want)
+	}
+	if digest(definition.files["LICENSE.txt"]) != want["LICENSE.txt"] {
+		t.Fatalf("memory-sync LICENSE.txt is not version-neutral")
+	}
+
+	previous := make(map[string][]byte, len(definition.files))
+	predecessors := make(map[string]string, len(definition.files))
+	for relative := range definition.files {
+		previous[relative] = []byte("memory-sync v1.1 " + relative)
+		if relative == "LICENSE.txt" {
+			previous[relative] = definition.files[relative]
+		}
+		predecessors[relative] = digest(previous[relative])
+	}
+	service := &Service{catalog: &catalog{definitions: []skillDefinition{{
+		name: "memory-sync", source: "memory-sync", files: definition.files, predecessors: predecessors, packageExact: true,
+	}}}}
+	destination := filepath.Join(t.TempDir(), "skills")
+	for relative, content := range previous {
+		assertWrite(t, filepath.Join(destination, "memory-sync", native(relative)), content)
+	}
+	preview, err := service.Preview(context.Background(), Options{Dir: destination})
+	if err != nil || preview.State != StateInstalled || !preview.UpdateNeeded {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	installed, err := service.Install(context.Background(), Options{Dir: destination})
+	if err != nil || !installed.Changed || installed.UpdateNeeded {
+		t.Fatalf("install=%+v err=%v", installed, err)
+	}
+	for relative, content := range definition.files {
+		assertFileBytes(t, filepath.Join(destination, "memory-sync", native(relative)), content)
+	}
+	status, err := service.Status(context.Background(), Options{Dir: destination})
+	if err != nil || status.State != StateInstalled || status.UpdateNeeded {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	reinstalled, err := service.Install(context.Background(), Options{Dir: destination})
+	if err != nil || reinstalled.Changed || reinstalled.UpdateNeeded {
+		t.Fatalf("reinstall=%+v err=%v", reinstalled, err)
+	}
+}
+
+func TestBundledMemorySyncRejectsIncompleteOrInconsistentPredecessorPackage(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		mutate    func(t *testing.T, destination string, current map[string][]byte)
+		wantError error
+	}{
+		{
+			name: "missing predecessor file",
+			mutate: func(t *testing.T, destination string, _ map[string][]byte) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(destination, "memory-sync", "SKILL.md")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantError: ErrDrift,
+		},
+		{
+			name: "mixed old and current files",
+			mutate: func(t *testing.T, destination string, current map[string][]byte) {
+				t.Helper()
+				assertWrite(t, filepath.Join(destination, "memory-sync", "SKILL.md"), current["SKILL.md"])
+			},
+			wantError: ErrDrift,
+		},
+		{
+			name: "one byte near match",
+			mutate: func(t *testing.T, destination string, _ map[string][]byte) {
+				t.Helper()
+				assertWrite(t, filepath.Join(destination, "memory-sync", "SKILL.md"), []byte("memory-sync v1.1 SKILL.md!"))
+			},
+			wantError: ErrDrift,
+		},
+		{
+			name: "foreign bytes",
+			mutate: func(t *testing.T, destination string, _ map[string][]byte) {
+				t.Helper()
+				assertWrite(t, filepath.Join(destination, "memory-sync", "SKILL.md"), []byte("foreign"))
+			},
+			wantError: ErrDrift,
+		},
+		{
+			name: "managed path symlink",
+			mutate: func(t *testing.T, destination string, _ map[string][]byte) {
+				t.Helper()
+				path := filepath.Join(destination, "memory-sync", "SKILL.md")
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("LICENSE.txt", path); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantError: ErrConflict,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, destination, previous, current := bundledMemorySyncV11Fixture(t)
+			test.mutate(t, destination, current)
+			before := make(map[string][]byte, len(previous))
+			for relative := range previous {
+				path := filepath.Join(destination, "memory-sync", native(relative))
+				if data, err := os.ReadFile(path); err == nil {
+					before[relative] = data
+				}
+			}
+			if _, err := service.Preview(context.Background(), Options{Dir: destination}); !errors.Is(err, test.wantError) {
+				t.Fatalf("Preview() error=%v, want %v", err, test.wantError)
+			}
+			if _, err := service.Install(context.Background(), Options{Dir: destination}); !errors.Is(err, test.wantError) {
+				t.Fatalf("Install() error=%v, want %v", err, test.wantError)
+			}
+			for relative, want := range before {
+				assertFileBytes(t, filepath.Join(destination, "memory-sync", native(relative)), want)
+			}
+			if test.name == "missing predecessor file" {
+				if _, err := os.Lstat(filepath.Join(destination, "memory-sync", "SKILL.md")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("missing SKILL.md=%v", err)
+				}
+			}
+			if test.wantError == ErrConflict {
+				info, err := os.Lstat(filepath.Join(destination, "memory-sync", "SKILL.md"))
+				if err != nil || info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("SKILL.md info=%v err=%v", info, err)
+				}
+			}
+		})
+	}
+}
+
+func bundledMemorySyncV11Fixture(t *testing.T) (*Service, string, map[string][]byte, map[string][]byte) {
+	t.Helper()
+	bundled, err := bundledCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := bundled.definitions[17]
+	previous := make(map[string][]byte, len(definition.files))
+	predecessors := make(map[string]string, len(definition.files))
+	for relative := range definition.files {
+		previous[relative] = []byte("memory-sync v1.1 " + relative)
+		if relative == "LICENSE.txt" {
+			previous[relative] = definition.files[relative]
+		}
+		predecessors[relative] = digest(previous[relative])
+	}
+	destination := filepath.Join(t.TempDir(), "skills")
+	for relative, content := range previous {
+		assertWrite(t, filepath.Join(destination, "memory-sync", native(relative)), content)
+	}
+	service := &Service{catalog: &catalog{definitions: []skillDefinition{{
+		name: "memory-sync", source: "memory-sync", files: definition.files, predecessors: predecessors, packageExact: true,
+	}}}}
+	return service, destination, previous, definition.files
+}
+
 func TestBundledGitDeliveryDefinesCanonicalDeliveryGates(t *testing.T) {
 	catalog, err := bundledCatalog()
 	if err != nil {

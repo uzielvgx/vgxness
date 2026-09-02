@@ -89,6 +89,8 @@ type Service struct {
 	afterInspect     func()
 }
 
+type predecessorPackageState struct{ present, oldOnly, currentOnly int }
+
 func New() *Service { return &Service{} }
 
 func skillsRoot(options Options) (string, error) {
@@ -267,6 +269,14 @@ func (s *Service) inspect(options Options, held *os.Root) (Result, map[string][]
 	if err != nil {
 		return Result{}, nil, err
 	}
+	c, err := s.resolvedCatalog()
+	if err != nil {
+		return Result{}, nil, err
+	}
+	definitions := make(map[string]skillDefinition, len(c.definitions))
+	for _, definition := range c.definitions {
+		definitions[definition.name] = definition
+	}
 	result := Result{State: StateAbsent, Path: rootPath, FileCount: len(entries), Hashes: hashes(entries)}
 	r := held
 	if r == nil {
@@ -295,7 +305,10 @@ func (s *Service) inspect(options Options, held *os.Root) (Result, map[string][]
 		}
 	}
 	present, predecessors, missing := 0, 0, 0
+	predecessorPackages := map[string]predecessorPackageState{}
 	for _, identity := range sorted(entries) {
+		skill, relative, _ := strings.Cut(identity, "/")
+		definition := definitions[skill]
 		actual, _, err := regular(r, native(identity))
 		if errors.Is(err, os.ErrNotExist) {
 			pending, pendingErr := transactionPending(r, native(identity))
@@ -320,15 +333,40 @@ func (s *Service) inspect(options Options, held *os.Root) (Result, map[string][]
 			return result, entries, ErrRecovery
 		}
 		present++
-		if bytes.Equal(actual, entries[identity]) {
+		state := predecessorPackages[skill]
+		state.present++
+		current := bytes.Equal(actual, entries[identity])
+		old := definition.predecessors[relative] == digest(actual)
+		if current && old {
+			predecessorPackages[skill] = state
+			continue
+		}
+		if current {
+			state.currentOnly++
+			predecessorPackages[skill] = state
+			continue
+		}
+		if old {
+			predecessors++
+			state.oldOnly++
+			predecessorPackages[skill] = state
 			continue
 		}
 		if s.predecessor(identity, actual) {
 			predecessors++
+			predecessorPackages[skill] = state
 			continue
 		}
 		result.State = StateDrifted
 		return result, entries, ErrDrift
+	}
+	for _, definition := range c.definitions {
+		state := predecessorPackages[definition.name]
+		if definition.packageExact && state.present > 0 &&
+			(state.present != len(definition.files) || state.oldOnly > 0 && state.currentOnly > 0) {
+			result.State = StateDrifted
+			return result, entries, ErrDrift
+		}
 	}
 	legacy, err := s.inspectLegacy(r, entries)
 	if err != nil {

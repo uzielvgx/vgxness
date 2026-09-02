@@ -17,28 +17,32 @@ import (
 )
 
 type fakeMemoryRuntime struct {
-	result     memory.Entry
-	items      []memory.Entry
-	recall     memory.Recall
-	recent     memory.Recent
-	project    string
-	err        error
-	calls      int
-	sync       memory.SyncResult
-	status     memory.SyncConfigurationStatus
-	endpoint   string
-	deviceID   string
-	bearer     string
-	opts       config.Options
-	backfill   memory.SyncBackfillResult
-	repair     memory.SyncProjectRepairResult
-	transition memory.SyncProjectTransitionResult
-	start      memory.ProviderSessionStart
-	checkpoint string
-	ended      memory.ProviderSessionEnd
-	context    memory.ProviderSessionContext
-	draft      memory.ProviderSessionDraft
-	draftSave  memory.ProviderSessionDraftSave
+	result              memory.Entry
+	items               []memory.Entry
+	recall              memory.Recall
+	recent              memory.Recent
+	project             string
+	err                 error
+	calls               int
+	sync                memory.SyncResult
+	status              memory.SyncConfigurationStatus
+	endpoint            string
+	deviceID            string
+	bearer              string
+	opts                config.Options
+	backfill            memory.SyncBackfillResult
+	backfillWorkspace   string
+	backfillLimit       int
+	repair              memory.SyncProjectRepairResult
+	transition          memory.SyncProjectTransitionResult
+	transitionWorkspace string
+	transitionMode      memory.SyncProjectTransitionMode
+	start               memory.ProviderSessionStart
+	checkpoint          string
+	ended               memory.ProviderSessionEnd
+	context             memory.ProviderSessionContext
+	draft               memory.ProviderSessionDraft
+	draftSave           memory.ProviderSessionDraftSave
 }
 
 func TestMemorySyncTransitionCommandsRequireExactModeConfirmation(t *testing.T) {
@@ -68,6 +72,26 @@ func TestMemorySyncTransitionCommandsRequireExactModeConfirmation(t *testing.T) 
 		expected := "schema_version=1\nmode=" + tc.mode + "\nstatus=publishing\nprojects=1\nsessions=0\nobservations=0\nqueued=1\n"
 		testutil.Require(t, code == 0 && stderr == "" && out == expected && runtime.calls == 1, "verb=%s code=%d out=%q stderr=%q calls=%d", tc.verb, code, out, stderr, runtime.calls)
 	}
+}
+
+func TestMemorySyncBackfillRejectsRelativeWorkspaceWithoutRuntimeCall(t *testing.T) {
+	runtime := &fakeMemoryRuntime{}
+	code, out, stderr := runMemoryTest([]string{"memory", "sync", "backfill", "--workspace", "relative"}, "", runtime)
+	testutil.Require(t, code == 2 && out == "" && stderr != "" && runtime.calls == 0, "code=%d out=%q stderr=%q calls=%d", code, out, stderr, runtime.calls)
+}
+
+func TestMemorySyncBackfillPassesAbsoluteWorkspaceAndRendersCountOnlyResult(t *testing.T) {
+	workspace := t.TempDir()
+	runtime := &fakeMemoryRuntime{backfill: memory.SyncBackfillResult{SchemaVersion: 1, Limit: 2, Queued: 2, Remaining: true}}
+	code, out, stderr := runMemoryTest([]string{"memory", "sync", "backfill", "--workspace", workspace, "--limit", "2"}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && runtime.backfillWorkspace == workspace && runtime.backfillLimit == 2 && out == "schema_version=1\nlimit=2\nremaining=true\nprojects=0\nsessions=0\nobservations=0\nqueued=2\n", "code=%d out=%q stderr=%q workspace=%q limit=%d", code, out, stderr, runtime.backfillWorkspace, runtime.backfillLimit)
+}
+
+func TestMemorySyncTransitionWiresModeAndAbsoluteWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	runtime := &fakeMemoryRuntime{transition: memory.SyncProjectTransitionResult{SchemaVersion: 1, Mode: memory.SyncProjectTransitionReseedSource, Status: memory.SyncProjectTransitionCompleted}}
+	code, _, stderr := runMemoryTest([]string{"memory", "sync", "reseed", "--workspace", workspace, "--confirm-cloud-empty"}, "", runtime)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 1 && runtime.transitionWorkspace == workspace && runtime.transitionMode == memory.SyncProjectTransitionReseedSource, "code=%d stderr=%q workspace=%q mode=%q", code, stderr, runtime.transitionWorkspace, runtime.transitionMode)
 }
 
 func TestMemorySyncRepairProjectRequiresExactConfirmationAndEmitsOnlyResult(t *testing.T) {
@@ -151,8 +175,9 @@ func (f *fakeMemoryRuntime) SyncStatus(context.Context, config.Options) (memory.
 	}
 	return f.status, f.err
 }
-func (f *fakeMemoryRuntime) BackfillSyncProject(context.Context, config.Options, string, int) (memory.SyncBackfillResult, error) {
+func (f *fakeMemoryRuntime) BackfillSyncProject(_ context.Context, _ config.Options, workspace string, limit int) (memory.SyncBackfillResult, error) {
 	f.calls++
+	f.backfillWorkspace, f.backfillLimit = workspace, limit
 	return f.backfill, f.err
 }
 func (f *fakeMemoryRuntime) RepairSyncProject(_ context.Context, opts config.Options, _ string, _ bool) (memory.SyncProjectRepairResult, error) {
@@ -164,9 +189,10 @@ func (f *fakeMemoryRuntime) RepairSyncProject(_ context.Context, opts config.Opt
 	return f.repair, f.err
 }
 
-func (f *fakeMemoryRuntime) TransitionSyncProject(_ context.Context, opts config.Options, _ string, _ memory.SyncProjectTransitionMode) (memory.SyncProjectTransitionResult, error) {
+func (f *fakeMemoryRuntime) TransitionSyncProject(_ context.Context, opts config.Options, workspace string, mode memory.SyncProjectTransitionMode) (memory.SyncProjectTransitionResult, error) {
 	f.calls++
 	f.opts = opts
+	f.transitionWorkspace, f.transitionMode = workspace, mode
 	return f.transition, f.err
 }
 func (f *fakeMemoryRuntime) StartProviderSession(_ context.Context, _ config.Options, request memory.ProviderSessionStart) (memory.ProviderSession, error) {

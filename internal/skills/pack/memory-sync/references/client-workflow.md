@@ -1,6 +1,6 @@
 # VGXNESS client memory-sync workflow
 
-Use this reference only for a user-requested client action. `configure` and `status` are storage-root-wide because runtime has one profile. Foreground `sync` and `backfill` require a named workspace. All placeholders are non-secret labels: never substitute or display bearer content.
+Use this reference only for a user-requested client action. `configure` and `status` are storage-root-wide because runtime has one profile. Foreground `sync`, `reseed`, `rejoin`, and `backfill` require a named absolute workspace. All placeholders are non-secret labels: never substitute or display bearer content.
 
 ## Safe command forms
 
@@ -21,6 +21,8 @@ Backfill is local-only and requires no credential or endpoint. It resolves the e
 ```text
 vgxness memory sync backfill --storage-root <absolute-storage-root> --workspace <absolute-workspace> --limit <1-1000> --json
 ```
+
+Backfill rejects a relative workspace at both the CLI and runtime boundaries. Its result is count-only (`queued`, `remaining`, and per-kind counts); it is bounded and a later `queued=0` result is the idempotent no-op.
 
 For a requested root-wide `configure` action, endpoint and device ID are configure inputs only. Configure the default keyring through an approved secure stdin mechanism that is outside model-visible text:
 
@@ -59,6 +61,24 @@ vgxness memory sync --storage-root <absolute-storage-root> --workspace <absolute
 ```
 
 After the result, run the same conditional status form matching the enrolled profile. If interrupted or its result is unknown, do not retry or repair: run only this matching token-free status, report the unknown outcome, and escalate. Never replace foreground sync with `syncd serve`.
+
+## First-device reseed and device rejoin
+
+Use these foreground transitions only when explicitly requested for the named workspace. Do not reset the cloud, operate a server, or substitute normal sync, `repair-project`, or `git pull`.
+
+After the cloud owner has reset the cloud, the source device uses the exact reseed confirmation:
+
+```text
+vgxness memory sync reseed --storage-root <absolute-storage-root> --workspace <absolute-workspace> --confirm-cloud-empty --json
+```
+
+Every subsequent device uses the exact rejoin confirmation:
+
+```text
+vgxness memory sync rejoin --storage-root <absolute-storage-root> --workspace <absolute-workspace> --confirm-merge --json
+```
+
+For a file-enrolled profile, retain `--credential-file <absolute-credential-file>` on either command. Runtime requires the strict marker/binding before remote work; reseed verifies the cloud is exactly empty, and rejoin pulls before merging. Both commands affect only that project. A durable private backup intent makes retries resume the same transition and blocks only that project; never inspect, delete, replace, or report its path.
 
 ## Token-free interpretation
 

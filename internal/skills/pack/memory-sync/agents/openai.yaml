@@ -1,6 +1,6 @@
 interface:
   display_name: "Memory Sync"
-  short_description: "Safely synchronize VGXNESS client memory"
-  default_prompt: "Use $memory-sync to synchronize VGXNESS memory safely."
+  short_description: "Safely synchronize or transition VGXNESS client memory"
+  default_prompt: "Use $memory-sync to safely synchronize, reseed, or rejoin VGXNESS memory."
 policy:
   allow_implicit_invocation: true

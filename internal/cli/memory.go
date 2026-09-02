@@ -533,14 +533,10 @@ func runMemorySyncBackfill(ctx context.Context, args []string, stdout, stderr io
 	flags.StringVar(&workspace, "workspace", "", "workspace")
 	flags.BoolVar(&jsonOutput, "json", false, "emit JSON")
 	flags.IntVar(&limit, "limit", 100, "maximum records")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || workspace == "" || limit < 1 || limit > 1000 {
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || !filepath.IsAbs(workspace) || limit < 1 || limit > 1000 {
 		return memoryFailure(stderr, memory.ErrInvalid)
 	}
-	absolute, err := filepath.Abs(workspace)
-	if err != nil {
-		return memoryFailure(stderr, memory.ErrInvalid)
-	}
-	result, err := runtime.BackfillSyncProject(ctx, opts, filepath.Clean(absolute), limit)
+	result, err := runtime.BackfillSyncProject(ctx, opts, filepath.Clean(workspace), limit)
 	if err != nil {
 		return memoryFailure(stderr, err)
 	}
