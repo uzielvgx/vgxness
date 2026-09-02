@@ -107,7 +107,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v59 marker", "artifact: opencode-agent/vgxness-manager; version: 59"},
+		{"active v60 marker", "artifact: opencode-agent/vgxness-manager; version: 60"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
 		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
