@@ -107,7 +107,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v59 marker", "artifact: opencode-agent/vgxness-manager; version: 59"},
+		{"active v60 marker", "artifact: opencode-agent/vgxness-manager; version: 60"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
 		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
@@ -128,8 +128,8 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 			t.Errorf("installed manager is missing %s clause %q", required.name, required.value)
 		}
 	}
-	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 59")); got != 1 {
-		t.Fatalf("installed current manager v59 marker count=%d, want 1", got)
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 60")); got != 1 {
+		t.Fatalf("installed current manager v60 marker count=%d, want 1", got)
 	}
 	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 0 {
 		t.Fatalf("installed current manager retains v57 marker count=%d, want 0", got)

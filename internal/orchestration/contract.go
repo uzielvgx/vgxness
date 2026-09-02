@@ -11,6 +11,10 @@ import (
 const ContractIdentity = "vgxness-orchestration/v1"
 
 const (
+	// PedagogicalExecutionBrief is the provider-neutral teaching contract embedded
+	// verbatim in current manager projections.
+	PedagogicalExecutionBrief = "For non-trivial work, give a concise Execution Brief before acting: outcome, approach, and the next observable milestone. Give updates only at meaningful milestones, not every tool call. At completion state the outcome, evidence, limitations, and one reusable concept. Adapt depth to the user's signal: guided by default; concise on request; mentor when learning is sought; expert when the user signals fluency. Do not turn trivial requests into tutorials or expose private chain-of-thought."
+
 	// ContractBudgetPolicy is the canonical tools/delegations projection.
 	ContractBudgetPolicy = "Canonical budgets: direct 0 tools/0 delegations; assisted simple 3 tools/0 delegations and complex 3 tools/1 delegation; action 6 tools/0 delegations; engineering 30 tools/5 delegations; assured 40 tools/5 delegations."
 

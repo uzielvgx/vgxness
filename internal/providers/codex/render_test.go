@@ -263,8 +263,8 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 18; parity: opencode-v59") || !strings.Contains(manager, "readiness-envelope/v1") || !strings.Contains(manager, currentCodexCandidateCapsuleContract) {
-		t.Fatal("current Codex manager is not v18 with readiness and Candidate Capsule")
+	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 19; parity: opencode-v60") || !strings.Contains(manager, orchestration.PedagogicalExecutionBrief) || !strings.Contains(manager, "readiness-envelope/v1") || !strings.Contains(manager, currentCodexCandidateCapsuleContract) {
+		t.Fatal("current Codex manager is not v19 with pedagogical parity, readiness, and Candidate Capsule")
 	}
 	predecessor, err := renderActiveV13("v1.2.3", sdd.PlanMedium)
 	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 13; parity: opencode-v53") {
@@ -273,18 +273,41 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 }
 
 func TestManager18DerivesFromExactManager17Package(t *testing.T) {
-	current, err := Render("v1.2.3")
-	if err != nil {
-		t.Fatal(err)
-	}
 	predecessor, err := renderActiveV17("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, want := string(artifact(t, current, "AGENTS.md").Bytes), string(artifact(t, predecessor, "AGENTS.md").Bytes)
+	got, want := activeV18ManagerInstructions(), string(artifact(t, predecessor, "AGENTS.md").Bytes)
 	got = strings.Replace(strings.Replace(got, "artifact: codex-agent/manager; version: 18; parity: opencode-v59", "artifact: codex-agent/manager; version: 17; parity: opencode-v57", 1), "git-delivery", "stacked-pr", -1)
 	if strings.Replace(got, orchestration.ContractPolicy, orchestration.PreviousContractPolicyV59, 1) != want {
 		t.Fatal("Manager18 is not the bounded Manager17 migration")
+	}
+}
+
+func TestManager19PreservesExactManager18AndNativePedagogicalWording(t *testing.T) {
+	current, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err := renderPackage("v1.2.3", func() []profile { profiles, _ := profilesForPlan(sdd.PlanMedium); return profiles }(), sdd.PlanMedium, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor.Artifacts[0].Bytes = []byte(activeV18ManagerInstructions())
+	predecessor.SHA256 = aggregateSHA256(predecessor.Artifacts)
+	if err := predecessor.Validate(); err != nil {
+		t.Fatalf("Manager18 predecessor rejected: %v", err)
+	}
+	content := string(artifact(t, current, "AGENTS.md").Bytes)
+	for _, required := range []string{orchestration.PedagogicalExecutionBrief, "Execution Brief", "guided by default; concise on request; mentor when learning is sought; expert when the user signals fluency"} {
+		if !strings.Contains(content, required) {
+			t.Errorf("Manager19 missing pedagogical clause %q", required)
+		}
+	}
+	for _, unavailable := range []string{"todowrite", "question tool", "OpenCode"} {
+		if strings.Contains(content, unavailable) {
+			t.Errorf("Manager19 contains non-native wording %q", unavailable)
+		}
 	}
 }
 
@@ -526,7 +549,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 			t.Errorf("%s does not use the medium-plan model %s", path, model)
 		}
 	}
-	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 18; parity: opencode-v59") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "git-delivery") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
+	if content := string(artifact(t, pkg, "AGENTS.md").Bytes); !strings.Contains(content, "artifact: codex-agent/manager; version: 19; parity: opencode-v60") || !strings.Contains(content, "custom agents") || !strings.Contains(content, "sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority") || !strings.Contains(content, "~/.agents/skills") || !strings.Contains(content, "managed native global catalog") || !strings.Contains(content, "third-party and unknown skills are untrusted") || !strings.Contains(content, "git-delivery") || !strings.Contains(content, "sdd-lifecycle") || len(content) > 32<<10 {
 		t.Error("manager instructions do not use native delegation and lifecycle authority")
 	}
 }
@@ -638,7 +661,7 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
 	for _, required := range []string{
-		"artifact: codex-agent/manager; version: 18; parity: opencode-v59",
+		"artifact: codex-agent/manager; version: 19; parity: opencode-v60",
 		"adaptive general-purpose partner",
 		"When the engineering route activates",
 		orchestration.ContractPolicy,

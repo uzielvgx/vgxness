@@ -72,6 +72,37 @@ func TestCAREParityCurrentProviderInventories(t *testing.T) {
 	}
 }
 
+func TestManagerPedagogicalExecutionBriefParity(t *testing.T) {
+	pkg, err := codex.Render("v0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexManager := string(pkg.Artifacts[0].Bytes)
+	contract := orchestration.PedagogicalExecutionBrief
+	for _, clause := range []string{
+		"Execution Brief before acting: outcome, approach, and the next observable milestone",
+		"Give updates only at meaningful milestones, not every tool call.",
+		"outcome, evidence, limitations, and one reusable concept.",
+		"guided by default; concise on request; mentor when learning is sought; expert when the user signals fluency.",
+		"Do not turn trivial requests into tutorials or expose private chain-of-thought.",
+	} {
+		if !strings.Contains(codexManager, clause) {
+			t.Errorf("Codex manager lacks pedagogical parity clause %q", clause)
+		}
+	}
+	if !strings.Contains(codexManager, contract) {
+		t.Error("Codex manager does not include the shared pedagogical contract")
+	}
+	for _, unavailable := range []string{"todowrite", "question tool", "OpenCode"} {
+		if strings.Contains(codexManager, unavailable) {
+			t.Errorf("Codex manager contains unavailable provider wording %q", unavailable)
+		}
+	}
+	if len(codexManager) > 32<<10 {
+		t.Errorf("Codex manager size=%d", len(codexManager))
+	}
+}
+
 func TestCAREParityPublicPolicyAndContractSurface(t *testing.T) {
 	mission := reflect.TypeFor[orchestration.CAREMission]()
 	for _, field := range []string{"SchemaVersion", "Role", "MissionID", "ReplayNonce", "ReviewBinding", "CandidateIdentity", "CatalogRef", "ChangeProfileDigest", "AssurancePlanDigest", "Assignment", "Skills", "EvidenceScope", "CorrectionDelta"} {

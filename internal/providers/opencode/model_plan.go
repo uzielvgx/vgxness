@@ -24,7 +24,8 @@ const (
 	sddApplyName                                            = "vgxness-sdd-apply.md"
 	sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion = 4, 3
 	sddApplyTargetVersion, sddApplyPredecessorVersion       = 7, 6
-	managerCurrentMarker                                    = "artifact: opencode-agent/vgxness-manager; version: 59"
+	managerCurrentMarker                                    = "artifact: opencode-agent/vgxness-manager; version: 60"
+	managerV59Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 59"
 	managerV58Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 58"
 	managerV57Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 57"
 	managerV56Marker                                        = "artifact: opencode-agent/vgxness-manager; version: 56"
@@ -1057,11 +1058,15 @@ func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBu
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
-	v1, err := previousCAREV1ModelPlanBundle(current)
+	v1, err := immediatePredecessor(current)
 	if err != nil {
 		return nil, err
 	}
-	v57, err := previousV57ModelPlanBundle(v1)
+	v58, err := previousCAREV1ModelPlanBundle(v1)
+	if err != nil {
+		return nil, err
+	}
+	v57, err := previousV57ModelPlanBundle(v58)
 	if err != nil {
 		return nil, err
 	}
@@ -1113,7 +1118,7 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := [][]byte{v1.agents[managerAgentName], v57.agents[managerAgentName], v56.agents[managerAgentName], v55.agents[managerAgentName], v54.agents[managerAgentName], v53.agents[managerAgentName], v52.agents[managerAgentName], v51.agents[managerAgentName], v50.agents[managerAgentName], v49.agents[managerAgentName], v48.agents[managerAgentName], v47.agents[managerAgentName], v46.agents[managerAgentName]}
+	result := [][]byte{v1.agents[managerAgentName], v58.agents[managerAgentName], v57.agents[managerAgentName], v56.agents[managerAgentName], v55.agents[managerAgentName], v54.agents[managerAgentName], v53.agents[managerAgentName], v52.agents[managerAgentName], v51.agents[managerAgentName], v50.agents[managerAgentName], v49.agents[managerAgentName], v48.agents[managerAgentName], v47.agents[managerAgentName], v46.agents[managerAgentName]}
 	for _, prior := range []struct {
 		base, marker string
 	}{
@@ -1490,7 +1495,7 @@ func encodeLike(current modelPlanBundle, agents map[string][]byte) (modelPlanBun
 func immediatePredecessor(current modelPlanBundle) (modelPlanBundle, error) {
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
 		agents := cloneAgents(current.agents)
-		agents[managerAgentName] = previousManagerV58(agents[managerAgentName])
+		agents[managerAgentName] = previousManagerV59(agents[managerAgentName])
 		if len(agents[managerAgentName]) == 0 {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
@@ -2093,7 +2098,11 @@ func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return activateManagerV59(value)
+	value, err = activateManagerV59(value)
+	if err != nil {
+		return nil, err
+	}
+	return activateManagerV60(value)
 }
 
 func bindManagerV56(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
@@ -2129,9 +2138,21 @@ func activateManagerV59(value []byte) ([]byte, error) {
 	if bytes.Count(value, []byte(managerV58Marker)) != 1 || bytes.Count(value, []byte("`stacked-pr`")) != 1 {
 		return nil, integration.ErrInvalid
 	}
-	value = bytes.Replace(value, []byte(managerV58Marker), []byte(managerCurrentMarker), 1)
+	value = bytes.Replace(value, []byte(managerV58Marker), []byte(managerV59Marker), 1)
 	value = bytes.Replace(value, []byte("`stacked-pr`"), []byte("`git-delivery`"), 1)
 	return bytes.Replace(value, []byte(orchestration.PreviousContractPolicyV59), []byte(orchestration.ContractPolicy), 1), nil
+}
+
+func activateManagerV60(value []byte) ([]byte, error) {
+	if bytes.Count(value, []byte(managerV59Marker)) != 1 || bytes.Count(value, []byte("\n\nContract identity:")) != 1 || bytes.Contains(value, []byte(orchestration.PedagogicalExecutionBrief)) {
+		return nil, integration.ErrInvalid
+	}
+	value = bytes.Replace(value, []byte(managerV59Marker), []byte(managerCurrentMarker), 1)
+	value = bytes.Replace(value, []byte("\n\nContract identity:"), []byte("\n\n"+orchestration.PedagogicalExecutionBrief+"\n\nContract identity:"), 1)
+	if bytes.Count(value, []byte(managerCurrentMarker)) != 1 || bytes.Count(value, []byte(orchestration.PedagogicalExecutionBrief)) != 1 {
+		return nil, integration.ErrInvalid
+	}
+	return value, nil
 }
 
 // activateManagerV58 independently preserves the complete CARE-v2 Manager58 package.
@@ -2275,6 +2296,9 @@ func previousManagerV56(current []byte) []byte {
 
 func previousManagerV57(current []byte) []byte {
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+		current = previousManagerV59(current)
+	}
+	if bytes.Count(current, []byte(managerV59Marker)) == 1 {
 		current = previousManagerV58(current)
 	}
 	if bytes.Count(current, []byte(managerV58Marker)) != 1 {
@@ -2284,12 +2308,20 @@ func previousManagerV57(current []byte) []byte {
 }
 
 func previousManagerV58(current []byte) []byte {
-	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 || bytes.Count(current, []byte("`git-delivery`")) != 1 {
+	if bytes.Count(current, []byte(managerV59Marker)) != 1 || bytes.Count(current, []byte("`git-delivery`")) != 1 {
 		return nil
 	}
-	value := bytes.Replace(current, []byte(managerCurrentMarker), []byte(managerV58Marker), 1)
+	value := bytes.Replace(current, []byte(managerV59Marker), []byte(managerV58Marker), 1)
 	value = bytes.Replace(value, []byte(orchestration.ContractPolicy), []byte(orchestration.PreviousContractPolicyV59), 1)
 	return bytes.ReplaceAll(value, []byte("`git-delivery`"), []byte("`stacked-pr`"))
+}
+
+func previousManagerV59(current []byte) []byte {
+	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 || bytes.Count(current, []byte(orchestration.PedagogicalExecutionBrief)) != 1 {
+		return nil
+	}
+	value := bytes.Replace(current, []byte(managerCurrentMarker), []byte(managerV59Marker), 1)
+	return bytes.Replace(value, []byte("\n\n"+orchestration.PedagogicalExecutionBrief), nil, 1)
 }
 
 func previousManagerV57FromV58(current []byte) []byte {
@@ -2541,7 +2573,7 @@ func previousV57ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
 		return current, nil
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 && bytes.Count(current.agents[managerAgentName], []byte(managerV58Marker)) != 1 {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 && bytes.Count(current.agents[managerAgentName], []byte(managerV59Marker)) != 1 && bytes.Count(current.agents[managerAgentName], []byte(managerV58Marker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	var err error
@@ -2558,14 +2590,26 @@ func previousV57ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousCAREV1ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 && bytes.Count(current.agents[managerAgentName], []byte(managerV58Marker)) != 1 {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+		agents := cloneAgents(current.agents)
+		agents[managerAgentName] = previousManagerV59(agents[managerAgentName])
+		if len(agents[managerAgentName]) == 0 {
+			return modelPlanBundle{}, integration.ErrInvalid
+		}
+		predecessor, err := encodeLike(current, agents)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+		return previousCAREV1ModelPlanBundle(predecessor)
+	}
+	if bytes.Count(current.agents[managerAgentName], []byte(managerV59Marker)) != 1 && bytes.Count(current.agents[managerAgentName], []byte(managerV58Marker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	current, err := normalizeCAREV1(current)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+	if bytes.Count(current.agents[managerAgentName], []byte(managerV59Marker)) == 1 {
 		agents := cloneAgents(current.agents)
 		agents[managerAgentName] = previousManagerV58(agents[managerAgentName])
 		if len(agents[managerAgentName]) == 0 {
