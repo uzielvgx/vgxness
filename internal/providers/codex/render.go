@@ -20,6 +20,11 @@ import (
 
 var releaseVersion = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)))*)?$`)
 
+const (
+	historicalCodexHooksPath = "plugins/vgxness/hooks.json"
+	historicalCodexHooksJSON = `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PreCompact":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PostCompact":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PostToolUse":[{"matcher":"vgxness_memory_session_summary","hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"Stop":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}]}}` + "\n"
+)
+
 // Artifact is one projection file. Bytes belong exclusively to the returned Package.
 type Artifact struct {
 	Path  string
@@ -120,8 +125,11 @@ func lifecycleArtifacts(version string) []Artifact {
 	return []Artifact{
 		{Path: ".agents/plugins/marketplace.json", Bytes: []byte(`{"name":"vgxness","interface":{"displayName":"VGXNESS"},"plugins":[{"name":"vgxness","source":{"source":"local","path":"./plugins/vgxness"},"policy":{"installation":"AVAILABLE","authentication":"ON_USE"},"category":"Developer Tools"}]}` + "\n")},
 		{Path: "plugins/vgxness/.codex-plugin/plugin.json", Bytes: append(manifest, '\n')},
-		{Path: "plugins/vgxness/hooks.json", Bytes: []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PreCompact":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PostCompact":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"PostToolUse":[{"matcher":"vgxness_memory_session_summary","hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"Stop":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"vgxness memory codex-hook --stdin"}]}]}}` + "\n")},
 	}
+}
+
+func historicalCodexHooksArtifact() Artifact {
+	return Artifact{Path: historicalCodexHooksPath, Bytes: []byte(historicalCodexHooksJSON)}
 }
 
 func renderLegacy(version string) (Package, error) {

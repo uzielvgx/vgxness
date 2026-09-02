@@ -236,9 +236,18 @@ func inspectRoot(ctx context.Context, root *Root, pkg Package) (inspection, erro
 		}
 		state.artifacts = append(state.artifacts, item)
 	}
+	legacyHooksPresent, legacyHooksExact, err := inspectHistoricalCodexHooks(root, pkg)
+	if err != nil {
+		return inspection{}, err
+	}
+	if legacyHooksPresent && !legacyHooksExact {
+		drifted = true
+	}
 	switch {
 	case drifted:
 		state.result.State = integration.StateDrifted
+	case legacyHooksPresent:
+		state.result.State = integration.StatePartial
 	case exact == len(pkg.Artifacts):
 		state.result.State = integration.StateInstalled
 	case absent == len(pkg.Artifacts):
@@ -247,6 +256,89 @@ func inspectRoot(ctx context.Context, root *Root, pkg Package) (inspection, erro
 		state.result.State = integration.StatePartial
 	}
 	return state, nil
+}
+
+func inspectHistoricalCodexHooks(root *Root, pkg Package) (present, exact bool, err error) {
+	if !pkg.current {
+		return false, false, nil
+	}
+	artifact := historicalCodexHooksArtifact()
+	body, _, err := root.Read(artifact.Path, maxArtifactBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, false, nil
+	}
+	if err != nil {
+		if errors.Is(err, integration.ErrDrift) || errors.Is(err, integration.ErrConflict) {
+			return true, false, nil
+		}
+		return true, false, err
+	}
+	return true, bytes.Equal(body, artifact.Bytes), nil
+}
+
+func removeHistoricalCodexHooks(root *Root, pkg Package) (bool, error) {
+	present, exact, err := inspectHistoricalCodexHooks(root, pkg)
+	if err != nil || !present {
+		return false, err
+	}
+	if !exact {
+		return false, drift("historical Codex hooks")
+	}
+	if err := root.MarkPending(pendingEvidence(pkg.SHA256)); err != nil {
+		return false, recovery(err)
+	}
+	return migrateHistoricalCodexHooks(root, pkg)
+}
+
+func migrateHistoricalCodexHooks(root *Root, pkg Package) (bool, error) {
+	if !pkg.current {
+		return false, nil
+	}
+	artifact := historicalCodexHooksArtifact()
+	sidecar := artifact.Path + ".vgxness-remove"
+	body, info, err := root.Read(sidecar, maxArtifactBytes)
+	if err == nil {
+		if !bytes.Equal(body, artifact.Bytes) {
+			return false, recovery(integration.ErrDrift)
+		}
+		backup := Backup{Name: artifact.Path, Sidecar: sidecar, Info: info, Bytes: artifact.Bytes}
+		target, _, targetErr := root.Read(artifact.Path, maxArtifactBytes)
+		if targetErr == nil {
+			if !bytes.Equal(target, artifact.Bytes) {
+				return false, recovery(integration.ErrDrift)
+			}
+			if err := root.RemoveTarget(backup); err != nil {
+				return false, err
+			}
+		} else if !errors.Is(targetErr, os.ErrNotExist) {
+			return false, recovery(targetErr)
+		}
+		if err := root.RemoveBackup(backup); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, recovery(err)
+	}
+	target, targetInfo, targetErr := root.Read(artifact.Path, maxArtifactBytes)
+	if errors.Is(targetErr, os.ErrNotExist) {
+		return false, nil
+	}
+	if targetErr != nil || !bytes.Equal(target, artifact.Bytes) {
+		return false, recovery(errors.Join(targetErr, integration.ErrDrift))
+	}
+	backup, err := root.BackupExact(artifact.Path, artifact.Bytes, targetInfo)
+	if err != nil {
+		return false, err
+	}
+	if err := root.RemoveTarget(backup); err != nil {
+		return false, err
+	}
+	if err := root.RemoveBackup(backup); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 func inspectKnown(ctx context.Context, root *Root, preferred Package) (inspection, Package, error) {
 	packages, err := knownPackages()
@@ -400,6 +492,9 @@ func (s *Integration) Status(ctx context.Context, options integration.Options) (
 		return state.result, err
 	}
 	if present, err := pending(root, pkg); err != nil || present {
+		if state.result.State != integration.StateDrifted {
+			state.result.State = integration.StatePartial
+		}
 		return state.result, errors.Join(integration.ErrRecovery, err)
 	}
 	if _, present, err := readActivationEvidence(root, installed); err != nil || present {
@@ -478,6 +573,13 @@ func pending(root *Root, pkg Package) (bool, error) {
 			if !errors.Is(err, os.ErrNotExist) {
 				return false, recovery(err)
 			}
+		}
+	}
+	if pkg.current {
+		if _, err := root.lstat(historicalCodexHooksPath + ".vgxness-remove"); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -575,6 +677,9 @@ func (s *Integration) install(ctx context.Context, root *Root, pkg Package, stat
 			return fail(err)
 		}
 	}
+	if _, err := migrateHistoricalCodexHooks(root, pkg); err != nil {
+		return integration.Result{}, err
+	}
 	verified, err := inspectRoot(ctx, root, pkg)
 	if err != nil || verified.result.State != integration.StateInstalled {
 		return fail(errors.Join(err, integration.ErrDrift))
@@ -593,6 +698,16 @@ func (s *Integration) install(ctx context.Context, root *Root, pkg Package, stat
 }
 
 func (s *Integration) installAndActivate(ctx context.Context, root *Root, pkg Package, state inspection) (integration.Result, error) {
+	migrated, err := removeHistoricalCodexHooks(root, pkg)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	if migrated {
+		state, err = inspectRoot(ctx, root, pkg)
+		if err != nil {
+			return integration.Result{}, err
+		}
+	}
 	result, err := s.install(ctx, root, pkg, state)
 	if err != nil {
 		return result, err
@@ -608,6 +723,9 @@ func (s *Integration) installAndActivate(ctx context.Context, root *Root, pkg Pa
 			if err != nil {
 				return integration.Result{}, recovery(err)
 			}
+		}
+		if migrated {
+			result.Changed, result.RestartRequired = true, true
 		}
 		return result, nil
 	}
@@ -628,6 +746,9 @@ func (s *Integration) installAndActivate(ctx context.Context, root *Root, pkg Pa
 		if err := root.ClearActivationPending(evidence.body); err != nil {
 			return integration.Result{}, recovery(err)
 		}
+		if migrated || plugin || market {
+			result.Changed, result.RestartRequired = true, true
+		}
 		return result, nil
 	}
 	var rollbackErr error
@@ -642,16 +763,18 @@ func (s *Integration) recoverActivation(ctx context.Context, root *Root, pkg Pac
 	if err != nil || !present {
 		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
 	}
-	if evidence.phase == "deactivate" {
-		changed := false
-		if p, err := root.Pending(); err != nil {
-			return integration.Result{}, recovery(err)
-		} else if p {
-			if _, err := recoverInstalled(ctx, root, pkg); err != nil {
-				return integration.Result{}, err
-			}
-			changed = true
+	recovered, err := recoverPendingArtifacts(ctx, root, pkg)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	reconciled := func(result integration.Result) integration.Result {
+		if recovered {
+			result.Changed, result.RestartRequired = true, true
 		}
+		return result
+	}
+	if evidence.phase == "deactivate" {
+		changed := recovered
 		state, err := inspectRoot(ctx, root, pkg)
 		if err != nil {
 			return integration.Result{}, recovery(err)
@@ -675,14 +798,7 @@ func (s *Integration) recoverActivation(ctx context.Context, root *Root, pkg Pac
 		if changed {
 			state.result.Changed, state.result.RestartRequired = true, true
 		}
-		return state.result, nil
-	}
-	if p, err := root.Pending(); err != nil {
-		return integration.Result{}, recovery(err)
-	} else if p {
-		if _, err := recoverInstalled(ctx, root, pkg); err != nil {
-			return integration.Result{}, err
-		}
+		return reconciled(state.result), nil
 	}
 	state, err := inspectRoot(ctx, root, pkg)
 	if err != nil || state.result.State != integration.StateInstalled {
@@ -693,7 +809,7 @@ func (s *Integration) recoverActivation(ctx context.Context, root *Root, pkg Pac
 		if err := root.ClearActivationPending(evidence.body); err != nil {
 			return integration.Result{}, recovery(err)
 		}
-		return state.result, nil
+		return reconciled(state.result), nil
 	}
 	if activationErr == nil && activation == activationDrifted {
 		marketOnly, err := s.marketplaceCreatedExactly(ctx, root)
@@ -718,10 +834,44 @@ func (s *Integration) recoverActivation(ctx context.Context, root *Root, pkg Pac
 		if err = root.ClearActivationPending(evidence.body); err != nil {
 			return integration.Result{}, recovery(err)
 		}
-		return state.result, nil
+		state.result.Changed, state.result.RestartRequired = true, true
+		return reconciled(state.result), nil
 	}
-	return s.installAndActivate(ctx, root, pkg, state)
+	result, installErr := s.installAndActivate(ctx, root, pkg, state)
+	if installErr != nil {
+		return result, installErr
+	}
+	return reconciled(result), installErr
 }
+
+func recoverPendingArtifacts(ctx context.Context, root *Root, pkg Package) (bool, error) {
+	present, err := pending(root, pkg)
+	if err != nil {
+		return false, recovery(err)
+	}
+	if !present {
+		return false, nil
+	}
+	marked, err := root.Pending()
+	if err != nil {
+		return false, recovery(err)
+	}
+	if !marked {
+		if err := root.MarkPending(pendingEvidence(pkg.SHA256)); err != nil {
+			return false, recovery(err)
+		}
+	}
+	recoveryPkg, err := recoveryPackage(root, pkg, false, pkg.SHA256)
+	if err != nil {
+		return false, err
+	}
+	result, err := recoverInstalled(ctx, root, recoveryPkg)
+	if err != nil {
+		return false, err
+	}
+	return result.Changed || present, nil
+}
+
 func (s *Integration) Install(ctx context.Context, options integration.Options) (integration.Result, error) {
 	return s.installProtected(ctx, options, nil, true)
 }
@@ -774,7 +924,13 @@ func (s *Integration) installProtected(ctx context.Context, options integration.
 	return s.installAndActivate(ctx, root, pkg, state)
 }
 
-func recoveryPackage(root *Root, fallback Package, preferFallback bool) (Package, error) {
+func recoveryPackage(root *Root, fallback Package, preferFallback bool, expectedSHA string) (Package, error) {
+	validate := func(pkg Package) (Package, error) {
+		if expectedSHA != "" && pkg.SHA256 != expectedSHA {
+			return Package{}, recovery(conflict("pending package does not match activation evidence"))
+		}
+		return pkg, nil
+	}
 	packages, err := knownPackages()
 	if err != nil {
 		return Package{}, err
@@ -792,11 +948,15 @@ func recoveryPackage(root *Root, fallback Package, preferFallback bool) (Package
 		if len(matches) != 1 {
 			return Package{}, recovery(conflict("unknown pending package"))
 		}
-		state, inspectErr := inspectRoot(context.Background(), root, matches[0])
+		pkg, validateErr := validate(matches[0])
+		if validateErr != nil {
+			return Package{}, validateErr
+		}
+		state, inspectErr := inspectRoot(context.Background(), root, pkg)
 		if inspectErr != nil || state.result.State == integration.StateDrifted {
 			return Package{}, recovery(errors.Join(inspectErr, integration.ErrDrift))
 		}
-		for _, artifact := range matches[0].Artifacts {
+		for _, artifact := range pkg.Artifacts {
 			for _, suffix := range []string{".vgxness-stage", ".vgxness-remove"} {
 				got, _, readErr := root.Read(artifact.Path+suffix, maxArtifactBytes)
 				if !errors.Is(readErr, os.ErrNotExist) && (readErr != nil || !bytes.Equal(got, artifact.Bytes)) {
@@ -804,7 +964,7 @@ func recoveryPackage(root *Root, fallback Package, preferFallback bool) (Package
 				}
 			}
 		}
-		return matches[0], nil
+		return pkg, nil
 	}
 	matches := make([]Package, 0, len(packages))
 	for index := range packages {
@@ -828,20 +988,20 @@ func recoveryPackage(root *Root, fallback Package, preferFallback bool) (Package
 	nextPackage:
 	}
 	if len(matches) == 1 {
-		return matches[0], nil
+		return validate(matches[0])
 	}
 	if len(matches) > 1 {
 		if preferFallback {
 			for _, pkg := range matches {
 				if pkg.SHA256 == fallback.SHA256 {
-					return fallback, nil
+					return validate(fallback)
 				}
 			}
 		}
 		return Package{}, recovery(conflict("ambiguous recovery package"))
 	}
 	if preferFallback {
-		return fallback, nil
+		return validate(fallback)
 	}
 	return Package{}, recovery(conflict("unidentified legacy pending package"))
 }
@@ -928,6 +1088,11 @@ func recoverInstalled(ctx context.Context, root *Root, pkg Package) (integration
 			return integration.Result{}, recovery(errors.Join(err, integration.ErrDrift))
 		}
 	}
+	historicalChanged, err := migrateHistoricalCodexHooks(root, pkg)
+	if err != nil {
+		return integration.Result{}, err
+	}
+	changed = changed || historicalChanged
 	verified, err := inspectRoot(ctx, root, pkg)
 	if err != nil || verified.result.State != integration.StateInstalled {
 		return integration.Result{}, recovery(errors.Join(err, integration.ErrDrift))
@@ -978,6 +1143,13 @@ func (s *Integration) Uninstall(ctx context.Context, options integration.Options
 func (s *Integration) uninstall(ctx context.Context, root *Root, pkg Package, state inspection) (integration.Result, error) {
 	if state.result.State == integration.StateDrifted {
 		return integration.Result{}, fmt.Errorf("%w: managed Codex artifacts", integration.ErrDrift)
+	}
+	if _, err := removeHistoricalCodexHooks(root, pkg); err != nil {
+		return integration.Result{}, err
+	}
+	state, err := inspectRoot(ctx, root, pkg)
+	if err != nil {
+		return integration.Result{}, err
 	}
 	var evidence activationPending
 	if pkg.current {
@@ -1100,7 +1272,7 @@ func (s *Integration) reinstallProtected(ctx context.Context, options integratio
 		if installedExact {
 			pkg = installed
 		}
-		pkg, err = recoveryPackage(root, pkg, installedExact || options.ModelPlan != "")
+		pkg, err = recoveryPackage(root, pkg, installedExact || options.ModelPlan != "", "")
 		if err != nil {
 			return integration.Result{}, err
 		}
