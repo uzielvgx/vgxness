@@ -592,7 +592,7 @@ func (runtime Memory) SyncStatus(ctx context.Context, opts config.Options) (memo
 // BackfillSyncProject queues unsynced local records for one resolved workspace.
 // It is local-only and deliberately does not load credentials.
 func (runtime Memory) BackfillSyncProject(ctx context.Context, opts config.Options, workspace string, limit int) (memory.SyncBackfillResult, error) {
-	if runtime.readOnly || opts.ProjectLocal || workspace == "" || limit < 1 || limit > 1000 {
+	if runtime.readOnly || opts.ProjectLocal || !filepath.IsAbs(workspace) || limit < 1 || limit > 1000 {
 		return memory.SyncBackfillResult{}, memory.ErrInvalid
 	}
 	return withWritableStore(ctx, opts, func(store *memory.Store) (memory.SyncBackfillResult, error) {

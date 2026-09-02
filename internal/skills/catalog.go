@@ -12,6 +12,7 @@ type skillDefinition struct {
 	source       string
 	files        map[string][]byte
 	predecessors map[string]string
+	packageExact bool
 	legacy       []legacyDefinition
 }
 
@@ -19,6 +20,14 @@ type legacyDefinition struct {
 	name      string
 	digests   map[string]string
 	exactOnly bool
+}
+
+var memorySyncV11Predecessors = map[string]string{
+	"LICENSE.txt":                   "904c73d094910aff6f8e7f0bd06ab953f55f879264680363095d03e64e9a28d7",
+	"SKILL.md":                      "eee909e04794e5d8e8a0dd9c6a4e6b81ce58e200c0e2a740933dec2e7eaf3a57",
+	"agents/openai.yaml":            "8603b91c3c8a3290658d2a9b695ecffd456475e2649471bada5e3f071c7afb1f",
+	"references/client-workflow.md": "40e029c0ba126b48546608d5c3efac9a41ed02b2f4d721a739b63e71b07e7239",
+	"skill-manifest.json":           "e4458bec256408c591700e65ec413037c6c69ad2c6f0843f4e9d6676e85571be",
 }
 
 type catalog struct{ definitions []skillDefinition }
@@ -56,6 +65,9 @@ func (s *Service) entries() (map[string][]byte, error) {
 				return nil, ErrInvalid
 			}
 			entries[identity] = content
+		}
+		if definition.packageExact && (len(definition.predecessors) == 0 || len(definition.predecessors) != len(definition.files)) {
+			return nil, ErrInvalid
 		}
 		for relative := range definition.predecessors {
 			if _, exists := definition.files[relative]; !validRelative(relative) || !exists {
@@ -171,7 +183,7 @@ func bundledCatalog() (catalog, error) {
 	if err != nil {
 		return catalog{}, err
 	}
-	memorySync := skillDefinition{name: "memory-sync", source: "memory-sync"}
+	memorySync := skillDefinition{name: "memory-sync", source: "memory-sync", predecessors: memorySyncV11Predecessors, packageExact: true}
 	memorySync.files, err = bundledFiles(memorySync.source)
 	if err != nil {
 		return catalog{}, err
