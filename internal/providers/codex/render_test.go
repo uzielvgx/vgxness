@@ -52,8 +52,8 @@ func TestCAREDelegationRendersOnlyCurrentProfiles(t *testing.T) {
 			t.Errorf("missing CARE profile %s", path)
 		}
 	}
-	if len(pkg.Artifacts) != 16 {
-		t.Errorf("Codex package artifact count = %d, want 16 including lifecycle artifacts", len(pkg.Artifacts))
+	if len(pkg.Artifacts) != 15 {
+		t.Errorf("Codex package artifact count = %d, want 15 including lifecycle artifacts", len(pkg.Artifacts))
 	}
 	for _, legacy := range []string{"risk", "readability", "reliability", "resilience", "refuter"} {
 		if paths["agents/"+legacy+".toml"] {
@@ -232,7 +232,6 @@ func TestRenderProducesNativeCodexProjection(t *testing.T) {
 		"agents/verifier.toml",
 		".agents/plugins/marketplace.json",
 		"plugins/vgxness/.codex-plugin/plugin.json",
-		"plugins/vgxness/hooks.json",
 	}
 	if got := artifactPaths(pkg.Artifacts); !reflect.DeepEqual(got, wantPaths) {
 		t.Fatalf("paths = %v, want %v", got, wantPaths)

@@ -143,8 +143,8 @@ func TestCodexPreTerminalClosureV18PackageUpgradesAndRejectsDrift(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(current.Artifacts) != len(predecessor.Artifacts)+3 {
-		t.Fatalf("lifecycle artifacts = %d, want 3", len(current.Artifacts)-len(predecessor.Artifacts))
+	if len(current.Artifacts) != len(predecessor.Artifacts)+2 {
+		t.Fatalf("lifecycle artifacts = %d, want 2", len(current.Artifacts)-len(predecessor.Artifacts))
 	}
 	for _, item := range current.Artifacts {
 		got, readErr := os.ReadFile(filepath.Join(root, item.Path))
