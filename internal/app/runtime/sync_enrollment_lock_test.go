@@ -29,19 +29,19 @@ func TestMemoryConfigureSyncRecoversCredentialSlots(t *testing.T) {
 		_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, token)
 		return err
 	}
-	if err := configure("vgx1." + device + ".one"); err != nil {
+	if err := configure(testBearerWithSecret(device, 1)); err != nil {
 		t.Fatal(err)
 	}
 	runtime.afterSyncCredentialPut = func() error { return errors.New("crash before profile") }
-	if err := configure("vgx1." + device + ".two"); err == nil {
+	if err := configure(testBearerWithSecret(device, 2)); err == nil {
 		t.Fatal("pre-commit crash succeeded")
 	}
 	runtime.afterSyncCredentialPut = nil
-	if err := configure("vgx1." + device + ".three"); err != nil || len(values) != 1 {
+	if err := configure(testBearerWithSecret(device, 3)); err != nil || len(values) != 1 {
 		t.Fatalf("pre-commit recovery err=%v values=%v", err, values)
 	}
 	runtime.afterSyncProfileCommit = func() error { return errors.New("crash after profile") }
-	if err := configure("vgx1." + device + ".four"); err == nil {
+	if err := configure(testBearerWithSecret(device, 4)); err == nil {
 		t.Fatal("post-commit crash succeeded")
 	}
 	profile := syncEnrollmentProfile(t, root)
@@ -50,11 +50,11 @@ func TestMemoryConfigureSyncRecoversCredentialSlots(t *testing.T) {
 	}
 	runtime.deleteSecret = func(string) error { return secrets.ErrUnavailable }
 	runtime.afterSyncProfileCommit = nil
-	if err := configure("vgx1." + device + ".five"); !errors.Is(err, secrets.ErrUnavailable) || syncEnrollmentProfile(t, root).PreviousCredentialRef == "" {
+	if err := configure(testBearerWithSecret(device, 5)); !errors.Is(err, secrets.ErrUnavailable) || syncEnrollmentProfile(t, root).PreviousCredentialRef == "" {
 		t.Fatalf("failed recovery err=%v profile=%+v", err, syncEnrollmentProfile(t, root))
 	}
 	runtime.deleteSecret = func(reference string) error { delete(values, reference); return nil }
-	if err := configure("vgx1." + device + ".six"); err != nil {
+	if err := configure(testBearerWithSecret(device, 6)); err != nil {
 		t.Fatal(err)
 	}
 	profile = syncEnrollmentProfile(t, root)
@@ -74,7 +74,7 @@ func TestMemoryConfigureSyncSerializesConcurrentEnrollment(t *testing.T) {
 		return store.ConfigureSyncProfile(ctx, profile)
 	}
 	go func() {
-		_, err := first.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, "vgx1."+device+".one")
+		_, err := first.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, testBearerWithSecret(device, 1))
 		done <- err
 	}()
 	<-entered
@@ -85,7 +85,7 @@ func TestMemoryConfigureSyncSerializesConcurrentEnrollment(t *testing.T) {
 		secondCalls++
 		return store.ConfigureSyncProfile(ctx, profile)
 	}
-	_, err := second.ConfigureSync(ctx, config.Options{StorageRoot: root}, "https://sync.example.test", device, "vgx1."+device+".two")
+	_, err := second.ConfigureSync(ctx, config.Options{StorageRoot: root}, "https://sync.example.test", device, testBearerWithSecret(device, 2))
 	if !errors.Is(err, context.Canceled) || secondCalls != 0 {
 		t.Fatalf("second err=%v calls=%d", err, secondCalls)
 	}

@@ -43,8 +43,10 @@ type testDoer func(*http.Request) (*http.Response, error)
 
 func (do testDoer) RoundTrip(request *http.Request) (*http.Response, error) { return do(request) }
 
+const testCredential = "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
 func TestDiscoverUsesExactAuthenticatedGET(t *testing.T) {
-	const credential = "secret-credential"
+	const credential = testCredential
 	client, err := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodGet || request.URL.Path != "/v1/sync/discovery" || request.URL.RawQuery != "" || request.Header.Get("Authorization") != "Bearer "+credential || request.Header.Get("Accept") != mediaType || request.Body != nil {
 			t.Fatalf("unexpected request: %s %s headers=%v", request.Method, request.URL, request.Header)
@@ -66,7 +68,7 @@ func TestNewRejectsNonHTTPS(t *testing.T) {
 }
 
 func TestClientDoesNotFollowCredentialBearingRedirects(t *testing.T) {
-	const credential = "secret-credential"
+	const credential = testCredential
 	var calls int
 	var authorization string
 	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -101,7 +103,7 @@ func TestPullRejectsResponseForAnotherHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Pull(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, 1)
+	_, err = client.Pull(context.Background(), testCredential, syncservice.Cursor{HistoryID: history}, 1)
 	if !errors.Is(err, ErrRemote) {
 		t.Fatalf("error = %v, want %v", err, ErrRemote)
 	}
@@ -119,7 +121,7 @@ func TestPullUsesExactContinuationRequestAndClosesBody(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{mediaType}}, Body: reader}, nil
 	}))
-	if page, err := client.Pull(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 5}, 3); err != nil || page.Position != 3 || !reader.closed {
+	if page, err := client.Pull(context.Background(), testCredential, syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 5}, 3); err != nil || page.Position != 3 || !reader.closed {
 		t.Fatalf("page=%+v err=%v closed=%v", page, err, reader.closed)
 	}
 }
@@ -136,7 +138,7 @@ func TestPullProjectBindsSelectorAndAcceptsSparseEOF(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 	}))
-	if page, err := client.PullProject(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, projectID, 1); err != nil || page.Position != 5 {
+	if page, err := client.PullProject(context.Background(), testCredential, syncservice.Cursor{HistoryID: history}, projectID, 1); err != nil || page.Position != 5 {
 		t.Fatalf("page=%+v err=%v", page, err)
 	}
 }
@@ -155,7 +157,7 @@ func TestPullProjectRejectsTamperedSelectorOrPosition(t *testing.T) {
 		client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 		}))
-		if _, err := client.PullProject(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, projectID, 1); !errors.Is(err, ErrRemote) {
+		if _, err := client.PullProject(context.Background(), testCredential, syncservice.Cursor{HistoryID: history}, projectID, 1); !errors.Is(err, ErrRemote) {
 			t.Fatalf("error = %v, want %v", err, ErrRemote)
 		}
 	}
@@ -174,7 +176,7 @@ func TestPullProjectRejectsRehashedForeignTombstone(t *testing.T) {
 	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 	}))
-	if _, err := client.PullProject(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, projectID, 1); !errors.Is(err, ErrRemote) {
+	if _, err := client.PullProject(context.Background(), testCredential, syncservice.Cursor{HistoryID: history}, projectID, 1); !errors.Is(err, ErrRemote) {
 		t.Fatalf("error = %v, want %v", err, ErrRemote)
 	}
 }
@@ -184,13 +186,13 @@ func TestPullProjectRejectsEmptySelector(t *testing.T) {
 		t.Fatal("sent empty project pull")
 		return nil, nil
 	}))
-	if _, err := client.PullProject(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: uuid.NewString()}, "", 1); !errors.Is(err, ErrInvalidInput) {
+	if _, err := client.PullProject(context.Background(), testCredential, syncservice.Cursor{HistoryID: uuid.NewString()}, "", 1); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("error = %v, want %v", err, ErrInvalidInput)
 	}
 }
 
 func TestClientRejectsUnsafeResponsesWithoutSecrets(t *testing.T) {
-	credential, secret := "secret-credential", "server-private-value"
+	credential, secret := testCredential, "server-private-value"
 	for _, test := range []struct {
 		name                            string
 		status                          int
@@ -226,7 +228,7 @@ func TestClientRejectsUnsafeResponsesWithoutSecrets(t *testing.T) {
 }
 
 func TestDiagnosticErrorsAreSanitizedAndPreserveSentinels(t *testing.T) {
-	const credential = "bearer-secret"
+	const credential = testCredential
 	const private = "https://private.example/v1/sync/pull?project_id=project-secret&body=private"
 	projectID := "550e8400-e29b-41d4-a716-446655440001"
 	for _, tc := range []struct {
@@ -292,7 +294,7 @@ func TestRemoteStructuredErrorCodeIsRetainedInDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Capabilities(context.Background(), "secret-credential")
+	_, err = client.Capabilities(context.Background(), testCredential)
 	diagnostic, ok := DiagnosticFrom(err)
 	if !errors.Is(err, ErrRemote) || !ok || diagnostic.HTTPStatus != http.StatusConflict || diagnostic.Code != syncapi.ErrorConflict {
 		t.Fatalf("err=%v diagnostic=%+v ok=%v", err, diagnostic, ok)
@@ -325,7 +327,7 @@ func TestGetReadFailureRemainsRemoteWithTransportDiagnostic(t *testing.T) {
 	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(failingReader{err: errors.New("private body")})}, nil
 	}))
-	_, err := client.Capabilities(context.Background(), "secret-credential")
+	_, err := client.Capabilities(context.Background(), testCredential)
 	diagnostic, ok := DiagnosticFrom(err)
 	if !errors.Is(err, ErrRemote) || !ok || diagnostic.Class != ErrorClassTransport || diagnostic.HTTPStatus != http.StatusOK {
 		t.Fatalf("err=%v diagnostic=%+v ok=%v", err, diagnostic, ok)
@@ -338,7 +340,7 @@ func TestClientRejectsInvalidEndpointAndCredential(t *testing.T) {
 			t.Fatalf("endpoint %q: %v", endpoint, err)
 		}
 	}
-	for _, credential := range []string{"", "a b", "a\nb"} {
+	for _, credential := range []string{"", "a b", "a\nb", "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "vgx1.123e4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "vgx1.123E4567-e89b-12d3-a456-426614174000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"} {
 		client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) { t.Fatal("called"); return nil, nil }))
 		if _, err := client.Discover(context.Background(), credential); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("credential %q: %v", credential, err)
@@ -347,7 +349,7 @@ func TestClientRejectsInvalidEndpointAndCredential(t *testing.T) {
 }
 
 func TestPushUsesBoundedAuthenticatedPOSTAndRejectsMismatchedResults(t *testing.T) {
-	credential := "secret-credential"
+	credential := testCredential
 	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
 	client, _ := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodPost || request.URL.Path != "/v1/sync/push" || request.Header.Get("Authorization") != "Bearer "+credential || request.Header.Get("Content-Type") != mediaType || request.Header.Get("Accept") != mediaType {
@@ -372,14 +374,14 @@ func TestPushRetriesServiceUnavailableBeforeSuccessResponseValidation(t *testing
 		body := `{"protocol_version":1,"protocol_version":1,"results":[{"mutation_id":"` + mutation.MutationID + `","disposition":"rejected","code":"invalid_input"}]}`
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	_, err := client.Push(context.Background(), "secret-credential", []syncservice.Mutation{mutation})
+	_, err := client.Push(context.Background(), testCredential, []syncservice.Mutation{mutation})
 	if !errors.Is(err, ErrRemote) || calls != 2 {
 		t.Fatalf("error=%v calls=%d", err, calls)
 	}
 }
 
 func TestPushRetriesInterruptedOKResponseBodyAndClosesBothBodies(t *testing.T) {
-	const credential = "secret-credential"
+	const credential = testCredential
 	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
 	var readers []*closingReader
 	calls := 0
@@ -407,7 +409,7 @@ func TestPushRetriesInterruptedOKResponseBodyAndClosesBothBodies(t *testing.T) {
 }
 
 func TestPushReturnsUnavailableAfterSecondInterruptedOKResponseBody(t *testing.T) {
-	const credential = "secret-credential"
+	const credential = testCredential
 	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
 	var readers []*closingReader
 	calls := 0
@@ -436,7 +438,7 @@ func TestPushDoesNotRetryUnauthorized(t *testing.T) {
 		calls++
 		return &http.Response{StatusCode: http.StatusUnauthorized, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("unauthorized"))}, nil
 	}))
-	_, err := client.Push(context.Background(), "secret-credential", []syncservice.Mutation{mutation})
+	_, err := client.Push(context.Background(), testCredential, []syncservice.Mutation{mutation})
 	if !errors.Is(err, ErrUnauthorized) || calls != 1 {
 		t.Fatalf("error=%v calls=%d", err, calls)
 	}
@@ -449,7 +451,7 @@ func TestPushDoesNotRetryNilTransportResponse(t *testing.T) {
 		calls++
 		return nil, nil
 	}))
-	_, err := client.Push(context.Background(), "secret-credential", []syncservice.Mutation{mutation})
+	_, err := client.Push(context.Background(), testCredential, []syncservice.Mutation{mutation})
 	if !errors.Is(err, ErrRemote) || calls != 1 {
 		t.Fatalf("error=%v calls=%d", err, calls)
 	}
@@ -464,7 +466,7 @@ func TestPushPreservesCancellationWithoutRetry(t *testing.T) {
 		calls++
 		return nil, context.Canceled
 	}))
-	_, err := client.Push(ctx, "secret-credential", []syncservice.Mutation{mutation})
+	_, err := client.Push(ctx, testCredential, []syncservice.Mutation{mutation})
 	if !errors.Is(err, context.Canceled) || calls != 0 {
 		t.Fatalf("error=%v calls=%d", err, calls)
 	}
@@ -478,7 +480,7 @@ func TestGetPreservesCanceledContext(t *testing.T) {
 		calls++
 		return nil, context.Canceled
 	}))
-	if _, err := client.Discover(ctx, "secret-credential"); !errors.Is(err, context.Canceled) || calls != 0 {
+	if _, err := client.Discover(ctx, testCredential); !errors.Is(err, context.Canceled) || calls != 0 {
 		t.Fatalf("error=%v calls=%d", err, calls)
 	}
 }
@@ -487,7 +489,7 @@ func TestCapabilitiesRejectsInvalidUTF8(t *testing.T) {
 	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader("{\"protocol_version\":1,\"capabilities\":[\"\xff\"]}"))}, nil
 	}))
-	if _, err := client.Capabilities(context.Background(), "secret-credential"); !errors.Is(err, ErrRemote) {
+	if _, err := client.Capabilities(context.Background(), testCredential); !errors.Is(err, ErrRemote) {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -498,7 +500,7 @@ func TestPullAcceptsResponseUpToPullLimit(t *testing.T) {
 	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	if _, err := client.Pull(context.Background(), "secret-credential", syncservice.Cursor{HistoryID: history}, 1); err != nil {
+	if _, err := client.Pull(context.Background(), testCredential, syncservice.Cursor{HistoryID: history}, 1); err != nil {
 		t.Fatalf("pull response under limit rejected: %v", err)
 	}
 }
@@ -508,7 +510,7 @@ func TestGetRejectsNilDecoderWithoutPanic(t *testing.T) {
 		t.Fatal("request sent with nil decoder")
 		return nil, nil
 	}))
-	if err := client.get(context.Background(), OperationCapabilities, "/v1/sync/capabilities", nil, "secret-credential", syncapi.MaxBodyBytes, nil); !errors.Is(err, ErrInvalidInput) {
+	if err := client.get(context.Background(), OperationCapabilities, "/v1/sync/capabilities", nil, testCredential, syncapi.MaxBodyBytes, nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("error=%v", err)
 	}
 }

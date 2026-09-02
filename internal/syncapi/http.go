@@ -2,7 +2,6 @@ package syncapi
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -396,10 +395,10 @@ func (handler *handler) authenticate(request *http.Request) (Identity, int) {
 		return Identity{}, http.StatusUnauthorized
 	}
 	bearer := strings.TrimPrefix(values[0], "Bearer ")
-	if !validBearer(bearer) {
+	credential, declared := ParseBearer(bearer)
+	if !declared {
 		return Identity{}, http.StatusUnauthorized
 	}
-	deviceID, declared := declaredDeviceID(bearer)
 	if !handler.authLimits.allowGlobal() {
 		return Identity{}, http.StatusTooManyRequests
 	}
@@ -416,50 +415,13 @@ func (handler *handler) authenticate(request *http.Request) (Identity, int) {
 	if identity.OwnerID == uuid.Nil || identity.DeviceID == uuid.Nil {
 		return Identity{}, http.StatusUnauthorized
 	}
-	if !declared || identity.DeviceID != deviceID {
+	if !declared || identity.DeviceID != credential.DeviceID {
 		return Identity{}, http.StatusUnauthorized
 	}
 	if !handler.authLimits.allowDevice(identity.DeviceID) {
 		return Identity{}, http.StatusTooManyRequests
 	}
 	return identity, 0
-}
-
-// declaredDeviceID returns only the syntactically declared, canonical device
-// ID. It intentionally does not validate or retain bearer secret material.
-func declaredDeviceID(bearer string) (uuid.UUID, bool) {
-	parts := strings.Split(bearer, ".")
-	if len(parts) != 3 {
-		return uuid.Nil, false
-	}
-	id, err := uuid.Parse(parts[1])
-	if err != nil || id == uuid.Nil || id.String() != parts[1] {
-		return uuid.Nil, false
-	}
-	return id, true
-}
-
-func validBearer(bearer string) bool {
-	if len(bearer) != 85 {
-		return false
-	}
-	parts := strings.Split(bearer, ".")
-	if len(parts) != 3 || parts[0] != "vgx1" {
-		return false
-	}
-	id, err := uuid.Parse(parts[1])
-	if err != nil || id == uuid.Nil || id.String() != parts[1] {
-		return false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[2])
-	defer clearBytes(raw)
-	return err == nil && len(raw) == 32 && base64.RawURLEncoding.EncodeToString(raw) == parts[2]
-}
-
-func clearBytes(value []byte) {
-	for index := range value {
-		value[index] = 0
-	}
 }
 
 func requestHasBody(body io.ReadCloser) bool {
