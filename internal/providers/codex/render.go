@@ -75,6 +75,33 @@ func RenderPlan(version string, plan sdd.Plan) (Package, error) {
 	return clonePackage(pkg), nil
 }
 
+// renderActiveV18PreTerminalClosure retains the exact Manager18 package from
+// immediately before the terminal memory-save closure was added. It exists
+// solely so lifecycle inspection can safely upgrade that complete package.
+func renderActiveV18PreTerminalClosure(version string, plan sdd.Plan) (Package, error) {
+	selected, err := profilesForPlan(plan)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg, err := renderPackage(version, selected, plan, false)
+	if err != nil {
+		return Package{}, err
+	}
+	for index := range pkg.Artifacts {
+		if pkg.Artifacts[index].Path != "AGENTS.md" {
+			continue
+		}
+		manager := strings.Replace(activeManagerInstructions(), orchestration.ContractPolicy, orchestration.PreviousContractPolicyV59, 1)
+		if manager == activeManagerInstructions() {
+			return Package{}, integration.ErrInvalid
+		}
+		pkg.Artifacts[index].Bytes = []byte(manager)
+		pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
+		return pkg, nil
+	}
+	return Package{}, integration.ErrInvalid
+}
+
 func lifecycleArtifacts(version string) []Artifact {
 	manifest, err := json.Marshal(struct {
 		Name        string `json:"name"`

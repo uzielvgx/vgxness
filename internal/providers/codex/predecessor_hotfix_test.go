@@ -3,6 +3,7 @@ package codex
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,5 +120,52 @@ func TestCodexV14CAREPackageRecoversPendingMarkerThenUpgrades(t *testing.T) {
 	status, err = service.Status(context.Background(), options)
 	if err != nil || status.State != integration.StateInstalled {
 		t.Fatalf("upgraded v15 status=%+v err=%v", status, err)
+	}
+}
+
+func TestCodexPreTerminalClosureV18PackageUpgradesAndRejectsDrift(t *testing.T) {
+	plan := sdd.PlanMedium
+	predecessor, err := renderActiveV18PreTerminalClosure("v0.0.0", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := filepath.Join(t.TempDir(), "codex")
+	writePackage(t, root, predecessor)
+	fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: root}
+	service := fakeActivationIntegration(fake)
+	options := integration.Options{ConfigDir: root, ModelPlan: plan}
+	result, err := service.Reinstall(context.Background(), options)
+	if err != nil || result.State != integration.StateInstalled || result.ModelPlan != plan || !containsCall(fake.calls, "[plugin add vgxness@vgxness --json]") {
+		t.Fatalf("pre-terminal v18 reinstall=%+v err=%v calls=%v", result, err, fake.calls)
+	}
+	current, err := RenderPlan("v0.0.0", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.Artifacts) != len(predecessor.Artifacts)+3 {
+		t.Fatalf("lifecycle artifacts = %d, want 3", len(current.Artifacts)-len(predecessor.Artifacts))
+	}
+	for _, item := range current.Artifacts {
+		got, readErr := os.ReadFile(filepath.Join(root, item.Path))
+		if readErr != nil || !bytes.Equal(got, item.Bytes) {
+			t.Fatalf("published %q = %q, %v", item.Path, got, readErr)
+		}
+	}
+
+	writePackage(t, root, predecessor)
+	path := filepath.Join(root, "AGENTS.md")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before = append(before, "arbitrary drift\n"...)
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Reinstall(context.Background(), options)
+	after, readErr := os.ReadFile(path)
+	if !errors.Is(err, integration.ErrDrift) || readErr != nil || !bytes.Equal(after, before) {
+		t.Fatalf("drift reinstall err=%v after=%q readErr=%v", err, after, readErr)
 	}
 }
