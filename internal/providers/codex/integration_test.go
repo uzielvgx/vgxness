@@ -615,14 +615,32 @@ func TestHistoricalCodexHooksGoldenIdentity(t *testing.T) {
 
 func TestHistoricalCodexHookRemovalFailuresRemainRecoverable(t *testing.T) {
 	tests := []struct {
-		name     string
-		failSync int
+		name  string
+		match func(root, name string) bool
 	}{
-		{name: "pending durability", failSync: 1},
-		{name: "backup durability", failSync: 2},
-		{name: "target removal durability", failSync: 3},
-		{name: "backup cleanup durability", failSync: 4},
-		{name: "activation evidence durability", failSync: 5},
+		{name: "pending durability", match: func(root, name string) bool {
+			_, err := os.Lstat(filepath.Join(root, ".vgxness-pending"))
+			return name == "." && err == nil
+		}},
+		{name: "backup durability", match: func(root, name string) bool {
+			_, hookErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json"))
+			_, sidecarErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json.vgxness-remove"))
+			return name == "plugins/vgxness" && hookErr == nil && sidecarErr == nil
+		}},
+		{name: "target removal durability", match: func(root, name string) bool {
+			_, hookErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json"))
+			_, sidecarErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json.vgxness-remove"))
+			return name == "plugins/vgxness" && errors.Is(hookErr, os.ErrNotExist) && sidecarErr == nil
+		}},
+		{name: "backup cleanup durability", match: func(root, name string) bool {
+			_, hookErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json"))
+			_, sidecarErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json.vgxness-remove"))
+			return name == "plugins/vgxness" && errors.Is(hookErr, os.ErrNotExist) && errors.Is(sidecarErr, os.ErrNotExist)
+		}},
+		{name: "activation evidence durability", match: func(root, name string) bool {
+			_, err := os.Lstat(filepath.Join(root, ".vgxness-activation-pending"))
+			return name == "." && err == nil
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -635,17 +653,15 @@ func TestHistoricalCodexHookRemovalFailuresRemainRecoverable(t *testing.T) {
 			hook := filepath.Join(root, "plugins", "vgxness", "hooks.json")
 			require(t, os.WriteFile(hook, historicalCodexHooksGolden(t), 0o600) == nil)
 
-			calls := 0
+			fired := false
 			failing := NewIntegration()
 			failing.open = func(ctx context.Context, options integration.Options, create bool) (*Root, error) {
 				r, openErr := OpenRoot(ctx, options, create)
 				if openErr == nil {
 					r.syncHook = func(name string) error {
-						if name == "." || name == "plugins/vgxness" {
-							calls++
-							if calls == test.failSync {
-								return errors.New("injected retired-hook durability failure")
-							}
+						if test.match(root, name) {
+							fired = true
+							return errors.New("injected retired-hook durability failure")
 						}
 						return nil
 					}
@@ -654,6 +670,7 @@ func TestHistoricalCodexHookRemovalFailuresRemainRecoverable(t *testing.T) {
 			}
 			options := integration.Options{ConfigDir: root}
 			_, err = failing.Reinstall(context.Background(), options)
+			require(t, fired)
 			require(t, errors.Is(err, integration.ErrRecovery))
 
 			status, statusErr := NewIntegration().Status(context.Background(), options)
@@ -680,17 +697,16 @@ func TestHistoricalCodexHookUninstallEvidenceFailureRemainsRecoverable(t *testin
 	hook := filepath.Join(root, "plugins", "vgxness", "hooks.json")
 	require(t, os.WriteFile(hook, historicalCodexHooksGolden(t), 0o600) == nil)
 
-	calls := 0
+	fired := false
 	failing := NewIntegration()
 	failing.open = func(ctx context.Context, options integration.Options, create bool) (*Root, error) {
 		r, openErr := OpenRoot(ctx, options, create)
 		if openErr == nil {
 			r.syncHook = func(name string) error {
-				if name == "." || name == "plugins/vgxness" {
-					calls++
-					if calls == 5 {
-						return errors.New("injected deactivation evidence durability failure")
-					}
+				_, pendingErr := os.Lstat(filepath.Join(root, ".vgxness-activation-pending"))
+				if name == "." && pendingErr == nil {
+					fired = true
+					return errors.New("injected deactivation evidence durability failure")
 				}
 				return nil
 			}
@@ -699,6 +715,7 @@ func TestHistoricalCodexHookUninstallEvidenceFailureRemainsRecoverable(t *testin
 	}
 	options := integration.Options{ConfigDir: root}
 	_, err = failing.Uninstall(context.Background(), options)
+	require(t, fired)
 	require(t, errors.Is(err, integration.ErrRecovery))
 	status, statusErr := NewIntegration().Status(context.Background(), options)
 	require(t, errors.Is(statusErr, integration.ErrRecovery) && status.State != integration.StateInstalled)
