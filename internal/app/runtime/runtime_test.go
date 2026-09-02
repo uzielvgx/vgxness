@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,6 +19,20 @@ import (
 	"github.com/vgxness/vgxness/internal/syncclient"
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
+
+const canonicalRuntimeBearerPayload = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+func testBearer(deviceID string) string {
+	return testBearerWithSecret(deviceID, 0)
+}
+
+func testBearerWithSecret(deviceID string, secret byte) string {
+	payload := canonicalRuntimeBearerPayload
+	if secret != 0 {
+		payload = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{secret}, 32))
+	}
+	return "vgx1." + deviceID + "." + payload
+}
 
 func TestMemoryReadOnlyResolveProjectDoesNotCreateAbsentStore(t *testing.T) {
 	storageRoot := filepath.Join(t.TempDir(), "absent-store")
@@ -111,7 +127,7 @@ func TestMemorySyncRejectsUnboundOrMalformedWorkspaceBeforeRemote(t *testing.T) 
 	}
 	requests := 0
 	runtime := NewMemory("cli", false)
-	runtime.credential = func(string) (string, error) { return "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", nil }
+	runtime.credential = func(string) (string, error) { return testBearer("550e8400-e29b-41d4-a716-446655440000"), nil }
 	runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) {
 		requests++
 		return nil, errors.New("unexpected remote call")
@@ -175,14 +191,14 @@ func TestMemorySyncProfileAndCredentialStatesAvoidNetwork(t *testing.T) {
 	}
 	profile.Enabled = true
 	setup(&profile)
-	for _, credential := range []string{"malformed", "vgx1.550e8400-e29b-41d4-a716-446655440001.secret"} {
+	for _, credential := range []string{"malformed", testBearer("550e8400-e29b-41d4-a716-446655440001")} {
 		result, credentials, requests = run(credential, nil)
 		if result.Status != memory.SyncStatusInvalid || credentials != 1 || requests != 0 {
 			t.Fatalf("credential %q = %+v credentials=%d requests=%d", credential, result, credentials, requests)
 		}
 	}
 	for credentialErr, want := range map[error]memory.SyncStatus{secrets.ErrMissing: memory.SyncStatusCredentialMissing, secrets.ErrUnavailable: memory.SyncStatusCredentialUnavailable} {
-		result, credentials, requests = run("vgx1.550e8400-e29b-41d4-a716-446655440000.secret", credentialErr)
+		result, credentials, requests = run(testBearer("550e8400-e29b-41d4-a716-446655440000"), credentialErr)
 		if result.Status != want || credentials != 1 || requests != 0 {
 			t.Fatalf("credential error %v = %+v credentials=%d requests=%d", credentialErr, result, credentials, requests)
 		}
@@ -191,7 +207,7 @@ func TestMemorySyncProfileAndCredentialStatesAvoidNetwork(t *testing.T) {
 
 func TestMemoryConfigureSyncStoresCredentialBeforeActivatingProfileAndStatusIsLocal(t *testing.T) {
 	root := t.TempDir()
-	bearer := "vgx1.550e8400-e29b-41d4-a716-446655440000.secret"
+	bearer := testBearer("550e8400-e29b-41d4-a716-446655440000")
 	values := map[string]string{}
 	runtime := NewMemory("cli", false)
 	runtime.putSecret = func(reference, value string) error {
@@ -231,7 +247,7 @@ func TestMemoryConfigureSyncStoresCredentialBeforeActivatingProfileAndStatusIsLo
 	if err != nil || !status.Configured || !status.Enabled || status.Credential != memory.SyncCredentialAvailable {
 		t.Fatalf("status=%+v err=%v", status, err)
 	}
-	updated := "vgx1.550e8400-e29b-41d4-a716-446655440000.updated"
+	updated := testBearerWithSecret("550e8400-e29b-41d4-a716-446655440000", 1)
 	status, err = runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://other.example.test", profile.DeviceID, updated)
 	if err != nil || !status.Configured || len(values) != 1 || values[profile.CredentialRef] == updated {
 		t.Fatalf("reconfigure status=%+v err=%v values=%v", status, err, values)
@@ -247,12 +263,26 @@ func TestMemoryConfigureSyncStoresCredentialBeforeActivatingProfileAndStatusIsLo
 	}
 }
 
+func TestMemoryConfigureSyncRejectsMalformedBearerBeforeSecretOrStoreWrite(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "absent")
+	puts := 0
+	runtime := NewMemory("cli", false)
+	runtime.putSecret = func(string, string) error { puts++; return nil }
+	status, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", "550e8400-e29b-41d4-a716-446655440000", "vgx1.550e8400-e29b-41d4-a716-446655440000.short")
+	if !errors.Is(err, memory.ErrInvalid) || status != (memory.SyncConfigurationStatus{}) || puts != 0 {
+		t.Fatalf("status=%+v err=%v puts=%d", status, err, puts)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("invalid configure opened storage root: %v", err)
+	}
+}
+
 func TestMemoryConfigureSyncCredentialFileDoesNotUseOrPersistKeyring(t *testing.T) {
 	if os.PathSeparator == '\\' {
 		t.Skip("credential files are unsupported on Windows")
 	}
 	root := t.TempDir()
-	bearer := "vgx1.550e8400-e29b-41d4-a716-446655440000.secret"
+	bearer := testBearer("550e8400-e29b-41d4-a716-446655440000")
 	credentialFile := filepath.Join(canonicalRuntimeTestDir(t), "credential")
 	if err := os.WriteFile(credentialFile, []byte(bearer+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -286,11 +316,11 @@ func TestMemoryConfigureSyncCredentialFileRejectsKeyringProfileWithoutSideEffect
 	root := t.TempDir()
 	device := "550e8400-e29b-41d4-a716-446655440000"
 	runtime := enrollmentRuntime(map[string]string{})
-	if _, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, "vgx1."+device+".keyring"); err != nil {
+	if _, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: root}, "https://sync.example.test", device, testBearer(device)); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(canonicalRuntimeTestDir(t), "credential")
-	if err := os.WriteFile(file, []byte("vgx1."+device+".file\n"), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(testBearer(device)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runtime.putSecret = func(string, string) error { t.Fatal("put keyring"); return nil }
@@ -327,7 +357,7 @@ func TestMemoryConfigureSyncDoesNotStoreCredentialWhenProfileCannotBeOpened(t *t
 	runtime := NewMemory("cli", false)
 	runtime.putSecret = func(string, string) error { return nil }
 	runtime.deleteSecret = func(string) error { deleted++; return nil }
-	_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: blocked}, "https://sync.example.test", "550e8400-e29b-41d4-a716-446655440000", "vgx1.550e8400-e29b-41d4-a716-446655440000.secret")
+	_, err := runtime.ConfigureSync(context.Background(), config.Options{StorageRoot: blocked}, "https://sync.example.test", "550e8400-e29b-41d4-a716-446655440000", testBearer("550e8400-e29b-41d4-a716-446655440000"))
 	if err == nil || deleted != 0 {
 		t.Fatalf("configure error=%v deleted=%d", err, deleted)
 	}
@@ -335,8 +365,8 @@ func TestMemoryConfigureSyncDoesNotStoreCredentialWhenProfileCannotBeOpened(t *t
 
 func TestMemoryConfigureSyncCompensatesByMutationOutcome(t *testing.T) {
 	const deviceID = "550e8400-e29b-41d4-a716-446655440000"
-	const first = "vgx1.550e8400-e29b-41d4-a716-446655440000.first"
-	const second = "vgx1.550e8400-e29b-41d4-a716-446655440000.second"
+	first := testBearer("550e8400-e29b-41d4-a716-446655440000")
+	second := testBearerWithSecret("550e8400-e29b-41d4-a716-446655440000", 1)
 	newRuntime := func(values map[string]string) Memory {
 		runtime := NewMemory("cli", false)
 		runtime.putSecret = func(reference, value string) error { values[reference] = value; return nil }
@@ -467,7 +497,7 @@ func TestMemoryConfigureSyncCompensatesByMutationOutcome(t *testing.T) {
 
 func TestMemoryConfigureSyncPreservesLegacyAndRejectsForgedRecoveryMarker(t *testing.T) {
 	const device = "550e8400-e29b-41d4-a716-446655440000"
-	token := "vgx1." + device + ".token"
+	token := testBearer(device)
 	t.Run("legacy retained", func(t *testing.T) {
 		root, values := t.TempDir(), map[string]string{"secret://keychain/legacy": "legacy"}
 		paths, err := config.Prepare(context.Background(), config.Options{StorageRoot: root})

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/vgxness/vgxness/internal/syncapi"
 )
 
 const (
@@ -285,24 +286,8 @@ func validDeviceName(name string) bool {
 }
 
 func parseDeviceBearer(bearer string) (uuid.UUID, bool) {
-	if len(bearer) != 85 {
-		return uuid.Nil, false
-	}
-	parts := strings.Split(bearer, ".")
-	if len(parts) != 3 || parts[0] != "vgx1" {
-		return uuid.Nil, false
-	}
-	id, err := uuid.Parse(parts[1])
-	if err != nil || id == uuid.Nil || id.String() != parts[1] {
-		return uuid.Nil, false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil || len(raw) != 32 || base64.RawURLEncoding.EncodeToString(raw) != parts[2] {
-		clearBytes(raw)
-		return uuid.Nil, false
-	}
-	clearBytes(raw)
-	return id, true
+	credential, ok := syncapi.ParseBearer(bearer)
+	return credential.DeviceID, ok
 }
 
 func clearBytes(b []byte) {

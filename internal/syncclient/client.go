@@ -422,15 +422,8 @@ func contextError(ctx context.Context, err error) error {
 }
 
 func validCredential(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, character := range value {
-		if character <= ' ' || character == 0x7f {
-			return false
-		}
-	}
-	return true
+	_, ok := syncapi.ParseBearer(value)
+	return ok
 }
 
 func pullMatches(request syncapi.PullRequest, response syncapi.PullResponse) bool {

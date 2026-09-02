@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/vgxness/vgxness/internal/config"
@@ -29,8 +27,6 @@ const (
 	foregroundSyncLease   = time.Minute
 	foregroundSyncTimeout = 15 * time.Second
 )
-
-var canonicalBearer = regexp.MustCompile(`^vgx1\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.([A-Za-z0-9_-]{1,128})$`)
 
 const credentialFileReference = "secret://keychain/sync/file"
 
@@ -357,8 +353,8 @@ func (runtime Memory) sync(ctx context.Context, opts config.Options) (memory.Syn
 }
 
 func validBearer(value, deviceID string) bool {
-	match := canonicalBearer.FindStringSubmatch(value)
-	return match != nil && match[1] == strings.ToLower(deviceID)
+	credential, ok := syncapi.ParseBearer(value)
+	return ok && credential.DeviceID.String() == deviceID
 }
 
 func (runtime Memory) syncCredential(opts config.Options, reference string) (string, error) {

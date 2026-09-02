@@ -117,7 +117,7 @@ func TestMemorySyncClassifiesCredentialAndProfileValidationFailures(t *testing.T
 		{name: "unavailable", err: secrets.ErrUnavailable, want: memory.SyncStatusCredentialUnavailable},
 		{name: "generic", err: errors.New("credential failure"), want: memory.SyncStatusUnavailable},
 		{name: "malformed", credential: "malformed", want: memory.SyncStatusInvalid},
-		{name: "mismatched device", credential: "vgx1.550e8400-e29b-41d4-a716-446655440001.secret", want: memory.SyncStatusInvalid},
+		{name: "mismatched device", credential: testBearer("550e8400-e29b-41d4-a716-446655440001"), want: memory.SyncStatusInvalid},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime := NewMemory("test", false)
@@ -141,7 +141,7 @@ func TestMemorySyncClassifiesCredentialAndProfileValidationFailures(t *testing.T
 		t.Fatal(err)
 	}
 	runtime := NewMemory("test", false)
-	runtime.credential = func(string) (string, error) { return "vgx1.550e8400-e29b-41d4-a716-446655440000.secret", nil }
+	runtime.credential = func(string) (string, error) { return testBearer("550e8400-e29b-41d4-a716-446655440000"), nil }
 	result, err := runtime.Sync(context.Background(), opts)
 	if err != nil || result.Status != memory.SyncStatusInvalid {
 		t.Fatalf("invalid endpoint sync = %+v, %v", result, err)
@@ -157,7 +157,8 @@ func TestSyncRemoteForwardsCredentialAndHTTPErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := syncRemote{client: client, credential: "credential"}
+	credential := testBearer("550e8400-e29b-41d4-a716-446655440000")
+	remote := syncRemote{client: client, credential: credential}
 	cursor := syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-446655440000"}
 	if _, err = remote.Discover(context.Background()); !errors.Is(err, syncclient.ErrUnauthorized) {
 		t.Fatalf("discover error = %v", err)
@@ -172,7 +173,7 @@ func TestSyncRemoteForwardsCredentialAndHTTPErrors(t *testing.T) {
 		t.Fatalf("requests = %d, want 3", len(requests))
 	}
 	for _, request := range requests {
-		if request.Header.Get("Authorization") != "Bearer credential" {
+		if request.Header.Get("Authorization") != "Bearer "+credential {
 			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
 		}
 	}
@@ -206,7 +207,7 @@ func TestSyncRemoteMapsSuccessfulPullAndPush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := syncRemote{client: client, credential: "credential"}
+	remote := syncRemote{client: client, credential: testBearer("550e8400-e29b-41d4-a716-446655440000")}
 	page, err := remote.Pull(context.Background(), cursor, 1)
 	if err != nil || page.Cursor != (syncservice.Cursor{HistoryID: cursor.HistoryID, Position: 3, Watermark: cursor.Watermark}) || !page.HasMore || len(page.Changes) != 1 || page.Changes[0].Mutation.MutationID != mutation.MutationID {
 		t.Fatalf("pull = %+v, %v", page, err)
