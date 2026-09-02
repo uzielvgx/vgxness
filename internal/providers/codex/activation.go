@@ -193,6 +193,26 @@ func hasRoot(item marketplaceRecord, root string) bool {
 	return filepath.Clean(real) == filepath.Clean(want)
 }
 
+func vgxnessMarketplaces(items []marketplaceRecord) []marketplaceRecord {
+	matched := make([]marketplaceRecord, 0, 1)
+	for _, item := range items {
+		if item.Name == marketplaceName {
+			matched = append(matched, item)
+		}
+	}
+	return matched
+}
+
+func vgxnessPlugins(items []pluginRecord) []pluginRecord {
+	matched := make([]pluginRecord, 0, 1)
+	for _, item := range items {
+		if item.ID == pluginID || item.Name == marketplaceName || item.Marketplace == marketplaceName {
+			matched = append(matched, item)
+		}
+	}
+	return matched
+}
+
 func (s *Integration) activation(ctx context.Context, root *Root) (activationState, error) {
 	markets, err := s.command(ctx, root, "plugin", "marketplace", "list", "--json")
 	if err != nil {
@@ -206,10 +226,12 @@ func (s *Integration) activation(ctx context.Context, root *Root) (activationSta
 	if err != nil {
 		return activationAbsent, err
 	}
-	if len(market.Marketplaces) == 0 && len(listed.Installed) == 0 {
+	ownedMarkets := vgxnessMarketplaces(market.Marketplaces)
+	ownedPlugins := vgxnessPlugins(listed.Installed)
+	if len(ownedMarkets) == 0 && len(ownedPlugins) == 0 {
 		return activationAbsent, nil
 	}
-	if len(market.Marketplaces) != 1 || len(listed.Installed) != 1 || market.Marketplaces[0].Name != marketplaceName || !hasRoot(market.Marketplaces[0], root.Path) {
+	if len(ownedMarkets) != 1 || len(ownedPlugins) != 1 || !hasRoot(ownedMarkets[0], root.Path) {
 		return activationDrifted, nil
 	}
 	body, _, readErr := root.Read("plugins/vgxness/.codex-plugin/plugin.json", maxArtifactBytes)
@@ -219,7 +241,7 @@ func (s *Integration) activation(ctx context.Context, root *Root) (activationSta
 	if readErr != nil || json.Unmarshal(body, &manifest) != nil || manifest.Version == "" {
 		return activationDrifted, nil
 	}
-	p := listed.Installed[0]
+	p := ownedPlugins[0]
 	if p.ID != pluginID || p.Name != marketplaceName || p.Marketplace != marketplaceName || p.Version != manifest.Version || !*p.Installed || !*p.Enabled {
 		return activationDrifted, nil
 	}
@@ -239,7 +261,8 @@ func (s *Integration) marketplaceCreatedExactly(ctx context.Context, root *Root)
 	if err != nil {
 		return false, err
 	}
-	return len(market.Marketplaces) == 1 && market.Marketplaces[0].Name == marketplaceName && hasRoot(market.Marketplaces[0], root.Path) && len(listed.Installed) == 0, nil
+	ownedMarkets := vgxnessMarketplaces(market.Marketplaces)
+	return len(ownedMarkets) == 1 && hasRoot(ownedMarkets[0], root.Path) && len(vgxnessPlugins(listed.Installed)) == 0, nil
 }
 
 func (s *Integration) pluginCreatedExactly(ctx context.Context, root *Root) (bool, error) {
@@ -262,10 +285,14 @@ func (s *Integration) pluginCreatedExactly(ctx context.Context, root *Root) (boo
 	if err != nil || json.Unmarshal(body, &manifest) != nil {
 		return false, err
 	}
-	if len(market.Marketplaces) != 0 || len(listed.Installed) != 1 {
+	if len(vgxnessMarketplaces(market.Marketplaces)) != 0 {
 		return false, nil
 	}
-	p := listed.Installed[0]
+	ownedPlugins := vgxnessPlugins(listed.Installed)
+	if len(ownedPlugins) != 1 {
+		return false, nil
+	}
+	p := ownedPlugins[0]
 	return p.ID == pluginID && p.Name == marketplaceName && p.Marketplace == marketplaceName && p.Version == manifest.Version && *p.Installed && *p.Enabled, nil
 }
 

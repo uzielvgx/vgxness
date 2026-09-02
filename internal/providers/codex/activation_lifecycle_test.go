@@ -25,6 +25,8 @@ func TestRunCodexFailsClosed(t *testing.T) {
 type fakeCodexCLI struct {
 	market, plugin, enabled bool
 	root, version           string
+	ambientMarkets          []map[string]any
+	ambientPlugins          []map[string]any
 	fail                    map[string]error
 	output                  map[string][]byte
 	mutations               int
@@ -49,7 +51,10 @@ func (f *fakeCodexCLI) Run(_ context.Context, _ string, args, _ []string) ([]byt
 	}
 	switch key {
 	case "[plugin list --json]":
-		installed := []any{}
+		installed := make([]any, 0, len(f.ambientPlugins)+1)
+		for _, plugin := range f.ambientPlugins {
+			installed = append(installed, plugin)
+		}
 		if f.plugin {
 			version := f.version
 			if version == "" {
@@ -59,7 +64,10 @@ func (f *fakeCodexCLI) Run(_ context.Context, _ string, args, _ []string) ([]byt
 		}
 		return json.Marshal(map[string]any{"installed": installed})
 	case "[plugin marketplace list --json]":
-		markets := []any{}
+		markets := make([]any, 0, len(f.ambientMarkets)+1)
+		for _, market := range f.ambientMarkets {
+			markets = append(markets, market)
+		}
 		if f.market {
 			markets = append(markets, map[string]any{"name": marketplaceName, "root": f.root})
 		}
@@ -149,6 +157,57 @@ func openActivationRoot(t *testing.T) *Root {
 	}
 	t.Cleanup(func() { _ = root.Close() })
 	return root
+}
+
+func TestActivationIgnoresUnrelatedAmbientState(t *testing.T) {
+	ctx, path := context.Background(), filepath.Join(t.TempDir(), "codex")
+	pkg, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePackage(t, path, pkg)
+	fake := &fakeCodexCLI{
+		fail: map[string]error{}, after: map[string]error{}, root: path, market: true, plugin: true, enabled: true,
+		ambientMarkets: []map[string]any{{"name": "openai", "root": "/tmp/openai"}},
+		ambientPlugins: []map[string]any{{"pluginId": "openai@openai", "name": "openai", "marketplaceName": "openai", "version": "1.0.0", "installed": true, "enabled": true}},
+	}
+	result, err := fakeActivationIntegration(fake).Status(ctx, integration.Options{ConfigDir: path})
+	if err != nil || result.State != integration.StateInstalled {
+		t.Fatalf("Status=%+v err=%v", result, err)
+	}
+}
+
+func TestActivateRecoveryIgnoresUnrelatedAmbientState(t *testing.T) {
+	ctx, path := context.Background(), filepath.Join(t.TempDir(), "codex")
+	pkg, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePackage(t, path, pkg)
+	if err := os.WriteFile(filepath.Join(path, activationPendingName), activationEvidence(pkg, "activate").body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeCodexCLI{
+		fail: map[string]error{}, after: map[string]error{}, root: path,
+		ambientMarkets: []map[string]any{{"name": "openai", "root": "/tmp/openai"}},
+		ambientPlugins: []map[string]any{{"pluginId": "openai@openai", "name": "openai", "marketplaceName": "openai", "version": "1.0.0", "installed": true, "enabled": true}},
+	}
+	result, err := fakeActivationIntegration(fake).Reinstall(ctx, integration.Options{ConfigDir: path})
+	if err != nil || result.State != integration.StateInstalled {
+		t.Fatalf("Reinstall=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(path, activationPendingName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("activation marker retained: %v", err)
+	}
+}
+
+func TestActivationRejectsConflictingVGXNESSIdentityWithoutMutation(t *testing.T) {
+	root := openActivationRoot(t)
+	fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: root.Path + "-foreign", market: true, plugin: true, enabled: true}
+	_, _, _, err := fakeActivationIntegration(fake).activate(context.Background(), root)
+	if !errors.Is(err, integration.ErrConflict) || fake.mutations != 0 {
+		t.Fatalf("activate err=%v mutations=%d", err, fake.mutations)
+	}
 }
 
 func TestCodexActivationRecoveryEvidenceSurvivesAbruptCLIMutations(t *testing.T) {
