@@ -1126,7 +1126,14 @@ func (s *Integration) reinstallProtected(ctx context.Context, options integratio
 		return integration.Result{}, err
 	}
 	if options.ModelPlan == "" && (state.result.State == integration.StateInstalled || state.result.State == integration.StatePartial) {
-		pkg = installed
+		if !installed.legacy && installed.plan != "" {
+			pkg, err = RenderPlan("v0.0.0", installed.plan)
+			if err != nil {
+				return integration.Result{}, err
+			}
+		} else {
+			pkg = installed
+		}
 	}
 	switch state.result.State {
 	case integration.StateInstalled:

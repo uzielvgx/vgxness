@@ -169,3 +169,28 @@ func TestCodexPreTerminalClosureV18PackageUpgradesAndRejectsDrift(t *testing.T) 
 		t.Fatalf("drift reinstall err=%v after=%q readErr=%v", err, after, readErr)
 	}
 }
+
+func TestCodexPreTerminalClosureV18NoFlagReinstallInfersPlanAndUpgrades(t *testing.T) {
+	plan := sdd.PlanHigh
+	predecessor, err := renderActiveV18PreTerminalClosure("v0.0.0", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "codex")
+	writePackage(t, root, predecessor)
+	fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: root}
+	result, err := fakeActivationIntegration(fake).Reinstall(context.Background(), integration.Options{ConfigDir: root})
+	if err != nil || result.State != integration.StateInstalled || result.ModelPlan != plan {
+		t.Fatalf("no-flag reinstall=%+v err=%v", result, err)
+	}
+	current, err := RenderPlan("v0.0.0", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range current.Artifacts {
+		got, readErr := os.ReadFile(filepath.Join(root, item.Path))
+		if readErr != nil || !bytes.Equal(got, item.Bytes) {
+			t.Fatalf("upgraded artifact %q = %q, %v", item.Path, got, readErr)
+		}
+	}
+}
