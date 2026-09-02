@@ -614,6 +614,7 @@ func TestHistoricalCodexHooksGoldenIdentity(t *testing.T) {
 }
 
 func TestHistoricalCodexHookRemovalFailuresRemainRecoverable(t *testing.T) {
+	pluginDir := filepath.Join("plugins", "vgxness")
 	tests := []struct {
 		name  string
 		match func(root, name string) bool
@@ -625,17 +626,17 @@ func TestHistoricalCodexHookRemovalFailuresRemainRecoverable(t *testing.T) {
 		{name: "backup durability", match: func(root, name string) bool {
 			_, hookErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json"))
 			_, sidecarErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json.vgxness-remove"))
-			return name == "plugins/vgxness" && hookErr == nil && sidecarErr == nil
+			return name == pluginDir && hookErr == nil && sidecarErr == nil
 		}},
 		{name: "target removal durability", match: func(root, name string) bool {
 			_, hookErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json"))
 			_, sidecarErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json.vgxness-remove"))
-			return name == "plugins/vgxness" && errors.Is(hookErr, os.ErrNotExist) && sidecarErr == nil
+			return name == pluginDir && errors.Is(hookErr, os.ErrNotExist) && sidecarErr == nil
 		}},
 		{name: "backup cleanup durability", match: func(root, name string) bool {
 			_, hookErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json"))
 			_, sidecarErr := os.Lstat(filepath.Join(root, "plugins", "vgxness", "hooks.json.vgxness-remove"))
-			return name == "plugins/vgxness" && errors.Is(hookErr, os.ErrNotExist) && errors.Is(sidecarErr, os.ErrNotExist)
+			return name == pluginDir && errors.Is(hookErr, os.ErrNotExist) && errors.Is(sidecarErr, os.ErrNotExist)
 		}},
 		{name: "activation evidence durability", match: func(root, name string) bool {
 			_, err := os.Lstat(filepath.Join(root, ".vgxness-activation-pending"))
