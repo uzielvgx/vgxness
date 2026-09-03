@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -149,6 +150,79 @@ func TestMemorySyncRejectsUnboundOrMalformedWorkspaceBeforeRemote(t *testing.T) 
 			break
 		}
 	}
+}
+
+func TestMemorySyncTransitionGuardPrecedesCredentialsAndTransport(t *testing.T) {
+	prepare := func(t *testing.T) (Memory, config.Options, string) {
+		t.Helper()
+		runtime, opts, portableID, project := setupBoundPlanRuntime(t)
+		store := openPlanRuntimeStore(t, opts)
+		if _, err := store.PrepareSyncProjectTransition(context.Background(), portableID, project, memory.SyncProjectTransitionRejoinMerge, false); err != nil {
+			store.Close()
+			t.Fatal(err)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return runtime, opts, portableID
+	}
+	run := func(t *testing.T, runtime Memory, opts config.Options) (memory.SyncResult, error, int, int) {
+		t.Helper()
+		credentials, requests := 0, 0
+		runtime.credential = func(string) (string, error) { credentials++; return testBearer(planRuntimeDeviceID), nil }
+		runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) {
+			requests++
+			return nil, errors.New("unexpected remote call")
+		})
+		result, err := runtime.Sync(context.Background(), opts)
+		return result, err, credentials, requests
+	}
+
+	t.Run("active transition fails closed", func(t *testing.T) {
+		runtime, opts, _ := prepare(t)
+		result, err, credentials, requests := run(t, runtime, opts)
+		if !errors.Is(err, memory.ErrConflict) || credentials != 0 || requests != 0 {
+			t.Fatalf("result=%+v err=%v credentials=%d requests=%d", result, err, credentials, requests)
+		}
+	})
+
+	t.Run("completed transition permits ordinary sync", func(t *testing.T) {
+		runtime, opts, portableID := prepare(t)
+		database, err := sql.Open("sqlite", filepath.Join(opts.StorageRoot, "memory.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`UPDATE sync_project_transitions SET status='completed', completed_at=created_at WHERE portable_project_id=?`, portableID); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_, err, credentials, requests := run(t, runtime, opts)
+		if errors.Is(err, memory.ErrConflict) || credentials != 1 || requests == 0 {
+			t.Fatalf("err=%v credentials=%d requests=%d", err, credentials, requests)
+		}
+	})
+
+	t.Run("corrupt transition fails closed", func(t *testing.T) {
+		runtime, opts, portableID := prepare(t)
+		database, err := sql.Open("sqlite", filepath.Join(opts.StorageRoot, "memory.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`PRAGMA ignore_check_constraints=ON; UPDATE sync_project_transitions SET mode='corrupt' WHERE portable_project_id=?; PRAGMA ignore_check_constraints=OFF`, portableID); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		result, err, credentials, requests := run(t, runtime, opts)
+		if !errors.Is(err, memory.ErrCorrupt) || credentials != 0 || requests != 0 {
+			t.Fatalf("result=%+v err=%v credentials=%d requests=%d", result, err, credentials, requests)
+		}
+	})
 }
 
 func TestMemorySyncProfileAndCredentialStatesAvoidNetwork(t *testing.T) {
@@ -893,6 +967,203 @@ func TestRunSyncProjectTransitionFailsClosedForInvalidIntentAndIncompleteSync(t 
 	})
 }
 
+func TestResumeActiveSyncProjectTransition(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	readErr := errors.New("corrupt transition")
+	for name, test := range map[string]struct {
+		ctx             context.Context
+		mode            memory.SyncProjectTransitionMode
+		transition      memory.SyncProjectTransitionResult
+		identity        int64
+		active          bool
+		readErr         error
+		finalizeResults []memory.SyncProjectTransitionResult
+		wantErr         error
+		wantStatus      string
+		wantReads       int
+		wantFinalizes   int
+		wantRemoteWork  bool
+	}{
+		"cancelled":         {ctx: cancelledResumeContext(), mode: memory.SyncProjectTransitionRejoinMerge, wantErr: context.Canceled},
+		"absent":            {ctx: context.Background(), mode: memory.SyncProjectTransitionRejoinMerge, wantErr: memory.ErrConflict, wantReads: 1},
+		"mode mismatch":     {ctx: context.Background(), mode: memory.SyncProjectTransitionReseedSource, active: true, transition: memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPulling}, wantErr: memory.ErrConflict, wantReads: 1},
+		"identity mismatch": {ctx: context.Background(), mode: memory.SyncProjectTransitionRejoinMerge, identity: 1, active: true, transition: memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPulling, TransitionIdentity: 2}, wantErr: memory.ErrConflict, wantReads: 1},
+		"read error":        {ctx: context.Background(), mode: memory.SyncProjectTransitionRejoinMerge, readErr: readErr, wantErr: readErr, wantReads: 1},
+		"completed":         {ctx: context.Background(), mode: memory.SyncProjectTransitionRejoinMerge, active: true, transition: memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionCompleted}, wantStatus: memory.SyncProjectTransitionCompleted, wantReads: 1},
+		"pulling":           {ctx: context.Background(), mode: memory.SyncProjectTransitionRejoinMerge, active: true, transition: memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPulling}, wantStatus: memory.SyncProjectTransitionCompleted, wantReads: 1, wantFinalizes: 1, wantRemoteWork: true},
+		"publishing":        {ctx: context.Background(), mode: memory.SyncProjectTransitionRejoinMerge, active: true, transition: memory.SyncProjectTransitionResult{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPublishing}, finalizeResults: []memory.SyncProjectTransitionResult{{Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionPublishing}}, wantStatus: memory.SyncProjectTransitionCompleted, wantReads: 1, wantFinalizes: 2, wantRemoteWork: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &transitionTestStore{projectForegroundStore: projectForegroundStore{claims: [][]memory.SyncOutboxClaim{{}}}, transition: test.transition, active: test.active, readErr: test.readErr, finalizeResults: test.finalizeResults}
+			remote := &testForegroundRemote{}
+			identity := test.transition.TransitionIdentity
+			if test.identity != 0 {
+				identity = test.identity
+			}
+			result, err := resumeActiveSyncProjectTransition(test.ctx, store, remote, project, "project", test.mode, identity)
+			if !errors.Is(err, test.wantErr) || result.Status != test.wantStatus || store.readCalls != test.wantReads || store.finalizes != test.wantFinalizes {
+				t.Fatalf("result=%+v err=%v reads=%d finalizes=%d", result, err, store.readCalls, store.finalizes)
+			}
+			remoteWork := remote.capabilities != 0 || remote.discovers != 0 || remote.pulls != 0 || remote.projectPulls != 0 || remote.pushes != 0
+			if remoteWork != test.wantRemoteWork || (!test.wantRemoteWork && (store.ensureCalls != 0 || store.prepareCalls != 0 || store.seals != 0)) {
+				t.Fatalf("remote=%+v ensures=%d prepares=%d seals=%d", remote, store.ensureCalls, store.prepareCalls, store.seals)
+			}
+		})
+	}
+}
+
+func TestResumeSyncProjectTransition(t *testing.T) {
+	prepare := func(t *testing.T, runtime Memory, opts config.Options, portableID, project string) (*memory.Store, int64) {
+		t.Helper()
+		store := openPlanRuntimeStore(t, opts)
+		transition, err := store.PrepareSyncProjectTransition(context.Background(), portableID, project, memory.SyncProjectTransitionRejoinMerge, false)
+		if err != nil {
+			store.Close()
+			t.Fatal(err)
+		}
+		return store, transition.TransitionIdentity
+	}
+	t.Run("absence and cancellation precede credentials and transport", func(t *testing.T) {
+		runtime, opts, _, _ := setupBoundPlanRuntime(t)
+		credentials, transports := 0, 0
+		runtime.credential = func(string) (string, error) { credentials++; return testBearer(planRuntimeDeviceID), nil }
+		runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) { transports++; return nil, errors.New("unexpected") })
+		if _, err := runtime.resumeSyncProjectTransition(context.Background(), opts, opts.ProjectDir, memory.SyncProjectTransitionRejoinMerge, 1); !errors.Is(err, memory.ErrConflict) {
+			t.Fatalf("absence error=%v", err)
+		}
+		if _, err := runtime.resumeSyncProjectTransition(cancelledResumeContext(), opts, opts.ProjectDir, memory.SyncProjectTransitionRejoinMerge, 1); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation error=%v", err)
+		}
+		if credentials != 0 || transports != 0 {
+			t.Fatalf("credentials=%d transports=%d", credentials, transports)
+		}
+	})
+	t.Run("active transition resolves credentials before resuming", func(t *testing.T) {
+		runtime, opts, portableID, project := setupBoundPlanRuntime(t)
+		store, identity := prepare(t, runtime, opts, portableID, project)
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		credentials, transports := 0, 0
+		runtime.credential = func(string) (string, error) { credentials++; return testBearer(planRuntimeDeviceID), nil }
+		runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) { transports++; return nil, errors.New("offline") })
+		_, err := runtime.resumeSyncProjectTransition(context.Background(), opts, opts.ProjectDir, memory.SyncProjectTransitionRejoinMerge, identity)
+		if !errors.Is(err, memory.ErrConflict) || credentials != 1 || transports == 0 {
+			t.Fatalf("err=%v credentials=%d transports=%d", err, credentials, transports)
+		}
+	})
+	t.Run("mode mismatch precedes credentials and transport", func(t *testing.T) {
+		runtime, opts, portableID, project := setupBoundPlanRuntime(t)
+		store, identity := prepare(t, runtime, opts, portableID, project)
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		credentials, transports := 0, 0
+		runtime.credential = func(string) (string, error) { credentials++; return testBearer(planRuntimeDeviceID), nil }
+		runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) { transports++; return nil, errors.New("unexpected") })
+		if _, err := runtime.resumeSyncProjectTransition(context.Background(), opts, opts.ProjectDir, memory.SyncProjectTransitionReseedSource, identity); !errors.Is(err, memory.ErrConflict) || credentials != 0 || transports != 0 {
+			t.Fatalf("err=%v credentials=%d transports=%d", err, credentials, transports)
+		}
+	})
+	t.Run("same mode replacement precedes credentials and transport", func(t *testing.T) {
+		runtime, opts, portableID, project := setupBoundPlanRuntime(t)
+		store, identity := prepare(t, runtime, opts, portableID, project)
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		database, err := sql.Open("sqlite", filepath.Join(opts.StorageRoot, "memory.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`UPDATE sync_project_transitions SET status='completed',completed_at=created_at WHERE portable_project_id=?`, portableID); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		replacement := openPlanRuntimeStore(t, opts)
+		if _, err := replacement.PrepareSyncProjectTransition(context.Background(), portableID, project, memory.SyncProjectTransitionRejoinMerge, false); err != nil {
+			replacement.Close()
+			t.Fatal(err)
+		}
+		if err := replacement.Close(); err != nil {
+			t.Fatal(err)
+		}
+		credentials, transports := 0, 0
+		runtime.credential = func(string) (string, error) { credentials++; return testBearer(planRuntimeDeviceID), nil }
+		runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) { transports++; return nil, errors.New("unexpected") })
+		if _, err := runtime.resumeSyncProjectTransition(context.Background(), opts, opts.ProjectDir, memory.SyncProjectTransitionRejoinMerge, identity); !errors.Is(err, memory.ErrConflict) || credentials != 0 || transports != 0 {
+			t.Fatalf("err=%v credentials=%d transports=%d", err, credentials, transports)
+		}
+	})
+	t.Run("completed reread precedes credentials and transport", func(t *testing.T) {
+		runtime, opts, portableID, project := setupBoundPlanRuntime(t)
+		store, identity := prepare(t, runtime, opts, portableID, project)
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		database, err := sql.Open("sqlite", filepath.Join(opts.StorageRoot, "memory.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`UPDATE sync_project_transitions SET status='completed', completed_at=created_at WHERE portable_project_id=?`, portableID); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		credentials, transports := 0, 0
+		runtime.credential = func(string) (string, error) { credentials++; return "", errors.New("unexpected") }
+		runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) { transports++; return nil, errors.New("unexpected") })
+		result, err := runtime.resumeSyncProjectTransition(context.Background(), opts, opts.ProjectDir, memory.SyncProjectTransitionRejoinMerge, identity)
+		want := memory.SyncProjectTransitionResult{SchemaVersion: 1, Mode: memory.SyncProjectTransitionRejoinMerge, Status: memory.SyncProjectTransitionCompleted, TransitionIdentity: identity}
+		if err != nil || result != want || credentials != 0 || transports != 0 {
+			t.Fatalf("result=%+v err=%v credentials=%d transports=%d", result, err, credentials, transports)
+		}
+	})
+	t.Run("corrupt reread precedes credentials and transport", func(t *testing.T) {
+		runtime, opts, portableID, project := setupBoundPlanRuntime(t)
+		store, identity := prepare(t, runtime, opts, portableID, project)
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		database, err := sql.Open("sqlite", filepath.Join(opts.StorageRoot, "memory.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`PRAGMA ignore_check_constraints=ON`); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`UPDATE sync_project_transitions SET mode='corrupt' WHERE portable_project_id=?`, portableID); err != nil {
+			_, _ = database.Exec(`PRAGMA ignore_check_constraints=OFF`)
+			database.Close()
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`PRAGMA ignore_check_constraints=OFF`); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		credentials, transports := 0, 0
+		runtime.credential = func(string) (string, error) { credentials++; return "", errors.New("unexpected") }
+		runtime.transport = roundTripper(func(*http.Request) (*http.Response, error) { transports++; return nil, errors.New("unexpected") })
+		if _, err := runtime.resumeSyncProjectTransition(context.Background(), opts, opts.ProjectDir, memory.SyncProjectTransitionRejoinMerge, identity); !errors.Is(err, memory.ErrCorrupt) || credentials != 0 || transports != 0 {
+			t.Fatalf("err=%v credentials=%d transports=%d", err, credentials, transports)
+		}
+	})
+}
+
+func cancelledResumeContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
 func TestRunSyncProjectTransitionRecoversBeforePublishingResume(t *testing.T) {
 	project := "550e8400-e29b-41d4-a716-446655440001"
 	claim := memory.SyncOutboxClaim{SyncOutboxEntry: memory.SyncOutboxEntry{Mutation: syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440002", RecordID: "observation", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationCreate, Observation: &syncservice.Observation{ID: "observation", ProjectID: "project"}}}, ClaimToken: "550e8400-e29b-41d4-a716-446655440003"}
@@ -1363,18 +1634,36 @@ func (store *projectForegroundStore) MarkSyncOutboxRetry(context.Context, string
 
 type transitionTestStore struct {
 	projectForegroundStore
-	transition      memory.SyncProjectTransitionResult
-	active          bool
-	intent          memory.SyncProjectBackupIntent
-	prepareErr      error
-	prepareResult   memory.SyncProjectTransitionResult
-	ensureCalls     int
-	backupPaths     []string
-	finalizes       int
-	finalizeResults []memory.SyncProjectTransitionResult
-	recoveredClaims [][]memory.SyncOutboxClaim
-	seals           int
-	prepareCalls    int
+	transition          memory.SyncProjectTransitionResult
+	active              bool
+	readErr             error
+	readCalls           int
+	intent              memory.SyncProjectBackupIntent
+	prepareErr          error
+	prepareResult       memory.SyncProjectTransitionResult
+	ensureCalls         int
+	backupPaths         []string
+	finalizes           int
+	finalizeResults     []memory.SyncProjectTransitionResult
+	recoveredClaims     [][]memory.SyncOutboxClaim
+	seals               int
+	prepareCalls        int
+	transitionTranslate func(context.Context, string, string, int64, []syncservice.Mutation) ([]syncservice.Mutation, error)
+}
+
+func TestTransitionProjectStoreTranslateUsesExactIdentity(t *testing.T) {
+	var portable, project string
+	var identity int64
+	store := &transitionTestStore{transitionTranslate: func(_ context.Context, gotPortable, gotProject string, gotIdentity int64, mutations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+		portable, project, identity = gotPortable, gotProject, gotIdentity
+		return mutations, nil
+	}}
+	adapter := transitionProjectStore{syncProjectTransitionStore: store, portableProject: "portable", project: "project", transitionIdentity: 42}
+	mutations := []syncservice.Mutation{{MutationID: "mutation"}}
+	got, err := adapter.TranslateSyncMutations(context.Background(), "portable", "project", mutations)
+	if err != nil || len(got) != 1 || portable != "portable" || project != "project" || identity != 42 {
+		t.Fatalf("translated=%+v portable=%q project=%q identity=%d err=%v", got, portable, project, identity, err)
+	}
 }
 
 func testBackupOps() syncProjectBackupOps {
@@ -1386,7 +1675,8 @@ func testBackupOps() syncProjectBackupOps {
 }
 
 func (store *transitionTestStore) SyncProjectTransition(context.Context, string, string) (memory.SyncProjectTransitionResult, bool, error) {
-	return store.transition, store.active, nil
+	store.readCalls++
+	return store.transition, store.active, store.readErr
 }
 
 func (store *transitionTestStore) EnsureSyncProjectBackupIntent(_ context.Context, _ string, _ string, _ memory.SyncProjectTransitionMode, _ string) (memory.SyncProjectBackupIntent, error) {
@@ -1421,6 +1711,33 @@ func (store *transitionTestStore) FinalizeSyncProjectTransition(context.Context,
 		return result, nil
 	}
 	return memory.SyncProjectTransitionResult{Status: memory.SyncProjectTransitionCompleted}, nil
+}
+
+func (store *transitionTestStore) ClaimDueSyncOutboxForProjectTransition(ctx context.Context, lease time.Duration, limit int, project, _ string, _ int64) ([]memory.SyncOutboxClaim, error) {
+	return store.ClaimDueSyncOutboxForProject(ctx, lease, limit, project)
+}
+
+func (store *transitionTestStore) ApplySyncPushResultForProjectTransition(ctx context.Context, mutationID, claimToken string, result syncservice.Result, _ string, _ string, _ int64) error {
+	return store.ApplySyncPushResult(ctx, mutationID, claimToken, result)
+}
+
+func (store *transitionTestStore) MarkSyncOutboxRetryForProjectTransition(ctx context.Context, mutationID, claimToken string, next time.Time, code, _ string, _ string, _ int64) error {
+	return store.MarkSyncOutboxRetry(ctx, mutationID, claimToken, next, code)
+}
+
+func (store *transitionTestStore) ApplyProjectPulledPageForTransition(ctx context.Context, portableProject, localProject string, page syncservice.PullPage, _ int64) error {
+	return store.ApplyProjectPulledPage(ctx, portableProject, localProject, page)
+}
+
+func (store *transitionTestStore) TranslateSyncMutationsForTransition(ctx context.Context, portableProject, localProject string, transitionIdentity int64, mutations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+	if store.transitionTranslate != nil {
+		return store.transitionTranslate(ctx, portableProject, localProject, transitionIdentity, mutations)
+	}
+	return store.projectForegroundStore.TranslateSyncMutations(ctx, portableProject, localProject, mutations)
+}
+
+func (store *transitionTestStore) FinalizeSyncProjectTransitionWithIdentity(ctx context.Context, portableProject, localProject string, _ int64) (memory.SyncProjectTransitionResult, error) {
+	return store.FinalizeSyncProjectTransition(ctx, portableProject, localProject)
 }
 
 func (store *orderedStore) ClaimDueSyncOutbox(context.Context, time.Duration, int) ([]memory.SyncOutboxClaim, error) {
