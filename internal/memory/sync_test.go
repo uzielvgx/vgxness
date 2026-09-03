@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -104,6 +105,397 @@ func TestBackfillSyncProjectRepairsUnattemptedStaleCreatePayload(t *testing.T) {
 	again, err := store.BackfillSyncProject(context.Background(), "project", 100)
 	testutil.Require(t, err == nil && again.Queued == 0, "again=%+v err=%v", again, err)
 }
+
+func TestReadProjectPullCursorReturnsRawStoredValues(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	portable, history := "550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"
+	counts := func() [5]int {
+		t.Helper()
+		var values [5]int
+		for index, table := range []string{"projects", "portable_project_identities", "sync_project_cursor", "sync_project_inbox", "sync_outbox"} {
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM `+table).Scan(&values[index]))
+		}
+		return values
+	}
+	absentBefore := counts()
+	cursor, found, err := store.ReadProjectPullCursor(context.Background(), portable)
+	if err != nil || found || cursor != (syncservice.Cursor{}) {
+		t.Fatalf("absent cursor=%+v found=%v err=%v", cursor, found, err)
+	}
+	if absentAfter := counts(); absentAfter != absentBefore {
+		t.Fatalf("absent read mutated counts: before=%v after=%v", absentBefore, absentAfter)
+	}
+	_, err = store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project','workspace','test',1); INSERT INTO sync_project_cursor(portable_project_id,history_id,position,watermark,updated_at) VALUES(?,?,?,?,?)`, portable, history, 3, 3, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	presentBefore := counts()
+	for attempt := 0; attempt < 2; attempt++ {
+		cursor, found, err = store.ReadProjectPullCursor(context.Background(), portable)
+		if err != nil || !found || cursor != (syncservice.Cursor{HistoryID: history, Position: 3, Watermark: 3}) {
+			t.Fatalf("attempt=%d cursor=%+v found=%v err=%v", attempt, cursor, found, err)
+		}
+	}
+	if presentAfter := counts(); presentAfter != presentBefore {
+		t.Fatalf("present reads mutated counts: before=%v after=%v", presentBefore, presentAfter)
+	}
+	var storedHistory string
+	var storedPosition, storedWatermark int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT history_id,position,watermark FROM sync_project_cursor WHERE portable_project_id=?`, portable).Scan(&storedHistory, &storedPosition, &storedWatermark))
+	if storedHistory != history || storedPosition != 3 || storedWatermark != 3 {
+		t.Fatalf("persisted cursor changed: %q/%d/%d", storedHistory, storedPosition, storedWatermark)
+	}
+	legacy, err := store.ProjectPullCursor(context.Background(), portable, history)
+	if err != nil || legacy != (syncservice.Cursor{HistoryID: history, Position: 3}) {
+		t.Fatalf("legacy cursor=%+v err=%v", legacy, err)
+	}
+}
+
+func TestReadSyncProjectTopologyReturnsAtomicMetadataOnlySnapshot(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	workspace := t.TempDir()
+	portable, history := "550e8400-e29b-41d4-a716-446655440501", "550e8400-e29b-41d4-a716-446655440502"
+
+	absent, err := store.ReadSyncProjectTopology(context.Background(), workspace, portable)
+	if err != nil || absent != (SyncProjectTopology{SchemaVersion: 1, PortableProjectID: portable}) {
+		t.Fatalf("absent=%+v err=%v", absent, err)
+	}
+
+	hash, err := portableWorkspaceHash(workspace)
+	testutil.NoError(t, err)
+	boundAt := fixedTime.UTC().Format(time.RFC3339Nano)
+	_, err = store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO project_roots(workspace_hash,project_id) VALUES(?,'project')`, hash)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project',?,'test',?)`, portable, hash, boundAt)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_project_cursor(portable_project_id,history_id,position,watermark,updated_at) VALUES(?,?,?,?,?)`, portable, history, 3, 3, fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO sync_project_transitions(portable_project_id,local_project_id,mode,status,created_at,completed_at) VALUES(?,'project','rejoin_merge','completed',?,?)`, portable, fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	want := SyncProjectTopology{SchemaVersion: 1, PortableProjectID: portable, WorkspaceProjectID: "project", WorkspacePortableProjectID: portable, BoundProjectID: "project", Cursor: syncservice.Cursor{HistoryID: history, Position: 3, Watermark: 3}, HasCursor: true, Transition: SyncProjectTransitionResult{SchemaVersion: 1, Mode: SyncProjectTransitionRejoinMerge, Status: SyncProjectTransitionCompleted, TransitionIdentity: fixedTime.UnixNano()}, HasTransition: true}
+	counts := func() [5]int {
+		t.Helper()
+		var values [5]int
+		for index, table := range []string{"projects", "project_roots", "portable_project_identities", "sync_project_cursor", "sync_project_transitions"} {
+			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM `+table).Scan(&values[index]))
+		}
+		return values
+	}
+	before := counts()
+	for attempt := 0; attempt < 2; attempt++ {
+		got, err := store.ReadSyncProjectTopology(context.Background(), workspace, portable)
+		if err != nil || got != want {
+			t.Fatalf("attempt=%d got=%+v err=%v", attempt, got, err)
+		}
+	}
+	if after := counts(); after != before {
+		t.Fatalf("snapshot mutated row counts: before=%v after=%v", before, after)
+	}
+}
+
+func TestReadSyncProjectTopologyPreservesMismatchedBindings(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	workspace := t.TempDir()
+	portable, otherPortable := "550e8400-e29b-41d4-a716-446655440511", "550e8400-e29b-41d4-a716-446655440512"
+	hash, err := portableWorkspaceHash(workspace)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('workspace',0),('other',0)`)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO project_roots(workspace_hash,project_id) VALUES(?,'workspace')`, hash)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'workspace',?,'test',?)`, otherPortable, hash, fixedTime.UTC().Format(time.RFC3339Nano))
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'other',?,'test',?)`, portable, strings.Repeat("a", 64), fixedTime.UTC().Format(time.RFC3339Nano))
+	testutil.NoError(t, err)
+	got, err := store.ReadSyncProjectTopology(context.Background(), workspace, portable)
+	want := SyncProjectTopology{SchemaVersion: 1, PortableProjectID: portable, WorkspaceProjectID: "workspace", WorkspacePortableProjectID: otherPortable, BoundProjectID: "other"}
+	if err != nil || got != want {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
+func TestReadSyncProjectTopologyRejectsCorruptAssociations(t *testing.T) {
+	portable, history := "550e8400-e29b-41d4-a716-446655440521", "550e8400-e29b-41d4-a716-446655440522"
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, *Store, string)
+	}{
+		{name: "malformed identity hash", setup: func(t *testing.T, store *Store, _ string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project','not-a-hash','test',?)`, portable, fixedTime.UTC().Format(time.RFC3339Nano))
+			testutil.NoError(t, err)
+		}},
+		{name: "invalid identity timestamp", setup: func(t *testing.T, store *Store, _ string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project',?,'test',?)`, portable, strings.Repeat("b", 64), time.Time{}.Format(time.RFC3339Nano))
+			testutil.NoError(t, err)
+		}},
+		{name: "identity timestamp with offset", setup: func(t *testing.T, store *Store, _ string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project',?,'test',?)`, portable, strings.Repeat("b", 64), fixedTime.UTC().Format("2006-01-02T15:04:05+00:00"))
+			testutil.NoError(t, err)
+		}},
+		{name: "identity timestamp with redundant fraction", setup: func(t *testing.T, store *Store, _ string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project',?,'test',?)`, portable, strings.Repeat("b", 64), fixedTime.UTC().Format("2006-01-02T15:04:05.000000000Z07:00"))
+			testutil.NoError(t, err)
+		}},
+		{name: "workspace identity differs from root", setup: func(t *testing.T, store *Store, hash string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('root',0),('identity',0)`)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO project_roots(workspace_hash,project_id) VALUES(?,'root')`, hash)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'identity',?,'test',?)`, portable, hash, fixedTime.UTC().Format(time.RFC3339Nano))
+			testutil.NoError(t, err)
+		}},
+		{name: "cursor without binding", setup: func(t *testing.T, store *Store, _ string) {
+			_, err := store.db.Exec(`PRAGMA foreign_keys=OFF; INSERT INTO sync_project_cursor(portable_project_id,history_id,position,watermark,updated_at) VALUES(?,?,0,0,?); PRAGMA foreign_keys=ON`, portable, history, fixedTime.UnixNano())
+			testutil.NoError(t, err)
+		}},
+		{name: "malformed cursor", setup: func(t *testing.T, store *Store, hash string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO project_roots(workspace_hash,project_id) VALUES(?,'project')`, hash)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project',?,'test',?)`, portable, hash, fixedTime.UTC().Format(time.RFC3339Nano))
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`PRAGMA ignore_check_constraints=ON`)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO sync_project_cursor(portable_project_id,history_id,position,watermark,updated_at) VALUES(?,?,2,1,?)`, portable, history, fixedTime.UnixNano())
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`PRAGMA ignore_check_constraints=OFF`)
+			testutil.NoError(t, err)
+		}},
+		{name: "transition bound to another project", setup: func(t *testing.T, store *Store, hash string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0),('other',0)`)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO project_roots(workspace_hash,project_id) VALUES(?,'project')`, hash)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project',?,'test',?)`, portable, hash, fixedTime.UTC().Format(time.RFC3339Nano))
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO sync_project_transitions(portable_project_id,local_project_id,mode,status,created_at) VALUES(?,'other','rejoin_merge','pulling',?)`, portable, fixedTime.UnixNano())
+			testutil.NoError(t, err)
+		}},
+		{name: "invalid transition state", setup: func(t *testing.T, store *Store, hash string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO project_roots(workspace_hash,project_id) VALUES(?,'project')`, hash)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project',?,'test',?)`, portable, hash, fixedTime.UTC().Format(time.RFC3339Nano))
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`PRAGMA ignore_check_constraints=ON`)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO sync_project_transitions(portable_project_id,local_project_id,mode,status,created_at) VALUES(?,'project','rejoin_merge','invalid',?)`, portable, fixedTime.UnixNano())
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`PRAGMA ignore_check_constraints=OFF`)
+			testutil.NoError(t, err)
+		}},
+		{name: "completed before creation", setup: func(t *testing.T, store *Store, hash string) {
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0)`)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO project_roots(workspace_hash,project_id) VALUES(?,'project')`, hash)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project',?,'test',?)`, portable, hash, fixedTime.UTC().Format(time.RFC3339Nano))
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO sync_project_transitions(portable_project_id,local_project_id,mode,status,created_at,completed_at) VALUES(?,'project','rejoin_merge','completed',?,?)`, portable, fixedTime.UnixNano(), fixedTime.UnixNano()-1)
+			testutil.NoError(t, err)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			workspace := t.TempDir()
+			hash, err := portableWorkspaceHash(workspace)
+			testutil.NoError(t, err)
+			test.setup(t, store, hash)
+			got, err := store.ReadSyncProjectTopology(context.Background(), workspace, portable)
+			if !errors.Is(err, ErrCorrupt) || got != (SyncProjectTopology{}) {
+				t.Fatalf("topology=%+v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestReadSyncProjectTopologyRejectsInvalidAndPreservesCancellation(t *testing.T) {
+	workspace := t.TempDir()
+	portable := "550e8400-e29b-41d4-a716-446655440531"
+	store := openTestStore(t)
+	defer store.Close()
+	for name, call := range map[string]func() (SyncProjectTopology, error){
+		"nil context": func() (SyncProjectTopology, error) { return store.ReadSyncProjectTopology(nil, workspace, portable) },
+		"invalid portable": func() (SyncProjectTopology, error) {
+			return store.ReadSyncProjectTopology(context.Background(), workspace, "bad")
+		},
+		"noncanonical UUID": func() (SyncProjectTopology, error) {
+			return store.ReadSyncProjectTopology(context.Background(), workspace, strings.ToUpper(portable))
+		},
+		"invalid workspace": func() (SyncProjectTopology, error) {
+			return store.ReadSyncProjectTopology(context.Background(), filepath.Join(workspace, "missing"), portable)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := call()
+			if !errors.Is(err, ErrInvalid) || got != (SyncProjectTopology{}) {
+				t.Fatalf("topology=%+v err=%v", got, err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got, err := store.ReadSyncProjectTopology(ctx, workspace, portable); !errors.Is(err, context.Canceled) || got != (SyncProjectTopology{}) {
+		t.Fatalf("pre-cancel topology=%+v err=%v", got, err)
+	}
+
+	started := make(chan struct{})
+	driverName := fmt.Sprintf("topology-cancel-%d", time.Now().UnixNano())
+	sql.Register(driverName, cancelCursorDriver{started: started})
+	db, err := sql.Open(driverName, "")
+	testutil.NoError(t, err)
+	defer db.Close()
+	cancelStore := &Store{db: db}
+	ctx, cancel = context.WithCancel(context.Background())
+	resultCh := make(chan struct {
+		topology SyncProjectTopology
+		err      error
+	}, 1)
+	go func() {
+		topology, err := cancelStore.ReadSyncProjectTopology(ctx, workspace, portable)
+		resultCh <- struct {
+			topology SyncProjectTopology
+			err      error
+		}{topology: topology, err: err}
+	}()
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("topology query did not start")
+	}
+	select {
+	case got := <-resultCh:
+		if !errors.Is(got.err, context.Canceled) || got.topology != (SyncProjectTopology{}) {
+			t.Fatalf("topology=%+v err=%v", got.topology, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("topology query did not stop after cancellation")
+	}
+}
+
+func TestReadProjectPullCursorRejectsInvalidAndCancelledInput(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	for name, input := range map[string]struct {
+		ctx      context.Context
+		portable string
+	}{
+		"nil context":       {portable: "550e8400-e29b-41d4-a716-446655440001"},
+		"invalid":           {ctx: context.Background(), portable: "bad"},
+		"noncanonical UUID": {ctx: context.Background(), portable: "550E8400-E29B-41D4-A716-446655440001"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, found, err := store.ReadProjectPullCursor(input.ctx, input.portable); !errors.Is(err, ErrInvalid) || found {
+				t.Fatalf("found=%v err=%v", found, err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, found, err := store.ReadProjectPullCursor(ctx, "550e8400-e29b-41d4-a716-446655440001"); !errors.Is(err, context.Canceled) || found {
+		t.Fatalf("cancelled found=%v err=%v", found, err)
+	}
+}
+
+func TestReadProjectPullCursorRejectsCorruptStoredValues(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		history   string
+		position  int64
+		watermark int64
+	}{
+		{name: "history", history: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", position: 0, watermark: 0},
+		{name: "negative position", history: "550e8400-e29b-41d4-a716-446655440002", position: -1, watermark: 0},
+		{name: "negative watermark", history: "550e8400-e29b-41d4-a716-446655440002", position: 0, watermark: -1},
+		{name: "position after watermark", history: "550e8400-e29b-41d4-a716-446655440002", position: 2, watermark: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestStore(t)
+			defer store.Close()
+			portable := "550e8400-e29b-41d4-a716-446655440001"
+			_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',0); INSERT INTO portable_project_identities(portable_id,project_id,workspace_hash,source,bound_at) VALUES(?,'project','workspace','test',1)`, portable)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`PRAGMA ignore_check_constraints=ON`)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`INSERT INTO sync_project_cursor(portable_project_id,history_id,position,watermark,updated_at) VALUES(?,?,?,?,?)`, portable, test.history, test.position, test.watermark, fixedTime.UnixNano())
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`PRAGMA ignore_check_constraints=OFF`)
+			testutil.NoError(t, err)
+			if _, found, err := store.ReadProjectPullCursor(context.Background(), portable); !errors.Is(err, ErrCorrupt) || found {
+				t.Fatalf("found=%v err=%v", found, err)
+			}
+		})
+	}
+}
+
+func TestReadProjectPullCursorPreservesInFlightCancellation(t *testing.T) {
+	started := make(chan struct{})
+	driverName := fmt.Sprintf("cursor-cancel-%d", time.Now().UnixNano())
+	sql.Register(driverName, cancelCursorDriver{started: started})
+	db, err := sql.Open(driverName, "")
+	testutil.NoError(t, err)
+	defer db.Close()
+	store := &Store{db: db}
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		cursor syncservice.Cursor
+		found  bool
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		cursor, found, err := store.ReadProjectPullCursor(ctx, "550e8400-e29b-41d4-a716-446655440001")
+		resultCh <- result{cursor: cursor, found: found, err: err}
+	}()
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("cursor query did not start")
+	}
+	select {
+	case got := <-resultCh:
+		if !errors.Is(got.err, context.Canceled) || got.found || got.cursor != (syncservice.Cursor{}) {
+			t.Fatalf("cursor=%+v found=%v err=%v", got.cursor, got.found, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cursor query did not stop after cancellation")
+	}
+}
+
+type cancelCursorDriver struct{ started chan struct{} }
+
+func (d cancelCursorDriver) Open(string) (driver.Conn, error) {
+	return &cancelCursorConn{started: d.started}, nil
+}
+
+type cancelCursorConn struct{ started chan struct{} }
+
+func (*cancelCursorConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+func (*cancelCursorConn) Close() error              { return nil }
+func (*cancelCursorConn) Begin() (driver.Tx, error) { return cancelCursorTx{}, nil }
+func (*cancelCursorConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return cancelCursorTx{}, nil
+}
+func (c *cancelCursorConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+	close(c.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type cancelCursorTx struct{}
+
+func (cancelCursorTx) Commit() error   { return nil }
+func (cancelCursorTx) Rollback() error { return nil }
 
 func TestBackfillSyncProjectDoesNotRepairAttemptedCreatePayload(t *testing.T) {
 	for _, test := range []struct {
@@ -291,6 +683,47 @@ func TestBackfillSyncProjectSkipsTombstonedObservation(t *testing.T) {
 	testutil.Require(t, queued == 0, "resurrected outbox=%d", queued)
 }
 
+func TestSyncProjectTransitionRejectsDurableCorruption(t *testing.T) {
+	for _, test := range []struct {
+		name, mode, status string
+		createdAt          int64
+		completedAt        any
+		valid              bool
+	}{
+		{name: "valid active", mode: "rejoin_merge", status: "pulling", createdAt: fixedTime.UnixNano(), valid: true},
+		{name: "valid completed", mode: "rejoin_merge", status: "completed", createdAt: fixedTime.UnixNano(), completedAt: fixedTime.UnixNano(), valid: true},
+		{name: "reseed source pulling", mode: "reseed_source", status: "pulling", createdAt: fixedTime.UnixNano()},
+		{name: "completed without completion time", mode: "rejoin_merge", status: "completed", createdAt: fixedTime.UnixNano()},
+		{name: "active with completion time", mode: "rejoin_merge", status: "publishing", createdAt: fixedTime.UnixNano(), completedAt: fixedTime.UnixNano()},
+		{name: "completion before creation", mode: "rejoin_merge", status: "completed", createdAt: fixedTime.UnixNano(), completedAt: fixedTime.UnixNano() - 1},
+		{name: "nonpositive creation time", mode: "rejoin_merge", status: "pulling", createdAt: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, portable := seededSyncProjectTransition(t)
+			defer store.Close()
+			testutil.NoError(t, func() error {
+				_, err := store.db.Exec(`PRAGMA ignore_check_constraints=ON`)
+				return err
+			}())
+			_, err := store.db.Exec(`INSERT INTO sync_project_transitions(portable_project_id,local_project_id,mode,status,created_at,completed_at) VALUES(?,'project',?,?,?,?)`, portable, test.mode, test.status, test.createdAt, test.completedAt)
+			testutil.NoError(t, err)
+			_, err = store.db.Exec(`PRAGMA ignore_check_constraints=OFF`)
+			testutil.NoError(t, err)
+
+			result, present, err := store.SyncProjectTransition(context.Background(), portable, "project")
+			if test.valid {
+				if err != nil || !present || result != (SyncProjectTransitionResult{SchemaVersion: 1, Mode: SyncProjectTransitionMode(test.mode), Status: test.status, TransitionIdentity: test.createdAt}) {
+					t.Fatalf("result=%+v present=%v err=%v", result, present, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrCorrupt) || present || result != (SyncProjectTransitionResult{}) {
+				t.Fatalf("result=%+v present=%v err=%v", result, present, err)
+			}
+		})
+	}
+}
+
 func TestActiveSyncProjectTransitionBlocksLocalWritesAndBackfill(t *testing.T) {
 	for _, mode := range []SyncProjectTransitionMode{SyncProjectTransitionRejoinMerge, SyncProjectTransitionReseedSource} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -330,6 +763,204 @@ func TestCompletedSyncProjectTransitionPermitsLocalWrites(t *testing.T) {
 	testutil.NoError(t, err)
 	item, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "allowed", State: StateActive, Provenance: Provenance{Producer: "test"}})
 	testutil.Require(t, err == nil && item.Project == "project", "item=%+v err=%v", item, err)
+}
+
+func TestPrepareSyncProjectTransitionReplacementHasNewGenerationWhenClockRepeats(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	_, err := store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	var first int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT created_at FROM sync_project_transitions WHERE portable_project_id=?`, portable).Scan(&first))
+	_, err = store.db.Exec(`UPDATE sync_project_transitions SET status='completed',completed_at=created_at WHERE portable_project_id=?`, portable)
+	testutil.NoError(t, err)
+	_, err = store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	var second int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT created_at FROM sync_project_transitions WHERE portable_project_id=?`, portable).Scan(&second))
+	if second <= first {
+		t.Fatalf("replacement created_at = %d; want > %d", second, first)
+	}
+}
+
+func TestFinalizeSyncProjectTransitionWithIdentityRejectsReplacedIncarnation(t *testing.T) {
+	first, portable := seededSyncProjectTransition(t)
+	defer first.Close()
+	ctx := context.Background()
+	previous, err := first.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	var database string
+	testutil.NoError(t, first.db.QueryRow(`PRAGMA database_list`).Scan(new(int), new(string), &database))
+	second := openPath(t, database)
+	defer second.Close()
+	testutil.NoError(t, func() error {
+		_, err := second.db.Exec(`UPDATE sync_project_transitions SET status='completed',completed_at=created_at WHERE portable_project_id=?`, portable)
+		return err
+	}())
+	replacement, err := second.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	testutil.NoError(t, err)
+	if _, err := first.FinalizeSyncProjectTransitionWithIdentity(ctx, portable, "project", previous.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("finalize replaced incarnation error=%v", err)
+	}
+	current, found, err := second.SyncProjectTransition(ctx, portable, "project")
+	if err != nil || !found || current.TransitionIdentity != replacement.TransitionIdentity || current.Status != SyncProjectTransitionPulling {
+		t.Fatalf("current=%+v found=%v err=%v", current, found, err)
+	}
+}
+
+func TestTransitionEffectsRejectReplacedIncarnationAtomicallyAcrossStores(t *testing.T) {
+	first, portable := seededSyncProjectTransition(t)
+	defer first.Close()
+	ctx := context.Background()
+	previous, err := first.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.NoError(t, err)
+	var database string
+	testutil.NoError(t, first.db.QueryRow(`PRAGMA database_list`).Scan(new(int), new(string), &database))
+	second := openPath(t, database)
+	defer second.Close()
+	testutil.NoError(t, func() error {
+		_, err := second.db.Exec(`UPDATE sync_project_transitions SET status='completed',completed_at=created_at WHERE portable_project_id=?`, portable)
+		return err
+	}())
+	replacement, err := second.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.NoError(t, err)
+	if _, err := first.ClaimDueSyncOutboxForProjectTransition(ctx, time.Minute, 1, "project", portable, previous.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("claim replaced incarnation error=%v", err)
+	}
+	claims, err := second.ClaimDueSyncOutboxForProject(ctx, time.Minute, 1, "project")
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claims=%+v err=%v", claims, err)
+	}
+	claim := claims[0]
+	sequence := int64(1)
+	accepted := syncservice.Result{MutationID: claim.Mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &sequence, Version: 1}
+	if err := first.ApplySyncPushResultForProjectTransition(ctx, claim.Mutation.MutationID, claim.ClaimToken, accepted, portable, "project", previous.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("apply replaced incarnation error=%v", err)
+	}
+	if err := first.MarkSyncOutboxRetryForProjectTransition(ctx, claim.Mutation.MutationID, claim.ClaimToken, fixedTime.Add(time.Minute), "transport", portable, "project", previous.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retry replaced incarnation error=%v", err)
+	}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-4466554403a0"}}
+	if err := first.ApplyProjectPulledPageForTransition(ctx, portable, "project", page, previous.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("pull materialize replaced incarnation error=%v", err)
+	}
+	if _, err := first.FinalizeSyncProjectTransitionWithIdentity(ctx, portable, "project", previous.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("finalize replaced incarnation error=%v", err)
+	}
+	current, found, err := second.SyncProjectTransition(ctx, portable, "project")
+	if err != nil || !found || current.TransitionIdentity != replacement.TransitionIdentity || current.Mode != replacement.Mode || current.Status != replacement.Status {
+		t.Fatalf("current=%+v found=%v err=%v replacement=%+v", current, found, err, replacement)
+	}
+}
+
+func TestTranslateSyncMutationsForTransitionRejectsReplacedIncarnationAtomicallyAcrossStores(t *testing.T) {
+	first, portable := seededSyncProjectTransition(t)
+	defer first.Close()
+	ctx := context.Background()
+	previous, err := first.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.NoError(t, err)
+	testutil.NoError(t, func() error {
+		_, err := first.db.Exec(`INSERT INTO sessions(id,project_id,sync_version) VALUES('unmapped-session','project',0)`)
+		return err
+	}())
+	var database string
+	testutil.NoError(t, first.db.QueryRow(`PRAGMA database_list`).Scan(new(int), new(string), &database))
+	second := openPath(t, database)
+	defer second.Close()
+	testutil.NoError(t, func() error {
+		_, err := second.db.Exec(`UPDATE sync_project_transitions SET status='completed',completed_at=created_at WHERE portable_project_id=?`, portable)
+		return err
+	}())
+	_, err = second.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.NoError(t, err)
+	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-4466554403a1", RecordID: "unmapped-session", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "unmapped-session", ProjectID: "project"}}
+	if _, err := first.TranslateSyncMutationsForTransition(ctx, portable, "project", previous.TransitionIdentity, []syncservice.Mutation{mutation}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("translate replaced incarnation error=%v", err)
+	}
+	var mappings int
+	testutil.NoError(t, second.db.QueryRow(`SELECT count(*) FROM sync_portable_identities WHERE portable_project_id=? AND local_id='unmapped-session'`, portable).Scan(&mappings))
+	if mappings != 0 {
+		t.Fatalf("unmapped session mappings=%d", mappings)
+	}
+}
+
+func TestSyncProjectTransitionEffectsRejectCompletedIncarnationAtomicallyAcrossStores(t *testing.T) {
+	first, portable := seededSyncProjectTransition(t)
+	defer first.Close()
+	ctx := context.Background()
+	transition, err := first.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionReseedSource, true)
+	testutil.NoError(t, err)
+	claims, err := first.ClaimDueSyncOutboxForProject(ctx, time.Minute, 1, "project")
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claims=%+v err=%v", claims, err)
+	}
+	claim := claims[0]
+	var database string
+	testutil.NoError(t, first.db.QueryRow(`PRAGMA database_list`).Scan(new(int), new(string), &database))
+	second := openPath(t, database)
+	defer second.Close()
+	testutil.NoError(t, func() error {
+		_, err := second.db.Exec(`UPDATE sync_project_transitions SET status='completed',completed_at=created_at WHERE portable_project_id=?`, portable)
+		return err
+	}())
+	testutil.NoError(t, func() error {
+		_, err := first.db.Exec(`INSERT INTO sessions(id,project_id,sync_version) VALUES('completed-unmapped-session','project',0)`)
+		return err
+	}())
+	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-4466554403a2", RecordID: "completed-unmapped-session", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "completed-unmapped-session", ProjectID: "project"}}
+	if _, err := first.TranslateSyncMutationsForTransition(ctx, portable, "project", transition.TransitionIdentity, []syncservice.Mutation{mutation}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("translate completed incarnation error=%v", err)
+	}
+	var mappings int
+	testutil.NoError(t, second.db.QueryRow(`SELECT count(*) FROM sync_portable_identities WHERE portable_project_id=? AND local_id='completed-unmapped-session'`, portable).Scan(&mappings))
+	if mappings != 0 {
+		t.Fatalf("completed unmapped session mappings=%d", mappings)
+	}
+	sequence := int64(1)
+	accepted := syncservice.Result{MutationID: claim.Mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &sequence, Version: 1}
+	if _, err := first.ClaimDueSyncOutboxForProjectTransition(ctx, time.Minute, 1, "project", portable, transition.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("claim completed incarnation error=%v", err)
+	}
+	if err := first.ApplySyncPushResultForProjectTransition(ctx, claim.Mutation.MutationID, claim.ClaimToken, accepted, portable, "project", transition.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("apply completed incarnation error=%v", err)
+	}
+	if err := first.MarkSyncOutboxRetryForProjectTransition(ctx, claim.Mutation.MutationID, claim.ClaimToken, fixedTime.Add(time.Minute), "transport", portable, "project", transition.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retry completed incarnation error=%v", err)
+	}
+	page := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: "550e8400-e29b-41d4-a716-4466554403a0"}}
+	if err := first.ApplyProjectPulledPageForTransition(ctx, portable, "project", page, transition.TransitionIdentity); !errors.Is(err, ErrConflict) {
+		t.Fatalf("pull completed incarnation error=%v", err)
+	}
+	finalized, err := first.FinalizeSyncProjectTransitionWithIdentity(ctx, portable, "project", transition.TransitionIdentity)
+	if err != nil || finalized.Status != SyncProjectTransitionCompleted || finalized.TransitionIdentity != transition.TransitionIdentity {
+		t.Fatalf("finalized=%+v err=%v", finalized, err)
+	}
+}
+
+func TestPrepareSyncProjectTransitionFutureGenerationDoesNotBypassActiveClaim(t *testing.T) {
+	store, portable := seededSyncProjectTransition(t)
+	defer store.Close()
+	ctx := context.Background()
+	_, err := store.db.Exec(`UPDATE projects SET sync_version=0 WHERE id='project'`)
+	testutil.NoError(t, err)
+	_, err = store.BackfillSyncProject(ctx, "project", 100)
+	testutil.NoError(t, err)
+	claims, err := store.ClaimDueSyncOutboxForProject(ctx, time.Minute, 1, "project")
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claims=%+v err=%v", claims, err)
+	}
+	future := fixedTime.Add(2 * time.Minute).UnixNano()
+	_, err = store.db.Exec(`INSERT INTO sync_project_transitions(portable_project_id,local_project_id,mode,status,created_at,completed_at) VALUES(?,'project','rejoin_merge','completed',?,?)`, portable, future, future)
+	testutil.NoError(t, err)
+
+	result, err := store.PrepareSyncProjectTransition(ctx, portable, "project", SyncProjectTransitionRejoinMerge, false)
+	var status string
+	var createdAt int64
+	testutil.NoError(t, store.db.QueryRow(`SELECT status,created_at FROM sync_project_transitions WHERE portable_project_id=?`, portable).Scan(&status, &createdAt))
+	if !errors.Is(err, ErrConflict) || result != (SyncProjectTransitionResult{}) || status != SyncProjectTransitionCompleted || createdAt != future {
+		t.Fatalf("result=%+v err=%v status=%q created_at=%d", result, err, status, createdAt)
+	}
 }
 
 func TestPrepareSyncProjectTransitionExcludesActiveLocalProject(t *testing.T) {

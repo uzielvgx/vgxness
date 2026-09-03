@@ -308,6 +308,24 @@ func (runtime Memory) sync(ctx context.Context, opts config.Options) (memory.Syn
 	if !profile.Enabled {
 		return memory.SyncResult{Status: memory.SyncStatusDisabled}, nil
 	}
+	// A valid strict binding lets us check the durable transition before loading a
+	// credential. Preserve the historical profile/credential result for absent,
+	// malformed, or unbound workspaces.
+	if workspace, workspaceErr := canonicalInvocationWorkspace(opts.ProjectDir); workspaceErr == nil {
+		if portableID, present, markerErr := memory.ReadProjectID(workspace); markerErr == nil && present {
+			if projectID, bound, bindingErr := store.BoundPortableProject(ctx, workspace, portableID); bindingErr == nil && bound {
+				if resolved, resolveErr := store.ResolveProject(ctx, workspace); resolveErr == nil && resolved == projectID {
+					transition, found, transitionErr := store.SyncProjectTransition(ctx, portableID, projectID)
+					if transitionErr != nil {
+						return result, transitionErr
+					}
+					if found && (transition.Status == memory.SyncProjectTransitionPulling || transition.Status == memory.SyncProjectTransitionPublishing) {
+						return result, memory.ErrConflict
+					}
+				}
+			}
+		}
+	}
 	credential, err := runtime.syncCredential(opts, profile.CredentialRef)
 	if err != nil {
 		if errors.Is(err, secrets.ErrUnsupported) {
@@ -694,13 +712,111 @@ func (runtime Memory) TransitionSyncProject(ctx context.Context, opts config.Opt
 	return runSyncProjectTransition(ctx, store, syncRemote{client: client, credential: credential}, paths.Database, portable, project, mode, syncProjectBackupOps{create: memory.CreateSQLiteBackup, verify: memory.VerifySQLiteBackup, verifyIntent: memory.VerifySQLiteBackupIntent, digest: memory.SQLiteBackupSHA256})
 }
 
+// resumeSyncProjectTransition continues only the transition selected by a plan.
+func (runtime Memory) resumeSyncProjectTransition(ctx context.Context, opts config.Options, workspace string, mode memory.SyncProjectTransitionMode, transitionIdentity int64) (memory.SyncProjectTransitionResult, error) {
+	if runtime.readOnly || opts.ProjectLocal || !filepath.IsAbs(workspace) || transitionIdentity <= 0 || (mode != memory.SyncProjectTransitionReseedSource && mode != memory.SyncProjectTransitionRejoinMerge) {
+		return memory.SyncProjectTransitionResult{}, memory.ErrInvalid
+	}
+	workspace, err := canonicalInvocationWorkspace(workspace)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, memory.ErrInvalid
+	}
+	paths, err := config.Prepare(ctx, opts)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	release, err := acquireSyncEnrollmentLock(ctx, paths.Database)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	defer release()
+	store, err := openStore(ctx, opts)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	defer store.Close()
+	portable, present, err := memory.ReadProjectID(workspace)
+	if err != nil || !present {
+		return memory.SyncProjectTransitionResult{}, memory.ErrInvalid
+	}
+	project, bound, err := store.BoundPortableProject(ctx, workspace, portable)
+	if err != nil || !bound {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	if resolved, err := store.ResolveProject(ctx, workspace); err != nil || resolved != project {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	profile, found, err := store.GetSyncProfile(ctx)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	if !found || !profile.Enabled {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	transition, found, err := store.SyncProjectTransition(ctx, portable, project)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	if !found || transition.Mode != mode || transition.TransitionIdentity != transitionIdentity {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	if transition.Status == memory.SyncProjectTransitionCompleted {
+		return transition, nil
+	}
+	credential, err := runtime.syncCredential(opts, profile.CredentialRef)
+	if err != nil || !validBearer(credential, profile.DeviceID) {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	transport := runtime.transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client, err := syncclient.New(profile.Endpoint, transport)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	return resumeActiveSyncProjectTransition(ctx, store, syncRemote{client: client, credential: credential}, portable, project, mode, transitionIdentity)
+}
+
 type syncProjectTransitionStore interface {
 	foregroundProjectStore
 	SyncProjectTransition(context.Context, string, string) (memory.SyncProjectTransitionResult, bool, error)
 	EnsureSyncProjectBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, string) (memory.SyncProjectBackupIntent, error)
 	SealSyncProjectBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, memory.SyncProjectBackupIntent, []byte) (memory.SyncProjectBackupIntent, error)
 	PrepareSyncProjectTransitionWithBackupIntent(context.Context, string, string, memory.SyncProjectTransitionMode, bool, memory.SyncProjectBackupIntent) (memory.SyncProjectTransitionResult, error)
-	FinalizeSyncProjectTransition(context.Context, string, string) (memory.SyncProjectTransitionResult, error)
+	ClaimDueSyncOutboxForProjectTransition(context.Context, time.Duration, int, string, string, int64) ([]memory.SyncOutboxClaim, error)
+	ApplySyncPushResultForProjectTransition(context.Context, string, string, syncservice.Result, string, string, int64) error
+	MarkSyncOutboxRetryForProjectTransition(context.Context, string, string, time.Time, string, string, string, int64) error
+	ApplyProjectPulledPageForTransition(context.Context, string, string, syncservice.PullPage, int64) error
+	TranslateSyncMutationsForTransition(context.Context, string, string, int64, []syncservice.Mutation) ([]syncservice.Mutation, error)
+	FinalizeSyncProjectTransitionWithIdentity(context.Context, string, string, int64) (memory.SyncProjectTransitionResult, error)
+}
+
+type transitionProjectStore struct {
+	syncProjectTransitionStore
+	portableProject    string
+	project            string
+	transitionIdentity int64
+}
+
+func (s transitionProjectStore) ClaimDueSyncOutboxForProject(ctx context.Context, lease time.Duration, limit int, project string) ([]memory.SyncOutboxClaim, error) {
+	return s.ClaimDueSyncOutboxForProjectTransition(ctx, lease, limit, project, s.portableProject, s.transitionIdentity)
+}
+
+func (s transitionProjectStore) ApplySyncPushResult(ctx context.Context, mutationID, claimToken string, result syncservice.Result) error {
+	return s.ApplySyncPushResultForProjectTransition(ctx, mutationID, claimToken, result, s.portableProject, s.project, s.transitionIdentity)
+}
+
+func (s transitionProjectStore) MarkSyncOutboxRetry(ctx context.Context, mutationID, claimToken string, next time.Time, code string) error {
+	return s.MarkSyncOutboxRetryForProjectTransition(ctx, mutationID, claimToken, next, code, s.portableProject, s.project, s.transitionIdentity)
+}
+
+func (s transitionProjectStore) ApplyProjectPulledPage(ctx context.Context, portableProject, localProject string, page syncservice.PullPage) error {
+	return s.ApplyProjectPulledPageForTransition(ctx, portableProject, localProject, page, s.transitionIdentity)
+}
+
+func (s transitionProjectStore) TranslateSyncMutations(ctx context.Context, portableProject, localProject string, mutations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+	return s.TranslateSyncMutationsForTransition(ctx, portableProject, localProject, s.transitionIdentity, mutations)
 }
 
 type syncProjectBackupOps struct {
@@ -776,35 +892,57 @@ func runSyncProjectTransition(ctx context.Context, store syncProjectTransitionSt
 			return memory.SyncProjectTransitionResult{}, err
 		}
 	}
+	return continueSyncProjectTransition(ctx, store, remote, portableProject, project, transition)
+}
+
+// resumeActiveSyncProjectTransition continues an existing transition. Its caller
+// must hold the enrollment lock; it never creates a transition.
+func resumeActiveSyncProjectTransition(ctx context.Context, store syncProjectTransitionStore, remote foregroundRemote, portableProject, project string, mode memory.SyncProjectTransitionMode, transitionIdentity int64) (memory.SyncProjectTransitionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	transition, active, err := store.SyncProjectTransition(ctx, portableProject, project)
+	if err != nil {
+		return memory.SyncProjectTransitionResult{}, err
+	}
+	if !active || transition.Mode != mode || transition.TransitionIdentity != transitionIdentity {
+		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
+	}
+	return continueSyncProjectTransition(ctx, store, remote, portableProject, project, transition)
+}
+
+func continueSyncProjectTransition(ctx context.Context, store syncProjectTransitionStore, remote foregroundRemote, portableProject, project string, transition memory.SyncProjectTransitionResult) (memory.SyncProjectTransitionResult, error) {
+	transitionStore := transitionProjectStore{syncProjectTransitionStore: store, portableProject: portableProject, project: project, transitionIdentity: transition.TransitionIdentity}
+	var err error
 	if transition.Status == memory.SyncProjectTransitionCompleted {
 		return transition, nil
 	}
 	if transition.Status == memory.SyncProjectTransitionPulling {
-		result, err := runForegroundProjectPull(ctx, store, remote, project, portableProject, memory.SyncResult{Mode: memory.SyncModeProjectBidirectional, Status: memory.SyncStatusSynced})
+		result, err := runForegroundProjectPull(ctx, transitionStore, remote, project, portableProject, memory.SyncResult{Mode: memory.SyncModeProjectBidirectional, Status: memory.SyncStatusSynced})
 		if err != nil {
 			return memory.SyncProjectTransitionResult{}, err
 		}
 		if result.Status != memory.SyncStatusSynced {
 			return memory.SyncProjectTransitionResult{}, memory.ErrConflict
 		}
-		transition, err = store.FinalizeSyncProjectTransition(ctx, portableProject, project)
+		transition, err = store.FinalizeSyncProjectTransitionWithIdentity(ctx, portableProject, project, transition.TransitionIdentity)
 		if err != nil || transition.Status == memory.SyncProjectTransitionCompleted {
 			return transition, err
 		}
 	} else if transition.Status == memory.SyncProjectTransitionPublishing && transition.Mode == memory.SyncProjectTransitionRejoinMerge {
-		transition, err = store.FinalizeSyncProjectTransition(ctx, portableProject, project)
+		transition, err = store.FinalizeSyncProjectTransitionWithIdentity(ctx, portableProject, project, transition.TransitionIdentity)
 		if err != nil || transition.Status == memory.SyncProjectTransitionCompleted {
 			return transition, err
 		}
 	}
-	result, err := runForegroundProjectSync(ctx, store, remote, project, portableProject)
+	result, err := runForegroundProjectSync(ctx, transitionStore, remote, project, portableProject)
 	if err != nil {
 		return memory.SyncProjectTransitionResult{}, err
 	}
 	if result.Status != memory.SyncStatusSynced {
 		return memory.SyncProjectTransitionResult{}, memory.ErrConflict
 	}
-	return store.FinalizeSyncProjectTransition(ctx, portableProject, project)
+	return store.FinalizeSyncProjectTransitionWithIdentity(ctx, portableProject, project, transition.TransitionIdentity)
 }
 
 // probeEmptyProject accepts only the exact, single-page empty project result.
