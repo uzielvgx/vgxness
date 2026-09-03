@@ -135,10 +135,13 @@ type SyncProjectTransitionResult struct {
 	SchemaVersion int                       `json:"schemaVersion"`
 	Mode          SyncProjectTransitionMode `json:"mode"`
 	Status        string                    `json:"status"`
-	Projects      int                       `json:"projects"`
-	Sessions      int                       `json:"sessions"`
-	Observations  int                       `json:"observations"`
-	Queued        int                       `json:"queued"`
+	// TransitionIdentity is a durable, opaque generation used only to bind a
+	// plan to the exact transition it selected.
+	TransitionIdentity int64 `json:"-"`
+	Projects           int   `json:"projects"`
+	Sessions           int   `json:"sessions"`
+	Observations       int   `json:"observations"`
+	Queued             int   `json:"queued"`
 }
 
 type Search struct {
