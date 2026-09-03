@@ -179,6 +179,62 @@ func (r *Repository) Discover(ctx context.Context, deviceID uuid.UUID) (syncserv
 	return syncservice.Discovery{ProtocolVersion: 1, HistoryID: state.HistoryID.String(), Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, nil
 }
 
+// ProjectState returns minimal owner-scoped state for one canonical portable project.
+func (r *Repository) ProjectState(ctx context.Context, deviceID uuid.UUID, projectID string) (syncservice.ProjectState, error) {
+	if deviceID == uuid.Nil || !validProjectID(projectID) {
+		return syncservice.ProjectState{}, ErrRepository
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return syncservice.ProjectState{}, repositoryError(ctx)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err = tx.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"); err != nil {
+		return syncservice.ProjectState{}, repositoryError(ctx)
+	}
+	schema, err := recoverySchema(ctx, tx)
+	if err != nil || !repositoryMigrationsValid(ctx, tx, schema) {
+		return syncservice.ProjectState{}, repositoryError(ctx)
+	}
+	owners, err := r.owners(ctx, tx, schema)
+	if err != nil {
+		return syncservice.ProjectState{}, repositoryError(ctx)
+	}
+	if len(owners) != 1 || owners[0] != r.ownerID {
+		return syncservice.ProjectState{}, ErrUnauthenticated
+	}
+	table := func(name string) string { return pgx.Identifier{schema, name}.Sanitize() }
+	var revoked bool
+	if err = tx.QueryRow(ctx, "SELECT revoked_at IS NOT NULL FROM "+table("devices")+" WHERE owner_id=$1 AND id=$2", r.ownerID, deviceID).Scan(&revoked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return syncservice.ProjectState{}, ErrUnauthenticated
+		}
+		return syncservice.ProjectState{}, repositoryError(ctx)
+	}
+	if revoked {
+		return syncservice.ProjectState{}, ErrUnauthenticated
+	}
+	state, err := r.ownerState(ctx, tx, schema)
+	if err != nil {
+		return syncservice.ProjectState{}, repositoryError(ctx)
+	}
+	result := syncservice.ProjectState{Status: syncservice.ProjectStateAbsent, HasHistory: true, HistoryGeneration: state.HistoryID.String(), Watermark: state.NextSeq - 1}
+	var exists bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM "+table("projects")+" WHERE owner_id=$1 AND id=$2)", r.ownerID, projectID).Scan(&exists); err != nil {
+		return syncservice.ProjectState{}, repositoryError(ctx)
+	}
+	if exists {
+		result.Status = syncservice.ProjectStateActive
+		if err = tx.QueryRow(ctx, "SELECT count(*) FROM "+table("observations")+" WHERE owner_id=$1 AND project_id=$2 AND lifecycle='active'", r.ownerID, projectID).Scan(&result.ActiveObservations); err != nil {
+			return syncservice.ProjectState{}, repositoryError(ctx)
+		}
+	}
+	if err = commitRepository(ctx, tx); err != nil {
+		return syncservice.ProjectState{}, err
+	}
+	return result, nil
+}
+
 // Push applies each mutation in its own transaction.
 func (r *Repository) Push(ctx context.Context, deviceID uuid.UUID, mutations []syncservice.Mutation) ([]syncservice.Result, error) {
 	results := make([]syncservice.Result, 0, len(mutations))

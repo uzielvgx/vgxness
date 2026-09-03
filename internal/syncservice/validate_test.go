@@ -186,6 +186,15 @@ func TestLegacyIDsAndBootstrapCreates(t *testing.T) {
 	}
 }
 
+func TestProjectStateHistoryMatchesSupportedDurableStates(t *testing.T) {
+	if err := ValidateProjectState(ProjectState{Status: ProjectStateAbsent}); err != nil {
+		t.Fatalf("absent without history: %v", err)
+	}
+	if err := ValidateProjectState(ProjectState{Status: ProjectStateActive}); err == nil {
+		t.Fatal("accepted active without history")
+	}
+}
+
 func TestCanonicalChangeHashV1OrdinaryGoldenUnchanged(t *testing.T) {
 	base := `{"sequence":1,"canonical_version":1,"mutation":{"mutation_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","record_id":"project","record_kind":"project","kind":"create","base_version":0,"project":{"id":"project"}}}`
 	for _, wire := range []string{base, strings.TrimSuffix(base, "}") + `,"hash_version":1}`} {

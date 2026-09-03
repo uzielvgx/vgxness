@@ -68,6 +68,200 @@ func TestRepositoryRequiresMigrationAndBootstrapsOwner(t *testing.T) {
 	}
 }
 
+func TestRepositoryProjectStateIsOwnerScopedAndAggregated(t *testing.T) {
+	ctx, conn := context.Background(), testConn(t)
+	mustNoError(t, Migrate(ctx, conn))
+	repo, err := NewRepository(conn, uuid.New())
+	mustNoError(t, err)
+	mustNoError(t, repo.EnsureOwner(ctx))
+	device, err := repo.IssueDevice(ctx, "state")
+	mustNoError(t, err)
+	projectID := uuid.NewString()
+	absent, err := repo.ProjectState(ctx, device.ID, projectID)
+	mustNoError(t, err)
+	if absent.Status != syncservice.ProjectStateAbsent || !absent.HasHistory || absent.HistoryGeneration == "" || absent.Watermark != 0 {
+		t.Fatalf("absent=%+v", absent)
+	}
+	mustNoError(t, pushAccepted(ctx, repo, device.ID, mutationProject(projectID, 0)))
+	active, err := repo.ProjectState(ctx, device.ID, projectID)
+	mustNoError(t, err)
+	if active.Status != syncservice.ProjectStateActive || active.ActiveObservations != 0 || active.Watermark != 1 {
+		t.Fatalf("active empty=%+v", active)
+	}
+	mustNoError(t, pushAccepted(ctx, repo, device.ID, mutationObservation("observation", projectID, "", nil, 0)))
+	active, err = repo.ProjectState(ctx, device.ID, projectID)
+	mustNoError(t, err)
+	if active.ActiveObservations != 1 || active.Watermark != 2 {
+		t.Fatalf("active history=%+v", active)
+	}
+	if _, err = repo.ProjectState(ctx, uuid.New(), projectID); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("wrong owner/device error=%v", err)
+	}
+}
+
+func TestRepositoryProjectStateReturnsCancellationFromAuthorizationQueries(t *testing.T) {
+	for _, query := range []string{"owners", "device"} {
+		t.Run(query, func(t *testing.T) {
+			started := make(chan struct{}, 1)
+			owner, device := uuid.New(), uuid.New()
+			repo, err := NewRepository(&projectStateFakeDB{tx: projectStateFakeTx{owner: owner, block: query, started: started}}, owner)
+			mustNoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := repo.ProjectState(ctx, device, uuid.NewString())
+				done <- err
+			}()
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("ProjectState did not begin the authorization query")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("ProjectState cancellation error = %v, want context.Canceled", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("ProjectState did not return after cancellation")
+			}
+		})
+	}
+}
+
+type projectStateFakeDB struct{ tx pgx.Tx }
+
+func (db *projectStateFakeDB) Begin(context.Context) (pgx.Tx, error) { return db.tx, nil }
+
+type projectStateFakeTx struct {
+	pgx.Tx
+	owner   uuid.UUID
+	block   string
+	started chan<- struct{}
+}
+
+func (tx projectStateFakeTx) Commit(context.Context) error   { return nil }
+func (tx projectStateFakeTx) Rollback(context.Context) error { return nil }
+func (tx projectStateFakeTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+
+func (tx projectStateFakeTx) Query(ctx context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	switch {
+	case strings.HasPrefix(sql, "SELECT version, checksum, dirty, fingerprint FROM "):
+		return &projectStateFakeRows{}, nil
+	case strings.HasPrefix(sql, "SELECT id FROM "):
+		if tx.block == "owners" {
+			tx.signal()
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return &projectStateFakeRows{values: [][]any{{tx.owner}}, index: -1}, nil
+	default:
+		return nil, fmt.Errorf("unexpected query: %s", sql)
+	}
+}
+
+func (tx projectStateFakeTx) QueryRow(ctx context.Context, sql string, _ ...any) pgx.Row {
+	switch {
+	case sql == "SELECT current_schemas(false)":
+		return projectStateFakeRow{values: []any{[]string{"syncpg_test"}}}
+	case strings.HasPrefix(sql, "SELECT count(*) FROM "):
+		return projectStateFakeRow{values: []any{len(migrations)}}
+	case strings.HasPrefix(sql, "SELECT revoked_at IS NOT NULL FROM "):
+		if tx.block == "device" {
+			return projectStateBlockingRow{ctx: ctx, started: tx.started}
+		}
+		return projectStateFakeRow{values: []any{false}}
+	default:
+		return projectStateFakeRow{err: fmt.Errorf("unexpected query row: %s", sql)}
+	}
+}
+
+func (tx projectStateFakeTx) signal() {
+	select {
+	case tx.started <- struct{}{}:
+	default:
+	}
+}
+
+type projectStateFakeRows struct {
+	pgx.Rows
+	values [][]any
+	index  int
+}
+
+func (rows *projectStateFakeRows) Close()     {}
+func (rows *projectStateFakeRows) Err() error { return nil }
+func (rows *projectStateFakeRows) Next() bool {
+	rows.index++
+	return rows.index < len(rows.values)
+}
+func (rows *projectStateFakeRows) Scan(dest ...any) error {
+	return projectStateAssign(dest, rows.values[rows.index])
+}
+
+type projectStateFakeRow struct {
+	pgx.Row
+	values []any
+	err    error
+}
+
+func (row projectStateFakeRow) Scan(dest ...any) error {
+	if row.err != nil {
+		return row.err
+	}
+	return projectStateAssign(dest, row.values)
+}
+
+type projectStateBlockingRow struct {
+	pgx.Row
+	ctx     context.Context
+	started chan<- struct{}
+}
+
+func (row projectStateBlockingRow) Scan(...any) error {
+	select {
+	case row.started <- struct{}{}:
+	default:
+	}
+	<-row.ctx.Done()
+	return row.ctx.Err()
+}
+
+func projectStateAssign(dest, values []any) error {
+	if len(dest) != len(values) {
+		return fmt.Errorf("scan destinations = %d, values = %d", len(dest), len(values))
+	}
+	for i := range dest {
+		switch target := dest[i].(type) {
+		case *uuid.UUID:
+			value, ok := values[i].(uuid.UUID)
+			if !ok {
+				return fmt.Errorf("unexpected UUID value %T", values[i])
+			}
+			*target = value
+		case *[]string:
+			value, ok := values[i].([]string)
+			if !ok {
+				return fmt.Errorf("unexpected string slice value %T", values[i])
+			}
+			*target = value
+		case *int:
+			value, ok := values[i].(int)
+			if !ok {
+				return fmt.Errorf("unexpected int value %T", values[i])
+			}
+			*target = value
+		default:
+			return fmt.Errorf("unexpected scan destination %T", target)
+		}
+	}
+	return nil
+}
+
 func TestRepositoryOwnerConflictAndReadOnlyState(t *testing.T) {
 	ctx, conn := context.Background(), testConn(t)
 	if err := Migrate(ctx, conn); err != nil {

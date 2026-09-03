@@ -48,6 +48,11 @@ type ProjectPullBackend interface {
 	PullProject(context.Context, uuid.UUID, syncservice.Cursor, string, int) (syncservice.PullPage, error)
 }
 
+// ProjectStateBackend provides owner-scoped state for exactly one portable project.
+type ProjectStateBackend interface {
+	ProjectState(context.Context, uuid.UUID, string) (syncservice.ProjectState, error)
+}
+
 // CapabilitiesResponse is the v1 capabilities representation.
 type CapabilitiesResponse struct {
 	ProtocolVersion int      `json:"protocol_version"`
@@ -131,7 +136,11 @@ func newHandlerWithBackend(authenticator Authenticator, capabilities capabilitie
 func newHandlerWithBackendAndAuthenticationLimits(authenticator Authenticator, capabilities capabilitiesFunc, backend SyncBackend, observer FailureObserver, authLimits *authenticationLimits) http.Handler {
 	if capabilities == nil {
 		capabilities = func(context.Context) CapabilitiesResponse {
-			return CapabilitiesResponse{ProtocolVersion: ProtocolVersion, Capabilities: []string{"capabilities"}}
+			value := CapabilitiesResponse{ProtocolVersion: ProtocolVersion, Capabilities: []string{"capabilities"}}
+			if _, ok := backend.(ProjectStateBackend); ok {
+				value.Capabilities = append(value.Capabilities, string(syncservice.CapabilityProjectState))
+			}
+			return value
 		}
 	}
 	return &handler{authenticator: authenticator, backend: backend, capabilities: capabilities, limits: newRequestLimits(), authLimits: authLimits, observer: observer}
@@ -156,11 +165,12 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
 	request = request.WithContext(ctx)
-	if request.URL.Path != "/v1/sync/capabilities" && request.URL.Path != "/v1/sync/push" && request.URL.Path != "/v1/sync/pull" && request.URL.Path != "/v1/sync/discovery" {
+	stateProjectID, statePath := projectStatePath(request.URL.Path)
+	if request.URL.Path != "/v1/sync/capabilities" && request.URL.Path != "/v1/sync/push" && request.URL.Path != "/v1/sync/pull" && request.URL.Path != "/v1/sync/discovery" && !statePath {
 		writeError(writer, http.StatusNotFound, ErrorInvalidInput, false, handler.observer)
 		return
 	}
-	validMethod := request.URL.Path == "/v1/sync/capabilities" && request.Method == http.MethodGet || request.URL.Path == "/v1/sync/push" && request.Method == http.MethodPost || request.URL.Path == "/v1/sync/pull" && request.Method == http.MethodGet || request.URL.Path == "/v1/sync/discovery" && request.Method == http.MethodGet
+	validMethod := request.URL.Path == "/v1/sync/capabilities" && request.Method == http.MethodGet || request.URL.Path == "/v1/sync/push" && request.Method == http.MethodPost || request.URL.Path == "/v1/sync/pull" && request.Method == http.MethodGet || request.URL.Path == "/v1/sync/discovery" && request.Method == http.MethodGet || statePath && request.Method == http.MethodGet
 	if !validMethod {
 		if request.URL.Path == "/v1/sync/push" {
 			writer.Header().Set("Allow", http.MethodPost)
@@ -226,7 +236,47 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		handler.servePull(writer, request.WithContext(ctx), identity)
+	default:
+		handler.serveProjectState(writer, request.WithContext(ctx), identity, stateProjectID)
 	}
+}
+
+func projectStatePath(path string) (string, bool) {
+	const prefix, suffix = "/v1/sync/projects/", "/state"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return "", false
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	if strings.Contains(id, "/") {
+		return "", false
+	}
+	return id, true
+}
+
+func (handler *handler) serveProjectState(writer http.ResponseWriter, request *http.Request, identity Identity, projectID string) {
+	if !canonicalProjectStatePath(request) || request.Body != nil && requestHasBody(request.Body) || !validProjectID(projectID) {
+		writeError(writer, http.StatusBadRequest, ErrorInvalidInput, false, handler.observer)
+		return
+	}
+	backend, ok := handler.backend.(ProjectStateBackend)
+	if !ok {
+		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+		return
+	}
+	state, err := backend.ProjectState(request.Context(), identity.DeviceID, projectID)
+	if errors.Is(err, ErrUnauthenticated) {
+		writeError(writer, http.StatusUnauthorized, ErrorUnauthorized, true, handler.observer)
+		return
+	}
+	if err != nil || syncservice.ValidateProjectState(state) != nil {
+		writeError(writer, http.StatusServiceUnavailable, ErrorUnavailable, false, handler.observer)
+		return
+	}
+	writeJSON(writer, http.StatusOK, state, false, handler.observer)
+}
+
+func canonicalProjectStatePath(request *http.Request) bool {
+	return request.URL.RawPath == "" || request.URL.EscapedPath() == request.URL.Path
 }
 
 func (handler *handler) servePush(writer http.ResponseWriter, request *http.Request, identity Identity) {

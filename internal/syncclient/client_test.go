@@ -61,6 +61,77 @@ func TestDiscoverUsesExactAuthenticatedGET(t *testing.T) {
 	}
 }
 
+func TestProjectStateNegotiatesAndFailsClosedWhenUnsupported(t *testing.T) {
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	client, err := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/v1/sync/capabilities" {
+			t.Fatalf("unexpected state request without capability: %s", request.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(`{"protocol_version":1,"capabilities":["capabilities"]}`))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.ProjectState(context.Background(), testCredential, projectID); !errors.Is(err, ErrProjectStateUnsupported) {
+		t.Fatalf("error = %v, want unsupported", err)
+	}
+}
+
+func TestProjectStateUsesExactAuthenticatedGET(t *testing.T) {
+	projectID, generation := "550e8400-e29b-41d4-a716-446655440001", uuid.NewString()
+	client, _ := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("Authorization") != "Bearer "+testCredential || request.Header.Get("Accept") != mediaType || request.Body != nil {
+			t.Fatalf("unexpected headers/body: %v", request.Header)
+		}
+		switch request.URL.Path {
+		case "/v1/sync/capabilities":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(`{"protocol_version":1,"capabilities":["capabilities","project_state"]}`))}, nil
+		case "/v1/sync/projects/" + projectID + "/state":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(`{"status":"active","has_history":true,"history_generation":"` + generation + `","watermark":2,"active_observations":1}`))}, nil
+		default:
+			t.Fatalf("path = %q", request.URL.Path)
+			return nil, nil
+		}
+	}))
+	if state, err := client.ProjectState(context.Background(), testCredential, projectID); err != nil || state.Status != syncservice.ProjectStateActive || state.ActiveObservations != 1 {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}
+
+func TestProjectStateRejectsMalformedStateResponse(t *testing.T) {
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	for _, body := range []string{
+		`{"status":"active"}`,
+		`{"status":"active","has_history":false}`,
+		`{"status":"deleted","has_history":false}`,
+		`{"status":"unknown","has_history":false}`,
+	} {
+		client, _ := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path == "/v1/sync/capabilities" {
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(`{"protocol_version":1,"capabilities":["capabilities","project_state"]}`))}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		}))
+		if _, err := client.ProjectState(context.Background(), testCredential, projectID); !errors.Is(err, ErrRemote) {
+			t.Fatalf("body=%s error=%v", body, err)
+		}
+	}
+}
+
+func TestProjectStateAcceptsAbsentWithoutHistory(t *testing.T) {
+	projectID := "550e8400-e29b-41d4-a716-446655440001"
+	client, _ := New("https://sync.example", testDoer(func(request *http.Request) (*http.Response, error) {
+		body := `{"status":"absent","has_history":false}`
+		if request.URL.Path == "/v1/sync/capabilities" {
+			body = `{"protocol_version":1,"capabilities":["capabilities","project_state"]}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	if state, err := client.ProjectState(context.Background(), testCredential, projectID); err != nil || state.Status != syncservice.ProjectStateAbsent || state.HasHistory {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}
+
 func TestNewRejectsNonHTTPS(t *testing.T) {
 	if _, err := New("http://sync.example", testDoer(func(*http.Request) (*http.Response, error) { return nil, nil })); err == nil {
 		t.Fatal("accepted HTTP endpoint")

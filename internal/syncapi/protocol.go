@@ -61,6 +61,9 @@ type PullResponse struct {
 // DiscoveryResponse is the v1 authenticated bootstrap discovery response.
 type DiscoveryResponse = syncservice.Discovery
 
+// ProjectStateResponse is the v1 exact-project state response.
+type ProjectStateResponse = syncservice.ProjectState
+
 type ErrorCode string
 
 const (
@@ -108,6 +111,28 @@ func DecodeDiscoveryResponse(body []byte) (DiscoveryResponse, error) {
 	}
 	if err := syncservice.ValidateDiscovery(response); err != nil {
 		return DiscoveryResponse{}, ErrInvalidRequest
+	}
+	return response, nil
+}
+
+// DecodeProjectStateResponse decodes a strict, bounded exact-project response.
+func DecodeProjectStateResponse(body []byte) (ProjectStateResponse, error) {
+	var envelope struct {
+		Status             syncservice.ProjectStateStatus `json:"status"`
+		HasHistory         *bool                          `json:"has_history"`
+		HistoryGeneration  string                         `json:"history_generation,omitempty"`
+		Watermark          int64                          `json:"watermark,omitempty"`
+		ActiveObservations int64                          `json:"active_observations,omitempty"`
+	}
+	if err := decodeStrict(body, &envelope); err != nil {
+		return ProjectStateResponse{}, err
+	}
+	if envelope.HasHistory == nil {
+		return ProjectStateResponse{}, ErrInvalidRequest
+	}
+	response := ProjectStateResponse{Status: envelope.Status, HasHistory: *envelope.HasHistory, HistoryGeneration: envelope.HistoryGeneration, Watermark: envelope.Watermark, ActiveObservations: envelope.ActiveObservations}
+	if err := syncservice.ValidateProjectState(response); err != nil {
+		return ProjectStateResponse{}, ErrInvalidRequest
 	}
 	return response, nil
 }
