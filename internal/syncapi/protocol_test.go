@@ -28,11 +28,33 @@ func TestDecodeDiscoveryResponseIsStrict(t *testing.T) {
 		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery"],"extra":true}`),
 		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery"]}{}`),
 		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery","bootstrap_discovery"]}`),
+		[]byte(`{"protocol_version":1,"history_id":"123e4567-e89b-12d3-a456-426614174000","capabilities":["bootstrap_discovery","project_state"]}`),
 		[]byte{0xff},
 	} {
 		if _, err := DecodeDiscoveryResponse(body); err == nil {
 			t.Fatalf("accepted invalid discovery: %q", body)
 		}
+	}
+}
+
+func TestDecodeProjectStateResponseRequiresExplicitSupportedState(t *testing.T) {
+	valid := []byte(`{"status":"active","has_history":true,"history_generation":"123e4567-e89b-12d3-a456-426614174000"}`)
+	if _, err := DecodeProjectStateResponse(valid); err != nil {
+		t.Fatalf("valid project state: %v", err)
+	}
+	for _, body := range [][]byte{
+		[]byte(`{"status":"active"}`),
+		[]byte(`{"status":"active","has_history":false}`),
+		[]byte(`{"status":"deleted","has_history":false}`),
+		[]byte(`{"status":"unknown","has_history":false}`),
+		[]byte(`{"status":"active","has_history":false,"extra":true}`),
+	} {
+		if _, err := DecodeProjectStateResponse(body); err == nil {
+			t.Fatalf("accepted invalid project state: %s", body)
+		}
+	}
+	if _, err := DecodeProjectStateResponse([]byte(`{"status":"absent","has_history":false}`)); err != nil {
+		t.Fatalf("valid absent without history: %v", err)
 	}
 }
 

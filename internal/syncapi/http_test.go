@@ -491,20 +491,23 @@ func assertError(t *testing.T, recorder *httptest.ResponseRecorder, code ErrorCo
 }
 
 type testSyncBackend struct {
-	mu          sync.Mutex
-	pushes      int
-	pulls       int
-	discovers   int
-	deviceID    uuid.UUID
-	items       []syncservice.Mutation
-	cursor      syncservice.Cursor
-	projectID   string
-	limit       int
-	pushErr     error
-	pullErr     error
-	discoverErr error
-	page        syncservice.PullPage
-	discovery   syncservice.Discovery
+	mu              sync.Mutex
+	pushes          int
+	pulls           int
+	discovers       int
+	deviceID        uuid.UUID
+	items           []syncservice.Mutation
+	cursor          syncservice.Cursor
+	projectID       string
+	projectState    syncservice.ProjectState
+	projectStates   int
+	projectStateErr error
+	limit           int
+	pushErr         error
+	pullErr         error
+	discoverErr     error
+	page            syncservice.PullPage
+	discovery       syncservice.Discovery
 }
 
 func (backend *testSyncBackend) Push(_ context.Context, deviceID uuid.UUID, items []syncservice.Mutation) ([]syncservice.Result, error) {
@@ -547,6 +550,14 @@ func (backend *testSyncBackend) Discover(_ context.Context, deviceID uuid.UUID) 
 		backend.discovery = syncservice.Discovery{ProtocolVersion: 1, HistoryID: "123e4567-e89b-12d3-a456-426614174000", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
 	}
 	return backend.discovery, backend.discoverErr
+}
+
+func (backend *testSyncBackend) ProjectState(_ context.Context, deviceID uuid.UUID, projectID string) (syncservice.ProjectState, error) {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	backend.projectStates++
+	backend.deviceID, backend.projectID = deviceID, projectID
+	return backend.projectState, backend.projectStateErr
 }
 
 func validProjectMutation(id string) syncservice.Mutation {
@@ -643,6 +654,136 @@ func TestProjectPullRejectsInvalidSelectorWithoutBackendEffects(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest || backend.pulls != 0 {
 			t.Fatalf("selector %q status/pulls = %d/%d", projectID, recorder.Code, backend.pulls)
 		}
+	}
+}
+
+func TestProjectStateRequiresAuthenticatedExactPathAndSafeBackend(t *testing.T) {
+	identity, projectID := testIdentity(), "550e8400-e29b-41d4-a716-446655440001"
+	backend := &testSyncBackend{projectState: syncservice.ProjectState{Status: syncservice.ProjectStateActive, HasHistory: true, HistoryGeneration: uuid.NewString(), Watermark: 2, ActiveObservations: 1}}
+	handler := NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil)
+	request := func(method, target string, authenticated bool) *http.Request {
+		r := httptest.NewRequest(method, target, nil)
+		if authenticated {
+			r.Header.Set("Authorization", "Bearer "+testBearer)
+			r.Header.Set("Accept", MediaType)
+		}
+		return r
+	}
+	for _, test := range []struct {
+		name string
+		r    *http.Request
+		want int
+	}{
+		{"unauthenticated", request(http.MethodGet, "/v1/sync/projects/"+projectID+"/state", false), http.StatusUnauthorized},
+		{"malformed", request(http.MethodGet, "/v1/sync/projects/not-a-uuid/state", true), http.StatusBadRequest},
+		{"trailing", request(http.MethodGet, "/v1/sync/projects/"+projectID+"/state/extra", true), http.StatusNotFound},
+		{"method", request(http.MethodPost, "/v1/sync/projects/"+projectID+"/state", true), http.StatusMethodNotAllowed},
+		{"active", request(http.MethodGet, "/v1/sync/projects/"+projectID+"/state", true), http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, test.r)
+			if recorder.Code != test.want {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
+			}
+		})
+	}
+	if backend.projectID != projectID || backend.projectStates != 1 {
+		t.Fatalf("project state calls/id = %d/%q", backend.projectStates, backend.projectID)
+	}
+}
+
+func TestProjectStateRejectsPercentEncodedAliasAfterAuthentication(t *testing.T) {
+	identity, projectID := testIdentity(), "550e8400-e29b-41d4-a716-446655440001"
+	alias := "/v1/sync/projects/%35" + projectID[1:] + "/state"
+	for _, test := range []struct {
+		name          string
+		target        string
+		authenticated bool
+		want          int
+		calls         int
+	}{
+		{"encoded unauthenticated", alias, false, http.StatusUnauthorized, 0},
+		{"encoded authenticated", alias, true, http.StatusBadRequest, 0},
+		{"canonical", "/v1/sync/projects/" + projectID + "/state", true, http.StatusOK, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &testSyncBackend{projectState: syncservice.ProjectState{Status: syncservice.ProjectStateActive, HasHistory: true, HistoryGeneration: uuid.NewString()}}
+			request := httptest.NewRequest(http.MethodGet, test.target, nil)
+			if test.authenticated {
+				request.Header.Set("Authorization", "Bearer "+testBearer)
+				request.Header.Set("Accept", MediaType)
+			}
+			recorder := httptest.NewRecorder()
+			NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil).ServeHTTP(recorder, request)
+			if recorder.Code != test.want || backend.projectStates != test.calls {
+				t.Fatalf("status/calls=%d/%d, want %d/%d", recorder.Code, backend.projectStates, test.want, test.calls)
+			}
+		})
+	}
+}
+
+func TestCapabilitiesAdvertiseProjectStateWithoutChangingDiscovery(t *testing.T) {
+	identity := testIdentity()
+	backend := &testSyncBackend{}
+	handler := NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil)
+	for _, test := range []struct {
+		path string
+		want []string
+	}{
+		{"/v1/sync/capabilities", []string{"capabilities", "project_state"}},
+		{"/v1/sync/discovery", []string{"bootstrap_discovery"}},
+	} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request.Header.Set("Authorization", "Bearer "+testBearer)
+		request.Header.Set("Accept", MediaType)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status=%d", test.path, recorder.Code)
+		}
+		var response struct {
+			Capabilities []string `json:"capabilities"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || len(response.Capabilities) != len(test.want) {
+			t.Fatalf("%s response=%q err=%v", test.path, recorder.Body.String(), err)
+		}
+		for index, capability := range test.want {
+			if response.Capabilities[index] != capability {
+				t.Fatalf("%s capabilities=%v", test.path, response.Capabilities)
+			}
+		}
+	}
+}
+
+func TestProjectStateStatesAndBackendFailureAreSafe(t *testing.T) {
+	identity, projectID := testIdentity(), "550e8400-e29b-41d4-a716-446655440001"
+	for _, test := range []struct {
+		name  string
+		state syncservice.ProjectState
+		err   error
+		want  int
+	}{
+		{"absent", syncservice.ProjectState{Status: syncservice.ProjectStateAbsent, HasHistory: true, HistoryGeneration: uuid.NewString()}, nil, http.StatusOK},
+		{"absent no history", syncservice.ProjectState{Status: syncservice.ProjectStateAbsent}, nil, http.StatusOK},
+		{"active empty", syncservice.ProjectState{Status: syncservice.ProjectStateActive, HasHistory: true, HistoryGeneration: uuid.NewString()}, nil, http.StatusOK},
+		{"active no history", syncservice.ProjectState{Status: syncservice.ProjectStateActive}, nil, http.StatusServiceUnavailable},
+		{"active history", syncservice.ProjectState{Status: syncservice.ProjectStateActive, HasHistory: true, HistoryGeneration: uuid.NewString(), Watermark: 4, ActiveObservations: 2}, nil, http.StatusOK},
+		{"deleted", syncservice.ProjectState{Status: "deleted"}, nil, http.StatusServiceUnavailable},
+		{"unknown", syncservice.ProjectState{Status: "unknown"}, nil, http.StatusServiceUnavailable},
+		{"backend", syncservice.ProjectState{}, errors.New("database secret"), http.StatusServiceUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &testSyncBackend{projectState: test.state, projectStateErr: test.err}
+			request := httptest.NewRequest(http.MethodGet, "/v1/sync/projects/"+projectID+"/state", nil)
+			request.Header.Set("Authorization", "Bearer "+testBearer)
+			request.Header.Set("Accept", MediaType)
+			recorder := httptest.NewRecorder()
+			NewSyncServerHandler(&testAuthenticator{identity: identity}, backend, nil).ServeHTTP(recorder, request)
+			if recorder.Code != test.want || strings.Contains(recorder.Body.String(), "database secret") {
+				t.Fatalf("status/body = %d/%q", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 
@@ -863,7 +1004,7 @@ func TestDiscoveryRequiresAuthenticatedBodyFreeGET(t *testing.T) {
 	}
 	assertHeaders(t, recorder, false)
 	var discovery DiscoveryResponse
-	if err := json.Unmarshal(recorder.Body.Bytes(), &discovery); err != nil || syncservice.ValidateDiscovery(discovery) != nil {
+	if err := json.Unmarshal(recorder.Body.Bytes(), &discovery); err != nil || syncservice.ValidateDiscovery(discovery) != nil || len(discovery.Capabilities) != 1 || discovery.Capabilities[0] != syncservice.CapabilityBootstrapDiscovery {
 		t.Fatalf("discovery = %#v, err=%v", discovery, err)
 	}
 	request = httptest.NewRequest(http.MethodPost, "/v1/sync/discovery", nil)

@@ -522,6 +522,11 @@ func (adapter repositoryBackend) Discover(ctx context.Context, deviceID uuid.UUI
 	return discovery, repositoryBackendError(err)
 }
 
+func (adapter repositoryBackend) ProjectState(ctx context.Context, deviceID uuid.UUID, projectID string) (syncservice.ProjectState, error) {
+	state, err := adapter.repository.ProjectState(ctx, deviceID, projectID)
+	return state, repositoryBackendError(err)
+}
+
 func repositoryBackendError(err error) error {
 	if errors.Is(err, syncpg.ErrUnauthenticated) {
 		return syncapi.ErrUnauthenticated

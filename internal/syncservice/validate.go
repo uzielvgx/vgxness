@@ -181,6 +181,24 @@ func ValidateDiscovery(value Discovery) error {
 	return nil
 }
 
+// ValidateProjectState validates the minimal exact-project state response.
+func ValidateProjectState(value ProjectState) error {
+	if value.Status != ProjectStateAbsent && value.Status != ProjectStateActive || value.Watermark < 0 || value.ActiveObservations < 0 {
+		return ErrInvalidCursor
+	}
+	if !value.HasHistory {
+		if value.Status != ProjectStateAbsent || value.HistoryGeneration != "" || value.Watermark != 0 {
+			return ErrInvalidCursor
+		}
+	} else if !isUUID(value.HistoryGeneration) || strings.ToLower(value.HistoryGeneration) != value.HistoryGeneration {
+		return ErrInvalidCursor
+	}
+	if value.Status != ProjectStateActive && value.ActiveObservations != 0 {
+		return ErrInvalidCursor
+	}
+	return nil
+}
+
 func validRecordKind(kind RecordKind) bool {
 	return kind == RecordKindProject || kind == RecordKindSession || kind == RecordKindObservation
 }

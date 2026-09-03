@@ -122,6 +122,26 @@ type Capability string
 
 const CapabilityBootstrapDiscovery Capability = "bootstrap_discovery"
 
+// CapabilityProjectState advertises authenticated exact-project state lookup.
+const CapabilityProjectState Capability = "project_state"
+
+// ProjectStateStatus is the intentionally small exact-project state vocabulary.
+type ProjectStateStatus string
+
+const (
+	ProjectStateAbsent ProjectStateStatus = "absent"
+	ProjectStateActive ProjectStateStatus = "active"
+)
+
+// ProjectState contains only owner-scoped aggregate project metadata.
+type ProjectState struct {
+	Status             ProjectStateStatus `json:"status"`
+	HasHistory         bool               `json:"has_history"`
+	HistoryGeneration  string             `json:"history_generation,omitempty"`
+	Watermark          int64              `json:"watermark,omitempty"`
+	ActiveObservations int64              `json:"active_observations,omitempty"`
+}
+
 // Discovery is the authenticated owner-scoped bootstrap metadata response.
 type Discovery struct {
 	ProtocolVersion int          `json:"protocol_version"`

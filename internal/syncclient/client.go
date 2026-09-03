@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/google/uuid"
+
 	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncservice"
 )
@@ -18,13 +20,14 @@ import (
 const mediaType = syncapi.MediaType
 
 var (
-	ErrInvalidEndpoint      = errors.New("sync client invalid endpoint")
-	ErrInvalidInput         = errors.New("sync client invalid input")
-	ErrRemote               = errors.New("sync client remote failure")
-	ErrUnauthorized         = errors.New("sync client unauthorized")
-	ErrUnavailable          = errors.New("sync client unavailable")
-	ErrDiscoveryUnsupported = errors.New("sync client discovery unsupported")
-	errNilTransportResponse = errors.New("sync client nil transport response")
+	ErrInvalidEndpoint         = errors.New("sync client invalid endpoint")
+	ErrInvalidInput            = errors.New("sync client invalid input")
+	ErrRemote                  = errors.New("sync client remote failure")
+	ErrUnauthorized            = errors.New("sync client unauthorized")
+	ErrUnavailable             = errors.New("sync client unavailable")
+	ErrDiscoveryUnsupported    = errors.New("sync client discovery unsupported")
+	ErrProjectStateUnsupported = errors.New("sync client project state unsupported")
+	errNilTransportResponse    = errors.New("sync client nil transport response")
 )
 
 // Operation is a stable, allowlisted sync capability identifier.
@@ -36,6 +39,7 @@ const (
 	OperationProjectDiscovery Operation = "project_discovery"
 	OperationPull             Operation = "pull"
 	OperationProjectPull      Operation = "project_pull"
+	OperationProjectState     Operation = "project_state"
 )
 
 // ErrorClass is a stable, allowlisted category that never includes remote data.
@@ -104,6 +108,8 @@ func canonicalCause(cause error) error {
 		return ErrUnavailable
 	case errors.Is(cause, ErrDiscoveryUnsupported):
 		return ErrDiscoveryUnsupported
+	case errors.Is(cause, ErrProjectStateUnsupported):
+		return ErrProjectStateUnsupported
 	case errors.Is(cause, ErrRemote):
 		return ErrRemote
 	default:
@@ -113,7 +119,7 @@ func canonicalCause(cause error) error {
 
 func validOperation(operation Operation) bool {
 	switch operation {
-	case OperationCapabilities, OperationPush, OperationProjectDiscovery, OperationPull, OperationProjectPull:
+	case OperationCapabilities, OperationPush, OperationProjectDiscovery, OperationPull, OperationProjectPull, OperationProjectState:
 		return true
 	default:
 		return false
@@ -237,6 +243,42 @@ func (client *Client) Capabilities(ctx context.Context, credential string) (sync
 		seen[capability] = struct{}{}
 	}
 	return value, nil
+}
+
+// ProjectState retrieves authenticated state for exactly one portable project.
+// It fails closed when the server did not negotiate the capability.
+func (client *Client) ProjectState(ctx context.Context, credential, projectID string) (syncapi.ProjectStateResponse, error) {
+	if !validProjectID(projectID) || !validCredential(credential) {
+		return syncapi.ProjectStateResponse{}, ErrInvalidInput
+	}
+	capabilities, err := client.Capabilities(ctx, credential)
+	if err != nil {
+		return syncapi.ProjectStateResponse{}, err
+	}
+	if !hasCapability(capabilities, string(syncservice.CapabilityProjectState)) {
+		return syncapi.ProjectStateResponse{}, NewDiagnosticError(OperationProjectState, ErrorClassResponseInvalid, 0, ErrProjectStateUnsupported)
+	}
+	var value syncapi.ProjectStateResponse
+	if err := client.get(ctx, OperationProjectState, "/v1/sync/projects/"+projectID+"/state", nil, credential, syncapi.MaxBodyBytes, func(body []byte) error {
+		decoded, err := syncapi.DecodeProjectStateResponse(body)
+		value = decoded
+		return err
+	}); err != nil {
+		return value, err
+	}
+	if syncservice.ValidateProjectState(value) != nil {
+		return syncapi.ProjectStateResponse{}, NewDiagnosticError(OperationProjectState, ErrorClassResponseInvalid, 0, ErrRemote)
+	}
+	return value, nil
+}
+
+func hasCapability(value syncapi.CapabilitiesResponse, want string) bool {
+	for _, capability := range value.Capabilities {
+		if capability == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Push sends no more than one protocol batch and retries only one transient failure.
@@ -424,6 +466,11 @@ func contextError(ctx context.Context, err error) error {
 func validCredential(value string) bool {
 	_, ok := syncapi.ParseBearer(value)
 	return ok
+}
+
+func validProjectID(value string) bool {
+	id, err := uuid.Parse(value)
+	return err == nil && id != uuid.Nil && id.String() == value && id.Variant() == uuid.RFC4122 && id.Version() >= 1 && id.Version() <= 5
 }
 
 func pullMatches(request syncapi.PullRequest, response syncapi.PullResponse) bool {
