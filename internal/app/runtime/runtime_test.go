@@ -1423,6 +1423,25 @@ func (store *transitionTestStore) FinalizeSyncProjectTransition(context.Context,
 	return memory.SyncProjectTransitionResult{Status: memory.SyncProjectTransitionCompleted}, nil
 }
 
+func (store *transitionTestStore) ClaimDueSyncOutboxForProjectTransition(ctx context.Context, lease time.Duration, limit int, project string, _ string, _ int64) ([]memory.SyncOutboxClaim, error) {
+	return store.ClaimDueSyncOutboxForProject(ctx, lease, limit, project)
+}
+func (store *transitionTestStore) ApplySyncPushResultForProjectTransition(ctx context.Context, mutationID, claimToken string, result syncservice.Result, _ string, _ string, _ int64) error {
+	return store.ApplySyncPushResult(ctx, mutationID, claimToken, result)
+}
+func (store *transitionTestStore) MarkSyncOutboxRetryForProjectTransition(ctx context.Context, mutationID, claimToken string, next time.Time, code string, _ string, _ string, _ int64) error {
+	return store.MarkSyncOutboxRetry(ctx, mutationID, claimToken, next, code)
+}
+func (store *transitionTestStore) ApplyProjectPulledPageForTransition(ctx context.Context, portableProject, localProject string, page syncservice.PullPage, _ int64) error {
+	return store.ApplyProjectPulledPage(ctx, portableProject, localProject, page)
+}
+func (store *transitionTestStore) TranslateSyncMutationsForTransition(ctx context.Context, portableProject, localProject string, _ int64, mutations []syncservice.Mutation) ([]syncservice.Mutation, error) {
+	return store.projectForegroundStore.TranslateSyncMutations(ctx, portableProject, localProject, mutations)
+}
+func (store *transitionTestStore) FinalizeSyncProjectTransitionWithIdentity(ctx context.Context, portableProject, localProject string, _ int64) (memory.SyncProjectTransitionResult, error) {
+	return store.FinalizeSyncProjectTransition(ctx, portableProject, localProject)
+}
+
 func (store *orderedStore) ClaimDueSyncOutbox(context.Context, time.Duration, int) ([]memory.SyncOutboxClaim, error) {
 	store.events = append(store.events, "claim")
 	if store.claimErr != nil {
