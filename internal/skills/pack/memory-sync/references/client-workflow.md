@@ -1,10 +1,10 @@
 # VGXNESS client memory-sync workflow
 
-Use this reference only for a user-requested client action. `configure` and `status` are storage-root-wide because runtime has one profile. Foreground `sync`, `reseed`, `rejoin`, and `backfill` require a named absolute workspace. All placeholders are non-secret labels: never substitute or display bearer content.
+Use this reference only for a user-requested client action. `configure` and `status` are storage-root-wide because runtime has one profile. Direct `status` MUST have explicit current authorization only for the local, token-free credential-status check on the selected absolute storage root; it is workspace-free and MUST NOT request, infer, add, or derive a workspace or workspace selector. Status authority MUST NOT authorize named-workspace `sync`, its preflight, `backfill`, `reseed`, or `rejoin`; each retains independent explicit current authorization for its exact absolute workspace and action. Foreground `sync`, `reseed`, `rejoin`, and `backfill` require a named absolute workspace. All placeholders are non-secret labels: never substitute or display bearer content.
 
 ## Safe command forms
 
-First establish an absolute storage root. `status` is root-wide and local. Foreground sync requires an explicit absolute `--workspace`; CLI and runtime enforce it. Runtime automatically validates that workspace's strict marker/binding before any remote call, so the agent does not inspect the marker or invent a separate probe. It transfers or pulls only that project's eligible records and cursor, never other projects in the same root. Use the keyring-profile status form as the preflight:
+First establish an absolute storage root. Direct `status` is root-wide, local, token-free, and workspace-free, and requires its own explicit current authorization for that selected root only. It MUST NOT request, infer, add, or derive a workspace or workspace selector, and its authority MUST NOT authorize named-workspace `sync`, preflight, `backfill`, `reseed`, or `rejoin`. Each named action and preflight requires independent explicit current authorization for its exact absolute workspace and action. Foreground sync requires an explicit absolute `--workspace`; CLI and runtime enforce it. Runtime automatically validates that workspace's strict marker/binding before any remote call, so the agent does not inspect the marker or invent a separate probe. It transfers or pulls only that project's eligible records and cursor, never other projects in the same root. Use the keyring-profile status form as the preflight:
 
 ```text
 vgxness memory sync status --storage-root <absolute-storage-root> --json
@@ -62,6 +62,8 @@ vgxness memory sync --storage-root <absolute-storage-root> --workspace <absolute
 
 After the result, run the same conditional status form matching the enrolled profile. If interrupted or its result is unknown, do not retry or repair: run only this matching token-free status, report the unknown outcome, and escalate. Never replace foreground sync with `syncd serve`.
 
+AutoSyncProject is internal runtime automation, not a public agent action or CLI command. Its Phase 3C planner can select bounded foreground sync or resume an active transition; agents use only the public foreground commands documented here.
+
 ## First-device reseed and device rejoin
 
 Use these foreground transitions only when explicitly requested for the named workspace. Do not reset the cloud, operate a server, or substitute normal sync, `repair-project`, or `git pull`.
@@ -78,7 +80,7 @@ Every subsequent device uses the exact rejoin confirmation:
 vgxness memory sync rejoin --storage-root <absolute-storage-root> --workspace <absolute-workspace> --confirm-merge --json
 ```
 
-For a file-enrolled profile, retain `--credential-file <absolute-credential-file>` on either command. Runtime requires the strict marker/binding before remote work; reseed verifies the cloud is exactly empty, and rejoin pulls before merging. Both commands affect only that project. A durable private backup intent makes retries resume the same transition and blocks only that project; never inspect, delete, replace, or report its path.
+For a file-enrolled profile, retain `--credential-file <absolute-credential-file>` on either command. Runtime requires the strict marker/binding before remote work; reseed verifies the cloud is exactly empty, and rejoin pulls before merging. Both commands affect only that project. A durable private backup intent makes retries resume the same transition and blocks only that project; never inspect, delete, replace, or report its path. An active transition can resume only through the same explicit `reseed` or `rejoin` action with that mode's exact confirmation; ordinary `sync` is not a substitute.
 
 ## Token-free interpretation
 

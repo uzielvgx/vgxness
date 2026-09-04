@@ -22,12 +22,12 @@ type legacyDefinition struct {
 	exactOnly bool
 }
 
-var memorySyncV11Predecessors = map[string]string{
+var memorySyncV12Predecessors = map[string]string{
 	"LICENSE.txt":                   "904c73d094910aff6f8e7f0bd06ab953f55f879264680363095d03e64e9a28d7",
-	"SKILL.md":                      "eee909e04794e5d8e8a0dd9c6a4e6b81ce58e200c0e2a740933dec2e7eaf3a57",
-	"agents/openai.yaml":            "8603b91c3c8a3290658d2a9b695ecffd456475e2649471bada5e3f071c7afb1f",
-	"references/client-workflow.md": "40e029c0ba126b48546608d5c3efac9a41ed02b2f4d721a739b63e71b07e7239",
-	"skill-manifest.json":           "e4458bec256408c591700e65ec413037c6c69ad2c6f0843f4e9d6676e85571be",
+	"SKILL.md":                      "b1ca88880e74035b4b284cfa88d135cdb5593dc35285104400b5d8870971a83f",
+	"agents/openai.yaml":            "a355e835187fefb7f55a35eddebb4e5ac6e8a412d3f2c52f26b1dd5c2064ae48",
+	"references/client-workflow.md": "0969bcc01c53c37933d58a71713bc88fb683e207c35e0fb7930c14049c1041df",
+	"skill-manifest.json":           "96eddcbd1dc0643084bb3e1ef8255e0e7e209f3f8fd2318bde309971da3c020b",
 }
 
 type catalog struct{ definitions []skillDefinition }
@@ -183,7 +183,7 @@ func bundledCatalog() (catalog, error) {
 	if err != nil {
 		return catalog{}, err
 	}
-	memorySync := skillDefinition{name: "memory-sync", source: "memory-sync", predecessors: memorySyncV11Predecessors, packageExact: true}
+	memorySync := skillDefinition{name: "memory-sync", source: "memory-sync", predecessors: memorySyncV12Predecessors, packageExact: true}
 	memorySync.files, err = bundledFiles(memorySync.source)
 	if err != nil {
 		return catalog{}, err

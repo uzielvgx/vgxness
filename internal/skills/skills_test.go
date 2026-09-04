@@ -164,7 +164,7 @@ func TestBundledSDDLifecycleReservesAcceptedSDDWritesForApply(t *testing.T) {
 	}
 }
 
-func TestBundledMemorySyncDefinesClientOnlyFailClosedContract(t *testing.T) {
+func TestBundledMemorySyncDefinesPhase3CClientOnlyFailClosedContract(t *testing.T) {
 	catalog, err := bundledCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestBundledMemorySyncDefinesClientOnlyFailClosedContract(t *testing.T) {
 		t.Fatalf("definition=%+v", definition)
 	}
 	skill := string(definition.files["SKILL.md"])
-	for _, required := range []string{"name: memory-sync", "<!-- managed-by: vgxness; artifact: global-skill/memory-sync; version: 1 -->", "status", "backfill", "foreground", "storage-root-wide", "one profile", "explicit absolute `--workspace`", "CLI and runtime enforce", "Runtime automatically validates", "agent does not inspect the marker", "strict marker/binding", "only that project's eligible records and cursor", "never other projects", "cross-process lock serializes configure, sync, and repair", "If interrupted or its result is unknown, do not retry or repair", "Endpoint and device ID are configure inputs only", "agent/model never reads or exposes a bearer", "Runtime reads stdin, keyring, or credential file", "credential-free", "keyring", "credential file", "Windows", "fail closed", "syncd serve", "SDD"} {
+	for _, required := range []string{"name: memory-sync", "<!-- managed-by: vgxness; artifact: global-skill/memory-sync; version: 1 -->", "version: \"1.3.0\"", "status", "backfill", "foreground", "storage-root-wide", "one profile", "explicit absolute `--workspace`", "CLI and runtime enforce", "Runtime automatically validates", "agent does not inspect the marker", "strict marker/binding", "only that project's eligible records and cursor", "never other projects", "cross-process lock serializes configure, sync, and repair", "If interrupted or its result is unknown, do not retry or repair", "Endpoint and device ID are configure inputs only", "agent/model never reads or exposes a bearer", "Runtime reads stdin, keyring, or credential file", "credential-free", "keyring", "credential file", "Windows", "fail closed", "AutoSyncProject", "planner", "same explicit transition", "exact confirmation", "ordinary `sync` is not a substitute", "syncd serve", "SDD"} {
 		if !bytes.Contains([]byte(skill), []byte(required)) {
 			t.Errorf("memory-sync missing %q", required)
 		}
@@ -186,6 +186,7 @@ func TestBundledMemorySyncDefinesClientOnlyFailClosedContract(t *testing.T) {
 	}
 	reference := string(definition.files["references/client-workflow.md"])
 	for _, required := range []string{
+		"AutoSyncProject is internal runtime automation, not a public agent action or CLI command",
 		"vgxness memory sync status --storage-root <absolute-storage-root> --credential-file <absolute-credential-file> --json",
 		"vgxness memory sync --storage-root <absolute-storage-root> --workspace <absolute-workspace> --credential-file <absolute-credential-file> --json",
 		"absolute regular current-user-owned",
@@ -198,6 +199,8 @@ func TestBundledMemorySyncDefinesClientOnlyFailClosedContract(t *testing.T) {
 		"agent does not inspect the marker",
 		"cross-process lock serializes configure, sync, and repair",
 		"If interrupted or its result is unknown, do not retry or repair",
+		"same explicit `reseed` or `rejoin` action",
+		"ordinary `sync` is not a substitute",
 	} {
 		if !bytes.Contains([]byte(reference), []byte(required)) {
 			t.Errorf("memory-sync client workflow missing %q", required)
@@ -205,7 +208,7 @@ func TestBundledMemorySyncDefinesClientOnlyFailClosedContract(t *testing.T) {
 	}
 }
 
-func TestBundledMemorySyncV11PredecessorUpdatesToV12(t *testing.T) {
+func TestBundledMemorySyncV12PredecessorUpdatesToV13(t *testing.T) {
 	bundled, err := bundledCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -213,13 +216,13 @@ func TestBundledMemorySyncV11PredecessorUpdatesToV12(t *testing.T) {
 	definition := bundled.definitions[17]
 	want := map[string]string{
 		"LICENSE.txt":                   "904c73d094910aff6f8e7f0bd06ab953f55f879264680363095d03e64e9a28d7",
-		"SKILL.md":                      "eee909e04794e5d8e8a0dd9c6a4e6b81ce58e200c0e2a740933dec2e7eaf3a57",
-		"agents/openai.yaml":            "8603b91c3c8a3290658d2a9b695ecffd456475e2649471bada5e3f071c7afb1f",
-		"references/client-workflow.md": "40e029c0ba126b48546608d5c3efac9a41ed02b2f4d721a739b63e71b07e7239",
-		"skill-manifest.json":           "e4458bec256408c591700e65ec413037c6c69ad2c6f0843f4e9d6676e85571be",
+		"SKILL.md":                      "b1ca88880e74035b4b284cfa88d135cdb5593dc35285104400b5d8870971a83f",
+		"agents/openai.yaml":            "a355e835187fefb7f55a35eddebb4e5ac6e8a412d3f2c52f26b1dd5c2064ae48",
+		"references/client-workflow.md": "0969bcc01c53c37933d58a71713bc88fb683e207c35e0fb7930c14049c1041df",
+		"skill-manifest.json":           "96eddcbd1dc0643084bb3e1ef8255e0e7e209f3f8fd2318bde309971da3c020b",
 	}
 	if !definition.packageExact || !mapsEqual(definition.predecessors, want) {
-		t.Fatalf("memory-sync v1.1 predecessor digests=%v want=%v", definition.predecessors, want)
+		t.Fatalf("memory-sync v1.2 predecessor digests=%v want=%v", definition.predecessors, want)
 	}
 	if digest(definition.files["LICENSE.txt"]) != want["LICENSE.txt"] {
 		t.Fatalf("memory-sync LICENSE.txt is not version-neutral")
@@ -228,7 +231,7 @@ func TestBundledMemorySyncV11PredecessorUpdatesToV12(t *testing.T) {
 	previous := make(map[string][]byte, len(definition.files))
 	predecessors := make(map[string]string, len(definition.files))
 	for relative := range definition.files {
-		previous[relative] = []byte("memory-sync v1.1 " + relative)
+		previous[relative] = []byte("memory-sync v1.2 " + relative)
 		if relative == "LICENSE.txt" {
 			previous[relative] = definition.files[relative]
 		}
@@ -290,7 +293,7 @@ func TestBundledMemorySyncRejectsIncompleteOrInconsistentPredecessorPackage(t *t
 			name: "one byte near match",
 			mutate: func(t *testing.T, destination string, _ map[string][]byte) {
 				t.Helper()
-				assertWrite(t, filepath.Join(destination, "memory-sync", "SKILL.md"), []byte("memory-sync v1.1 SKILL.md!"))
+				assertWrite(t, filepath.Join(destination, "memory-sync", "SKILL.md"), []byte("memory-sync v1.2 SKILL.md!"))
 			},
 			wantError: ErrDrift,
 		},
@@ -318,7 +321,7 @@ func TestBundledMemorySyncRejectsIncompleteOrInconsistentPredecessorPackage(t *t
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			service, destination, previous, current := bundledMemorySyncV11Fixture(t)
+			service, destination, previous, current := bundledMemorySyncV12Fixture(t)
 			test.mutate(t, destination, current)
 			before := make(map[string][]byte, len(previous))
 			for relative := range previous {
@@ -351,7 +354,7 @@ func TestBundledMemorySyncRejectsIncompleteOrInconsistentPredecessorPackage(t *t
 	}
 }
 
-func bundledMemorySyncV11Fixture(t *testing.T) (*Service, string, map[string][]byte, map[string][]byte) {
+func bundledMemorySyncV12Fixture(t *testing.T) (*Service, string, map[string][]byte, map[string][]byte) {
 	t.Helper()
 	bundled, err := bundledCatalog()
 	if err != nil {
@@ -361,7 +364,7 @@ func bundledMemorySyncV11Fixture(t *testing.T) (*Service, string, map[string][]b
 	previous := make(map[string][]byte, len(definition.files))
 	predecessors := make(map[string]string, len(definition.files))
 	for relative := range definition.files {
-		previous[relative] = []byte("memory-sync v1.1 " + relative)
+		previous[relative] = []byte("memory-sync v1.2 " + relative)
 		if relative == "LICENSE.txt" {
 			previous[relative] = definition.files[relative]
 		}
