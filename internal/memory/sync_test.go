@@ -2856,6 +2856,31 @@ func TestClaimDueSyncOutboxForProjectDoesNotLeaseOtherProjectRelations(t *testin
 	testutil.Require(t, bClaims == 0, "project b claims=%d", bClaims)
 }
 
+func TestSyncQueueSummaryForProjectIsolatesDelayedWorkAndConflicts(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	store.now = func() time.Time { return fixedTime }
+	ctx := context.Background()
+	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('a',0),('b',0)`)
+	testutil.NoError(t, err)
+	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440401", "a")
+	enqueueMutation(t, store, mutation)
+	_, err = store.db.Exec(`UPDATE sync_outbox SET state='retry',attempts=1,last_error_code='temporary',next_attempt_at=? WHERE mutation_id=?`, fixedTime.Add(time.Hour).UnixNano(), mutation.MutationID)
+	testutil.NoError(t, err)
+
+	a, err := store.SyncQueueSummaryForProject(ctx, "a")
+	testutil.Require(t, err == nil && a == (SyncQueueSummary{Work: true}), "a=%+v err=%v", a, err)
+	b, err := store.SyncQueueSummaryForProject(ctx, "b")
+	testutil.Require(t, err == nil && b == (SyncQueueSummary{}), "b=%+v err=%v", b, err)
+
+	_, err = store.db.Exec(`INSERT INTO sync_conflicts(conflict_id,history_id,created_seq,record_kind,record_id,canonical_version,competing_version_id,status,resolved_seq,payload_version,snapshot,created_at,updated_at) VALUES('550e8400-e29b-41d4-a716-446655440402','550e8400-e29b-41d4-a716-446655440403',1,'project','a',1,'550e8400-e29b-41d4-a716-446655440404','unresolved',NULL,1,X'7B7D',?,?)`, fixedTime.UnixNano(), fixedTime.UnixNano())
+	testutil.NoError(t, err)
+	a, err = store.SyncQueueSummaryForProject(ctx, "a")
+	testutil.Require(t, err == nil && a == (SyncQueueSummary{Work: true, Conflict: true}), "a=%+v err=%v", a, err)
+	b, err = store.SyncQueueSummaryForProject(ctx, "b")
+	testutil.Require(t, err == nil && b == (SyncQueueSummary{}), "b=%+v err=%v", b, err)
+}
+
 func TestTranslateSyncMutationsUsesDeterministicPortableIDs(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()

@@ -1513,6 +1513,34 @@ func (s *Store) SyncQueueSummary(ctx context.Context) (SyncQueueSummary, error) 
 	return SyncQueueSummary{Work: work != 0, Conflict: conflict != 0}, nil
 }
 
+// SyncQueueSummaryForProject reports durable work and conflicts owned by one
+// project, without allowing other projects to block its foreground sync.
+func (s *Store) SyncQueueSummaryForProject(ctx context.Context, project string) (SyncQueueSummary, error) {
+	if s == nil || ctx == nil || project == "" {
+		return SyncQueueSummary{}, fmt.Errorf("%w: sync project queue", ErrInvalid)
+	}
+	if err := cancelled(ctx); err != nil {
+		return SyncQueueSummary{}, err
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.closed || s.db == nil {
+		return SyncQueueSummary{}, fmt.Errorf("%w: store closed", ErrCorrupt)
+	}
+	if s.readOnly {
+		return SyncQueueSummary{}, fmt.Errorf("%w: store is read-only", ErrConflict)
+	}
+	owner := `(record_kind='project' AND record_id=?) OR (record_kind='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=record_id AND s.project_id=?)) OR (record_kind='observation' AND EXISTS(SELECT 1 FROM observations n WHERE n.id=record_id AND n.project_id=?))`
+	var work, conflict int
+	err := s.db.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM sync_outbox WHERE `+owner+`),
+		EXISTS(SELECT 1 FROM sync_conflicts WHERE status='unresolved' AND (`+owner+`))`, project, project, project, project, project, project).Scan(&work, &conflict)
+	if err != nil {
+		return SyncQueueSummary{}, writeError(ctx, err)
+	}
+	return SyncQueueSummary{Work: work != 0, Conflict: conflict != 0}, nil
+}
+
 // PendingOwnConflictReceipts returns bounded, unmaterialized own conflicts that
 // still have later local work for the same record.
 func (s *Store) PendingOwnConflictReceipts(ctx context.Context) ([]string, error) {

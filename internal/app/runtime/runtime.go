@@ -1033,6 +1033,10 @@ type foregroundProjectStore interface {
 	ApplyProjectPulledPage(context.Context, string, string, syncservice.PullPage) error
 }
 
+type foregroundProjectQueueStore interface {
+	SyncQueueSummaryForProject(context.Context, string) (memory.SyncQueueSummary, error)
+}
+
 // runForegroundProjectSync synchronizes one locally bound project without
 // touching owner-global pull cursors or bootstrap state.
 func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore, remote foregroundRemote, project, portableProject string) (memory.SyncResult, error) {
@@ -1074,6 +1078,21 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 			return result, err
 		}
 		if len(claims) == 0 {
+			if queueStore, ok := store.(foregroundProjectQueueStore); ok {
+				queue, err := queueStore.SyncQueueSummaryForProject(ctx, project)
+				if err != nil {
+					result.Status = memory.SyncStatusPartial
+					return result, err
+				}
+				if queue.Conflict {
+					result.Status = memory.SyncStatusConflict
+					return result, nil
+				}
+				if queue.Work {
+					result.Status = memory.SyncStatusPartial
+					return result, nil
+				}
+			}
 			return runForegroundProjectPull(ctx, store, remote, project, portableProject, result)
 		}
 		result.Batches++
