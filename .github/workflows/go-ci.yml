@@ -52,6 +52,8 @@ jobs:
         env:
           VGXNESS_TEST_POSTGRES_DSN: postgresql://vgxness_test:vgxness_test@localhost:5432/vgxness_test?sslmode=disable
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Test agent-evaluation runner offline
+        run: python3 -m unittest tools/agent_eval/test_runner.py
       - name: Enforce aggregate coverage floor
         run: |
           observed="$(go tool cover -func=coverage.out | awk '/^total:/{gsub("%", "", $3); print $3}')"
