@@ -783,6 +783,30 @@ func TestRunForegroundProjectSyncPullsSelectedProjectAfterEmptyPush(t *testing.T
 	}
 }
 
+func TestRunForegroundProjectSyncDoesNotReportSyncedWithScopedPendingWork(t *testing.T) {
+	project := "550e8400-e29b-41d4-a716-446655440001"
+	for _, tc := range []struct {
+		name      string
+		queue     memory.SyncQueueSummary
+		status    memory.SyncStatus
+		pulls     int
+		discovers int
+	}{
+		{name: "delayed work", queue: memory.SyncQueueSummary{Work: true}, status: memory.SyncStatusPartial},
+		{name: "unresolved conflict", queue: memory.SyncQueueSummary{Conflict: true}, status: memory.SyncStatusConflict},
+		{name: "other project work excluded", status: memory.SyncStatusSynced, pulls: 1, discovers: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &projectForegroundStore{claims: [][]memory.SyncOutboxClaim{nil}, queue: tc.queue}
+			remote := &testForegroundRemote{}
+			result, err := runForegroundProjectSync(context.Background(), store, remote, "project-a", project)
+			if err != nil || result.Status != tc.status || remote.projectPulls != tc.pulls || remote.discovers != tc.discovers {
+				t.Fatalf("result=%+v err=%v pulls=%d discovers=%d", result, err, remote.projectPulls, remote.discovers)
+			}
+		})
+	}
+}
+
 func TestRunForegroundProjectSyncPullsPagesAndRetriesFromCommittedCursor(t *testing.T) {
 	project := "550e8400-e29b-41d4-a716-446655440001"
 	history := "550e8400-e29b-41d4-a716-446655440010"
@@ -1570,6 +1594,7 @@ type projectForegroundStore struct {
 	pendingErr        error
 	pendingErrs       []error
 	repairMutationIDs []string
+	queue             memory.SyncQueueSummary
 }
 
 func (store *projectForegroundStore) PendingProjectRepair(context.Context, string, string) error {
@@ -1593,6 +1618,10 @@ func (store *projectForegroundStore) PendingProjectRepairMutation(context.Contex
 		return "", err
 	}
 	return "", store.pendingErr
+}
+
+func (store *projectForegroundStore) SyncQueueSummaryForProject(context.Context, string) (memory.SyncQueueSummary, error) {
+	return store.queue, nil
 }
 
 func (store *projectForegroundStore) ProjectPullCursor(context.Context, string, string) (syncservice.Cursor, error) {
