@@ -118,7 +118,10 @@ type ProtectedReinstallResult struct {
 type setupView uint8
 
 const (
-	setupViewInstall setupView = iota
+	setupViewHome setupView = iota
+	setupViewProviders
+	setupViewPlan
+	setupViewReview
 	setupViewRecovery
 )
 
@@ -424,7 +427,7 @@ func (m *Model) updateRecoveryKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "tab":
 		m.cancelRecoveryOperation()
-		m.setupView = setupViewInstall
+		m.setupView = setupViewHome
 		return true, m.loadSetupPlan()
 	case "left", "h":
 		if m.recoveryMode != RecoveryModeManaged {
@@ -476,7 +479,7 @@ func (m *Model) updateRecoveryKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			m.recoveryPreview = RestorePreview{}
 			return true, nil
 		}
-		m.setRoute(routeOverview)
+		m.setRoute(routeSetup)
 		return true, nil
 	}
 	return false, nil

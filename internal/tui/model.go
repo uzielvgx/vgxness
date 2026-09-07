@@ -10,7 +10,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -21,6 +20,35 @@ import (
 const (
 	minimumWidth  = 42
 	minimumHeight = 10
+)
+
+var (
+	softbricCanvas   = lipgloss.Color("#071522")
+	softbricInk      = lipgloss.Color("#102231")
+	softbricDelivery = lipgloss.Color("#005F5C")
+	softbricBric     = lipgloss.Color("#008B87")
+	softbricAqua     = lipgloss.Color("#4DD4D4")
+	softbricPaper    = lipgloss.Color("#F5F7F8")
+
+	studioAccent = lipgloss.NewStyle().Foreground(softbricAqua).Bold(true)
+	studioCyan   = lipgloss.NewStyle().Foreground(softbricAqua)
+	studioMuted  = lipgloss.NewStyle().Foreground(softbricAqua)
+	studioPanel  = lipgloss.NewStyle().
+			Foreground(softbricPaper).
+			Background(softbricInk).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(softbricDelivery).
+			Padding(0, 1)
+	studioCard = lipgloss.NewStyle().
+			Foreground(softbricPaper).
+			Background(softbricInk).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(softbricDelivery).
+			Padding(0, 1)
+	studioFocus = lipgloss.NewStyle().
+			Foreground(softbricCanvas).
+			Background(softbricAqua).
+			Bold(true)
 )
 
 type Request struct {
@@ -55,7 +83,6 @@ type SetupStatus struct {
 }
 
 type Backend interface {
-	Inspect(context.Context, Request) (Inspection, error)
 	SetupStatus(context.Context, Request) (SetupStatus, error)
 	PlanSetup(context.Context, SetupRequest) (SetupPlan, error)
 	ApplySetup(context.Context, SetupRequest) (SetupResult, error)
@@ -65,9 +92,6 @@ type Backend interface {
 	PreviewRestore(context.Context, RestorePreviewRequest) (RestorePreview, error)
 	RestoreBackup(context.Context, RestoreRequest) (RestoreResult, error)
 	ProtectedReinstall(context.Context, ProtectedReinstallRequest) (ProtectedReinstallResult, error)
-	Recent(context.Context, Request) ([]MemorySummary, error)
-	Search(context.Context, MemorySearch) ([]MemorySummary, error)
-	GetMemory(context.Context, MemoryLookup) (MemoryDetail, error)
 }
 
 type Options struct {
@@ -84,13 +108,10 @@ type setupLoadedMsg struct {
 	generation int
 	value      SetupStatus
 	err        error
+	startup    bool
 }
 
-type memoriesLoadedMsg struct {
-	generation int
-	value      []MemorySummary
-	err        error
-}
+type setupStartMsg struct{}
 
 type keyMap struct {
 	Sections key.Binding
@@ -122,25 +143,7 @@ func (keys keyMap) FullHelp() [][]key.Binding {
 
 type route uint8
 
-const (
-	routeOverview route = iota
-	routeSystem
-	routeMemory
-	routeSetup
-)
-
-func (current route) title() string {
-	switch current {
-	case routeSystem:
-		return "SYSTEM"
-	case routeMemory:
-		return "MEMORY"
-	case routeSetup:
-		return "SETUP"
-	default:
-		return "OVERVIEW"
-	}
-}
+const routeSetup route = iota
 
 type focusArea uint8
 
@@ -176,26 +179,9 @@ type Model struct {
 	focus      focusArea
 	sections   list.Model
 
-	inspection             Inspection
-	inspectionErr          error
-	inspectionLoading      bool
 	setup                  SetupStatus
 	setupErr               error
 	setupLoading           bool
-	memories               []MemorySummary
-	memoriesErr            error
-	memoriesLoading        bool
-	memorySearch           textinput.Model
-	memoryList             list.Model
-	memoryViewport         viewport.Model
-	memoryDetail           MemoryDetail
-	memoryDetailReady      bool
-	memoryStatus           string
-	memorySearching        bool
-	memorySearched         bool
-	memoryDetailLoad       bool
-	memoryGeneration       int
-	cancelMemory           context.CancelFunc
 	setupPlan              SetupPlan
 	setupResult            SetupResult
 	setupProviders         []setupflow.Provider
@@ -203,6 +189,8 @@ type Model struct {
 	setupMultiResult       setupflow.MultiResult
 	setupViewport          viewport.Model
 	setupSelected          string
+	setupProviderCursor    int
+	installationAction     installationAction
 	setupPlanErr           error
 	setupApplyErr          error
 	setupPlanLoading       bool
@@ -258,12 +246,12 @@ type Model struct {
 	setupCatalogLoading         bool
 	setupCatalogGeneration      int
 	cancelSetupCatalog          context.CancelFunc
+	setupCatalogQuery           string
+	setupCatalogSearching       bool
+	setupCatalogResultIndex     int
 	setupEditorPlan             SetupPlan
 	setupEditorRequest          SetupRequest
 	setupEditorPreviewed        bool
-	activity                    []activityRow
-	activityAliases             map[activitySubject]uint64
-	activityAlias               uint64
 
 	spinner spinner.Model
 	help    help.Model
@@ -281,11 +269,8 @@ func NewModel(ctx context.Context, backend Backend, options Options) Model {
 	delegate.SetHeight(1)
 	delegate.SetSpacing(0)
 	sections := list.New([]list.Item{
-		sectionItem{route: routeOverview, title: "Overview", description: "workspace summary"},
-		sectionItem{route: routeSystem, title: "System", description: "read-only health"},
-		sectionItem{route: routeMemory, title: "Memory", description: "search and inspect"},
-		sectionItem{route: routeSetup, title: "Setup", description: "controlled provider setup"},
-	}, delegate, 24, 4)
+		sectionItem{route: routeSetup, title: "Installation", description: "install, repair, configure"},
+	}, delegate, 24, 1)
 	sections.SetShowTitle(false)
 	sections.SetShowFilter(false)
 	sections.SetShowHelp(false)
@@ -296,59 +281,40 @@ func NewModel(ctx context.Context, backend Backend, options Options) Model {
 	model := Model{
 		ctx: ctx, loadCtx: loadCtx, cancelLoad: cancelLoad,
 		backend: backend, options: options, generation: 1,
-		route: routeOverview, focus: focusContent, sections: sections,
-		inspectionLoading: true, setupLoading: true, memoriesLoading: true,
-		spinner: spin, help: help.New(), keys: newKeyMap(),
-		activityAliases: make(map[activitySubject]uint64),
+		route: routeSetup, focus: focusContent, sections: sections,
+		setupGeneration: 1,
+		spinner:         spin, help: help.New(), keys: newKeyMap(),
 	}
-	model.initMemory()
 	model.initSetup()
 	return model
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.load()
+	return func() tea.Msg { return setupStartMsg{} }
 }
 
-func (m Model) load() tea.Cmd {
-	generation := m.generation
-	request := Request{Workspace: m.options.Workspace}
-	inspect := func() tea.Msg {
+func (m Model) loadStartupStatus() tea.Cmd {
+	return func() tea.Msg {
 		if m.backend == nil {
-			return inspectionLoadedMsg{generation: generation, err: fmt.Errorf("inspection backend unavailable")}
+			return setupLoadedMsg{generation: m.generation, startup: true, err: fmt.Errorf("setup backend unavailable")}
 		}
-		value, err := m.backend.Inspect(m.loadCtx, request)
-		return inspectionLoadedMsg{generation: generation, value: value, err: err}
+		value, err := m.backend.SetupStatus(m.ctx, Request{Workspace: m.options.Workspace})
+		return setupLoadedMsg{generation: m.generation, value: value, err: err, startup: true}
 	}
-	setupStatus := func() tea.Msg {
-		if m.backend == nil {
-			return setupLoadedMsg{generation: generation, value: SetupStatus{statusGeneration: m.setupStatusGeneration}, err: fmt.Errorf("setup backend unavailable")}
-		}
-		value, err := m.backend.SetupStatus(m.loadCtx, request)
-		value.statusGeneration = m.setupStatusGeneration
-		return setupLoadedMsg{generation: generation, value: value, err: err}
-	}
-	memories := func() tea.Msg {
-		if m.backend == nil {
-			return memoriesLoadedMsg{generation: generation, err: fmt.Errorf("memory backend unavailable")}
-		}
-		value, err := m.backend.Recent(m.loadCtx, request)
-		return memoriesLoadedMsg{generation: generation, value: value, err: err}
-	}
-	return tea.Batch(inspect, setupStatus, memories, m.spinner.Tick)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case setupStartMsg:
+		m.setupLoading = true
+		return m, tea.Batch(m.loadStartupStatus(), m.spinner.Tick)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.help.SetWidth(max(1, msg.Width))
-		m.resizeSections()
-		m.resizeMemory()
 		m.resizeSetup()
 		return m, nil
 	case tea.KeyPressMsg:
-		if m.route == routeSetup && (m.setupApplying || m.recoveryOperation.mutating()) {
+		if m.setupApplying || m.recoveryOperation.mutating() {
 			if msg.String() == "ctrl+c" && m.cancelSetup != nil {
 				if m.setupApplying {
 					m.cancelSetup()
@@ -362,35 +328,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.String() == "ctrl+c" {
-			m.cancelCurrentLoad()
-			m.cancelMemoryOperation()
 			m.cancelSetupOperation()
 			m.cancelRecoveryOperation()
 			return m, tea.Quit
 		}
-		if m.route == routeSetup && m.tooSmall() {
+		if m.tooSmall() {
 			if key.Matches(msg, m.keys.Quit) {
-				m.cancelCurrentLoad()
-				m.cancelMemoryOperation()
 				m.cancelSetupOperation()
 				m.cancelRecoveryOperation()
 				return m, tea.Quit
 			}
 			return m, nil
 		}
-		if m.route == routeMemory && m.focus == focusMemorySearch {
-			if handled, cmd := m.updateMemoryKey(msg); handled {
-				return m, cmd
-			}
-		}
-		if m.route == routeSetup && m.focus != focusNavigation {
+		if m.focus != focusNavigation {
 			if handled, cmd := m.updateSetupKey(msg); handled {
 				return m, cmd
 			}
 		}
 		if key.Matches(msg, m.keys.Quit) {
-			m.cancelCurrentLoad()
-			m.cancelMemoryOperation()
 			m.cancelSetupOperation()
 			m.cancelRecoveryOperation()
 			return m, tea.Quit
@@ -399,83 +354,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.help.ShowAll = !m.help.ShowAll
 			return m, nil
 		}
-		if m.focus == focusNavigation {
-			switch {
-			case key.Matches(msg, m.keys.Back):
-				m.focus = focusContent
-				return m, nil
-			case key.Matches(msg, m.keys.Select):
-				if item, ok := m.sections.SelectedItem().(sectionItem); ok {
-					m.setRoute(item.route)
-					if item.route == routeSetup {
-						return m, tea.Batch(m.loadSetupPlan(), m.loadSetupCatalog(false))
-					}
-				}
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.sections, cmd = m.sections.Update(msg)
-			return m, cmd
-		}
 		switch {
-		case key.Matches(msg, m.keys.Sections) && !m.tooSmall():
-			m.sections.Select(int(m.route))
-			m.focus = focusNavigation
-			return m, nil
-		case key.Matches(msg, m.keys.Refresh) && !m.tooSmall():
-			m.cancelCurrentLoad()
-			m.cancelMemoryOperation()
-			m.cancelSetupOperation()
-			m.cancelRecoveryOperation()
-			m.memorySearched = false
-			m.memoryDetail = MemoryDetail{}
-			m.memoryDetailReady = false
-			m.memoryStatus = ""
-			m.loadCtx, m.cancelLoad = context.WithCancel(m.ctx)
-			m.generation++
-			m.inspectionLoading, m.setupLoading, m.memoriesLoading = true, true, true
-			m.inspectionErr, m.setupErr, m.memoriesErr = nil, nil, nil
-			return m, m.load()
-		}
-		if m.route == routeMemory {
-			if handled, cmd := m.updateMemoryKey(msg); handled {
-				return m, cmd
-			}
-		}
-		if key.Matches(msg, m.keys.Back) && m.route != routeOverview {
-			m.setRoute(routeOverview)
+		case key.Matches(msg, m.keys.Sections):
 			return m, nil
 		}
-	case inspectionLoadedMsg:
-		if msg.generation != m.generation {
-			return m, nil
-		}
-		m.inspection, m.inspectionErr, m.inspectionLoading = msg.value, msg.err, false
-		m.cancelCompletedLoad()
-		return m, nil
 	case setupLoadedMsg:
 		if msg.generation != m.generation || msg.value.statusGeneration != m.setupStatusGeneration {
 			return m, nil
 		}
 		m.setup, m.setupErr, m.setupLoading = cloneSetupStatus(msg.value), msg.err, false
-		m.cancelCompletedLoad()
-		return m, nil
-	case memoriesLoadedMsg:
-		if msg.generation != m.generation {
-			return m, nil
+		if msg.startup && msg.err == nil {
+			m.setRoute(routeSetup)
+			return m, m.loadSetupCatalog(false)
 		}
-		m.memories = append([]MemorySummary(nil), msg.value...)
-		m.memoriesErr, m.memoriesLoading = msg.err, false
-		if !m.memorySearched {
-			m.setMemoryItems(msg.value)
-		}
-		m.cancelCompletedLoad()
-		return m, nil
-	case memorySearchLoadedMsg:
-		m.handleMemorySearchLoaded(msg)
-		return m, nil
-	case memoryDetailLoadedMsg:
-		m.handleMemoryDetailLoaded(msg)
 		return m, nil
 	case setupPlanLoadedMsg:
 		m.handleSetupPlanLoaded(msg)
@@ -505,9 +396,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
-	case activityMsg:
-		m.addActivity(msg.event)
-		return m, nil
 	}
 	return m, nil
 }
@@ -523,7 +411,7 @@ func (m Model) render() string {
 	width := max(1, m.width)
 	if m.tooSmall() {
 		lines := []string{
-			"VGXNESS / OVERVIEW / READ ONLY",
+			"VGXNESS / INSTALLATION STUDIO",
 			strings.Repeat("─", width),
 			"! Resize required",
 			fmt.Sprintf("  Need at least %dx%d; current terminal is %dx%d.", minimumWidth, minimumHeight, m.width, m.height),
@@ -532,179 +420,60 @@ func (m Model) render() string {
 		return fit(lines, width, m.height)
 	}
 
-	mode := "READ ONLY"
-	if m.route == routeSetup {
-		mode = "CONTROLLED WRITE"
+	lines := m.brandHeader()
+	panelWidth := max(1, width-2)
+	body := studioPanel.Width(panelWidth).Render(strings.Join(m.renderSetupRoute(), "\n"))
+	lines = append(lines, strings.Split(body, "\n")...)
+	if !(m.multiSetupEnabled() && m.setupView == setupViewReview) {
+		lines = append(lines, studioMuted.Render(m.setupHelp()))
 	}
-	lines := []string{
-		"VGXNESS / " + m.route.title() + " / " + mode,
-		"workspace  " + sanitizeTerminal(m.options.Workspace),
-		strings.Repeat("─", width),
+	return lipgloss.NewStyle().Background(softbricCanvas).Width(width).Render(fit(lines, width, m.height))
+}
+
+func (m Model) brandHeader() []string {
+	workspace := studioMuted.Render("workspace  ") + sanitizeTerminal(m.options.Workspace)
+	if m.wide() && m.setupView == setupViewHome {
+		return append(softbricBanner(),
+			studioAccent.Render("INSTALLATION STUDIO")+studioMuted.Render("  ·  LOCAL SETUP CONSOLE")+"   "+workspace,
+		)
 	}
-	content := m.renderRoute()
-	if m.focus == focusNavigation && !m.wide() {
-		content = m.renderNavigation()
-	} else if m.wide() {
-		content = m.renderWide(content, width)
+	return []string{
+		studioAccent.Render("VGXNESS / INSTALLATION STUDIO"),
+		studioCyan.Render("Install · reinstall · configure") + studioMuted.Render("   │   ") + workspace,
 	}
-	lines = append(lines, content...)
-	footer := m.help.View(m.keys)
-	if m.route == routeMemory && m.focus != focusNavigation {
-		footer = m.memoryHelp()
-	} else if m.route == routeSetup && m.focus != focusNavigation {
-		footer = m.setupHelp()
+}
+
+func softbricBanner() []string {
+	columns := [][]string{
+		{"██╗   ██╗", "╚██╗ ██╔╝", " ╚████╔╝ ", "  ╚██╔╝  ", "   ██║   ", "   ╚═╝   "},       // V
+		{" ██████╗", "██╔════╝", "██║  ███╗", "██║   ██║", "╚██████╔╝", " ╚═════╝ "},         // G
+		{"██╗  ██╗", "╚██╗██╔╝", " ╚███╔╝ ", " ██╔██╗ ", "██╔╝ ██╗", "╚═╝  ╚═╝"},             // X
+		{"███╗   ██╗", "████╗  ██║", "██╔██╗ ██║", "██║╚██╗██║", "██║ ╚████║", "╚═╝  ╚═══╝"}, // N
+		{"███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "███████╗", "╚══════╝"},             // E
+		{"███████╗", "██╔════╝", "███████╗", "╚════██║", "███████║", "╚══════╝"},             // S
+		{"███████╗", "██╔════╝", "███████╗", "╚════██║", "███████║", "╚══════╝"},             // S
 	}
-	lines = append(lines, strings.Repeat("─", width), footer)
-	return fit(lines, width, m.height)
+	lines := make([]string, len(columns[0]))
+	for row := range lines {
+		parts := make([]string, len(columns))
+		for column := range columns {
+			parts[column] = padLine(columns[column][row], lipgloss.Width(columns[column][0]))
+		}
+		lines[row] = strings.Join(parts, " ")
+	}
+	gradient := lipgloss.Blend1D(len(lines), softbricAqua, softbricBric)
+	for index, line := range lines {
+		lines[index] = lipgloss.NewStyle().Foreground(gradient[index]).Bold(true).Render(line)
+	}
+	return lines
 }
 
 func (m Model) renderRoute() []string {
-	switch m.route {
-	case routeSystem:
-		return m.renderSystem()
-	case routeMemory:
-		return m.renderMemory()
-	case routeSetup:
-		return m.renderSetupRoute()
-	}
-	lines := []string{"STORAGE & CHRONICLE"}
-	lines = append(lines, m.renderInspection()...)
-	lines = append(lines, "", "SETUP")
-	lines = append(lines, m.renderSetup()...)
-	lines = append(lines, "")
-	lines = append(lines, m.renderActivity()...)
-	lines = append(lines, "", "RECENT PROJECT MEMORY")
-	return append(lines, m.renderMemories()...)
-}
-
-func (m Model) renderSystem() []string {
-	lines := []string{
-		"SYSTEM HEALTH",
-		"scope  quick read-only inspection · deep compatibility inventory is CLI-only",
-		"",
-		"QUICK CHECK",
-	}
-	lines = append(lines, m.renderInspection()...)
-	lines = append(lines, "", "SETUP & ADAPTER")
-	lines = append(lines, m.renderSetup()...)
-	lines = append(lines, "", "[Esc] return to Overview")
-	return lines
-}
-
-func (m Model) renderNavigation() []string {
-	lines := []string{"SECTIONS", "j/k move · Enter open · Esc close", ""}
-	return append(lines, strings.Split(strings.TrimRight(m.sections.View(), "\n"), "\n")...)
-}
-
-func (m Model) renderWide(content []string, width int) []string {
-	const sidebarWidth = 26
-	bodyWidth := max(1, width-sidebarWidth-1)
-	title, hint := "SECTIONS  [g] focus", ""
-	if m.focus == focusNavigation {
-		title, hint = "SECTIONS  NAV FOCUS", "j/k move · Enter open"
-	}
-	navigation := append([]string{title, hint}, strings.Split(strings.TrimRight(m.sections.View(), "\n"), "\n")...)
-	rows := max(len(navigation), len(content))
-	result := make([]string, 0, rows)
-	for index := 0; index < rows; index++ {
-		left, right := "", ""
-		if index < len(navigation) {
-			left = navigation[index]
-		}
-		if index < len(content) {
-			right = content[index]
-		}
-		result = append(result, padLine(left, sidebarWidth)+"│"+ansi.Truncate(right, bodyWidth, ""))
-	}
-	return result
-}
-
-func (m Model) renderInspection() []string {
-	if m.inspectionLoading {
-		return []string{m.spinner.View() + " Loading storage inspection..."}
-	}
-	if m.inspectionErr != nil {
-		return []string{
-			"✕ Inspection unavailable",
-			"  Action: run `vgxness status` for bounded diagnostics.",
-		}
-	}
-	value := m.inspection
-	lines := []string{
-		fmt.Sprintf("✓ Storage available · schema v%d", value.Migration),
-		"  root      " + sanitizeTerminal(value.Root),
-		"  database  " + sanitizeTerminal(value.Database),
-	}
-	return lines
-}
-
-func (m Model) renderSetup() []string {
-	if m.setupLoading {
-		return []string{m.spinner.View() + " Loading setup status..."}
-	}
-	if m.setupErr != nil {
-		return []string{
-			"✕ Setup unavailable",
-			"  Action: run `vgxness setup opencode --status`.",
-		}
-	}
-	value := m.setup
-	state := "! Setup requires attention"
-	if value.Ready {
-		state = "✓ Setup ready"
-	}
-	lines := []string{state}
-	if value.SelfInstallState != "" || value.SelfInstallPath != "" {
-		lines = append(lines, "  launcher     "+sanitizeTerminal(value.SelfInstallState)+"  "+sanitizeTerminal(value.SelfInstallPath))
-	}
-	if value.IntegrationState != "" || value.IntegrationPath != "" {
-		lines = append(lines, "  integration  "+sanitizeTerminal(value.IntegrationState)+"  "+sanitizeTerminal(value.IntegrationPath))
-	}
-	if value.ArtifactCount > 0 {
-		lines = append(lines, fmt.Sprintf("  artifacts    %d", value.ArtifactCount))
-	}
-	if value.HandshakeStatus != "" {
-		glyph := "✕"
-		if value.HandshakeOK {
-			glyph = "✓"
-		}
-		lines = append(lines, "  "+glyph+" OpenCode handshake · "+sanitizeTerminal(value.HandshakeStatus))
-	}
-	if value.ModelPlan != "" {
-		lines = append(lines, "  model plan   "+sanitizeTerminal(value.ModelPlan))
-	}
-	if value.Blocker != "" {
-		lines = append(lines, "  Next: "+sanitizeTerminal(value.Blocker))
-	}
-	return lines
-}
-
-func (m Model) renderMemories() []string {
-	if m.memoriesLoading {
-		return []string{m.spinner.View() + " Loading recent memories..."}
-	}
-	if m.memoriesErr != nil {
-		return []string{
-			"✕ Memory unavailable",
-			"  Action: verify memory storage, then press r to retry.",
-		}
-	}
-	if len(m.memories) == 0 {
-		return []string{"! No active project memories found."}
-	}
-	lines := make([]string, 0, len(m.memories))
-	for _, item := range m.memories {
-		kind := sanitizeTerminal(item.Type)
-		if kind == "" {
-			kind = "memory"
-		}
-		lines = append(lines, "✓ "+sanitizeTerminal(item.Title)+"  ["+kind+"]  "+sanitizeTerminal(item.ID))
-	}
-	return lines
+	return m.renderSetupRoute()
 }
 
 func (m Model) loading() bool {
-	return m.inspectionLoading || m.setupLoading || m.memoriesLoading || m.setupPlanLoading || m.setupApplying || m.recoveryOperation != recoveryOperationIdle
+	return m.setupLoading || m.setupPlanLoading || m.setupApplying || m.recoveryOperation != recoveryOperationIdle
 }
 
 func (m *Model) cancelCurrentLoad() {
@@ -737,22 +506,10 @@ func (m *Model) resizeSections() {
 }
 
 func (m *Model) setRoute(next route) {
-	if m.route == routeMemory && next != routeMemory {
-		m.cancelMemoryOperation()
-	}
-	if m.route == routeSetup && next != routeSetup {
-		m.cancelSetupOperation()
-		m.cancelRecoveryOperation()
-	}
-	previous := m.route
 	m.route = next
 	m.sections.Select(int(next))
-	if next == routeMemory {
-		m.focusMemory(focusMemoryList)
-		return
-	}
-	if next == routeSetup && previous != routeSetup {
-		m.setupView = setupViewInstall
+	if next == routeSetup {
+		m.setupView = setupViewHome
 		m.setupSelected = defaultSetupPlan
 		if validSetupPlan(m.setup.ModelPlan) {
 			m.setupSelected = m.setup.ModelPlan

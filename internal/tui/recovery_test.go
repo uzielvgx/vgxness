@@ -153,7 +153,7 @@ func TestSetupRecoveryTabDefaultsManagedLoadsRealStateAndSelectsSnapshots(t *tes
 		t.Fatalf("recovery load requests plan=%+v list=%+v", backend.planRequests, backend.listRequests)
 	}
 	view := model.View().Content
-	for _, expected := range []string{"CONTROLLED WRITE", "Backup & Recovery", "MANAGED", "/config/opencode", "/backups", "17", "20260729T120000", "2.0 KiB"} {
+	for _, expected := range []string{"INSTALLATION STUDIO", "Backup & Recovery", "MANAGED", "/config/opencode", "/backups", "17", "20260729T120000", "2.0 KiB"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("recovery view missing %q:\n%s", expected, view)
 		}

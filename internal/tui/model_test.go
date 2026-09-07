@@ -2,7 +2,8 @@ package tui
 
 import (
 	"context"
-	"errors"
+	"image/color"
+	"math"
 	"strings"
 	"testing"
 
@@ -12,143 +13,101 @@ import (
 
 type fakeBackend struct{}
 
-func (fakeBackend) Inspect(context.Context, Request) (Inspection, error) {
-	return Inspection{}, nil
-}
-
 func (fakeBackend) SetupStatus(context.Context, Request) (SetupStatus, error) {
 	return SetupStatus{}, nil
-}
-
-func (fakeBackend) Recent(context.Context, Request) ([]MemorySummary, error) {
-	return nil, nil
-}
-
-func (fakeBackend) Search(context.Context, MemorySearch) ([]MemorySummary, error) {
-	return nil, nil
-}
-
-func (fakeBackend) GetMemory(context.Context, MemoryLookup) (MemoryDetail, error) {
-	return MemoryDetail{}, nil
 }
 
 func (fakeBackend) PlanSetup(context.Context, SetupRequest) (SetupPlan, error) {
 	return SetupPlan{}, nil
 }
-
 func (fakeBackend) ApplySetup(context.Context, SetupRequest) (SetupResult, error) {
 	return SetupResult{}, nil
 }
 
-func TestOverviewRendersIndependentResultsAtEightyColumns(t *testing.T) {
+func TestTUIStartsAtInstallationAndConfigurationOnly(t *testing.T) {
 	model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
-	model = updateModel(t, model, inspectionLoadedMsg{generation: 1, value: Inspection{
-		Root: "/storage", Database: "/storage/memory.db", Migration: 5,
-	}})
-	model = updateModel(t, model, setupLoadedMsg{generation: 1, err: errors.New("opencode unavailable")})
-	model = updateModel(t, model, memoriesLoadedMsg{generation: 1, value: []MemorySummary{{
-		ID: "obs-1", Title: "Durable TUI decision", Type: "architecture",
-	}}})
-
-	view := model.View()
-	if !view.AltScreen || view.WindowTitle != "VGXNESS Console" {
-		t.Fatalf("unexpected terminal view options: alt=%t title=%q", view.AltScreen, view.WindowTitle)
-	}
-	for index, line := range strings.Split(view.Content, "\n") {
-		if width := lipgloss.Width(line); width > 80 {
-			t.Fatalf("line %d width=%d: %q", index+1, width, line)
-		}
-	}
-	for _, expected := range []string{"schema v5", "Durable TUI decision", "Setup unavailable"} {
-		if !strings.Contains(view.Content, expected) {
-			t.Fatalf("view missing %q:\n%s", expected, view.Content)
-		}
-	}
-}
-
-func TestOverviewIgnoresStaleAsyncResultsAndQuits(t *testing.T) {
-	model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
-	model = updateModel(t, model, inspectionLoadedMsg{generation: 0, value: Inspection{Migration: 99}})
-	if strings.Contains(model.View().Content, "schema v99") {
-		t.Fatal("stale inspection result was rendered")
-	}
-
-	updated, cmd := model.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
-	if _, ok := updated.(Model); !ok || cmd == nil {
-		t.Fatalf("quit update returned model=%T cmd=%v", updated, cmd)
-	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("quit command returned %T", cmd())
-	}
-}
-
-func TestRefreshAndQuitCancelSupersededLoads(t *testing.T) {
-	model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
-	firstLoad := model.loadCtx
-	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
-	select {
-	case <-firstLoad.Done():
-	default:
-		t.Fatal("refresh did not cancel the superseded load")
-	}
-	secondLoad := model.loadCtx
-	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
-	model = updated.(Model)
-	select {
-	case <-secondLoad.Done():
-	default:
-		t.Fatal("quit did not cancel the active load")
-	}
-}
-
-func TestSectionNavigatorOpensSystemAndEscReturnsOverview(t *testing.T) {
-	model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
-	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
-	model = updateModel(t, model, inspectionLoadedMsg{generation: 1, value: Inspection{
-		Root: "/storage", Database: "/storage/memory.db", Migration: 5,
-	}})
-	model = updateModel(t, model, setupLoadedMsg{generation: 1, value: SetupStatus{
-		Ready: true, SelfInstallState: "installed", SelfInstallPath: "/bin/vgxness",
-		IntegrationState: "installed", IntegrationPath: "/config/vgxness-manager.md",
-		ArtifactCount: 17, HandshakeOK: true, HandshakeStatus: "healthy", ModelPlan: "medium",
-	}})
-
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'g', Text: "g"}))
-	if !strings.Contains(model.View().Content, "SECTIONS") {
-		t.Fatalf("section navigator did not open:\n%s", model.View().Content)
-	}
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	view := model.View().Content
-	if !strings.Contains(view, "SYSTEM HEALTH") || !strings.Contains(view, "schema v5") || !strings.Contains(view, "CLI-only") {
-		t.Fatalf("system route missing evidence:\n%s", view)
+	if !strings.Contains(view, "INSTALLATION") {
+		t.Fatalf("installation landing page missing:\n%s", view)
 	}
-	assertMaximumWidth(t, view, 80)
-
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
-	if view = model.View().Content; !strings.Contains(view, "RECENT PROJECT MEMORY") || strings.Contains(view, "SYSTEM HEALTH") {
-		t.Fatalf("escape did not return to overview:\n%s", view)
+	for _, removed := range []string{"OVERVIEW", "SYSTEM", "MEMORY", "SESSION ACTIVITY", "RECENT PROJECT MEMORY"} {
+		if strings.Contains(view, removed) {
+			t.Fatalf("removed monitoring surface %q still rendered:\n%s", removed, view)
+		}
 	}
 }
 
-func TestWideSystemKeepsPersistentSectionList(t *testing.T) {
-	model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
-	model = updateModel(t, model, tea.WindowSizeMsg{Width: 120, Height: 30})
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'g', Text: "g"}))
-	if view := model.View().Content; !strings.Contains(view, "NAV FOCUS") || !strings.Contains(view, "j/k move") {
-		t.Fatalf("wide navigation focus is not visible:\n%s", view)
+func TestInstallationViewRemainsUsableAtCompactAndWideSizes(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{80, 24}, {120, 40}} {
+		t.Run("terminal", func(t *testing.T) {
+			model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
+			model = updateModel(t, model, tea.WindowSizeMsg{Width: size.width, Height: size.height})
+			plan := readySetupPlan("medium")
+			model = updateModel(t, model, setupPlanLoadedMsg{generation: 1, request: model.setupRequest(), value: plan})
+			content := model.View().Content
+			assertMaximumWidth(t, content, size.width)
+			for _, expected := range []string{"INSTALLATION STUDIO", "OPENCODE SETUP", "READY TO APPLY", "[a] apply", "[Tab] Recovery"} {
+				if !strings.Contains(content, expected) {
+					t.Fatalf("%dx%d view missing %q:\n%s", size.width, size.height, expected, content)
+				}
+			}
+			for _, removed := range []string{"SESSION ACTIVITY", "RECENT PROJECT MEMORY", "SYSTEM HEALTH"} {
+				if strings.Contains(content, removed) {
+					t.Fatalf("%dx%d view includes %q:\n%s", size.width, size.height, removed, content)
+				}
+			}
+			t.Logf("%dx%d installation fixture:\n%s", size.width, size.height, content)
+		})
 	}
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	view := model.View().Content
-	for _, expected := range []string{"Overview", "System", "SYSTEM HEALTH"} {
-		if !strings.Contains(view, expected) {
-			t.Fatalf("wide system view missing %q:\n%s", expected, view)
+}
+
+func TestSoftbricBrandingUsesResponsiveBanner(t *testing.T) {
+	for _, size := range []struct {
+		width, height int
+		want          string
+		avoid         string
+	}{
+		{80, 24, "VGXNESS / INSTALLATION STUDIO", "██╗"},
+		{120, 40, "██╗", "VGXNESS / INSTALLATION STUDIO"},
+	} {
+		t.Run(size.want, func(t *testing.T) {
+			model := NewModel(context.Background(), fakeBackend{}, Options{Workspace: "/workspace"})
+			model = updateModel(t, model, tea.WindowSizeMsg{Width: size.width, Height: size.height})
+			content := model.View().Content
+			if !strings.Contains(content, size.want) {
+				t.Fatalf("%dx%d view missing responsive banner %q:\n%s", size.width, size.height, size.want, content)
+			}
+			if strings.Contains(content, size.avoid) {
+				t.Fatalf("%dx%d view unexpectedly contains %q:\n%s", size.width, size.height, size.avoid, content)
+			}
+			assertMaximumWidth(t, content, size.width)
+		})
+	}
+}
+
+func TestSoftbricBannerHasSevenUniformRowsWithoutShadowGlyph(t *testing.T) {
+	banner := softbricBanner()
+	if len(banner) != 6 {
+		t.Fatalf("banner has %d rows, want 6", len(banner))
+	}
+	for index, line := range banner {
+		if strings.Contains(line, "▟") {
+			t.Fatalf("banner row %d contains a decorative shadow glyph: %q", index, line)
+		}
+		if got := lipgloss.Width(line); got != 65 {
+			t.Fatalf("banner row %d width=%d, want 65: %q", index, got, line)
 		}
 	}
-	assertMaximumWidth(t, view, 120)
+}
+
+func TestMutedInstructionTextMeetsContrastThresholdOnSoftbricSurfaces(t *testing.T) {
+	foreground := studioMuted.GetForeground()
+	for _, background := range []color.Color{softbricCanvas, softbricInk} {
+		if ratio := contrastRatio(t, foreground, background); ratio < 4.5 {
+			t.Fatalf("muted instruction contrast is %.2f:1, want at least 4.5:1", ratio)
+		}
+	}
 }
 
 func TestSanitizeTerminalEscapesControls(t *testing.T) {
@@ -176,4 +135,29 @@ func assertMaximumWidth(t *testing.T, content string, maximum int) {
 			t.Fatalf("line %d width=%d maximum=%d: %q", index+1, width, maximum, line)
 		}
 	}
+}
+
+func contrastRatio(t *testing.T, foreground, background color.Color) float64 {
+	t.Helper()
+	foregroundLuminance := relativeLuminance(t, foreground)
+	backgroundLuminance := relativeLuminance(t, background)
+	if foregroundLuminance < backgroundLuminance {
+		foregroundLuminance, backgroundLuminance = backgroundLuminance, foregroundLuminance
+	}
+	return (foregroundLuminance + 0.05) / (backgroundLuminance + 0.05)
+}
+
+func relativeLuminance(t *testing.T, value color.Color) float64 {
+	t.Helper()
+	red, green, blue, _ := value.RGBA()
+	channels := [3]float64{}
+	for index, component := range []uint32{red, green, blue} {
+		channel := float64(component) / 65535
+		if channel <= 0.04045 {
+			channels[index] = channel / 12.92
+		} else {
+			channels[index] = math.Pow((channel+0.055)/1.055, 2.4)
+		}
+	}
+	return 0.2126*channels[0] + 0.7152*channels[1] + 0.0722*channels[2]
 }

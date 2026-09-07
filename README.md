@@ -60,7 +60,7 @@ For complete definitions and status classifications, read the [Product Blueprint
 
 ## Choose models in Setup
 
-Run `vgxness tui`, press `g`, choose **Setup** with `j`/`k`, and press `Enter`. Press `m` to open the 13-agent assignment matrix. Use `j`/`k` or the arrow keys to move between agents, `h`/`l` or left/right to choose a model, and `[`/`]` to change requested effort. `Enter` returns to a fresh preview; `Esc` cancels the matrix edit.
+Run `vgxness tui` to open the installation studio. It is focused on previewing and applying managed installation, reinstallation, and configuration changes. Use `h`/`l` to select a preset, `m` to open OpenCode's 13-agent assignment matrix, and `/` there to search locally discovered models; use the arrow keys to select a match before `Enter` assigns it. Use `Tab` for protected backup and recovery actions. `Enter` returns from an edited matrix to a fresh preview; `Esc` cancels the matrix edit. The TUI never applies a plan until the explicit `[a] apply` then `[y] yes` confirmation. Codex uses its supported shared presets; per-agent assignments remain an OpenCode capability.
 
 Setup initially reads the local OpenCode model cache with the exact argv `opencode models --pure`. In the matrix, `r` is an explicit refresh and runs `opencode models --pure --refresh`; a refresh failure keeps the current assignments and cached choices so you can retry. Local discovery proves only that an identifier is present. It does not prove provider authorization, account access, model support, or runtime availability. Non-static discovered identifiers are therefore recorded as `custom` with `unknown` availability.
 

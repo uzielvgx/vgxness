@@ -12,7 +12,6 @@ import (
 
 	appruntime "github.com/vgxness/vgxness/internal/app/runtime"
 	"github.com/vgxness/vgxness/internal/cli"
-	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/hooks"
 	"github.com/vgxness/vgxness/internal/inspection"
 	"github.com/vgxness/vgxness/internal/integration"
@@ -119,14 +118,12 @@ func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, 
 			return 1
 		}
 		backend := tuiBackend{
-			inspection: inspection.Service{Health: memory.HealthFile},
-			setup:      setupRuntime,
-			opencode:   integrationRuntime,
-			codex:      codexIntegrationRuntime,
-			recovery:   setupRuntime,
-			memory:     appruntime.NewMemoryWithHooks("cli", true, dispatcher),
-			catalog:    modelcatalog.NewOpenCode("", nil, modelcatalog.Options{}),
-			hooks:      dispatcher,
+			setup:    setupRuntime,
+			opencode: integrationRuntime,
+			codex:    codexIntegrationRuntime,
+			recovery: setupRuntime,
+			catalog:  modelcatalog.NewOpenCode("", nil, modelcatalog.Options{}),
+			hooks:    dispatcher,
 		}
 		return launchTUI(ctx, stdin, stdout, stderr, backend, tui.Options{Workspace: workspace})
 	}
@@ -139,10 +136,6 @@ func mustWorkspace() string {
 		return "."
 	}
 	return workspace
-}
-
-type tuiInspectionRuntime interface {
-	Status(context.Context, config.Options) (inspection.Result, error)
 }
 
 type tuiSetupRuntime interface {
@@ -168,38 +161,18 @@ type tuiRecoveryRuntime interface {
 	ProtectedReinstall(context.Context, setupflow.ProtectedReinstallRequest) (setupflow.ProtectedReinstallResult, error)
 }
 
-type tuiMemoryRuntime interface {
-	ResolveProject(context.Context, config.Options, string) (string, error)
-	Recall(context.Context, config.Options, memory.Recall) ([]memory.Entry, error)
-	Recent(context.Context, config.Options, memory.Recent) ([]memory.Entry, error)
-	Get(context.Context, config.Options, memory.Lookup) (memory.Entry, error)
-}
-
 type tuiModelCatalog interface {
 	Discover(context.Context) (modelcatalog.Snapshot, error)
 	Refresh(context.Context) (modelcatalog.Snapshot, error)
 }
 
 type tuiBackend struct {
-	inspection tuiInspectionRuntime
-	setup      tuiSetupRuntime
-	opencode   integration.Runtime
-	codex      integration.Runtime
-	recovery   tuiRecoveryRuntime
-	memory     tuiMemoryRuntime
-	catalog    tuiModelCatalog
-	hooks      tuiHookRegistry
-}
-
-func (backend tuiBackend) Register(id hooks.ListenerID, listener hooks.Listener, names ...hooks.Name) error {
-	if backend.hooks == nil {
-		return errors.New("hook registry unavailable")
-	}
-	return backend.hooks.Register(id, listener, names...)
-}
-
-func (backend tuiBackend) Unregister(id hooks.ListenerID) bool {
-	return backend.hooks != nil && backend.hooks.Unregister(id)
+	setup    tuiSetupRuntime
+	opencode integration.Runtime
+	codex    integration.Runtime
+	recovery tuiRecoveryRuntime
+	catalog  tuiModelCatalog
+	hooks    hooks.Emitter
 }
 
 func (backend tuiBackend) PlanMultiSetup(ctx context.Context, request tui.MultiSetupRequest) (setupflow.MultiPlan, error) {
@@ -291,14 +264,6 @@ func (backend tuiBackend) ModelCatalog(ctx context.Context, refresh bool) ([]tui
 	return rows, nil
 }
 
-func (backend tuiBackend) Inspect(ctx context.Context, request tui.Request) (tui.Inspection, error) {
-	result, err := backend.inspection.Status(ctx, config.Options{ProjectDir: request.Workspace})
-	if err != nil {
-		return tui.Inspection{}, err
-	}
-	return tui.Inspection{Root: result.Root, Database: result.Database, Migration: result.Migration}, nil
-}
-
 func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) (tui.SetupStatus, error) {
 	workspace, err := cleanWorkspace(request.Workspace)
 	if err != nil {
@@ -314,9 +279,8 @@ func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) 
 		SelfInstallState: preview.SelfInstallState, SelfInstallPath: preview.SelfInstallPath,
 		IntegrationState: preview.IntegrationState, IntegrationPath: preview.IntegrationPath,
 		SkillsState: preview.SkillsState, SkillsPath: preview.SkillsPath, SkillsFileCount: preview.SkillsFileCount,
-		ArtifactCount: preview.ArtifactCount,
-		HandshakeOK:   preview.HandshakeOK, HandshakeStatus: preview.HandshakeStatus, ModelPlan: preview.ModelPlan,
-		ModelSchemaVersion: preview.ModelSchemaVersion, ModelAssignments: preview.ModelAssignments,
+		ArtifactCount: preview.ArtifactCount, HandshakeOK: preview.HandshakeOK, HandshakeStatus: preview.HandshakeStatus,
+		ModelPlan: preview.ModelPlan, ModelSchemaVersion: preview.ModelSchemaVersion, ModelAssignments: preview.ModelAssignments,
 	}, nil
 }
 
@@ -747,64 +711,4 @@ func tuiSetupPlan(plan setupflow.Plan) tui.SetupPlan {
 		HandshakeOK: plan.Handshake.OK, HandshakeStatus: plan.Handshake.Status.String(),
 		Ready: plan.Ready, Blocker: plan.Blocker,
 	}
-}
-
-func (backend tuiBackend) Recent(ctx context.Context, request tui.Request) ([]tui.MemorySummary, error) {
-	opts := config.Options{ProjectDir: request.Workspace}
-	project, err := backend.memory.ResolveProject(ctx, opts, request.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := backend.memory.Recent(ctx, opts, memory.Recent{Project: project, Scope: memory.ScopeProject, Limit: 5})
-	if err != nil {
-		return nil, err
-	}
-	return tuiMemorySummaries(entries), nil
-}
-
-func (backend tuiBackend) Search(ctx context.Context, request tui.MemorySearch) ([]tui.MemorySummary, error) {
-	opts := config.Options{ProjectDir: request.Workspace}
-	project, err := backend.memory.ResolveProject(ctx, opts, request.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := backend.memory.Recall(ctx, opts, memory.Recall{
-		Query: request.Query, Project: project, Scope: memory.ScopeProject,
-		Limit: request.Limit, MatchAny: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return tuiMemorySummaries(entries), nil
-}
-
-func (backend tuiBackend) GetMemory(ctx context.Context, request tui.MemoryLookup) (tui.MemoryDetail, error) {
-	opts := config.Options{ProjectDir: request.Workspace}
-	project, err := backend.memory.ResolveProject(ctx, opts, request.Workspace)
-	if err != nil {
-		return tui.MemoryDetail{}, err
-	}
-	entry, err := backend.memory.Get(ctx, opts, memory.Lookup{ID: request.ID, Project: project, Scope: memory.ScopeProject})
-	if err != nil {
-		return tui.MemoryDetail{}, err
-	}
-	return tui.MemoryDetail{
-		ID: entry.ID, Title: entry.Title, Content: entry.Content,
-		Project: entry.Project, Scope: string(entry.Scope), Type: entry.Type,
-		TopicKey: entry.TopicKey, Session: entry.Session, Producer: entry.Producer,
-		SourceProvider: entry.SourceProvider, SourceID: entry.SourceID,
-		State: string(entry.State), CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt,
-		References: append([]string(nil), entry.References...),
-	}, nil
-}
-
-func tuiMemorySummaries(entries []memory.Entry) []tui.MemorySummary {
-	result := make([]tui.MemorySummary, len(entries))
-	for index, entry := range entries {
-		result[index] = tui.MemorySummary{
-			ID: entry.ID, Title: entry.Title, Preview: entry.Preview, Type: entry.Type,
-			State: string(entry.State), UpdatedAt: entry.UpdatedAt,
-		}
-	}
-	return result
 }

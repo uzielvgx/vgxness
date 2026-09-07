@@ -10,7 +10,7 @@ This document describes the delivered OpenCode-native manager product. OpenCode 
 | --- | --- |
 | `cmd/vgxness`, `internal/app`, `internal/app/runtime` | Product entrypoint, dependency composition, and local runtime facade including sync planning/execution. |
 | `internal/cli` | `version`, `status`, `doctor`, `memory`, `sdd`, `integrate`, `self`, and `setup` commands. |
-| `internal/tui` | Keyboard-first storage, memory, and confirmation-gated setup UI. |
+| `internal/tui` | Keyboard-first installation, protected recovery, and confirmation-gated configuration UI. |
 | `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
 | `internal/memory` | SQLite/FTS5 schema v23, canonical workspace identity, explicit portable-to-local provenance, semantic memory, local provider-session drafts and leases, structured SDD repository, migrations, and retained legacy importer. Portable metadata is not normal resolution or sync selection. |
 | `internal/hooks` | Internal-only best-effort lifecycle observation. Completed memory synchronization can emit synchronous invocation-correlation events for the effective canonical invocation workspace (empty project directory means current working directory; explicit paths are absolute, clean, symlink-resolved, and case-normalized); listeners can block, and global single-flight drops concurrent or reentrant events. There is no queue, retry, replay, persistence, or crash durability. |

@@ -449,12 +449,6 @@ func TestRunDispatchesExplicitTUI(t *testing.T) {
 		if backend == nil || options.Workspace == "" {
 			t.Fatalf("invalid TUI launch: backend=%v options=%+v", backend, options)
 		}
-		if _, ok := backend.(interface {
-			Register(hooks.ListenerID, hooks.Listener, ...hooks.Name) error
-			Unregister(hooks.ListenerID) bool
-		}); !ok {
-			t.Fatal("TUI backend does not expose the optional activity registry")
-		}
 		return 23
 	}
 	var stdout, stderr bytes.Buffer
@@ -492,22 +486,6 @@ func TestRunDispatchesMCPWithoutInitializingTUI(t *testing.T) {
 	if code != 29 || mcpCalls != 1 || tuiCalls != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("code=%d mcpCalls=%d tuiCalls=%d stdout=%q stderr=%q", code, mcpCalls, tuiCalls, stdout.String(), stderr.String())
 	}
-}
-
-func TestTUIBackendSearchAndDetailStayProjectScoped(t *testing.T) {
-	runtime := &recordingTUIMemoryRuntime{}
-	backend := tuiBackend{memory: runtime}
-
-	results, err := backend.Search(context.Background(), tui.MemorySearch{Workspace: "/workspace", Query: "architecture reliability", Limit: 12})
-	testutil.Require(t, err == nil && len(results) == 1, "search results=%+v err=%v", results, err)
-	testutil.Require(t, runtime.recall.Project == "project-1" && runtime.recall.Scope == memory.ScopeProject && runtime.recall.MatchAny && runtime.recall.Limit == 12, "recall=%+v", runtime.recall)
-	testutil.Require(t, results[0].ID == "obs-1" && results[0].Preview == "bounded preview", "summary=%+v", results[0])
-
-	detail, err := backend.GetMemory(context.Background(), tui.MemoryLookup{Workspace: "/workspace", ID: "obs-1"})
-	testutil.Require(t, err == nil && detail.ID == "obs-1" && detail.Content == "Full durable content", "detail=%+v err=%v", detail, err)
-	testutil.Require(t, runtime.lookup.Project == "project-1" && runtime.lookup.Scope == memory.ScopeProject && runtime.lookup.ID == "obs-1", "lookup=%+v", runtime.lookup)
-	detail.References[0] = "changed"
-	testutil.Require(t, runtime.references[0] == "obs-prior", "detail references alias runtime storage: %+v", runtime.references)
 }
 
 func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
