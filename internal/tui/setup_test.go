@@ -26,6 +26,11 @@ type recordingSetupBackend struct {
 	catalogCalls   []bool
 	catalogStarted chan struct{}
 	catalogBlock   chan struct{}
+	status         SetupStatus
+}
+
+func (backend *recordingSetupBackend) SetupStatus(context.Context, Request) (SetupStatus, error) {
+	return cloneSetupStatus(backend.status), nil
 }
 
 type recordingMultiSetupBackend struct {
@@ -44,7 +49,7 @@ func (backend *recordingMultiSetupBackend) ApplyMultiSetup(_ context.Context, re
 	return backend.multiResult, nil
 }
 
-func TestMultiSetupTogglesProvidersAndBlocksCodexModelEditor(t *testing.T) {
+func TestMultiSetupKeepsOpenCodeModelEditorVisibleAndExplainsCodexLimit(t *testing.T) {
 	backend := &recordingMultiSetupBackend{}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
 	model.route = routeSetup
@@ -53,13 +58,234 @@ func TestMultiSetupTogglesProvidersAndBlocksCodexModelEditor(t *testing.T) {
 		t.Fatalf("default providers=%v", model.setupProviders)
 	}
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'c', Text: "c"}))
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'o', Text: "o"}))
-	if model.hasSetupProvider(setupflow.ProviderOpenCode) || !model.hasSetupProvider(setupflow.ProviderCodex) {
+	if !model.hasSetupProvider(setupflow.ProviderOpenCode) || !model.hasSetupProvider(setupflow.ProviderCodex) {
 		t.Fatalf("toggle providers=%v", model.setupProviders)
 	}
+	model.seedSetupAssignments(assignmentSetupPlan(3))
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'm', Text: "m"}))
-	if model.setupModelEditing || !strings.Contains(strings.Join(model.setupRouteLines(), "\n"), "shared plan only") {
-		t.Fatalf("codex model state=%t lines=%v", model.setupModelEditing, model.setupRouteLines())
+	view := strings.Join(model.setupRouteLines(), "\n")
+	if !model.setupModelEditing || !strings.Contains(view, "AGENT ASSIGNMENT MATRIX") || !strings.Contains(view, "Codex uses its managed presets") {
+		t.Fatalf("codex/openCode editor state=%t lines=%s", model.setupModelEditing, view)
+	}
+}
+
+func TestMultiSetupJourneyRendersProviderReviewAndKeepsCancelledModelEdits(t *testing.T) {
+	backend := &recordingMultiSetupBackend{}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	model.seedSetupAssignments(assignmentSetupPlan(3))
+	model.setupCatalog = []SetupCatalogModel{{Provider: "openai", Reference: "openai/gpt-5.6-terra", Variants: []string{"xhigh"}}, {Provider: "openai", Reference: "openai/gpt-5.6-sol", Variants: []string{"high"}}}
+
+	home := model.View().Content
+	for _, expected := range []string{"[1] Install", "[2] Reinstall", "[3] Configure", "Nothing changes until the final review"} {
+		if !strings.Contains(home, expected) {
+			t.Fatalf("home missing %q:\n%s", expected, home)
+		}
+	}
+	assertMaximumWidth(t, home, 120)
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if view := model.View().Content; !strings.Contains(view, "1 OF 3 · PROVIDERS") {
+		t.Fatalf("install did not advance to providers:\n%s", view)
+	}
+	model = updateModel(t, model, keyPress("c"))
+	updated, preview := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if preview == nil || !strings.Contains(model.View().Content, "2 OF 3 · PLAN") {
+		t.Fatalf("providers did not advance to plan: cmd=%v\n%s", preview, model.View().Content)
+	}
+	model.setupPlan = SetupPlan{Digest: "preview", Ready: true}
+	model.setupMultiPlan = setupflow.MultiPlan{Digest: "preview", Ready: true, Changed: true, Providers: []setupflow.ProviderPlan{{Provider: setupflow.ProviderOpenCode, Ready: true, Changed: true}, {Provider: setupflow.ProviderCodex, Ready: true, Changed: true}}}
+	model.setupPlanLoading, model.setupPreviewed, model.setupPreviewRequest = false, true, model.setupRequest()
+
+	before := model.setupAssignmentRows[0]
+	model = updateModel(t, model, keyPress("m"))
+	if !strings.Contains(model.View().Content, "MODEL DETAILS") {
+		t.Fatalf("wide editor did not use two panes:\n%s", model.View().Content)
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if got := model.setupAssignmentRows[0]; got != before {
+		t.Fatalf("cancelled model edit changed configuration: got=%+v want=%+v", got, before)
+	}
+
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if view := model.View().Content; !strings.Contains(view, "┌ REVIEW") {
+		t.Fatalf("plan did not advance to review:\n%s", view)
+	}
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	compact := model.View().Content
+	if !strings.Contains(compact, "┌ PROVIDERS") || !strings.Contains(compact, "[a] apply reviewed plan") {
+		t.Fatalf("compact review is not actionable:\n%s", compact)
+	}
+	assertMaximumWidth(t, compact, 80)
+}
+
+func TestMultiSetupKeyboardSelectorsUseVerticalCursors(t *testing.T) {
+	backend := &recordingMultiSetupBackend{}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if model.installationAction != actionReinstall {
+		t.Fatalf("home down selected %v, want reinstall", model.installationAction)
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if model.setupView != setupViewRecovery {
+		t.Fatalf("home Enter opened %v, want recovery", model.setupView)
+	}
+
+	model.setupView = setupViewProviders
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if model.setupProviderCursor != 1 {
+		t.Fatalf("provider cursor=%d, want Codex", model.setupProviderCursor)
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
+	if !model.hasSetupProvider(setupflow.ProviderCodex) {
+		t.Fatal("Space did not toggle the focused provider")
+	}
+
+	model.setupView = setupViewPlan
+	model.setupSelected = "medium"
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if model.setupSelected != "high" {
+		t.Fatalf("plan down selected %q, want high", model.setupSelected)
+	}
+
+	model.setupModelEditing = true
+	model.seedSetupAssignments(assignmentSetupPlan(3))
+	model.setupCatalog = []SetupCatalogModel{{Provider: "openai", Reference: "openai/fast"}, {Provider: "anthropic", Reference: "anthropic/reasoning"}}
+	model = updateModel(t, model, keyPress("/"))
+	model = updateModel(t, model, keyPress("j"))
+	if model.setupCatalogQuery != "j" {
+		t.Fatalf("search consumed literal j as navigation: query=%q", model.setupCatalogQuery)
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Text: "anthropic"}))
+	search := strings.Join(model.modelAssignmentLines(), "\n")
+	if !strings.Contains(search, "1 matching local model") || !strings.Contains(search, "anthropic/reasoning") {
+		t.Fatalf("search did not show editable query, count, and match:\n%s", search)
+	}
+	if footer := model.setupHelp(); strings.Count(search+"\n"+footer, "[Enter]") != 1 {
+		t.Fatalf("search duplicated its contextual footer:\n%s\n%s", search, footer)
+	}
+}
+
+func TestAssignmentEditorUsesPanelWidthAndContextualHelp(t *testing.T) {
+	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	model.setupView = setupViewPlan
+	model.seedSetupAssignments(assignmentSetupPlan(3))
+	model = updateModel(t, model, keyPress("m"))
+
+	if help := model.setupHelp(); !strings.Contains(help, "[↑↓/j/k] row") || strings.Contains(help, "[m] OpenCode models") {
+		t.Fatalf("assignment editor showed route help: %q", help)
+	}
+
+	content := model.View().Content
+	panelContentWidth := model.setupViewport.Width() - 6 // outer border plus horizontal padding
+	leftWidth := max(26, (panelContentWidth-3)/2)
+	rightWidth := max(26, panelContentWidth-3-leftWidth)
+	border := "┌" + strings.Repeat("─", leftWidth) + "┬" + strings.Repeat("─", rightWidth) + "┐"
+	if !strings.Contains(content, border) {
+		t.Fatalf("120-column panel wrapped assignment-table border %q:\n%s", border, content)
+	}
+
+	model = updateModel(t, model, keyPress("/"))
+	if help := model.setupHelp(); !strings.Contains(help, "[↑↓] result") || strings.Contains(help, "j/k") {
+		t.Fatalf("search help disagreed with literal query keys: %q", help)
+	}
+}
+
+func TestInstallationActionsKeepDistinctDestinations(t *testing.T) {
+	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	if view := model.View().Content; !strings.Contains(view, "[1] Install") || !strings.Contains(view, "[2] Reinstall") || !strings.Contains(view, "[3] Configure") {
+		t.Fatalf("home did not present the three actions:\n%s", view)
+	}
+	model = updateModel(t, model, keyPress("2"))
+	updated, recovery := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if recovery == nil || model.setupView != setupViewRecovery {
+		t.Fatalf("reinstall did not enter protected recovery: view=%v cmd=%v", model.setupView, recovery)
+	}
+
+	model.setRoute(routeSetup)
+	model.seedSetupAssignments(assignmentSetupPlan(3))
+	model = updateModel(t, model, keyPress("3"))
+	updated, editor := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if editor != nil || model.setupView != setupViewProviders {
+		t.Fatalf("configure did not enter provider selection: view=%v cmd=%v", model.setupView, editor)
+	}
+	updated, preview := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if preview == nil || model.setupView != setupViewPlan {
+		t.Fatalf("configure did not reach plan selection: view=%v cmd=%v", model.setupView, preview)
+	}
+	updated, editor = model.Update(keyPress("m"))
+	model = updated.(Model)
+	if editor == nil || !model.setupModelEditing {
+		t.Fatalf("configure did not open model editor from plan: editing=%t cmd=%v", model.setupModelEditing, editor)
+	}
+}
+
+func TestProductionMultiStatusFailureIsActionableBeforeWizardRouting(t *testing.T) {
+	backend := &recordingMultiSetupBackend{recordingSetupBackend: recordingSetupBackend{status: SetupStatus{}}}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = updateModel(t, model, setupLoadedMsg{generation: model.generation, startup: true, err: errors.New("secret token\nfailed\x1b")})
+	view := model.View().Content
+	if !strings.Contains(view, "LOCAL STATUS CHECK") || !strings.Contains(view, "press [r] to retry") || strings.Contains(strings.ToLower(view), "secret") || strings.Contains(strings.ToLower(view), "token") {
+		t.Fatalf("status failure was not safely actionable:\n%s", view)
+	}
+	updated, retry := model.Update(keyPress("r"))
+	model = updated.(Model)
+	if retry == nil || !model.setupLoading {
+		t.Fatalf("status failure did not start local retry: loading=%t cmd=%v", model.setupLoading, retry)
+	}
+}
+
+func TestInitSeedsInstalledExactAssignmentsThenUsesMultiPreviewWithoutApply(t *testing.T) {
+	installed := assignmentSetupPlan(3)
+	backend := &recordingMultiSetupBackend{
+		recordingSetupBackend: recordingSetupBackend{status: SetupStatus{ModelPlan: "high", ModelSchemaVersion: 3, ModelAssignments: installed.ModelAssignments}},
+		multiPlan:             setupflow.MultiPlan{Digest: "multi-preview", Ready: true},
+	}
+	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, cmd := model.Update(model.Init()())
+	model = updated.(Model)
+	batch := cmd().(tea.BatchMsg)
+	updated, preview := model.Update(batch[0]())
+	model = updated.(Model)
+	model = runSetupCommands(t, model, preview)
+	if model.setupSelected != "high" || !model.setupAssignmentsExact || model.setupAssignmentRows[0].Reference != installed.ModelAssignments[0].Model {
+		t.Fatalf("startup lost installed configuration: plan=%q exact=%t row=%+v", model.setupSelected, model.setupAssignmentsExact, model.setupAssignmentRows[0])
+	}
+	if len(backend.multiRequests) != 0 || len(backend.applyRequests) != 0 {
+		t.Fatalf("startup should leave the production wizard at home: multi=%+v apply=%+v", backend.multiRequests, backend.applyRequests)
+	}
+}
+
+func TestStartupSeedsSchemaV3StatusByArtifactKeyAndPreservesResolvedVariant(t *testing.T) {
+	installed := assignmentSetupPlan(3)
+	for index := range *installed.ModelAssignments {
+		installed.ModelAssignments[index].Role = ""
+		installed.ModelAssignments[index].Class = ""
+		installed.ModelAssignments[index].Variant = "xhigh"
+		installed.ModelAssignments[index].VariantSpecified = false
+	}
+	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
+	model.setup = SetupStatus{ModelSchemaVersion: 3, ModelAssignments: installed.ModelAssignments}
+	model.setRoute(routeSetup)
+	request := model.setupRequest()
+	if !model.setupAssignmentsSeeded || !model.setupAssignmentsExact || request.ModelAssignments == nil {
+		t.Fatalf("schema-v3 status did not seed an exact editor: seeded=%t exact=%t request=%+v", model.setupAssignmentsSeeded, model.setupAssignmentsExact, request)
+	}
+	for _, row := range *request.ModelAssignments {
+		if row.Variant != "xhigh" || row.VariantSpecified {
+			t.Fatalf("resolved status variant changed before preview: %+v", row)
+		}
 	}
 }
 
@@ -87,6 +313,7 @@ func TestMultiSetupChangedPlanAllowsConfirmationButUnchangedDoesNot(t *testing.T
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
 	model.route = routeSetup
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.setupView = setupViewReview
 	model.setupPreviewed = true
 	model.setupPreviewRequest = model.setupRequest()
 	model.setupMultiPlan = setupflow.MultiPlan{Digest: "changed", Ready: true, Changed: true}
@@ -132,6 +359,7 @@ func TestMultiSetupUnchangedPlanAllowsRetryOnlyForUnverifiedSelectedProvider(t *
 func TestMultiSetupFailureRendersSanitizedReasonOutcomesAndSharedRecovery(t *testing.T) {
 	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
 	model.route = routeSetup
+	model.setupView = setupViewReview
 	model.setupApplyErr = errors.New("bad\nreason\x1b")
 	model.setupMultiResult = setupflow.MultiResult{
 		Shared:    setupflow.SharedResult{Recovery: "restore\nlauncher"},
@@ -230,7 +458,7 @@ func TestSetupNavigationLoadsInstalledPlanAndRendersControlledWritePreview(t *te
 		t.Fatalf("plan requests=%+v", backend.planRequests)
 	}
 	view := model.View().Content
-	for _, expected := range []string{"VGXNESS / SETUP / CONTROLLED WRITE", "READY TO APPLY", "selected plan  high", "action  initial install", "digest  " + strings.Repeat("d", 64), "7-STEP PLAN", "Global skills-creator", "Retire legacy provider skill"} {
+	for _, expected := range []string{"INSTALLATION STUDIO", "[1] Install", "READY TO APPLY", "selected plan  high", "action  initial install", "digest  " + strings.Repeat("d", 64), "7-STEP PLAN", "OpenCode provider artifacts", "Retire legacy provider skill"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("Setup preview missing %q:\n%s", expected, view)
 		}
@@ -429,7 +657,7 @@ func TestSetupExactEditorAcceptsLegacyResolvedVariant(t *testing.T) {
 	}
 }
 
-func TestSetupLegacyAssignmentSeedOmitsDerivedVariants(t *testing.T) {
+func TestSetupSchemaV3AssignmentSeedPreservesResolvedVariants(t *testing.T) {
 	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
 	plan := assignmentSetupPlan(3)
 	for index := range *plan.ModelAssignments {
@@ -442,8 +670,8 @@ func TestSetupLegacyAssignmentSeedOmitsDerivedVariants(t *testing.T) {
 		t.Fatalf("legacy assignments were not retained: request=%+v error=%q", request, model.modelEditorError())
 	}
 	for _, row := range *request.ModelAssignments {
-		if row.Variant != "" || row.VariantSpecified {
-			t.Fatalf("derived variant reached request: %+v", row)
+		if row.Variant != "xhigh" || row.VariantSpecified {
+			t.Fatalf("resolved variant changed before request: %+v", row)
 		}
 	}
 }
@@ -626,6 +854,27 @@ func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testi
 	}
 }
 
+func TestSetupAssignmentCatalogSearchSelectsMatchingModel(t *testing.T) {
+	plan := assignmentSetupPlan(3)
+	model := NewModel(context.Background(), &recordingSetupBackend{}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	model.seedSetupAssignments(plan)
+	model.setupModelEditing = true
+	model.setupCatalog = []SetupCatalogModel{
+		{Provider: "openai", Reference: "openai/fast", Variants: []string{"low"}},
+		{Provider: "anthropic", Reference: "anthropic/reasoning", Variants: []string{"high"}},
+	}
+	model = updateModel(t, model, keyPress("/"))
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Text: "anthropic"}))
+	if !strings.Contains(strings.Join(model.modelAssignmentLines(), "\n"), "anthropic/reasoning") {
+		t.Fatal("catalog search did not render matching local model")
+	}
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if got := model.setupAssignmentRows[0].Reference; got != "anthropic/reasoning" {
+		t.Fatalf("catalog search selected %q", got)
+	}
+}
+
 func TestSetupPlanSelectionIsHiddenForExactAssignments(t *testing.T) {
 	for _, schema := range []int{1, 2} {
 		t.Run(fmt.Sprintf("v%d remains preset", schema), func(t *testing.T) {
@@ -742,7 +991,6 @@ func TestSetupAssignmentJourneyPreviewApplyStatusAndReentry(t *testing.T) {
 	}
 
 	installed := *model.setup.ModelAssignments
-	model.setRoute(routeOverview)
 	model.setRoute(routeSetup)
 	reentry := model.setupRequest()
 	if reentry.ModelAssignments == nil || !model.setupAssignmentsSeeded || !model.setupAssignmentsExact {
@@ -982,7 +1230,7 @@ func TestSetupScrollSynchronizesCurrentRouteBeforeViewportUpdate(t *testing.T) {
 	if strings.Contains(model.View().Content, "later-step-24") {
 		t.Fatal("test plan did not clip initial route")
 	}
-	for range 31 {
+	for range 35 {
 		model = updateModel(t, model, keyPress("j"))
 	}
 	if !strings.Contains(model.View().Content, "later-step-24") {
@@ -1086,7 +1334,6 @@ func TestSetupRendersSuccessAndFailureRecovery(t *testing.T) {
 	newer.ModelAssignments[0].Model = "acme/newer"
 	model = updateModel(t, model, setupLoadedMsg{generation: model.generation, value: SetupStatus{statusGeneration: model.setupStatusGeneration, ModelSchemaVersion: 3, ModelAssignments: newer.ModelAssignments}})
 	newer.ModelAssignments[0].Model = "mutated/newer"
-	model.setRoute(routeOverview)
 	model.setRoute(routeSetup)
 	if request := model.setupRequest(); request.ModelAssignments == nil || (*request.ModelAssignments)[0].Reference != "acme/newer" {
 		t.Fatalf("newer status was not retained: %+v", request)
@@ -1388,12 +1635,8 @@ func TestSchemaV3PreservesProviderReturnedAssignmentOrder(t *testing.T) {
 
 func openSetupRoute(t *testing.T, model Model) (Model, tea.Cmd) {
 	t.Helper()
-	model = updateModel(t, model, keyPress("g"))
-	for range 3 {
-		model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	}
-	updated, cmd := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	return updated.(Model), cmd
+	model.setRoute(routeSetup)
+	return model, tea.Batch(model.loadSetupPlan(), model.loadSetupCatalog(false))
 }
 
 func runSetupCommands(t *testing.T, model Model, cmd tea.Cmd) Model {

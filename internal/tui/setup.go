@@ -20,6 +20,18 @@ const (
 
 var setupPlans = [...]string{"low", "medium", "high", "ultra"}
 
+type installationAction uint8
+
+const (
+	actionInstall installationAction = iota
+	actionReinstall
+	actionConfigure
+)
+
+func (action installationAction) label() string {
+	return [...]string{"Install", "Reinstall", "Configure"}[action]
+}
+
 type SetupRequest struct {
 	Workspace              string
 	Plan                   string
@@ -209,7 +221,8 @@ func (m *Model) initSetup() {
 	preview.FillHeight = false
 	m.setupViewport = preview
 	m.setupSelected = defaultSetupPlan
-	m.setupView = setupViewInstall
+	m.setupProviderCursor = 0
+	m.setupView = setupViewHome
 	if _, ok := m.backend.(MultiSetupBackend); ok {
 		m.setupProviders = []setupflow.Provider{setupflow.ProviderOpenCode}
 	}
@@ -346,7 +359,7 @@ func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
 		return
 	}
 	m.finishSetupOperation()
-	m.setupPlanLoading = false
+	m.setupPlanLoading, m.setupLoading = false, false
 	m.setupPlanErr = msg.err
 	if msg.err == nil {
 		if msg.multi != nil {
@@ -429,8 +442,105 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.setupModelEditing {
 		return m.updateModelEditorKey(msg)
 	}
+	if m.multiSetupEnabled() {
+		switch m.setupView {
+		case setupViewHome:
+			switch msg.String() {
+			case "up", "k":
+				m.installationAction = (m.installationAction + 2) % 3
+				return true, nil
+			case "down", "j":
+				m.installationAction = (m.installationAction + 1) % 3
+				return true, nil
+			case "1", "2", "3":
+				m.installationAction = installationAction(msg.String()[0] - '1')
+				return true, nil
+			case "enter":
+				if m.installationAction == actionReinstall {
+					m.setupView = setupViewRecovery
+					m.resetRecoveryState()
+					return true, m.loadRecovery()
+				}
+				m.setupView = setupViewProviders
+				return true, nil
+			}
+		case setupViewProviders:
+			switch msg.String() {
+			case "up", "k":
+				m.setupProviderCursor = (m.setupProviderCursor + 1) % 2
+				return true, nil
+			case "down", "j":
+				m.setupProviderCursor = (m.setupProviderCursor + 1) % 2
+				return true, nil
+			case "space", " ":
+				m.toggleSetupProvider(setupProviderAt(m.setupProviderCursor))
+				return true, nil
+			case "o", "c":
+				provider := setupflow.ProviderOpenCode
+				if msg.String() == "c" {
+					provider = setupflow.ProviderCodex
+				}
+				m.toggleSetupProvider(provider)
+				return true, nil
+			case "enter":
+				m.setupView = setupViewPlan
+				return true, m.loadSetupPlan()
+			case "esc":
+				m.setupView = setupViewHome
+				return true, nil
+			}
+		case setupViewPlan:
+			switch msg.String() {
+			case "up", "k":
+				return true, m.selectSetupPlan(-1)
+			case "down", "j":
+				return true, m.selectSetupPlan(1)
+			case "enter":
+				if m.setupPreviewed {
+					m.setupView = setupViewReview
+					return true, nil
+				}
+				return true, m.loadSetupPlan()
+			case "esc":
+				m.setupView = setupViewProviders
+				return true, nil
+			case "m":
+				return m.enterModelEditor()
+			case "left", "h":
+				return true, m.selectSetupPlan(-1)
+			case "right", "l":
+				return true, m.selectSetupPlan(1)
+			case "r":
+				return true, m.loadSetupPlan()
+			}
+		case setupViewReview:
+			if msg.String() == "esc" {
+				m.setupView = setupViewPlan
+				return true, nil
+			}
+		}
+	}
 
 	switch msg.String() {
+	case "1":
+		m.installationAction = actionInstall
+		return true, nil
+	case "2":
+		m.installationAction = actionReinstall
+		return true, nil
+	case "3":
+		m.installationAction = actionConfigure
+		return true, nil
+	case "enter":
+		switch m.installationAction {
+		case actionReinstall:
+			m.setupView = setupViewRecovery
+			m.resetRecoveryState()
+			return true, m.loadRecovery()
+		case actionConfigure:
+			return m.enterModelEditor()
+		}
+		return true, nil
 	case "o", "c":
 		if m.multiSetupEnabled() {
 			provider := setupflow.ProviderOpenCode
@@ -455,20 +565,14 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case "m":
-		if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
-			return true, nil
-		}
-		m.setupModelEditing = true
-		m.setupModelSlot = 0
-		m.setupAssignmentEntryRows, m.setupAssignmentsEntry = m.setupAssignmentRows, m.setupAssignmentsExact
-		m.setupAssignmentsEntryEdited = m.setupAssignmentsEdited
-		m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupModelEntryVars, m.setupEntryOverrides = m.setupModelRefs, m.setupModelEfforts, m.setupModelVariants, m.setupOverrides
-		m.setupEditorPlan, m.setupEditorRequest, m.setupEditorPreviewed = cloneSetupPlan(m.setupPlan), cloneSetupRequest(m.setupPreviewRequest), m.setupPreviewed
-		return true, m.loadSetupCatalog(false)
+		return m.enterModelEditor()
 	case "r":
+		if m.setupErr != nil {
+			m.setupLoading = true
+			return true, m.loadStartupStatus()
+		}
 		return true, m.loadSetupPlan()
 	case "esc":
-		m.setRoute(routeOverview)
 		return true, nil
 	case "j", "k", "up", "down", "pgup", "pgdown", "home", "end":
 		m.setupViewport.SetContent(strings.Join(m.setupRouteLines(), "\n"))
@@ -479,7 +583,23 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
+func (m *Model) enterModelEditor() (bool, tea.Cmd) {
+	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
+		return true, nil
+	}
+	m.setupModelEditing, m.setupModelSlot = true, 0
+	m.setupAssignmentEntryRows, m.setupAssignmentsEntry = m.setupAssignmentRows, m.setupAssignmentsExact
+	m.setupAssignmentsEntryEdited = m.setupAssignmentsEdited
+	m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupModelEntryVars, m.setupEntryOverrides = m.setupModelRefs, m.setupModelEfforts, m.setupModelVariants, m.setupOverrides
+	m.setupEditorPlan, m.setupEditorRequest, m.setupEditorPreviewed = cloneSetupPlan(m.setupPlan), cloneSetupRequest(m.setupPreviewRequest), m.setupPreviewed
+	return true, m.loadSetupCatalog(false)
+}
+
 func (m Model) multiSetupEnabled() bool { _, ok := m.backend.(MultiSetupBackend); return ok }
+func setupProviderAt(index int) setupflow.Provider {
+	return [...]setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex}[index%2]
+}
+
 func (m Model) hasSetupProvider(provider setupflow.Provider) bool {
 	for _, value := range m.setupProviders {
 		if value == provider {
@@ -604,6 +724,38 @@ func (m *Model) updateModelEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m *Model) updateAssignmentEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.setupCatalogSearching {
+		switch msg.String() {
+		case "esc":
+			m.setupCatalogSearching, m.setupCatalogQuery, m.setupCatalogResultIndex = false, "", 0
+			return true, nil
+		case "enter":
+			m.selectFilteredCatalogModel()
+			m.setupCatalogSearching, m.setupCatalogQuery, m.setupCatalogResultIndex = false, "", 0
+			return true, nil
+		case "backspace":
+			value := []rune(m.setupCatalogQuery)
+			if len(value) > 0 {
+				m.setupCatalogQuery = string(value[:len(value)-1])
+			}
+			return true, nil
+		case "down":
+			if count := len(m.filteredSetupCatalog()); count > 0 {
+				m.setupCatalogResultIndex = (m.setupCatalogResultIndex + 1) % count
+			}
+			return true, nil
+		case "up":
+			if count := len(m.filteredSetupCatalog()); count > 0 {
+				m.setupCatalogResultIndex = (m.setupCatalogResultIndex + count - 1) % count
+			}
+			return true, nil
+		}
+		if msg.Text != "" {
+			m.setupCatalogQuery += msg.Text
+			m.setupCatalogResultIndex = 0
+		}
+		return true, nil
+	}
 	switch msg.String() {
 	case "esc":
 		m.setupAssignmentRows, m.setupAssignmentsExact, m.setupAssignmentsEdited = m.setupAssignmentEntryRows, m.setupAssignmentsEntry, m.setupAssignmentsEntryEdited
@@ -629,6 +781,9 @@ func (m *Model) updateAssignmentEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.selectAssignmentVariant(1)
 	case "r":
 		return true, m.loadSetupCatalog(true)
+	case "/":
+		m.setupCatalogSearching, m.setupCatalogQuery, m.setupCatalogResultIndex = true, "", 0
+		return true, nil
 	case "q":
 		return false, nil
 	}
@@ -662,6 +817,38 @@ func (m *Model) selectCatalogModel(offset int) {
 	m.markAssignmentEdit()
 }
 
+func (m *Model) selectFilteredCatalogModel() {
+	matches := m.filteredSetupCatalog()
+	if len(matches) > 0 {
+		selected := matches[min(m.setupCatalogResultIndex, len(matches)-1)]
+		row := &m.setupAssignmentRows[m.setupModelSlot]
+		row.Provider, row.Reference = selected.Provider, selected.Reference
+		row.Source, row.Availability = selected.Source, selected.Availability
+		variants := m.setupVariantsForModel(row.Reference)
+		row.VariantSpecified = true
+		if len(variants) == 0 {
+			row.Variant = ""
+		} else if !supportsSetupVariant(variants, row.Variant) {
+			row.Variant = variants[0]
+		}
+		m.markAssignmentEdit()
+	}
+}
+
+func (m Model) filteredSetupCatalog() []SetupCatalogModel {
+	query := strings.ToLower(strings.TrimSpace(m.setupCatalogQuery))
+	if query == "" {
+		return append([]SetupCatalogModel(nil), m.setupCatalog...)
+	}
+	filtered := make([]SetupCatalogModel, 0, len(m.setupCatalog))
+	for _, row := range m.setupCatalog {
+		if strings.Contains(strings.ToLower(row.Reference), query) || strings.Contains(strings.ToLower(row.Provider), query) {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
 func (m *Model) selectAssignmentVariant(offset int) {
 	row := &m.setupAssignmentRows[m.setupModelSlot]
 	next := cycleSetupVariant(row.Variant, m.setupVariantsForModel(row.Reference), offset)
@@ -689,14 +876,18 @@ func (m *Model) resetSetupAssignments() {
 }
 
 func (m *Model) seedSetupAssignments(plan SetupPlan) {
-	ordered, ok := canonicalSetupAssignments(plan.ModelAssignments)
+	// Setup status is a readback of provider-owned artifacts. Its role/class
+	// annotations may be absent or evolve, while artifact keys are the stable
+	// contract used by the setup request. Normalize by those keys so an installed
+	// schema-v3 plan remains an exact request on the first preview.
+	ordered, ok := setupAssignmentsByArtifactKey(plan.ModelAssignments)
 	if !ok {
 		return
 	}
 	var rows [SetupModelAssignmentCount]SetupModelAssignmentRequest
 	for index, assignment := range ordered {
 		variant := assignment.Variant
-		if !assignment.VariantSpecified {
+		if plan.ModelSchemaVersion < 3 && !assignment.VariantSpecified {
 			variant = ""
 		}
 		rows[index] = SetupModelAssignmentRequest{
@@ -707,6 +898,31 @@ func (m *Model) seedSetupAssignments(plan SetupPlan) {
 	m.setupAssignmentRows = rows
 	m.setupAssignmentsSeeded = true
 	m.setupAssignmentsExact = plan.ModelSchemaVersion >= 3
+}
+
+func setupAssignmentsByArtifactKey(rows *[SetupModelAssignmentCount]SetupModelAssignment) ([SetupModelAssignmentCount]SetupModelAssignment, bool) {
+	if rows == nil {
+		return [SetupModelAssignmentCount]SetupModelAssignment{}, false
+	}
+	byKey := make(map[string]SetupModelAssignment, SetupModelAssignmentCount)
+	for _, row := range rows {
+		if row.ArtifactKey == "" {
+			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
+		}
+		if _, duplicate := byKey[row.ArtifactKey]; duplicate {
+			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
+		}
+		byKey[row.ArtifactKey] = row
+	}
+	var ordered [SetupModelAssignmentCount]SetupModelAssignment
+	for index, identity := range setupAgentRows {
+		row, ok := byKey[identity.ArtifactKey]
+		if !ok {
+			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
+		}
+		ordered[index] = row
+	}
+	return ordered, len(byKey) == SetupModelAssignmentCount
 }
 
 func (m *Model) restoreSetupEditorPreview() {
@@ -845,12 +1061,8 @@ func validSetupPlan(value string) bool {
 }
 
 func (m *Model) resizeSetup() {
-	width := m.width
-	if m.wide() {
-		width -= 27
-	}
-	m.setupViewport.SetWidth(max(1, width))
-	m.setupViewport.SetHeight(max(3, m.height-5))
+	m.setupViewport.SetWidth(max(1, m.width))
+	m.setupViewport.SetHeight(max(3, m.height-6))
 }
 
 func (m Model) renderSetupRoute() []string {
@@ -865,6 +1077,25 @@ func (m Model) setupRouteLines() []string {
 	if m.setupView == setupViewRecovery {
 		return m.recoveryRouteLines()
 	}
+	if m.setupErr != nil {
+		return []string{studioAccent.Render("INSTALLATION STUDIO"), "", "┌ LOCAL STATUS CHECK ─────────────────────────────────────────────────────", "│ ✕ Could not read the local setup status.", "│ " + setupActionableError(m.setupErr), "└ Action: press [r] to retry, or verify the local setup service is available."}
+	}
+	// The OpenCode editor is available in a composite setup whenever OpenCode is
+	// selected. Check it before the composite home so its controls and any
+	// validation errors cannot be hidden by the multi-provider early return.
+	if m.setupModelEditing {
+		if m.multiSetupEnabled() {
+			lines := []string{studioAccent.Render("OPENCODE MODEL EDITOR"), studioMuted.Render("OpenCode assignments · Codex uses its managed presets.")}
+			if m.setupAssignmentsSeeded {
+				return append(lines, m.modelAssignmentLines()...)
+			}
+			return append(lines, m.modelEditorLines()...)
+		}
+		if m.setupAssignmentsSeeded {
+			return append([]string{studioAccent.Render("OPENCODE SETUP"), installationActionBar(m.installationAction)}, m.modelAssignmentLines()...)
+		}
+		return append([]string{studioAccent.Render("OPENCODE SETUP"), installationActionBar(m.installationAction)}, m.modelEditorLines()...)
+	}
 	if m.multiSetupEnabled() {
 		return m.multiSetupRouteLines()
 	}
@@ -872,12 +1103,16 @@ func (m Model) setupRouteLines() []string {
 	if m.setupAssignmentsExact {
 		header = "per-agent assignments"
 	}
-	lines := []string{"OPENCODE SETUP", header}
-	if m.setupModelEditing {
-		if m.setupAssignmentsSeeded {
-			return append(lines, m.modelAssignmentLines()...)
-		}
-		return append(lines, m.modelEditorLines()...)
+	lines := []string{studioAccent.Render("OPENCODE SETUP"), installationActionBar(m.installationAction), studioMuted.Render(header)}
+	// Give the unplanned home a clear starting point without pushing the
+	// reviewed plan, outcome, or recovery details below a compact terminal.
+	if !m.setupPreviewed && m.setupPlan.Digest == "" && m.setupPlan.SelfInstallState == "" && m.setupPlanErr == nil && m.setupApplyErr == nil && !m.setupSucceeded {
+		lines = append(lines, "", "┌ ACTIONS ────────────────────────────────────────────────────────────────")
+		lines = append(lines, installationActionCards(m.installationAction)...)
+		lines = append(lines, "└ choose [1/2/3], then [Enter] · [m] edits OpenCode model assignments")
+	}
+	if m.setupErr != nil {
+		return append(lines, "", "✕ CONFIGURATION STATUS UNAVAILABLE", "No plan was loaded. Press [r] to retry the local status check.")
 	}
 	switch {
 	case m.setupApplying:
@@ -990,7 +1225,149 @@ func (m Model) setupRouteLines() []string {
 	return lines
 }
 
+func installationActionBar(selected installationAction) string {
+	parts := make([]string, 0, 3)
+	for _, action := range []installationAction{actionInstall, actionReinstall, actionConfigure} {
+		label := fmt.Sprintf("[%d] %s", action+1, action.label())
+		if action == selected {
+			parts = append(parts, studioCyan.Render("▸ "+label))
+		} else {
+			parts = append(parts, studioMuted.Render("  "+label))
+		}
+	}
+	return strings.Join(parts, "   ")
+}
+
+func installationActionCards(selected installationAction) []string {
+	cards := []struct{ title, detail string }{
+		{"Install", "preview and apply the local provider setup"},
+		{"Reinstall", "repair or restore from the protected recovery flow"},
+		{"Configure", "review OpenCode model assignments before a new preview"},
+	}
+	lines := make([]string, 0, len(cards))
+	for index, card := range cards {
+		marker := " "
+		if installationAction(index) == selected {
+			marker = "▸"
+		}
+		lines = append(lines, fmt.Sprintf("│ %s [%d] %-10s %s", marker, index+1, card.title, card.detail))
+	}
+	return lines
+}
+
 func (m Model) multiSetupRouteLines() []string {
+	switch m.setupView {
+	case setupViewHome:
+		return m.multiSetupHomeLines()
+	case setupViewProviders:
+		return m.multiSetupProviderLines()
+	case setupViewPlan:
+		return m.multiSetupPlanLines()
+	}
+	return m.multiSetupReviewLines()
+}
+
+func (m Model) multiSetupHomeLines() []string {
+	lines := []string{studioAccent.Render("INSTALLATION STUDIO"), studioMuted.Render("Choose what you need. Nothing changes until the final review."), ""}
+	cardWidth := max(1, m.setupViewport.Width()-6)
+	for _, card := range []struct {
+		action        installationAction
+		title, detail string
+	}{
+		{actionInstall, "Install", "Select providers, preview a plan, then review before apply."},
+		{actionReinstall, "Reinstall", "Open protected backup and recovery before any replacement."},
+		{actionConfigure, "Configure", "Choose providers and tune the OpenCode model plan."},
+	} {
+		marker := " "
+		if m.installationAction == card.action {
+			marker = "▸"
+		}
+		style := studioCard.Width(cardWidth)
+		if m.installationAction == card.action {
+			style = style.Foreground(softbricCanvas).Background(softbricAqua).BorderForeground(softbricAqua)
+		}
+		cardView := style.Render(fmt.Sprintf("%s [%d] %s\n  %s", marker, card.action+1, card.title, card.detail))
+		lines = append(lines, strings.Split(cardView, "\n")...)
+	}
+	return lines
+}
+
+func (m Model) multiSetupProviderLines() []string {
+	lines := []string{studioAccent.Render("INSTALL · 1 OF 3 · PROVIDERS"), studioMuted.Render("Choose one or both local integrations."), "", "┌ PROVIDERS ───────────────────────────────────────────────────────────────"}
+	for index, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex} {
+		selected := " "
+		if m.hasSetupProvider(provider) {
+			selected = "✓"
+		}
+		cursor := " "
+		if index == m.setupProviderCursor {
+			cursor = "▸"
+		}
+		detail := "Per-agent model assignments available."
+		if provider == setupflow.ProviderCodex {
+			detail = "Uses managed presets; no custom model persistence."
+		}
+		row := fmt.Sprintf("%s %s %-10s %s", cursor, selected, provider, detail)
+		if index == m.setupProviderCursor {
+			row = studioFocus.Width(max(1, m.setupViewport.Width()-6)).Render(row)
+		}
+		lines = append(lines, "│ "+row)
+	}
+	return append(lines, "└────────────────────────────────────────────────────────────────────────")
+}
+
+func (m Model) multiSetupPlanLines() []string {
+	lines := []string{studioAccent.Render("INSTALL · 2 OF 3 · PLAN"), studioMuted.Render("Choose the shared plan, or configure OpenCode assignments."), "", "┌ PLAN ────────────────────────────────────────────────────────────────────"}
+	for _, plan := range setupPlans {
+		marker := " "
+		if plan == m.setupSelected {
+			marker = "▸"
+		}
+		description := map[string]string{
+			"low":    "fewer local assignment defaults",
+			"medium": "balanced local assignment defaults",
+			"high":   "broader local assignment defaults",
+			"ultra":  "widest local assignment defaults",
+		}[plan]
+		row := fmt.Sprintf("%s %-7s %s", marker, plan, description)
+		if plan == m.setupSelected {
+			row = studioFocus.Width(max(1, m.setupViewport.Width()-6)).Render(row)
+		}
+		lines = append(lines, "│ "+row)
+	}
+	lines = append(lines, "└────────────────────────────────────────────────────────────────────────")
+	if m.hasSetupProvider(setupflow.ProviderCodex) {
+		lines = append(lines, "! Codex uses managed presets. Configure changes OpenCode only.")
+	}
+	if m.setupPlanLoading {
+		return append(lines, "", "… Refreshing local preview.")
+	}
+	if m.setupPlanErr != nil {
+		return append(lines, "", "✕ Preview failed: "+setupActionableError(m.setupPlanErr), "Action: [r] retry the local preview.")
+	}
+	if m.setupPreviewed {
+		lines = append(lines, "✓ Preview ready. [Enter] review the plan.")
+	} else {
+		lines = append(lines, "[Enter] create a local preview before review.")
+	}
+	return lines
+}
+
+func setupActionableError(err error) string {
+	if err == nil {
+		return "-"
+	}
+	value := sanitizeTerminal(err.Error())
+	lower := strings.ToLower(value)
+	for _, sensitive := range []string{"secret", "token", "password", "credential", "authorization"} {
+		if strings.Contains(lower, sensitive) {
+			return "Local operation failed; details were withheld."
+		}
+	}
+	return truncateSetupRunes(value, 160)
+}
+
+func (m Model) multiSetupReviewLines() []string {
 	providers := ""
 	for _, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex} {
 		marker := " "
@@ -999,9 +1376,17 @@ func (m Model) multiSetupRouteLines() []string {
 		}
 		providers += marker + " " + string(provider) + "  "
 	}
-	lines := []string{"MULTI-PROVIDER SETUP", "providers  " + strings.TrimSpace(providers), "shared plan  " + sanitizeTerminal(m.setupSelected)}
+	lines := []string{
+		studioAccent.Render("INSTALLATION STUDIO · PROVIDER SETUP"),
+		installationActionBar(m.installationAction),
+		studioMuted.Render("01 PROVIDERS") + "   →   " + studioMuted.Render("02 PLAN") + "   →   " + studioMuted.Render("03 MODELS") + "   →   " + studioMuted.Render("04 REVIEW"),
+		"",
+		"┌ PROVIDERS ─────────────────────────────────────────────────────────────",
+		"│ " + strings.TrimSpace(providers),
+		"└ shared plan  " + sanitizeTerminal(m.setupSelected),
+	}
 	if m.hasSetupProvider(setupflow.ProviderCodex) {
-		lines = append(lines, "! Codex: shared plan only; OpenCode custom slots do not apply.")
+		lines = append(lines, "! Codex uses its managed presets; only OpenCode has editable per-agent models.")
 	}
 	if m.setupPlanLoading {
 		return append(lines, "", "... Loading verified provider preview...")
@@ -1035,7 +1420,7 @@ func (m Model) multiSetupRouteLines() []string {
 	if plan.Ready && !plan.Changed {
 		state = "✓ NO CHANGES"
 	}
-	lines = append(lines, state, "digest  "+setupValue(plan.Digest))
+	lines = append(lines, "", "┌ REVIEW ────────────────────────────────────────────────────────────────", "│ "+state, "│ digest  "+setupValue(plan.Digest))
 	for _, row := range plan.Providers {
 		glyph := "!"
 		if row.Ready {
@@ -1045,9 +1430,9 @@ func (m Model) multiSetupRouteLines() []string {
 		if row.Installed && !row.Changed {
 			status = "installed"
 		}
-		lines = append(lines, glyph+" "+string(row.Provider)+"  "+status)
+		lines = append(lines, "│ "+glyph+" "+string(row.Provider)+"  "+status)
 		if row.Blocker != "" {
-			lines = append(lines, "  blocker  "+sanitizeTerminal(row.Blocker))
+			lines = append(lines, "│   blocker  "+sanitizeTerminal(row.Blocker))
 		}
 	}
 	if plan.Blocker != "" {
@@ -1056,6 +1441,7 @@ func (m Model) multiSetupRouteLines() []string {
 	if m.setupConfirm {
 		lines = append(lines, "", "! CONFIRM MULTI-PROVIDER APPLY", "Apply shared work once, then providers? [y] yes  [n/Esc] cancel")
 	}
+	lines = append(lines, "└ [a] apply reviewed plan · no files change until confirmation")
 	return lines
 }
 
@@ -1081,7 +1467,40 @@ func (m Model) setupHelp() string {
 	if m.setupView == setupViewRecovery {
 		return m.recoveryHelp()
 	}
+	if m.setupModelEditing && m.setupCatalogSearching {
+		return "[↑↓] result  [Enter] assign  [Esc] cancel search"
+	}
+	if m.setupModelEditing {
+		if m.setupAssignmentsSeeded {
+			help := "[↑↓/j/k] row  [←→] model"
+			if len(m.setupVariantsForModel(m.setupAssignmentRows[m.setupModelSlot].Reference)) > 0 {
+				help += "  [[/]] variant"
+			} else if m.knownSetupModel(m.setupAssignmentRows[m.setupModelSlot].Reference) {
+				help += "  provider default"
+			} else {
+				help += "  variant not available"
+			}
+			return help + "  [r] refresh  [Enter] preview  [Esc] cancel  [q] quit"
+		}
+		help := "[j/k] slot  type/edit ref"
+		if len(m.setupVariantsForModel(m.setupModelRefs[m.setupModelSlot])) > 0 {
+			help += "  [Tab] variant"
+		} else if m.knownSetupModel(m.setupModelRefs[m.setupModelSlot]) {
+			help += "  provider default"
+		} else {
+			help += "  variant not available"
+		}
+		return help + "  [Enter] save  [Esc] cancel"
+	}
 	if m.multiSetupEnabled() {
+		switch m.setupView {
+		case setupViewHome:
+			return "[↑↓/j/k] action  [1/2/3] select  [Enter] continue"
+		case setupViewProviders:
+			return "[↑↓/j/k] focus  [Space] toggle  [o/c] toggle  [Enter] choose plan  [Esc] home"
+		case setupViewPlan:
+			return "[↑↓/j/k] plan  [m] OpenCode models  [Enter] review  [Esc] providers"
+		}
 		if m.setupApplying {
 			return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
 		}
@@ -1104,27 +1523,6 @@ func (m Model) setupHelp() string {
 		return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
 	case m.setupConfirm:
 		return "[j/k] scroll  [y] apply  [n/Esc] cancel  No write occurs until y"
-	case m.setupModelEditing:
-		if m.setupAssignmentsSeeded {
-			help := "[↑↓/j/k] row  [←→] model"
-			if len(m.setupVariantsForModel(m.setupAssignmentRows[m.setupModelSlot].Reference)) > 0 {
-				help += "  [[/]] variant"
-			} else if m.knownSetupModel(m.setupAssignmentRows[m.setupModelSlot].Reference) {
-				help += "  provider default"
-			} else {
-				help += "  variant not available"
-			}
-			return help + "  [r] refresh  [Enter] preview  [Esc] cancel  [q] quit"
-		}
-		help := "[j/k] slot  type/edit ref"
-		if len(m.setupVariantsForModel(m.setupModelRefs[m.setupModelSlot])) > 0 {
-			help += "  [Tab] variant"
-		} else if m.knownSetupModel(m.setupModelRefs[m.setupModelSlot]) {
-			help += "  provider default"
-		} else {
-			help += "  variant not available"
-		}
-		return help + "  [Enter] save  [Esc] cancel"
 	case m.setupSucceeded:
 		return "[j/k] scroll  [r] reload preview  [Esc] Overview  [q] quit"
 	case m.setupApplyErr != nil:
@@ -1148,6 +1546,34 @@ func (m Model) setupHelp() string {
 }
 
 func (m Model) modelAssignmentLines() []string {
+	if m.setupCatalogSearching {
+		matches := m.filteredSetupCatalog()
+		count := fmt.Sprintf("%d matching local models", len(matches))
+		if len(matches) == 1 {
+			count = "1 matching local model"
+		}
+		lines := []string{"MODEL CATALOG SEARCH", "Query  " + setupValue(m.setupCatalogQuery) + "  ·  " + count, ""}
+		start := max(0, m.setupCatalogResultIndex-3)
+		end := min(len(matches), start+7)
+		for index := start; index < end; index++ {
+			marker := " "
+			if index == m.setupCatalogResultIndex {
+				marker = "▸"
+			}
+			row := marker + " " + matches[index].Reference
+			if index == m.setupCatalogResultIndex {
+				row = studioFocus.Width(max(1, m.setupViewport.Width()-6)).Render(row)
+			}
+			lines = append(lines, row)
+		}
+		if len(matches) == 0 {
+			lines = append(lines, "No local model matches this query.")
+		}
+		return lines
+	}
+	if m.wide() {
+		return m.wideModelAssignmentLines()
+	}
 	lines := []string{"AGENT ASSIGNMENT MATRIX · 13 agents", "agent                  class/role          provider/model · variant"}
 	for index, identity := range setupAgentRows {
 		marker := " "
@@ -1171,7 +1597,76 @@ func (m Model) modelAssignmentLines() []string {
 	default:
 		lines = appendSetupWrapped(lines, "", fmt.Sprintf("✓ %d catalog models · %s", len(m.setupCatalog), setupDiscoveryDisclaimer), m.setupViewport.Width())
 	}
+	if m.setupCatalogSearching {
+		matches := m.filteredSetupCatalog()
+		lines = append(lines, "", "Catalog search  "+setupValue(m.setupCatalogQuery)+"  [Enter] choose first  [Esc] cancel")
+		for index, row := range matches {
+			if index == 5 {
+				break
+			}
+			lines = append(lines, "  "+row.Reference)
+		}
+		if len(matches) == 0 {
+			lines = append(lines, "  No local model matches.")
+		}
+	}
 	lines = append(lines, "allowed variants  "+m.setupVariantAvailability(m.setupAssignmentRows[m.setupModelSlot].Reference))
+	if err := m.modelEditorError(); err != "" {
+		lines = append(lines, "✕ "+err)
+	}
+	return lines
+}
+
+func (m Model) wideModelAssignmentLines() []string {
+	selected := m.setupAssignmentRows[m.setupModelSlot]
+	identity := setupAgentRows[m.setupModelSlot]
+	width := max(60, m.setupViewport.Width()-6)
+	leftWidth := max(26, (width-3)/2)
+	rightWidth := max(26, width-3-leftWidth)
+	border := "┌" + strings.Repeat("─", leftWidth) + "┬" + strings.Repeat("─", rightWidth) + "┐"
+	bottom := "└" + strings.Repeat("─", leftWidth) + "┴" + strings.Repeat("─", rightWidth) + "┘"
+	row := func(left, right string) string {
+		return "│" + padLine(left, leftWidth) + "│" + padLine(right, rightWidth) + "│"
+	}
+	lines := []string{
+		"AGENT ASSIGNMENT MATRIX · OpenCode",
+		border,
+		row(" AGENTS", " MODEL DETAILS"),
+	}
+	for index, agent := range setupAgentRows {
+		marker := " "
+		if index == m.setupModelSlot {
+			marker = "▸"
+		}
+		right := ""
+		switch index {
+		case 0:
+			right = "agent       " + identity.Name
+		case 1:
+			right = "role        " + identity.Class + "/" + identity.Role
+		case 2:
+			right = "model       " + setupValue(selected.Reference)
+		case 3:
+			right = "variant     " + setupValue(selected.Variant)
+		case 4:
+			right = "available   " + m.setupVariantAvailability(selected.Reference)
+		case 6:
+			if len(m.setupCatalog) > 0 {
+				right = fmt.Sprintf("catalog     %d local models · [/] search", len(m.setupCatalog))
+			} else {
+				right = "catalog     loading or unavailable"
+			}
+		case 8:
+			right = "Choose a catalog model or variant."
+		}
+		lines = append(lines, row(" "+marker+" "+agent.Name+" · "+agent.Class, " "+right))
+	}
+	lines = append(lines, bottom)
+	if m.setupCatalogLoading {
+		lines = append(lines, "... Loading local model catalog...")
+	} else if m.setupCatalogErr != nil {
+		lines = append(lines, "✕ Model catalog unavailable. [r] Retry explicit refresh.")
+	}
 	if err := m.modelEditorError(); err != "" {
 		lines = append(lines, "✕ "+err)
 	}
