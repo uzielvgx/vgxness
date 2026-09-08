@@ -7,8 +7,7 @@ import { SQLiteDatabase } from "../src/sqlite/node-sqlite.ts";
 import { decodeBlob, decodeRawJSON, encodeBlob, encodeRawJSON, formatTimestamp, nowNs, parseTimestamp } from "../src/sqlite/codec.ts";
 
 test("adapter serializes transactions and preserves binary and bigint codecs", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pi-sqlite-")); t.after(() => rm(root, { recursive: true, force: true }));
-  const database = new SQLiteDatabase(join(root, "store.sqlite")); t.after(() => database.close());
+  const root = await mkdtemp(join(tmpdir(), "pi-sqlite-")); const database = new SQLiteDatabase(join(root, "store.sqlite")); t.after(async () => { database.close(); await rm(root, { recursive: true, force: true }); });
   database.db.exec("CREATE TABLE values_table (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)");
   database.transaction(() => database.db.prepare("INSERT INTO values_table(payload) VALUES(?)").run(encodeBlob(new Uint8Array([0, 255, 7]))));
   assert.deepEqual(decodeBlob((database.db.prepare("SELECT payload FROM values_table").get() as any).payload), new Uint8Array([0, 255, 7]));
@@ -22,16 +21,15 @@ test("adapter serializes transactions and preserves binary and bigint codecs", a
 });
 
 test("read-only adapter refuses writes", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "pi-sqlite-ro-")); t.after(() => rm(root, { recursive: true, force: true })); const path = join(root, "store.sqlite");
+  const root = await mkdtemp(join(tmpdir(), "pi-sqlite-ro-")); const path = join(root, "store.sqlite");
   const writable = new SQLiteDatabase(path); writable.db.exec("CREATE TABLE t(id INTEGER)"); writable.close();
-  const readonly = new SQLiteDatabase(path, { readOnly: true }); t.after(() => readonly.close());
+  const readonly = new SQLiteDatabase(path, { readOnly: true }); t.after(async () => { readonly.close(); await rm(root, { recursive: true, force: true }); });
   assert.throws(() => readonly.transaction(() => undefined), /read-only/);
   assert.throws(() => readonly.db.exec("INSERT INTO t VALUES(1)"));
 });
 
 test("void transactions commit and failures leave a reusable connection", async t => {
- const root = await mkdtemp(join(tmpdir(), "pi-sqlite-void-")); t.after(() => rm(root, { recursive: true, force: true }));
- const db = new SQLiteDatabase(join(root, "db")); t.after(() => db.close()); db.db.exec("CREATE TABLE value(id INTEGER)");
+ const root = await mkdtemp(join(tmpdir(), "pi-sqlite-void-")); const db = new SQLiteDatabase(join(root, "db")); t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); }); db.db.exec("CREATE TABLE value(id INTEGER)");
  assert.equal(db.transaction(() => { db.db.exec("INSERT INTO value VALUES(1)"); }), undefined);
  assert.throws(() => db.transaction(() => { db.db.exec("INSERT INTO value VALUES(2)"); throw new Error("failed transaction"); }));
  db.transaction(() => { db.db.exec("INSERT INTO value VALUES(3)"); });
@@ -39,19 +37,17 @@ test("void transactions commit and failures leave a reusable connection", async 
 });
 test("database and WAL/SHM paths reject symlinks and directories; new files are private", async t => {
  const { mkdir, symlink, stat, writeFile } = await import("node:fs/promises");
- const root = await mkdtemp(join(tmpdir(), "pi-sqlite-paths-")); t.after(() => rm(root, { recursive: true, force: true }));
- for (const suffix of ["", "-wal", "-shm"]) {
+ const root = await mkdtemp(join(tmpdir(), "pi-sqlite-paths-")); for (const suffix of ["", "-wal", "-shm"]) {
    const path = join(root, `db${suffix.length}`), outside = join(root, `outside${suffix.length}`); await writeFile(outside, "untouched");
    await symlink(outside, path + suffix); assert.throws(() => new SQLiteDatabase(path), /regular|symlink/); await rm(path + suffix);
    await mkdir(path + suffix); assert.throws(() => new SQLiteDatabase(path), /regular|symlink/); await rm(path + suffix, { recursive: true });
  }
- const path = join(root, "private"), db = new SQLiteDatabase(path); t.after(() => db.close()); db.db.exec("CREATE TABLE t(x)");
+ const path = join(root, "private"), db = new SQLiteDatabase(path); t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); }); db.db.exec("CREATE TABLE t(x)");
  if (process.platform !== "win32") for (const file of [path, path + "-wal", path + "-shm"]) assert.equal((await stat(file)).mode & 0o077, 0);
 });
 test("newer read-only schema rejection and writer contention release connections", async t => {
  const { DatabaseSync } = await import("node:sqlite");
- const root = await mkdtemp(join(tmpdir(), "pi-sqlite-lock-")); t.after(() => rm(root, { recursive: true, force: true }));
- const path = join(root, "db"), first = new SQLiteDatabase(path), second = new SQLiteDatabase(path); t.after(() => { first.close(); second.close(); });
+ const root = await mkdtemp(join(tmpdir(), "pi-sqlite-lock-")); const path = join(root, "db"), first = new SQLiteDatabase(path), second = new SQLiteDatabase(path); t.after(async () => { first.close(); second.close(); await rm(root, { recursive: true, force: true }); });
  first.db.exec("CREATE TABLE t(x); BEGIN IMMEDIATE");
  assert.throws(() => second.transaction(() => second.db.exec("INSERT INTO t VALUES(1)")), /locked|busy/);
  first.db.exec("ROLLBACK"); second.transaction(() => { second.db.exec("INSERT INTO t VALUES(2)"); });

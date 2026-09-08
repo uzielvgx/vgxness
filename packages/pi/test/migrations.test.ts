@@ -6,12 +6,11 @@ import { tmpdir } from "node:os";
 import { SQLiteDatabase } from "../src/sqlite/node-sqlite.ts";
 import { applyMigrations, latestSchemaVersion, migrations } from "../src/sqlite/migrations.ts";
 
-test("all Go migration resources apply with their immutable hashes", async (t) => { const root = await mkdtemp(join(tmpdir(), "pi-migrations-")); t.after(() => rm(root,{recursive:true,force:true})); const db = new SQLiteDatabase(join(root,"db.sqlite")); t.after(()=>db.close()); applyMigrations(db); assert.equal((db.db.prepare("PRAGMA user_version").get() as any).user_version,23n); assert.equal(migrations.length,23); assert.ok(migrations.every((m)=>/^[0-9a-f]{64}$/.test(m.sha256))); assert.equal((db.db.prepare("PRAGMA foreign_keys").get() as any).foreign_keys,1n); });
-test("migration rejects a newer database and restores foreign keys", async (t) => { const root=await mkdtemp(join(tmpdir(),"pi-migrations-newer-"));t.after(()=>rm(root,{recursive:true,force:true}));const db=new SQLiteDatabase(join(root,"db.sqlite"));t.after(()=>db.close());db.db.exec("PRAGMA user_version=24");assert.throws(()=>applyMigrations(db),/newer/); });
+test("all Go migration resources apply with their immutable hashes", async (t) => { const root = await mkdtemp(join(tmpdir(), "pi-migrations-")); const db = new SQLiteDatabase(join(root,"db.sqlite")); t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); }); applyMigrations(db); assert.equal((db.db.prepare("PRAGMA user_version").get() as any).user_version,23n); assert.equal(migrations.length,23); assert.ok(migrations.every((m)=>/^[0-9a-f]{64}$/.test(m.sha256))); assert.equal((db.db.prepare("PRAGMA foreign_keys").get() as any).foreign_keys,1n); });
+test("migration rejects a newer database and restores foreign keys", async (t) => { const root=await mkdtemp(join(tmpdir(),"pi-migrations-newer-"));const db=new SQLiteDatabase(join(root,"db.sqlite"));t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });db.db.exec("PRAGMA user_version=24");assert.throws(()=>applyMigrations(db),/newer/); });
 
 test("v11 rebuild rolls back atomically and restores FK enforcement before retry", async t => {
- const root = await mkdtemp(join(tmpdir(), "pi-v11-rollback-")); t.after(() => rm(root, { recursive: true, force: true }));
- const db = new SQLiteDatabase(join(root, "db")); t.after(() => db.close());
+ const root = await mkdtemp(join(tmpdir(), "pi-v11-rollback-")); const db = new SQLiteDatabase(join(root, "db")); t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
  applyMigrations(db, migrations.slice(0, 10));
  db.db.exec("INSERT INTO projects(id) VALUES('project')");
  const before = db.db.prepare("SELECT sql FROM sqlite_master WHERE name='sdd_changes'").get();

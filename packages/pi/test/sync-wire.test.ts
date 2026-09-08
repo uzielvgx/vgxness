@@ -129,9 +129,8 @@ test("credential files enforce line and metadata rules; injected credentials nee
   const map = new MapCredentials(); map.set("ref", bearer); assert.equal(map.get("ref"), bearer); map.delete("ref"); assert.equal(map.get("ref"), undefined);
   const dir = mkdtempSync(join(tmpdir(), "pi-wire-credential-")), file = join(dir, "credential");
   try {
-    writeFileSync(file, bearer + "\r\n", { mode: 0o600 }); assert.equal(new CredentialFile(file).get("ref"), process.platform === "linux" ? bearer : undefined);
-    if (process.platform !== "linux") return;
-    chmodSync(file, 0o644); assert.equal(new CredentialFile(file).get("ref"), undefined); chmodSync(file, 0o600);
+    writeFileSync(file, bearer + "\r\n", { mode: 0o600 }); assert.equal(new CredentialFile(file).get("ref"), bearer);
+    if (process.platform !== "win32") { chmodSync(file, 0o644); assert.equal(new CredentialFile(file).get("ref"), undefined); chmodSync(file, 0o600); }
     symlinkSync(file, join(dir, "link")); assert.equal(new CredentialFile(join(dir, "link")).get("ref"), undefined);
     mkdirSync(join(dir, "nested")); writeFileSync(join(dir, "nested", "credential"), bearer, { mode: 0o600 }); symlinkSync(join(dir, "nested"), join(dir, "alias")); assert.equal(new CredentialFile(join(dir, "alias", "credential")).get("ref"), undefined);
     for (const content of ["", bearer + "\n\n", bearer + "\r", "x".repeat(515)]) { writeFileSync(file, content); assert.equal(new CredentialFile(file).get("ref"), undefined); }
