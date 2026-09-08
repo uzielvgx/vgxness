@@ -1,6 +1,0 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { hashFile } from "./manifest.ts";
-import { BackendClient } from "./client.ts";
-import type { Hello, Mode } from "./protocol.ts";
-export async function startBackend(options:{binary:string;workspace:string;mode:Mode;role:string;hello:Hello;storageRoot?:string;spawn?:typeof spawn}):Promise<BackendClient>{if(await hashFile(options.binary)!==options.hello.implementation.sha256)throw new Error("backend integrity changed before launch");const args=["--protocol","vgxness-pi/v1","--workspace",options.workspace,"--mode",options.mode,"--role",options.role];if(options.storageRoot)args.push("--storage-root",options.storageRoot);const child=(options.spawn??spawn)(options.binary,args,{shell:false,stdio:["pipe","pipe","pipe"],detached:process.platform!=="win32"});const client=new BackendClient(child,options.hello);try{await client.waitReady()}catch(error){await client.close();throw error}return client;}
-export async function stopBackend(child:ChildProcess, graceMs=100):Promise<void>{if(child.exitCode!==null)return;child.kill("SIGTERM");await new Promise<void>(r=>setTimeout(r,graceMs));if(child.exitCode===null){try{if(process.platform!=="win32"&&child.pid)process.kill(-child.pid,"SIGKILL");else child.kill("SIGKILL");}catch{}}}

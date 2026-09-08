@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
-type Backend = { request(operation: string, payload: unknown, binding: { workspace: string; mode: "read-only" | "full"; role: string }): Promise<unknown> };
+type Backend = { verifyCurrentAcceptedBinding?(binding: unknown): Promise<boolean>; request(operation: string, payload: unknown, binding: { workspace: string; mode: "read-only" | "full"; role: string }): Promise<unknown> };
 export type ToolHost = { workspace: string; mode: "read-only" | "full"; role: string; backend: () => Promise<Backend> };
 const text = () => Type.String({ minLength: 1 });
 const scope = Type.Optional(Type.Literal("project"));
@@ -13,13 +13,13 @@ export function validate(schema: unknown, value: unknown) {
 
 export const memorySchemas = {
   memory_save: Type.Object({ title: Type.Optional(Type.String({ maxLength: 256 })), content: text(), type: Type.Optional(text()), topicKey: Type.Optional(text()), session: Type.Optional(text()), sourceProvider: Type.Optional(text()), sourceId: Type.Optional(text()), scope, state: Type.Optional(state), references: Type.Optional(Type.Array(text(), { maxItems: 32 })) }, { additionalProperties: false }),
-  memory_search: Type.Object({ query: text(), type: Type.Optional(text()), topicKey: Type.Optional(text()), scope, states: Type.Optional(Type.Array(state, { maxItems: 2 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), matchAny: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
-  memory_recent: Type.Object({ scope, states: Type.Optional(Type.Array(state, { maxItems: 2 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }, { additionalProperties: false }),
+  memory_search: Type.Object({ query: text(), type: Type.Optional(text()), topicKey: Type.Optional(text()), scope, states: Type.Optional(Type.Array(state, { maxItems: 2 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })), matchAny: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+  memory_recent: Type.Object({ scope, states: Type.Optional(Type.Array(state, { maxItems: 2 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })) }, { additionalProperties: false }),
   memory_get: Type.Object({ id: text(), scope }, { additionalProperties: false }),
   memory_forget: Type.Object({ id: text(), scope }, { additionalProperties: false }),
 };
 const operation = <T>(name: string, properties: T) => Type.Object({ operation: Type.Literal(name), ...(properties as object) }, { additionalProperties: false });
-const timestamp = Type.String({ format: "date-time" });
+const timestamp = Type.String({ pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$" });
 export const memoryOperationSchema = Type.Union([
   operation("project.resolve", {}),
   operation("project.initialize", {}),
@@ -35,7 +35,7 @@ export const memoryOperationSchema = Type.Union([
   operation("session.renew", { handle: text() }),
   operation("session.end", { handle: text(), state: Type.Union([Type.Literal("completed"), Type.Literal("cancelled"), Type.Literal("interrupted")]), summary: Type.String({ maxLength: 4096 }) }),
   operation("session.context", { handle: text() }),
-  operation("session.draft_save", { handle: text(), summary: Type.String({ maxLength: 4096 }), expectedUpdatedAt: timestamp }),
+  operation("session.draft_save", { handle: text(), summary: Type.String({ maxLength: 4096 }), expectedUpdatedAt: Type.Optional(timestamp) }),
 ]);
 
 export function createMemoryTools(host: ToolHost) {

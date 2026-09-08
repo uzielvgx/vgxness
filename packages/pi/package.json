@@ -1,1 +1,28 @@
-{"name":"@vgxness/pi","version":"0.1.0","private":true,"type":"module","pi":{"extensions":["./src/extension.ts"]},"engines":{"node":">=22.19.0"},"scripts":{"test":"node --test","build":"node ./scripts/verify-package.mjs","pack:check":"npm pack --dry-run --ignore-scripts"},"optionalDependencies":{"@vgxness/pi-backend-linux-x64":"0.1.0","@vgxness/pi-backend-linux-arm64":"0.1.0","@vgxness/pi-backend-darwin-x64":"0.1.0","@vgxness/pi-backend-darwin-arm64":"0.1.0","@vgxness/pi-backend-win32-x64":"0.1.0","@vgxness/pi-backend-win32-arm64":"0.1.0"}}
+{
+  "name": "@vgxness/pi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node ./scripts/test.mjs",
+    "build": "node ./scripts/verify-package.mjs",
+    "pack:check": "npm pack --dry-run --ignore-scripts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4",
+    "typebox": "1.3.7"
+  },
+  "files": [
+    "src",
+    "resources",
+    "LICENSE"
+  ]
+}

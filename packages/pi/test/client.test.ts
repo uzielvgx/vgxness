@@ -1,5 +1,118 @@
-import test from "node:test"; import assert from "node:assert/strict"; import { PassThrough } from "node:stream"; import { EventEmitter } from "node:events"; import { mkdtemp,mkdir,readFile } from "node:fs/promises"; import { tmpdir } from "node:os"; import { join } from "node:path"; import { createHash } from "node:crypto"; import { spawn, spawnSync } from "node:child_process"; import { BackendClient } from "../src/backend/client.ts"; import { startBackend } from "../src/backend/supervisor.ts"; import type { Hello } from "../src/backend/protocol.ts";
-test("serializes only negotiated bindings on the closed request wire", async () => { const stdin = new PassThrough(), stdout = new PassThrough(), child = Object.assign(new EventEmitter(), { stdin, stdout }) as any; const hello: Hello = { type: "hello", protocol: "vgxness-pi/v1", implementation: { name: "x", version: "1", sha256: "a".repeat(64) }, workspace: "/w", mode: "full", role: "manager", capabilities: [], limits: { maxRecordBytes: 1048576, maxActiveRequests: 32, maxCorrelationIds: 4096 } }; let wire = ""; stdin.on("data", (data) => { wire += data.toString(); }); const client = new BackendClient(child, hello); stdout.write(JSON.stringify(hello) + "\n"); await client.waitReady(20); const pending = client.request("memory.get", {}, { workspace: "/w", mode: "full", role: "manager", storageRoot: "/private" } as any, "closed"); const record = JSON.parse(wire.trim().split("\n").at(-1)!); assert.deepEqual(Object.keys(record).sort(), ["id", "mode", "operation", "payload", "role", "type", "workspace"]); stdout.write('{"type":"result","id":"closed","result":true}\n'); assert.equal(await pending, true); });
-test("validates hello, multiplexes and never replays ids",async()=>{const stdin=new PassThrough(),stdout=new PassThrough(),p=Object.assign(new EventEmitter(),{stdin,stdout}) as any;const h:Hello={type:"hello",protocol:"vgxness-pi/v1",implementation:{name:"x",version:"1",sha256:"a".repeat(64)},workspace:"/w",mode:"full",role:"manager",capabilities:[],limits:{maxRecordBytes:1048576,maxActiveRequests:32,maxCorrelationIds:4096}};const c=new BackendClient(p,h);stdout.write(JSON.stringify(h)+"\n");await c.waitReady(20);const x=c.request("memory.get",{}, {workspace:"/w",mode:"full",role:"manager"},"one");stdout.write('{"type":"result","id":"one","result":1}\n');assert.equal(await x,1);await new Promise(r=>setTimeout(r,30));const y=c.request("memory.get",{}, {workspace:"/w",mode:"full",role:"manager"},"two");stdout.write('{"type":"result","id":"two","result":2}\n');assert.equal(await y,2);await assert.rejects(c.request("memory.get",{}, {workspace:"/w",mode:"full",role:"manager"},"one"));});
-test("actual Go backend exchanges hello and closes",async()=>{const d=await mkdtemp(join(tmpdir(),"pi-go-")),bin=join(d,"backend"),workspace=join(d,"workspace"),storage=join(d,"storage");await mkdir(workspace);await mkdir(storage);const build=spawnSync("go",["build","-o",bin,"./cmd/vgxness-pi-backend"],{cwd:join(process.cwd(),"../.."),env:{...process.env,GOPROXY:"off",GOSUMDB:"off"}});assert.equal(build.status,0,build.stderr.toString());const probe=spawn(bin,["--protocol","vgxness-pi/v1","--workspace",workspace,"--mode","read-only","--role","explore","--storage-root",storage],{stdio:["pipe","pipe","pipe"]});const hello:any=await new Promise((resolve,reject)=>{let b="";const t=setTimeout(()=>{probe.kill("SIGKILL");reject(Error("hello timeout"))},1000);probe.stdout.on("data",d=>{b+=d;const n=b.indexOf("\n");if(n>=0){clearTimeout(t);resolve(JSON.parse(b.slice(0,n)))}});probe.on("error",reject)});const exited=new Promise(r=>probe.once("exit",r));probe.stdin.end();probe.kill("SIGTERM");await exited;hello.implementation.sha256=createHash("sha256").update(await readFile(bin)).digest("hex");const client=await startBackend({binary:bin,workspace,storageRoot:storage,mode:"read-only",role:"explore",hello});try{await assert.rejects(client.request("memory.project.resolve",{},{workspace,mode:"read-only",role:"explore"},"read"));}finally{await client.close();}});
-test("protocol rejects nested duplicates and compares reordered hello",async()=>{const {decodeRecord,sameHello}=await import("../src/backend/protocol.ts");const h:any={type:"hello",protocol:"vgxness-pi/v1",implementation:{name:"x",version:"1",sha256:"a".repeat(64)},workspace:"/w",mode:"full",role:"manager",capabilities:[],limits:{maxRecordBytes:1048576,maxActiveRequests:32,maxCorrelationIds:4096}};const reordered={limits:h.limits,capabilities:h.capabilities,role:h.role,mode:h.mode,workspace:h.workspace,implementation:h.implementation,protocol:h.protocol,type:h.type};assert.equal(sameHello(h,reordered),true);assert.throws(()=>decodeRecord(new TextEncoder().encode('{"type":"request","id":"x","operation":"memory.recall","workspace":"/w","mode":"full","role":"manager","payload":{"a":{"x":1,"x":2}}}\n')));assert.throws(()=>decodeRecord(new TextEncoder().encode('{"type":"request","id":"x","operation":"memory.recall","workspace":"/w","mode":"full","role":"manager"}\n')));});
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, mkdir, rename, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadNativeRuntime } from "./runtime-fixture.mjs";
+const { createNativeDispatcher, operationNames } = await loadNativeRuntime();
+async function fixture(t: test.TestContext) {
+  const root = await mkdtemp(join(tmpdir(), "pi-dispatch-")), workspace = join(root, "workspace"), storageRoot = join(root, "storage"); await mkdir(workspace);
+  const binding = { workspace, mode: "full", role: "manager" }, client = await createNativeDispatcher({ ...binding, storageRoot });
+  t.after(async () => { await client.close(); await rm(root, { recursive: true, force: true }); }); return { root, workspace, storageRoot, binding, client };
+}
+test("native dispatcher enforces closed payloads and exact local bindings", async t => {
+  const { client, binding } = await fixture(t);
+  assert.equal(operationNames.length, 35);
+  for (const payload of [null, [], { project: "other" }, { unexpected: true }]) await assert.rejects(client.request("memory.recent", payload, binding), /invalid operation/);
+  for (const key of ["workspace", "mode", "role"]) await assert.rejects(client.request("memory.recent", {}, { ...binding, [key]: "forged" }), /binding mismatch/);
+  await assert.rejects(client.request("arbitrary.shell", {}, binding), /invalid operation/);
+  await assert.rejects(client.request("memory.remember", { content: "x", scope: "personal" }, binding), /invalid operation/);
+  await assert.rejects(client.request("memory.remember", { content: "x", sourceProvider: "forged", sourceId: "unverified" }, binding));
+  await assert.rejects(client.request("memory.remember", { content: "x".repeat(1048577) }, binding), /exceeds limit/);
+  const entry = await client.request("memory.remember", { content: "durable native evidence" }, binding);
+  assert.equal((await client.request("memory.get", { id: entry.ID }, binding)).Content, "durable native evidence");
+});
+test("queued payloads are captured and failed work does not poison dispatcher", async t => {
+  const { client, binding } = await fixture(t), payload = { content: "accepted bytes" };
+  const pending = client.request("memory.remember", payload, binding); payload.content = "changed bytes";
+  assert.equal((await pending).Content, "accepted bytes");
+  const values = await Promise.allSettled([client.request("unknown", {}, binding), client.request("memory.recent", {}, binding)]);
+  assert.equal(values[0].status, "rejected"); assert.equal(values[1].status, "fulfilled");
+  await client.close(); await assert.rejects(client.request("memory.recent", {}, binding), /closed/);
+});
+test("workspace replacement and read-only or worker authority fail closed", async t => {
+  const { client, workspace, root, storageRoot, binding } = await fixture(t);
+  for (const [mode, role] of [["read-only", "manager"], ["full", "general"], ["read-only", "explore"]]) {
+    const b = { workspace, mode, role }, other = await createNativeDispatcher({ ...b, storageRoot });
+    try { assert.deepEqual(await other.request("memory.recent", {}, b), []); await assert.rejects(other.request("memory.remember", { content: "denied" }, b), /authority/); await assert.rejects(other.request("sdd.create", { title: "x", idempotencyKey: "x", backend: "memory", interactionMode: "automatic", plan: "low" }, b), /authority/); } finally { await other.close(); }
+  }
+  await rename(workspace, join(root, "original")); await mkdir(workspace);
+  await assert.rejects(client.request("memory.recent", {}, binding), /identity changed/);
+  await rm(workspace, { recursive: true }); await symlink(join(root, "original"), workspace);
+  await assert.rejects(client.request("memory.recent", {}, binding), /identity changed/);
+});
+test("native sessions redact capabilities and enforce lease rotation and explicit completion", async t => {
+  const { client, binding, storageRoot } = await fixture(t);
+  const first = await client.request("memory.session.start", { externalId: "raw-private-external" }, binding);
+  assert.equal(first.leaseToken, undefined); assert.doesNotMatch(JSON.stringify(first), /raw-private-external/);
+  const second = await createNativeDispatcher({ ...binding, storageRoot });
+  try {
+    await second.request("memory.session.start", { externalId: "raw-private-external" }, binding);
+    await assert.rejects(client.request("memory.session.draft_save", { handle: first.handle, summary: "stale owner" }, binding));
+    const draft = await second.request("memory.session.draft_save", { handle: first.handle, summary: "explicit safe summary" }, binding);
+    await assert.rejects(second.request("memory.session.draft_save", { handle: first.handle, summary: "missing optimistic version" }, binding));
+    await second.request("memory.session.draft_save", { handle: first.handle, summary: "updated safe summary", expectedUpdatedAt: draft.UpdatedAt }, binding);
+    await second.request("memory.session.end", { handle: first.handle, state: "completed", summary: "" }, binding);
+    const next = await second.request("memory.session.start", { externalId: "next" }, binding);
+    assert.match((await second.request("memory.session.context", { handle: next.handle }, binding)).handoff, /UNTRUSTED DATA.*updated safe summary/s);
+  } finally { await second.close(); }
+});
+
+test("explicit initialization publishes portable marker without rekeying local project", async t => {
+ const { client, binding, workspace } = await fixture(t);
+ const local = await client.request("memory.project.resolve", {}, binding);
+ const portable = await client.request("memory.project.initialize", {}, binding);
+ assert.match(portable, /^[a-f0-9-]{36}$/); assert.notEqual(portable, local);
+ assert.equal(await client.request("memory.project.initialize", {}, binding), portable);
+ assert.equal(await client.request("memory.project.resolve", {}, binding), local);
+ const { readFile, writeFile } = await import("node:fs/promises");
+ const marker = join(workspace, ".vgxness", "project-id"); assert.equal(JSON.parse(await readFile(marker, "utf8")).project_id, portable);
+ await writeFile(marker, JSON.stringify({ format: "vgxness-project-id/v1", kind: "project", project_id: "550e8400-e29b-41d4-a716-446655440000" }));
+ await assert.rejects(client.request("memory.project.initialize", {}, binding), /marker changed/);
+});
+
+test("memory retains Go zero-value defaults and rejects Unicode control metadata", async t => {
+ const { client, binding } = await fixture(t);
+ const value = await client.request("memory.remember", { content: "apple evidence", type: "", state: "" }, binding);
+ assert.equal(value.Type, "learning"); assert.equal(value.State, "active");
+ for (const operation of ["memory.recent", "memory.recall"]) { const values = await client.request(operation, { ...(operation.endsWith("recall") ? { query: "apple" } : {}), limit: 0, states: [] }, binding); assert.equal(values.length, 1); }
+ await assert.rejects(client.request("memory.remember", { content: "apple", title: "   " }, binding));
+ await assert.rejects(client.request("memory.remember", { content: "apple\u0085evidence" }, binding));
+});
+
+test("production credential file stays private and resolves only the fixed configured reference", async t => {
+ const { workspace, storageRoot, binding } = await fixture(t), { writeFile } = await import("node:fs/promises"), { randomBytes } = await import("node:crypto");
+ const device = "550e8400-e29b-41d4-a716-446655440000", token = `vgx1.${device}.${randomBytes(32).toString("base64url")}`, credentialFile = join(storageRoot, "credential");
+ await writeFile(credentialFile, token, { mode: 0o600 });
+ const client = await createNativeDispatcher({ ...binding, storageRoot, credentialFile });
+ try {
+   const status = await client.request("memory.sync.configure", { endpoint: "https://sync.example.test", deviceId: device }, binding); assert.equal(status.credential, "available"); assert.doesNotMatch(JSON.stringify(status), /vgx1\.|credential$/);
+   await assert.rejects(client.request("memory.sync.configure", { endpoint: "https://sync.example.test", deviceId: "550e8400-e29b-41d4-a716-446655440001" }, binding), /does not match device/);
+   const { SQLiteDatabase } = await import("../src/sqlite/node-sqlite.ts"); const db = new SQLiteDatabase(join(storageRoot, "memory.db"), { readOnly: true });
+   try { const row: any = db.queryOne("SELECT credential_ref FROM sync_profiles"); assert.equal(row.credential_ref, "secret://keychain/sync/file"); assert.doesNotMatch(JSON.stringify(row), /vgx1\.|\/tmp\//); } finally { db.close(); }
+ } finally { await client.close(); }
+});
+
+test("native apply proof rejects superseded accepted tasks and inputs at the current state version", async t => {
+  const { client, binding, storageRoot } = await fixture(t);
+  const { SQLiteDatabase } = await import("../src/sqlite/node-sqlite.ts");
+  const { createHash } = await import("node:crypto");
+  const change = await client.request("sdd.create", { idempotencyKey: "current-proof", title: "Proof", backend: "memory", interactionMode: "automatic", plan: "low" }, binding);
+  const project = await client.request("memory.project.resolve", {}, binding);
+  const db = new SQLiteDatabase(join(storageRoot, "memory.db")); t.after(() => db.close());
+  const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+  db.db.prepare("UPDATE sdd_changes SET phase='apply',state_version=7 WHERE id=?").run(change.id);
+  for (const phase of ["design", "tasks"]) {
+    db.db.prepare("INSERT INTO sdd_artifacts VALUES(?,?,?,?,?,?,?,?)").run(phase, project, change.id, phase, "accepted", phase + "2", 1n, 1n);
+    for (const suffix of ["1", "2"]) db.db.prepare("INSERT INTO sdd_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(phase + suffix, project, change.id, phase, "accepted", Buffer.from(phase), null, sha(phase), sha(""), 1n, 1n);
+  }
+  for (const task of ["tasks1", "tasks2"]) db.db.prepare("INSERT INTO sdd_revision_links VALUES(?,?,?,?,?,?)").run(project, change.id, task, "design", "design2", sha("design"));
+  const proof = { changeId: change.id, stateVersion: 7, artifactId: "tasks", revisionId: "tasks2", digest: sha("tasks"), inputs: [{ artifactId: "design", revisionId: "design2", digest: sha("design") }] };
+  assert.equal(await client.verifyCurrentAcceptedBinding(proof), true);
+  const old = await client.request("sdd.get_revision", { changeId: change.id, revisionId: "tasks1" }, binding);
+  assert.equal(old.status, "accepted"); assert.equal(old.artifactStatus, "accepted");
+  assert.equal(await client.verifyCurrentAcceptedBinding({ ...proof, revisionId: "tasks1" }), false);
+  db.db.prepare("UPDATE sdd_revision_links SET input_revision_id='design1' WHERE revision_id='tasks2'").run();
+  assert.equal(await client.verifyCurrentAcceptedBinding({ ...proof, inputs: [{ ...proof.inputs[0], revisionId: "design1" }] }), false);
+  assert.equal(await client.verifyCurrentAcceptedBinding({ ...proof, stateVersion: 6 }), false);
+});

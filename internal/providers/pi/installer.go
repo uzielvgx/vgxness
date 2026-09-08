@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -32,8 +31,9 @@ type Options struct {
 	ReleaseDir  string
 	AgentDir    string
 	InstallRoot string
-	GOOS        string
-	GOARCH      string
+	// GOOS and GOARCH are retained for caller compatibility; portable artifacts do not select a target.
+	GOOS   string
+	GOARCH string
 }
 
 type Result struct {
@@ -101,20 +101,6 @@ func reservationOperation(name string) error {
 }
 
 func normalize(options Options) (Options, string, error) {
-	if options.GOOS == "" {
-		options.GOOS = runtime.GOOS
-	}
-	if options.GOARCH == "" {
-		options.GOARCH = runtime.GOARCH
-	}
-	platform := options.GOOS
-	if platform == "windows" {
-		platform = "win32"
-	}
-	arch := options.GOARCH
-	if arch == "amd64" {
-		arch = "x64"
-	}
 	if options.ReleaseDir == "" || options.AgentDir == "" || options.InstallRoot == "" || !filepath.IsAbs(options.ReleaseDir) || !filepath.IsAbs(options.AgentDir) || !filepath.IsAbs(options.InstallRoot) {
 		return Options{}, "", errors.New("Pi release, agent, and managed roots must be absolute")
 	}
@@ -123,7 +109,7 @@ func normalize(options Options) (Options, string, error) {
 			return Options{}, "", errors.New("symlinked Pi path")
 		}
 	}
-	return options, platform + "-" + arch, nil
+	return options, "portable-typescript", nil
 }
 
 func Install(ctx context.Context, options Options) (Result, error) {
@@ -198,8 +184,8 @@ func install(ctx context.Context, options Options, expectedSource string) (resul
 	if err := installBoundary("staged"); err != nil {
 		return Result{}, err
 	}
-	for _, file := range []string{"vgxness-pi-" + version + ".tgz", "vgxness-pi-backend-" + target + "-" + version + ".tgz"} {
-		if err := extract(filepath.Join(options.ReleaseDir, file), stage, file != "vgxness-pi-"+version+".tgz", sums[file]); err != nil {
+	for _, file := range []string{"vgxness-pi-" + version + ".tgz"} {
+		if err := extract(filepath.Join(options.ReleaseDir, file), stage, sums[file]); err != nil {
 			return Result{}, err
 		}
 		if sums[file] == "" {
@@ -327,9 +313,6 @@ func recoverReservation(destination, packagePath, source string) bool {
 }
 
 func validateRelease(dir, target string) (string, map[string]string, error) {
-	if !supportedTarget(target) {
-		return "", nil, errors.New("unsupported Pi target")
-	}
 	info, err := os.Lstat(dir)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return "", nil, errors.New("Pi release directory is unsafe")
@@ -339,9 +322,6 @@ func validateRelease(dir, target string) (string, map[string]string, error) {
 		return "", nil, err
 	}
 	expected := map[string]bool{"PROVENANCE.json": true, "SHA256SUMS": true, "vgxness-pi-" + version + ".tgz": true}
-	for _, name := range []string{"linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"} {
-		expected["vgxness-pi-backend-"+name+"-"+version+".tgz"] = true
-	}
 	if len(entries) != len(expected) {
 		return "", nil, errors.New("Pi release has unexpected assets")
 	}
@@ -382,13 +362,11 @@ func validateRelease(dir, target string) (string, map[string]string, error) {
 		return "", nil, errors.New("invalid Pi provenance")
 	}
 	main := "vgxness-pi-" + version + ".tgz"
-	sidecar := "vgxness-pi-backend-" + target + "-" + version + ".tgz"
-	// The managed identity includes both selected bytes and target, so altered
-	// local assets can never reuse a package path solely from provenance.
-	return checksum([]byte(provenance.SourceSHA256 + "\n" + target + "\n" + sums[main] + "\n" + sums[sidecar])), sums, nil
+	// Bind the single portable package bytes as well as source provenance.
+	return checksum([]byte(provenance.SourceSHA256 + "\nportable-typescript\n" + sums[main])), sums, nil
 }
 
-func extract(archive, root string, sidecar bool, expected string) error {
+func extract(archive, root string, expected string) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
@@ -412,7 +390,7 @@ func extract(archive, root string, sidecar bool, expected string) error {
 		if err != nil {
 			return err
 		}
-		if h.Typeflag != tar.TypeReg || h.Size < 0 || h.Size > 32<<20 || !strings.HasPrefix(h.Name, "package/") || strings.Contains(h.Name, "..") || filepath.IsAbs(h.Name) || seen[h.Name] {
+		if h.Typeflag != tar.TypeReg || h.Mode != 0o644 || h.Size < 0 || h.Size > 32<<20 || !strings.HasPrefix(h.Name, "package/") || strings.Contains(h.Name, "..") || filepath.IsAbs(h.Name) || seen[h.Name] {
 			return errors.New("unsafe Pi archive")
 		}
 		seen[h.Name] = true
@@ -421,10 +399,6 @@ func extract(archive, root string, sidecar bool, expected string) error {
 			return errors.New("Pi archive exceeds size limit")
 		}
 		rel := strings.TrimPrefix(h.Name, "package/")
-		if sidecar {
-			module := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(archive), "-"+version+".tgz"), "vgxness-")
-			rel = filepath.Join("node_modules", "@vgxness", module, rel)
-		}
 		path := filepath.Join(root, rel)
 		if !within(root, path) {
 			return errors.New("unsafe Pi archive path")
@@ -456,51 +430,70 @@ func verifyPackage(root, target string) error {
 	var main struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
+		Type    string `json:"type"`
 		Pi      struct {
 			Extensions []string `json:"extensions"`
 		} `json:"pi"`
-		Optional map[string]string `json:"optionalDependencies"`
+		Engines map[string]string `json:"engines"`
+		Peers   map[string]string `json:"peerDependencies"`
+		Files   []string          `json:"files"`
 	}
-	if strictObjectFields(data, map[string]bool{"name": true, "version": true, "type": true, "pi": true, "engines": true, "optionalDependencies": true}) != nil || strictJSON(data, &main) != nil || main.Name != "@vgxness/pi" || main.Version != version || len(main.Pi.Extensions) != 1 || main.Pi.Extensions[0] != "./src/extension.ts" || len(main.Optional) != 6 {
-		return errors.New("invalid Pi package metadata")
+	if strictObjectFields(data, map[string]bool{"name": true, "version": true, "type": true, "pi": true, "engines": true, "peerDependencies": true, "files": true}) != nil || strictJSON(data, &main) != nil || main.Name != "@vgxness/pi" || main.Version != version || main.Type != "module" || len(main.Pi.Extensions) != 1 || main.Pi.Extensions[0] != "./src/extension.ts" || main.Engines["node"] != ">=22.19.0" || len(main.Peers) != 2 || main.Peers["typebox"] != "1.3.7" || main.Peers["@earendil-works/pi-coding-agent"] != "^0.84.4" {
+		return errors.New("invalid portable Pi package metadata")
 	}
-	for _, suffix := range []string{"linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"} {
-		if main.Optional["@vgxness/pi-backend-"+suffix] != version {
-			return errors.New("invalid Pi sidecar dependencies")
+	for _, name := range []string{"src/extension.ts", "src/probe.ts", "resources/migrations/manifest.json", "resources/prompts/manager.md", "resources/skills/sdd-lifecycle/SKILL.md", "LICENSE"} {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil || !info.Mode().IsRegular() {
+			return errors.New("Pi package missing runtime resource")
 		}
 	}
-	backend := filepath.Join(root, "node_modules", "@vgxness", "pi-backend-"+target, "manifest.json")
-	data, err = os.ReadFile(backend)
+	entries, err := os.ReadDir(filepath.Join(root, "resources", "migrations"))
 	if err != nil {
 		return err
 	}
-	var manifest struct{ Name, Version, Binary, SHA256 string }
-	if strictObjectFields(data, map[string]bool{"name": true, "version": true, "binary": true, "sha256": true}) != nil || strictJSON(data, &manifest) != nil || manifest.Name != "@vgxness/pi-backend-"+target || manifest.Version != version || manifest.Binary == "" || !validHex(manifest.SHA256) {
-		return errors.New("invalid Pi backend manifest")
+	count := 0
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".sql") {
+			count++
+		}
 	}
-	data, err = os.ReadFile(filepath.Join(filepath.Dir(backend), "package.json"))
+	if count != 23 {
+		return errors.New("Pi package must contain exactly 23 SQL migrations")
+	}
+	data, err = os.ReadFile(filepath.Join(root, "resources", "migrations", "manifest.json"))
 	if err != nil {
 		return err
 	}
-	var sidecar struct {
-		Name    string   `json:"name"`
-		Version string   `json:"version"`
-		OS      []string `json:"os"`
-		CPU     []string `json:"cpu"`
+	var manifest struct {
+		Version    int
+		Migrations []struct {
+			Version      int
+			File, SHA256 string
+		}
 	}
-	parts := strings.Split(target, "-")
-	if strictObjectFields(data, map[string]bool{"name": true, "version": true, "os": true, "cpu": true}) != nil || strictJSON(data, &sidecar) != nil || sidecar.Name != "@vgxness/pi-backend-"+target || sidecar.Version != version || len(parts) != 2 || len(sidecar.OS) != 1 || sidecar.OS[0] != parts[0] || len(sidecar.CPU) != 1 || sidecar.CPU[0] != parts[1] {
-		return errors.New("invalid Pi backend package metadata")
+	if strictJSON(data, &manifest) != nil || manifest.Version != 23 || len(manifest.Migrations) != 23 {
+		return errors.New("invalid Pi migration manifest")
 	}
-	binaryPath := filepath.Join(filepath.Dir(backend), manifest.Binary)
-	if !within(filepath.Dir(backend), binaryPath) {
-		return errors.New("unsafe Pi backend binary path")
+	seen := map[string]bool{}
+	for index, migration := range manifest.Migrations {
+		if migration.Version != index+1 || filepath.Base(migration.File) != migration.File || !strings.HasSuffix(migration.File, ".sql") || seen[migration.File] {
+			return errors.New("invalid Pi migration manifest")
+		}
+		seen[migration.File] = true
+		data, err := os.ReadFile(filepath.Join(root, "resources", "migrations", migration.File))
+		if err != nil || checksum(data) != migration.SHA256 {
+			return errors.New("Pi migration hash mismatch")
+		}
 	}
-	binary, err := os.ReadFile(binaryPath)
-	if err != nil || checksum(binary) != manifest.SHA256 {
-		return errors.New("Pi backend binary identity mismatch")
-	}
-	return nil
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 || entry.Name() == "node_modules" || entry.Name() == "bin" || strings.HasSuffix(path, ".go") || strings.HasSuffix(path, ".exe") {
+			return errors.New("non-portable Pi package member")
+		}
+		return nil
+	})
 }
 
 func activate(ctx context.Context, agent, installRoot, packagePath string) error {
@@ -867,14 +860,6 @@ func claimInstallRoot(root string) error {
 		return errors.New("invalid Pi install root ownership")
 	}
 	return nil
-}
-func supportedTarget(target string) bool {
-	for _, value := range []string{"linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"} {
-		if target == value {
-			return true
-		}
-	}
-	return false
 }
 
 func verifyManaged(root, source string) error {

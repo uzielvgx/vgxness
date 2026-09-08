@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { assertWorkerRole, type WorkerRole } from "./roles.ts";
-export type WorkerMission = { nonce: string; digest: string; role: WorkerRole; workspace: string; mode: "full" | "read-only"; model: string; effort: string; goal: string; criteria: string[]; commands: string[][]; resultLimit: number; acceptedBindings?: { changeId: string; artifactId: string; revisionId: string; digest: string; stateVersion: number; inputs: Array<{ artifactId: string; revisionId: string; digest: string }> }; targets: Record<string, string> };
+export type WorkerMission = { nonce: string; digest: string; role: WorkerRole; workspace: string; mode: "full" | "read-only"; model: string; effort: string; goal: string; criteria: string[]; commands: string[][]; resultLimit: number; exploration?: { roots: string[]; maxFiles: number; maxBytes: number; maxTokens: number }; acceptedBindings?: { changeId: string; artifactId: string; revisionId: string; digest: string; stateVersion: number; inputs: Array<{ artifactId: string; revisionId: string; digest: string }> }; targets: Record<string, string> };
 const used = new Set<string>();
 const issued = new Map<string, string>();
 const ledgers = new WeakMap<object, Record<string, string>>();
@@ -16,11 +16,21 @@ const freeze = (value: any): any => { if (value && typeof value === "object" && 
 export async function acceptMission(value: WorkerMission, allowIssuedMissionBootstrap = false) {
   assertWorkerRole(value.role); if (!value.nonce || used.has(value.nonce)) throw new Error("worker mission nonce rejected");
   if (!value.workspace || !Number.isSafeInteger(value.resultLimit) || value.resultLimit < 1 || value.resultLimit > 65536 || !Array.isArray(value.criteria) || !Array.isArray(value.commands) || !value.goal || !value.model || !value.effort) throw new Error("worker mission shape rejected");
+  if (value.role === "explore" && value.commands.length !== 0) throw new Error("explore missions cannot authorize commands");
   const copy = { ...value }; delete (copy as any).digest;
   const digest = createHash("sha256").update(canonical(copy)).digest("hex");
   if (digest !== value.digest || (!allowIssuedMissionBootstrap && issued.get(value.nonce) !== digest)) throw new Error("worker mission digest rejected");
   const workspace = resolve(value.workspace); const workspaceInfo = await lstat(workspace); if (!workspaceInfo.isDirectory() || workspaceInfo.isSymbolicLink()) throw new Error("worker workspace identity rejected");
   for (const [target, hash] of Object.entries(value.targets)) { const path = resolve(workspace, target); if (!target || isAbsolute(target) || relative(workspace, path).startsWith("..")) throw new Error("worker target escapes workspace"); let ancestor = workspace; for (const segment of target.split(/[\\/]/).filter(Boolean).slice(0, -1)) { ancestor = resolve(ancestor, segment); const info = await lstat(ancestor); if (info.isSymbolicLink()) throw new Error("worker target has symlink ancestor"); } try { const info = await lstat(path); if (info.isSymbolicLink()) throw new Error("worker target is a symlink"); if (hash === "ABSENT" || createHash("sha256").update(await readFile(path)).digest("hex") !== hash) throw new Error("worker target drift"); } catch (error: any) { if (!(hash === "ABSENT" && error?.code === "ENOENT")) throw error; } }
+  if (value.exploration) {
+    const e = value.exploration;
+    if (value.role !== "explore" || !Array.isArray(e.roots) || !e.roots.length || e.roots.length > 16 || !Number.isInteger(e.maxFiles) || e.maxFiles < 1 || e.maxFiles > 10000 || !Number.isInteger(e.maxBytes) || e.maxBytes < 1 || e.maxBytes > 16777216 || !Number.isInteger(e.maxTokens) || e.maxTokens < 1 || e.maxTokens > 65536) throw new Error("worker exploration budget rejected");
+    for (const root of e.roots) {
+      if (typeof root !== "string" || isAbsolute(root) || root.split(/[\\/]/).includes("..")) throw new Error("worker exploration root rejected");
+      let path = workspace;
+      for (const segment of root.split(/[\\/]/).filter(Boolean)) { path = resolve(path, segment); const info = await lstat(path); if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("worker exploration root rejected"); }
+    }
+  }
   used.add(value.nonce); const accepted = JSON.parse(JSON.stringify(value)); Object.defineProperty(accepted, acceptedBrand, { value: true, enumerable: false, configurable: false, writable: false }); freeze(accepted); acceptedMissions.add(accepted); ledgers.set(accepted, { ...value.targets }); return accepted;
 }
 /** Revalidates the manager-issued bytes inside Pi's isolated extension graph. */
@@ -53,6 +63,7 @@ export async function revalidateWorkerMission(mission: WorkerMission) {
 export function workerTargetLedger(mission: WorkerMission) { let ledger = ledgers.get(mission); if (!ledger) { if (!(mission as any)[acceptedBrand] || !Object.isFrozen(mission)) throw new Error("worker mission was not accepted"); ledger = { ...mission.targets }; ledgers.set(mission, ledger); } return ledger; }
 export async function advanceWorkerTargets(mission: WorkerMission, targets: string[]) { const ledger = workerTargetLedger(mission); for (const target of targets) { if (!(target in ledger)) throw new Error("worker target not authorized"); const path = resolve(mission.workspace, target); try { const info = await lstat(path); if (!info.isFile() || info.isSymbolicLink()) throw new Error("worker target is not regular"); ledger[target] = createHash("sha256").update(await readFile(path)).digest("hex"); } catch (error: any) { if (error?.code === "ENOENT") ledger[target] = "ABSENT"; else throw error; } } }
 export function validateWorkerArgv(mission: WorkerMission & { commands?: string[][] }, argv: string[]) {
+  if (mission.role === "explore") throw new Error("explore missions cannot authorize commands");
   if (!Array.isArray(argv) || argv.length === 0 || !mission.commands?.some((allowed) => allowed.length === argv.length && allowed.every((part, index) => part === argv[index]))) throw new Error("worker command not authorized");
   return [...argv];
 }

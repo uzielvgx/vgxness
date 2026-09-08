@@ -2,7 +2,6 @@ package e2e_test
 
 import (
 	"archive/tar"
-	"bufio"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -19,10 +18,7 @@ import (
 	"github.com/vgxness/vgxness/internal/release"
 )
 
-// This is deliberately an extracted-package journey. It proves the native
-// Linux arm64 sidecar and the installed Pi SDK loader without npm installation
-// or a provider call. Cross-built targets are checked by release assembly but
-// cannot establish their target runtime behavior on this host.
+// Exercises the portable package on this host; native target claims need their own runners.
 func TestPiExtractedNativePackageJourney(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -44,75 +40,29 @@ func TestPiExtractedNativePackageJourney(t *testing.T) {
 	if err != nil || json.Unmarshal(settings, &discovery) != nil || len(discovery.Packages) != 1 || discovery.Packages[0] != installed.PackagePath {
 		t.Fatalf("settings discovery entry=%q err=%v", settings, err)
 	}
-	mainRoot := installed.PackagePath
-	platform, arch := runtime.GOOS, runtime.GOARCH
-	if platform == "windows" {
-		platform = "win32"
-	}
-	if arch == "amd64" {
-		arch = "x64"
-	}
-	backendRoot := filepath.Join(mainRoot, "node_modules", "@vgxness", "pi-backend-"+platform+"-"+arch)
 	userData := filepath.Join(workspace, "user-data.txt")
 	if err := os.WriteFile(userData, []byte("preserve me"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	backend := "vgxness-pi-backend"
-	if runtime.GOOS == "windows" {
-		backend += ".exe"
-	}
-	cmd := exec.Command(filepath.Join(backendRoot, "bin", backend), "--protocol", "vgxness-pi/v1", "--workspace", workspace, "--storage-root", extensionStorage, "--mode", "full", "--role", "manager")
-	cmd.Dir = workspace
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH"), "PI_CODING_AGENT_DIR=" + agent, "PI_CODING_AGENT_SESSION_DIR=" + t.TempDir(), "VGXNESS_PI_STORAGE_ROOT=" + extensionStorage}
-	stdin, err := cmd.StdinPipe()
+	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
+	checkProbe := exec.Command(node, filepath.Join(installed.PackagePath, "src", "probe.ts"))
+	checkProbe.Env = []string{"HOME=" + t.TempDir(), "PATH=" + filepath.Dir(node), "TMPDIR=" + t.TempDir(), "SystemRoot=" + os.Getenv("SystemRoot")}
+	if data, err := checkProbe.CombinedOutput(); err != nil || !strings.Contains(string(data), `"runtime":"typescript"`) {
+		t.Fatalf("isolated portable probe: %v: %s", err, data)
 	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(installed.PackagePath, "node_modules")); !os.IsNotExist(err) {
+		t.Fatal("package contains runtime dependency sidecars")
 	}
-	reader := bufio.NewReader(stdout)
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	var hello map[string]any
-	if err := json.Unmarshal(line, &hello); err != nil || hello["type"] != "hello" || hello["protocol"] != "vgxness-pi/v1" {
-		t.Fatalf("hello=%s err=%v", line, err)
-	}
-	if _, err := stdin.Write(line); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := stdin.Write(piRequestLine(t, "fixture", "memory.project.initialize", workspace, "full", "manager")); err != nil {
-		t.Fatal(err)
-	}
-	result, err := reader.ReadBytes('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	var response map[string]any
-	if err := json.Unmarshal(result, &response); err != nil || response["type"] != "result" {
-		t.Fatalf("result=%s err=%v", result, err)
-	}
-	_ = stdin.Close()
-	_ = cmd.Wait()
 	loader, err := piSDKLoader()
 	if err != nil {
 		t.Skip(err)
 	}
-	// The extracted extension must keep local storage configuration out of the
-	// closed backend wire record, execute a real native tool, and close its
-	// session/backend in the same SDK lifecycle used by Pi.
+	// Load through the real Pi SDK and use only temporary local storage.
 	resourceLoader := filepath.Join(filepath.Dir(filepath.Dir(loader)), "resource-loader.js")
-	script := `const {DefaultResourceLoader}=await import(process.argv[1]); const [workspace,agent]=process.argv.slice(2); const resources=new DefaultResourceLoader({cwd:workspace,agentDir:agent,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true}); await resources.reload(); const v=resources.getExtensions(); if(v.errors.length||v.extensions.length!==1) throw new Error(JSON.stringify(v)); const handlers=v.extensions[0].handlers; const context={sessionManager:{getSessionId:()=>"installed-session"}}; const tools=[...v.extensions[0].tools.values()].map(x=>x.definition); const save=tools.find(x=>x.name==="memory_save"), get=tools.find(x=>x.name==="memory_get"); if(!save||!get) throw new Error("settings package was not discovered"); try { const saved=JSON.parse((await save.execute("save",{title:"fixture",content:"installed native write"})).content[0].text); const id=saved.id??saved.ID; if(typeof id!=="string") throw new Error("native memory save returned no id"); const loaded=JSON.parse((await get.execute("get",{id})).content[0].text); if((loaded.content??loaded.Content)!=="installed native write") throw new Error("native memory readback mismatch"); } finally { for(const handler of handlers.get("session_shutdown")??[]) await handler({reason:"quit"},context); }`
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node unavailable")
-	}
+	script := `const {DefaultResourceLoader}=await import(process.argv[1]); const [workspace,agent]=process.argv.slice(2); const resources=new DefaultResourceLoader({cwd:workspace,agentDir:agent,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true}); await resources.reload(); const v=resources.getExtensions(); if(v.errors.length||v.extensions.length!==1) throw new Error(JSON.stringify(v)); const handlers=v.extensions[0].handlers; const context={sessionManager:{getSessionId:()=>"installed-session"}}; const tools=[...v.extensions[0].tools.values()].map(x=>x.definition); const save=tools.find(x=>x.name==="memory_save"), get=tools.find(x=>x.name==="memory_get"); if(!save||!get) throw new Error("settings package was not discovered"); try { const saved=JSON.parse((await save.execute("save",{title:"fixture",content:"installed TypeScript write"})).content[0].text); const id=saved.id??saved.ID; if(typeof id!=="string") throw new Error("TypeScript memory save returned no id"); const loaded=JSON.parse((await get.execute("get",{id})).content[0].text); if((loaded.content??loaded.Content)!=="installed TypeScript write") throw new Error("TypeScript memory readback mismatch"); } finally { for(const handler of handlers.get("session_shutdown")??[]) await handler({reason:"quit"},context); }`
 	check := exec.Command(node, "--input-type=module", "-e", script, resourceLoader, workspace, agent)
 	check.Dir = workspace
 	check.Env = []string{"HOME=" + t.TempDir(), "PATH=" + filepath.Dir(node), "PI_CODING_AGENT_DIR=" + agent, "PI_CODING_AGENT_SESSION_DIR=" + t.TempDir(), "VGXNESS_PI_STORAGE_ROOT=" + extensionStorage}

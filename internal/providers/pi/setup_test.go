@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -112,21 +111,27 @@ func TestStatusReportsActivatedFinalizationPending(t *testing.T) {
 
 func TestProbeRejectsFailedAndTimedOutChildren(t *testing.T) {
 	previous := probeTimeout
-	probeTimeout = 50 * time.Millisecond
+	probeTimeout = 5 * time.Second
 	defer func() { probeTimeout = previous }()
 	for _, test := range []struct {
 		name, script string
 		want         string
 	}{
-		{"healthy", "echo '{\"type\":\"hello\",\"protocol\":\"vgxness-pi/v1\"}'; read x; exit 0", "healthy"},
-		{"incompatible", "echo broken; exit 0", "incompatible"},
-		{"silent-timeout", "exec sleep 3", "unavailable"},
-		{"hello-then-hang", "echo '{\"type\":\"hello\",\"protocol\":\"vgxness-pi/v1\"}'; read x; exec sleep 3", "unavailable"},
-		{"hello-then-fail", "echo '{\"type\":\"hello\",\"protocol\":\"vgxness-pi/v1\"}'; read x; exit 7", "unavailable"},
+		{"healthy", `console.log(JSON.stringify({type:"health",runtime:"typescript",schemaVersion:23,foreignKeys:true,fts5:true,bigint:true,backup:true}))`, "healthy"},
+		{"incompatible", `console.log("broken")`, "incompatible"},
+		{"silent-timeout", `setTimeout(()=>{},3000)`, "unavailable"},
+		{"health-then-hang", `console.log(JSON.stringify({type:"health",runtime:"typescript",schemaVersion:23,foreignKeys:true,fts5:true,bigint:true,backup:true}));setTimeout(()=>{},3000)`, "unavailable"},
+		{"health-then-fail", `console.log(JSON.stringify({type:"health",runtime:"typescript",schemaVersion:23,foreignKeys:true,fts5:true,bigint:true,backup:true}));process.exit(7)`, "unavailable"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			// Output classification needs normal process-start headroom under a
+			// loaded test runner. Only the explicit hang cases use a short deadline.
+			probeTimeout = 5 * time.Second
+			if test.name == "silent-timeout" || test.name == "health-then-hang" {
+				probeTimeout = 300 * time.Millisecond
+			}
 			packagePath := fakeProbePackage(t, test.script)
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if got := probe(ctx, Options{}, packagePath); got.Status.String() != test.want {
 				t.Fatalf("probe=%+v want=%s", got, test.want)
@@ -137,23 +142,52 @@ func TestProbeRejectsFailedAndTimedOutChildren(t *testing.T) {
 
 func fakeProbePackage(t *testing.T, script string) string {
 	t.Helper()
-	platform, arch := runtime.GOOS, runtime.GOARCH
-	if platform == "windows" {
-		t.Skip("shell probe fixture")
-	}
-	if arch == "amd64" {
-		arch = "x64"
-	}
-	root := filepath.Join(t.TempDir(), "package", "node_modules", "@vgxness", "pi-backend-"+platform+"-"+arch)
-	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o700); err != nil {
+	root := filepath.Join(t.TempDir(), "package")
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "manifest.json"), []byte(`{"binary":"bin/backend"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "src", "probe.ts"), []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, "bin", "backend")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
+	return root
+}
+
+func TestStatusReportsLegacyPackageAndUpdatePreservesIt(t *testing.T) {
+	root := t.TempDir()
+	options := Options{ReleaseDir: tinyRelease(t, filepath.Join(root, "release-a"), "a"), AgentDir: filepath.Join(root, "agent"), InstallRoot: filepath.Join(root, "managed")}
+	installed, err := Install(context.Background(), options)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(root))))
+	metadataPath := filepath.Join(installed.PackagePath, "package.json")
+	legacy := []byte(`{"name":"@vgxness/pi","version":"0.1.0","optionalDependencies":{"@vgxness/pi-backend-linux-arm64":"0.1.0"}}`)
+	if err := os.WriteFile(metadataPath, legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(installed.PackagePath, ".vgxness-pi.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest managedManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Files["package.json"] = checksum(legacy)
+	data, _ = json.Marshal(manifest)
+	if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, err := NewProvider(Options{AgentDir: options.AgentDir, InstallRoot: options.InstallRoot}).Status(context.Background(), setupflow.SharedPlan{})
+	if err != nil || status.Ready || !status.Installed || !strings.Contains(status.Blocker, "Legacy Go Pi package needs update") {
+		t.Fatalf("legacy status=%+v err=%v", status, err)
+	}
+	options.ReleaseDir = tinyRelease(t, filepath.Join(root, "release-b"), "b")
+	updated, err := Install(context.Background(), options)
+	if err != nil || updated.PackagePath == installed.PackagePath {
+		t.Fatalf("update=%+v err=%v", updated, err)
+	}
+	if data, err := os.ReadFile(metadataPath); err != nil || string(data) != string(legacy) {
+		t.Fatalf("old package was changed: %v", err)
+	}
 }

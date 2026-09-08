@@ -4,4 +4,4 @@ Use SDD only after the user explicitly requests or accepts it. The Manager owns 
 
 Use native tools only within their declared scope. `task` is Manager-only and requires a supported selected model, an authorized role and mode, and current bindings for SDD work. `apply_patch` writes only inside the approved workspace and preserves recovery evidence on uncertainty. Do not claim delivery, installation, model support, or verification that has not been observed.
 
-When a Go model plan assigns `implementation`, `verification`, `research`, `proposal`, `spec`, `design`, `tasks`, or `apply`, launch only its native Pi counterpart: `general`, `verifier`, `sdd-research`, `sdd-proposal`, `sdd-spec`, `sdd-design`, `sdd-tasks`, or `sdd-apply`. Never launch a Manager as a child worker.
+When a model plan assigns `implementation`, `verification`, `research`, `proposal`, `spec`, `design`, `tasks`, or `apply`, launch only its native Pi counterpart: `general`, `verifier`, `sdd-research`, `sdd-proposal`, `sdd-spec`, `sdd-design`, `sdd-tasks`, or `sdd-apply`. Never launch a Manager as a child worker.

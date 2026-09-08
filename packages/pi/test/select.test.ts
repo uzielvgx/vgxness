@@ -1,3 +1,22 @@
-import test from "node:test"; import assert from "node:assert/strict"; import { mkdtemp, mkdir, writeFile, chmod, symlink } from "node:fs/promises"; import { tmpdir } from "node:os"; import { join } from "node:path"; import { createHash } from "node:crypto"; import { selectBackend } from "../src/backend/select.ts";
-test("selects only exact verified package",async()=>{const d=await mkdtemp(join(tmpdir(),"pi-"));const p=join(d,"backend"),name=`@vgxness/pi-backend-linux-${process.arch}`;await mkdir(join(p,"bin"),{recursive:true});const b=join(p,"bin","vgxness-pi-backend");await writeFile(b,"x");await chmod(b,0o755);const h=createHash("sha256").update("x").digest("hex");await writeFile(join(p,"manifest.json"),JSON.stringify({name,version:"1.0.0",binary:"bin/vgxness-pi-backend",sha256:h}));await writeFile(join(p,"package.json"),JSON.stringify({name,version:"1.0.0",os:[process.platform],cpu:[process.arch]}));assert.equal((await selectBackend({root:d,version:"1.0.0",resolvePackage:async()=>p})).binary,b);await symlink(b,join(p,"link"));await writeFile(join(p,"manifest.json"),JSON.stringify({name,version:"1.0.0",binary:"link",sha256:h}));await assert.rejects(selectBackend({root:d,version:"1.0.0",resolvePackage:async()=>p}));});
-test("rejects package metadata drift",async()=>{const d=await mkdtemp(join(tmpdir(),"pi-")),p=join(d,"backend"),name=`@vgxness/pi-backend-linux-${process.arch}`;await mkdir(p);await writeFile(join(p,"bin"),"x");await chmod(join(p,"bin"),0o755);const sha256=createHash("sha256").update("x").digest("hex");await writeFile(join(p,"manifest.json"),JSON.stringify({name,version:"1.0.0",binary:"bin",sha256}));await writeFile(join(p,"package.json"),JSON.stringify({name,version:"other",os:[process.platform],cpu:[process.arch]}));await assert.rejects(selectBackend({root:d,version:"1.0.0",resolvePackage:async()=>p}));});
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, mkdir, rm, symlink, stat, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadNativeRuntime } from "./runtime-fixture.mjs";
+const { createNativeDispatcher } = await loadNativeRuntime();
+test("native storage rejects missing read-only database and symlink storage without creating files", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pi-storage-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const workspace = join(root, "workspace"), storageRoot = join(root, "absent"); await mkdir(workspace);
+  await assert.rejects(createNativeDispatcher({ workspace, storageRoot, mode: "read-only", role: "explore" }));
+  await assert.rejects(stat(storageRoot));
+  await mkdir(join(root, "outside")); await symlink(join(root, "outside"), join(root, "link"));
+  await assert.rejects(createNativeDispatcher({ workspace, storageRoot: join(root, "link", "child"), mode: "full", role: "manager" }), /symlink/);
+  await assert.rejects(stat(join(root, "outside", "child")));
+  await assert.rejects(createNativeDispatcher({ workspace, storageRoot: "relative", mode: "full", role: "manager" }), /absolute/);
+});
+test("extension defaults directly to native dispatcher with no backend launcher imports", async () => {
+  const source = await readFile(new URL("../src/extension.ts", import.meta.url), "utf8");
+  assert.match(source, /createNativeDispatcher\(\{ workspace, storageRoot:/);
+  assert.doesNotMatch(source, /selectBackend|startBackend|backend\/supervisor|backend\/select/);
+});

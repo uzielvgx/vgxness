@@ -4,13 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 const root = path.resolve(import.meta.dirname, "../../..");
-const platforms = [
-  ["linux", "x64"], ["linux", "arm64"],
-  ["darwin", "x64"], ["darwin", "arm64"],
-  ["win32", "x64"], ["win32", "arm64"],
-] as const;
-
-test("Pi package metadata is closed, offline, and platform-specific", () => {
+test("Pi package metadata is closed, offline, and portable", () => {
   const workspace = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const lockfile = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
   const pi = JSON.parse(fs.readFileSync(path.join(root, "packages/pi/package.json"), "utf8"));
@@ -25,21 +19,10 @@ test("Pi package metadata is closed, offline, and platform-specific", () => {
   assert.equal(pi.scripts.postinstall, undefined);
   assert.equal(pi.scripts.preinstall, undefined);
   assert.equal(pi.scripts.install, undefined);
-  assert.equal(Object.keys(pi.optionalDependencies).length, 6);
-
-  for (const [os, cpu] of platforms) {
-    const suffix = `${os}-${cpu}`;
-    const name = `@vgxness/pi-backend-${suffix}`;
-    assert.equal(pi.optionalDependencies[name], pi.version);
-    const dir = path.join(root, `packages/pi-backend-${suffix}`);
-    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
-    const schema = JSON.parse(fs.readFileSync(path.join(dir, "manifest.schema.json"), "utf8"));
-    assert.equal(pkg.name, name);
-    assert.equal(pkg.version, pi.version);
-    assert.deepEqual(pkg.os, [os]);
-    assert.deepEqual(pkg.cpu, [cpu]);
-    assert.equal(pkg.scripts, undefined);
-    assert.equal(schema.additionalProperties, false);
-    assert.deepEqual(schema.required, ["name", "version", "binary", "sha256"]);
-  }
+  assert.equal(pi.optionalDependencies, undefined);
+  assert.deepEqual(pi.peerDependencies, {"@earendil-works/pi-coding-agent":"^0.84.4",typebox:"1.3.7"});
+  assert.deepEqual(lockfile.packages["packages/pi"].peerDependencies, pi.peerDependencies);
+  assert.equal(lockfile.packages["packages/pi"].optionalDependencies, undefined);
+  assert.equal(pi.bin, undefined);
+  assert.deepEqual(pi.files, ["src", "resources", "LICENSE"]);
 });

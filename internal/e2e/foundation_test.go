@@ -43,24 +43,45 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		}
 	})
 	t.Run("standard lanes are independent and aggregated", func(t *testing.T) {
-		lanes := []string{"coverage", "postgres-integration", "race", "static", "vulnerability", "linux-e2e", "fuzz-openspec", "fuzz-launcher-manifest", "windows-compile", "windows-install", "darwin-smoke"}
+		lanes := []string{"coverage", "postgres-integration", "race", "static", "vulnerability", "linux-e2e", "fuzz-openspec", "fuzz-launcher-manifest", "windows-compile", "windows-install", "darwin-smoke", "pi-typescript"}
 		for _, lane := range lanes {
 			if !strings.Contains(workflow, "  "+lane+":\n") {
 				t.Errorf("workflow missing standard lane %q", lane)
 			}
 		}
-		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, postgres-integration, race, static, vulnerability, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke]") {
+		if strings.Count(workflow, "    needs:") != 1 || !strings.Contains(workflow, "needs: [coverage, postgres-integration, race, static, vulnerability, linux-e2e, fuzz-openspec, fuzz-launcher-manifest, windows-compile, windows-install, darwin-smoke, pi-typescript]") {
 			t.Error("only the standard aggregate gate may depend on validation lanes")
 		}
 		if !strings.Contains(workflow, "  quality:\n    name: quality\n    if: ${{ always() }}") {
 			t.Error("workflow must preserve the always-running quality check required by branch protection")
 		}
-		for _, result := range []string{"needs.coverage.result", "needs.postgres-integration.result", "needs.race.result", "needs.static.result", "needs.vulnerability.result", "needs.linux-e2e.result", "needs.fuzz-openspec.result", "needs.fuzz-launcher-manifest.result", "needs.windows-compile.result", "needs.windows-install.result", "needs.darwin-smoke.result"} {
+		for _, result := range []string{"needs.coverage.result", "needs.postgres-integration.result", "needs.race.result", "needs.static.result", "needs.vulnerability.result", "needs.linux-e2e.result", "needs.fuzz-openspec.result", "needs.fuzz-launcher-manifest.result", "needs.windows-compile.result", "needs.windows-install.result", "needs.darwin-smoke.result", "needs.pi-typescript.result"} {
 			if !strings.Contains(workflow, result) {
 				t.Errorf("aggregate gate does not require %q", result)
 			}
 		}
 	})
+	t.Run("Pi TypeScript lane covers portable SQLite runtimes", func(t *testing.T) {
+		start, end := strings.Index(workflow, "  pi-typescript:\n"), strings.Index(workflow, "  quality:\n")
+		if start < 0 || end <= start {
+			t.Fatal("workflow must define an independent Pi lane before quality")
+		}
+		lane := workflow[start:end]
+		for _, want := range []string{
+			"os: [ubuntu-24.04, macos-15, windows-latest]",
+			"node: ['22.19.0', '24']", "node-version: ${{ matrix.node }}",
+			"node packages/pi/scripts/test.mjs", "metadata.test.mjs", "package-artifact.test.mjs",
+			"package_contract.test.ts", "sqlite-adapter.test.ts", "migrations.test.ts",
+		} {
+			if !strings.Contains(lane, want) {
+				t.Errorf("Pi lane missing %q", want)
+			}
+		}
+		if !strings.Contains(workflow[end:], `require_success pi-typescript "$PI_TYPESCRIPT_RESULT"`) {
+			t.Error("quality must require successful Pi validation")
+		}
+	})
+
 	t.Run("PostgreSQL evidence is durable", func(t *testing.T) {
 		start := strings.Index(workflow, "  postgres-integration:\n")
 		end := strings.Index(workflow, "  race:\n")
