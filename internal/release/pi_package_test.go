@@ -4,9 +4,6 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,35 +74,35 @@ func TestPiTarballContainsPackageMetadata(t *testing.T) {
 	}
 }
 
-func TestPiSidecarReadbackRejectsTamperedManifestAndExtraFiles(t *testing.T) {
+func TestPiPortableReadbackRejectsLegacySidecar(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vgxness-pi-backend-linux-arm64-0.1.0.tgz")
-	binary := []byte("backend")
-	digest := sha256.Sum256(binary)
-	metadata := []byte(`{"name":"@vgxness/pi-backend-linux-arm64","version":"0.1.0","os":["linux"],"cpu":["arm64"]}`)
-	manifest, _ := json.Marshal(map[string]string{"name": "@vgxness/pi-backend-linux-arm64", "version": "0.1.0", "binary": "bin/vgxness-pi-backend", "sha256": hex.EncodeToString(digest[:])})
-	files := []archiveFile{{"package.json", metadata, 0o644}, {"manifest.json", manifest, 0o644}, {"bin/vgxness-pi-backend", binary, 0o755}}
-	if err := writeNpmTarball(path, files); err != nil {
+	if err := writeNpmTarball(path, []archiveFile{{"package.json", []byte(`{"name":"@vgxness/pi-backend-linux-arm64"}`), 0o644}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyPiTarball(path); err != nil {
+	if err := verifyPiTarball(path); err == nil {
+		t.Fatal("legacy sidecar accepted")
+	}
+}
+func TestPiPortableMetadataRejectsRuntimeDependenciesAndOldEngine(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
 		t.Fatal(err)
 	}
-	files[1].data = []byte(`{"name":"@vgxness/pi-backend-linux-arm64","version":"0.1.0","binary":"bin/vgxness-pi-backend","sha256":"` + strings.Repeat("0", 64) + `"}`)
-	bad := filepath.Join(t.TempDir(), filepath.Base(path))
-	if err := writeNpmTarball(bad, files); err != nil {
+	pkg, err := readJSON(filepath.Join(root, "packages", "pi", "package.json"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyPiTarball(bad); err == nil {
-		t.Fatal("tampered manifest accepted")
-	}
-	files[1].data = manifest
-	files = append(files, archiveFile{"extra", []byte("x"), 0o644})
-	extra := filepath.Join(t.TempDir(), filepath.Base(path))
-	if err := writeNpmTarball(extra, files); err != nil {
+	if err := validatePortablePiMetadata(pkg); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyPiTarball(extra); err == nil {
-		t.Fatal("extra sidecar file accepted")
+	pkg["optionalDependencies"] = map[string]any{"@vgxness/pi-backend-linux-x64": piVersion}
+	if err := validatePortablePiMetadata(pkg); err == nil {
+		t.Fatal("sidecar dependency accepted")
+	}
+	delete(pkg, "optionalDependencies")
+	pkg["engines"] = map[string]any{"node": ">=22"}
+	if err := validatePortablePiMetadata(pkg); err == nil {
+		t.Fatal("unsupported engine accepted")
 	}
 }
 
@@ -123,12 +120,6 @@ func TestPiReleaseRejectsExistingOutput(t *testing.T) {
 func TestPiReleaseVerificationRejectsExtraAssetsAndMalformedChecksums(t *testing.T) {
 	directory := t.TempDir()
 	for _, name := range []string{"PROVENANCE.json", "SHA256SUMS", "vgxness-pi-0.1.0.tgz"} {
-		if err := os.WriteFile(filepath.Join(directory, name), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, target := range piTargets {
-		name := "vgxness-pi-backend-" + target.platform + "-" + target.arch + "-0.1.0.tgz"
 		if err := os.WriteFile(filepath.Join(directory, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -152,5 +143,43 @@ func TestPiProvenanceRejectsDuplicateKeys(t *testing.T) {
 	}
 	if err := verifyPiProvenance(path, "source"); err == nil {
 		t.Fatal("duplicate provenance key accepted")
+	}
+}
+
+func TestPiPortableArtifactNeedsNoBuildToolsAndRejectsMigrationDrift(t *testing.T) {
+	repository, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	stage := t.TempDir()
+	if err := packagePiMain(repository, stage); err != nil {
+		t.Fatal(err)
+	}
+	names, err := piRegularNames(stage)
+	if err != nil || len(names) != 1 || names[0] != "vgxness-pi-0.1.0.tgz" {
+		t.Fatalf("names=%v err=%v", names, err)
+	}
+	path := filepath.Join(stage, names[0])
+	if err := verifyPiTarball(path); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := readPiTarball(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := []archiveFile{}
+	for name, entry := range entries {
+		if strings.HasSuffix(name, "001_memory.sql") {
+			entry.data = append(entry.data, []byte("\n-- drift")...)
+		}
+		files = append(files, archiveFile{strings.TrimPrefix(name, "package/"), entry.data, entry.mode})
+	}
+	bad := filepath.Join(t.TempDir(), names[0])
+	if err := writeNpmTarball(bad, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPiTarball(bad); err == nil || !strings.Contains(err.Error(), "migration hash") {
+		t.Fatalf("drift result=%v", err)
 	}
 }

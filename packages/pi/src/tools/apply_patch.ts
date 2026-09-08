@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type { ToolHost } from "./memory.ts";
@@ -111,8 +112,14 @@ async function owned(snapshot: Snapshot) {
     return (await readFile(snapshot.path)).equals(snapshot.after);
   } catch (error: any) { return snapshot.after === undefined && error?.code === "ENOENT"; }
 }
+export class PatchRecoveryError extends Error {
+  readonly code = "recovery_pending";
+  readonly retrySafe = false;
+  constructor(readonly details: { code: string; retrySafe: boolean; affectedPaths: string[]; recoveryPaths: string[] }) { super(`Patch recovery_pending; retrySafe=false; ${JSON.stringify(details)}`); this.name = "PatchRecoveryError"; }
+}
+
 export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions = {}) {
-  return { name: "apply_patch", label: "Apply patch", description: "Apply one complete, preflighted unified patch inside the workspace.", parameters: applyPatchSchema,
+  const tool = { name: "apply_patch", label: "Apply patch", description: "Apply one complete, preflighted unified patch inside the workspace.", parameters: applyPatchSchema, executionMode: "sequential" as const,
     async execute(_id: string, input: { patch: string }) {
       if (!Value.Check(applyPatchSchema, input)) throw new Error("invalid tool input");
       const worker = options.workerRole !== undefined;
@@ -185,7 +192,7 @@ export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions 
         if (recoveryPending) {
           const affectedPaths = snapshots.filter((snapshot) => snapshot.committed && !snapshot.restored).map((snapshot) => snapshot.path).slice(0, 16);
           const recoveryPaths = snapshots.filter((snapshot) => snapshot.committed && !snapshot.restored && snapshot.restoreTemporary).map((snapshot) => snapshot.restoreTemporary!).slice(0, 16);
-          return { isError: true, content: [{ type: "text", text: "Patch recovery pending; committed paths were retained for safe manual recovery." }], details: { code: "recovery_pending", retrySafe: false, affectedPaths, recoveryPaths } };
+          throw new PatchRecoveryError({ code: "recovery_pending", retrySafe: false, affectedPaths, recoveryPaths });
         }
         throw error;
       } finally {
@@ -200,4 +207,16 @@ export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions 
       return { content: [{ type: "text", text: `Applied ${snapshots.length} file patch(es).` }] };
     },
   };
+  const execute = tool.execute;
+  tool.execute = async (id: string, input: { patch: string }) => {
+    if (!Value.Check(applyPatchSchema, input)) throw new Error("invalid tool input");
+    const root = await realpath(host.workspace);
+    const edits = parsePatch(input.patch, root);
+    // Reject aliasing/symlink paths before acquiring multiple canonical Pi queues.
+    for (const edit of edits) { if (edit.oldPath) await regular(edit.oldPath, root); if (edit.newPath && edit.newPath !== edit.oldPath) await regular(edit.newPath, root, true); }
+    const targets = edits.map(edit => edit.newPath ?? edit.oldPath!).sort();
+    const locked = (index: number): Promise<any> => index === targets.length ? execute(id, input) : withFileMutationQueue(targets[index], () => locked(index + 1));
+    return locked(0);
+  };
+  return tool;
 }

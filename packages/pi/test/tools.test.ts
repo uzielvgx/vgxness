@@ -9,8 +9,8 @@ import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { loadPiExtensions } from "./pi-fixture.mjs";
 const { loadExtensions } = await loadPiExtensions();
-import { startBackend } from "../src/backend/supervisor.ts";
-import type { Hello } from "../src/backend/protocol.ts";
+import { loadNativeRuntime } from "./runtime-fixture.mjs";
+const { createNativeDispatcher } = await loadNativeRuntime();
 
 async function loadPatchTool(workspace: string, options: unknown = {}) {
   (globalThis as any).__piTestHost = { workspace, mode: "full", role: "manager", backend: async () => { throw new Error("not used"); } };
@@ -100,8 +100,8 @@ test("apply_patch restores delete-first commits and retains recovery evidence", 
   assert.equal(await readFile(join(workspace, "delete.txt"), "utf8"), "delete\n");
   assert.equal(await readFile(join(workspace, "two.txt"), "utf8"), "two\n");
   const pendingTool: any = await loadPatchTool(workspace, { fault: (point: string) => { if (point === "after-commit") throw new Error("injected commit failure"); if (point === "before-rollback") throw new Error("injected recovery failure"); } });
-  const result = await pendingTool.execute("pending", { patch });
-  assert.equal(result.isError, true);
+  let result: any;
+  await assert.rejects(pendingTool.execute("pending", { patch }), (error: any) => { result = error; return error.code === "recovery_pending" && /retrySafe=false/.test(error.message); });
   assert.equal(result.details.code, "recovery_pending");
   assert.equal(result.details.retrySafe, false);
   assert.deepEqual(result.details.affectedPaths, [join(workspace, "delete.txt")]);
@@ -111,7 +111,7 @@ test("apply_patch restores delete-first commits and retains recovery evidence", 
   delete (globalThis as any).__piTestOptions;
 });
 
-test("full manager sidecar initializes then saves and reads isolated memory", async () => {
+test("full native manager initializes then saves and reads isolated memory", async () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "../../..");
   const temp = await mkdtemp(join(tmpdir(), "pi-tools-"));
   const binary = join(temp, "backend");
@@ -119,21 +119,7 @@ test("full manager sidecar initializes then saves and reads isolated memory", as
   const storageRoot = join(temp, "storage");
   await mkdir(workspace);
   await mkdir(storageRoot);
-  const build = spawnSync("go", ["build", "-o", binary, "./cmd/vgxness-pi-backend"], { cwd: root, env: { ...process.env, GOPROXY: "off", GOSUMDB: "off" } });
-  assert.equal(build.status, 0, build.stderr.toString());
-  const probe = spawn(binary, ["--protocol", "vgxness-pi/v1", "--workspace", workspace, "--mode", "full", "--role", "manager", "--storage-root", storageRoot], { stdio: ["pipe", "pipe", "pipe"] });
-  const hello = await new Promise<any>((resolve, reject) => {
-    let buffer = "";
-    probe.stdout.on("data", (chunk) => { buffer += chunk; const newline = buffer.indexOf("\n"); if (newline >= 0) resolve(JSON.parse(buffer.slice(0, newline))); });
-    probe.on("error", reject);
-  });
-  const probeExit = new Promise<void>((resolve) => probe.once("exit", () => resolve()));
-  probe.kill("SIGTERM");
-  await Promise.race([probeExit, new Promise((resolve) => setTimeout(resolve, 100))]);
-  if (probe.exitCode == null && probe.signalCode == null) probe.kill("SIGKILL");
-  await probeExit;
-  hello.implementation.sha256 = createHash("sha256").update(await readFile(binary)).digest("hex");
-  const client = await startBackend({ binary, workspace, storageRoot, mode: "full", role: "manager", hello: hello as Hello });
+  const client = await createNativeDispatcher({ workspace, storageRoot, mode: "full", role: "manager" });
   const binding = { workspace, mode: "full" as const, role: "manager" };
   try {
     await client.request("memory.project.initialize", {}, binding, "initialize");
@@ -160,4 +146,27 @@ test("full manager sidecar initializes then saves and reads isolated memory", as
     delete (globalThis as any).__piTestHost;
     await client.close();
   }
+});
+
+test("apply_patch shares Pi's file mutation queue with built-in write", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "pi-patch-queue-"));
+  await writeFile(join(workspace, "file.txt"), "before\n");
+  let staged!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { staged = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const patchTool = await loadPatchTool(workspace, { fault: async (point: string) => { if (point === "after-stage") { staged(); await gate; } } });
+  assert.equal(patchTool.executionMode, "sequential");
+  const wrapper = join(workspace, "builtin.ts");
+  await writeFile(wrapper, 'import { createWriteToolDefinition } from "@earendil-works/pi-coding-agent"; export default pi => pi.registerTool(createWriteToolDefinition(' + JSON.stringify(workspace) + '));');
+  const loaded = await loadExtensions([wrapper], workspace); assert.deepEqual(loaded.errors, []);
+  const write: any = [...loaded.extensions[0].tools.values()][0].definition;
+  const patch = patchTool.execute("patch", { patch: "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-before\n+patched\n" });
+  await entered;
+  let written = false;
+  const pending = write.execute("builtin", { path: "file.txt", content: "builtin\n" }).then(() => { written = true; });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(written, false);
+  assert.equal(await readFile(join(workspace, "file.txt"), "utf8"), "before\n");
+  release(); await patch; await pending;
+  assert.equal(await readFile(join(workspace, "file.txt"), "utf8"), "builtin\n");
+  delete (globalThis as any).__piTestHost; delete (globalThis as any).__piTestOptions;
 });

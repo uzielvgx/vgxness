@@ -160,3 +160,7 @@ Use `vgxness self rollback` through the installed launcher to return to its one 
 ## Release rollback boundaries
 
 Application rollback is local and one level deep; it changes the active immutable binary and does not alter a Git tag or GitHub release. If a published release is unsafe, maintainers may mark it as a prerelease, delete the GitHub release, and separately decide whether to delete the remote tag. Deleting a release does not remove installations, archives already downloaded by users, or the Git object. Tags must never be silently moved or reused; publish a new patch or prerelease tag for corrected code.
+
+## Pi portable package
+
+The separate `vgxness-release pi --output /absolute/new-directory` assembler emits one portable TypeScript tarball plus checksums and provenance. It performs no Pi backend cross-builds and does not publish or install. See [Pi TypeScript packaging and setup](pi-typescript.md) for the Node/host requirements, offline provisioning, migration resources, and isolated health check.

@@ -23,10 +23,6 @@ import (
 
 const piVersion = "0.1.0"
 
-type piTarget struct{ platform, arch string }
-
-var piTargets = []piTarget{{"linux", "x64"}, {"linux", "arm64"}, {"darwin", "x64"}, {"darwin", "arm64"}, {"win32", "x64"}, {"win32", "arm64"}}
-
 func RunPi(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("vgxness-release pi", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -104,13 +100,8 @@ func PackagePi(ctx context.Context, repository, output string) (resultErr error)
 			resultErr = fmt.Errorf("%w; staging retained at %s", resultErr, stage)
 		}
 	}()
-	for _, target := range piTargets {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := packagePiBackend(ctx, repository, stage, target); err != nil {
-			return err
-		}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := packagePiMain(repository, stage); err != nil {
 		return err
@@ -165,44 +156,6 @@ func PackagePi(ctx context.Context, repository, output string) (resultErr error)
 	return nil
 }
 
-func packagePiBackend(ctx context.Context, repository, stage string, target piTarget) error {
-	suffix := target.platform + "-" + target.arch
-	packageName := "@vgxness/pi-backend-" + suffix
-	binName := "vgxness-pi-backend"
-	if target.platform == "win32" {
-		binName += ".exe"
-	}
-	work, err := os.MkdirTemp(stage, ".build-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(work)
-	bin := filepath.Join(work, binName)
-	goarch := target.arch
-	if goarch == "x64" {
-		goarch = "amd64"
-	}
-	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-buildvcs=false", "-mod=readonly", "-o", bin, "./cmd/vgxness-pi-backend")
-	command.Dir = repository
-	command.Env = append(filteredGoEnv(), "CGO_ENABLED=0", "GOOS="+mapPiOS(target.platform), "GOARCH="+goarch)
-	combined, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("build %s: %w: %s", suffix, err, strings.TrimSpace(string(combined)))
-	}
-	binary, err := os.ReadFile(bin)
-	if err != nil {
-		return err
-	}
-	digest := sha256.Sum256(binary)
-	metadata, err := readJSON(filepath.Join(repository, "packages", "pi-backend-"+suffix, "package.json"))
-	if err != nil {
-		return err
-	}
-	delete(metadata, "private")
-	manifest, _ := json.Marshal(map[string]string{"name": packageName, "version": piVersion, "binary": "bin/" + binName, "sha256": hex.EncodeToString(digest[:])})
-	return writeNpmTarball(filepath.Join(stage, "vgxness-pi-backend-"+suffix+"-"+piVersion+".tgz"), []archiveFile{{"package.json", mustJSON(metadata), 0o644}, {"manifest.json", append(manifest, '\n'), 0o644}, {"bin/" + binName, binary, 0o755}})
-}
-
 func validatePiSourceMetadata(repository string) error {
 	main, err := readJSON(filepath.Join(repository, "packages", "pi", "package.json"))
 	if err != nil {
@@ -221,37 +174,35 @@ func validatePiSourceMetadata(repository string) error {
 			}
 		}
 	}
-	deps, ok := main["optionalDependencies"].(map[string]any)
-	if !ok || len(deps) != len(piTargets) {
-		return errors.New("invalid Pi sidecar dependencies")
+	return validatePortablePiMetadata(main)
+}
+
+func validatePortablePiMetadata(main map[string]any) error {
+	if main["name"] != "@vgxness/pi" || main["version"] != piVersion || main["type"] != "module" {
+		return errors.New("invalid Pi package identity")
 	}
-	for _, target := range piTargets {
-		suffix := target.platform + "-" + target.arch
-		name := "@vgxness/pi-backend-" + suffix
-		if deps[name] != piVersion {
-			return fmt.Errorf("sidecar version mismatch: %s", name)
+	for _, name := range []string{"optionalDependencies", "dependencies", "bin", "os", "cpu"} {
+		if _, ok := main[name]; ok {
+			return errors.New("Pi package must be portable and host-loaded")
 		}
-		sidecar, err := readJSON(filepath.Join(repository, "packages", "pi-backend-"+suffix, "package.json"))
-		if err != nil {
-			return err
-		}
-		if sidecar["name"] != name || sidecar["version"] != piVersion || !stringListEquals(sidecar["os"], []string{target.platform}) || !stringListEquals(sidecar["cpu"], []string{target.arch}) {
-			return fmt.Errorf("invalid sidecar metadata: %s", name)
-		}
+	}
+	pi, ok := main["pi"].(map[string]any)
+	if !ok {
+		return errors.New("invalid Pi extension contract")
+	}
+	extensions, ok := pi["extensions"].([]any)
+	if !ok || len(extensions) != 1 || extensions[0] != "./src/extension.ts" {
+		return errors.New("invalid Pi extension contract")
+	}
+	engines, ok := main["engines"].(map[string]any)
+	if !ok || engines["node"] != ">=22.19.0" {
+		return errors.New("invalid Pi Node engine")
+	}
+	peers, ok := main["peerDependencies"].(map[string]any)
+	if !ok || len(peers) != 2 || peers["typebox"] != "1.3.7" || peers["@earendil-works/pi-coding-agent"] != "^0.84.4" {
+		return errors.New("invalid Pi host dependency contract")
 	}
 	return nil
-}
-func stringListEquals(value any, want []string) bool {
-	values, ok := value.([]any)
-	if !ok || len(values) != len(want) {
-		return false
-	}
-	for i := range want {
-		if values[i] != want[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func packagePiMain(repository, stage string) error {
@@ -341,8 +292,8 @@ func verifyPiRelease(directory, source, repository string) error {
 	if err != nil {
 		return err
 	}
-	if len(names) != 7 {
-		return fmt.Errorf("release has %d tarballs, want 7", len(names))
+	if len(names) != 1 {
+		return fmt.Errorf("release has %d tarballs, want 1", len(names))
 	}
 	for _, name := range names {
 		if err := verifyPiTarball(filepath.Join(directory, name)); err != nil {
@@ -381,9 +332,6 @@ func verifyReleaseDirectory(directory string) error {
 		return err
 	}
 	expected := map[string]bool{"PROVENANCE.json": true, "SHA256SUMS": true, "vgxness-pi-" + piVersion + ".tgz": true}
-	for _, target := range piTargets {
-		expected["vgxness-pi-backend-"+target.platform+"-"+target.arch+"-"+piVersion+".tgz"] = true
-	}
 	if len(entries) != len(expected) {
 		return errors.New("release has unexpected files")
 	}
@@ -524,9 +472,6 @@ func verifyPiTarball(path string) error {
 	if err != nil {
 		return err
 	}
-	if strings.HasPrefix(name, "vgxness-pi-backend-") {
-		return verifyPiSidecar(name, entries)
-	}
 	if name != "vgxness-pi-"+piVersion+".tgz" {
 		return errors.New("unexpected tarball name")
 	}
@@ -538,13 +483,44 @@ func verifyPiTarball(path string) error {
 	if json.Unmarshal(metadata.data, &pkg) != nil || pkg["name"] != "@vgxness/pi" || pkg["version"] != piVersion {
 		return errors.New("main package metadata mismatch")
 	}
-	deps, ok := pkg["optionalDependencies"].(map[string]any)
-	if !ok || len(deps) != len(piTargets) {
-		return errors.New("main package dependencies mismatch")
+	if err := validatePortablePiMetadata(pkg); err != nil {
+		return err
 	}
-	for _, target := range piTargets {
-		if deps["@vgxness/pi-backend-"+target.platform+"-"+target.arch] != piVersion {
-			return errors.New("main package dependency mismatch")
+	for name, entry := range entries {
+		if entry.mode.Perm() != 0o644 || strings.Contains(name, "/node_modules/") || strings.Contains(name, "/bin/") || strings.HasSuffix(name, ".go") || strings.HasSuffix(name, ".exe") {
+			return errors.New("non-portable Pi package member")
+		}
+	}
+	migrations := 0
+	for name := range entries {
+		if strings.HasPrefix(name, "package/resources/migrations/") && strings.HasSuffix(name, ".sql") {
+			migrations++
+		}
+	}
+	if migrations != 23 {
+		return errors.New("Pi package must contain exactly 23 SQL migrations")
+	}
+	var manifest struct {
+		Version    int
+		Migrations []struct {
+			Version      int
+			File, SHA256 string
+		}
+	}
+	if json.Unmarshal(entries["package/resources/migrations/manifest.json"].data, &manifest) != nil || manifest.Version != 23 || len(manifest.Migrations) != 23 {
+		return errors.New("invalid Pi migration manifest")
+	}
+	seen := map[string]bool{}
+	for index, migration := range manifest.Migrations {
+		entry, exists := entries["package/resources/migrations/"+migration.File]
+		if migration.Version != index+1 || filepath.Base(migration.File) != migration.File || !strings.HasSuffix(migration.File, ".sql") || seen[migration.File] || !exists || fmt.Sprintf("%x", sha256.Sum256(entry.data)) != migration.SHA256 {
+			return errors.New("Pi migration hash mismatch")
+		}
+		seen[migration.File] = true
+	}
+	for _, name := range []string{"package/src/extension.ts", "package/src/probe.ts", "package/resources/migrations/manifest.json"} {
+		if _, ok := entries[name]; !ok {
+			return errors.New("Pi package missing runtime resource")
 		}
 	}
 	if _, ok := entries["package/LICENSE"]; !ok {
@@ -598,49 +574,6 @@ func readPiTarball(path string) (map[string]piTarEntry, error) {
 		entries[h.Name] = piTarEntry{data, os.FileMode(h.Mode)}
 	}
 	return entries, nil
-}
-func verifyPiSidecar(filename string, entries map[string]piTarEntry) error {
-	suffix := strings.TrimSuffix(strings.TrimPrefix(filename, "vgxness-pi-backend-"), "-"+piVersion+".tgz")
-	var target *piTarget
-	for i := range piTargets {
-		if piTargets[i].platform+"-"+piTargets[i].arch == suffix {
-			target = &piTargets[i]
-		}
-	}
-	if target == nil {
-		return errors.New("unknown sidecar")
-	}
-	bin := "vgxness-pi-backend"
-	if target.platform == "win32" {
-		bin += ".exe"
-	}
-	expected := map[string]os.FileMode{"package/package.json": 0o644, "package/manifest.json": 0o644, "package/bin/" + bin: 0o755}
-	if len(entries) != len(expected) {
-		return errors.New("sidecar has missing or extra entries")
-	}
-	for path, mode := range expected {
-		entry, ok := entries[path]
-		if !ok || entry.mode.Perm() != mode {
-			return errors.New("sidecar layout or mode mismatch")
-		}
-	}
-	var pkg map[string]any
-	if json.Unmarshal(entries["package/package.json"].data, &pkg) != nil {
-		return errors.New("invalid sidecar metadata")
-	}
-	name := "@vgxness/pi-backend-" + suffix
-	if pkg["name"] != name || pkg["version"] != piVersion || !stringListEquals(pkg["os"], []string{target.platform}) || !stringListEquals(pkg["cpu"], []string{target.arch}) {
-		return errors.New("sidecar metadata mismatch")
-	}
-	var manifest map[string]any
-	if json.Unmarshal(entries["package/manifest.json"].data, &manifest) != nil {
-		return errors.New("invalid sidecar manifest")
-	}
-	digest := sha256.Sum256(entries["package/bin/"+bin].data)
-	if len(manifest) != 4 || manifest["name"] != name || manifest["version"] != piVersion || manifest["binary"] != "bin/"+bin || manifest["sha256"] != hex.EncodeToString(digest[:]) {
-		return errors.New("sidecar manifest mismatch")
-	}
-	return nil
 }
 func assertNoLinkAncestors(path string) error {
 	absolute, err := filepath.Abs(path)
@@ -715,22 +648,6 @@ func piRegularNames(directory string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
-}
-func mapPiOS(platform string) string {
-	if platform == "win32" {
-		return "windows"
-	}
-	return platform
-}
-func filteredGoEnv() []string {
-	env := []string{}
-	for _, entry := range os.Environ() {
-		name, _, _ := strings.Cut(entry, "=")
-		if name != "CGO_ENABLED" && name != "GOOS" && name != "GOARCH" {
-			env = append(env, entry)
-		}
-	}
-	return env
 }
 func requireRegular(path string) error {
 	info, err := os.Lstat(path)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -586,7 +587,7 @@ func tinyRelease(t *testing.T, dir, source string) string {
 		gz := gzip.NewWriter(file)
 		tw := tar.NewWriter(gz)
 		for path, data := range files {
-			if err := tw.WriteHeader(&tar.Header{Name: "package/" + path, Mode: 0o755, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+			if err := tw.WriteHeader(&tar.Header{Name: "package/" + path, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := tw.Write(data); err != nil {
@@ -608,19 +609,21 @@ func tinyRelease(t *testing.T, dir, source string) string {
 		}
 		sums[name] = checksum(data)
 	}
-	writeArchive(main, map[string][]byte{"package.json": []byte(`{"name":"@vgxness/pi","version":"0.1.0","pi":{"extensions":["./src/extension.ts"]},"optionalDependencies":{"@vgxness/pi-backend-linux-x64":"0.1.0","@vgxness/pi-backend-linux-arm64":"0.1.0","@vgxness/pi-backend-darwin-x64":"0.1.0","@vgxness/pi-backend-darwin-arm64":"0.1.0","@vgxness/pi-backend-win32-x64":"0.1.0","@vgxness/pi-backend-win32-arm64":"0.1.0"}}`)})
-	for _, target := range []string{"linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"} {
-		binary := []byte("binary-" + target)
-		manifest, err := json.Marshal(map[string]string{"name": "@vgxness/pi-backend-" + target, "version": version, "binary": "bin/backend", "sha256": checksum(binary)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		parts := strings.Split(target, "-")
-		metadata, _ := json.Marshal(map[string]any{"name": "@vgxness/pi-backend-" + target, "version": version, "os": []string{parts[0]}, "cpu": []string{parts[1]}})
-		writeArchive("vgxness-pi-backend-"+target+"-"+version+".tgz", map[string][]byte{"package.json": metadata, "manifest.json": manifest, "bin/backend": binary})
+	files := map[string][]byte{"package.json": []byte(`{"name":"@vgxness/pi","version":"0.1.0","type":"module","pi":{"extensions":["./src/extension.ts"]},"engines":{"node":">=22.19.0"},"peerDependencies":{"@earendil-works/pi-coding-agent":"^0.84.4","typebox":"1.3.7"}}`)}
+	for _, name := range []string{"src/extension.ts", "src/probe.ts", "resources/migrations/manifest.json", "resources/prompts/manager.md", "resources/skills/sdd-lifecycle/SKILL.md", "LICENSE"} {
+		files[name] = []byte("fixture")
 	}
+	migrations := []map[string]any{}
+	for i := 1; i <= 23; i++ {
+		name := fmt.Sprintf("%03d_fixture.sql", i)
+		data := []byte("-- fixture")
+		files["resources/migrations/"+name] = data
+		migrations = append(migrations, map[string]any{"version": i, "file": name, "sha256": checksum(data)})
+	}
+	files["resources/migrations/manifest.json"], _ = json.Marshal(map[string]any{"version": 23, "migrations": migrations})
+	writeArchive(main, files)
 	var lines []string
-	for _, name := range append([]string{main}, "vgxness-pi-backend-linux-x64-0.1.0.tgz", "vgxness-pi-backend-linux-arm64-0.1.0.tgz", "vgxness-pi-backend-darwin-x64-0.1.0.tgz", "vgxness-pi-backend-darwin-arm64-0.1.0.tgz", "vgxness-pi-backend-win32-x64-0.1.0.tgz", "vgxness-pi-backend-win32-arm64-0.1.0.tgz") {
+	for _, name := range []string{main} {
 		lines = append(lines, sums[name]+"  "+name)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
@@ -631,4 +634,47 @@ func tinyRelease(t *testing.T, dir, source string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func TestPortablePackageRejectsMigrationAndDependencyDrift(t *testing.T) {
+	release := tinyRelease(t, filepath.Join(t.TempDir(), "release"), "a")
+	_, sums, err := validateRelease(release, "linux-x64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	name := "vgxness-pi-" + version + ".tgz"
+	if err := extract(filepath.Join(release, name), root, sums[name]); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPackage(root, "linux-x64"); err != nil {
+		t.Fatal(err)
+	}
+	migration := filepath.Join(root, "resources", "migrations", "001_fixture.sql")
+	if err := os.WriteFile(migration, []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPackage(root, "linux-x64"); err == nil || !strings.Contains(err.Error(), "migration hash") {
+		t.Fatalf("migration drift=%v", err)
+	}
+	if err := os.WriteFile(migration, []byte("-- fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadata := filepath.Join(root, "package.json")
+	data, err := os.ReadFile(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pkg map[string]any
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		t.Fatal(err)
+	}
+	pkg["optionalDependencies"] = map[string]string{"@vgxness/pi-backend-linux-x64": version}
+	data, _ = json.Marshal(pkg)
+	if err := os.WriteFile(metadata, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPackage(root, "linux-x64"); err == nil {
+		t.Fatal("sidecar dependency accepted")
+	}
 }

@@ -8,8 +8,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { loadPiExtensions } from "./pi-fixture.mjs";
 const { loadExtensions } = await loadPiExtensions();
 import { discoverSkillPaths } from "../src/skills/catalog.ts";
-import { startBackend } from "../src/backend/supervisor.ts";
-import type { Hello } from "../src/backend/protocol.ts";
+import { loadNativeRuntime } from "./runtime-fixture.mjs";
+const { createNativeDispatcher } = await loadNativeRuntime();
 
 test("session lifecycle uses private handles and skips read-only persistence", async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), "pi-session-"));
@@ -77,23 +77,13 @@ test("skill discovery prefers compatible shared skills and de-duplicates bundled
   assert.deepEqual(await discoverSkillPaths({ sharedRoot: shared, bundledRoot: bundled, existingNames: ["shared", "fallback"] }), []);
 });
 
-test("temporary Go storage accepts only explicit session handoff content", async (t) => {
+test("temporary native storage accepts only explicit session handoff content", async (t) => {
   const root = join(process.cwd(), "../..");
   const temp = await mkdtemp(join(tmpdir(), "pi-session-go-"));
   t.after(() => rm(temp, { recursive: true, force: true }));
   const binary = join(temp, "backend"), workspace = join(temp, "workspace"), storageRoot = join(temp, "storage");
   await mkdir(workspace); await mkdir(storageRoot);
-  const build = spawnSync("go", ["build", "-o", binary, "./cmd/vgxness-pi-backend"], { cwd: root, env: { ...process.env, GOPROXY: "off", GOSUMDB: "off" } });
-  assert.equal(build.status, 0, build.stderr.toString());
-  const probe = spawn(binary, ["--protocol", "vgxness-pi/v1", "--workspace", workspace, "--mode", "full", "--role", "manager", "--storage-root", storageRoot], { stdio: ["pipe", "pipe", "pipe"] });
-  const hello = await new Promise<any>((resolve, reject) => { let buffer = ""; probe.stdout.on("data", (chunk) => { buffer += chunk; const end = buffer.indexOf("\n"); if (end >= 0) resolve(JSON.parse(buffer.slice(0, end))); }); probe.on("error", reject); });
-  const probeExit = new Promise<void>((resolve) => probe.once("exit", () => resolve()));
-  probe.kill("SIGTERM");
-  await Promise.race([probeExit, new Promise((resolve) => setTimeout(resolve, 100))]);
-  if (probe.exitCode == null && probe.signalCode == null) probe.kill("SIGKILL");
-  await probeExit;
-  hello.implementation.sha256 = createHash("sha256").update(await readFile(binary)).digest("hex");
-  const client = await startBackend({ binary, workspace, storageRoot, mode: "full", role: "manager", hello: hello as Hello });
+  const client = await createNativeDispatcher({ workspace, storageRoot, mode: "full", role: "manager" });
   t.after(() => client.close());
   const binding = { workspace, mode: "full" as const, role: "manager" };
   await client.request("memory.project.initialize", {}, binding, "initialize");
@@ -126,9 +116,9 @@ test("extension rejects stale, tampered, or incomplete SDD task input references
   const taskContent = "{}", task = { artifactId: "tasks", revisionId: "task", digest: digest(taskContent) };
   const specContent = "spec", designContent = "design";
   const spec = { artifactId: "spec", revisionId: "spec", digest: digest(specContent) }, design = { artifactId: "design", revisionId: "design", digest: digest(designContent) };
-  const revisions: any = { task: { ...task, id: "task", changeId: "change", content: Buffer.from(taskContent).toString("base64"), status: "accepted", artifactStatus: "accepted", inputs: [spec, design] }, spec: { ...spec, id: "spec", changeId: "change", content: Buffer.from(specContent).toString("base64"), status: "accepted", artifactStatus: "accepted" }, design: { ...design, id: "design", changeId: "change", content: Buffer.from(designContent).toString("base64"), status: "accepted", artifactStatus: "accepted" } };
+  const revisions: any = { task: { ...task, artifact: "tasks", id: "task", changeId: "change", content: Buffer.from(taskContent).toString("base64"), status: "accepted", artifactStatus: "accepted", inputs: [spec, design] }, spec: { ...spec, artifact: "spec", id: "spec", changeId: "change", content: Buffer.from(specContent).toString("base64"), status: "accepted", artifactStatus: "accepted" }, design: { ...design, artifact: "design", id: "design", changeId: "change", content: Buffer.from(designContent).toString("base64"), status: "accepted", artifactStatus: "accepted" } };
   await writeFile(wrapper, `import { createPiExtension } from ${JSON.stringify(source)}; export default createPiExtension(globalThis.__sddOptions);`);
-  (globalThis as any).__sddOptions = { workspace, mode: "full", role: "manager", workerCli: process.execPath, backend: async () => ({ request: async (operation: string, payload: any) => operation === "sdd.get_revision" ? revisions[payload.revisionId] : { phase: "apply", status: "active", stateVersion: 7 } }) };
+  (globalThis as any).__sddOptions = { workspace, mode: "full", role: "manager", workerCli: process.execPath, backend: async () => ({ verifyCurrentAcceptedBinding: async () => true, request: async (operation: string, payload: any) => operation === "sdd.get_revision" ? revisions[payload.revisionId] : { phase: "apply", status: "active", stateVersion: 7 } }) };
   const loaded = await loadExtensions([wrapper], workspace); assert.deepEqual(loaded.errors, []);
   const tool: any = [...loaded.extensions[0].tools.values()].map((item: any) => item.definition).find((item: any) => item.name === "task");
   const base = { goal: "apply", nonce: crypto.randomUUID(), role: "sdd-apply", mode: "full", model: "provider/model", effort: "low", criteria: ["apply"], commands: [], resultLimit: 100, targets: {}, acceptedBindings: { changeId: "change", ...task, stateVersion: 7, inputs: [spec] } };
@@ -162,4 +152,31 @@ test("native role mapping preserves CARE roles and rejects manager", async () =>
   assert.equal(nativeWorkerRole("care-specialist"), "care-specialist");
   assert.equal(nativeWorkerRole("sdd-apply"), "sdd-apply");
   assert.throws(() => nativeWorkerRole("manager"));
+});
+
+test("OpenSpec apply bindings verify exact tasks and input file bytes without following symlinks", async t => {
+ const workspace = await mkdtemp(join(tmpdir(), "pi-external-binding-")); t.after(() => rm(workspace, { recursive: true, force: true }));
+ const directory = join(workspace, "openspec", "changes", "change"); await mkdir(directory, { recursive: true });
+ const tasks = Buffer.from("accepted tasks"), design = Buffer.from("accepted design"), digest = (value: Buffer) => createHash("sha256").update(value).digest("hex");
+ await writeFile(join(directory, "tasks.md"), tasks); await writeFile(join(directory, "design.md"), design);
+ const input = { artifactId: "design-artifact", revisionId: "design-revision", digest: digest(design) };
+ const task = { artifactId: "tasks-artifact", revisionId: "tasks-revision", digest: digest(tasks) };
+ const revisions: any = {
+  "tasks-revision": { id: task.revisionId, artifactId: task.artifactId, artifact: "tasks", changeId: "change", digest: task.digest, externalLocation: "openspec/changes/change/tasks.md", status: "accepted", artifactStatus: "accepted", inputs: [input] },
+  "design-revision": { id: input.revisionId, artifactId: input.artifactId, artifact: "design", changeId: "change", digest: input.digest, externalLocation: "openspec/changes/change/design.md", status: "accepted", artifactStatus: "accepted" },
+ };
+ const wrapper = join(workspace, "extension.ts");
+ await writeFile(wrapper, `import { createPiExtension } from ${JSON.stringify(join(process.cwd(), "src/extension.ts"))}; export default createPiExtension(globalThis.__externalBindingOptions);`);
+ (globalThis as any).__externalBindingOptions = { workspace, workerCli: process.execPath, backend: async () => ({ verifyCurrentAcceptedBinding: async () => true, request: async (operation: string, payload: any) => operation === "sdd.get_revision" ? revisions[payload.revisionId] : { phase: "apply", status: "active", stateVersion: 7 } }) };
+ t.after(() => { delete (globalThis as any).__externalBindingOptions; });
+ const loaded = await loadExtensions([wrapper], workspace); assert.deepEqual(loaded.errors, []);
+ const tool: any = [...loaded.extensions[0].tools.values()].map((item: any) => item.definition).find((item: any) => item.name === "task");
+ const value = { goal: "apply", nonce: crypto.randomUUID(), role: "sdd-apply", mode: "full", model: "provider/model", effort: "low", criteria: ["apply"], commands: [], resultLimit: 100, targets: {}, acceptedBindings: { changeId: "change", ...task, stateVersion: 7, inputs: [input] } };
+ // This reaches model validation only after accepted file bindings pass; it never calls a model.
+ await assert.rejects(tool.execute("valid", value), /model or effort unsupported/);
+ revisions["tasks-revision"].artifact = "design"; await assert.rejects(tool.execute("wrong-kind", value), /accepted binding rejected/); revisions["tasks-revision"].artifact = "tasks";
+ await writeFile(join(directory, "tasks.md"), "drift"); await assert.rejects(tool.execute("drift", value), /accepted binding rejected/); await writeFile(join(directory, "tasks.md"), tasks);
+ revisions["tasks-revision"].externalLocation = "../tasks.md"; await assert.rejects(tool.execute("escape", value), /accepted binding rejected/); revisions["tasks-revision"].externalLocation = "openspec/changes/change/tasks.md";
+ await rm(join(directory, "design.md")); await writeFile(join(workspace, "external.md"), design); await symlink(join(workspace, "external.md"), join(directory, "design.md"));
+ await assert.rejects(tool.execute("symlink", value), /accepted binding rejected/);
 });

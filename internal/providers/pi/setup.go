@@ -1,7 +1,6 @@
 package pi
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -44,7 +42,7 @@ func (p provider) Plan(ctx context.Context, _ setupflow.SharedPlan) (setupflow.P
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: err.Error()}, nil
 	}
-	return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Changed: !installed, Installed: installed, State: piState(installed), ArtifactSHA256: source, ArtifactCount: 2}, nil
+	return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Changed: !installed, Installed: installed, State: piState(installed), ArtifactSHA256: source, ArtifactCount: 1}, nil
 }
 
 func (p provider) Status(ctx context.Context, shared setupflow.SharedPlan) (setupflow.ProviderPlan, error) {
@@ -63,7 +61,7 @@ func (p provider) Status(ctx context.Context, shared setupflow.SharedPlan) (setu
 	plan.Handshake = probe(ctx, p.options, filepath.Join(p.options.InstallRoot, "packages", "pi-"+version+"-"+plan.ArtifactSHA256[:16], "package"))
 	plan.Ready = plan.Handshake.OK
 	if !plan.Ready {
-		plan.Blocker = "Pi backend handshake is unavailable"
+		plan.Blocker = "Pi TypeScript runtime health is unavailable"
 	}
 	return plan, nil
 }
@@ -142,6 +140,9 @@ func installedStatus(ctx context.Context, options Options) (setupflow.ProviderPl
 	if err := verifyManaged(path, ""); err != nil {
 		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: err.Error()}, nil
 	}
+	if legacyPackage(path) {
+		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Installed: true, State: integration.StateInstalled, Blocker: "Legacy Go Pi package needs update to the portable TypeScript package"}, nil
+	}
 	data, err = os.ReadFile(filepath.Join(path, ".vgxness-pi.json"))
 	if err != nil {
 		return setupflow.ProviderPlan{}, err
@@ -150,14 +151,14 @@ func installedStatus(ctx context.Context, options Options) (setupflow.ProviderPl
 	if json.Unmarshal(data, &manifest) != nil || !validHex(manifest.SourceSHA) {
 		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: "invalid Pi managed manifest"}, nil
 	}
-	plan := setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Installed: true, State: integration.StateInstalled, ArtifactSHA256: manifest.SourceSHA, ArtifactCount: 2}
+	plan := setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Installed: true, State: integration.StateInstalled, ArtifactSHA256: manifest.SourceSHA, ArtifactCount: 1}
 	if pending := retainedStatus(options, path); pending.Blocker != "" {
 		return pending, nil
 	}
 	plan.Handshake = probe(ctx, options, path)
 	plan.Ready = plan.Handshake.OK
 	if !plan.Ready {
-		plan.Blocker = "Pi backend handshake is unavailable"
+		plan.Blocker = "Pi TypeScript runtime health is unavailable"
 	}
 	return plan, nil
 }
@@ -210,84 +211,33 @@ func retainedStatus(options Options, activePath string) setupflow.ProviderPlan {
 	return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, State: integration.StatePartial, Blocker: "Pi recovery " + found[0]}
 }
 
-// probe performs only the native protocol hello exchange in a fresh temporary
-// workspace. It neither loads the extension nor touches a user's Pi storage.
+// probe runs the package's isolated Node health check, never user storage.
 func probe(ctx context.Context, options Options, packagePath string) integration.Handshake {
 	limited, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	platform, arch := runtime.GOOS, runtime.GOARCH
-	if platform == "windows" {
-		platform = "win32"
-	}
-	if arch == "amd64" {
-		arch = "x64"
-	}
-	root := filepath.Join(packagePath, "node_modules", "@vgxness", "pi-backend-"+platform+"-"+arch)
-	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
+	node, err := exec.LookPath("node")
 	if err != nil {
 		return integration.Handshake{Status: integration.HandshakeUnavailable}
-	}
-	var manifest struct {
-		Binary string `json:"binary"`
-	}
-	if strictJSON(data, &manifest) != nil || manifest.Binary == "" {
-		return integration.Handshake{Status: integration.HandshakeIncompatible}
-	}
-	binary := filepath.Join(root, manifest.Binary)
-	if !within(root, binary) {
-		return integration.Handshake{Status: integration.HandshakeIncompatible}
 	}
 	workspace, err := os.MkdirTemp("", "vgxness-pi-probe-")
 	if err != nil {
 		return integration.Handshake{Status: integration.HandshakeUnavailable}
 	}
 	defer os.RemoveAll(workspace)
-	storage := filepath.Join(workspace, "storage")
-	command := exec.CommandContext(limited, binary, "--protocol", "vgxness-pi/v1", "--workspace", workspace, "--storage-root", storage, "--mode", "read-only", "--role", "manager")
+	command := exec.CommandContext(limited, node, filepath.Join(packagePath, "src", "probe.ts"))
 	command.Dir = workspace
-	command.Env = []string{"HOME=" + workspace, "PATH=" + os.Getenv("PATH"), "PI_CODING_AGENT_DIR=" + workspace, "PI_CODING_AGENT_SESSION_DIR=" + filepath.Join(workspace, "session")}
-	in, err := command.StdinPipe()
-	if err != nil {
-		return integration.Handshake{Status: integration.HandshakeUnavailable}
-	}
-	out, err := command.StdoutPipe()
-	if err != nil {
-		return integration.Handshake{Status: integration.HandshakeUnavailable}
-	}
-	if command.Start() != nil {
-		return integration.Handshake{Status: integration.HandshakeUnavailable}
-	}
-	reaped := false
-	reap := func() {
-		if reaped {
-			return
-		}
-		if command.ProcessState == nil {
-			_ = command.Process.Kill()
-		}
-		_ = command.Wait()
-		reaped = true
-	}
-	defer reap()
-	scanner := bufio.NewScanner(out)
-	if !scanner.Scan() {
-		return integration.Handshake{Status: integration.HandshakeUnavailable}
-	}
-	line := scanner.Bytes()
-	var hello map[string]any
-	if json.Unmarshal(line, &hello) != nil || hello["type"] != "hello" || hello["protocol"] != "vgxness-pi/v1" {
-		return integration.Handshake{Status: integration.HandshakeIncompatible}
-	}
-	if _, err := in.Write(append(append([]byte{}, line...), '\n')); err != nil {
-		return integration.Handshake{Status: integration.HandshakeUnavailable}
-	}
-	if err := in.Close(); err != nil {
-		return integration.Handshake{Status: integration.HandshakeUnavailable}
-	}
-	err = command.Wait()
-	reaped = true
+	command.Env = []string{"HOME=" + workspace, "PATH=" + filepath.Dir(node), "TMPDIR=" + workspace, "TMP=" + workspace, "TEMP=" + workspace, "SystemRoot=" + os.Getenv("SystemRoot"), "PI_CODING_AGENT_DIR=" + workspace}
+	output, err := command.Output()
 	if err != nil || limited.Err() != nil {
 		return integration.Handshake{Status: integration.HandshakeUnavailable}
+	}
+	var health struct {
+		Type, Runtime                     string
+		SchemaVersion                     int
+		ForeignKeys, FTS5, BigInt, Backup bool
+	}
+	if strictJSON(output, &health) != nil || health.Type != "health" || health.Runtime != "typescript" || health.SchemaVersion != 23 || !health.ForeignKeys || !health.FTS5 || !health.BigInt || !health.Backup {
+		return integration.Handshake{Status: integration.HandshakeIncompatible}
 	}
 	return integration.Handshake{OK: true, Status: integration.HandshakeHealthy}
 }
@@ -325,4 +275,23 @@ func piState(installed bool) integration.State {
 		return integration.StateInstalled
 	}
 	return integration.StateAbsent
+}
+
+func legacyPackage(path string) bool {
+	data, err := os.ReadFile(filepath.Join(path, "package.json"))
+	if err != nil {
+		return false
+	}
+	var metadata struct {
+		Optional map[string]string `json:"optionalDependencies"`
+	}
+	if json.Unmarshal(data, &metadata) != nil {
+		return false
+	}
+	for name := range metadata.Optional {
+		if strings.HasPrefix(name, "@vgxness/pi-backend-") {
+			return true
+		}
+	}
+	return false
 }
