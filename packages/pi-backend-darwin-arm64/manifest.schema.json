@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["name","version","binary","sha256"],"properties":{"name":{"type":"string"},"version":{"type":"string"},"binary":{"type":"string"},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}}

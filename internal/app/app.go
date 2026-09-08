@@ -20,6 +20,7 @@ import (
 	"github.com/vgxness/vgxness/internal/opencodebackup"
 	"github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
+	"github.com/vgxness/vgxness/internal/providers/pi"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
@@ -41,6 +42,14 @@ type appRuntimes struct {
 	opencode   integration.Runtime
 	codex      integration.Runtime
 	dispatcher *hooks.Dispatcher
+}
+
+// productSetup exposes the provider-owned Pi adapter while preserving the
+// established setup service interfaces used by the CLI and TUI.
+type productSetup struct{ *setupflow.Service }
+
+func (productSetup) PiProvider(options pi.Options) setupflow.ProviderRuntime {
+	return pi.NewProvider(options)
 }
 
 type tuiHookRegistry interface {
@@ -92,7 +101,7 @@ func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, 
 	}
 	codexIntegrationRuntime = integration.Observe(codexIntegrationRuntime, dispatcher)
 	cliMemory := appruntime.NewMemoryWithHooks("cli", false, dispatcher)
-	setupRuntime := setupflow.NewWithRecovery(
+	setupRuntime := productSetup{setupflow.NewWithRecovery(
 		installer,
 		integrationRuntime,
 		func(executable string) (integration.ManagedRuntime, error) {
@@ -110,7 +119,7 @@ func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, 
 			return opencodebackup.New(options)
 		},
 		opencode.NewProber(""),
-	)
+	)}
 	workspace := mustWorkspace()
 	if len(args) == 1 && args[0] == "tui" {
 		if launchTUI == nil {
@@ -219,6 +228,23 @@ func (backend tuiBackend) multiSetup(request tui.MultiSetupRequest) (*setupflow.
 				}
 				return integration.Observe(runtime, backend.hooks), nil
 			}))
+			continue
+		}
+		if provider == setupflow.ProviderPi {
+			releaseDir := os.Getenv("VGXNESS_PI_RELEASE_DIR")
+			agentDir := os.Getenv("PI_CODING_AGENT_DIR")
+			if agentDir == "" {
+				home, homeErr := os.UserHomeDir()
+				if homeErr != nil {
+					return nil, setupflow.MultiOptions{}, homeErr
+				}
+				agentDir = filepath.Join(home, ".pi", "agent")
+			}
+			root := os.Getenv("VGXNESS_PI_MANAGED_ROOT")
+			if root == "" {
+				root = filepath.Join(agentDir, "vgxness-managed")
+			}
+			runtimes = append(runtimes, pi.NewProvider(pi.Options{ReleaseDir: releaseDir, AgentDir: agentDir, InstallRoot: root}))
 			continue
 		}
 		codexOptions, err := codexSetupOptions(options.Integration)

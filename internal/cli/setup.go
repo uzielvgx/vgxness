@@ -14,6 +14,7 @@ import (
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
+	"github.com/vgxness/vgxness/internal/providers/pi"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
@@ -26,8 +27,12 @@ type multiSetupRuntime interface {
 	OpenCodeProvider(setupflow.Options, setupflow.PreviewIntegrationFactory) setupflow.ProviderRuntime
 }
 
+type piSetupRuntime interface {
+	PiProvider(pi.Options) setupflow.ProviderRuntime
+}
+
 func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime, providers ...integration.Runtime) int {
-	if len(providers) == 1 && len(args) > 0 && (args[0] == "opencode" || args[0] == "codex" || args[0] == "all") {
+	if len(providers) == 1 && len(args) > 0 && (args[0] == "opencode" || args[0] == "codex" || args[0] == "pi" || args[0] == "all") {
 		return runMultiSetup(ctx, args, stdin, stdout, stderr, runtime, providers[0])
 	}
 	return runOpenCodeSetup(ctx, args, stdin, stdout, stderr, runtime)
@@ -177,12 +182,12 @@ func runOpenCodeSetup(ctx context.Context, args []string, stdin io.Reader, stdou
 
 func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime, codex integration.Runtime) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|all> [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--codex-home PATH] [--model-plan low|medium|high|ultra]")
+		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|pi|all> [--preview|--status] [--yes] [--pi-release-dir PATH] [--pi-agent-dir PATH] [--pi-root PATH]")
 		return 2
 	}
 	providers, ok := setupProviders(args[0])
 	if !ok {
-		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|all> [--preview|--status] [--yes] [--workspace PATH] [--bin-dir PATH] [--data-dir PATH] [--config-dir PATH] [--codex-home PATH] [--model-plan low|medium|high|ultra]")
+		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|pi|all> [--preview|--status] [--yes] [--pi-release-dir PATH] [--pi-agent-dir PATH] [--pi-root PATH]")
 		return 2
 	}
 	flags := flag.NewFlagSet("setup "+args[0], flag.ContinueOnError)
@@ -190,6 +195,7 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	var preview, status, yes bool
 	var workspace string
 	var codexHome string
+	var piRelease, piAgent, piRoot string
 	var deprecatedModel string
 	var options setupflow.Options
 	flags.BoolVar(&preview, "preview", false, "explain the complete plan without writing")
@@ -208,6 +214,9 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	flags.StringVar(&options.SelfInstall.DataDir, "data-dir", "", "version data directory")
 	flags.StringVar(&options.Integration.ConfigDir, "config-dir", "", "OpenCode configuration directory")
 	flags.StringVar(&codexHome, "codex-home", "", "Codex home directory")
+	flags.StringVar(&piRelease, "pi-release-dir", "", "local Pi release directory")
+	flags.StringVar(&piAgent, "pi-agent-dir", "", "Pi agent settings directory")
+	flags.StringVar(&piRoot, "pi-root", "", "VGXNESS-managed Pi package root")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || preview && status || yes && (preview || status) {
 		fmt.Fprintln(stderr, "invalid setup arguments")
 		return 2
@@ -222,6 +231,14 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	}
 	if !includesCodex(providers) && codexHome != "" {
 		fmt.Fprintln(stderr, "invalid: --codex-home applies only to Codex")
+		return 2
+	}
+	if !includesPi(providers) && (piRelease != "" || piAgent != "" || piRoot != "") {
+		fmt.Fprintln(stderr, "invalid: Pi paths apply only to Pi")
+		return 2
+	}
+	if includesPi(providers) && piRelease == "" && !status {
+		fmt.Fprintln(stderr, "invalid: --pi-release-dir is required for Pi")
 		return 2
 	}
 	if includesOpenCode(providers) && (hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration)) {
@@ -268,6 +285,41 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 			runtimes = append(runtimes, composite.OpenCodeProvider(options, func(path string) (integration.Runtime, error) {
 				return opencode.NewPreviewIntegration(path)
 			}))
+			continue
+		}
+		if provider == setupflow.ProviderPi {
+			factory, ok := runtime.(piSetupRuntime)
+			if !ok {
+				fmt.Fprintln(stderr, "operational: Pi setup runtime is unavailable")
+				return 1
+			}
+			if piAgent == "" {
+				piAgent = os.Getenv("PI_CODING_AGENT_DIR")
+				if piAgent == "" {
+					home, homeErr := os.UserHomeDir()
+					if homeErr != nil {
+						fmt.Fprintln(stderr, "operational: resolve Pi agent directory")
+						return 1
+					}
+					piAgent = filepath.Join(home, ".pi", "agent")
+				}
+			}
+			if piRoot == "" {
+				piRoot = filepath.Join(piAgent, "vgxness-managed")
+			}
+			paths := []*string{&piAgent, &piRoot}
+			if piRelease != "" {
+				paths = append(paths, &piRelease)
+			}
+			for _, path := range paths {
+				absolute, pathErr := filepath.Abs(*path)
+				if pathErr != nil {
+					fmt.Fprintln(stderr, "invalid: Pi path is invalid")
+					return 2
+				}
+				*path = filepath.Clean(absolute)
+			}
+			runtimes = append(runtimes, factory.PiProvider(pi.Options{ReleaseDir: piRelease, AgentDir: piAgent, InstallRoot: piRoot}))
 			continue
 		}
 		codexOptions, err := codexSetupOptions(options.Integration, codexHome)
@@ -357,6 +409,8 @@ func setupProviders(value string) ([]setupflow.Provider, bool) {
 		return []setupflow.Provider{setupflow.ProviderOpenCode}, true
 	case "codex":
 		return []setupflow.Provider{setupflow.ProviderCodex}, true
+	case "pi":
+		return []setupflow.Provider{setupflow.ProviderPi}, true
 	case "all":
 		return []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex}, true
 	default:
@@ -376,6 +430,15 @@ func includesOpenCode(providers []setupflow.Provider) bool {
 func includesCodex(providers []setupflow.Provider) bool {
 	for _, provider := range providers {
 		if provider == setupflow.ProviderCodex {
+			return true
+		}
+	}
+	return false
+}
+
+func includesPi(providers []setupflow.Provider) bool {
+	for _, provider := range providers {
+		if provider == setupflow.ProviderPi {
 			return true
 		}
 	}

@@ -1,0 +1,1 @@
+{"name":"vgxness-workspace","private":true,"workspaces":["packages/*"],"scripts":{"test":"npm --prefix packages/pi run test","build":"npm --prefix packages/pi run build","pack:check":"npm --prefix packages/pi run pack:check"}}
