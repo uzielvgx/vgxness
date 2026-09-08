@@ -46,8 +46,26 @@ func (w *failAfterWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func testWorkspace(t *testing.T) string {
+	t.Helper()
+	workspace, _, err := CanonicalWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return workspace
+}
+
+func testRecord(t *testing.T, request Request) []byte {
+	t.Helper()
+	record, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(record, '\n')
+}
+
 func TestServerHandshakeBindsAndDispatchesOnce(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	called := 0
 	started := make(chan struct{})
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(_ context.Context, request Request) (any, error) {
@@ -63,16 +81,23 @@ func TestServerHandshakeBindsAndDispatchesOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader, writer := io.Pipe()
+	defer writer.Close()
 	var output lockedBuffer
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(context.Background(), reader, &output) }()
-	_, _ = writer.Write(append(hello, '\n'))
-	request, err := json.Marshal(Request{Type: "request", ID: "one", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})
-	if err != nil {
+	if _, err := writer.Write(append(hello, '\n')); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = writer.Write(append(request, '\n'))
-	<-started
+	if _, err := writer.Write(testRecord(t, Request{Type: "request", ID: "one", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("server returned before dispatch: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("request did not dispatch")
+	}
 	_ = writer.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -83,7 +108,7 @@ func TestServerHandshakeBindsAndDispatchesOnce(t *testing.T) {
 }
 
 func TestServerRejectsHandshakeBeforeDispatch(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	called := 0
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(context.Context, Request) (any, error) { called++; return nil, nil })
 	if err != nil {
@@ -103,15 +128,15 @@ func TestServerRejectsHandshakeBeforeDispatch(t *testing.T) {
 func TestServerMalformedRecordClosesBeforeLaterDispatch(t *testing.T) {
 	for _, malformed := range []string{`{`, `{"type":"request","id":"x","id":"y"}`, `{"type":"unknown","id":"x"}`} {
 		t.Run(malformed, func(t *testing.T) {
-			workspace := t.TempDir()
+			workspace := testWorkspace(t)
 			called := 0
 			server, err := NewServer(Binding{Workspace: workspace, Mode: Full, Role: "manager"}, 8, func(context.Context, Request) (any, error) { called++; return nil, nil })
 			if err != nil {
 				t.Fatal(err)
 			}
 			hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: Full, Role: "manager"}))
-			valid := `{"type":"request","id":"later","operation":"memory.project.initialize","workspace":"` + workspace + `","mode":"full","role":"manager","payload":{}}` + "\n"
-			input := bytes.NewBuffer(append(append(append(hello, '\n'), []byte(malformed+"\n")...), []byte(valid)...))
+			valid := testRecord(t, Request{Type: "request", ID: "later", Operation: "memory.project.initialize", Workspace: workspace, Mode: Full, Role: "manager", Payload: json.RawMessage(`{}`)})
+			input := bytes.NewBuffer(append(append(append(hello, '\n'), []byte(malformed+"\n")...), valid...))
 			if err := server.Serve(context.Background(), input, io.Discard); err == nil || called != 0 {
 				t.Fatalf("err=%v called=%d", err, called)
 			}
@@ -120,7 +145,7 @@ func TestServerMalformedRecordClosesBeforeLaterDispatch(t *testing.T) {
 }
 
 func TestServerMutationBurstFIFO(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	var mu sync.Mutex
 	order := []string{}
 	started := make(chan struct{})
@@ -146,7 +171,7 @@ func TestServerMutationBurstFIFO(t *testing.T) {
 	_, _ = writer.Write(append(hello, '\n'))
 	for i := 0; i < 8; i++ {
 		id := fmt.Sprintf("m%d", i)
-		_, _ = writer.Write([]byte(`{"type":"request","id":"` + id + `","operation":"memory.project.initialize","workspace":"` + workspace + `","mode":"full","role":"manager","payload":{}}` + "\n"))
+		_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: id, Operation: "memory.project.initialize", Workspace: workspace, Mode: Full, Role: "manager", Payload: json.RawMessage(`{}`)}))
 		if i == 0 {
 			<-started
 		}
@@ -188,7 +213,7 @@ func TestServerMutationDomainErrors(t *testing.T) {
 		{"conflict", "conflict", sdd.ErrConflict, true}, {"stale", "conflict", sdd.ErrStaleState, true}, {"invalid", "invalid_request", sdd.ErrInvalid, true}, {"digest", "unavailable", sdd.ErrDigestMismatch, true}, {"inputs", "unavailable", sdd.ErrInputsChanged, true}, {"unknown", "recovery_pending", errors.New("unknown"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			workspace := t.TempDir()
+			workspace := testWorkspace(t)
 			server, err := NewServer(Binding{Workspace: workspace, Mode: Full, Role: "manager"}, 8, func(context.Context, Request) (any, error) { return nil, tc.err })
 			if err != nil {
 				t.Fatal(err)
@@ -199,7 +224,7 @@ func TestServerMutationDomainErrors(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- server.Serve(context.Background(), reader, &out) }()
 			_, _ = writer.Write(append(hello, '\n'))
-			_, _ = writer.Write([]byte(`{"type":"request","id":"x","operation":"memory.project.initialize","workspace":"` + workspace + `","mode":"full","role":"manager","payload":{}}` + "\n"))
+			_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: "x", Operation: "memory.project.initialize", Workspace: workspace, Mode: Full, Role: "manager", Payload: json.RawMessage(`{}`)}))
 			deadline := time.Now().Add(time.Second)
 			for !bytes.Contains(out.Bytes(), []byte(`"id":"x"`)) && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
@@ -216,7 +241,7 @@ func TestServerMutationDomainErrors(t *testing.T) {
 }
 
 func TestServerCoalescesIdenticalActiveAndCompletedRequests(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	started, release, completed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	calls := 0
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(context.Context, Request) (any, error) {
@@ -235,7 +260,7 @@ func TestServerCoalescesIdenticalActiveAndCompletedRequests(t *testing.T) {
 	go func() { done <- server.Serve(context.Background(), reader, &output) }()
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
 	_, _ = writer.Write(append(hello, '\n'))
-	record := []byte(`{"type":"request","id":"same","operation":"memory.recall","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{"key":"value"}}` + "\n")
+	record := testRecord(t, Request{Type: "request", ID: "same", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{"key":"value"}`)})
 	_, _ = writer.Write(record)
 	<-started
 	_, _ = writer.Write(record)
@@ -255,7 +280,7 @@ func TestServerCoalescesIdenticalActiveAndCompletedRequests(t *testing.T) {
 }
 
 func TestServerRetriesCapacityRejectedIDAfterActiveWorkCompletes(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	started := make(chan string, 33)
 	release := make(chan struct{})
 	var calls atomic.Int32
@@ -275,7 +300,7 @@ func TestServerRetriesCapacityRejectedIDAfterActiveWorkCompletes(t *testing.T) {
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
 	_, _ = writer.Write(append(hello, '\n'))
 	for i := 0; i < 32; i++ {
-		_, _ = writer.Write([]byte(fmt.Sprintf(`{"type":"request","id":"active-%d","operation":"memory.recall","workspace":%q,"mode":"read-only","role":"general","payload":{}}`, i, workspace) + "\n"))
+		_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: fmt.Sprintf("active-%d", i), Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)}))
 	}
 	for i := 0; i < 32; i++ {
 		select {
@@ -284,7 +309,7 @@ func TestServerRetriesCapacityRejectedIDAfterActiveWorkCompletes(t *testing.T) {
 			t.Fatal("active capacity was not reached")
 		}
 	}
-	retry := []byte(fmt.Sprintf(`{"type":"request","id":"retry","operation":"memory.recall","workspace":%q,"mode":"read-only","role":"general","payload":{}}`, workspace) + "\n")
+	retry := testRecord(t, Request{Type: "request", ID: "retry", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})
 	_, _ = writer.Write(retry)
 	limitDeadline := time.After(time.Second)
 	for !bytes.Contains(output.Bytes(), []byte(`"code":"limit_exceeded"`)) {
@@ -315,7 +340,7 @@ func TestServerRetriesCapacityRejectedIDAfterActiveWorkCompletes(t *testing.T) {
 }
 
 func TestServerClosesOnMismatchedRequestIDReuse(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	started, cancelled := make(chan struct{}), make(chan struct{})
 	calls := 0
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(ctx context.Context, _ Request) (any, error) {
@@ -333,9 +358,9 @@ func TestServerClosesOnMismatchedRequestIDReuse(t *testing.T) {
 	go func() { done <- server.Serve(context.Background(), reader, io.Discard) }()
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
 	_, _ = writer.Write(append(hello, '\n'))
-	_, _ = writer.Write([]byte(`{"type":"request","id":"reuse","operation":"memory.recall","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n"))
+	_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: "reuse", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)}))
 	<-started
-	_, _ = writer.Write([]byte(`{"type":"request","id":"reuse","operation":"memory.get","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n"))
+	_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: "reuse", Operation: "memory.get", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)}))
 	if err := <-done; err == nil {
 		t.Fatal("mismatched request ID reuse accepted")
 	}
@@ -350,7 +375,7 @@ func TestServerClosesOnMismatchedRequestIDReuse(t *testing.T) {
 }
 
 func TestServerOutputFailureCancelsAndReapsActiveWork(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	started, cancelled := make(chan struct{}), make(chan struct{})
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(ctx context.Context, _ Request) (any, error) {
 		close(started)
@@ -366,7 +391,7 @@ func TestServerOutputFailureCancelsAndReapsActiveWork(t *testing.T) {
 	go func() { done <- server.Serve(context.Background(), reader, &failAfterWriter{}) }()
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
 	_, _ = writer.Write(append(hello, '\n'))
-	_, _ = writer.Write([]byte(`{"type":"request","id":"active","operation":"memory.recall","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n"))
+	_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: "active", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)}))
 	<-started
 	_ = writer.Close()
 	if err := <-done; err == nil {
@@ -380,7 +405,7 @@ func TestServerOutputFailureCancelsAndReapsActiveWork(t *testing.T) {
 }
 
 func TestServerCancelsActiveRequestAndCachesTerminalReplay(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(ctx context.Context, _ Request) (any, error) { <-ctx.Done(); return nil, ctx.Err() })
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +419,7 @@ func TestServerCancelsActiveRequestAndCachesTerminalReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _ = writer.Write(append(hello, '\n'))
-	request := []byte(`{"type":"request","id":"cancel-me","operation":"memory.recall","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n")
+	request := testRecord(t, Request{Type: "request", ID: "cancel-me", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})
 	_, _ = writer.Write(request)
 	_, _ = writer.Write([]byte(`{"type":"cancel","id":"cancel-me"}` + "\n"))
 	_, _ = writer.Write(request)
@@ -408,7 +433,7 @@ func TestServerCancelsActiveRequestAndCachesTerminalReplay(t *testing.T) {
 }
 
 func TestServerEOFCancelsActiveRequestBeforeWaiting(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	started := make(chan struct{})
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(ctx context.Context, _ Request) (any, error) {
 		close(started)
@@ -423,7 +448,7 @@ func TestServerEOFCancelsActiveRequestBeforeWaiting(t *testing.T) {
 	go func() { done <- server.Serve(context.Background(), reader, io.Discard) }()
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
 	_, _ = writer.Write(append(hello, '\n'))
-	_, _ = writer.Write([]byte(`{"type":"request","id":"active","operation":"memory.recall","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n"))
+	_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: "active", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)}))
 	select {
 	case <-started:
 	case <-time.After(time.Second):
@@ -441,7 +466,7 @@ func TestServerEOFCancelsActiveRequestBeforeWaiting(t *testing.T) {
 }
 
 func TestServerRevalidatesWorkspaceBeforeDispatch(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	called := 0
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(context.Context, Request) (any, error) { called++; return nil, nil })
 	if err != nil {
@@ -451,7 +476,7 @@ func TestServerRevalidatesWorkspaceBeforeDispatch(t *testing.T) {
 	if err := os.Remove(workspace); err != nil {
 		t.Fatal(err)
 	}
-	input := bytes.NewBuffer(append(append(hello, '\n'), []byte(`{"type":"request","id":"one","operation":"memory.recall","workspace":"`+workspace+`","mode":"read-only","role":"general","payload":{}}`+"\n")...))
+	input := bytes.NewBuffer(append(append(hello, '\n'), testRecord(t, Request{Type: "request", ID: "one", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})...))
 	var output bytes.Buffer
 	if err := server.Serve(context.Background(), input, &output); err != nil {
 		t.Fatal(err)
@@ -462,7 +487,7 @@ func TestServerRevalidatesWorkspaceBeforeDispatch(t *testing.T) {
 }
 
 func TestServerRejectsUnknownCancel(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(context.Context, Request) (any, error) { return nil, nil })
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +503,7 @@ func TestServerRejectsUnknownCancel(t *testing.T) {
 }
 
 func TestServerBoundsOversizedDispatchOutput(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(context.Context, Request) (any, error) {
 		return map[string]string{"value": string(bytes.Repeat([]byte("x"), MaxRecordBytes))}, nil
 	})
@@ -486,7 +511,7 @@ func TestServerBoundsOversizedDispatchOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
-	request := []byte(`{"type":"request","id":"large","operation":"memory.recall","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n")
+	request := testRecord(t, Request{Type: "request", ID: "large", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})
 	var output bytes.Buffer
 	if err := server.Serve(context.Background(), bytes.NewBuffer(append(append(hello, '\n'), request...)), &output); err != nil {
 		t.Fatal(err)
@@ -497,7 +522,7 @@ func TestServerBoundsOversizedDispatchOutput(t *testing.T) {
 }
 
 func TestServerSerializesMutationsAndSkipsCancelledQueuedMutation(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	var calls []string
@@ -525,7 +550,7 @@ func TestServerSerializesMutationsAndSkipsCancelledQueuedMutation(t *testing.T) 
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: Full, Role: "manager"}))
 	_, _ = writer.Write(append(hello, '\n'))
 	for _, id := range []string{"first", "second"} {
-		_, _ = writer.Write([]byte(`{"type":"request","id":"` + id + `","operation":"memory.remember","workspace":"` + workspace + `","mode":"full","role":"manager","payload":{}}` + "\n"))
+		_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: id, Operation: "memory.remember", Workspace: workspace, Mode: Full, Role: "manager", Payload: json.RawMessage(`{}`)}))
 	}
 	<-firstStarted
 	_, _ = writer.Write([]byte(`{"type":"cancel","id":"second"}` + "\n"))
@@ -546,13 +571,13 @@ func TestServerSerializesMutationsAndSkipsCancelledQueuedMutation(t *testing.T) 
 }
 
 func TestServerUsesSpecificAuthorityErrors(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(context.Context, Request) (any, error) { return nil, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
-	request := []byte(`{"type":"request","id":"denied","operation":"memory.remember","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n")
+	request := testRecord(t, Request{Type: "request", ID: "denied", Operation: "memory.remember", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})
 	var output bytes.Buffer
 	if err := server.Serve(context.Background(), bytes.NewBuffer(append(append(hello, '\n'), request...)), &output); err != nil {
 		t.Fatal(err)
@@ -563,7 +588,7 @@ func TestServerUsesSpecificAuthorityErrors(t *testing.T) {
 }
 
 func TestServerSerializesMutationDispatches(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	firstStarted, releaseFirst, secondStarted := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	server, err := NewServer(Binding{Workspace: workspace, Mode: Full, Role: "manager"}, 4, func(_ context.Context, request Request) (any, error) {
 		if request.ID == "first" {
@@ -583,7 +608,7 @@ func TestServerSerializesMutationDispatches(t *testing.T) {
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: Full, Role: "manager"}))
 	_, _ = writer.Write(append(hello, '\n'))
 	for _, id := range []string{"first", "second"} {
-		_, _ = writer.Write([]byte(`{"type":"request","id":"` + id + `","operation":"memory.remember","workspace":"` + workspace + `","mode":"full","role":"manager","payload":{}}` + "\n"))
+		_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: id, Operation: "memory.remember", Workspace: workspace, Mode: Full, Role: "manager", Payload: json.RawMessage(`{}`)}))
 	}
 	<-firstStarted
 	select {
@@ -604,15 +629,15 @@ func TestServerSerializesMutationDispatches(t *testing.T) {
 }
 
 func TestServerMarksMutationFailureRetryUnsafeAndReadFailureSafe(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	server, err := NewServer(Binding{Workspace: workspace, Mode: Full, Role: "manager"}, 4, func(_ context.Context, request Request) (any, error) { return nil, errors.New(request.ID) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: Full, Role: "manager"}))
 	input := append(hello, '\n')
-	input = append(input, []byte(`{"type":"request","id":"write","operation":"memory.remember","workspace":"`+workspace+`","mode":"full","role":"manager","payload":{}}`+"\n")...)
-	input = append(input, []byte(`{"type":"request","id":"read","operation":"memory.recall","workspace":"`+workspace+`","mode":"full","role":"manager","payload":{}}`+"\n")...)
+	input = append(input, testRecord(t, Request{Type: "request", ID: "write", Operation: "memory.remember", Workspace: workspace, Mode: Full, Role: "manager", Payload: json.RawMessage(`{}`)})...)
+	input = append(input, testRecord(t, Request{Type: "request", ID: "read", Operation: "memory.recall", Workspace: workspace, Mode: Full, Role: "manager", Payload: json.RawMessage(`{}`)})...)
 	var output bytes.Buffer
 	if err := server.Serve(context.Background(), bytes.NewBuffer(input), &output); err != nil {
 		t.Fatal(err)
@@ -634,7 +659,7 @@ func TestServerMarksMutationFailureRetryUnsafeAndReadFailureSafe(t *testing.T) {
 }
 
 func TestServerMalformedProtocolCancelsActiveRequest(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testWorkspace(t)
 	started := make(chan struct{})
 	cancelled := make(chan struct{})
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(ctx context.Context, _ Request) (any, error) {
@@ -651,7 +676,7 @@ func TestServerMalformedProtocolCancelsActiveRequest(t *testing.T) {
 	go func() { done <- server.Serve(context.Background(), reader, io.Discard) }()
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
 	_, _ = writer.Write(append(hello, '\n'))
-	_, _ = writer.Write([]byte(`{"type":"request","id":"active","operation":"memory.recall","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n"))
+	_, _ = writer.Write(testRecord(t, Request{Type: "request", ID: "active", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)}))
 	<-started
 	_, _ = writer.Write([]byte("not-json\n"))
 	if err := <-done; err == nil {
