@@ -8,10 +8,52 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestPiSourceIdentityIgnoresCoverageOutputButDetectsSourceDrift(t *testing.T) {
+	repository := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Test"}} {
+		command := exec.Command("git", append([]string{"-C", repository}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	source := filepath.Join(repository, "source.go")
+	if err := os.WriteFile(source, []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "-C", repository, "add", "source.go").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, output)
+	}
+	before, err := piSourceIdentity(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "coverage.out"), []byte("mode: atomic\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	afterCoverage, err := piSourceIdentity(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != afterCoverage {
+		t.Fatal("coverage output changed Pi source identity")
+	}
+	if err := os.WriteFile(filepath.Join(repository, "extra.go"), []byte("package extra\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	afterSource, err := piSourceIdentity(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == afterSource {
+		t.Fatal("tracked source drift did not change Pi source identity")
+	}
+}
 
 func TestPiTarballContainsPackageMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vgxness-pi-0.1.0.tgz")

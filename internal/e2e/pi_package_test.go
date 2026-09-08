@@ -54,7 +54,11 @@ func TestPiExtractedNativePackageJourney(t *testing.T) {
 	if err := os.WriteFile(userData, []byte("preserve me"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(filepath.Join(backendRoot, "bin", "vgxness-pi-backend"), "--protocol", "vgxness-pi/v1", "--workspace", workspace, "--storage-root", extensionStorage, "--mode", "full", "--role", "manager")
+	backend := "vgxness-pi-backend"
+	if runtime.GOOS == "windows" {
+		backend += ".exe"
+	}
+	cmd := exec.Command(filepath.Join(backendRoot, "bin", backend), "--protocol", "vgxness-pi/v1", "--workspace", workspace, "--storage-root", extensionStorage, "--mode", "full", "--role", "manager")
 	cmd.Dir = workspace
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH"), "PI_CODING_AGENT_DIR=" + agent, "PI_CODING_AGENT_SESSION_DIR=" + t.TempDir(), "VGXNESS_PI_STORAGE_ROOT=" + extensionStorage}
 	stdin, err := cmd.StdinPipe()
@@ -80,7 +84,7 @@ func TestPiExtractedNativePackageJourney(t *testing.T) {
 	if _, err := stdin.Write(line); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := stdin.Write(append([]byte(`{"type":"request","id":"fixture","operation":"memory.project.initialize","workspace":"`+workspace+`","mode":"full","role":"manager","payload":{}}`), '\n')); err != nil {
+	if _, err := stdin.Write(piRequestLine(t, "fixture", "memory.project.initialize", workspace, "full", "manager")); err != nil {
 		t.Fatal(err)
 	}
 	result, err := reader.ReadBytes('\n')
@@ -118,6 +122,24 @@ func TestPiExtractedNativePackageJourney(t *testing.T) {
 	if value, err := os.ReadFile(userData); err != nil || string(value) != "preserve me" {
 		t.Fatalf("user data after package removal=%q err=%v", value, err)
 	}
+}
+
+func TestMain(m *testing.M) {
+	if runtime.GOOS == "darwin" {
+		if directory, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+			_ = os.Setenv("TMPDIR", directory)
+		}
+	}
+	os.Exit(m.Run())
+}
+
+func piRequestLine(t *testing.T, id, operation, workspace, mode, role string) []byte {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"type": "request", "id": id, "operation": operation, "workspace": workspace, "mode": mode, "role": role, "payload": map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(data, '\n')
 }
 
 func piSDKLoader() (string, error) {

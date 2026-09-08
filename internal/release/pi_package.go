@@ -62,7 +62,7 @@ func PackagePi(ctx context.Context, repository, output string) (resultErr error)
 	if err := validateOutput(output); err != nil {
 		return err
 	}
-	if rel, err := filepath.Rel(repository, output); err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+	if rel, err := filepath.Rel(repository, output); err == nil && (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
 		return errors.New("output directory must be outside repository")
 	}
 	if err := requireRegular(filepath.Join(repository, "LICENSE")); err != nil {
@@ -788,6 +788,11 @@ func piSourceIdentity(root string) (string, error) {
 	sort.Strings(files)
 	h := sha256.New()
 	for _, rel := range files {
+		// The coverage workflow writes this repository-root report while package
+		// tests may assemble Pi concurrently. It is not package or build input.
+		if rel == "coverage.out" {
+			continue
+		}
 		path := filepath.Join(root, filepath.FromSlash(rel))
 		info, e := os.Lstat(path)
 		if errors.Is(e, os.ErrNotExist) {

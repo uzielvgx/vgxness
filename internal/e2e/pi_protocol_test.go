@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -17,7 +18,11 @@ func TestPiProtocolCLI(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(t.TempDir(), "vgxness-pi-backend")
+	binName := "vgxness-pi-backend"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), binName)
 	build := exec.Command("go", "build", "-o", bin, "./cmd/vgxness-pi-backend")
 	build.Dir = root
 	if output, err := build.CombinedOutput(); err != nil {
@@ -48,7 +53,7 @@ func TestPiProtocolCLI(t *testing.T) {
 	if _, err := in.Write(hello); err != nil {
 		t.Fatal(err)
 	}
-	request := []byte(`{"type":"request","id":"cli","operation":"memory.project.initialize","workspace":"` + workspace + `","mode":"full","role":"manager","payload":{}}` + "\n")
+	request := piRequestLine(t, "cli", "memory.project.initialize", workspace, "full", "manager")
 	if _, err := in.Write(request); err != nil {
 		t.Fatal(err)
 	}

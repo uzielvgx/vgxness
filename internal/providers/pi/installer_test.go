@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,15 @@ import (
 	"github.com/vgxness/vgxness/internal/release"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
+
+func TestMain(m *testing.M) {
+	if runtime.GOOS == "darwin" {
+		if directory, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+			_ = os.Setenv("TMPDIR", directory)
+		}
+	}
+	os.Exit(m.Run())
+}
 
 func TestInstallReleasePreservesForeignSettingsAndIsIdempotent(t *testing.T) {
 	repository := filepath.Join("..", "..", "..")
@@ -40,9 +50,10 @@ func TestInstallReleasePreservesForeignSettingsAndIsIdempotent(t *testing.T) {
 	if err != nil || second.Changed || second.PackagePath != first.PackagePath {
 		t.Fatalf("second=%+v err=%v", second, err)
 	}
-	data, err := os.ReadFile(filepath.Join(options.AgentDir, "settings.json"))
-	if err != nil || !strings.Contains(string(data), `"unknown"`) || !strings.Contains(string(data), "/foreign/package") || !strings.Contains(string(data), "/foreign/object") || strings.Count(string(data), first.PackagePath) != 1 {
-		t.Fatalf("settings=%s err=%v", data, err)
+	settingsValue, err := readSettingsFixture(filepath.Join(options.AgentDir, "settings.json"))
+	paths, pathsErr := settingsPackagePaths(filepath.Join(options.AgentDir, "settings.json"))
+	if err != nil || pathsErr != nil || settingsValue.Unknown["keep"] != true || paths[first.PackagePath] != 1 || paths["/foreign/package"] != 1 || paths["/foreign/object"] != 1 {
+		t.Fatalf("unknown=%v paths=%v err=%v pathsErr=%v", settingsValue.Unknown, paths, err, pathsErr)
 	}
 }
 
@@ -53,10 +64,9 @@ func TestLockSettingsCooperatesWithProperLockfileAndRefusesCompromise(t *testing
 	}
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node unavailable")
+		t.Fatal("node is required for proper-lockfile interoperability: ", err)
 	}
-	const proper = "/home/ubuntu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/proper-lockfile"
-	command := exec.Command(node, "-e", `const l=require(process.argv[1]); l.lockSync(process.argv[2],{realpath:false,stale:10000,update:1000}); console.log("locked"); setTimeout(()=>{},10000)`, proper, settings)
+	command := exec.Command(node, "-e", `const l=require(process.argv[1]); l.lockSync(process.argv[2],{realpath:false,stale:10000,update:1000}); console.log("locked"); setTimeout(()=>{},10000)`, properLockfile(t), settings)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -186,10 +196,9 @@ func TestLockSettingsHeartbeatPreventsProperLockfileSteal(t *testing.T) {
 	time.Sleep(2500 * time.Millisecond)
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node unavailable")
+		t.Fatal("node is required for proper-lockfile interoperability: ", err)
 	}
-	const proper = "/home/ubuntu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/proper-lockfile"
-	command := exec.Command(node, "-e", `const l=require(process.argv[1]);try{l.lockSync(process.argv[2],{realpath:false,stale:2000,update:1000});console.log("stolen")}catch(e){console.log(e.code)}`, proper, settings)
+	command := exec.Command(node, "-e", `const l=require(process.argv[1]);try{l.lockSync(process.argv[2],{realpath:false,stale:2000,update:1000});console.log("stolen")}catch(e){console.log(e.code)}`, properLockfile(t), settings)
 	data, err := command.Output()
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +208,61 @@ func TestLockSettingsHeartbeatPreventsProperLockfileSteal(t *testing.T) {
 	}
 	if err := check(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func properLockfile(t *testing.T) string {
+	t.Helper()
+	path, err := properLockfilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func properLockfilePath() (string, error) {
+	path := os.Getenv("PI_PROPER_LOCKFILE")
+	if path == "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(ctx, "npm", "root", "-g").Output()
+		if err != nil {
+			return "", errors.New("resolve global npm root for proper-lockfile fixture")
+		}
+		path = filepath.Join(strings.TrimSpace(string(output)), "@earendil-works", "pi-coding-agent", "node_modules", "proper-lockfile")
+	}
+	info, err := os.Stat(filepath.Join(path, "index.js"))
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errors.New("proper-lockfile fixture unavailable")
+	}
+	data, err := os.ReadFile(filepath.Join(path, "package.json"))
+	if err != nil {
+		return "", errors.New("read proper-lockfile fixture metadata")
+	}
+	var metadata struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &metadata) != nil || metadata.Name != "proper-lockfile" || metadata.Version != "4.1.2" {
+		return "", errors.New("proper-lockfile fixture must be version 4.1.2")
+	}
+	return path, nil
+}
+
+func TestProperLockfilePathRejectsWrongVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proper-lockfile")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "index.js"), []byte("module.exports={}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "package.json"), []byte(`{"name":"proper-lockfile","version":"4.1.1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_PROPER_LOCKFILE", path)
+	if _, err := properLockfilePath(); err == nil {
+		t.Fatal("wrong proper-lockfile version accepted")
 	}
 }
 
@@ -371,7 +435,11 @@ func TestInstallReplacesOnlyOwnedEntryAndPreservesObjectFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := filepath.Join(options.AgentDir, "settings.json")
-	if err := os.WriteFile(settings, []byte(`{"packages":[{"path":"`+first.PackagePath+`","enabled":true},"/foreign/pi-0.1.0-lookalike"]}`), 0o600); err != nil {
+	fixture, err := json.Marshal(map[string]any{"packages": []any{map[string]any{"path": first.PackagePath, "enabled": true}, "/foreign/pi-0.1.0-lookalike"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, fixture, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	options.ReleaseDir = tinyRelease(t, filepath.Join(root, "release-b"), "b")
@@ -379,9 +447,10 @@ func TestInstallReplacesOnlyOwnedEntryAndPreservesObjectFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(settings)
-	if err != nil || !strings.Contains(string(data), second.PackagePath) || !strings.Contains(string(data), `"enabled": true`) || !strings.Contains(string(data), "/foreign/pi-0.1.0-lookalike") {
-		t.Fatalf("settings=%s err=%v", data, err)
+	settingsValue, err := readSettingsFixture(settings)
+	paths, pathsErr := settingsPackagePaths(settings)
+	if err != nil || pathsErr != nil || !settingsPackageEnabled(settingsValue.Packages, second.PackagePath) || paths[second.PackagePath] != 1 || paths["/foreign/pi-0.1.0-lookalike"] != 1 {
+		t.Fatalf("packages=%s paths=%v err=%v pathsErr=%v", settingsValue.Packages, paths, err, pathsErr)
 	}
 }
 
@@ -421,8 +490,11 @@ func TestInstallRejectsChecksumDriftAndDuplicateOwnedEntries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		settings := `{"packages":["` + first.PackagePath + `","` + first.PackagePath + `"]}`
-		if err := os.WriteFile(filepath.Join(options.AgentDir, "settings.json"), []byte(settings), 0o600); err != nil {
+		settings, err := json.Marshal(map[string]any{"packages": []string{first.PackagePath, first.PackagePath}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(options.AgentDir, "settings.json"), settings, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		options.ReleaseDir = tinyRelease(t, filepath.Join(root, "release-b"), "b")
@@ -430,6 +502,59 @@ func TestInstallRejectsChecksumDriftAndDuplicateOwnedEntries(t *testing.T) {
 			t.Fatal("Install accepted duplicate managed settings entries")
 		}
 	})
+}
+
+func settingsPackagePaths(path string) (map[string]int, error) {
+	settings, err := readSettingsFixture(path)
+	if err != nil {
+		return nil, err
+	}
+	paths := map[string]int{}
+	for _, entry := range settings.Packages {
+		var value string
+		if json.Unmarshal(entry, &value) == nil {
+			paths[value]++
+			continue
+		}
+		var object struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(entry, &object); err != nil || object.Path == "" {
+			return nil, errors.New("invalid package entry")
+		}
+		paths[object.Path]++
+	}
+	return paths, nil
+}
+
+type settingsFixture struct {
+	Unknown  map[string]bool   `json:"unknown"`
+	Packages []json.RawMessage `json:"packages"`
+}
+
+func readSettingsFixture(path string) (settingsFixture, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return settingsFixture{}, err
+	}
+	var settings settingsFixture
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return settingsFixture{}, err
+	}
+	return settings, nil
+}
+
+func settingsPackageEnabled(entries []json.RawMessage, path string) bool {
+	for _, entry := range entries {
+		var object struct {
+			Path    string `json:"path"`
+			Enabled bool   `json:"enabled"`
+		}
+		if json.Unmarshal(entry, &object) == nil && object.Path == path && object.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func tinyRelease(t *testing.T, dir, source string) string {

@@ -67,7 +67,11 @@ func TestServerHandshakeBindsAndDispatchesOnce(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(context.Background(), reader, &output) }()
 	_, _ = writer.Write(append(hello, '\n'))
-	_, _ = writer.Write([]byte(`{"type":"request","id":"one","operation":"memory.recall","workspace":"` + workspace + `","mode":"read-only","role":"general","payload":{}}` + "\n"))
+	request, err := json.Marshal(Request{Type: "request", ID: "one", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = writer.Write(append(request, '\n'))
 	<-started
 	_ = writer.Close()
 	if err := <-done; err != nil {
