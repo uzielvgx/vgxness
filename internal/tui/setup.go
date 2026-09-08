@@ -467,18 +467,20 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		case setupViewProviders:
 			switch msg.String() {
 			case "up", "k":
-				m.setupProviderCursor = (m.setupProviderCursor + 1) % 2
+				m.setupProviderCursor = (m.setupProviderCursor + 2) % 3
 				return true, nil
 			case "down", "j":
-				m.setupProviderCursor = (m.setupProviderCursor + 1) % 2
+				m.setupProviderCursor = (m.setupProviderCursor + 1) % 3
 				return true, nil
 			case "space", " ":
 				m.toggleSetupProvider(setupProviderAt(m.setupProviderCursor))
 				return true, nil
-			case "o", "c":
+			case "o", "c", "p":
 				provider := setupflow.ProviderOpenCode
 				if msg.String() == "c" {
 					provider = setupflow.ProviderCodex
+				} else if msg.String() == "p" {
+					provider = setupflow.ProviderPi
 				}
 				m.toggleSetupProvider(provider)
 				return true, nil
@@ -541,11 +543,13 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return m.enterModelEditor()
 		}
 		return true, nil
-	case "o", "c":
+	case "o", "c", "p":
 		if m.multiSetupEnabled() {
 			provider := setupflow.ProviderOpenCode
 			if msg.String() == "c" {
 				provider = setupflow.ProviderCodex
+			} else if msg.String() == "p" {
+				provider = setupflow.ProviderPi
 			}
 			m.toggleSetupProvider(provider)
 			return true, m.loadSetupPlan()
@@ -597,7 +601,7 @@ func (m *Model) enterModelEditor() (bool, tea.Cmd) {
 
 func (m Model) multiSetupEnabled() bool { _, ok := m.backend.(MultiSetupBackend); return ok }
 func setupProviderAt(index int) setupflow.Provider {
-	return [...]setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex}[index%2]
+	return [...]setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi}[index%3]
 }
 
 func (m Model) hasSetupProvider(provider setupflow.Provider) bool {
@@ -1293,8 +1297,8 @@ func (m Model) multiSetupHomeLines() []string {
 }
 
 func (m Model) multiSetupProviderLines() []string {
-	lines := []string{studioAccent.Render("INSTALL · 1 OF 3 · PROVIDERS"), studioMuted.Render("Choose one or both local integrations."), "", "┌ PROVIDERS ───────────────────────────────────────────────────────────────"}
-	for index, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex} {
+	lines := []string{studioAccent.Render("INSTALL · 1 OF 3 · PROVIDERS"), studioMuted.Render("Choose one or more local integrations."), "", "┌ PROVIDERS ───────────────────────────────────────────────────────────────"}
+	for index, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi} {
 		selected := " "
 		if m.hasSetupProvider(provider) {
 			selected = "✓"
@@ -1306,6 +1310,8 @@ func (m Model) multiSetupProviderLines() []string {
 		detail := "Per-agent model assignments available."
 		if provider == setupflow.ProviderCodex {
 			detail = "Uses managed presets; no custom model persistence."
+		} else if provider == setupflow.ProviderPi {
+			detail = "Set VGXNESS_PI_RELEASE_DIR to a local Pi release; Pi runs tools natively."
 		}
 		row := fmt.Sprintf("%s %s %-10s %s", cursor, selected, provider, detail)
 		if index == m.setupProviderCursor {
@@ -1369,7 +1375,7 @@ func setupActionableError(err error) string {
 
 func (m Model) multiSetupReviewLines() []string {
 	providers := ""
-	for _, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex} {
+	for _, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi} {
 		marker := " "
 		if m.hasSetupProvider(provider) {
 			marker = "✓"
@@ -1497,7 +1503,7 @@ func (m Model) setupHelp() string {
 		case setupViewHome:
 			return "[↑↓/j/k] action  [1/2/3] select  [Enter] continue"
 		case setupViewProviders:
-			return "[↑↓/j/k] focus  [Space] toggle  [o/c] toggle  [Enter] choose plan  [Esc] home"
+			return "[↑↓/j/k] focus  [Space] toggle  [o/c/p] toggle  [Enter] choose plan  [Esc] home"
 		case setupViewPlan:
 			return "[↑↓/j/k] plan  [m] OpenCode models  [Enter] review  [Esc] providers"
 		}
@@ -1507,7 +1513,7 @@ func (m Model) setupHelp() string {
 		if m.setupConfirm {
 			return "[y] apply  [n/Esc] cancel  No write occurs until y"
 		}
-		help := "[o] OpenCode  [c] Codex  [h/l] shared plan  [r] refresh"
+		help := "[o] OpenCode  [c] Codex  [p] Pi  [h/l] shared plan  [r] refresh"
 		if m.hasSetupProvider(setupflow.ProviderOpenCode) {
 			help += "  [m] model profile  [Tab] Recovery"
 		} else {

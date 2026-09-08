@@ -19,9 +19,10 @@ type Provider string
 const (
 	ProviderOpenCode Provider = "opencode"
 	ProviderCodex    Provider = "codex"
+	ProviderPi       Provider = "pi"
 )
 
-var providerOrder = [...]Provider{ProviderOpenCode, ProviderCodex}
+var providerOrder = [...]Provider{ProviderOpenCode, ProviderCodex, ProviderPi}
 
 // ProviderPlan is the provider-owned preflight result. Shared work is modeled
 // by MultiPlan and must not be repeated by provider implementations.
@@ -406,7 +407,7 @@ func (m *Multi) Apply(ctx context.Context, options MultiOptions) (MultiResult, e
 func selectedProviders(input []Provider) ([]Provider, error) {
 	seen := make(map[Provider]bool, len(input))
 	for _, provider := range input {
-		if provider != ProviderOpenCode && provider != ProviderCodex || seen[provider] {
+		if provider != ProviderOpenCode && provider != ProviderCodex && provider != ProviderPi || seen[provider] {
 			return nil, ErrInvalid
 		}
 		seen[provider] = true

@@ -48,9 +48,12 @@ jobs:
           cache: true
       - name: Prefetch modules
         run: go mod download
+      - name: Install pinned proper-lockfile fixture
+        run: npm install --prefix "$RUNNER_TEMP/vgxness-pi-lockfile" --ignore-scripts --no-package-lock proper-lockfile@4.1.2
       - name: Test with coverage
         env:
           VGXNESS_TEST_POSTGRES_DSN: postgresql://vgxness_test:vgxness_test@localhost:5432/vgxness_test?sslmode=disable
+          PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: Test agent-evaluation runner offline
         run: python3 -m unittest tools/agent_eval/test_runner.py
@@ -133,7 +136,11 @@ jobs:
           cache: true
       - name: Prefetch modules
         run: go mod download
+      - name: Install pinned proper-lockfile fixture
+        run: npm install --prefix "$RUNNER_TEMP/vgxness-pi-lockfile" --ignore-scripts --no-package-lock proper-lockfile@4.1.2
       - name: Race
+        env:
+          PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
         run: go test -count=1 -race ./...
 
   static:
@@ -255,7 +262,12 @@ jobs:
           cache: true
       - name: Prefetch modules
         run: go mod download
+      - name: Install pinned proper-lockfile fixture
+        shell: pwsh
+        run: npm install --prefix "$env:RUNNER_TEMP/vgxness-pi-lockfile" --ignore-scripts --no-package-lock proper-lockfile@4.1.2
       - name: Installer tests
+        env:
+          PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
         run: go test -count=1 ./...
       - name: Native Windows self-install lifecycle
         run: go test -tags=e2e -count=1 -run '^TestWindowsSelfInstallLifecycle$' ./internal/e2e
@@ -273,11 +285,15 @@ jobs:
           cache: true
       - name: Prefetch modules
         run: go mod download
+      - name: Install pinned proper-lockfile fixture
+        run: npm install --prefix "$RUNNER_TEMP/vgxness-pi-lockfile" --ignore-scripts --no-package-lock proper-lockfile@4.1.2
       - name: Build and smoke native CLI
         run: |
           go build -trimpath -o vgxness ./cmd/vgxness
           ./vgxness version
       - name: Test native filesystem and runtime packages
+        env:
+          PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
         run: go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/selfinstall ./internal/providers/...
 
   quality:

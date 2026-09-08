@@ -69,6 +69,16 @@ func TestMultiSetupKeepsOpenCodeModelEditorVisibleAndExplainsCodexLimit(t *testi
 	}
 }
 
+func TestMultiSetupExplainsPiReleaseSource(t *testing.T) {
+	model := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 100, Height: 30})
+	model.setupView = setupViewProviders
+	view := strings.Join(model.setupRouteLines(), "\n")
+	if !strings.Contains(view, "Choose one or more") || !strings.Contains(view, "VGXNESS_PI_RELEASE_DIR") {
+		t.Fatalf("Pi source instruction missing: %s", view)
+	}
+}
+
 func TestMultiSetupJourneyRendersProviderReviewAndKeepsCancelledModelEdits(t *testing.T) {
 	backend := &recordingMultiSetupBackend{}
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
