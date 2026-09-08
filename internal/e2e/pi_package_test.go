@@ -38,7 +38,10 @@ func TestPiExtractedNativePackageJourney(t *testing.T) {
 		t.Fatalf("install=%+v err=%v", installed, err)
 	}
 	settings, err := os.ReadFile(filepath.Join(agent, "settings.json"))
-	if err != nil || !strings.Contains(string(settings), installed.PackagePath) {
+	var discovery struct {
+		Packages []string `json:"packages"`
+	}
+	if err != nil || json.Unmarshal(settings, &discovery) != nil || len(discovery.Packages) != 1 || discovery.Packages[0] != installed.PackagePath {
 		t.Fatalf("settings discovery entry=%q err=%v", settings, err)
 	}
 	mainRoot := installed.PackagePath

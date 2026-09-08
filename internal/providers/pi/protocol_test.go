@@ -1,6 +1,47 @@
 package pi
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
+
+func TestAuthorizeCanonicalWorkspaceAliases(t *testing.T) {
+	workspace := t.TempDir()
+	canonical, _, err := CanonicalWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := Binding{Workspace: canonical, Mode: ReadOnly, Role: "general"}
+	alias := workspace + string(filepath.Separator) + "."
+	if alias == canonical {
+		t.Fatal("canonical alias was cleaned before authorization")
+	}
+	request := Request{Workspace: alias, Mode: ReadOnly, Role: "general", Operation: "memory.recall"}
+	if err := binding.Authorize(request); err != nil {
+		t.Fatal(err)
+	}
+	request.Workspace = t.TempDir()
+	if err := binding.Authorize(request); err == nil {
+		t.Fatal("other workspace accepted")
+	}
+	request.Workspace = ""
+	if err := binding.Authorize(request); err == nil {
+		t.Fatal("empty workspace accepted")
+	}
+	request.Workspace = "."
+	if err := binding.Authorize(request); err == nil {
+		t.Fatal("relative workspace accepted")
+	}
+	request.Workspace = alias
+	request.Mode = Full
+	if err := binding.Authorize(request); err == nil {
+		t.Fatal("mode mismatch accepted")
+	}
+	request.Mode, request.Role = ReadOnly, "manager"
+	if err := binding.Authorize(request); err == nil {
+		t.Fatal("role mismatch accepted")
+	}
+}
 
 func TestDecodeRejectsInvalidRecords(t *testing.T) {
 	for _, input := range []string{

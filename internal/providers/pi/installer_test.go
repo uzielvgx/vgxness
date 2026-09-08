@@ -94,8 +94,21 @@ func TestLockSettingsCooperatesWithProperLockfileAndRefusesCompromise(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(settings+".lock", time.Now(), time.Now()); err != nil {
+	lock := settings + ".lock"
+	before, err := os.Stat(lock)
+	if err != nil {
 		t.Fatal(err)
+	}
+	changed := before.ModTime().Add(-time.Hour)
+	if err := os.Chtimes(lock, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("compromised lock timestamp unchanged: before=%v after=%v", before.ModTime(), after.ModTime())
 	}
 	if err := check(); err == nil {
 		t.Fatal("compromised lock was accepted")

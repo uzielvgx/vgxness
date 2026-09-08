@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sync"
 	"unicode/utf8"
 )
@@ -132,8 +133,17 @@ type AuthorityError struct{ Code string }
 func (e *AuthorityError) Error() string { return e.Code }
 
 func (binding Binding) Authorize(request Request) error {
-	if request.Workspace != binding.Workspace {
+	if request.Workspace == "" {
 		return &AuthorityError{Code: "workspace_mismatch"}
+	}
+	if request.Workspace != binding.Workspace {
+		if !filepath.IsAbs(request.Workspace) {
+			return &AuthorityError{Code: "workspace_mismatch"}
+		}
+		workspace, _, err := CanonicalWorkspace(request.Workspace)
+		if err != nil || workspace != binding.Workspace {
+			return &AuthorityError{Code: "workspace_mismatch"}
+		}
 	}
 	if request.Mode != binding.Mode {
 		return &AuthorityError{Code: "mode_denied"}
