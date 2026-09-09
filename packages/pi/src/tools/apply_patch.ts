@@ -6,7 +6,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type { ToolHost } from "./memory.ts";
 
-export const applyPatchSchema = Type.Object({ patch: Type.String({ minLength: 1 }) }, { additionalProperties: false });
+export const applyPatchSchema = Type.Object({ patch: Type.String({ minLength: 1, description: "Raw unified diff: --- old-path, +++ new-path, then numbered @@ hunks. Use workspace-relative paths. The parser rejects *** Begin Patch / *** Update File / *** End Patch wrappers. One-line replacement example:\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n" }) }, { additionalProperties: false });
 type Hunk = { oldStart: number; oldCount: number; newStart: number; newCount: number; lines: string[]; oldNoNewline: boolean; newNoNewline: boolean };
 type Edit = { oldPath: string | undefined; newPath: string | undefined; hunks: Hunk[] };
 type Snapshot = { path: string; before: Buffer | undefined; after: Buffer | undefined; mode?: number; temporary?: string; restoreTemporary?: string; committed?: boolean; restored?: boolean };
@@ -120,7 +120,7 @@ export class PatchRecoveryError extends Error {
 }
 
 export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions = {}) {
-  const tool = { name: "apply_patch", label: "Apply patch", description: "Apply one complete, preflighted unified patch inside the workspace.", parameters: applyPatchSchema, executionMode: "sequential" as const,
+  const tool = { name: "apply_patch", label: "Apply patch", description: "Apply one complete, preflighted unified diff inside the workspace. Supply ---/+++ file headers and numbered @@ -old,count +new,count @@ hunks; see the patch parameter example.", parameters: applyPatchSchema, executionMode: "sequential" as const,
     async execute(_id: string, input: { patch: string }, signal?: AbortSignal) {
       if (!Value.Check(applyPatchSchema, input)) throw new Error("invalid tool input");
       host.mutationGuard?.();
