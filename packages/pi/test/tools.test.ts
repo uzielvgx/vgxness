@@ -28,14 +28,14 @@ test("Pi SDK registers native tools with closed operation schemas", async () => 
   const loaded = await loadExtensions([extension], process.cwd());
   assert.deepEqual(loaded.errors, []);
   const tools = [...loaded.extensions[0].tools.values()].map((item: any) => item.definition);
-  assert.equal(tools.length, 14);
+  assert.equal(tools.length, 15);
   for (const tool of tools) {
     const schemas = tool.parameters.anyOf ?? [tool.parameters];
     assert.ok(schemas.every((schema: any) => schema.additionalProperties === false), tool.name);
   }
   assert.deepEqual(
     tools.map((tool) => tool.name).sort(),
-    ["apply_patch", "memory", "memory_forget", "memory_get", "memory_recent", "memory_save", "memory_search", "model_resolve", "question", "sdd", "session_context", "session_handoff", "task", "todowrite"].sort(),
+    ["vgx_skill", "apply_patch", "memory", "memory_forget", "memory_get", "memory_recent", "memory_save", "memory_search", "model_resolve", "question", "sdd", "session_context", "session_handoff", "task", "todowrite"].sort(),
   );
 });
 

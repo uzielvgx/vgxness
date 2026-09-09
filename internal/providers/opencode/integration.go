@@ -1492,6 +1492,10 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	if err != nil {
 		return inspection{}, err
 	}
+	frozenPlan, err := managerV60Bundle(plan)
+	if err != nil {
+		return inspection{}, err
+	}
 	result := integration.Result{
 		Provider: "opencode", State: integration.StateAbsent, Path: managerPath, ArtifactSHA256: artifactSHA256(plan.agents[managerAgentName]),
 		ManifestPath: manifestPath, ManifestSHA256: artifactSHA256(plan.manifest),
@@ -1557,7 +1561,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 			}
 		} else {
 			var historicalErr error
-			historicalReviewBundle, historicalReviewBundleMatched, historicalErr = completeHistoricalReviewBundle(configDirectory, plan)
+			historicalReviewBundle, historicalReviewBundleMatched, historicalErr = completeHistoricalReviewBundle(configDirectory, frozenPlan)
 			if historicalErr != nil {
 				return inspection{}, historicalErr
 			}
@@ -1602,7 +1606,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	}
 	if !installedPlanOK || predecessorManifestInstalled {
 		if plan.configV3 != nil {
-			predecessors, err = modelBoundAgentPredecessorsV3(*plan.resolvedV3)
+			predecessors, err = modelBoundAgentPredecessorsV3(*frozenPlan.resolvedV3)
 			if err != nil {
 				return inspection{}, err
 			}
@@ -1636,11 +1640,11 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		}
 		return nil
 	}
-	exploreV3 := previousExploreV3(plan.agents[exploreAgentName])
+	exploreV3 := previousExploreV3(frozenPlan.agents[exploreAgentName])
 	exploreV2 := previousExploreV2(exploreV3)
-	generalV7 := previousGeneralV7(plan.agents[generalAgentName])
+	generalV7 := previousGeneralV7(frozenPlan.agents[generalAgentName])
 	generalV6 := previousGeneralV6(generalV7)
-	verifierV5 := previousVerifierV5(plan.agents[verifierAgentName])
+	verifierV5 := previousVerifierV5(frozenPlan.agents[verifierAgentName])
 	verifierV4 := previousVerifierV4(verifierV5)
 	if len(exploreV3) == 0 || len(exploreV2) == 0 || len(generalV7) == 0 || len(generalV6) == 0 || len(verifierV5) == 0 || len(verifierV4) == 0 {
 		return inspection{}, integration.ErrInvalid
@@ -1671,7 +1675,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 				prior = append(prior, verifierV5, verifierV4, previousVerifierPredecessor(verifierV4))
 			default:
 				if identity.Class == sdd.ManagedAgentClassSDD {
-					prior = [][]byte{previousSDDAgentPredecessor(identity.Role, content)}
+					prior = [][]byte{previousSDDAgentPredecessor(identity.Role, frozenPlan.agents[name])}
 				}
 			}
 		}

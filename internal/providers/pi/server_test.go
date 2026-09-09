@@ -34,6 +34,16 @@ func (b *lockedBuffer) Bytes() []byte {
 	return append([]byte(nil), b.b.Bytes()...)
 }
 
+type notifyingReader struct {
+	r      io.Reader
+	before chan<- struct{}
+}
+
+func (r notifyingReader) Read(p []byte) (int, error) {
+	r.before <- struct{}{}
+	return r.r.Read(p)
+}
+
 type failAfterWriter struct {
 	writes int
 }
@@ -242,39 +252,53 @@ func TestServerMutationDomainErrors(t *testing.T) {
 
 func TestServerCoalescesIdenticalActiveAndCompletedRequests(t *testing.T) {
 	workspace := testWorkspace(t)
-	started, release, completed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	started, release, firstResult := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	calls := 0
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(context.Context, Request) (any, error) {
 		calls++
 		close(started)
 		<-release
-		close(completed)
 		return "ok", nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader, writer := io.Pipe()
+	beforeRead := make(chan struct{}, 8)
 	var output lockedBuffer
+	var firstResultOnce sync.Once
+	outputWriter := writerFunc(func(record []byte) (int, error) {
+		n, err := output.Write(record)
+		if err == nil && n == len(record) && bytes.Contains(record, []byte(`"id":"same"`)) && bytes.Contains(record, []byte(`"type":"result"`)) {
+			firstResultOnce.Do(func() { close(firstResult) })
+		}
+		return n, err
+	})
 	done := make(chan error, 1)
-	go func() { done <- server.Serve(context.Background(), reader, &output) }()
+	go func() {
+		done <- server.Serve(context.Background(), notifyingReader{r: reader, before: beforeRead}, outputWriter)
+	}()
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
+	<-beforeRead
 	_, _ = writer.Write(append(hello, '\n'))
 	record := testRecord(t, Request{Type: "request", ID: "same", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{"key":"value"}`)})
+	<-beforeRead
 	_, _ = writer.Write(record)
 	<-started
+	<-beforeRead
 	_, _ = writer.Write(record)
+	<-beforeRead
 	if bytes.Contains(output.Bytes(), []byte(`"code":"conflict"`)) {
 		t.Fatal("identical active request conflicted")
 	}
 	close(release)
-	<-completed
+	<-firstResult
 	_, _ = writer.Write(record)
 	_ = writer.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || bytes.Count(output.Bytes(), []byte(`"id":"same"`)) < 2 {
+	if calls != 1 || bytes.Count(output.Bytes(), []byte(`"id":"same"`)) != 2 {
 		t.Fatalf("calls=%d output=%s", calls, output.Bytes())
 	}
 }

@@ -192,3 +192,64 @@ test("explore missions reject executable commands before bootstrap", async () =>
  const mission: any = issueMission({ nonce: crypto.randomUUID(), role: "explore", workspace, mode: "read-only", model: "test", effort: "low", goal: "inspect", criteria: [], commands: [[process.execPath, "--version"]], resultLimit: 100, targets: {} });
  await assert.rejects(acceptMission(mission), /explore missions cannot authorize commands/);
 });
+
+test("SDK task binds host-resolved skills and rejects model-supplied skill contents", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pi-task-skills-"));
+  t.after(() => import("node:fs/promises").then(fs => fs.rm(root, { recursive: true, force: true })));
+  const content = "Use observable evidence.";
+  const skills = [{ name: "fixture", files: [{ path: "SKILL.md", content, sha256: createHash("sha256").update(content).digest("hex") }] }];
+  let received: any, selections: any;
+  const key = "__taskSkills_" + crypto.randomUUID();
+  (globalThis as any)[key] = { role: "manager", mode: "full", workspace: root, resolveSkills: async (input: any) => { selections = input; return skills; }, executeWorker: async (mission: any) => { received = mission; return "observed"; } };
+  t.after(() => { delete (globalThis as any)[key]; });
+  const wrapper = join(root, "task.ts");
+  await writeFile(wrapper, `import { createTaskTool } from ${JSON.stringify(join(process.cwd(), "src/tools/task.ts"))}; export default pi => pi.registerTool(createTaskTool(globalThis[${JSON.stringify(key)}]));`);
+  const loaded = await loadExtensions([wrapper], root); assert.deepEqual(loaded.errors, []);
+  const tool: any = [...loaded.extensions[0].tools.values()][0].definition;
+  const input = { nonce: crypto.randomUUID(), role: "verifier", mode: "read-only", model: "fixture/model", effort: "low", goal: "Verify", criteria: ["Observed result"], commands: [], targets: {}, resultLimit: 8192, skills: [{ name: "fixture", sha256: skills[0].files[0].sha256 }] };
+  await tool.execute("task", input);
+  assert.deepEqual(selections, input.skills); assert.deepEqual(received.skills, skills); assert.ok(Object.isFrozen(received.skills));
+  assert.match(received.digest, /^[0-9a-f]{64}$/);
+  await assert.rejects(tool.execute("task", { ...input, nonce: crypto.randomUUID(), skills: [{ name: "fixture", content: "forged" }] }), /invalid task input/);
+});
+
+test("SDK skill tool returns a readable manifest identity and rejects arbitrary paths", async t => {
+  const fs = await import("node:fs/promises"), root = await mkdtemp(join(tmpdir(), "pi-skill-tool-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const sharedRoot = join(root, "shared"), bundledRoot = join(root, "missing");
+  await fs.mkdir(join(sharedRoot, "fixture"), { recursive: true });
+  const content = '---\nname: fixture\ndescription: Review fixtures.\ncompatibility: Agent Skills hosts\nprovenance: "VGXNESS portable global skill"\n---\nInspect actual evidence.';
+  await writeFile(join(sharedRoot, "fixture", "SKILL.md"), content);
+  const wrapper = join(root, "tool.ts");
+  await writeFile(wrapper, `import { createSkillTool } from ${JSON.stringify(join(process.cwd(), "src/tools/skill.ts"))}; export default pi => pi.registerTool(createSkillTool(${JSON.stringify({ sharedRoot, bundledRoot })}));`);
+  const loaded = await loadExtensions([wrapper], root); assert.deepEqual(loaded.errors, []);
+  const tool: any = [...loaded.extensions[0].tools.values()][0].definition;
+  const list = JSON.parse((await tool.execute("list", { operation: "list" })).content[0].text);
+  const read = JSON.parse((await tool.execute("read", { operation: "read", name: "fixture" })).content[0].text);
+  assert.equal(list[0].sha256, read.files[0].sha256); assert.equal(read.files[0].content, content);
+  await assert.rejects(tool.execute("escape", { operation: "read", name: "fixture", resources: ["../outside"] }), /path/);
+  await assert.rejects(tool.execute("forged", { operation: "read", name: "fixture", path: "/outside" }), /invalid skill input/);
+});
+
+
+test("SDK task canonicalizes every shared alias before authority and SDD checks", async t => {
+ const root = await mkdtemp(join(tmpdir(), "pi-task-alias-"));
+ t.after(() => import("node:fs/promises").then(fs => fs.rm(root,{recursive:true,force:true})));
+ const { loadManagerContract } = await import("../src/orchestration/contract.ts");
+ const contract=loadManagerContract(); let received:any; let bindingChecks=0;
+ const binding={changeId:"c",artifactId:"a",revisionId:"r",digest:"a".repeat(64),stateVersion:1,inputs:[{artifactId:"s",revisionId:"sr",digest:"b".repeat(64)}]};
+ const key="__taskAlias_"+crypto.randomUUID();
+ const host:any={role:"manager",mode:"full",workspace:root,verifyAcceptedBinding:async(value:any)=>{bindingChecks++;return JSON.stringify(value)===JSON.stringify(binding);},executeWorker:async(mission:any)=>{received=mission;return "ok";}};
+ (globalThis as any)[key]=host;t.after(()=>{delete(globalThis as any)[key];});
+ const wrapper=join(root,"task.ts");
+ await writeFile(wrapper,`import { createTaskTool } from ${JSON.stringify(join(process.cwd(),"src/tools/task.ts"))}; export default pi=>pi.registerTool(createTaskTool(globalThis[${JSON.stringify(key)}]));`);
+ const loaded=await loadExtensions([wrapper],root);assert.deepEqual(loaded.errors,[]);
+ const tool:any=[...loaded.extensions[0].tools.values()][0].definition;
+ const input=(role:string,mode="read-only",acceptedBindings?:any)=>({nonce:crypto.randomUUID(),role,mode,model:"fixture/model",effort:"low",goal:"Exercise alias",criteria:["Canonical bounded mission"],commands:[],targets:{},resultLimit:8192,...(acceptedBindings?{acceptedBindings}:{})});
+ for(const role of contract.roles)for(const alias of role.aliases){const before=bindingChecks;await tool.execute("alias",input(alias,role.writeAuthority?"full":"read-only",role.id==="sdd-apply"?binding:undefined));assert.equal(received.role,role.id);assert.match(received.digest,/^[0-9a-f]{64}$/);if(role.id==="sdd-apply")assert.equal(bindingChecks-before,2);}
+ await assert.rejects(tool.execute("readonly",input("verification","full")),/full mode/);
+ await assert.rejects(tool.execute("apply",input("apply","full")),/accepted binding/);
+ await assert.rejects(tool.execute("invalid",input("manager")),/launchable|unsupported/);
+ await assert.rejects(tool.execute("invalid",input("unknown")),/launchable|unsupported/);
+ host.mode="read-only";await assert.rejects(tool.execute("parent",input("worker","full")),/parent authority/);
+});

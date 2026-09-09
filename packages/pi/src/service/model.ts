@@ -1,7 +1,9 @@
+import { loadManagerContract } from "../orchestration/contract.ts";
 import type { Capability, Catalog, Effort, Model, Plan, ResolvedPlan, Role } from "../ports/model.ts";
 const capabilities: Capability[] = ["efficient", "balanced", "frontier"];
 const efforts: Effort[] = ["low", "medium", "high", "ultra"];
-const roles: Role[] = ["manager", "research", "proposal", "spec", "design", "tasks", "apply", "implementation", "verification", "care-reviewer", "care-specialist", "care-challenger"];
+const contract = loadManagerContract();
+const roles = [contract.manager, ...contract.roles].flatMap(role => role.modelRole ? [role.modelRole as Role] : []);
 const rank = (v: string) => efforts.indexOf(v as Effort) + 1;
 const matrix: Record<Plan, Record<Role, [
     Capability,

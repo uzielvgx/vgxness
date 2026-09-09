@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/sdd"
 	_ "modernc.org/sqlite"
 )
@@ -103,33 +104,27 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read installed manager: %v", err)
 	}
+	contract, err := orchestration.LoadManagerContract()
+	if err != nil {
+		t.Fatalf("load canonical orchestration contract: %v", err)
+	}
 	for _, required := range []struct {
 		name  string
 		value string
 	}{
-		{"active v60 marker", "artifact: opencode-agent/vgxness-manager; version: 60"},
+		{"active v61 marker", "artifact: opencode-agent/vgxness-manager; version: 61"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
-		{"proportional ceremony", "Apply ceremony proportionally: small authorized repository changes remain delegated and do not imply SDD or delivery."},
-		{"context capsule", "Carry a Context Capsule v1 alongside the smallest applicable mission shape."},
-		{"context digest ownership", "The Manager is the sole digest-computation owner for every non-SDD repository delegation."},
-		{"git-delivery", "automatically load `git-delivery`"},
-		{"pre-write gate", "Before delegating any workspace write"},
 		{"global permission", "permission:\n  \"*\": allow"},
-		{"sdd-lifecycle", "Load `sdd-lifecycle` before creating an accepted SDD change"},
-		{"managed catalog", "managed global portable catalog"},
-		{"same-name collision", "same-name/project-local skill collides"},
-		{"verifier and CARE order", "The verifier runs first; each applicable CARE role then reviews that same candidate."},
-		{"candidate-bound outcomes", "Require PASS, FAIL, or INCONCLUSIVE with candidate-bound evidence;"},
-		{"CARE risk tiers", "CARE risk tiers: passive documentation or images are exempt; standard uses reviewer; elevated uses reviewer then specialist; critical uses reviewer, specialist, then challenger."},
-		{"correction invalidation", "Permit at most one correction and one scoped revalidation; a correction creates a new candidate and invalidates prior evidence."},
-		{"Manager authority", "The Manager alone decides completion."},
 	} {
 		if !bytes.Contains(managerData, []byte(required.value)) {
 			t.Errorf("installed manager is missing %s clause %q", required.name, required.value)
 		}
 	}
-	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 60")); got != 1 {
-		t.Fatalf("installed current manager v60 marker count=%d, want 1", got)
+	if !bytes.Contains(managerData, []byte(contract.RenderManagerSections())) {
+		t.Fatal("installed manager does not contain the complete canonical contract")
+	}
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 61")); got != 1 {
+		t.Fatalf("installed current manager v61 marker count=%d, want 1", got)
 	}
 	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 0 {
 		t.Fatalf("installed current manager retains v57 marker count=%d, want 0", got)
@@ -144,25 +139,34 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 			t.Fatalf("setup did not install the expected v3 manifest content %q: %v\n%s", expected, err, manifestData)
 		}
 	}
-	generalData, generalErr := os.ReadFile(general)
-	exploreData, exploreErr := os.ReadFile(explore)
-	verifierData, verifierErr := os.ReadFile(verifier)
-	for _, required := range []struct {
-		name string
-		data []byte
-		err  error
-		want []string
-	}{
-		{"general", generalData, generalErr, []string{"artifact: opencode-agent/general; version: 10", "permission:\n  \"*\": allow", "delegated non-SDD implementation worker", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
-		{"explore", exploreData, exploreErr, []string{"artifact: opencode-agent/explore; version: 4", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return."}},
-		{"verifier", verifierData, verifierErr, []string{"artifact: opencode-agent/vgxness-verifier; version: 7", "permission:\n  \"*\": allow", "one exact Review Binding", "Require a Context Capsule v1 for every non-SDD repository mission:", "Echo the accepted contextDigest unchanged in the return.", "PASS|FAIL|INCONCLUSIVE"}},
-	} {
-		if required.err != nil {
-			t.Fatalf("read installed %s contract: %v", required.name, required.err)
+	rolePaths := map[string]string{
+		"explore": explore, "general": general, "verifier": verifier,
+		"care-reviewer":   filepath.Join(configDirectory, "agents", "vgxness-care-reviewer.md"),
+		"care-specialist": filepath.Join(configDirectory, "agents", "vgxness-care-specialist.md"),
+		"care-challenger": filepath.Join(configDirectory, "agents", "vgxness-care-challenger.md"),
+		"sdd-research":    filepath.Join(configDirectory, "agents", "vgxness-sdd-research.md"),
+		"sdd-proposal":    filepath.Join(configDirectory, "agents", "vgxness-sdd-proposal.md"),
+		"sdd-spec":        filepath.Join(configDirectory, "agents", "vgxness-sdd-spec.md"),
+		"sdd-design":      filepath.Join(configDirectory, "agents", "vgxness-sdd-design.md"),
+		"sdd-tasks":       filepath.Join(configDirectory, "agents", "vgxness-sdd-tasks.md"),
+		"sdd-apply":       filepath.Join(configDirectory, "agents", "vgxness-sdd-apply.md"),
+	}
+	nativeBindings := map[string][]string{
+		"general":  {"artifact: opencode-agent/general; version: 10", "permission:\n  \"*\": allow"},
+		"explore":  {"artifact: opencode-agent/explore; version: 4", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow"},
+		"verifier": {"artifact: opencode-agent/vgxness-verifier; version: 7", "permission:\n  \"*\": allow"},
+	}
+	for _, role := range contract.Roles {
+		data, readErr := os.ReadFile(rolePaths[role.ID])
+		if readErr != nil {
+			t.Fatalf("read installed %s contract: %v", role.ID, readErr)
 		}
-		for _, want := range required.want {
-			if !bytes.Contains(required.data, []byte(want)) {
-				t.Errorf("installed %s contract is missing %q", required.name, want)
+		if !bytes.Contains(data, []byte(role.Instructions)) {
+			t.Errorf("installed %s does not contain its complete canonical instructions", role.ID)
+		}
+		for _, binding := range nativeBindings[role.ID] {
+			if !bytes.Contains(data, []byte(binding)) {
+				t.Errorf("installed %s is missing native binding %q", role.ID, binding)
 			}
 		}
 	}

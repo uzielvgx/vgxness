@@ -336,7 +336,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Portable package and native SQLite contract
-        run: node packages/pi/scripts/test.mjs metadata.test.mjs package-artifact.test.mjs package_contract.test.ts sqlite-adapter.test.ts migrations.test.ts database-compatibility.test.ts memory-service.test.ts session-service.test.ts sdd-service.test.ts model-service.test.ts sync-wire.test.ts sync-service.test.ts sync-recovery.test.ts credentials.test.ts
+        run: node packages/pi/scripts/test.mjs metadata.test.mjs package-artifact.test.mjs package_contract.test.ts sqlite-adapter.test.ts migrations.test.ts database-compatibility.test.ts memory-service.test.ts session-service.test.ts sdd-service.test.ts model-service.test.ts sync-wire.test.ts sync-service.test.ts sync-recovery.test.ts credentials.test.ts worker-context.test.ts
 
   quality:
     name: quality

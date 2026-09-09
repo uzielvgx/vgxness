@@ -63,7 +63,7 @@ func Render(version string) (Package, error) {
 // RenderPlan returns the native Codex projection for one shared model plan.
 // The primary manager remains host-selected; the plan binds delegated profiles.
 func RenderPlan(version string, plan sdd.Plan) (Package, error) {
-	selected, err := profilesForPlan(plan)
+	selected, err := sharedProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
 	}
@@ -410,7 +410,7 @@ func renderPackage(version string, selected []profile, plan sdd.Plan, legacy boo
 // this provider without changing Codex's native prompt or MCP semantics.
 func OrchestrationContractIdentity() string { return orchestration.ContractIdentity }
 
-func activeManagerInstructions() string {
+func activeV19ManagerInstructions() string {
 	value := activeV18ManagerInstructions()
 	if strings.Count(value, "artifact: codex-agent/manager; version: 18; parity: opencode-v59") != 1 || strings.Count(value, nativeDelegationPolicy) != 1 || strings.Contains(value, orchestration.PedagogicalExecutionBrief) {
 		return ""
@@ -920,9 +920,11 @@ func (pkg Package) Validate() error {
 	preConsolidation, preConsolidationErr := preConsolidationProfilesForPlan(pkg.plan)
 	matchesCurrent := packageMatches(pkg, selected, activeManagerInstructions())
 	if pkg.current {
-		matchesCurrent = currentErr == nil && packageMatchesWithLifecycle(pkg, current, activeManagerInstructions())
+		shared, sharedErr := sharedProfilesForPlan(pkg.plan)
+		matchesCurrent = sharedErr == nil && packageMatchesWithLifecycle(pkg, shared, activeManagerInstructions())
 	}
 	matchesKnown := matchesCurrent ||
+		(currentErr == nil && packageMatchesWithLifecycle(pkg, current, activeV19ManagerInstructions())) ||
 		(currentErr == nil && packageMatches(pkg, current, activeV18ManagerInstructions())) ||
 		(currentErr == nil && packageMatches(pkg, current, activeV16ManagerInstructions())) ||
 		(preCAREErr == nil && packageMatches(pkg, preCARE, activeV13ManagerInstructions())) ||

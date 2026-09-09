@@ -1,8 +1,9 @@
 export type PiModel = { provider: string; id: string; name?: string; capability?: "efficient" | "balanced" | "frontier"; supportedEfforts?: string[] };
 
 /** Go plan assignments use lifecycle role IDs; Pi workers use only these native roles. */
-const nativeRoles: Record<string, string> = { implementation: "general", verification: "verifier", research: "sdd-research", proposal: "sdd-proposal", spec: "sdd-spec", design: "sdd-design", tasks: "sdd-tasks", apply: "sdd-apply", explore: "explore", general: "general", verifier: "verifier", "care-reviewer": "care-reviewer", "care-specialist": "care-specialist", "care-challenger": "care-challenger", "sdd-research": "sdd-research", "sdd-proposal": "sdd-proposal", "sdd-spec": "sdd-spec", "sdd-design": "sdd-design", "sdd-tasks": "sdd-tasks", "sdd-apply": "sdd-apply" };
-export function nativeWorkerRole(role: string) { const mapped = nativeRoles[role]; if (!mapped) throw new Error("resolved role is not launchable as a Pi worker"); return mapped; }
+import { loadManagerContract, resolveRole } from "../orchestration/contract.ts";
+const managerContract = loadManagerContract();
+export function nativeWorkerRole(role: string) { const mapped = resolveRole(managerContract, role)?.id; if (!mapped || !managerContract.roles.some(item => item.id === mapped)) throw new Error("resolved role is not launchable as a Pi worker"); return mapped; }
 
 const efforts = new Set(["low", "medium", "high", "ultra"]);
 const capabilities = new Set(["efficient", "balanced", "frontier"]);

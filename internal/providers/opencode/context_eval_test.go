@@ -249,7 +249,8 @@ func TestManagerContextEvaluationAssets(t *testing.T) {
 
 func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	if err != nil || OrchestrationContractIdentity() != orchestration.ContractIdentity || !strings.Contains(string(bundle.agents[managerAgentName]), orchestration.ContractPolicy) {
+	contract, contractErr := orchestration.LoadManagerContract()
+	if err != nil || contractErr != nil || OrchestrationContractIdentity() != orchestration.ContractIdentity || !strings.Contains(string(bundle.agents[managerAgentName]), contract.RenderManagerSections()) {
 		t.Errorf("OpenCode manager lacks shared contract %q", orchestration.ContractIdentity)
 	}
 }

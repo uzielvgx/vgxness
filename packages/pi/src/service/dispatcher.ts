@@ -15,6 +15,7 @@ import { dispatchSync, type SyncOptions } from "./sync.ts";
 import { CredentialFile, validBearer } from "../ports/credentials.ts";
 import { FetchHttp } from "../ports/http.ts";
 import type { ServiceContext } from "./context.ts";
+import { loadManagerContract, resolveRole } from "../orchestration/contract.ts";
 export type RuntimeBinding = {
     workspace: string;
     mode: "full" | "read-only";
@@ -26,7 +27,7 @@ export type DispatcherOptions = RuntimeBinding & {
     now?: () => bigint;
     sync?: SyncOptions;
 };
-const roles = new Set(["manager", "general", "explore", "verifier", "care-reviewer", "care-specialist", "care-challenger", "sdd-research", "sdd-proposal", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply"]);
+const managerContract = loadManagerContract();
 const reads = new Set(["memory.recall", "memory.recent", "memory.get", "memory.project.resolve", "memory.sync.status", "memory.session.context", "sdd.get", "sdd.get_revision", "sdd.list", "sdd.list_revisions", "sdd.projection_status", "sdd.render_projection", "sdd.compare_projection", "model.resolve"]);
 const schemas = new Map<string, any>([["memory.remember", memorySchemas.memory_save], ["memory.recall", memorySchemas.memory_search], ["memory.recent", memorySchemas.memory_recent], ["memory.get", memorySchemas.memory_get], ["memory.forget", memorySchemas.memory_forget]]);
 // The direct service keeps Go's zero-value defaults; model-facing tool schemas remain narrow.
@@ -73,7 +74,7 @@ export class NativeDispatcher {
         ino: number;
     }, sync?: SyncOptions) { this.ctx = ctx; this.identity = identity; this.sync = sync; }
     static async open(options: DispatcherOptions) {
-        if (!roles.has(options.role) || !["full", "read-only"].includes(options.mode))
+        if (!resolveRole(managerContract, options.role) || !["full", "read-only"].includes(options.mode))
             throw new Error("invalid runtime binding");
         const workspace = await realpath(options.workspace), identity = await lstat(workspace);
         if (!identity.isDirectory() || identity.isSymbolicLink())

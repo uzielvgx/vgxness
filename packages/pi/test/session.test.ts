@@ -42,7 +42,7 @@ test("session lifecycle checkpoints, renews, and closes only its private handle"
   const handlers = loaded.extensions[0].handlers;
   const promptResult: any = await (handlers.get("before_agent_start") ?? [])[0]({ type: "before_agent_start", systemPrompt: "base" }, {});
   assert.match(promptResult.systemPrompt, /^base\n\n/);
-  assert.match(promptResult.systemPrompt, /VGXNESS Manager/);
+  assert.equal(promptResult.systemPrompt, `base\n\n${await readFile(join(process.cwd(), "resources/prompts/manager.md"), "utf8")}`);
   const handoff: any = [...loaded.extensions[0].tools.values()].map((item: any) => item.definition).find((tool: any) => tool.name === "session_handoff");
   await assert.rejects(handoff.execute("unavailable", { summary: "safe" }), /no writable active session/);
   const ctx: any = { sessionManager: { getSessionId: () => "sdk-session" } };

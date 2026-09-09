@@ -98,7 +98,7 @@ type modelPlanBundle struct {
 	manifest   []byte
 }
 
-func buildModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+func buildV60ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
 	resolved, err := sdd.ResolveOpenCodePlan(config)
 	if err != nil {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
@@ -239,7 +239,7 @@ var currentManagerSDDBoundaryV51 = strings.Replace(strings.Replace(currentManage
 
 const preConsolidationManagerSDDBoundary = "Use SDD only after the user explicitly requests or accepts it. Load `sdd-lifecycle` before creating an accepted SDD change. Verify the managed global portable catalog marker `<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->`; block if source, scope, or marker cannot be verified, a same-name/project-local skill collides, or loading fails. If `sdd-lifecycle` is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the `sdd-lifecycle` skill is the sole detailed lifecycle policy."
 
-func buildModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
+func buildV60ModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
 	resolved, err := sdd.ResolveOpenCodePlanV2(config)
 	if err != nil {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
@@ -251,7 +251,7 @@ func buildModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, erro
 	return encodeModelPlanBundleV2(config, resolved, agents)
 }
 
-func buildModelPlanBundleV3(config sdd.ModelPlanConfigV3) (modelPlanBundle, error) {
+func buildV60ModelPlanBundleV3(config sdd.ModelPlanConfigV3) (modelPlanBundle, error) {
 	resolved, err := ResolveModelPlanV3(config)
 	if err != nil {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
@@ -695,6 +695,14 @@ func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (mo
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
+	current, err = managerV60Bundle(current)
+	if err != nil {
+		return modelPlanBundle{}, integration.ErrDrift
+	}
+	if bytes.Equal(current.manifest, data) {
+		return current, nil
+	}
+
 	// alpha.2 shipped these exact package bytes under the same agent markers.
 	// Accept them only when the complete manifest and artifact hashes agree.
 	if isAlpha2ModelPlanManifest(data) {
@@ -763,6 +771,14 @@ func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (mo
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
+	current, err = managerV60Bundle(current)
+	if err != nil {
+		return modelPlanBundle{}, integration.ErrDrift
+	}
+	if bytes.Equal(current.manifest, data) {
+		return current, nil
+	}
+
 	immediate, err := immediatePredecessor(current)
 	if err == nil && bytes.Equal(immediate.manifest, data) {
 		return immediate, nil
@@ -826,6 +842,14 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
+	current, err = managerV60Bundle(current)
+	if err != nil {
+		return modelPlanBundle{}, integration.ErrDrift
+	}
+	if bytes.Equal(current.manifest, data) {
+		return current, nil
+	}
+
 	historical, recognized, err := historicalHighPlanWithLunaFastBundle(config)
 	if err != nil {
 		return modelPlanBundle{}, integration.ErrDrift
@@ -888,6 +912,14 @@ func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlan
 }
 
 func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+	}
+
 	v1 := current
 	careV1 := current
 	var err error
@@ -1020,6 +1052,14 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 }
 
 func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerPreviousMarker)) {
 		current, err = previousV55ModelPlanBundle(current)
@@ -1058,6 +1098,15 @@ func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBu
 }
 
 func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
+	if isSharedManagerBundle(current) {
+		old, e := managerV60Bundle(current)
+		if e != nil {
+			return nil, e
+		}
+		rest, e := managerPredecessors(old)
+		return append([][]byte{old.agents[managerAgentName]}, rest...), e
+	}
+
 	v1, err := immediatePredecessor(current)
 	if err != nil {
 		return nil, err
@@ -1140,6 +1189,14 @@ func managerPredecessors(current modelPlanBundle) ([][]byte, error) {
 }
 
 func previousV49ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	if current.configV3 == nil && current.resolvedV3 == nil {
 		if _, ok := current.agents[reviewRiskName]; !ok {
@@ -1213,6 +1270,14 @@ func previousV49ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func legacyFixedLensBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	if current.configV2 != nil || current.resolvedV2 != nil {
 		if current.configV2 == nil || current.resolvedV2 == nil {
 			return modelPlanBundle{}, integration.ErrInvalid
@@ -1263,6 +1328,14 @@ func legacyFixedLensBundle(current modelPlanBundle) (modelPlanBundle, error) {
 }
 
 func previousV50ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
 		var err error
 		current, err = previousV52ModelPlanBundle(current)
@@ -1299,6 +1372,14 @@ func previousGeneralV6FromCurrent(current []byte) []byte {
 }
 
 func previousV48ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = legacyV49Baseline(current)
 	if err != nil {
@@ -1326,6 +1407,14 @@ func previousV48ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV47ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = legacyV49Baseline(current)
 	if err != nil {
@@ -1353,6 +1442,14 @@ func previousV47ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV46ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = legacyV49Baseline(current)
 	if err != nil {
@@ -1368,18 +1465,50 @@ func previousV46ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV45ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	return fullHistoricalModelPlanBundle(current, previousManagerPromptV45, "artifact: opencode-agent/vgxness-manager; version: 45", previousGeneralPromptV4, "artifact: opencode-agent/general; version: 4", previousVerifierPromptV3(), verifierPreviousMarker, previousReviewPromptsV3())
 }
 
 func previousV44ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	return fullHistoricalModelPlanBundle(current, previousManagerPromptV44, "artifact: opencode-agent/vgxness-manager; version: 44", previousGeneralPromptV3, "artifact: opencode-agent/general; version: 3", previousVerifierPromptV3(), verifierPreviousMarker, previousReviewPromptsV3())
 }
 
 func previousV43ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	return fullHistoricalModelPlanBundle(current, previousManagerPromptV43, "artifact: opencode-agent/vgxness-manager; version: 43", previousGeneralPromptV2, "artifact: opencode-agent/general; version: 2", previousVerifierPromptV2, "artifact: opencode-agent/vgxness-verifier; version: 2", previousReviewPromptsV2())
 }
 
 func fullHistoricalModelPlanBundle(current modelPlanBundle, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	if current.configV3 != nil || current.resolvedV3 != nil {
 		if current.configV3 == nil || current.resolvedV3 == nil {
 			return modelPlanBundle{}, integration.ErrInvalid
@@ -1429,6 +1558,14 @@ func fullHistoricalModelPlanBundleV3(config sdd.ModelPlanConfigV3, resolved sdd.
 }
 
 func previousManagerModelPlanBundleV42(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	manager, err := bindManagerTemplate(previousManagerPromptV42, "artifact: opencode-agent/vgxness-manager; version: 42", current.resolved.Roles[sdd.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
@@ -1439,6 +1576,14 @@ func previousManagerModelPlanBundleV42(current modelPlanBundle) (modelPlanBundle
 }
 
 func previousManagerModelPlanBundleV41(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	manager, err := bindManagerTemplate(previousManagerPromptV41, "artifact: opencode-agent/vgxness-manager; version: 41", current.resolved.Roles[sdd.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
@@ -1449,6 +1594,14 @@ func previousManagerModelPlanBundleV41(current modelPlanBundle) (modelPlanBundle
 }
 
 func previousManagerModelPlanBundleV40(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	manager, err := bindManagerTemplate(previousManagerPromptV40, "artifact: opencode-agent/vgxness-manager; version: 40", current.resolved.Roles[sdd.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
@@ -1459,6 +1612,14 @@ func previousManagerModelPlanBundleV40(current modelPlanBundle) (modelPlanBundle
 }
 
 func previousManagerModelPlanBundleV39(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	manager, err := bindManagerTemplate(previousManagerPromptV39, "artifact: opencode-agent/vgxness-manager; version: 39", current.resolved.Roles[sdd.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
@@ -1493,6 +1654,10 @@ func encodeLike(current modelPlanBundle, agents map[string][]byte) (modelPlanBun
 }
 
 func immediatePredecessor(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		return managerV60Bundle(current)
+	}
+
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
 		agents := cloneAgents(current.agents)
 		agents[managerAgentName] = previousManagerV59(agents[managerAgentName])
@@ -1505,6 +1670,14 @@ func immediatePredecessor(current modelPlanBundle) (modelPlanBundle, error) {
 }
 
 func legacyV49Baseline(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerV57Marker)) || bytes.Contains(current.agents[managerAgentName], []byte(managerV56Marker)) {
 		var err error
 		current, err = previousV55ModelPlanBundle(current)
@@ -1519,6 +1692,14 @@ func legacyV49Baseline(current modelPlanBundle) (modelPlanBundle, error) {
 }
 
 func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = legacyV49Baseline(current)
 	if err != nil {
@@ -1556,6 +1737,14 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousBroadPermissionModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = legacyV49Baseline(current)
 	if err != nil {
@@ -1571,6 +1760,14 @@ func previousBroadPermissionModelPlanBundle(current modelPlanBundle) (modelPlanB
 }
 
 func previousSDDModelPlanBundleV2(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	predecessor, err := previousSDDModelPlanBundle(current)
 	if err != nil {
 		return modelPlanBundle{}, err
@@ -1590,6 +1787,14 @@ func previousSDDModelPlanBundleV2(current modelPlanBundle) (modelPlanBundle, err
 }
 
 func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = legacyV49Baseline(current)
 	if err != nil {
@@ -2189,6 +2394,18 @@ func activeManagerPromptWithPolicy(value []byte, policy string) []byte {
 }
 
 func previousManagerV49(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV57(current)
 	}
@@ -2228,14 +2445,50 @@ func previousManagerV49(current []byte) []byte {
 }
 
 func previousManagerV50(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	return derivePredecessor(current, []textReplacement{{old: managerV51Marker, new: managerV50Marker}, {old: currentManagerSDDBoundaryV51, new: currentManagerSDDBoundary}})
 }
 
 func previousManagerV51(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	return derivePredecessor(current, []textReplacement{{old: managerV52Marker, new: managerV51Marker}, {old: orchestration.PreviousContractPolicyV59, new: orchestration.PreviousContractPolicyV51}})
 }
 
 func previousManagerV52(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	replacements := []textReplacement{
 		{old: managerV53Marker, new: managerV52Marker},
 		{old: "\n\n" + orchestration.ReadinessManagerContract + "\n", new: ""},
@@ -2247,6 +2500,18 @@ func previousManagerV52(current []byte) []byte {
 }
 
 func previousManagerV53(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	if bytes.Count(current, []byte(managerV54Marker)) != 1 || bytes.Count(current, []byte(managerV53Marker)) != 0 {
 		return nil
 	}
@@ -2257,6 +2522,18 @@ func previousManagerV53(current []byte) []byte {
 }
 
 func previousManagerV54(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV55(current)
 	}
@@ -2267,6 +2544,18 @@ func previousManagerV54(current []byte) []byte {
 }
 
 func previousManagerV55(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV57(current)
 	}
@@ -2277,6 +2566,18 @@ func previousManagerV55(current []byte) []byte {
 }
 
 func previousManagerV56(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV57(current)
 	}
@@ -2295,6 +2596,18 @@ func previousManagerV56(current []byte) []byte {
 }
 
 func previousManagerV57(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV59(current)
 	}
@@ -2308,6 +2621,18 @@ func previousManagerV57(current []byte) []byte {
 }
 
 func previousManagerV58(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	if bytes.Count(current, []byte(managerV59Marker)) != 1 || bytes.Count(current, []byte("`git-delivery`")) != 1 {
 		return nil
 	}
@@ -2317,6 +2642,18 @@ func previousManagerV58(current []byte) []byte {
 }
 
 func previousManagerV59(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 || bytes.Count(current, []byte(orchestration.PedagogicalExecutionBrief)) != 1 {
 		return nil
 	}
@@ -2337,6 +2674,14 @@ func previousManagerV57FromV58(current []byte) []byte {
 }
 
 func previousV51ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	if bytes.Contains(current.agents[managerAgentName], []byte(managerCurrentMarker)) {
 		var err error
 		current, err = previousV52ModelPlanBundle(current)
@@ -2417,6 +2762,14 @@ func previousV51ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 // a trusted predecessor while v52 remains the active identity. Recognition is
 // package-wide: a manager, general, or apply substitution is not accepted.
 func previousV52ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = normalizeCAREV1(current)
 	if err != nil {
@@ -2448,6 +2801,14 @@ func previousV52ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV53ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = normalizeCAREV1(current)
 	if err != nil {
@@ -2481,6 +2842,14 @@ func previousV53ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 // predecessor of v55. It changes only the manager identity and removes the
 // v55 Candidate Capsule contract, preserving every other artifact byte.
 func previousV54ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = normalizeCAREV1(current)
 	if err != nil {
@@ -2504,6 +2873,14 @@ func previousV54ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	var err error
 	current, err = normalizeCAREV1(current)
 	if err != nil {
@@ -2544,6 +2921,14 @@ func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV56ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
 		var err error
 		current, err = previousCAREV1ModelPlanBundle(current)
@@ -2570,6 +2955,14 @@ func previousV56ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousV57ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
 		return current, nil
 	}
@@ -2590,6 +2983,14 @@ func previousV57ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 }
 
 func previousCAREV1ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
 		agents := cloneAgents(current.agents)
 		agents[managerAgentName] = previousManagerV59(agents[managerAgentName])
@@ -2621,6 +3022,14 @@ func previousCAREV1ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, er
 }
 
 func normalizeCAREV1(current modelPlanBundle) (modelPlanBundle, error) {
+	if isSharedManagerBundle(current) {
+		var normalizeErr error
+		current, normalizeErr = managerV60Bundle(current)
+		if normalizeErr != nil {
+			return modelPlanBundle{}, normalizeErr
+		}
+	}
+
 	agents := cloneAgents(current.agents)
 	present := 0
 	for _, item := range []struct {
@@ -2665,6 +3074,13 @@ func normalizeCAREV1(current modelPlanBundle) (modelPlanBundle, error) {
 
 func supportedHistoricalModelPlanBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 	bundles := []modelPlanBundle{current}
+	if isSharedManagerBundle(current) {
+		old, e := managerV60Bundle(current)
+		if e != nil {
+			return nil, e
+		}
+		bundles = append(bundles, old)
+	}
 	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
 		immediatePredecessor,
 		previousCAREV1ModelPlanBundle,
@@ -2709,6 +3125,18 @@ func supportedHistoricalModelPlanBundles(current modelPlanBundle) ([]modelPlanBu
 }
 
 func previousManagerV48(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	return derivePredecessor(current, []textReplacement{
 		{old: "artifact: opencode-agent/vgxness-manager; version: 49", new: "artifact: opencode-agent/vgxness-manager; version: 48"},
 		{old: currentOpenCodeManagerIdentity, new: previousOpenCodeManagerIdentityV48},
@@ -2721,6 +3149,18 @@ func previousManagerV48(current []byte) []byte {
 }
 
 func previousManagerV47(current []byte) []byte {
+	if bytes.Contains(current, []byte(sharedManagerMarker)) {
+		assignment, e := promptAssignment(current)
+		if e != nil {
+			return nil
+		}
+		old, e := bindManager(assignment)
+		if e != nil {
+			return nil
+		}
+		current = preserveVariantShape(current, old)
+	}
+
 	previous := previousManagerV48(current)
 	if len(previous) == 0 {
 		return nil

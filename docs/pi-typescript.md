@@ -54,3 +54,18 @@ Explore has no shell or write authority. Writable workers retain exact target ha
 `vgxness setup pi --status` inspects the installed package independently of the original release directory. It runs `node src/probe.ts` with an isolated temporary home and storage. The probe applies all migrations to a temporary database and checks schema version 23, foreign keys, FTS5, exact 64-bit integers, and SQLite backup, then removes its temporary files. It does not open configured user memory or authentication state.
 
 Local Linux arm64 checks cover Node 22.19.0 and Node 24, package extraction, the Pi SDK loader, and temporary memory read/write. A portable artifact does not by itself establish native macOS or Windows runtime support; those claims require observed target-native checks. Worker process support has its own platform constraints, separate from the package and SQLite probe.
+
+## Manager orchestration and delegated skills
+
+The Manager prompt defines task framing, skill selection, bounded delegation, independent verification, memory assessment, session handoff and explicit SDD/delivery authority. Pi's native skill catalog supplies descriptions; the Manager reads the applicable SKILL.md and necessary references before applying a workflow. The bundled `skills-creator` is discoverable in Pi; its optional structural validators require Python 3, not a Pi runtime service.
+
+`task.skills` accepts up to eight managed skill selections, each with `name`, the SKILL.md `sha256` returned by the Manager-only `vgx_skill` list/read tool, and optional `resources` (up to seven relative text paths). SKILL.md is always included. Shared compatible skills take precedence over package fallbacks. Unknown names, path escapes, symlinks, binary resources, altered digests and excess budgets fail before launch. A resource is limited to 64 KiB and the mission's skill text to 128 KiB. Discovery markers identify catalog eligibility; they are not cryptographic proof of a third-party publisher's trustworthiness.
+
+The host supplies immutable text snapshots with per-file hashes inside the mission digest. Workers see the complete goal, criteria, role/mode, allowed targets/commands, accepted SDD bindings, return budget and selected resources through their RPC prompt. They do not inherit ambient skills, the conversation, memory access or Manager authority. Snapshot resources are guidance, not executable permissions or live file handles; missing referenced resources must be reported. A later skill edit does not rewrite a mission already issued.
+
+These contracts are covered by resource validation, native task loading and RPC transport tests. Instruction delivery does not prove a model will follow every workflow correctly; open-ended task quality still requires behavioral evaluation with the selected model. Existing Windows worker and authentication limitations remain applicable.
+
+The Manager and twelve worker definitions now come from the shared registry,
+with native Pi tool guidance supplied by its adapter. See
+[Shared Manager and native adapters](architecture/shared-manager-contract.md)
+for regeneration, exact predecessor preservation and evidence limits.

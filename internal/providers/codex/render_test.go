@@ -252,7 +252,8 @@ func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	if got := OrchestrationContractIdentity(); got != orchestration.ContractIdentity || !strings.Contains(content, orchestration.ContractPolicy) {
+	contract, loadErr := orchestration.LoadManagerContract()
+	if loadErr != nil || OrchestrationContractIdentity() != orchestration.ContractIdentity || !strings.Contains(content, contract.RenderManagerSections()) {
 		t.Errorf("Codex manager lacks shared contract %q", orchestration.ContractIdentity)
 	}
 }
@@ -263,8 +264,9 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
-	if !strings.Contains(manager, "artifact: codex-agent/manager; version: 19; parity: opencode-v60") || !strings.Contains(manager, orchestration.PedagogicalExecutionBrief) || !strings.Contains(manager, "readiness-envelope/v1") || !strings.Contains(manager, currentCodexCandidateCapsuleContract) {
-		t.Fatal("current Codex manager is not v19 with pedagogical parity, readiness, and Candidate Capsule")
+	contract, loadErr := orchestration.LoadManagerContract()
+	if loadErr != nil || !strings.Contains(manager, "artifact: codex-agent/manager; version: 20; parity: opencode-v61") || !strings.Contains(manager, contract.RenderManagerSections()) {
+		t.Fatal("current Codex manager is not the canonical v20 projection")
 	}
 	predecessor, err := renderActiveV13("v1.2.3", sdd.PlanMedium)
 	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 13; parity: opencode-v53") {
@@ -285,7 +287,7 @@ func TestManager18DerivesFromExactManager17Package(t *testing.T) {
 }
 
 func TestManager19PreservesExactManager18AndNativePedagogicalWording(t *testing.T) {
-	current, err := Render("v1.2.3")
+	current, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +314,7 @@ func TestManager19PreservesExactManager18AndNativePedagogicalWording(t *testing.
 }
 
 func TestCurrentCAREContractIsStrictAndV55RemainsHistorical(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +394,7 @@ func TestActiveV12PredecessorPackageRequiresExactBytes(t *testing.T) {
 }
 
 func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +413,7 @@ func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
 }
 
 func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +475,7 @@ func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
 }
 
 func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +557,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 }
 
 func TestRenderedRepositoryChildrenValidateAndEchoContextCapsule(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +614,7 @@ func TestRenderedSDDProfilesRemainExactAndContextCapsuleFree(t *testing.T) {
 }
 
 func TestRenderUsesIntentTriggeredMemoryWithoutRoutineRecentFirst(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +638,7 @@ func TestRenderUsesIntentTriggeredMemoryWithoutRoutineRecentFirst(t *testing.T) 
 }
 
 func TestManagerRequiresTerminalMemoryClosureBeforeTerminalReporting(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,12 +662,15 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
+	contract, loadErr := orchestration.LoadManagerContract()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
 	for _, required := range []string{
-		"artifact: codex-agent/manager; version: 19; parity: opencode-v60",
-		"adaptive general-purpose partner",
-		"When the engineering route activates",
-		orchestration.ContractPolicy,
-		orchestration.ContractBudgetPolicy,
+		"artifact: codex-agent/manager; version: 20; parity: opencode-v61",
+		contract.RenderManagerSections(),
+		"# Native Codex adapter",
+		"content SHA256: " + orchestration.ManagerContractDigest(),
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("current Codex manager missing %q", required)
@@ -713,7 +718,7 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 }
 
 func TestOpenCodeAndCodexManagersHaveIdenticalNormalizedMemoryPolicy(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,7 +742,7 @@ func TestOpenCodeAndCodexManagersHaveIdenticalNormalizedMemoryPolicy(t *testing.
 }
 
 func TestDelegationProfileMatrix(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,7 +770,7 @@ func TestDelegationProfileMatrix(t *testing.T) {
 }
 
 func TestAssuranceProfilesRequireAndEchoReviewBinding(t *testing.T) {
-	pkg, err := Render("v1.2.3")
+	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
