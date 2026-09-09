@@ -93,6 +93,9 @@ type Result struct {
 	RetainedPredecessorCount   int
 	RetainedPredecessorPath    string
 	DirectoryDurability        string
+	MCPRepairOldExecutable     string
+	MCPRepairEntrySHA256       string
+	MCPRepairMode              string
 }
 
 // ManagedArtifact identifies desired provider-owned content without exposing it.
@@ -113,6 +116,22 @@ type Runtime interface {
 	Install(context.Context, Options) (Result, error)
 	Status(context.Context, Options) (Result, error)
 	Uninstall(context.Context, Options) (Result, error)
+}
+
+// MCPRepairProof makes an obsolete, provider-owned MCP entry repairable only
+// when the caller supplies the exact entry identity observed during preview.
+type MCPRepairProof struct {
+	OldExecutable       string
+	ExpectedEntrySHA256 string
+}
+
+// MCPRepairRuntime is deliberately separate from ordinary installation. A
+// drifted launcher remains fail-closed unless this explicit repair route is
+// selected with a proof captured from the same entry.
+type MCPRepairRuntime interface {
+	Runtime
+	PreviewMCPRepair(context.Context, Options, MCPRepairProof) (Result, error)
+	RepairMCP(context.Context, Options, MCPRepairProof) (Result, error)
 }
 
 // ManagedRuntime adds recovery operations without widening ordinary CLI use.

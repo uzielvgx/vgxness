@@ -8,12 +8,13 @@ import (
 )
 
 type skillDefinition struct {
-	name         string
-	source       string
-	files        map[string][]byte
-	predecessors map[string]string
-	packageExact bool
-	legacy       []legacyDefinition
+	name                string
+	source              string
+	files               map[string][]byte
+	predecessors        map[string]string
+	predecessorPackages []map[string]string
+	packageExact        bool
+	legacy              []legacyDefinition
 }
 
 type legacyDefinition struct {
@@ -66,8 +67,18 @@ func (s *Service) entries() (map[string][]byte, error) {
 			}
 			entries[identity] = content
 		}
-		if definition.packageExact && (len(definition.predecessors) == 0 || len(definition.predecessors) != len(definition.files)) {
+		if definition.packageExact && len(definition.predecessorPackages) == 0 && (len(definition.predecessors) == 0 || len(definition.predecessors) != len(definition.files)) {
 			return nil, ErrInvalid
+		}
+		for _, predecessor := range definition.predecessorPackages {
+			if len(predecessor) != len(definition.files) {
+				return nil, ErrInvalid
+			}
+			for relative := range predecessor {
+				if _, exists := definition.files[relative]; !validRelative(relative) || !exists {
+					return nil, ErrInvalid
+				}
+			}
 		}
 		for relative := range definition.predecessors {
 			if _, exists := definition.files[relative]; !validRelative(relative) || !exists {
@@ -93,10 +104,11 @@ func (s *Service) entries() (map[string][]byte, error) {
 
 func bundledCatalog() (catalog, error) {
 	creator := skillDefinition{
-		name:         "skills-creator",
-		source:       "skills-creator",
-		predecessors: predecessorDigests,
-		legacy:       []legacyDefinition{{name: "agent-skill-engineer", digests: legacyV032Digests}},
+		name:                "skills-creator",
+		source:              "skills-creator",
+		predecessorPackages: []map[string]string{predecessorDigests, skillsCreatorV040PredecessorDigests},
+		packageExact:        true,
+		legacy:              []legacyDefinition{{name: "agent-skill-engineer", digests: legacyV032Digests}},
 	}
 	entries, err := bundledFiles(creator.source)
 	if err != nil {
@@ -234,6 +246,11 @@ func (s *Service) predecessor(identity string, content []byte) bool {
 			actual := digest(content)
 			if definition.predecessors[relative] == actual {
 				return true
+			}
+			for _, predecessor := range definition.predecessorPackages {
+				if predecessor[relative] == actual {
+					return true
+				}
 			}
 			for _, legacy := range definition.legacy {
 				if legacy.digests[relative] == actual || !legacy.exactOnly && bytes.Equal(content, definition.files[relative]) {

@@ -60,9 +60,10 @@ func TestPiExtractedNativePackageJourney(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
+	t.Logf("resolved Pi SDK loader: %s", loader)
 	// Load through the real Pi SDK and use only temporary local storage.
 	resourceLoader := filepath.Join(filepath.Dir(filepath.Dir(loader)), "resource-loader.js")
-	script := `const {DefaultResourceLoader}=await import(process.argv[1]); const [workspace,agent]=process.argv.slice(2); const resources=new DefaultResourceLoader({cwd:workspace,agentDir:agent,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true}); await resources.reload(); const v=resources.getExtensions(); if(v.errors.length||v.extensions.length!==1) throw new Error(JSON.stringify(v)); const handlers=v.extensions[0].handlers; const context={sessionManager:{getSessionId:()=>"installed-session"}}; const tools=[...v.extensions[0].tools.values()].map(x=>x.definition); const save=tools.find(x=>x.name==="memory_save"), get=tools.find(x=>x.name==="memory_get"); if(!save||!get) throw new Error("settings package was not discovered"); try { const saved=JSON.parse((await save.execute("save",{title:"fixture",content:"installed TypeScript write"})).content[0].text); const id=saved.id??saved.ID; if(typeof id!=="string") throw new Error("TypeScript memory save returned no id"); const loaded=JSON.parse((await get.execute("get",{id})).content[0].text); if((loaded.content??loaded.Content)!=="installed TypeScript write") throw new Error("TypeScript memory readback mismatch"); } finally { for(const handler of handlers.get("session_shutdown")??[]) await handler({reason:"quit"},context); }`
+	script := `const {pathToFileURL}=await import("node:url"); const {DefaultResourceLoader}=await import(pathToFileURL(process.argv[1]).href); const [workspace,agent]=process.argv.slice(2); const resources=new DefaultResourceLoader({cwd:workspace,agentDir:agent,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true}); await resources.reload(); const v=resources.getExtensions(); if(v.errors.length||v.extensions.length!==1) throw new Error(JSON.stringify(v)); const handlers=v.extensions[0].handlers; const context={sessionManager:{getSessionId:()=>"installed-session"}}; for(const handler of handlers.get("session_start")??[]) await handler({reason:"startup"},context); const tools=[...v.extensions[0].tools.values()].map(x=>x.definition); const save=tools.find(x=>x.name==="memory_save"), get=tools.find(x=>x.name==="memory_get"); if(!save||!get) throw new Error("settings package was not discovered"); try { const saved=JSON.parse((await save.execute("save",{title:"fixture",content:"installed TypeScript write"})).content[0].text); const id=saved.id??saved.ID; if(typeof id!=="string") throw new Error("TypeScript memory save returned no id"); const loaded=JSON.parse((await get.execute("get",{id})).content[0].text); if((loaded.content??loaded.Content)!=="installed TypeScript write") throw new Error("TypeScript memory readback mismatch"); } finally { for(const handler of handlers.get("session_shutdown")??[]) await handler({reason:"quit"},context); }`
 	check := exec.Command(node, "--input-type=module", "-e", script, resourceLoader, workspace, agent)
 	check.Dir = workspace
 	check.Env = []string{"HOME=" + t.TempDir(), "PATH=" + filepath.Dir(node), "PI_CODING_AGENT_DIR=" + agent, "PI_CODING_AGENT_SESSION_DIR=" + t.TempDir(), "VGXNESS_PI_STORAGE_ROOT=" + extensionStorage}
@@ -98,6 +99,13 @@ func piRequestLine(t *testing.T, id, operation, workspace, mode, role string) []
 func piSDKLoader() (string, error) {
 	if root := os.Getenv("PI_SDK_ROOT"); root != "" {
 		candidate := filepath.Join(root, "dist", "core", "extensions", "loader.js")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		repository := filepath.Clean(filepath.Join(cwd, "..", ".."))
+		candidate := filepath.Join(repository, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "extensions", "loader.js")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		}

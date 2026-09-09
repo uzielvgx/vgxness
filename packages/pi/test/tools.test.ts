@@ -13,8 +13,9 @@ import { loadNativeRuntime } from "./runtime-fixture.mjs";
 const { createNativeDispatcher } = await loadNativeRuntime();
 
 async function loadPatchTool(workspace: string, options: unknown = {}) {
-  (globalThis as any).__piTestHost = { workspace, mode: "full", role: "manager", backend: async () => { throw new Error("not used"); } };
-  (globalThis as any).__piTestOptions = options;
+  const { host: hostOptions, ...toolOptions } = options as any;
+  (globalThis as any).__piTestHost = { workspace, mode: "full", role: "manager", backend: async () => ({ request: async () => ({ handle: "fixture", state: "active", leaseUntil: new Date(Date.now()+60000).toISOString() }) }), ...(hostOptions ?? {}) };
+  (globalThis as any).__piTestOptions = toolOptions;
   const wrapper = join(workspace, "patch-extension.ts");
   const source = join(dirname(fileURLToPath(import.meta.url)), "../src/tools/apply_patch.ts");
   await writeFile(wrapper, `import { createApplyPatchTool } from ${JSON.stringify(source)}; export default async (pi) => pi.registerTool(createApplyPatchTool(globalThis.__piTestHost, globalThis.__piTestOptions));`);
@@ -22,6 +23,24 @@ async function loadPatchTool(workspace: string, options: unknown = {}) {
   assert.deepEqual(loaded.errors, []);
   return [...loaded.extensions[0].tools.values()].map((item: any) => item.definition).find((item: any) => item.name === "apply_patch");
 }
+
+test("apply_patch checks authority immediately before each commit and still rolls back owned work", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "pi-patch-authority-"));
+  await writeFile(join(workspace, "one.txt"), "one\n"); await writeFile(join(workspace, "two.txt"), "two\n");
+  let guards = 0;
+  const tool: any = await loadPatchTool(workspace, { host: { mutationGuard: () => { if (++guards >= 3) throw new Error("session authority unavailable"); } } });
+  const patch = "--- a/one.txt\n+++ b/one.txt\n@@ -1 +1 @@\n-one\n+ONE\n--- a/two.txt\n+++ b/two.txt\n@@ -1 +1 @@\n-two\n+TWO\n";
+  await assert.rejects(tool.execute("authority", { patch }), /authority unavailable/);
+  assert.equal(await readFile(join(workspace, "one.txt"), "utf8"), "one\n");
+  assert.equal(await readFile(join(workspace, "two.txt"), "utf8"), "two\n");
+});
+
+test("apply_patch leaves a single file unchanged when authority expires before commit", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "pi-patch-authority-one-")); await writeFile(join(workspace, "one.txt"), "one\n");
+  let guards = 0; const tool: any = await loadPatchTool(workspace, { host: { mutationGuard: () => { if (++guards >= 2) throw new Error("session authority unavailable"); } } });
+  await assert.rejects(tool.execute("authority-one", { patch: "--- a/one.txt\n+++ b/one.txt\n@@ -1 +1 @@\n-one\n+ONE\n" }), /authority unavailable/);
+  assert.equal(await readFile(join(workspace, "one.txt"), "utf8"), "one\n");
+});
 
 test("Pi SDK registers native tools with closed operation schemas", async () => {
   const extension = join(dirname(fileURLToPath(import.meta.url)), "../src/extension.ts");
@@ -44,12 +63,13 @@ test("apply_patch preflights multi-file patches, links, roles, and drift", async
   const workspace = await mkdtemp(join(tmpdir(), "pi-patch-"));
   await writeFile(join(workspace, "one.txt"), "one\ntwo\nthree\n");
   await writeFile(join(workspace, "remove.txt"), "remove\n");
-  (globalThis as any).__piTestHost = { workspace, mode: "full", role: "manager", backend: async () => { throw new Error("not used"); } };
+  (globalThis as any).__piTestHost = { workspace, mode: "full", role: "manager", backend: async () => ({ request: async () => ({ handle: "fixture", state: "active", leaseUntil: new Date(Date.now()+60000).toISOString() }) }) };
   const wrapper = join(workspace, "extension.ts");
   const source = join(dirname(fileURLToPath(import.meta.url)), "../src/extension.ts");
   await writeFile(wrapper, `import { createPiExtension } from ${JSON.stringify(source)}; export default createPiExtension(globalThis.__piTestHost);`);
   const loaded = await loadExtensions([wrapper], workspace);
   assert.deepEqual(loaded.errors, []);
+  for (const handler of loaded.extensions[0].handlers.get("session_start") ?? []) await handler({ type: "session_start" }, { sessionManager: { getSessionId: () => "fixture" } });
   const tool: any = [...loaded.extensions[0].tools.values()].map((item: any) => item.definition).find((item: any) => item.name === "apply_patch");
   await tool.execute("multi", { patch: "--- a/one.txt\n+++ b/one.txt\n@@ -1,3 +1,3 @@\n-one\n+ONE\n two\n-three\n+THREE\n--- /dev/null\n+++ b/added.txt\n@@ -0,0 +1 @@\n+added\n--- a/remove.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-remove\n" });
   assert.equal(await read(join(workspace, "one.txt"), "utf8"), "ONE\ntwo\nTHREE\n");
@@ -129,6 +149,7 @@ test("full native manager initializes then saves and reads isolated memory", asy
     await writeFile(wrapper, `import { createPiExtension } from ${JSON.stringify(source)}; export default createPiExtension(globalThis.__piTestHost);`);
     const loaded = await loadExtensions([wrapper], workspace);
     assert.deepEqual(loaded.errors, []);
+    for (const handler of loaded.extensions[0].handlers.get("session_start") ?? []) await handler({ type: "session_start" }, { sessionManager: { getSessionId: () => "fixture" } });
     const tools = [...loaded.extensions[0].tools.values()].map((item: any) => item.definition);
     const save = tools.find((tool: any) => tool.name === "memory_save");
     const search = tools.find((tool: any) => tool.name === "memory_search");
@@ -170,3 +191,4 @@ test("apply_patch shares Pi's file mutation queue with built-in write", async ()
   assert.equal(await readFile(join(workspace, "file.txt"), "utf8"), "builtin\n");
   delete (globalThis as any).__piTestHost; delete (globalThis as any).__piTestOptions;
 });
+test("apply_patch cancellation preserves original files before and during commits",async t=>{const fs=await import("node:fs/promises"),root=await mkdtemp(join(tmpdir(),"pi-patch-cancel-"));t.after(()=>fs.rm(root,{recursive:true,force:true}));const one=join(root,"one"),two=join(root,"two");await writeFile(one,"one\n");await writeFile(two,"two\n");const patch="--- a/one\n+++ b/one\n@@ -1 +1 @@\n-one\n+ONE\n--- a/two\n+++ b/two\n@@ -1 +1 @@\n-two\n+TWO\n";const pre=new AbortController();pre.abort();await assert.rejects((await loadPatchTool(root)).execute("x",{patch},pre.signal));assert.equal(await readFile(one,"utf8"),"one\n");let commits=0;const c=new AbortController();const tool=await loadPatchTool(root,{fault:(p:string)=>{if(p==="before-commit"&&++commits===2)c.abort()}});await assert.rejects(tool.execute("x",{patch},c.signal),e=>{assert.doesNotMatch(String(e),/recovery_pending/);return true});assert.equal(await readFile(one,"utf8"),"one\n");assert.equal(await readFile(two,"utf8"),"two\n");});

@@ -14,6 +14,9 @@ import (
 )
 
 func TestStatusInspectsInstalledPiWithoutReleaseDirectory(t *testing.T) {
+	oldLookPath := piLookPath
+	piLookPath = func(name string) (string, error) { return "/fixture/" + name, nil }
+	t.Cleanup(func() { piLookPath = oldLookPath })
 	root := t.TempDir()
 	options := Options{
 		ReleaseDir:  tinyRelease(t, filepath.Join(root, "release"), "a"),
@@ -189,5 +192,57 @@ func TestStatusReportsLegacyPackageAndUpdatePreservesIt(t *testing.T) {
 	}
 	if data, err := os.ReadFile(metadataPath); err != nil || string(data) != string(legacy) {
 		t.Fatalf("old package was changed: %v", err)
+	}
+}
+
+func TestPlanWithoutReleaseRequiresAcquisition(t *testing.T) {
+	root := t.TempDir()
+	plan, err := NewProvider(Options{AgentDir: filepath.Join(root, "agent"), InstallRoot: filepath.Join(root, "managed")}).Plan(context.Background(), setupflow.SharedPlan{})
+	if err != nil || plan.Ready || plan.Blocker != "Pi release acquisition required" {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+}
+
+func TestPlanPrerequisitesBlockReadiness(t *testing.T) {
+	old := piLookPath
+	defer func() { piLookPath = old }()
+	root := t.TempDir()
+	options := Options{ReleaseDir: tinyRelease(t, filepath.Join(root, "release"), "a"), AgentDir: filepath.Join(root, "agent"), InstallRoot: filepath.Join(root, "managed"), GOOS: "linux", GOARCH: "amd64"}
+	piLookPath = func(name string) (string, error) {
+		if name == "node" {
+			return "/node", nil
+		}
+		return "", errors.New("missing")
+	}
+	plan, err := NewProvider(options).Plan(context.Background(), setupflow.SharedPlan{})
+	if err != nil || plan.Ready || !strings.Contains(plan.Blocker, "pi CLI") {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	piLookPath = func(string) (string, error) { return "", errors.New("missing") }
+	plan, err = NewProvider(options).Plan(context.Background(), setupflow.SharedPlan{})
+	if err != nil || plan.Ready || !strings.Contains(plan.Blocker, "node") {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+}
+
+func TestInstalledStatusPrerequisiteBlocksPreserveIdentity(t *testing.T) {
+	old := piLookPath
+	defer func() { piLookPath = old }()
+	root := t.TempDir()
+	o := Options{ReleaseDir: tinyRelease(t, filepath.Join(root, "release"), "a"), AgentDir: filepath.Join(root, "agent"), InstallRoot: filepath.Join(root, "managed"), GOOS: "linux", GOARCH: "amd64"}
+	if _, err := Install(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	for _, missing := range []string{"node", "pi"} {
+		piLookPath = func(name string) (string, error) {
+			if name == missing {
+				return "", errors.New("missing")
+			}
+			return "/fixture/" + name, nil
+		}
+		status, err := NewProvider(Options{AgentDir: o.AgentDir, InstallRoot: o.InstallRoot}).Status(context.Background(), setupflow.SharedPlan{})
+		if err != nil || status.Ready || !status.Installed || status.ArtifactSHA256 == "" || !strings.Contains(status.Blocker, missing) {
+			t.Fatalf("missing=%s status=%+v err=%v", missing, status, err)
+		}
 	}
 }

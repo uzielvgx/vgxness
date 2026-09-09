@@ -62,7 +62,7 @@ export async function revalidateWorkerMission(mission: WorkerMission) {
   }
 }
 /** Mutable only inside this process after a verified worker-owned patch; mission bytes remain immutable. */
-export function workerTargetLedger(mission: WorkerMission) { let ledger = ledgers.get(mission); if (!ledger) { if (!(mission as any)[acceptedBrand] || !Object.isFrozen(mission)) throw new Error("worker mission was not accepted"); ledger = { ...mission.targets }; ledgers.set(mission, ledger); } return ledger; }
+export function workerTargetLedger(mission: WorkerMission) { let ledger = ledgers.get(mission); if (!ledger) { if (!(mission as any)[acceptedBrand] || !Object.isFrozen(mission) || !acceptedMissions.has(mission)) throw new Error("worker mission was not accepted"); ledger = { ...mission.targets }; ledgers.set(mission, ledger); } return ledger; }
 export async function advanceWorkerTargets(mission: WorkerMission, targets: string[]) { const ledger = workerTargetLedger(mission); for (const target of targets) { if (!(target in ledger)) throw new Error("worker target not authorized"); const path = resolve(mission.workspace, target); try { const info = await lstat(path); if (!info.isFile() || info.isSymbolicLink()) throw new Error("worker target is not regular"); ledger[target] = createHash("sha256").update(await readFile(path)).digest("hex"); } catch (error: any) { if (error?.code === "ENOENT") ledger[target] = "ABSENT"; else throw error; } } }
 export function validateWorkerArgv(mission: WorkerMission & { commands?: string[][] }, argv: string[]) {
   if (mission.role === "explore") throw new Error("explore missions cannot authorize commands");

@@ -1,8 +1,8 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
-type Backend = { verifyCurrentAcceptedBinding?(binding: unknown): Promise<boolean>; request(operation: string, payload: unknown, binding: { workspace: string; mode: "read-only" | "full"; role: string }): Promise<unknown> };
-export type ToolHost = { workspace: string; mode: "read-only" | "full"; role: string; backend: () => Promise<Backend> };
+type Backend = { verifyCurrentAcceptedBinding?(binding: unknown): Promise<boolean>; request(operation: string, payload: unknown, binding: { workspace: string; mode: "read-only" | "full"; role: string }, control?: { beforeMutation?: () => void; signal?: AbortSignal }): Promise<unknown> };
+export type ToolHost = { workspace: string; mode: "read-only" | "full"; role: string; backend: () => Promise<Backend>; mutationGuard?: () => void; mutationSignal?: () => AbortSignal };
 const text = () => Type.String({ minLength: 1 });
 const scope = Type.Optional(Type.Literal("project"));
 const state = Type.Union([Type.Literal("active"), Type.Literal("needs_review")]);
@@ -48,18 +48,20 @@ export function createMemoryTools(host: ToolHost) {
   ] as const;
   const tools = definitions.map(([name, operation, description]) => ({
     name, label: name, description, parameters: memorySchemas[name],
-    async execute(_id: string, payload: unknown) {
+    async execute(_id: string, payload: unknown, signal?: AbortSignal) {
       validate(memorySchemas[name], payload);
-      const value = await (await host.backend()).request(operation, payload, host);
+      const mutate=operation === "memory.remember" || operation === "memory.forget", combined=mutate&&host.mutationSignal?signal?AbortSignal.any([signal,host.mutationSignal()]):host.mutationSignal():signal;
+      if(mutate){combined?.throwIfAborted();host.mutationGuard?.();} const client=await host.backend(); if(mutate){combined?.throwIfAborted();host.mutationGuard?.();}
+      const value = await client.request(operation, payload, host, mutate?{beforeMutation:()=>{combined?.throwIfAborted();host.mutationGuard?.();},signal:combined}:{signal:combined});
       return result(value);
     },
   }));
   tools.push({
     name: "memory", label: "Memory administration", description: "Perform one closed project, sync, or provider-session memory operation.", parameters: memoryOperationSchema,
-    async execute(_id: string, inputValue: Record<string, unknown>) {
+    async execute(_id: string, inputValue: Record<string, unknown>, signal?: AbortSignal) {
       validate(memoryOperationSchema, inputValue);
-      const { operation, ...payload } = inputValue;
-      return result(await (await host.backend()).request(`memory.${operation}`, payload, host));
+      const { operation: rawOperation, ...payload } = inputValue; const operation = String(rawOperation);
+      const mutate=!["project.resolve", "sync.status", "session.context"].includes(operation),combined=mutate&&host.mutationSignal?signal?AbortSignal.any([signal,host.mutationSignal()]):host.mutationSignal():signal;if(mutate){combined?.throwIfAborted();host.mutationGuard?.();}const client=await host.backend();if(mutate){combined?.throwIfAborted();host.mutationGuard?.();}return result(await client.request(`memory.${operation}`,payload,host,mutate?{beforeMutation:()=>{combined?.throwIfAborted();host.mutationGuard?.();},signal:combined}:{signal:combined}));
     },
   } as any);
   return tools;

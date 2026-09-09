@@ -115,13 +115,16 @@ async function owned(snapshot: Snapshot) {
 export class PatchRecoveryError extends Error {
   readonly code = "recovery_pending";
   readonly retrySafe = false;
-  constructor(readonly details: { code: string; retrySafe: boolean; affectedPaths: string[]; recoveryPaths: string[] }) { super(`Patch recovery_pending; retrySafe=false; ${JSON.stringify(details)}`); this.name = "PatchRecoveryError"; }
+  readonly details: { code: string; retrySafe: boolean; affectedPaths: string[]; recoveryPaths: string[] };
+  constructor(details: PatchRecoveryError["details"]) { super(`Patch recovery_pending; retrySafe=false; ${JSON.stringify(details)}`); this.name = "PatchRecoveryError"; this.details = details; }
 }
 
 export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions = {}) {
   const tool = { name: "apply_patch", label: "Apply patch", description: "Apply one complete, preflighted unified patch inside the workspace.", parameters: applyPatchSchema, executionMode: "sequential" as const,
-    async execute(_id: string, input: { patch: string }) {
+    async execute(_id: string, input: { patch: string }, signal?: AbortSignal) {
       if (!Value.Check(applyPatchSchema, input)) throw new Error("invalid tool input");
+      host.mutationGuard?.();
+      signal?.throwIfAborted();
       const worker = options.workerRole !== undefined;
       if (host.mode !== "full" || (host.role !== "manager" && !worker) || (worker && !options.allowedTargets) || (options.workerRole === "sdd-apply" && !options.acceptedBindings)) throw new Error("patch requires authorized full authority");
       const root = await realpath(host.workspace);
@@ -173,6 +176,8 @@ export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions 
           await options.fault?.("before-commit");
           await regular(snapshot.path, root, snapshot.before === undefined);
           if (snapshot.before !== undefined && !(await readFile(snapshot.path)).equals(snapshot.before)) throw new Error("patch drift detected");
+          host.mutationGuard?.();
+          signal?.throwIfAborted();
           if (snapshot.after === undefined) await rm(snapshot.path);
           else await rename(snapshot.temporary!, snapshot.path);
           snapshot.committed = true;
@@ -208,14 +213,15 @@ export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions 
     },
   };
   const execute = tool.execute;
-  tool.execute = async (id: string, input: { patch: string }) => {
+  tool.execute = async (id: string, input: { patch: string }, signal?: AbortSignal) => {
     if (!Value.Check(applyPatchSchema, input)) throw new Error("invalid tool input");
     const root = await realpath(host.workspace);
     const edits = parsePatch(input.patch, root);
     // Reject aliasing/symlink paths before acquiring multiple canonical Pi queues.
     for (const edit of edits) { if (edit.oldPath) await regular(edit.oldPath, root); if (edit.newPath && edit.newPath !== edit.oldPath) await regular(edit.newPath, root, true); }
     const targets = edits.map(edit => edit.newPath ?? edit.oldPath!).sort();
-    const locked = (index: number): Promise<any> => index === targets.length ? execute(id, input) : withFileMutationQueue(targets[index], () => locked(index + 1));
+    const combined=host.mutationSignal?signal?AbortSignal.any([signal,host.mutationSignal()]):host.mutationSignal():signal; combined?.throwIfAborted();
+    const locked = (index: number): Promise<any> => index === targets.length ? (combined?.throwIfAborted(), host.mutationGuard?.(), execute(id, input, combined)) : withFileMutationQueue(targets[index], () => locked(index + 1));
     return locked(0);
   };
   return tool;

@@ -20,6 +20,10 @@ function local(ctx: ServiceContext, row: any) { const out: any = session(row)!; 
     out.leaseToken = secret.token;
 else
     delete (out as any).leaseToken; return out; }
+/** Check lease validity in the mutation transaction; cleanup on a later start is not authority. */
+function activeLease(ctx: ServiceContext, row: any, token: string) {
+    return row && row.state === "active" && row.lease_token === token && row.lease_until != null && ns(row.lease_until) > clock(ctx);
+}
 export async function dispatchSession(ctx: ServiceContext, operation: string, payload: any): Promise<any> {
     const p = payload ?? {}, id = project(ctx);
     if (operation.startsWith("memory."))
@@ -61,13 +65,13 @@ export async function dispatchSession(ctx: ServiceContext, operation: string, pa
     writable(ctx);
     const s = secret(ctx, p.handle);
     if (operation === "session.checkpoint" || operation === "session.renew") {
-        return ctx.database.transaction(() => { const row = ctx.database.db.prepare(`${select} WHERE project_id=? AND handle=?`).get(id, p.handle) as any; if (!row || row.state !== "active" || row.lease_token !== s.token)
+        return ctx.database.transaction(() => { const row = ctx.database.db.prepare(`${select} WHERE project_id=? AND handle=?`).get(id, p.handle) as any; if (!activeLease(ctx, row, s.token))
             bad(); const now = monotonic(ctx, row.updated_at); ctx.database.db.prepare(`UPDATE local_provider_sessions SET ${operation === "session.checkpoint" ? "checkpointed=1," : ""}lease_until=?,updated_at=? WHERE handle=? AND lease_token=?`).run(now + ttl, now, p.handle, s.token); return local(ctx, ctx.database.db.prepare(`${select} WHERE handle=?`).get(p.handle)); });
     }
     if (operation === "session.draft_save") {
         if (!valid(p.summary, 4096) || p.summary.includes(p.handle))
             bad();
-        return ctx.database.transaction(() => { const row = ctx.database.db.prepare(`${select} WHERE project_id=? AND handle=?`).get(id, p.handle) as any; if (!row || row.state !== "active" || row.lease_token !== s.token)
+        return ctx.database.transaction(() => { const row = ctx.database.db.prepare(`${select} WHERE project_id=? AND handle=?`).get(id, p.handle) as any; if (!activeLease(ctx, row, s.token))
             bad(); const old = ctx.database.db.prepare("SELECT updated_at FROM local_provider_session_drafts WHERE handle=? AND project_id=?").get(p.handle, id) as any; let expected: bigint | undefined; try {
             expected = p.expectedUpdatedAt ? parseTimestamp(p.expectedUpdatedAt) : undefined;
         }
@@ -89,7 +93,7 @@ export async function dispatchSession(ctx: ServiceContext, operation: string, pa
             if (row.state === state)
                 return local(ctx, row);
             bad();
-        } if (row.lease_token !== s.token)
+        } if (!activeLease(ctx, row, s.token))
             bad(); let final = ""; if (state === "completed") {
             let summary = p.summary;
             if (summary === "") {

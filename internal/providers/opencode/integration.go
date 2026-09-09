@@ -309,6 +309,7 @@ type Integration struct {
 	afterRetirement           func() error
 	afterInstallRoot          func(*rootTransaction)
 	afterUninstallRoot        func(*rootTransaction)
+	afterMCPRepairRoot        func(*rootTransaction)
 }
 
 var currentExecutable = os.Executable

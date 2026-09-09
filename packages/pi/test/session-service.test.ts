@@ -34,3 +34,18 @@ test("provider session rejects a draft with a stale optimistic timestamp", async
   await assert.rejects(dispatchSession(ctx,"session.draft_save",{handle:current.handle,summary:"two",expectedUpdatedAt:"2020-01-01T00:00:00Z"}),/invalid/);
   await dispatchSession(ctx,"session.draft_save",{handle:current.handle,summary:"two",expectedUpdatedAt:draft.updatedAt});
 });
+
+test("expired leases reject every authoritative session mutation until a fresh start", async (t) => {
+  const ctx:any=await fixture(t); const current:any=await dispatchSession(ctx,"session.start",{externalId:"expired"});
+  // Advance the injectable clock past the durable lease. No later start is needed
+  // to make the old holder lose authority.
+  ctx.now=()=>1_800_000_000_000_000_000n;
+  for (const operation of ["session.checkpoint", "session.renew", "session.draft_save", "session.end"]) {
+    const payload:any={handle:current.handle};
+    if (operation==="session.draft_save") payload.summary="late";
+    if (operation==="session.end") { payload.state="interrupted"; payload.summary=""; }
+    await assert.rejects(dispatchSession(ctx,operation,payload),/invalid/);
+  }
+  const fresh:any=await dispatchSession(ctx,"session.start",{externalId:"fresh"});
+  assert.equal(fresh.state,"active"); assert.notEqual(fresh.handle,current.handle);
+});

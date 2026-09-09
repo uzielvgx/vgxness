@@ -1,0 +1,11 @@
+{
+  "name": "skills-creator",
+  "version": "0.4.0",
+  "owner": "VGXNESS",
+  "provenance": "VGXNESS skills-creator rename lineage from agent-skill-engineer v0.3.2 / original v0.2.0; package contents verified.",
+  "license_status": "MIT",
+  "created": "2026-07-29",
+  "last_validated": "2026-07-31",
+  "standard": "agentskills.io",
+  "supported_hosts": ["OpenCode", "Codex"]
+}

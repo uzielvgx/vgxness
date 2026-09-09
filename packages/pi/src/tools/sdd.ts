@@ -30,11 +30,12 @@ const base64 = (value: string) => Buffer.from(value, "utf8").toString("base64");
 const utf8 = (value: unknown) => typeof value === "string" ? Buffer.from(value, "base64").toString("utf8") : value;
 export function createSddTool(host: ToolHost) {
   return { name: "sdd", label: "SDD", description: "Perform one closed SDD operation through the local backend.", parameters: sddSchema,
-    async execute(_id: string, inputValue: Record<string, unknown>) {
+    async execute(_id: string, inputValue: Record<string, unknown>, signal?: AbortSignal) {
       validate(sddSchema, inputValue);
-      const { operation, ...payload } = inputValue;
+      const { operation: rawOperation, ...payload } = inputValue; const operation = String(rawOperation);
+      const mutate=["create", "set_interaction_mode", "save_revision", "accept_revision", "transition", "cancel", "record_projection"].includes(operation),combined=mutate&&host.mutationSignal?signal?AbortSignal.any([signal,host.mutationSignal()]):host.mutationSignal():signal;if(mutate){combined?.throwIfAborted();host.mutationGuard?.();}
       if (operation === "save_revision") payload.content = base64(String(payload.content));
-      const result = await (await host.backend()).request(`sdd.${operation}`, payload, host);
+      const client=await host.backend();if(mutate){combined?.throwIfAborted();host.mutationGuard?.();}const result = await client.request(`sdd.${operation}`, payload, host, mutate?{beforeMutation:()=>{combined?.throwIfAborted();host.mutationGuard?.();},signal:combined}:{signal:combined});
       if ((operation === "get_revision" || operation === "render_projection") && result && typeof result === "object" && "content" in result) {
         (result as Record<string, unknown>).content = utf8((result as Record<string, unknown>).content);
       }

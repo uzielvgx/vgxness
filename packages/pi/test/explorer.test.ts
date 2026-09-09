@@ -42,3 +42,10 @@ test('explorer directory cursor binds snapshot and search cursor binds query',as
  await writeFile(join(workspace,'src/a'),Array(25).fill('needle other').join('\n'));const search=await run('worker_search',{path:'src/a',query:'needle'});await assert.rejects(run('worker_search',{path:'src/a',query:'other',cursor:search.nextCursor}),/stale/);
  await assert.rejects(run('worker_read_page',{path:'src/a',extra:true}),/invalid/);
 });
+test('explorer cursors cannot cross accepted missions',async t=>{
+ const {workspace,run}=await setup(t);await writeFile(join(workspace,'src/a'),'abcdef');
+ const first=await run('worker_read_page',{path:'src/a',limit:2});
+ const other=await acceptMission(issueMission({nonce:crypto.randomUUID(),role:'explore',workspace,mode:'read-only',model:'p/m',effort:'low',goal:'other',criteria:[],commands:[],resultLimit:65536,targets:{},exploration:{roots:['src'],maxFiles:1000,maxBytes:100000,maxTokens:65536}}));
+ const page:any=Object.fromEntries(createExplorerTools(other).map(tool=>[tool.name,tool])).worker_read_page;
+ await assert.rejects(page.execute('x',{path:'src/a',cursor:first.nextCursor}),/stale/);
+});

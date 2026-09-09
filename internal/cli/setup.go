@@ -11,8 +11,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/vgxness/vgxness/internal/buildinfo"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
+	"github.com/vgxness/vgxness/internal/piartifact"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
 	"github.com/vgxness/vgxness/internal/providers/pi"
 	"github.com/vgxness/vgxness/internal/sdd"
@@ -30,6 +32,8 @@ type multiSetupRuntime interface {
 type piSetupRuntime interface {
 	PiProvider(pi.Options) setupflow.ProviderRuntime
 }
+
+var acquirePiRelease = pi.AcquireRelease
 
 func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime, providers ...integration.Runtime) int {
 	if len(providers) == 1 && len(args) > 0 && (args[0] == "opencode" || args[0] == "codex" || args[0] == "pi" || args[0] == "all") {
@@ -180,14 +184,14 @@ func runOpenCodeSetup(ctx context.Context, args []string, stdin io.Reader, stdou
 	return 0
 }
 
-func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime, codex integration.Runtime) int {
+func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime setupflow.Runtime, codex integration.Runtime) (exitCode int) {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|pi|all> [--preview|--status] [--yes] [--pi-release-dir PATH] [--pi-agent-dir PATH] [--pi-root PATH]")
+		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|pi|all> [--preview|--status] [--yes] [--pi-release-dir PATH|--pi-release-version vSemVer] [--pi-agent-dir PATH] [--pi-root PATH]")
 		return 2
 	}
 	providers, ok := setupProviders(args[0])
 	if !ok {
-		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|pi|all> [--preview|--status] [--yes] [--pi-release-dir PATH] [--pi-agent-dir PATH] [--pi-root PATH]")
+		fmt.Fprintln(stderr, "usage: vgxness setup <opencode|codex|pi|all> [--preview|--status] [--yes] [--pi-release-dir PATH|--pi-release-version vSemVer] [--pi-agent-dir PATH] [--pi-root PATH]")
 		return 2
 	}
 	flags := flag.NewFlagSet("setup "+args[0], flag.ContinueOnError)
@@ -195,7 +199,7 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	var preview, status, yes bool
 	var workspace string
 	var codexHome string
-	var piRelease, piAgent, piRoot string
+	var piRelease, piReleaseVersion, piAgent, piRoot string
 	var deprecatedModel string
 	var options setupflow.Options
 	flags.BoolVar(&preview, "preview", false, "explain the complete plan without writing")
@@ -215,11 +219,21 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	flags.StringVar(&options.Integration.ConfigDir, "config-dir", "", "OpenCode configuration directory")
 	flags.StringVar(&codexHome, "codex-home", "", "Codex home directory")
 	flags.StringVar(&piRelease, "pi-release-dir", "", "local Pi release directory")
+	flags.StringVar(&piReleaseVersion, "pi-release-version", "", "pinned Pi release v-prefixed SemVer")
 	flags.StringVar(&piAgent, "pi-agent-dir", "", "Pi agent settings directory")
 	flags.StringVar(&piRoot, "pi-root", "", "VGXNESS-managed Pi package root")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || preview && status || yes && (preview || status) {
 		fmt.Fprintln(stderr, "invalid setup arguments")
 		return 2
+	}
+	piVersionProvided := false
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "pi-release-version" {
+			piVersionProvided = true
+		}
+	})
+	if includesPi(providers) && !piVersionProvided {
+		piReleaseVersion = buildinfo.Version
 	}
 	if !includesOpenCode(providers) && (hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration)) {
 		fmt.Fprintln(stderr, "invalid: model slots apply only to OpenCode")
@@ -233,12 +247,18 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 		fmt.Fprintln(stderr, "invalid: --codex-home applies only to Codex")
 		return 2
 	}
-	if !includesPi(providers) && (piRelease != "" || piAgent != "" || piRoot != "") {
+	if !includesPi(providers) && (piRelease != "" || piVersionProvided || piAgent != "" || piRoot != "") {
 		fmt.Fprintln(stderr, "invalid: Pi paths apply only to Pi")
 		return 2
 	}
-	if includesPi(providers) && piRelease == "" && !status {
-		fmt.Fprintln(stderr, "invalid: --pi-release-dir is required for Pi")
+	if includesPi(providers) && piVersionProvided {
+		if _, err := piartifact.Filename(piReleaseVersion); err != nil {
+			fmt.Fprintln(stderr, "invalid: --pi-release-version must be strict v-prefixed SemVer")
+			return 2
+		}
+	}
+	if includesPi(providers) && piRelease != "" && piVersionProvided {
+		fmt.Fprintln(stderr, "invalid: --pi-release-dir and --pi-release-version cannot be combined")
 		return 2
 	}
 	if includesOpenCode(providers) && (hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration)) {
@@ -256,7 +276,7 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 			return 2
 		}
 	}
-	if runtime == nil || (!includesOpenCode(providers) && codex == nil) || (len(providers) == 2 && codex == nil) {
+	if runtime == nil || (includesCodex(providers) && codex == nil) {
 		fmt.Fprintln(stderr, "operational: setup runtime is unavailable")
 		return 1
 	}
@@ -279,6 +299,42 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 		return 2
 	}
 	options.Workspace = filepath.Clean(absWorkspace)
+	if includesPi(providers) {
+		if _, ok := runtime.(piSetupRuntime); !ok {
+			fmt.Fprintln(stderr, "operational: Pi setup runtime is unavailable")
+			return 1
+		}
+	}
+	var acquiredCleanup func() error
+	if includesPi(providers) && piRelease == "" && !preview && !status {
+		if piReleaseVersion == "dev" || piReleaseVersion == "" {
+			fmt.Fprintln(stderr, "invalid: --pi-release-version is required for development builds")
+			return 2
+		}
+		if _, err := piartifact.Filename(piReleaseVersion); err != nil {
+			fmt.Fprintln(stderr, "invalid: --pi-release-version is required for non-release builds")
+			return 2
+		}
+		var acquireErr error
+		piRelease, acquiredCleanup, acquireErr = acquirePiRelease(ctx, piReleaseVersion)
+		if acquireErr != nil {
+			fmt.Fprintf(stderr, "operational: acquire Pi release: %v\n", acquireErr)
+			return 1
+		}
+		defer func() {
+			if acquiredCleanup != nil {
+				if err := acquiredCleanup(); err != nil {
+					fmt.Fprintf(stderr, "recovery: acquired Pi release retained: %v\n", err)
+					if exitCode == 0 {
+						exitCode = 1
+					}
+				}
+			}
+		}()
+	}
+	if includesPi(providers) && piRelease == "" && preview {
+		fmt.Fprintf(stdout, "Pi release: acquisition required; pinned version=%s\n", terminalSafe(piReleaseVersion))
+	}
 	runtimes := make([]setupflow.ProviderRuntime, 0, len(providers))
 	for _, provider := range providers {
 		if provider == setupflow.ProviderOpenCode {
@@ -412,7 +468,7 @@ func setupProviders(value string) ([]setupflow.Provider, bool) {
 	case "pi":
 		return []setupflow.Provider{setupflow.ProviderPi}, true
 	case "all":
-		return []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex}, true
+		return []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi}, true
 	default:
 		return nil, false
 	}

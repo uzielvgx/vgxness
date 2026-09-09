@@ -26,10 +26,12 @@ const piVersion = "0.1.0"
 func RunPi(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("vgxness-release pi", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var output string
+	var output, releaseVersion, commit string
 	flags.StringVar(&output, "output", "", "new local output directory")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || output == "" {
-		fmt.Fprintln(stderr, "usage: vgxness-release pi --output <new-directory>")
+	flags.StringVar(&releaseVersion, "release-version", "", "portable release v-prefixed SemVer")
+	flags.StringVar(&commit, "commit", "", "portable release checkout commit")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || output == "" || (releaseVersion == "") != (commit == "") {
+		fmt.Fprintln(stderr, "usage: vgxness-release pi --output <new-directory> [--release-version <vSemVer> --commit <40-lowercase-hex>]")
 		return 2
 	}
 	repository, err := os.Getwd()
@@ -37,8 +39,14 @@ func RunPi(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pi release: resolve repository")
 		return 1
 	}
-	if err := PackagePi(ctx, repository, output); err != nil {
-		fmt.Fprintf(stderr, "pi release: %v\n", err)
+	var packageErr error
+	if releaseVersion == "" {
+		packageErr = PackagePi(ctx, repository, output)
+	} else {
+		packageErr = PackagePiBundle(ctx, repository, output, releaseVersion, commit)
+	}
+	if packageErr != nil {
+		fmt.Fprintf(stderr, "pi release: %v\n", packageErr)
 		return 1
 	}
 	fmt.Fprintf(stdout, "output=%s\n", output)
@@ -212,6 +220,7 @@ func packagePiMain(repository, stage string) error {
 	}
 	delete(metadata, "private")
 	delete(metadata, "scripts") // test/build helpers are source-tree only.
+	delete(metadata, "devDependencies")
 	files := []archiveFile{{"package.json", mustJSON(metadata), 0o644}}
 	for _, dir := range []string{"src", "resources"} {
 		root := filepath.Join(repository, "packages", "pi", dir)
@@ -444,6 +453,7 @@ func piMainSources(repository string) (map[string]archiveFile, error) {
 	}
 	delete(metadata, "private")
 	delete(metadata, "scripts")
+	delete(metadata, "devDependencies")
 	files := map[string]archiveFile{"package/package.json": {name: "package/package.json", data: mustJSON(metadata), mode: 0o644}}
 	for _, source := range []struct{ root, prefix string }{{filepath.Join(repository, "packages", "pi", "src"), "src"}, {filepath.Join(repository, "packages", "pi", "resources"), "resources"}, {filepath.Join(repository, "internal", "skills", "pack"), "resources/skills"}} {
 		entries, err := regularTree(source.root)

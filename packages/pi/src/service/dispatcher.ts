@@ -141,12 +141,13 @@ export class NativeDispatcher {
         this.#queue = result.catch(() => undefined);
         return result;
     }
-    request(operation: string, payload: unknown, binding: RuntimeBinding): Promise<any> {
+    request(operation: string, payload: unknown, binding: RuntimeBinding, control?: { beforeMutation?: () => void; signal?: AbortSignal }): Promise<any> {
         try {
             if (Buffer.byteLength(JSON.stringify(payload) ?? "", "utf8") > 1048576)
                 return Promise.reject(new Error("operation payload exceeds limit"));
             payload = structuredClone(payload);
             binding = { workspace: binding.workspace, mode: binding.mode, role: binding.role };
+            control = { beforeMutation: control?.beforeMutation, signal: control?.signal };
         }
         catch {
             return Promise.reject(new Error("invalid operation payload"));
@@ -164,6 +165,9 @@ export class NativeDispatcher {
                 throw new Error("invalid operation payload");
             if (!reads.has(operation) && (this.ctx.mode !== "full" || this.ctx.role !== "manager"))
                 throw new Error("mutation requires full manager authority");
+            control?.signal?.throwIfAborted();
+            if (!reads.has(operation))
+                control?.beforeMutation?.();
             if (operation === "model.resolve")
                 return resolveModel(payload);
             if (operation.startsWith("sdd."))

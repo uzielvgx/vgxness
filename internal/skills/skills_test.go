@@ -354,6 +354,93 @@ func TestBundledMemorySyncRejectsIncompleteOrInconsistentPredecessorPackage(t *t
 	}
 }
 
+func TestCompletePredecessorPackageRejectsMixesAndReapplies(t *testing.T) {
+	current := map[string][]byte{"SKILL.md": []byte("current skill"), "skill-manifest.json": []byte("current manifest")}
+	old := map[string][]byte{"SKILL.md": []byte("old skill"), "skill-manifest.json": []byte("old manifest")}
+	oldDigests := map[string]string{"SKILL.md": digest(old["SKILL.md"]), "skill-manifest.json": digest(old["skill-manifest.json"])}
+	service := &Service{catalog: &catalog{definitions: []skillDefinition{{name: "skills-creator", files: current, packageExact: true, predecessorPackages: []map[string]string{oldDigests}}}}}
+
+	t.Run("complete predecessor upgrades and reapplies", func(t *testing.T) {
+		destination := filepath.Join(t.TempDir(), "skills")
+		for relative, content := range old {
+			assertWrite(t, filepath.Join(destination, "skills-creator", native(relative)), content)
+		}
+		preview, err := service.Preview(context.Background(), Options{Dir: destination})
+		if err != nil || preview.State != StateInstalled || !preview.UpdateNeeded {
+			t.Fatalf("preview=%+v err=%v", preview, err)
+		}
+		installed, err := service.Install(context.Background(), Options{Dir: destination})
+		if err != nil || !installed.Changed || installed.UpdateNeeded {
+			t.Fatalf("install=%+v err=%v", installed, err)
+		}
+		reapplied, err := service.Install(context.Background(), Options{Dir: destination})
+		if err != nil || reapplied.Changed || reapplied.UpdateNeeded {
+			t.Fatalf("reapply=%+v err=%v", reapplied, err)
+		}
+	})
+
+	for _, test := range []struct {
+		name  string
+		write map[string][]byte
+	}{
+		{"mixed", map[string][]byte{"SKILL.md": old["SKILL.md"], "skill-manifest.json": current["skill-manifest.json"]}},
+		{"incomplete", map[string][]byte{"SKILL.md": old["SKILL.md"]}},
+		{"unknown", map[string][]byte{"SKILL.md": []byte("foreign"), "skill-manifest.json": old["skill-manifest.json"]}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			destination := filepath.Join(t.TempDir(), "skills")
+			for relative, content := range test.write {
+				assertWrite(t, filepath.Join(destination, "skills-creator", native(relative)), content)
+			}
+			if _, err := service.Preview(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrDrift) {
+				t.Fatalf("preview error=%v", err)
+			}
+			if _, err := service.Install(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrDrift) {
+				t.Fatalf("install error=%v", err)
+			}
+		})
+	}
+}
+
+func TestBundledSkillsCreatorV040PackageUpgradesAndRejectsMixes(t *testing.T) {
+	bundled, err := bundledCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := bundled.definitions[0]
+	if definition.name != "skills-creator" || len(definition.files) != 15 || len(skillsCreatorV040PredecessorDigests) != len(definition.files) || !mapsEqual(definition.predecessorPackages[1], skillsCreatorV040PredecessorDigests) {
+		t.Fatal("v0.4.0 predecessor identity is incomplete")
+	}
+	previous := make(map[string][]byte, len(definition.files))
+	for relative, content := range definition.files {
+		previous[relative] = content
+	}
+	for _, relative := range []string{"SKILL.md", "skill-manifest.json"} {
+		data, readErr := os.ReadFile(filepath.Join("testdata", "skills-creator-v040", relative))
+		if readErr != nil || digest(data) != skillsCreatorV040PredecessorDigests[relative] {
+			t.Fatalf("fixture %s err=%v digest=%s", relative, readErr, digest(data))
+		}
+		previous[relative] = data
+	}
+	destination := filepath.Join(t.TempDir(), "skills")
+	for relative, content := range previous {
+		assertWrite(t, filepath.Join(destination, "skills-creator", native(relative)), content)
+	}
+	service := New()
+	preview, err := service.Preview(context.Background(), Options{Dir: destination})
+	if err != nil || preview.State != StatePartial || !preview.UpdateNeeded {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	installed, err := service.Install(context.Background(), Options{Dir: destination})
+	if err != nil || !installed.Changed || installed.UpdateNeeded {
+		t.Fatalf("install=%+v err=%v", installed, err)
+	}
+	assertWrite(t, filepath.Join(destination, "skills-creator", "SKILL.md"), previous["SKILL.md"])
+	if _, err := service.Preview(context.Background(), Options{Dir: destination}); !errors.Is(err, ErrDrift) {
+		t.Fatalf("mixed preview=%v", err)
+	}
+}
+
 func bundledMemorySyncV12Fixture(t *testing.T) (*Service, string, map[string][]byte, map[string][]byte) {
 	t.Helper()
 	bundled, err := bundledCatalog()

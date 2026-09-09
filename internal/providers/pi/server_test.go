@@ -536,13 +536,37 @@ func TestServerBoundsOversizedDispatchOutput(t *testing.T) {
 	}
 	hello, _ := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
 	request := testRecord(t, Request{Type: "request", ID: "large", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewBuffer(append(append(hello, '\n'), request...)), &output); err != nil {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	var output lockedBuffer
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(context.Background(), reader, &output) }()
+	if _, err := writer.Write(append(append(hello, '\n'), request...)); err != nil {
 		t.Fatal(err)
 	}
-	if output.Len() > 2*MaxRecordBytes || !bytes.Contains(output.Bytes(), []byte(`"code":"cancelled"`)) {
-		t.Fatalf("output length=%d output=%s", output.Len(), output.Bytes())
+	deadline := time.After(5 * time.Second)
+	for !bytes.Contains(output.Bytes(), []byte(`"code":"limit_exceeded"`)) {
+		select {
+		case <-deadline:
+			t.Fatalf("no oversized response: %s", output.Bytes())
+		case <-time.After(time.Millisecond):
+		}
 	}
+	writer.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop")
+	}
+	data := output.Bytes()
+	if len(data) > 2*MaxRecordBytes || !bytes.Contains(data, []byte(`"id":"large"`)) {
+		t.Fatalf("invalid oversized response %s", data)
+	}
+
 }
 
 func TestServerSerializesMutationsAndSkipsCancelledQueuedMutation(t *testing.T) {
