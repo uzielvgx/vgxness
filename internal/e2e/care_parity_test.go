@@ -78,19 +78,19 @@ func TestManagerPedagogicalExecutionBriefParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	codexManager := string(pkg.Artifacts[0].Bytes)
-	contract := orchestration.PedagogicalExecutionBrief
+	contract, err := orchestration.LoadManagerContract()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, clause := range []string{
-		"Execution Brief before acting: outcome, approach, and the next observable milestone",
-		"Give updates only at meaningful milestones, not every tool call.",
-		"outcome, evidence, limitations, and one reusable concept.",
-		"guided by default; concise on request; mentor when learning is sought; expert when the user signals fluency.",
-		"Do not turn trivial requests into tutorials or expose private chain-of-thought.",
+		"Contract identity: vgxness-orchestration/v1",
+		"# Native Codex adapter",
 	} {
 		if !strings.Contains(codexManager, clause) {
 			t.Errorf("Codex manager lacks pedagogical parity clause %q", clause)
 		}
 	}
-	if !strings.Contains(codexManager, contract) {
+	if !strings.Contains(codexManager, contract.RenderManagerSections()) {
 		t.Error("Codex manager does not include the shared pedagogical contract")
 	}
 	for _, unavailable := range []string{"todowrite", "question tool", "OpenCode"} {

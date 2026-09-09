@@ -14,6 +14,7 @@ import (
 func TestOpenCodeManager59PackageIsExactImmediatePredecessorAndRejectsDrift(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	current = frozenManagerV60(t, current)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
 	testutil.Require(t, bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 59")), "Manager59 predecessor marker changed")

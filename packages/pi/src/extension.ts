@@ -1,3 +1,6 @@
+import { renderPiManagerPrompt } from "./orchestration/adapter.ts";
+import { createSkillTool } from "./tools/skill.ts";
+import { loadManagerContract, renderManagerPrompt } from "./orchestration/contract.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { delimiter, dirname, join } from "node:path";
@@ -133,7 +136,7 @@ function runtimeTaskTool(host: PiToolHost, context: () => any, workerCli?: strin
 }
 
 export function createPiTools(host: PiToolHost, pi: ExtensionApi) {
-  return [createQuestionTool(), createTodoWriteTool(pi), createApplyPatchTool(host), ...createMemoryTools(host), createSddTool(host), createModelTool(host), ...(host.role === "manager" ? [createTaskTool(host)] : [])];
+  return [createQuestionTool(), createTodoWriteTool(pi), createApplyPatchTool(host), ...createMemoryTools(host), createSddTool(host), createModelTool(host), ...(host.role === "manager" ? [createTaskTool(host), createSkillTool()] : [])];
 }
 export function createPiExtension(options: { workspace?: string; storageRoot?: string; credentialFile?: string; mode?: "full" | "read-only"; role?: string; resolvePackage?: (name: string) => Promise<string>; backend?: () => Promise<any>; workerCli?: string } = {}) {
   return async function extension(pi: ExtensionApi) {
@@ -142,6 +145,7 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
     const mode = options.mode ?? "full";
     const role = options.role ?? "manager";
     const managerPrompt = role === "manager" ? await readFile(join(dirname(fileURLToPath(import.meta.url)), "../resources/prompts/manager.md"), "utf8") : "";
+    if (role === "manager" && managerPrompt !== renderPiManagerPrompt(loadManagerContract())) throw new Error("generated Manager prompt drift");
     let runtimeContext: any;
     const host: PiToolHost & { modelCatalog: () => any } = { workspace, mode, role, storageRoot: options.storageRoot, modelCatalog: () => modelCatalog(runtimeContext), backend: () => {
       if (!startup) startup = (async () => {

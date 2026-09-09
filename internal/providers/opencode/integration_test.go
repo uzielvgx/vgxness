@@ -1769,6 +1769,7 @@ func TestIntegrationRejectsOldAgentsBehindNewManifest(t *testing.T) {
 func TestSDDAgentProfilesEnforceReadOnlySkillLoadingAndManagerWriterBoundaries(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
 		profile := string(bundle.agents[name])
 		for _, required := range []string{"mode: subagent", "hidden: true", "model: ", "variant: ", `"*": deny`, "read: allow", "grep: allow", "glob: allow", "list: allow", "skill: allow", "codegraph_explore: allow", "edit: deny", "bash: deny", "question: deny", "task: deny", `"skills":["exact relevant native skill name"]`, "exact skill list is required", "empty list is allowed only when the manager determined none apply", "Load every supplied applicable native skill with the skill tool before phase work", "Do not discover, invent, or self-route skills", "report it as unavailable"} {
@@ -2886,7 +2887,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 60"), []byte("version: 53"), 1)
+	older := bytes.Replace(current, []byte("version: 61"), []byte("version: 53"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -3383,6 +3384,7 @@ func TestIntegration_RefusesForeignMemoryPluginAndDoesNotInspectLegacyAgents(t *
 func TestManagerPromptDefinesNativeSkillsCodeGraphAndAuthority(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
 		"artifact: opencode-agent/vgxness-manager; version: 60",
@@ -3457,6 +3459,7 @@ func TestCAREChallengerRequiresBoundTypedOutcomes(t *testing.T) {
 		Assignments:   completeModelAssignmentsV3(),
 	})
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	challenger := string(bundle.agents["vgxness-care-challenger.md"])
 	for _, required := range []string{
 		"one exact Review Binding: candidateDigest, exact changedPaths, diffScope, and acceptanceCriteria",
@@ -3549,6 +3552,7 @@ func effectiveManagedPermission(permissions map[string]string, tool string) stri
 func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[managerAgentName])
 	required := []string{
 		`permission:
@@ -3587,6 +3591,7 @@ func TestManagerPromptDefinesAdaptiveInteractionQuestionsAndTDD(t *testing.T) {
 func TestManagerPromptDefinesExecutableSDDLifecycle(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[managerAgentName])
 	for _, required := range []string{"Use SDD only after the user explicitly requests or accepts it.", "sole detailed lifecycle policy", "SHA-256 digests", "latest stateVersion", "vgxness-sdd-apply alone writes authorized SDD workspace", "verifier validates"} {
 		if !strings.Contains(prompt, required) {
@@ -3598,6 +3603,7 @@ func TestManagerPromptDefinesExecutableSDDLifecycle(t *testing.T) {
 func TestManagerPromptDefinesInstalledChildMissionSchemas(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
 		"freeze one identity before assurance",
@@ -3872,6 +3878,7 @@ func TestMemoryPluginPreservesSafeSDDFailureCategories(t *testing.T) {
 func TestSDDAgentProfilesDefinePhaseMissionAndReturnContracts(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
 		profile := string(bundle.agents[name])
 		for _, required := range []string{

@@ -114,6 +114,11 @@ func knownPackages() ([]Package, error) {
 			return nil, err
 		}
 		packages = append(packages, current)
+		v19, err := renderActiveV19("v0.0.0", plan)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, v19)
 		v18PreTerminalClosure, err := renderActiveV18PreTerminalClosure("v0.0.0", plan)
 		if err != nil {
 			return nil, err

@@ -24,25 +24,13 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 60",
-		"For non-trivial work, give a concise Execution Brief before acting",
-		"Give updates only at meaningful milestones, not every tool call.",
-		orchestration.PedagogicalExecutionBrief,
-		"For frozen, risky, verification, or SDD work require the complete Candidate Capsule",
-		"Load `sdd-lifecycle` before creating an accepted SDD change.",
-		"If `sdd-lifecycle` is unavailable or fails to load, block the SDD request.",
-		"managed global portable catalog",
-		"<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->",
-		"same-name/project-local skill collides",
-		"Never fall back inline or accept a local skill with the same name.",
-		"automatically load `git-delivery`", "detailed operational delivery policy lives only in that loaded skill",
-		"Before delegating any workspace write", "pre-write gate required by that skill",
-		"`IMPLEMENTED`, `VERIFIED`, `DELIVERED`, `MERGED`, and `INSTALLED`", "never present an earlier state as a later one",
-		"sole Git and GitHub actor", "delegated implementation worker",
-		"Stop on ambiguity or a failed skill gate", "Do not commit or push without an explicit current-task request",
-		"Keep one exact Review Binding with candidate identity, changed paths, scope, and acceptance criteria",
-		"verifier runs first; each applicable CARE role then reviews that same candidate",
-		"Permit at most one correction and one scoped revalidation",
+		"artifact: opencode-agent/vgxness-manager; version: 61",
+		"# Native OpenCode adapter",
+		"Contract identity: vgxness-orchestration/v1",
+		"# Delegated role contract",
+		"Authority: may write only within its bounded mission.",
+		"Authority: read-only.",
+		"Write only Manager-authorized accepted SDD targets.",
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("canonical current manager missing %q", required)
@@ -57,11 +45,10 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 			t.Errorf("canonical current manager retains forbidden cleanup %q", forbidden)
 		}
 	}
-	if got := strings.Count(manager, "a correction creates a new candidate and invalidates prior evidence"); got != 1 {
-		t.Errorf("correction invalidation rule count=%d, want 1", got)
-	}
-	if strings.Contains(manager, "A correction creates a new candidate digest and invalidates all prior validation and review evidence.") {
-		t.Error("manager retains duplicate correction invalidation rule")
+	contract, err := orchestration.LoadManagerContract()
+	testutil.NoError(t, err)
+	if !strings.Contains(manager, contract.RenderManagerSections()) {
+		t.Error("current manager does not render the canonical contract")
 	}
 	if _, exists := bundle.agents[autonomousStackedPRSkillName]; exists {
 		t.Fatal("managed skill was added to model-bound agents")
@@ -71,20 +58,17 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 	}
 }
 
-func TestVersionEvolutionImmediatePredecessorIsExactManagerV59Package(t *testing.T) {
+func TestVersionEvolutionImmediatePredecessorIsExactManagerV60Package(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
-	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 60")) || !bytes.Contains(current.agents[managerAgentName], []byte(orchestration.PedagogicalExecutionBrief)) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 59")) || bytes.Contains(predecessor.agents[managerAgentName], []byte(orchestration.PedagogicalExecutionBrief)) {
-		t.Fatal("immediate predecessor did not retain exact Manager59 artifact identity")
-	}
-	if !bytes.Contains(current.agents[managerAgentName], []byte("CARE risk tiers: passive documentation or images are exempt")) {
-		t.Error("current manager lacks concise CARE tiers")
+	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 61")) || bytes.Contains(current.agents[managerAgentName], []byte(orchestration.PedagogicalExecutionBrief)) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 60")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte(orchestration.PedagogicalExecutionBrief)) {
+		t.Fatal("immediate predecessor did not retain exact Manager60 artifact identity")
 	}
 	for name, want := range current.agents {
-		if name != managerAgentName && !bytes.Equal(predecessor.agents[name], want) {
-			t.Fatalf("non-manager agent %s changed in immediate predecessor", name)
+		if name != managerAgentName && managerFrontmatter(t, string(predecessor.agents[name])) != managerFrontmatter(t, string(want)) {
+			t.Fatalf("non-manager agent %s native header changed in immediate predecessor", name)
 		}
 	}
 }
@@ -144,6 +128,7 @@ func TestV54UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	current = frozenManagerV60(t, current)
 	historical := mustLegacyFixedLensBundle(t, current)
 	for _, required := range []string{"version: 60", "Mission Instance v1", "Candidate Capsule v1", "Child Return Envelope v1", "Evidence Receipt v1", "8 KiB", "16 KiB", "verificationState"} {
 		if !bytes.Contains(current.agents[managerAgentName], []byte(required)) {
@@ -256,6 +241,7 @@ func previousManagerV42Must(t *testing.T, current modelPlanBundle) modelPlanBund
 func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[managerAgentName])
 	t.Logf("manager prompt bytes=%d newlines=%d", len(prompt), strings.Count(prompt, "\n"))
 
@@ -363,6 +349,7 @@ func TestManagerV42PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
 		"Apply the shared adaptive execution contract below before acting.",
@@ -392,6 +379,7 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 func TestPhase1ManagerPreservesDelegatedContextAndBoundsExpertEnsemble(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	manager, general := string(bundle.agents[managerAgentName]), string(bundle.agents[generalAgentName])
 
 	for _, required := range []string{
@@ -430,6 +418,7 @@ func TestPhase1ManagerPreservesDelegatedContextAndBoundsExpertEnsemble(t *testin
 func TestGeneralV9RequiresConciseDecisiveReturns(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
 		"artifact: opencode-agent/general; version: 10",
@@ -475,6 +464,7 @@ func TestRetiredAutonomousStackedPRSkillKeepsHistoricalIdentity(t *testing.T) {
 func TestManagerMapsDeliveryMilestones(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
 		"IMPLEMENTED: intended workspace changes complete and developmental checks observed; not independently verified.",
@@ -520,6 +510,7 @@ func TestManagerRetainsAuthorityWhileBroadProfilesDenyDurableMutations(t *testin
 func TestReadinessV54RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
 		"artifact: opencode-agent/vgxness-manager; version: 60",
@@ -537,6 +528,7 @@ func TestReadinessV54RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.
 func TestManagerUsesIntentTriggeredMemoryWithAllThenAnyFallback(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
 		"Recall from VGXNESS memory only when the request indicates prior project context may matter.",
@@ -561,6 +553,7 @@ func TestManagerUsesIntentTriggeredMemoryWithAllThenAnyFallback(t *testing.T) {
 func TestManagerRequiresTerminalMemoryClosureBeforeTerminalReporting(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
 		"After significant work and immediately before reporting IMPLEMENTED, VERIFIED, DELIVERED, MERGED, or INSTALLED",
@@ -578,6 +571,7 @@ func TestManagerRequiresTerminalMemoryClosureBeforeTerminalReporting(t *testing.
 func TestReadinessGeneralV10UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	general := string(bundle.agents[generalAgentName])
 	for _, required := range []string{
 		"artifact: opencode-agent/general; version: 10",
@@ -596,6 +590,7 @@ func TestReadinessGeneralV10UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 func TestReadinessSDDApplyIsExclusiveWorkspaceWriter(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	general, apply, manager := string(bundle.agents[generalAgentName]), string(bundle.agents[sddApplyName]), string(bundle.agents[managerAgentName])
 	for _, required := range []string{"artifact: opencode-agent/general; version: 10", "Reject SDD implementation or projection missions", "non-SDD implementation worker", "readiness-envelope/v1", "echo the accepted envelopeDigest"} {
 		if !strings.Contains(general, required) {
@@ -615,6 +610,7 @@ func TestReadinessSDDApplyIsExclusiveWorkspaceWriter(t *testing.T) {
 func TestReadinessV54ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV53ThenV52(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
 		"artifact: opencode-agent/vgxness-manager; version: 60",
@@ -644,6 +640,7 @@ func TestReadinessV54ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV53The
 func TestVersionEvolutionUsesOnlyManagedHEADPredecessors(t *testing.T) {
 	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	current = frozenManagerV60(t, current)
 	historical, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for name, marker := range map[string]string{

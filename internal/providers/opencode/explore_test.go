@@ -27,6 +27,7 @@ func managerFrontmatter(t *testing.T, prompt string) string {
 func TestManagedExploreAgentIsCodeGraphFirstAndStrictlyReadOnly(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	assignment := bundle.resolved.Roles[sdd.RoleResearch]
 	prompt, ok := bundle.agents["explore.md"]
 	if !ok {
@@ -63,6 +64,7 @@ permission:
 func TestManagedExploreAgentEchoesAndValidatesContextDigest(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[exploreAgentName])
 	for _, contract := range []string{
 		"Require a Context Capsule v1 for every non-SDD repository mission",
@@ -81,6 +83,7 @@ func TestManagedExploreAgentEchoesAndValidatesContextDigest(t *testing.T) {
 func TestSDDResearchBootstrapContractKeepsDownstreamPredecessorsBound(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 
 	research := string(bundle.agents[sddResearchName])
 	for _, contract := range []string{
@@ -115,6 +118,7 @@ func TestSDDResearchBootstrapContractKeepsDownstreamPredecessorsBound(t *testing
 func TestSDDApplyAndGeneralFailClosedHashBoundHandoffContract(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
+	bundle = frozenManagerV60(t, bundle)
 	apply, general := string(bundle.agents[sddApplyName]), string(bundle.agents[generalAgentName])
 	for _, contract := range []string{
 		"expectedStateVersion", "mission identity/replay nonce", "allowed paths with current content SHA-256 hashes and no-symlink constraints",

@@ -1,8 +1,9 @@
+import { validateWorkerSkills, type WorkerSkill } from "./context.ts";
 import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { assertWorkerRole, type WorkerRole } from "./roles.ts";
-export type WorkerMission = { nonce: string; digest: string; role: WorkerRole; workspace: string; mode: "full" | "read-only"; model: string; effort: string; goal: string; criteria: string[]; commands: string[][]; resultLimit: number; exploration?: { roots: string[]; maxFiles: number; maxBytes: number; maxTokens: number }; acceptedBindings?: { changeId: string; artifactId: string; revisionId: string; digest: string; stateVersion: number; inputs: Array<{ artifactId: string; revisionId: string; digest: string }> }; targets: Record<string, string> };
+export type WorkerMission = { skills?: WorkerSkill[]; nonce: string; digest: string; role: WorkerRole; workspace: string; mode: "full" | "read-only"; model: string; effort: string; goal: string; criteria: string[]; commands: string[][]; resultLimit: number; exploration?: { roots: string[]; maxFiles: number; maxBytes: number; maxTokens: number }; acceptedBindings?: { changeId: string; artifactId: string; revisionId: string; digest: string; stateVersion: number; inputs: Array<{ artifactId: string; revisionId: string; digest: string }> }; targets: Record<string, string> };
 const used = new Set<string>();
 const issued = new Map<string, string>();
 const ledgers = new WeakMap<object, Record<string, string>>();
@@ -14,6 +15,7 @@ const acceptedBrand = Symbol.for("vgxness.pi.accepted-worker-mission");
 const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}` : JSON.stringify(value);
 const freeze = (value: any): any => { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const key of Object.keys(value)) freeze(value[key]); Object.freeze(value); } return value; };
 export async function acceptMission(value: WorkerMission, allowIssuedMissionBootstrap = false) {
+  validateWorkerSkills(value.skills);
   assertWorkerRole(value.role); if (!value.nonce || used.has(value.nonce)) throw new Error("worker mission nonce rejected");
   if (!value.workspace || !Number.isSafeInteger(value.resultLimit) || value.resultLimit < 1 || value.resultLimit > 65536 || !Array.isArray(value.criteria) || !Array.isArray(value.commands) || !value.goal || !value.model || !value.effort) throw new Error("worker mission shape rejected");
   if (value.role === "explore" && value.commands.length !== 0) throw new Error("explore missions cannot authorize commands");

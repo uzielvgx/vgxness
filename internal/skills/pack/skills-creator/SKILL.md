@@ -2,9 +2,9 @@
 name: skills-creator
 description: Design, create, audit, repair, test, and improve portable Agent Skills built around SKILL.md; use when a user wants to turn a repeatable workflow into a skill, create a skill package from scratch, restructure an oversized or unreliable skill, improve implicit triggering, add progressive disclosure, create skill evaluations, review skill security, diagnose why an agent is not using a skill correctly, or review and audit third-party skills before requested installation; do not use for one-off prompt writing, general agent architecture without a reusable skill, or to bypass review or execute unreviewed third-party skill content.
 license: MIT
-compatibility: OpenCode and Codex
+compatibility: Agent Skills hosts with filesystem access and Python 3 for the optional validation scripts
 metadata:
-  version: "0.4.0"
+  version: "0.4.1"
   provenance: "VGXNESS skills-creator rename lineage from agent-skill-engineer v0.3.2 / original v0.2.0"
 ---
 

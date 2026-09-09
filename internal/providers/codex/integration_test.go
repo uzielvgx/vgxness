@@ -37,11 +37,15 @@ func TestKnownPackagesOrderCurrentThenPreTerminalV18ThenV17ForEveryPlan(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(known) != 54 {
-		t.Fatalf("known packages length = %d, want 54", len(known))
+	if len(known) != 58 {
+		t.Fatalf("known packages length = %d, want 58", len(known))
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v19, err := renderActiveV19("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,14 +85,14 @@ func TestKnownPackagesOrderCurrentThenPreTerminalV18ThenV17ForEveryPlan(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []string{current.SHA256, v18PreTerminalClosure.SHA256, v17.SHA256, v16.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
+		want := []string{current.SHA256, v19.SHA256, v18PreTerminalClosure.SHA256, v17.SHA256, v16.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
 		foundV12 := 0
 		for index, pkg := range known {
 			if pkg.SHA256 == v12.SHA256 {
 				foundV12++
 			}
-			if index >= int(planIndex(plan))*13 && index < int(planIndex(plan))*13+13 && pkg.SHA256 != want[index-int(planIndex(plan))*13] {
-				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*13])
+			if index >= int(planIndex(plan))*14 && index < int(planIndex(plan))*14+14 && pkg.SHA256 != want[index-int(planIndex(plan))*14] {
+				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*14])
 			}
 		}
 		if foundV12 != 1 {

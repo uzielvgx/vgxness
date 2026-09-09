@@ -1,0 +1,12 @@
+import { loadManagerContract, resolveRole, renderManagerPrompt, type ManagerContract } from "./contract.ts";
+export async function nativeCapabilities() { return { workers: process.platform === "win32" ? "unsupported" : "native-sdk-rpc", authentication: "host-configured-only", network: "not-required-for-contract", contract: (await loadManagerContract()).identity }; }
+export async function workerAuthority(role: string, contract?: ManagerContract) { const c=contract??await loadManagerContract(); const found=resolveRole(c,role); if(!found) throw new Error("unsupported worker role"); return found.writeAuthority; }
+
+export const piNativeInstructions = `# Pi native adapter
+Pi owns conversation, models, authentication, and tool execution. The package runs in TypeScript/Node without a VGXNESS Go process, CLI or MCP. VGXNESS only provisions the ecosystem.
+Use question for necessary user decisions, todowrite for useful tracking, and apply_patch for authorized workspace edits. Resolve supported models and effort with model_resolve before task; host credentials are required. Workers use native SDK/RPC on supported hosts; Windows worker process ownership and worker continuation are unavailable.
+Use vgx_skill list/read to discover managed delegation skills, read SKILL.md and only required relative resources, and obtain the exact manifest sha256. Pass task.skills entries with name, sha256 and selected resources; SKILL.md is automatic. Never invent hashes or treat reading as script execution permission. Missing or drifted skills block that dependency; user/project skills are not silently replaced.
+Each task requires a fresh nonce, role/mode, goal, criteria, exact targets and hashes or ABSENT, permitted command argv and resultLimit. Only registry-authorized worker roles can write; sdd-apply additionally requires acceptedBindings. Keep writers sequential. Inspect returned evidence and truncated/cancelled results; task results do not authorize delivery.
+Use native memory_search, memory_get, memory_save and session tools with the shared local database. Use memory_recent only when explicitly requested; no automatic cloud sync. Use the native sdd tool and loaded sdd-lifecycle skill for accepted changes; Manager alone accepts revisions and transitions state. Missing transport or authentication is unavailable, never inferred support.
+`;
+export function renderPiManagerPrompt(contract: ManagerContract) { return renderManagerPrompt(contract)+"\n"+piNativeInstructions; }

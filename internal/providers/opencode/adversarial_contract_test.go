@@ -170,6 +170,7 @@ func TestGeneratedManagerGeneralVerifierContractClauses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bundle = frozenManagerV60(t, bundle)
 	for name, clauses := range map[string][]string{
 		managerAgentName:  {"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority", "Route accepted SDD apply directly to vgxness-sdd-apply", "The verifier runs first; each applicable CARE role then reviews that same candidate.", "missing, stale, or mismatched evidence is INCONCLUSIVE"},
 		generalAgentName:  {"Reject SDD implementation or projection missions", "non-SDD implementation worker"},
@@ -237,6 +238,7 @@ func TestActiveProfilesUseSmallerContextContractsWithoutLosingInvariants(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	bundle = frozenManagerV60(t, bundle)
 	for name := range map[string]string{generalAgentName: canonicalGeneralPrompt, verifierAgentName: canonicalVerifierPrompt, exploreAgentName: explorePrompt} {
 		legacy := strings.Replace(string(bundle.agents[name]), activeChildContextContract, nativeChildContextContract, 1)
 		if got := len(bundle.agents[name]); got >= len(legacy) {
@@ -279,6 +281,7 @@ func TestAlteredContextCapsuleWithRepeatedSuppliedDigestIsRejectedByContract(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	bundle = frozenManagerV60(t, bundle)
 	if !strings.Contains(string(bundle.agents[managerAgentName]), "Reject altered capsule content even when the capsule and mission repeat the same supplied digest") {
 		t.Error("manager does not reject the repeated stale-digest adversary")
 	}
@@ -289,8 +292,9 @@ func TestSDDProfilesRemainContextCapsuleFreeWithExactPredecessors(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	frozen := frozenManagerV60(t, bundle)
 	for name, role := range map[string]sdd.Role{sddResearchName: sdd.RoleResearch, sddProposalName: sdd.RoleProposal, sddSpecName: sdd.RoleSpec, sddDesignName: sdd.RoleDesign, sddTasksName: sdd.RoleTasks, sddApplyName: sdd.RoleApply} {
-		current := bundle.agents[name]
+		current := frozen.agents[name]
 		if bytes.Contains(current, []byte("Context Capsule v1")) {
 			t.Errorf("%s current identity gained Context Capsule bytes", name)
 		}

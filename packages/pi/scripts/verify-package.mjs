@@ -1,3 +1,5 @@
+import { renderPiManagerPrompt } from "../src/orchestration/adapter.ts";
+import { canonicalContract } from "../src/orchestration/contract.ts";
 import fs from "node:fs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -15,3 +17,10 @@ for (const [index, migration] of manifest.migrations.entries()) {
  assert.equal(migration.version, index + 1);
  assert.equal(createHash("sha256").update(fs.readFileSync(new URL(migration.file, root))).digest("hex"), migration.sha256);
 }
+const contractSource = JSON.parse(fs.readFileSync(new URL("../../../internal/orchestration/manager_contract.json", import.meta.url)));
+const contractResource = fs.readFileSync(new URL("../resources/orchestration/contract.json", import.meta.url), "utf8");
+const contractDigest = createHash("sha256").update(canonicalContract(contractSource)).digest("hex");
+assert.equal(contractResource, JSON.stringify({...contractSource, sourceDigest: contractDigest}) + "\n", "Pi contract resource drift");
+const managerPrompt = fs.readFileSync(new URL("../resources/prompts/manager.md", import.meta.url), "utf8");
+const generatedPrompt = renderPiManagerPrompt({...contractSource, sourceDigest: contractDigest});
+assert.equal(managerPrompt, generatedPrompt, "Pi Manager prompt drift");

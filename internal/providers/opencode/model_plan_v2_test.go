@@ -38,7 +38,11 @@ func TestSchemaV2ManifestRecognizesExactV57AndUpgradesToCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v57, err := previousV57ModelPlanBundle(v1)
+	frozenV60, err := immediatePredecessor(v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v57, err := previousV57ModelPlanBundle(frozenV60)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +59,7 @@ func TestSchemaV2ManifestRecognizesExactV57AndUpgradesToCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	upgraded, err := requestedModelPlan(integration.Options{}, configDirectory)
-	if err != nil || !bytes.Equal(upgraded.manifest, current.manifest) || !bytes.Contains(upgraded.agents[managerAgentName], []byte(managerCurrentMarker)) {
+	if err != nil || !bytes.Equal(upgraded.manifest, current.manifest) || !bytes.Contains(upgraded.agents[managerAgentName], []byte(sharedManagerMarker)) {
 		t.Fatalf("v57 schema-v2 upgrade = err=%v current=%t", err, bytes.Equal(upgraded.manifest, current.manifest))
 	}
 }

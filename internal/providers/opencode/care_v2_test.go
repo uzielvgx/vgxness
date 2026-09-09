@@ -223,6 +223,7 @@ func TestCAREV2LifecyclePreservesOnlyRoleDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	current = frozenManagerV60(t, current)
 	immediate, err := immediatePredecessor(current)
 	if err != nil {
 		t.Fatal(err)
