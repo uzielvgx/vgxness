@@ -350,6 +350,8 @@ jobs:
         run: npm run typecheck --workspace packages/pi
       - name: Test Pi
         run: npm test --workspace packages/pi
+      - name: Verify assembled Pi release artifact
+        run: node packages/pi/scripts/check-release-artifact.mjs
 
   quality:
     name: quality
