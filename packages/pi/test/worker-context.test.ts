@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { snapshotWorkerSkills, validateWorkerSkills, workerPrompt } from "../src/workers/context.ts";
+import { readSkillResource, snapshotWorkerSkills, validateWorkerSkills, workerPrompt } from "../src/workers/context.ts";
 
 const skill = '---\nname: fixture\ndescription: Inspect fixture changes.\ncompatibility: Agent Skills hosts\nmetadata:\n  provenance: "VGXNESS portable global skill"\n---\nRead references/check.md. Report evidence.\n';
 async function fixture(t: any) {
@@ -36,6 +37,25 @@ test("worker skills reject missing names, escapes, links and excess resources", 
   await writeFile(join(options.sharedRoot, "fixture", "large"), "x".repeat(65537));
   await assert.rejects(snapshotWorkerSkills([{ name: "fixture", resources: ["large"] }], options), /budget/);
   await assert.rejects(snapshotWorkerSkills(Array(9).fill({ name: "fixture" }), options), /limit/);
+});
+test("bounded skill reader accepts regular fixtures and rejects root, ancestor, and resource links", async t => {
+  const options = await fixture(t);
+  const fixtureRoot = join(options.sharedRoot, "fixture");
+  const manifest = await readSkillResource(fixtureRoot, "SKILL.md");
+  assert.equal(manifest.content, skill);
+  assert.equal(manifest.sha256, createHash("sha256").update(skill).digest("hex"));
+
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  const rootLink = join(options.root, "root-link");
+  await symlink(fixtureRoot, rootLink, linkType);
+  await assert.rejects(readSkillResource(rootLink, "SKILL.md"), /root symlink/);
+
+  const ancestorLink = join(options.root, "ancestor-link");
+  await symlink(options.sharedRoot, ancestorLink, linkType);
+  await assert.rejects(readSkillResource(join(ancestorLink, "fixture"), "SKILL.md"), /root symlink/);
+
+  await symlink(join(fixtureRoot, "SKILL.md"), join(fixtureRoot, "manifest-link"));
+  await assert.rejects(readSkillResource(fixtureRoot, "manifest-link"), /resource symlink/);
 });
 test("worker prompt includes bounded authority, criteria and selected skill evidence", async t => {
   const skills = await snapshotWorkerSkills([{ name: "fixture" }], await fixture(t));

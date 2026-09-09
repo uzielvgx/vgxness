@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstat, open, realpath } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { constants } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { discoverSkillPaths } from "../skills/catalog.ts";
 import type { WorkerMission } from "./mission.ts";
 import { loadManagerContract, resolveRole } from "../orchestration/contract.ts";
@@ -13,15 +13,32 @@ const namePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 function resourcePath(path: string) {
   if (!path || isAbsolute(path) || path.includes("\\") || path.includes(":") || path.split("/").some(part => !part || part === "." || part === "..")) throw new Error("skill resource path rejected");
 }
-async function readResource(root: string, path: string) {
+async function validatedSkillRoot(root: string) {
+  const absolute = resolve(root);
+  const ancestors: string[] = [];
+  for (let current = absolute;; current = dirname(current)) {
+    ancestors.push(current);
+    if (dirname(current) === current) break;
+  }
+  for (const ancestor of ancestors.reverse()) {
+    const info = await lstat(ancestor);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("skill root symlink rejected");
+  }
+  return absolute;
+}
+export async function readSkillResource(root: string, path: string) {
   resourcePath(path);
-  if (await realpath(root) !== resolve(root)) throw new Error("skill root symlink rejected");
-  let current = root;
-  for (const part of path.split("/")) {
+  const absoluteRoot = await validatedSkillRoot(root);
+  let current = absoluteRoot;
+  const parts = path.split("/");
+  for (const part of parts.slice(0, -1)) {
     current = join(current, part);
     const info = await lstat(current);
-    if (info.isSymbolicLink()) throw new Error("skill resource symlink rejected");
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("skill resource symlink rejected");
   }
+  current = join(current, parts[parts.length - 1]);
+  const resource = await lstat(current);
+  if (resource.isSymbolicLink()) throw new Error("skill resource symlink rejected");
   const before = await lstat(current, { bigint: true });
   if (!before.isFile()) throw new Error("skill resource must be regular");
   if (before.size > 65536n) throw new Error("skill resource byte budget exceeded");
@@ -46,7 +63,7 @@ async function managedSkillEntries(options: Parameters<typeof discoverSkillPaths
   const entries = [];
   for (const path of await discoverSkillPaths(options)) {
     try {
-      const manifest = await readResource(path, "SKILL.md");
+      const manifest = await readSkillResource(path, "SKILL.md");
       const name = /^name:\s*([^\n]+)$/m.exec(manifest.content)?.[1]?.trim();
       if (name && namePattern.test(name)) entries.push({ name, path, manifest });
     } catch { /* Optional unreadable candidates are unavailable, never delegated. */ }
@@ -69,7 +86,7 @@ export async function snapshotWorkerSkills(selections: SkillSelection[], options
     const paths = ["SKILL.md", ...(selection.resources ?? [])];
     if (paths.length > 8 || new Set(paths).size !== paths.length) throw new Error("worker skill resource limit or duplicate");
     const files = [];
-    for (const path of paths) files.push(await readResource(root, path));
+    for (const path of paths) files.push(await readSkillResource(root, path));
     if (files[0].sha256 !== entry!.manifest.sha256) throw new Error("selected skill manifest drift");
     snapshots.push({ name: selection.name, files });
   }
