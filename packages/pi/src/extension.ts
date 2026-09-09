@@ -1,3 +1,4 @@
+import { frameReadOutcome } from "./tools/read-outcome.ts";
 import { renderPiManagerPrompt } from "./orchestration/adapter.ts";
 import { createSkillTool } from "./tools/skill.ts";
 import { loadManagerContract, renderManagerPrompt } from "./orchestration/contract.ts";
@@ -203,6 +204,7 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
     pi.registerTool({ name: "session_handoff", label: "Save session handoff", description: "Save an explicit, sanitized summary for the current manager session.", parameters: handoffSchema, async execute(_id: string, input: { summary: string }) { if (!Value.Check(handoffSchema, input)) throw new Error("invalid tool input"); if (mode !== "full" || role !== "manager") throw new Error("session handoff requires full manager authority"); await sessions.saveDraft(input.summary); return { content: [{ type: "text", text: "Saved session handoff." }] }; } });
     pi.registerTool({ name: "session_context", label: "Read session handoff", description: "Read the bounded, untrusted handoff for the current manager session.", parameters: Type.Object({}, { additionalProperties: false }), async execute(_id: string, input: Record<string, never>) { if (Object.keys(input).length) throw new Error("invalid tool input"); return { content: [{ type: "text", text: JSON.stringify(sessions.context()) }] }; } });
     pi.on("resources_discover", async () => ({ skillPaths: await discoverSkillPaths({ existingNames: pi.getCommands?.().filter((command: any) => command.source === "skill").map((command: any) => command.name) }), promptPaths: [join(dirname(fileURLToPath(import.meta.url)), "../resources/prompts")] }));
+    pi.on("tool_result", (event) => frameReadOutcome(event));
     pi.on("before_agent_start", async (event, ctx) => { runtimeContext = ctx; return managerPrompt ? { systemPrompt: `${event.systemPrompt}\n\n${managerPrompt}` } : undefined; });
     pi.on("session_start", async (_event, ctx) => { runtimeContext = ctx; await sessions.start(ctx.sessionManager.getSessionId()); });
     pi.on("session_tree", async () => { await sessions.checkpoint(); });

@@ -1,9 +1,10 @@
+import { isCandidateReference, type CandidateReference } from "./candidate.ts";
 import { validateWorkerSkills, type WorkerSkill } from "./context.ts";
 import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { assertWorkerRole, type WorkerRole } from "./roles.ts";
-export type WorkerMission = { skills?: WorkerSkill[]; nonce: string; digest: string; role: WorkerRole; workspace: string; mode: "full" | "read-only"; model: string; effort: string; goal: string; criteria: string[]; commands: string[][]; resultLimit: number; exploration?: { roots: string[]; maxFiles: number; maxBytes: number; maxTokens: number }; acceptedBindings?: { changeId: string; artifactId: string; revisionId: string; digest: string; stateVersion: number; inputs: Array<{ artifactId: string; revisionId: string; digest: string }> }; targets: Record<string, string> };
+export type WorkerMission = { candidate?: CandidateReference; skills?: WorkerSkill[]; nonce: string; digest: string; role: WorkerRole; workspace: string; mode: "full" | "read-only"; model: string; effort: string; goal: string; criteria: string[]; commands: string[][]; resultLimit: number; exploration?: { roots: string[]; maxFiles: number; maxBytes: number; maxTokens: number }; acceptedBindings?: { changeId: string; artifactId: string; revisionId: string; digest: string; stateVersion: number; inputs: Array<{ artifactId: string; revisionId: string; digest: string }> }; targets: Record<string, string> };
 const used = new Set<string>();
 const issued = new Map<string, string>();
 const ledgers = new WeakMap<object, Record<string, string>>();
@@ -16,6 +17,7 @@ const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(c
 const freeze = (value: any): any => { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const key of Object.keys(value)) freeze(value[key]); Object.freeze(value); } return value; };
 export async function acceptMission(value: WorkerMission, allowIssuedMissionBootstrap = false) {
   validateWorkerSkills(value.skills);
+  if (value.candidate !== undefined && !isCandidateReference(value.candidate)) throw new Error("worker candidate reference rejected");
   assertWorkerRole(value.role); if (!value.nonce || used.has(value.nonce)) throw new Error("worker mission nonce rejected");
   if (!value.workspace || !Number.isSafeInteger(value.resultLimit) || value.resultLimit < 1 || value.resultLimit > 65536 || !Array.isArray(value.criteria) || !Array.isArray(value.commands) || !value.goal || !value.model || !value.effort) throw new Error("worker mission shape rejected");
   if (value.role === "explore" && value.commands.length !== 0) throw new Error("explore missions cannot authorize commands");
@@ -38,6 +40,7 @@ export async function acceptMission(value: WorkerMission, allowIssuedMissionBoot
 /** Revalidates the manager-issued bytes inside Pi's isolated extension graph. */
 export async function bootstrapWorkerMission(value: WorkerMission) { return await acceptMission(value, true); }
 export function issueMission(value: Omit<WorkerMission, "digest">): WorkerMission {
+  if (value.candidate !== undefined && !isCandidateReference(value.candidate)) throw new Error("worker candidate reference rejected");
   assertWorkerRole(value.role); if (!value.nonce || issued.has(value.nonce) || used.has(value.nonce)) throw new Error("worker mission nonce rejected");
   const digest = createHash("sha256").update(canonical(value)).digest("hex");
   issued.set(value.nonce, digest);
