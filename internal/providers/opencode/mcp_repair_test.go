@@ -30,14 +30,15 @@ func TestRepairedMCPConfigPreservesOtherServersAndMode(t *testing.T) {
 		{"readonly", managedReadOnlyMCPConfig, "readonly"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			old := "/opt/vgxness-old"
+			root := t.TempDir()
+			old := filepath.Join(root, "vgxness-old")
 			entry := test.entry(old)
 			config := []byte(`{"mcp":{"other":{"type":"remote","url":"https://example.invalid"},"vgxness":` + string(entry) + `}}`)
 			digest, err := canonicalMCPEntrySHA256(entry)
 			if err != nil {
 				t.Fatal(err)
 			}
-			service := &Integration{executable: "/opt/vgxness-stable"}
+			service := &Integration{executable: filepath.Join(root, "vgxness-stable")}
 			repaired, err := service.repairedMCPConfig(config, state, integration.MCPRepairProof{OldExecutable: old, ExpectedEntrySHA256: digest})
 			if err != nil {
 				t.Fatal(err)

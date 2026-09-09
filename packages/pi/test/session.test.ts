@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+const mkdtemp = async (prefix: string) => realpath(await rawMkdtemp(prefix));
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp as rawMkdtemp, realpath, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -80,11 +81,10 @@ test("skill discovery prefers compatible shared skills and de-duplicates bundled
 test("temporary native storage accepts only explicit session handoff content", async (t) => {
   const root = join(process.cwd(), "../..");
   const temp = await mkdtemp(join(tmpdir(), "pi-session-go-"));
-  t.after(() => rm(temp, { recursive: true, force: true }));
   const binary = join(temp, "backend"), workspace = join(temp, "workspace"), storageRoot = join(temp, "storage");
   await mkdir(workspace); await mkdir(storageRoot);
   const client = await createNativeDispatcher({ workspace, storageRoot, mode: "full", role: "manager" });
-  t.after(() => client.close());
+  t.after(async () => { await client.close(); await rm(temp, { recursive: true, force: true }); });
   const binding = { workspace, mode: "full" as const, role: "manager" };
   await client.request("memory.project.initialize", {}, binding, "initialize");
   const first: any = await client.request("memory.session.start", { externalId: "sdk-one" }, binding, "start");

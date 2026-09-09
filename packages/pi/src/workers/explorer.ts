@@ -13,7 +13,7 @@ export function createExplorerTools(mission: WorkerMission) {
   async function checked(path: string) {
     if (typeof path !== "string" || isAbsolute(path) || path.split(/[\\/]/).includes("..")) throw new Error("explorer path rejected");
     const full = resolve(mission.workspace, path);
-    if (!budget.roots.some(root => { const rel = relative(resolve(mission.workspace, root), full); return rel === "" || (rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)); })) throw new Error("explorer path outside allowed roots");
+    if (!budget.roots.some(root => { const rel = relative(resolve(mission.workspace, root), full); return rel === "" || (rel.split(/[\\/]/)[0] !== ".." && !isAbsolute(rel)); })) throw new Error("explorer path outside allowed roots");
     let ancestor = resolve(mission.workspace);
     for (const part of ["", ...relative(ancestor, full).split(/[\\/]/).filter(Boolean)]) {
       ancestor = resolve(ancestor, part); const info = await lstat(ancestor);

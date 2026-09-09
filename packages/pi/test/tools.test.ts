@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+const mkdtemp = async (prefix: string) => realpath(await rawMkdtemp(prefix));
 import test from "node:test";
 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { chmod, lstat, mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp as rawMkdtemp, realpath, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -93,13 +94,15 @@ test("apply_patch rejects symlink ancestors and preserves modes and no-newline m
   await mkdir(join(workspace, "real"));
   await writeFile(join(workspace, "real", "file.txt"), "before");
   await chmod(join(workspace, "real", "file.txt"), 0o754);
+  const originalMode = (await lstat(join(workspace, "real", "file.txt"))).mode & 0o777;
+  if (process.platform !== "win32") assert.equal(originalMode, 0o754);
   await symlink(join(workspace, "real"), join(workspace, "linked-dir"));
   const tool: any = await loadPatchTool(workspace);
   await assert.rejects(tool.execute("ancestor-existing", { patch: "--- a/linked-dir/file.txt\n+++ b/linked-dir/file.txt\n@@ -1 +1 @@\n-before\n+after\n\\ No newline at end of file\n" }));
   await assert.rejects(tool.execute("ancestor-add", { patch: "--- /dev/null\n+++ b/linked-dir/add.txt\n@@ -0,0 +1 @@\n+new\n" }));
   await tool.execute("mode-newline", { patch: "--- a/real/file.txt\n+++ b/real/file.txt\n@@ -1 +1 @@\n-before\n\\ No newline at end of file\n+after\n\\ No newline at end of file\n" });
   assert.equal(await readFile(join(workspace, "real", "file.txt"), "utf8"), "after");
-  assert.equal((await lstat(join(workspace, "real", "file.txt"))).mode & 0o777, 0o754);
+  assert.equal((await lstat(join(workspace, "real", "file.txt"))).mode & 0o777, originalMode);
   await writeFile(join(workspace, "real", "insert.txt"), "one\ntwo\n");
   await tool.execute("insertion", { patch: "--- a/real/insert.txt\n+++ b/real/insert.txt\n@@ -1,0 +2 @@\n+insert\n" });
   assert.equal(await readFile(join(workspace, "real", "insert.txt"), "utf8"), "one\ninsert\ntwo\n");
@@ -145,7 +148,7 @@ test("full native manager initializes then saves and reads isolated memory", asy
     await client.request("memory.project.initialize", {}, binding, "initialize");
     (globalThis as any).__piTestHost = { workspace, backend: async () => client };
     const wrapper = join(temp, "extension.ts");
-    const source = join(root, "packages/pi/src/extension.ts").replace(/\\/g, "\\\\");
+    const source = join(root, "packages/pi/src/extension.ts");
     await writeFile(wrapper, `import { createPiExtension } from ${JSON.stringify(source)}; export default createPiExtension(globalThis.__piTestHost);`);
     const loaded = await loadExtensions([wrapper], workspace);
     assert.deepEqual(loaded.errors, []);

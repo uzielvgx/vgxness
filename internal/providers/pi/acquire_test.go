@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/piartifact"
@@ -194,8 +195,47 @@ func TestAcquireReleaseCleanupPreservesReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(directory); err != nil {
+	// Rename without deleting owned contents. Windows may protect the held
+	// directory from replacement until cleanup closes its root handle.
+	identity, err := os.Stat(directory)
+	if err != nil {
 		t.Fatal(err)
+	}
+	original := make(map[string][32]byte)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		original[entry.Name()] = sha256.Sum256(data)
+	}
+	moved := filepath.Join(t.TempDir(), "original")
+	t.Cleanup(func() { _ = cleanup(); _ = os.RemoveAll(directory) })
+	if err := os.Rename(directory, moved); err != nil {
+		if runtime.GOOS != "windows" || (!os.IsPermission(err) && !errors.Is(err, syscall.Errno(32))) {
+			t.Fatal(err)
+		}
+		current, statErr := os.Stat(directory)
+		if statErr != nil || !os.SameFile(identity, current) {
+			t.Fatalf("protected root identity changed: %v", statErr)
+		}
+		for name, digest := range original {
+			data, readErr := os.ReadFile(filepath.Join(directory, name))
+			if readErr != nil || sha256.Sum256(data) != digest {
+				t.Fatalf("protected root content changed: %s: %v", name, readErr)
+			}
+		}
+		if err := cleanup(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("protected root cleanup: %v", err)
+		}
+		return
 	}
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)

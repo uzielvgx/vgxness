@@ -10,9 +10,9 @@ import { fileURLToPath } from "node:url";
 
 test("real Go and TS connections round-trip int64, BLOB and FTS in both directions", async t => {
  const { writeFile } = await import("node:fs/promises"), { spawnSync } = await import("node:child_process");
- const root = await mkdtemp(join(tmpdir(), "pi-go-roundtrip-")); t.after(() => rm(root, { recursive: true, force: true }));
+ const root = await mkdtemp(join(tmpdir(), "pi-go-roundtrip-"));
  const path = join(root, "memory.db"), source = join(root, "roundtrip.go");
- const db = new SQLiteDatabase(path); t.after(() => db.close()); applyMigrations(db);
+ const db = new SQLiteDatabase(path); t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); }); applyMigrations(db);
  db.db.exec("CREATE TABLE compatibility_values(id TEXT PRIMARY KEY, precise INTEGER NOT NULL, payload BLOB NOT NULL)");
  db.execute("INSERT INTO compatibility_values VALUES(?,?,?)", "typescript", 9007199254740993n, new Uint8Array([0, 255, 128, 7]));
  db.execute("INSERT INTO observations_fts(id,title,topic_key,type,content) VALUES(?,?,?,?,?)", "typescript", "", "", "learning", "typescript searchable evidence");

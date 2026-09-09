@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+const mkdtemp = async (prefix: string) => realpath(await rawMkdtemp(prefix));
 import test from "node:test";
-import { mkdtemp, mkdir, rename, rm, symlink } from "node:fs/promises";
+import { mkdtemp as rawMkdtemp, realpath, mkdir, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadNativeRuntime } from "./runtime-fixture.mjs";
