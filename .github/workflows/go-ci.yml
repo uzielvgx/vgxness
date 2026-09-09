@@ -288,6 +288,8 @@ jobs:
       - name: Install pinned proper-lockfile fixture
         shell: pwsh
         run: npm install --prefix "$env:RUNNER_TEMP/vgxness-pi-lockfile" --ignore-scripts --no-package-lock proper-lockfile@4.1.2
+      - name: Stress concurrent fresh memory opens
+        run: go test -count=25 -v -run '^TestOpen_ConcurrentFreshProcesses$' ./internal/memory
       - name: Installer tests
         env:
           PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
