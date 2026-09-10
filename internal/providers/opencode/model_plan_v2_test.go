@@ -164,8 +164,8 @@ func TestSchemaV2LegacyReviewFamilyIsolatedFromCARE(t *testing.T) {
 			t.Fatalf("current v3 bundle is missing CARE artifact %s", care)
 		}
 	}
-	if len(v3.agents) != 13 {
-		t.Fatalf("current v3 agent count = %d, want 13", len(v3.agents))
+	if len(v3.agents) != 7 {
+		t.Fatalf("current v3 agent count = %d, want 7", len(v3.agents))
 	}
 
 	for name, bundle := range map[string]modelPlanBundle{"legacy-current": legacyCurrent, "v49": v49, "v47": v47} {

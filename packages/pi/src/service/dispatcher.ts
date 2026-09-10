@@ -6,10 +6,8 @@ import { Value } from "typebox/value";
 import { SQLiteDatabase } from "../sqlite/node-sqlite.ts";
 import { applyMigrations } from "../sqlite/migrations.ts";
 import { memorySchemas, memoryOperationSchema } from "../tools/memory.ts";
-import { sddSchema } from "../tools/sdd.ts";
 import { dispatchMemory, resolveProject } from "./memory.ts";
 import { dispatchSession } from "./session.ts";
-import { dispatchSdd } from "./sdd.ts";
 import { resolveModel } from "./model.ts";
 import { dispatchSync, type SyncOptions } from "./sync.ts";
 import { CredentialFile, validBearer } from "../ports/credentials.ts";
@@ -28,7 +26,7 @@ export type DispatcherOptions = RuntimeBinding & {
     sync?: SyncOptions;
 };
 const managerContract = loadManagerContract();
-const reads = new Set(["memory.recall", "memory.recent", "memory.get", "memory.project.resolve", "memory.sync.status", "memory.session.context", "sdd.get", "sdd.get_revision", "sdd.list", "sdd.list_revisions", "sdd.projection_status", "sdd.render_projection", "sdd.compare_projection", "model.resolve"]);
+const reads = new Set(["memory.recall", "memory.recent", "memory.get", "memory.project.resolve", "memory.sync.status", "memory.session.context", "model.resolve"]);
 const schemas = new Map<string, any>([["memory.remember", memorySchemas.memory_save], ["memory.recall", memorySchemas.memory_search], ["memory.recent", memorySchemas.memory_recent], ["memory.get", memorySchemas.memory_get], ["memory.forget", memorySchemas.memory_forget]]);
 // The direct service keeps Go's zero-value defaults; model-facing tool schemas remain narrow.
 for (const name of ["memory.remember", "memory.recall", "memory.recent", "memory.get", "memory.forget"]) {
@@ -49,7 +47,7 @@ for (const name of ["memory.remember", "memory.recall", "memory.recent", "memory
         properties.references = Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 50 }));
     schemas.set(name, Type.Object(properties, { additionalProperties: false }));
 }
-for (const [prefix, union] of [["memory", memoryOperationSchema], ["sdd", sddSchema]] as const) {
+for (const [prefix, union] of [["memory", memoryOperationSchema]] as const) {
     for (const variant of (union as any).anyOf) {
         const { operation, ...properties } = variant.properties;
         schemas.set(`${prefix}.${operation.const}`, Type.Object(properties, { additionalProperties: false }));
@@ -171,7 +169,7 @@ export class NativeDispatcher {
             if (operation === "model.resolve")
                 return resolveModel(payload);
             if (operation.startsWith("sdd."))
-                return dispatchSdd(this.ctx, operation.slice(4), payload);
+                throw new Error("SDD is retired; historical records are preserved");
             if (operation === "memory.sync.configure") {
                 const reference = this.sync?.credentialRef;
                 if (!reference || !this.sync?.credentials)

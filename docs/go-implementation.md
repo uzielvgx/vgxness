@@ -1,40 +1,15 @@
 # VGXNESS Go implementation architecture
 
-Current identities are OpenCode Manager61 and Codex Manager20 (parity OpenCode-v61), rendered from `internal/orchestration/manager_contract.json`. Complete Manager60 and Manager19 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only. Global `git-delivery` is a skill workflow; it introduces no Go/runtime writer, daemon or durable delivery state.
+Structured SDD is retired: no lifecycle tools, SDD worker profiles, or active `sdd-lifecycle` skill are installed. Historical records remain in SQLite; `vgxness sdd-archive` permits only list/get and revision reads. Model-plan schemas retain inactive legacy slots for compatibility. Use a short plan, one writer, independent verification and proportional CARE review. See [the current workflow](orchestration-flow.md).
 
-This document describes the delivered OpenCode-native manager product. OpenCode owns engineering execution. Go owns installation, managed artifact generation, storage, inspection, memory and SDD APIs, and terminal surfaces.
+
+Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Complete Manager61 and Manager20 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only. Global `git-delivery` is a skill workflow; it introduces no Go/runtime writer, daemon or durable delivery state.
 
 ## Delivered boundaries
-
-| Area | Responsibility |
-| --- | --- |
-| `cmd/vgxness`, `internal/app`, `internal/app/runtime` | Product entrypoint, dependency composition, and local runtime facade including sync planning/execution. |
-| `internal/cli` | `version`, `status`, `doctor`, `memory`, `sdd`, `integrate`, `self`, and `setup` commands. |
-| `internal/tui` | Keyboard-first installation, protected recovery, and confirmation-gated configuration UI. |
-| `internal/config`, `internal/inspection` | Read-only storage-root, database, and schema-health inspection. |
-| `internal/memory` | SQLite/FTS5 schema v23, canonical workspace identity, explicit portable-to-local provenance, semantic memory, local provider-session drafts and leases, structured SDD repository, migrations, and retained legacy importer. Portable metadata is not normal resolution or sync selection. |
-| `internal/hooks` | Internal-only best-effort lifecycle observation. Completed memory synchronization can emit synchronous invocation-correlation events for the effective canonical invocation workspace (empty project directory means current working directory; explicit paths are absolute, clean, symlink-resolved, and case-normalized); listeners can block, and global single-flight drops concurrent or reentrant events. There is no queue, retry, replay, persistence, or crash durability. |
-| `internal/sdd` | Native SDD domain, optimistic lifecycle, immutable revisions, model plans, and deterministic OpenSpec render/compare behavior. |
-| `internal/syncclient`, `internal/syncapi`, `internal/syncservice` | Project-scoped sync client plus shared HTTP/protocol and service contracts. |
-| `internal/syncpg`, `internal/syncadmin`, `cmd/vgxness-syncd` | Optional loopback sync daemon, PostgreSQL persistence/migrations, and administration surface; TLS termination is external. |
-| `internal/orchestration` | Shared Manager registry, native projection rendering and readiness policy/evidence types; it is not a runtime work executor or authorization enforcer. |
-| `internal/providers/opencode` | OpenCode current shared Manager61 roles, 12 other model-bound agents (`general` v10, `explore` v4, verifier v7, and six SDD roles including `sdd-apply` v7), model-plan manifest, immediate Manager60 predecessor, then Manager59, then CARE-v2/Manager58 and CARE-v1/Manager58/Manager57 predecessors, OpenCode v56/verifier-v6 deeper lifecycle identity, historical plugin v1–v10 and provider-skill v1/v2/v3 retirement identities, sync plumbing, and the setup handshake. The separate 47-file, 19-skill catalog includes `memory-sync` and `sdd-lifecycle`, the latter loaded only after explicit SDD acceptance. |
-| `internal/providers/codex` | Standalone Codex current Manager20 (parity OpenCode-v61) projection for `AGENTS.md` and 12 delegated profiles, with Codex Manager19 as immediate predecessor, then Manager18, then Manager17, Manager16 and deeper Manager15/v14 lifecycle identities, plus exact `low`, `medium`, `high`, and `ultra` model-plan projections while preserving user-owned `config.toml`. |
-| `internal/integration`, `internal/setup`, `internal/skills` | Managed OpenCode lifecycle, independent global portable-skill lifecycle, and seven-step CLI/TUI setup workflow. |
-| `internal/launcher`, `internal/selfinstall` | Permanent launcher, immutable SHA-256 application versions, atomic activation, and one-level rollback. |
-| `internal/release`, `cmd/vgxness-release` | Deterministic archives, checksums, release metadata, and workflow support. |
 
 Compatibility execution packages and commands are not delivered. There is no Go provider runner, execution adapter, bridge, control plane, Chronicle, Gatekeeper, registry, prompt composer, coordinator, stack engine, worktree writer, delivery-state service, or custom Git/GitHub tool. `internal/orchestration` defines policy and evidence types, but it does not execute the policy or enforce it at runtime. Native delivery policy lives only in the installed manager and skill.
 
 ## Dependency rules
-
-- `cmd/vgxness` depends on `internal/app`; it is not a second composition root.
-- The CLI and TUI depend on narrow consumer-owned interfaces.
-- Storage and SDD code do not depend on terminal presentation.
-- OpenCode integration generation does not execute engineering work.
-- Setup composes self-installation, integration, and a narrow OpenCode prober.
-- Read-only inspection never creates, migrates, or repairs storage.
-- MCP operations are filesystem-free for OpenSpec projection. Lifecycle observation does not expand MCP or provider boundaries, and it does not expose synchronization data scope.
 
 ## OpenCode handshake
 
@@ -44,31 +19,21 @@ Setup validates an absolute existing workspace, resolves `opencode`, and runs a 
 
 The default database is `~/.vgxness/memory.db`. Canonical workspace bindings isolate project data in one schema-v23 SQLite database. Explicit `--storage-root` and `--project-local` options remain isolated alternatives.
 
-Semantic observations, references, sessions, and FTS rows are separate from SDD changes, revisions, bindings, idempotency keys, and projection records. A read-only open never migrates the database. Existing older project databases are retained; normal startup does not import or delete them.
-
 ## Managed projection
 
-The OpenCode projection contains 17 managed artifacts with exact identities:
-
-- Manager61 from the shared registry with native permission bindings, explicit scope and authorization, exact candidate evidence and applicable skills;
-- managed `general` v10 and verifier v7 with global tool permission and distinct implementation/verification roles;
-- one deny-by-default read-only `explore` profile;
-- three hidden read-only CARE profiles;
-- six hidden SDD profiles: five read-only phase profiles plus `vgxness-sdd-apply`, the exclusive accepted-SDD workspace and projection writer;
-- MCP configuration using `vgxness mcp --full` plus the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` plugin, with no `opencode.json` plugin entry.
+The OpenCode projection contains 11 managed artifacts with exact identities:
 
 - one model-plan manifest;
 - one `opencode.json` default-agent selection using a semantic merge that preserves unrelated JSON values; existing `opencode.jsonc` bytes remain unchanged;
 - one bounded `<config-dir>/vgxness/default-agent.json` restoration record of whether `opencode.json` existed and any prior explicit default, so uninstall can restore that default or remove a config created by setup;
 
-The model plan contains exactly 13 agents and does not contain the skill. OpenCode immediate predecessor is Manager59, followed by CARE-v2/Manager58 and CARE-v1/Manager58/Manager57; OpenCode v56/verifier-v6 and older catalogued manager, agent, and model-plan predecessors can be upgraded. Codex immediate predecessor is Manager18, followed by Manager17, Manager16, and deeper Manager15/v14 lifecycle recognition. The shared registry governs routing and evidence; it is not a Go runtime broker. Recall is relevant-context only, and durable memory is assessed under a stable topic without secrets, transcripts, transient status or automatic cloud synchronization. Unknown, foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. Exact catalogued storage-plugin predecessors remain recognizable. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
-
-`internal/skills` separately owns the global 47-file, 19-skill `skills-creator`, `git-delivery`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, `memory-sync`, and `sdd-lifecycle` catalog at `~/.agents/skills`, or an absolute `--skills-dir` override. Official setup retires only exact `vgxness.ts` v1-v10 plugin bytes, provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes, and `stacked-pr` v3 bytes before global publication; modified, malformed, foreign, unknown, or newer bytes are drift and block without removal. OpenCode uninstall does not remove global skills. Its selected root is descriptor-anchored with `os.Root`; exact partial packs resume or remove safely, while unknown bytes are drift. Windows retains atomic rename/readback/backups but lacks directory fsync crash durability.
+The model plan contains exactly seven agents and does not contain the skill. OpenCode immediate predecessor is Manager59, followed by CARE-v2/Manager58 and CARE-v1/Manager58/Manager57; OpenCode v56/verifier-v6 and older catalogued manager, agent, and model-plan predecessors can be upgraded. Codex immediate predecessor is Manager18, followed by Manager17, Manager16, and deeper Manager15/v14 lifecycle recognition. The shared registry governs routing and evidence; it is not a Go runtime broker. Recall is relevant-context only, and durable memory is assessed under a stable topic without secrets, transcripts, transient status or automatic cloud synchronization. Unknown, foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. Exact catalogued storage-plugin predecessors remain recognizable. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
 
 ## Verification
-
-The repository validates focused packages, the full test suite, race behavior, E2E setup and native SDD lifecycle, vet, module integrity, trimmed builds, Windows amd64/arm64 builds, and diff whitespace. Tests must not require network access or package installation.
 
 ## CARE implementation boundary
 
 CARE is a managed documentation and evidence-ledger contract, not a Go provider runtime or a new schema/transport surface. Current identities and evaluator-owned protected-holdout limits are documented in [CARE architecture](care.md) and [CARE evaluation](care-evaluation.md). Repository validation establishes static conformance only.
+
+
+Current integration contract: OpenCode Manager62 and Codex Manager21 use one workspace writer and the same frozen candidate for verification and applicable CARE review. SQLite schema v23 is preserved. OpenCode installs 11 managed artifacts and Codex installs nine; each exposes six delegated profiles. The auto-discovered `plugins/vgxness-memory-lifecycle.ts` has no `opencode.json` plugin entry; missing it is partial. `vgxness mcp --full` exposes eight memory tools. Complete Manager61 and Manager20 packages are recognized predecessors. During retirement, modified, malformed, foreign, unknown, or newer bytes block without removal.

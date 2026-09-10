@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 	_ "modernc.org/sqlite"
 )
 
@@ -90,7 +89,12 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"vgxness-sdd-tasks.md",
 		"vgxness-sdd-apply.md",
 	}
-	managedProfiles := append(reviewerPaths(configDirectory, reviewers), reviewerPaths(configDirectory, sddProfiles)...)
+	managedProfiles := reviewerPaths(configDirectory, reviewers)
+	for _, path := range reviewerPaths(configDirectory, sddProfiles) {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("retired SDD profile remains: %s (%v)", path, err)
+		}
+	}
 	for _, path := range append([]string{launcher, manager, general, explore, verifier, memoryLifecyclePlugin, defaultAgentConfig}, managedProfiles...) {
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.Mode().IsRegular() {
@@ -112,7 +116,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"active v61 marker", "artifact: opencode-agent/vgxness-manager; version: 61"},
+		{"active v62 marker", "artifact: opencode-agent/vgxness-manager; version: 62"},
 		{"model and variant", "model: acme/frontier\nvariant: xhigh"},
 		{"global permission", "permission:\n  \"*\": allow"},
 	} {
@@ -123,8 +127,8 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 	if !bytes.Contains(managerData, []byte(contract.RenderManagerSections())) {
 		t.Fatal("installed manager does not contain the complete canonical contract")
 	}
-	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 61")); got != 1 {
-		t.Fatalf("installed current manager v61 marker count=%d, want 1", got)
+	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 62")); got != 1 {
+		t.Fatalf("installed current manager v62 marker count=%d, want 1", got)
 	}
 	if got := bytes.Count(managerData, []byte("artifact: opencode-agent/vgxness-manager; version: 57")); got != 0 {
 		t.Fatalf("installed current manager retains v57 marker count=%d, want 0", got)
@@ -144,12 +148,6 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		"care-reviewer":   filepath.Join(configDirectory, "agents", "vgxness-care-reviewer.md"),
 		"care-specialist": filepath.Join(configDirectory, "agents", "vgxness-care-specialist.md"),
 		"care-challenger": filepath.Join(configDirectory, "agents", "vgxness-care-challenger.md"),
-		"sdd-research":    filepath.Join(configDirectory, "agents", "vgxness-sdd-research.md"),
-		"sdd-proposal":    filepath.Join(configDirectory, "agents", "vgxness-sdd-proposal.md"),
-		"sdd-spec":        filepath.Join(configDirectory, "agents", "vgxness-sdd-spec.md"),
-		"sdd-design":      filepath.Join(configDirectory, "agents", "vgxness-sdd-design.md"),
-		"sdd-tasks":       filepath.Join(configDirectory, "agents", "vgxness-sdd-tasks.md"),
-		"sdd-apply":       filepath.Join(configDirectory, "agents", "vgxness-sdd-apply.md"),
 	}
 	nativeBindings := map[string][]string{
 		"general":  {"artifact: opencode-agent/general; version: 10", "permission:\n  \"*\": allow"},
@@ -213,37 +211,20 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		t.Fatalf("installed setup is not healthy:\n%s", statusOutput)
 	}
 
-	var createdEnvelope struct {
-		SchemaVersion int        `json:"schemaVersion"`
-		Result        sdd.Change `json:"result"`
+	// Retain this CI entrypoint while testing retirement instead of the old lifecycle.
+	for _, args := range [][]string{{"sdd", "create"}, {"sdd", "transition"}, {"sdd-archive", "create"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		command := exec.CommandContext(ctx, launcher, args...)
+		command.Env, command.Dir = environment, workspace
+		output, err := command.CombinedOutput()
+		cancel()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 2 || (!bytes.Contains(output, []byte("retired")) && !bytes.Contains(output, []byte("read-only"))) {
+			t.Fatalf("SDD request not rejected: %v err=%v output=%q", args, err, output)
+		}
 	}
-	decodeJSON(t, runWithInput(t, environment, workspace, `{"schemaVersion":1,"idempotencyKey":"hermetic-lifecycle-1","title":"Hermetic lifecycle","backend":"memory","interactionMode":"automatic","plan":"low"}`, launcher, "sdd", "create", "--stdin", "--json", "--workspace", workspace), &createdEnvelope)
-	change := createdEnvelope.Result
-	if createdEnvelope.SchemaVersion != 1 || change.ID == "" || change.StateVersion != 1 || change.Phase != sdd.PhaseExplore {
-		t.Fatalf("unexpected SDD change: %+v", createdEnvelope)
-	}
-	var modeEnvelope struct {
-		Result sdd.Change `json:"result"`
-	}
-	decodeJSON(t, runWithInput(t, environment, workspace, fmt.Sprintf(`{"schemaVersion":1,"changeId":%q,"interactionMode":"interactive","expectedStateVersion":1}`, change.ID), launcher, "sdd", "set-interaction-mode", "--stdin", "--json", "--workspace", workspace), &modeEnvelope)
-	if modeEnvelope.Result.InteractionMode != sdd.InteractionInteractive || modeEnvelope.Result.StateVersion != 2 {
-		t.Fatalf("unexpected SDD mode update: %+v", modeEnvelope.Result)
-	}
-	var savedEnvelope struct {
-		Result sdd.Revision `json:"result"`
-	}
-	decodeJSON(t, runWithInput(t, environment, workspace, fmt.Sprintf(`{"schemaVersion":1,"changeId":%q,"artifact":"explore","content":"bounded research","expectedStateVersion":2}`, change.ID), launcher, "sdd", "save-revision", "--stdin", "--json", "--workspace", workspace), &savedEnvelope)
-	var acceptedEnvelope struct {
-		Result sdd.Revision `json:"result"`
-	}
-	decodeJSON(t, runWithInput(t, environment, workspace, fmt.Sprintf(`{"schemaVersion":1,"changeId":%q,"revisionId":%q,"expectedStateVersion":%d}`, change.ID, savedEnvelope.Result.ID, savedEnvelope.Result.StateVersion), launcher, "sdd", "accept-revision", "--stdin", "--json", "--workspace", workspace), &acceptedEnvelope)
-	var transitionEnvelope struct {
-		Result sdd.Change `json:"result"`
-	}
-	decodeJSON(t, runWithInput(t, environment, workspace, fmt.Sprintf(`{"schemaVersion":1,"changeId":%q,"targetPhase":"proposal","expectedStateVersion":%d}`, change.ID, acceptedEnvelope.Result.StateVersion), launcher, "sdd", "transition", "--stdin", "--json", "--workspace", workspace), &transitionEnvelope)
-	if transitionEnvelope.Result.Phase != sdd.PhaseProposal {
-		t.Fatalf("SDD lifecycle did not advance: %+v", transitionEnvelope.Result)
-	}
+	// Initializing ordinary memory still works after SDD command rejection.
+	runWithInput(t, environment, workspace, `{"schemaVersion":1,"query":"retirement sentinel","limit":5}`, launcher, "memory", "search", "--stdin", "--json", "--workspace", workspace)
 
 	memoryDatabasePath := filepath.Join(homeDirectory, ".vgxness", "memory.db")
 	if info, err := os.Stat(memoryDatabasePath); err != nil || !info.Mode().IsRegular() {

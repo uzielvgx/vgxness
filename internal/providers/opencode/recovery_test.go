@@ -38,18 +38,12 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 		"agents/vgxness-care-reviewer.md",
 		"agents/vgxness-care-specialist.md",
 		"agents/vgxness-manager.md",
-		"agents/vgxness-sdd-apply.md",
-		"agents/vgxness-sdd-design.md",
-		"agents/vgxness-sdd-proposal.md",
-		"agents/vgxness-sdd-research.md",
-		"agents/vgxness-sdd-spec.md",
-		"agents/vgxness-sdd-tasks.md",
 		"agents/vgxness-verifier.md",
 		"plugins/vgxness-memory-lifecycle.ts",
 		"vgxness/default-agent.json",
 		"vgxness/model-plan.json",
 	}
-	if before.Root != configDirectory || len(before.Artifacts) != 16 || len(before.AggregateSHA256) != 64 {
+	if before.Root != configDirectory || len(before.Artifacts) != 10 || len(before.AggregateSHA256) != 64 {
 		t.Fatalf("unexpected layout: %+v", before)
 	}
 	paths := managedPaths(before)
@@ -58,7 +52,7 @@ func TestManagedLayoutUsesInstalledArtifactAuthority(t *testing.T) {
 	}
 
 	installed, err := service.Install(context.Background(), options)
-	if err != nil || installed.ArtifactCount != 17 {
+	if err != nil || installed.ArtifactCount != 11 {
 		t.Fatalf("Install() = %+v, %v", installed, err)
 	}
 	for _, artifact := range before.Artifacts {
@@ -593,7 +587,7 @@ func TestReinstallMovesRecognizedTargetToAnchorBeforePublishing(t *testing.T) {
 			}
 			return nil
 		})
-		if staged < 15 {
+		if staged < 9 {
 			t.Fatalf("desired artifacts were not all staged before first move: temporary files=%d", staged)
 		}
 		anchors, err := filepath.Glob(filepath.Join(filepath.Dir(target), ".vgxness-reinstall-old-*.tmp"))

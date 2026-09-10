@@ -1,20 +1,11 @@
 # Guided OpenCode, Codex and Pi setup
 
-Current identities are OpenCode Manager61 and Codex Manager20 (parity OpenCode-v61), rendered from `internal/orchestration/manager_contract.json`. Complete Manager60 and Manager19 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only.
+Structured SDD is retired: no lifecycle tools, SDD worker profiles, or active `sdd-lifecycle` skill are installed. Historical records remain in SQLite; `vgxness sdd-archive` permits only list/get and revision reads. Model-plan schemas retain inactive legacy slots for compatibility. Use a short plan, one writer, independent verification and proportional CARE review. See [the current workflow](orchestration-flow.md).
 
-The unified `setup opencode|codex|pi|all` flow explains and verifies selected providers before changing anything. OpenCode owns 17 managed artifacts, including one exact auto-discovered lifecycle plugin with no `opencode.json` plugin entry; Codex retains ownership of its `config.toml` and VGXNESS manages only its documented profiles. Shared setup work covers the launcher and separate global 47-file, 19-skill catalog, which adds `memory-sync` and `sdd-lifecycle`; the latter activates only after explicit SDD request/acceptance and fails closed when unavailable. The legacy provider skill is not an active artifact.
+Setup installs OpenCode Manager62 with seven agents across 11 provider artifacts, plus the global catalog of 18 skills across 46 files. Restart the host after installation.
 
-1. Inspect the candidate binary, destinations, workspace, and OpenCode compatibility.
-2. Install or update the permanent versioned launcher.
-3. Retire only exact legacy OpenCode plugin `vgxness.ts` v1-v10 bytes and provider skill `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes before global publication; modified, malformed, foreign, unknown, or newer bytes block without removal.
-4. Install `vgxness-manager`, managed `general` and verifier profiles, the read-only `explore` override, three hidden read-only CARE profiles, and six hidden SDD profiles.
-5. Install `<config-dir>/vgxness/model-plan.json`, the auto-discovered `<config-dir>/plugins/vgxness-memory-lifecycle.ts` lifecycle plugin, the `opencode.json` default-agent selection and bounded `<config-dir>/vgxness/default-agent.json` restoration metadata, configure `vgxness mcp --full`, then publish the global 47-file, 19-skill catalog listed above. The plugin needs no `opencode.json` entry.
-6. Read back all managed identities and perform the live OpenCode handshake.
-7. Report recovery guidance if any step fails.
 
-The resulting 17 OpenCode artifacts are 13 agents, the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` plugin, model-plan manifest, default-agent selection, and restoration metadata; the plugin has no `opencode.json` plugin entry. The agents include Manager61, managed `general` v10, `explore` v4, verifier v7, three CARE v2 roles/profiles, and six SDD roles/profiles including `vgxness-sdd-apply` v7. Current policy comes from the shared registry; exact complete Manager60 packages are immediate predecessors, followed by Manager59 and older CARE identities. Modified or mixed packages remain drift. `vgxness mcp --full` exposes eight memory and 13 SDD tools. Official setup publishes the global 47-file, 19-skill catalog including `memory-sync`; only exact historical `vgxness.ts` v1-v10 plugin, `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill, and `stacked-pr` v3 bytes are removable, while modified, malformed, foreign, unknown, or newer bytes block without removal. OpenCode uninstall does not own global skills.
-
-The shared Manager owns authorization, scope, candidate identity, lifecycle and final acceptance. It classifies direct questions, bounded reads, implementation and explicitly accepted SDD; selects applicable skills; delegates bounded independent work; and preserves one workspace writer. Missions bind exact targets, hashes, commands, criteria and skill resources. Significant work reports an outcome, approach and observable milestone. Independent verification and applicable reviews use the same frozen candidate. These are instructions and evidence contracts, not host enforcement or a live-model evaluation result. See [the shared Manager contract](architecture/shared-manager-contract.md).
+Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Complete Manager61 and Manager20 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only.
 
 ## Commands
 
@@ -42,15 +33,6 @@ With no model override flags, planning can retain the installed configuration or
 
 Preview is ready to apply when OpenCode responds healthily and no managed destination is drifted. Status is healthy when:
 
-- the permanent launcher identity is installed;
-- all 13 agent identities (manager, `general`, verifier, `explore`, three CARE profiles, and six SDD profiles) are installed with the resolved model and variant;
-- MCP is configured as `vgxness mcp --full`, and the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` plugin is installed without an `opencode.json` plugin entry;
-- the canonical non-secret model-plan manifest binds all model-aware agent digests;
-- only exact `vgxness.ts` v1-v10 plugin, `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill, and `stacked-pr` v3 retirement bytes are absent; modified, malformed, foreign, unknown, or newer bytes block without removal, and global `git-delivery` is installed without drift;
-- the separate global 47-file, 19-skill `skills-creator`, `git-delivery`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, `memory-sync`, and `sdd-lifecycle` catalog is installed without drift; OpenCode uninstall does not own it;
-- `opencode.json` semantically selects `vgxness-manager` as the default agent while preserving unrelated JSON values, existing `opencode.jsonc` bytes unchanged, and bounded `default-agent.json` restoration metadata recording whether the config existed and any prior explicit default;
-- the bounded OpenCode handshake succeeds in the workspace.
-
 `setup codex --status`, `setup pi --status` and `setup all --status` apply the same shared launcher and global-skills health requirements, then require every selected provider to be installed and healthy. If a provider fails after a possible mutation, setup reports its partial outcome and directs the user to `vgxness integrate <provider> status` before retrying; shared recovery guidance remains separate.
 
 For Pi, provide an offline `--pi-release-dir` or a pinned `--pi-release-version <vSemVer>`; a release binary may use its own build tag. Applying Pi setup can download that exact portable package; preview and status never download it. Node and `pi` must already be present. Pi status checks its installed identity and isolated package probe; Windows worker execution remains unavailable. See [Pi setup](pi-typescript.md).
@@ -61,10 +43,11 @@ Setup verifies exact bytes and static policy ordering only. It does not run a ne
 
 Install and uninstall rollback is conservative and never overwrites concurrent content. If durable rollback or restoration cannot complete, setup reports an explicit recovery failure and preserves available backups for inspection. An interrupted exact old/new model-plan switch can be resumed; unrelated drift must be repaired first. The shared pack classifies an exact desired/predecessor subset as partial: `install` resumes it and `uninstall` backs up and removes its exact present subset; unknown bytes remain drift. On Windows atomic rename/readback/backups are used, but directory fsync is unavailable and crash durability is therefore weaker.
 
-Immediately after upgrading a binary, `--status` may fail when its database has an older schema because read-only status cannot migrate it. Run one write-capable memory or SDD operation to atomically apply the required migration, then rerun `--status`. After a forward migration, older binaries fail closed and cannot use the database. Never delete the database; see [Native memory](memory.md#upgrade-migration-caveat).
-
 Restart OpenCode Desktop after setup, an artifact upgrade, or any plan/slot change. Running sessions retain the previously loaded agent files, MCP configuration, and model bindings.
 
 ## CARE setup boundary
 
 Setup installs the current CARE identities but does not establish an evaluation outcome. See [CARE architecture](care.md) and [CARE evaluation](care-evaluation.md). Historical runtime evidence was recorded on macOS; current-candidate native/model evidence must be recorded separately.
+
+
+Current integration contract: OpenCode Manager62 and Codex Manager21 use one workspace writer and the same frozen candidate for verification and applicable CARE review. SQLite schema v23 is preserved. OpenCode installs 11 managed artifacts and Codex installs nine; each exposes six delegated profiles. The auto-discovered `plugins/vgxness-memory-lifecycle.ts` has no `opencode.json` plugin entry; missing it is partial. `vgxness mcp --full` exposes eight memory tools. Complete Manager61 and Manager20 packages are recognized predecessors. During retirement, modified, malformed, foreign, unknown, or newer bytes block without removal.

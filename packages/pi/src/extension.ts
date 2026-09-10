@@ -4,17 +4,14 @@ import { createSkillTool } from "./tools/skill.ts";
 import { loadManagerContract, renderManagerPrompt } from "./orchestration/contract.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
-import { createHash } from "node:crypto";
 import { delimiter, dirname, join } from "node:path";
-import { constants } from "node:fs";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { createApplyPatchTool } from "./tools/apply_patch.ts";
 import { createMemoryTools, type ToolHost } from "./tools/memory.ts";
 import { createModelTool } from "./tools/model.ts";
 import { createQuestionTool } from "./tools/question.ts";
-import { createSddTool } from "./tools/sdd.ts";
 import { createTodoWriteTool } from "./tools/todowrite.ts";
 import { createNativeDispatcher } from "./service/dispatcher.ts";
 import { SessionAdapter } from "./session/adapter.ts";
@@ -70,42 +67,6 @@ function modelCatalog(context: any) {
   return { provider: current.provider, models: candidates.map((item: any) => ({ provider: item.provider, id: item.id, name: item.name, supportedEfforts: ["low", "medium", "high"].filter((level) => nativeEffort(item, level)) })) };
 }
 
-function acceptedBindingVerifier(host: PiToolHost) {
-  return async (binding: any) => {
-    const client = await host.backend();
-    const revisionFor = async (ref: any): Promise<any> => await client.request("sdd.get_revision", { changeId: binding.changeId, revisionId: ref.revisionId }, host);
-    const valid = async (revision: any, ref: any) => {
-      if (revision?.id !== ref.revisionId || revision?.changeId !== binding.changeId || revision?.artifactId !== ref.artifactId || revision?.digest !== ref.digest || revision?.status !== "accepted" || revision?.artifactStatus !== "accepted") return false;
-      let content: Buffer;
-      if (typeof revision.content === "string") content = Buffer.from(revision.content, "base64");
-      else {
-        // OpenSpec-only revisions retain their canonical bytes in the accepted file.
-        const names: Record<string, string> = { explore: "research.md", proposal: "proposal.md", spec: "spec.md", design: "design.md", tasks: "tasks.md", apply: "apply-result.md", verify: "verification.md" };
-        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(binding.changeId) || !names[revision.artifact] || revision.externalLocation !== `openspec/changes/${binding.changeId}/${names[revision.artifact]}`) return false;
-        try {
-          let path = host.workspace;
-          for (const part of revision.externalLocation.split("/")) { path = join(path, part); const info = await lstat(path); if (info.isSymbolicLink()) return false; }
-          const before = await lstat(path);
-          if (!before.isFile() || before.size > 4 * 1024 * 1024) return false;
-          const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-          try { const opened = await file.stat(); if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) return false; content = await file.readFile(); } finally { await file.close(); }
-          const after = await lstat(path);
-          if (after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) return false;
-        } catch { return false; }
-      }
-      return createHash("sha256").update(content).digest("hex") === ref.digest;
-    };
-    const taskRevision = await revisionFor(binding);
-    const key = (ref: any) => `${ref.artifactId}\u0000${ref.revisionId}\u0000${ref.digest}`;
-    const required = Array.isArray(taskRevision?.inputs) ? taskRevision.inputs : [];
-    const supplied = Array.isArray(binding.inputs) ? binding.inputs : [];
-    const requiredKeys = required.map(key).sort(), suppliedKeys = supplied.map(key).sort();
-    const exactInputs = requiredKeys.length > 0 && requiredKeys.length === suppliedKeys.length && requiredKeys.every((value: string, index: number) => value === suppliedKeys[index]) && new Set(suppliedKeys).size === suppliedKeys.length;
-    const revisions = await Promise.all(supplied.map(revisionFor));
-    const change: any = await client.request("sdd.get", { id: binding.changeId }, host);
-    return taskRevision?.artifact === "tasks" && await valid(taskRevision, binding) && exactInputs && (await Promise.all(revisions.map((revision: any, index: number) => valid(revision, supplied[index])))).every(Boolean) && change?.phase === "apply" && change?.status === "active" && change?.stateVersion === binding.stateVersion && !!client.verifyCurrentAcceptedBinding && await client.verifyCurrentAcceptedBinding(binding);
-  };
-}
 
 function supportsWorkerModel(context: any, selected: string, effort: string) {
   const slash = selected.indexOf("/");
@@ -135,12 +96,11 @@ function runtimeTaskTool(host: PiToolHost, context: () => any, workerCli?: strin
     supportsModel: injected ? undefined : (selected, effort) => supportsWorkerModel(context(), selected, effort),
     prepareWorker: injected ? undefined : async (mission) => await prepareWorkerAuthentication(context(), mission),
     executeWorker: injected ?? (workerCli ? async (mission, signal, auth, authority) => await executePiWorker(mission, { cli: workerCli, runnerModule, signal, auth, authority }) : undefined),
-    verifyAcceptedBinding: acceptedBindingVerifier(host),
   });
 }
 
 export function createPiTools(host: PiToolHost, pi: ExtensionApi) {
-  return [createQuestionTool(), createTodoWriteTool(pi), createApplyPatchTool(host), ...createMemoryTools(host), createSddTool(host), createModelTool(host), ...(host.role === "manager" ? [createTaskTool(host), createSkillTool()] : [])];
+  return [createQuestionTool(), createTodoWriteTool(pi), createApplyPatchTool(host), ...createMemoryTools(host),  createModelTool(host), ...(host.role === "manager" ? [createTaskTool(host), createSkillTool()] : [])];
 }
 export function createPiExtension(options: { workspace?: string; storageRoot?: string; credentialFile?: string; mode?: "full" | "read-only"; role?: string; resolvePackage?: (name: string) => Promise<string>; backend?: () => Promise<any>; workerCli?: string; executeWorker?: (mission: any, signal?: AbortSignal, auth?: unknown, authority?: Readonly<{ expiresAt: number }>) => Promise<string> } = {}) {
   return async function extension(pi: ExtensionApi) {
@@ -190,7 +150,6 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
       "vgx-status": async () => await snapshot("vgx-status",async()=>{await viewRequest("memory.project.resolve",{});return nativeStatusView({ workspace, mode, role, session: sessions.status(), workerCli, packageVersion, backendVersion: packageVersion, piVersion: PI_VERSION, modelCatalog: modelCatalog(runtimeContext) });}),
       "vgx-workers": async () => await snapshot("vgx-workers",async()=>nativeWorkersView(workerCli,[...workerStates.values()])),
       "vgx-memory": async () => await snapshot("vgx-memory",async()=>nativeMemoryView(await viewRequest("memory.recent",{limit:10}))),
-      "vgx-sdd": async () => await snapshot("vgx-sdd",async()=>({changes:await viewRequest("sdd.list",{status:"active",limit:10})})),
     };
     for (const [name, read] of Object.entries(views)) pi.registerCommand?.(name, { description: `Read VGXNESS ${name.slice(4)} status`, async handler(_args: string, ctx: any) {
       let value: unknown;

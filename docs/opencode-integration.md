@@ -1,46 +1,15 @@
 # OpenCode integration
 
-Current identities are OpenCode Manager61 and Codex Manager20 (parity OpenCode-v61), rendered from `internal/orchestration/manager_contract.json`. Complete Manager60 and Manager19 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only. Global `git-delivery` is the authorized delivery skill, with native Git and no Go delivery daemon.
+Structured SDD is retired: no lifecycle tools, SDD worker profiles, or active `sdd-lifecycle` skill are installed. Historical records remain in SQLite; `vgxness sdd-archive` permits only list/get and revision reads. Model-plan schemas retain inactive legacy slots for compatibility. Use a short plan, one writer, independent verification and proportional CARE review. See [the current workflow](orchestration-flow.md).
 
-OpenCode owns 17 managed artifacts: 13 agents, the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` plugin, a model-plan manifest, an `opencode.json` default-agent selection, and restoration metadata. The plugin has no `opencode.json` plugin entry. The separate global 47-file, 19-skill portable catalog adds `memory-sync` and `sdd-lifecycle`; exact historical `vgxness.ts` v1-v10 plugin bytes and `vgxness-autonomous-stacked-pr` v1/v2/v3 provider-skill bytes are removable, while modified, malformed, foreign, unknown, or newer bytes block without removal.
+OpenCode Manager62 owns 11 managed artifacts: seven agents (Manager, Explore, General, Verifier and three CARE roles), the memory lifecycle plugin, model-plan manifest, default-agent configuration and restoration metadata. Full MCP exposes eight memory tools; read-only MCP exposes three. The global catalog contains 18 skills across 46 files.
 
-The shared Manager owns authorization, scope, candidate identity, lifecycle and final acceptance. It classifies direct questions, bounded reads, implementation and explicitly accepted SDD; selects applicable skills; delegates bounded independent work; and preserves one workspace writer. Missions bind exact targets, hashes, commands, criteria and skill resources. Significant work reports an outcome, approach and observable milestone. Independent verification and applicable reviews use the same frozen candidate. These are instructions and evidence contracts, not host enforcement or a live-model evaluation result. See [the shared Manager contract](architecture/shared-manager-contract.md).
+
+Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Complete Manager61 and Manager20 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only. Global `git-delivery` is the authorized delivery skill, with native Git and no Go delivery daemon.
 
 Delivery labels are evidence-only: IMPLEMENTED requires completed workspace changes and observed developmental checks, but not independent verification; VERIFIED requires the exact frozen candidate to pass independent verification and review; DELIVERED requires the exact commit to be published and a new current-task PR created and read back; MERGED requires that PR merge and base containment/readback; INSTALLED additionally requires installation and handshake readback. No later state is inferred.
 
-VGXNESS installs 17 OpenCode-managed artifacts: 13 agents (`vgxness-manager` v61; managed `general` v10; `explore` v4; verifier v7; three CARE v2 roles; and six hidden SDD profiles including `vgxness-sdd-apply` v7), the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` plugin, one non-secret model-plan manifest, `opencode.json` with the default-agent selection, and bounded restoration metadata. The plugin has no `opencode.json` plugin entry. Current identities are OpenCode Manager61 and Codex Manager20 (parity OpenCode-v61), rendered from `internal/orchestration/manager_contract.json`. Complete Manager60 and Manager19 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only. SQLite schema v23 backs local provider-session drafts and leases. The managed MCP launch command is `vgxness mcp --full`; it exposes the full read/write set of eight memory and 13 SDD tools. Read-only managed profiles receive explicit non-mutating allowlists.
-
 MCP is local stdio for a trusted OpenCode host. It has no caller identity or session authentication: host tool allowlists, operator permissions, user authorization, and task scope are its authorization boundary. No capability token or additional authentication framework is provided.
-
-| Mode | Discovery | Contract |
-| --- | --- | --- |
-| `vgxness mcp` | `memory_recent`, `memory_search`, `memory_context` | Default-deny read-only mode. |
-| `vgxness mcp --full` | 21 tools | Eight memory tools and 13 SDD tools, including local-only session-summary and optimistic update tools. |
-
-Full MCP exposes exactly 21 tools: eight semantic-memory tools and 13 SDD tools.
-
-- `vgxness_memory_search`
-- `vgxness_memory_recent`
-- `vgxness_memory_get`
-- `vgxness_memory_save`
-- `vgxness_memory_forget`
-- `vgxness_memory_context`
-- `vgxness_memory_session_summary`, `vgxness_memory_update`
-- `vgxness_sdd_create`
-- `vgxness_sdd_list`
-- `vgxness_sdd_get`
-- `vgxness_sdd_set_interaction_mode`
-- `vgxness_sdd_save_revision`
-- `vgxness_sdd_get_revision`
-- `vgxness_sdd_list_revisions`
-- `vgxness_sdd_accept_revision`
-- `vgxness_sdd_transition`
-- `vgxness_sdd_projection_status`
-- `vgxness_sdd_record_projection`
-- `vgxness_sdd_render_projection`
-- `vgxness_sdd_compare_projection`
-
-The SDD tools store structured changes and immutable accepted revisions or transform supplied bytes. They do not route work, invoke agents, access the filesystem, write OpenSpec files, or advance phases on their own. OpenCode remains the execution authority for all engineering work.
 
 ## Install and inspect
 
@@ -68,8 +37,6 @@ Self-install version cleanup is separate from this integration. `vgxness self gc
 
 Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS creates or updates `opencode.json` with `default_agent: "vgxness-manager"`, preserving every unrelated JSON value. It preserves any existing `opencode.jsonc` byte-for-byte. Bounded metadata at `<config-dir>/vgxness/default-agent.json` restores a prior explicit default during uninstall. Model routing remains OpenCode-owned.
 
-Preview and status are read-only. The managed agent catalogue contains Manager61 plus 12 other profiles; `general` is v10, `explore` is v4, verifier is v7, the three OpenCode CARE profiles are v2, and the six SDD profiles include `vgxness-sdd-apply` v7. The lifecycle plugin is part of the exact managed inventory; missing it is partial, while foreign or changed bytes are drift and block replacement or removal. OpenCode immediate Manager60, then Manager59, CARE-v2/Manager58 and CARE-v1/Manager58/Manager57 packages are predecessor-only and never current. OpenCode v56/verifier-v6 and older recognized manager, agent, model-plan, and `vgxness.ts` v1-v10 plugin artifacts remain deeper lifecycle identities. Exact provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes are removable; modified, malformed, foreign, unknown, or newer bytes block without removal. Uninstall removes only exact provider artifacts, including the lifecycle plugin, and never removes global skills.
-
 Historical predecessor documentation may refer to manager v49, `general` v6, verifier v4, and reviewers v3; those identities do not describe the current generated ownership boundary.
 
 Installation stages each artifact in a private same-filesystem `0700` directory with a `0600` regular file, then publishes by no-overwrite link. Cleanup verifies the creation identity and exact expected bytes, retaining observed replacements, mutations, or extra staging entries as recovery evidence. This protects observable path replacement and content drift. POSIX provides no atomic compare-content-and-unlink operation against any external same-UID process holding a pre-opened writable descriptor, hostile or accidental; that situation is outside this supported boundary.
@@ -81,8 +48,6 @@ Changing the plan or a slot regenerates the same managed agent set only when eve
 VGXNESS's SQLite/FTS5 `MemoryStore` is the only persistent memory authority. MCP receives no caller identity; project selection and authorization are host/operator responsibilities.
 
 The default database is `~/.vgxness/memory.db`. Records remain isolated by canonical workspace binding, project, scope, topic, type, state, session, provenance, and references.
-
-The current SQLite schema v23 contains separate structured SDD tables, per-project sync backup intents, local-only provider-session rows, drafts, and leases; it does not make SDD content semantic memory or turn OpenSpec projections into canonical SQLite content. Immediately after a binary upgrade from an older supported schema, read-only opens cannot migrate: `status`, `doctor`, `setup opencode --status`, and read tools may report a storage/migration failure until one write-capable memory or SDD operation opens the database and atomically applies v23. Do not delete the database. Run the write-capable operation and rerun status; see [Native memory](memory.md#upgrade-migration-caveat).
 
 Memory access is explicit through MCP tools. Recall is intent-triggered when the request indicates prior project context may matter:
 
@@ -100,29 +65,11 @@ Current setup installs the exact auto-discovered lifecycle plugin only, without 
 
 Engram is not part of this integration.
 
-## Structured SDD storage and OpenSpec projection
-
-SDD changes, artifacts, revisions, input bindings, and projection records use isolated tables in the owned SQLite database. They are not semantic memories and never appear in memory search. MCP exposes the operations but supplies no caller identity. Create retries reuse a project-scoped idempotency key and must match the original normalized payload. Revision lists return metadata summaries without bodies; exact bodies require `get-revision`. Per-change automatic/interactive mode can be changed later only with an optimistic state version, and save or acceptance is valid only for the change's current phase.
-
-The backend determines canonical content ownership. `memory` stores canonical artifact bodies in structured SDD storage. `openspec` stores only the external repository-relative location, SHA-256 digest, revision identity, and input bindings in SQLite; the canonical body remains in the repository. `hybrid` stores canonical memory content and tracks OpenSpec as a projection.
-
-OpenSpec projection is a pure deterministic adapter. It maps accepted artifacts to bounded paths under `openspec/changes/<safe-change-id>/` and returns managed Markdown bytes with exact revision and digest metadata. Render and compare receive or return bytes through bounded JSON; neither operation reads, follows symlinks, creates directories, nor writes files. For `openspec`, `vgxness-sdd-apply` uses ordinary OpenCode workspace tools to write and read back the canonical file; Manager records bounded digest evidence.
-
-Comparison reports `synced`, `drifted`, or `missing`. In hybrid mode memory is canonical. A valid divergent projection may be inspected, replaced from a freshly rendered canonical result, or submitted explicitly through `vgxness_sdd_save_revision` as a new candidate. Compare never imports divergent content, overwrites an accepted revision, or changes lifecycle state.
-
 ## Other native capabilities
-
-The manager uses ordinary OpenCode workspace tools, the VGXNESS-managed `explore` override and `general` profile, skills by native registry name, optional user-approved SDD, the three CARE profiles, and the six model-bound SDD profiles. The `explore` override is bound to the research role model and variant. Its deny-by-default permissions allow only `read`, `grep`, `glob`, `list`, `skill`, and `codegraph_explore`; it has no shell, write, network, question, or delegation access.
-
-Research, proposal, spec, design, and tasks SDD profiles are read-only. `vgxness-sdd-apply` v7 alone has workspace-write authority for an explicitly accepted, hash-bound SDD apply or OpenSpec/hybrid projection; it cannot ask questions, delegate, persist memory, save or accept revisions, record projections, or transition lifecycle state. `general` v10 may write only ordinary authorized non-SDD repository implementation and rejects SDD missions. Manager owns lifecycle state, projections, and transitions but is not the workspace writer; verifier remains non-mutating.
-
-Each accepted SDD change follows `explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete`. A transition requires an accepted artifact for the current phase; `openspec` and `hybrid` also require a current projection record bound to that revision and digest. The manager sends phase agents exact change, artifact, accepted-input, evidence-scope, and return contracts. It may overlap at most four independent read-only missions bound to the same inputs; final artifacts, accepted-SDD workspace changes by `vgxness-sdd-apply`, validation, and all Manager lifecycle writes remain sequential and single-authority.
 
 The managed `explore` override uses `codegraph_explore` first for structural evidence and falls back narrowly to native reads and search when the index is unavailable, stale, or insufficient. When a project has a healthy `.codegraph` index, the manager and reviewers may also use one bounded query. Exact source, Git diff, and test output remain authoritative.
 
 ### Adaptive workflow and interaction
-
-The shared Manager owns authorization, scope, candidate identity, lifecycle and final acceptance. It classifies direct questions, bounded reads, implementation and explicitly accepted SDD; selects applicable skills; delegates bounded independent work; and preserves one workspace writer. Missions bind exact targets, hashes, commands, criteria and skill resources. Significant work reports an outcome, approach and observable milestone. Independent verification and applicable reviews use the same frozen candidate. These are instructions and evidence contracts, not host enforcement or a live-model evaluation result. See [the shared Manager contract](architecture/shared-manager-contract.md).
 
 Interaction mode is resolved in this order:
 
@@ -130,17 +77,11 @@ Interaction mode is resolved in this order:
 2. a durable project default recalled from VGXNESS memory;
 3. automatic mode as the fallback.
 
-Automatic mode resolves reversible choices from repository evidence and asks only for required authorization, irreversible or high-consequence ambiguity, unavailable prerequisites, or acceptance before SDD. Interactive mode asks about consequential route, architecture, behavior, scope, or testing tradeoffs while still deriving routine facts from the repository. A task override is never persisted; an explicitly requested project default may be retained as a durable decision.
-
-After SDD is accepted, the manager separately asks whether that change uses automatic or interactive phase execution. Automatic SDD advances validated gates without routine pauses but still stops for hard decisions, authorization, unavailable evidence, and drift. Interactive SDD pauses at every validated candidate boundary for approve, revise, or cancel. This choice is stored on the SDD change and does not alter the manager's general project default.
-
 The primary manager has explicit access to OpenCode's native `question` tool. It asks one blocking decision at a time, presents the recommended option first, and resumes without repeating the same question. Questions do not grant permission, override a denial, or move terminal and diagnostic work to the user. Review profiles cannot ask questions.
 
 ### Adaptive TDD
 
 For safely testable regressions and behavior changes, the manager prefers an observable RED -> GREEN -> REFACTOR cycle. It may claim TDD only when the test was run and observed failing for the expected reason before the production change. Tests added after implementation are reported as regression coverage instead.
-
-TDD is not a universal gate. Documentation, passive assets, generated code, disposable spikes, and changes for which a safe failing test cannot be expressed use proportional validation with an explicit rationale. SDD defines requirements and design; TDD may guide implementation and does not replace SDD.
 
 ### Native autonomous Git delivery
 
@@ -152,22 +93,14 @@ Manager, managed `general`, and verifier use a single global `allow` permission 
 
 ## Health contract
 
-The integration is installed only when manager v61, all other 12 agents (including `general` v10, `explore` v4, verifier v7, three CARE v2 profiles, and six SDD profiles including `vgxness-sdd-apply` v7), the model-plan manifest, default-agent selection, and restoration metadata match their provider identities exactly. Setup health combines:
-
-1. the permanent VGXNESS launcher is installed and verified;
-2. all 17 OpenCode-managed artifacts are installed without drift: 13 agents, the lifecycle plugin, model-plan manifest, default-agent selection, and restoration metadata;
-3. the separate global 47-file, 19-skill `skills-creator`, `git-delivery`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, `memory-sync`, and `sdd-lifecycle` catalog is installed without drift;
-4. the bounded OpenCode handshake succeeds for the selected workspace.
-
 Restart OpenCode Desktop after installation or a plan switch so it reloads the profiles, model bindings, variants, MCP configuration, and global portable skills.
 # Shared portable skills
 
-The global 47-file, 19-skill `skills-creator`, `git-delivery`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, `memory-sync`, and `sdd-lifecycle` catalog is installed automatically by setup and can be managed independently with `vgxness skills <preview|install|status|uninstall>` into `~/.agents/skills` (or an absolute `--skills-dir` override). Only exact `vgxness.ts` v1-v10 plugin bytes, provider `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes, and declared `stacked-pr` v3 bytes are removable before global publication; canonical `git-delivery` bytes at the `stacked-pr` path and modified, malformed, foreign, unknown, or newer bytes block without removal. `integrate opencode uninstall` is scoped to its 17 provider artifacts, removes only exact owned bytes, and never removes global skills.
-
 ## CARE inventory and evaluation boundary
-
-The current 13-agent inventory contains manager, `explore`, `general`, verifier, three CARE roles, and six SDD roles; there are no current fixed-lens aliases. Exact fixed-lens packages are predecessor-only lifecycle identities. See [CARE architecture](care.md) and [CARE evaluation](care-evaluation.md). Repository checks establish static conformance only; protected-holdout adjudication remains evaluator-owned and external. Runtime evidence is observed on macOS only, while target-native Windows and Linux behavior remains unverified.
 
 ## Repair an obsolete owned MCP executable
 
 Run `vgxness integrate opencode repair-mcp-preview --config-dir /absolute/config` to inspect the exact owned entry. Apply only the inspected proof with `repair-mcp --old-executable /absolute/old/vgxness --expected-mcp-sha256 <preview-digest>` and the same config directory. The repair preserves the existing full/read-only mode and unrelated MCP entries; foreign, mixed or changed entries are rejected. Concurrent changes are preserved, with retained recovery paths reported when rollback cannot safely restore ownership. Ordinary setup does not silently rewrite an obsolete executable.
+
+
+Current integration contract: OpenCode Manager62 and Codex Manager21 use one workspace writer and the same frozen candidate for verification and applicable CARE review. SQLite schema v23 is preserved. OpenCode installs 11 managed artifacts and Codex installs nine; each exposes six delegated profiles. The auto-discovered `plugins/vgxness-memory-lifecycle.ts` has no `opencode.json` plugin entry; missing it is partial. `vgxness mcp --full` exposes eight memory tools. Complete Manager61 and Manager20 packages are recognized predecessors. During retirement, modified, malformed, foreign, unknown, or newer bytes block without removal.

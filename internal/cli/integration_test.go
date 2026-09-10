@@ -129,7 +129,7 @@ func TestIntegrationCLI_RoutesEverySupportedAction(t *testing.T) {
 			args := []string{"integrate", "opencode", action, "--config-dir", "/tmp/config"}
 			code, stdout, stderr := runIntegrationTest(args, runtime)
 			testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.action == action && runtime.options.ConfigDir == "/tmp/config" && stderr == "", "exit=%d calls=%d action=%q options=%#v stderr=%q", code, runtime.calls, runtime.action, runtime.options, stderr)
-			testutil.Require(t, strings.Contains(stdout, "provider=opencode\n") && strings.Contains(stdout, "state=installed\n") && strings.Contains(stdout, "projection=native+sdd-storage\n") && !strings.Contains(stdout, "storage_plugin=") && !strings.Contains(stdout, "model=") && strings.Contains(stdout, "changed="), "output=%q", stdout)
+			testutil.Require(t, strings.Contains(stdout, "provider=opencode\n") && strings.Contains(stdout, "state=installed\n") && strings.Contains(stdout, "projection=native+memory\n") && !strings.Contains(stdout, "storage_plugin=") && !strings.Contains(stdout, "model=") && strings.Contains(stdout, "changed="), "output=%q", stdout)
 		})
 	}
 }

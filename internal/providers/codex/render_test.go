@@ -52,8 +52,8 @@ func TestCAREDelegationRendersOnlyCurrentProfiles(t *testing.T) {
 			t.Errorf("missing CARE profile %s", path)
 		}
 	}
-	if len(pkg.Artifacts) != 15 {
-		t.Errorf("Codex package artifact count = %d, want 15 including lifecycle artifacts", len(pkg.Artifacts))
+	if len(pkg.Artifacts) != 9 {
+		t.Errorf("Codex package artifact count = %d, want 9 including lifecycle artifacts", len(pkg.Artifacts))
 	}
 	for _, legacy := range []string{"risk", "readability", "reliability", "resilience", "refuter"} {
 		if paths["agents/"+legacy+".toml"] {
@@ -84,12 +84,6 @@ func TestRenderPlanUsesSharedModelMatrix(t *testing.T) {
 		"agents/care-reviewer.toml":   sdd.RoleCAREReviewer,
 		"agents/care-specialist.toml": sdd.RoleCARESpecialist,
 		"agents/care-challenger.toml": sdd.RoleCAREChallenger,
-		"agents/sdd-research.toml":    sdd.RoleResearch,
-		"agents/sdd-proposal.toml":    sdd.RoleProposal,
-		"agents/sdd-spec.toml":        sdd.RoleSpec,
-		"agents/sdd-design.toml":      sdd.RoleDesign,
-		"agents/sdd-tasks.toml":       sdd.RoleTasks,
-		"agents/sdd-apply.toml":       sdd.RoleApply,
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		pkg, err := RenderPlan("v1.2.3", plan)
@@ -223,12 +217,6 @@ func TestRenderProducesNativeCodexProjection(t *testing.T) {
 		"agents/care-specialist.toml",
 		"agents/explore.toml",
 		"agents/general.toml",
-		"agents/sdd-apply.toml",
-		"agents/sdd-design.toml",
-		"agents/sdd-proposal.toml",
-		"agents/sdd-research.toml",
-		"agents/sdd-spec.toml",
-		"agents/sdd-tasks.toml",
 		"agents/verifier.toml",
 		".agents/plugins/marketplace.json",
 		"plugins/vgxness/.codex-plugin/plugin.json",
@@ -265,8 +253,8 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 	}
 	manager := string(artifact(t, pkg, "AGENTS.md").Bytes)
 	contract, loadErr := orchestration.LoadManagerContract()
-	if loadErr != nil || !strings.Contains(manager, "artifact: codex-agent/manager; version: 20; parity: opencode-v61") || !strings.Contains(manager, contract.RenderManagerSections()) {
-		t.Fatal("current Codex manager is not the canonical v20 projection")
+	if loadErr != nil || !strings.Contains(manager, "artifact: codex-agent/manager; version: 21; parity: opencode-v62") || !strings.Contains(manager, contract.RenderManagerSections()) {
+		t.Fatal("current Codex manager is not the canonical v21 projection")
 	}
 	predecessor, err := renderActiveV13("v1.2.3", sdd.PlanMedium)
 	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 13; parity: opencode-v53") {
@@ -667,7 +655,7 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 		t.Fatal(loadErr)
 	}
 	for _, required := range []string{
-		"artifact: codex-agent/manager; version: 20; parity: opencode-v61",
+		"artifact: codex-agent/manager; version: 21; parity: opencode-v62",
 		contract.RenderManagerSections(),
 		"# Native Codex adapter",
 		"content SHA256: " + orchestration.ManagerContractDigest(),

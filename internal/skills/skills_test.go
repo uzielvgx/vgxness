@@ -67,14 +67,14 @@ func TestExplicitEmptyCatalogIsInvalidWhileDefaultLoadsBundle(t *testing.T) {
 
 func TestBundledCatalogHasNineteenCanonicalSkillsAndOneLegacyMigration(t *testing.T) {
 	catalog, err := bundledCatalog()
-	if err != nil || len(catalog.definitions) != 19 {
+	if err != nil || len(catalog.definitions) != 18 {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 	definition := catalog.definitions[0]
 	if definition.name != "skills-creator" || definition.source != "skills-creator" || len(definition.legacy) != 1 || definition.legacy[0].name != "agent-skill-engineer" {
 		t.Fatalf("definition=%+v", definition)
 	}
-	if definition = catalog.definitions[1]; definition.name != "git-delivery" || definition.source != "git-delivery" || len(definition.legacy) != 1 || definition.legacy[0].name != "stacked-pr" {
+	if definition = catalog.definitions[1]; definition.name != "git-delivery" || definition.source != "git-delivery" || len(definition.legacy) != 2 || definition.legacy[0].name != "stacked-pr" {
 		t.Fatalf("definition=%+v", definition)
 	}
 	if definition = catalog.definitions[2]; definition.name != "cross-platform" || definition.source != "cross-platform" || len(definition.legacy) != 0 {
@@ -125,42 +125,29 @@ func TestBundledCatalogHasNineteenCanonicalSkillsAndOneLegacyMigration(t *testin
 	if definition = catalog.definitions[17]; definition.name != "memory-sync" || definition.source != "memory-sync" || len(definition.legacy) != 0 {
 		t.Fatalf("definition=%+v", definition)
 	}
-	if definition = catalog.definitions[18]; definition.name != "sdd-lifecycle" || definition.source != "sdd-lifecycle" || len(definition.legacy) != 0 {
-		t.Fatalf("definition=%+v", definition)
-	}
+
 }
 
-func TestBundledSDDLifecycleDefinesNarrowActivationAndFailClosedContract(t *testing.T) {
-	catalog, err := bundledCatalog()
+func TestBundledCatalogRetiresSDD(t *testing.T) {
+	c, err := bundledCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	skill := string(catalog.definitions[18].files["SKILL.md"])
-	for _, required := range []string{"name: sdd-lifecycle", "<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->", "Use ONLY after", "explore -> proposal -> spec -> design -> tasks -> apply -> verify -> complete", "Automatic", "Interactive", "stateVersion", "idempotency", "memory", "OpenSpec", "hybrid", "symlink", "fail closed"} {
-		if !bytes.Contains([]byte(skill), []byte(required)) {
-			t.Errorf("sdd-lifecycle missing %q", required)
+	for _, d := range c.definitions {
+		if d.name == "sdd-lifecycle" {
+			t.Fatal("retired skill is active")
 		}
 	}
-}
-
-func TestBundledSDDLifecycleReservesAcceptedSDDWritesForApply(t *testing.T) {
-	catalog, err := bundledCatalog()
-	if err != nil {
-		t.Fatal(err)
-	}
-	skill := string(catalog.definitions[18].files["SKILL.md"])
-	for _, required := range []string{
-		"`vgxness-sdd-apply` alone writes authorized SDD workspace, OpenSpec, or hybrid targets",
-		"General handles ordinary authorized non-SDD repository implementation and rejects SDD apply or projection missions",
-	} {
-		if !strings.Contains(skill, required) {
-			t.Errorf("sdd-lifecycle missing %q", required)
+	found := false
+	for _, d := range c.definitions {
+		for _, old := range d.legacy {
+			if old.name == "sdd-lifecycle" {
+				found = old.exactOnly && len(old.digests) == 1
+			}
 		}
 	}
-	for _, forbidden := range []string{"managed general writes", "General writes only supplied exact relative path"} {
-		if strings.Contains(skill, forbidden) {
-			t.Errorf("sdd-lifecycle contains stale SDD writer claim %q", forbidden)
-		}
+	if !found {
+		t.Fatal("exact retired skill ownership missing")
 	}
 }
 
@@ -717,10 +704,10 @@ func TestInstallCreatesAndVerifiesManagedPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != StateInstalled || !result.Changed || result.FileCount != 47 {
+	if result.State != StateInstalled || !result.Changed || result.FileCount != 46 {
 		t.Fatalf("result=%+v", result)
 	}
-	for _, name := range []string{"skills-creator", "git-delivery", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs", "user-documentation", "api-documentation", "quality-test-documentation", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "end-to-end-testing", "memory-sync", "sdd-lifecycle"} {
+	for _, name := range []string{"skills-creator", "git-delivery", "cross-platform", "installer-lifecycle", "agent-evaluation", "ci-triage", "security-boundary", "documentation-strategy", "product-requirements", "software-architecture-docs", "user-documentation", "api-documentation", "quality-test-documentation", "operations-runbooks", "governance-compliance-docs", "release-lifecycle-docs", "end-to-end-testing", "memory-sync"} {
 		if _, err := os.Lstat(filepath.Join(destination, name, "SKILL.md")); err != nil {
 			t.Fatalf("canonical %s activation file: %v", name, err)
 		}
@@ -793,7 +780,7 @@ func TestInstallMigratesExactStackedPRV3ToGitDeliveryAndRejectsOtherBytes(t *tes
 		t.Fatal(err)
 	}
 	definition := catalog.definitions[1]
-	if definition.name != currentName || definition.source != currentName || len(definition.legacy) != 1 || definition.legacy[0].name != legacyName || definition.legacy[0].digests["SKILL.md"] != legacyDigest {
+	if definition.name != currentName || definition.source != currentName || len(definition.legacy) != 2 || definition.legacy[0].name != legacyName || definition.legacy[0].digests["SKILL.md"] != legacyDigest {
 		t.Fatalf("git-delivery migration definition=%+v", definition)
 	}
 	legacy := []byte(`---

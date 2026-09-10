@@ -47,11 +47,11 @@ func LoadManagerContract() (ManagerContract, error) {
 	if err := json.Unmarshal(managerContractBytes, &c); err != nil {
 		return c, err
 	}
-	if c.SchemaVersion != "vgxness-manager-contract/v1" || c.Identity != ContractIdentity || c.Manager.ID != "manager" || len(c.Roles) != 12 {
+	if c.SchemaVersion != "vgxness-manager-contract/v1" || c.Identity != ContractIdentity || c.Manager.ID != "manager" || len(c.Roles) != 6 {
 		return c, errors.New("invalid manager contract")
 	}
 	seen := map[string]bool{"manager": true}
-	required := []string{"explore", "general", "verifier", "care-reviewer", "care-specialist", "care-challenger", "sdd-research", "sdd-proposal", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply"}
+	required := []string{"explore", "general", "verifier", "care-reviewer", "care-specialist", "care-challenger"}
 	if strings.TrimSpace(c.Manager.Instructions) == "" {
 		return c, errors.New("invalid manager instructions")
 	}
@@ -104,4 +104,19 @@ func (c ManagerContract) RenderManagerSections() string {
 		roles = append(roles, "## "+r.ID+"\nAuthority: "+authority+". Aliases: "+aliases+".\n"+r.Instructions)
 	}
 	return c.Manager.Instructions + "\n\n# Delegated role contract\n" + strings.Join(roles, "\n\n") + "\n"
+}
+
+//go:embed manager_contract_v1.json
+var predecessorManagerContractBytes []byte
+
+// PreviousManagerContract is frozen only for exact installed-package recognition.
+func PreviousManagerContract() ManagerContract {
+	var c ManagerContract
+	if err := json.Unmarshal(predecessorManagerContractBytes, &c); err != nil {
+		panic(err)
+	}
+	return c
+}
+func PreviousManagerContractDigest() string {
+	return "b6675950128f60a52eec99a90ec6095e5b2d2d7fe3bbeda7ef74368edb2490a1"
 }

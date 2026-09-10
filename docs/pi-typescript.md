@@ -18,14 +18,13 @@ A managed legacy Go package remains intact. Status reports that it needs an upda
 
 ## Native tools and session state
 
-The extension opens the shared `~/.vgxness/memory.db` directly. An embedding host can select another absolute `storageRoot` through `createPiExtension`; worker missions cannot override workspace, project, mode, or role. Model-facing memory tools keep the existing Go result contract (`ID`, `Content`, `Preview`, and other capitalized entry fields). Only a full Manager can mutate memory or SDD lifecycle state.
+The extension opens the shared `~/.vgxness/memory.db` directly. An embedding host can select another absolute `storageRoot` through `createPiExtension`; worker missions cannot override workspace, project, mode, or role. Model-facing memory tools keep the existing Go result contract (`ID`, `Content`, `Preview`, and other capitalized entry fields). Only a full Manager can mutate memory. Structured SDD is retired; no SDD tools or worker roles are exposed. Historical records remain preserved in the shared database.
 
 The following additive Pi commands show read-only local views without adding conversation memory:
 
 - `/vgx-status`: native runtime, current session, worker transport, and model-catalog availability.
 - `/vgx-workers`: bounded recent worker execution status and elapsed time.
 - `/vgx-memory`: ten recent project-memory previews, marked as untrusted data.
-- `/vgx-sdd`: up to ten active changes.
 
 These commands preserve the underlying tools. Missing storage is reported as unavailable without creating it, and a context without interactive UI receives a structured command result. RPC contexts with notification support receive the same text through Pi's notification channel.
 
@@ -47,7 +46,7 @@ Pi discovers its worker CLI from the current Pi process or a verified Pi executa
 
 An `explore` mission can include an `exploration` object with up to 16 accepted workspace-relative `roots`, `maxFiles` (1–10,000), `maxBytes` (1–16,777,216), and `maxTokens` (1–65,536). Its native `worker_list`, `worker_search`, and `worker_read_page` tools enforce these cumulative budgets and reject path escapes, symbolic links, binary reads, and stale cursors. Search is a literal query within one authorized file; paged reads default to 2,048 characters and permit up to 4,096. Directory pages contain at most 50 entries; search pages contain at most 20 matches. Every page reports a continuation cursor where applicable and budget/truncation diagnostics. Output uses UTF-8 bytes as a conservative token upper bound; rereading a page charges the complete bounded file again.
 
-Explore has no shell or write authority. Writable workers retain exact target hashes, accepted role/mode and nonce bindings; SDD apply additionally requires the accepted tasks revision and input revisions. A full worker also receives a host-issued, non-extendable grant captured before launch. Its child checks the fixed expiry and a descriptor-pinned host revocation byte immediately before patch commits and check launches; an absent, expired, invalid, or revoked grant prevents a new submission. Renewal issues a fresh grant and does not extend an already captured one. Cancellation or revocation cannot undo an OS operation that was already submitted. OpenSpec-only bindings verify the exact canonical external files and reject drift or symlinks. Worker results accumulate text, usage and diagnostics through retries and resolve only at Pi's `agent_settled` event. Windows worker process-tree ownership remains unsupported; package and storage support are separate from that limitation.
+Explore has no shell or write authority. Writable workers retain exact target hashes, accepted role/mode and nonce bindings. A full worker also receives a host-issued, non-extendable grant captured before launch. Its child checks the fixed expiry and a descriptor-pinned host revocation byte immediately before patch commits and check launches; an absent, expired, invalid, or revoked grant prevents a new submission. Renewal issues a fresh grant and does not extend an already captured one. Cancellation or revocation cannot undo an OS operation that was already submitted. OpenSpec-only bindings verify the exact canonical external files and reject drift or symlinks. Worker results accumulate text, usage and diagnostics through retries and resolve only at Pi's `agent_settled` event. Windows worker process-tree ownership remains unsupported; package and storage support are separate from that limitation.
 
 ## Health and validation
 
@@ -57,15 +56,15 @@ Local Linux arm64 checks cover Node 22.19.0 and Node 24, package extraction, the
 
 ## Manager orchestration and delegated skills
 
-The Manager prompt defines task framing, skill selection, bounded delegation, independent verification, memory assessment, session handoff and explicit SDD/delivery authority. Pi's native skill catalog supplies descriptions; the Manager reads the applicable SKILL.md and necessary references before applying a workflow. The bundled `skills-creator` is discoverable in Pi; its optional structural validators require Python 3, not a Pi runtime service.
+The Manager prompt defines task framing, skill selection, bounded delegation, independent verification, memory assessment, session handoff and explicit delivery authority. Pi's native skill catalog supplies descriptions; the Manager reads the applicable SKILL.md and necessary references before applying a workflow. The bundled `skills-creator` is discoverable in Pi; its optional structural validators require Python 3, not a Pi runtime service.
 
 `task.skills` accepts up to eight managed skill selections, each with `name`, the SKILL.md `sha256` returned by the Manager-only `vgx_skill` list/read tool, and optional `resources` (up to seven relative text paths). SKILL.md is always included. Shared compatible skills take precedence over package fallbacks. Unknown names, path escapes, symlinks, binary resources, altered digests and excess budgets fail before launch. A resource is limited to 64 KiB and the mission's skill text to 128 KiB. Discovery markers identify catalog eligibility; they are not cryptographic proof of a third-party publisher's trustworthiness.
 
-The host supplies immutable text snapshots with per-file hashes inside the mission digest. Workers see the complete goal, criteria, role/mode, allowed targets/commands, accepted SDD bindings, return budget and selected resources through their RPC prompt. They do not inherit ambient skills, the conversation, memory access or Manager authority. Snapshot resources are guidance, not executable permissions or live file handles; missing referenced resources must be reported. A later skill edit does not rewrite a mission already issued.
+The host supplies immutable text snapshots with per-file hashes inside the mission digest. Workers see the complete goal, criteria, role/mode, allowed targets/commands, return budget and selected resources through their RPC prompt. They do not inherit ambient skills, the conversation, memory access or Manager authority. Snapshot resources are guidance, not executable permissions or live file handles; missing referenced resources must be reported. A later skill edit does not rewrite a mission already issued.
 
 These contracts are covered by resource validation, native task loading and RPC transport tests. Instruction delivery does not prove a model will follow every workflow correctly; open-ended task quality still requires behavioral evaluation with the selected model. Existing Windows worker and authentication limitations remain applicable.
 
-The Manager and twelve worker definitions now come from the shared registry,
+The Manager and six worker definitions now come from the shared registry,
 with native Pi tool guidance supplied by its adapter. See
 [Shared Manager and native adapters](architecture/shared-manager-contract.md)
 for regeneration, exact predecessor preservation and evidence limits.

@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { workerCanWrite } from "../workers/roles.ts";
 import type { ToolHost } from "./memory.ts";
 
 export const applyPatchSchema = Type.Object({ patch: Type.String({ minLength: 1, description: "Raw unified diff: --- old-path, +++ new-path, then numbered @@ hunks. Use workspace-relative paths. The parser rejects *** Begin Patch / *** Update File / *** End Patch wrappers. One-line replacement example:\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n" }) }, { additionalProperties: false });
@@ -126,7 +127,7 @@ export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions 
       host.mutationGuard?.();
       signal?.throwIfAborted();
       const worker = options.workerRole !== undefined;
-      if (host.mode !== "full" || (host.role !== "manager" && !worker) || (worker && !options.allowedTargets) || (options.workerRole === "sdd-apply" && !options.acceptedBindings)) throw new Error("patch requires authorized full authority");
+      if (host.mode !== "full" || (host.role !== "manager" && !worker) || (worker && (!options.allowedTargets || !workerCanWrite(options.workerRole!))) || (options.workerRole === "sdd-apply" && !options.acceptedBindings)) throw new Error("patch requires authorized full authority");
       const root = await realpath(host.workspace);
       const rootIdentity = await stat(root);
       const verifyRoot = async () => { const current = await stat(root); if (current.dev !== rootIdentity.dev || current.ino !== rootIdentity.ino) throw new Error("workspace root changed during patch"); };

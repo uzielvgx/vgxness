@@ -98,21 +98,6 @@ test("SDK patch checks expiry before commit and rolls back on mid-patch revocati
   });
 });
 
-test("task captures its old grant before an awaited SDD binding check", async t => {
-  const root = await mkdtemp(join(tmpdir(), "pi-grant-await-")); t.after(() => rm(root, { recursive: true, force: true }));
-  const first = new AbortController(); let current = first, launches = 0, release!: () => void;
-  const wait = new Promise<void>(resolve => { release = resolve; });
-  const key = `__grantAwait_${crypto.randomUUID()}`;
-  (globalThis as any)[key] = { role: "manager", mode: "full", workspace: root, mutationGrant: () => ({ expiresAt: Date.now() + 60000, signal: current.signal }), verifyAcceptedBinding: async () => { await wait; return true; }, executeWorker: async () => { launches++; return "unexpected"; } };
-  t.after(() => delete (globalThis as any)[key]);
-  const wrapper = join(root, "task.ts"); await writeFile(wrapper, `import {createTaskTool} from ${JSON.stringify(join(process.cwd(), "src/tools/task.ts"))}; export default pi => pi.registerTool(createTaskTool(globalThis[${JSON.stringify(key)}]));`);
-  const loaded = await loadExtensions([wrapper], root); assert.deepEqual(loaded.errors, []);
-  const task: any = [...loaded.extensions[0].tools.values()][0].definition;
-  const pending = task.execute("await", { nonce: crypto.randomUUID(), role: "sdd-apply", mode: "full", model: "fixture/model", effort: "low", goal: "write", criteria: ["write"], commands: [], targets: {}, resultLimit: 1024, acceptedBindings: { changeId: "c", artifactId: "a", revisionId: "r", digest: "a".repeat(64), stateVersion: 1, inputs: [{artifactId: "s", revisionId: "s", digest: "b".repeat(64)}] } });
-  const rejection = assert.rejects(pending, /mutation grant unavailable/);
-  first.abort(); current = new AbortController(); release(); await rejection;
-  assert.equal(launches, 0);
-});
 
 test("native worker rejects writes even when RPC ignores cancellation during startup", { skip: process.platform === "win32" ? "Pi worker processes unsupported on Windows" : false }, async t => {
   const root = await mkdtemp(join(tmpdir(), "pi-grant-rpc-")); t.after(() => rm(root, { recursive: true, force: true }));

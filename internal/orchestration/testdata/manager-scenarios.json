@@ -35,9 +35,9 @@
       "fragment": "Bind selected skill bytes and resources to the worker mission"
     },
     {
-      "id": "sdd-acceptance",
+      "id": "sdd-retired",
       "role": "manager",
-      "fragment": "Enter SDD only after explicit user acceptance"
+      "fragment": "The structured SDD lifecycle is retired"
     },
     {
       "id": "frozen-verification",

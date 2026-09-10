@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/sdd"
 )
 
@@ -338,6 +339,11 @@ func historicalBundlesIndependentOracle(current modelPlanBundle) ([]modelPlanBun
 			return nil, e
 		}
 		bundles = append(bundles, old)
+		previous, e := sharedBundleForContract(old, orchestration.PreviousManagerContract(), true)
+		if e != nil {
+			return nil, e
+		}
+		bundles = append(bundles, previous)
 	}
 	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
 		immediatePredecessor,
