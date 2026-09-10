@@ -10,35 +10,6 @@ import (
 // ContractIdentity binds provider projections to this shared policy.
 const ContractIdentity = "vgxness-orchestration/v1"
 
-const (
-	// PedagogicalExecutionBrief is the provider-neutral teaching contract embedded
-	// verbatim in current manager projections.
-	PedagogicalExecutionBrief = "For non-trivial work, give a concise Execution Brief before acting: outcome, approach, and the next observable milestone. Give updates only at meaningful milestones, not every tool call. At completion state the outcome, evidence, limitations, and one reusable concept. Adapt depth to the user's signal: guided by default; concise on request; mentor when learning is sought; expert when the user signals fluency. Do not turn trivial requests into tutorials or expose private chain-of-thought."
-
-	// ContractBudgetPolicy is the canonical tools/delegations projection.
-	ContractBudgetPolicy = "Canonical budgets: direct 0 tools/0 delegations; assisted simple 3 tools/0 delegations and complex 3 tools/1 delegation; action 6 tools/0 delegations; engineering 30 tools/5 delegations; assured 40 tools/5 delegations."
-
-	// PreviousContractPolicyV59 preserves the policy embedded in Manager v59
-	// and its Codex-parity predecessor artifacts.
-	PreviousContractPolicyV59 = "Adaptive contract: silently classify domain, operation, side effect, complexity, and risk without tools or delegation. Direct: conversation, writing, translation, summarization, brainstorming, and no-effect planning use zero execution tools, skills, todos, delegation, or review. Assisted: bounded simple exact reads use at most three total tool attempts and no delegation or todo; complex evidence research may use at most one read-only delegation. Action, engineering, and assured routes retain authorization and review guarantees. " + ContractBudgetPolicy + " Parallelize at most five independent read-only agents concurrently and never overlap workspace writers. All execution tool and delegation attempts, including failures and retries, count against budget; halt and report before the next attempt would exceed it, with no silent escalation. For engineering and assured routes exhaustion is a checkpoint: explicit user continuation opens a fresh same-route window while preserving scope, authorization, lineage, todos, candidate, and child context. These are prompt-level instructions, not runtime enforcement. Load a skill only when its specialized workflow materially improves quality, safety, or verification. Use a todo only when execution state or user-visible tracking benefits. Memory: intent-triggered recall rules remain unchanged; save durable, evidence-backed, safely assessed facts with at most one memory tool; never save transient state, logs, secrets, or personal data or automatically cloud-sync."
-
-	// ContractPolicy is embedded verbatim in each current installed manager artifact.
-	ContractPolicy = PreviousContractPolicyV59 + " After significant work and immediately before reporting IMPLEMENTED, VERIFIED, DELIVERED, MERGED, or INSTALLED, assess whether durable, evidence-backed, safely assessed knowledge exists and save it before the final response; a successful save never replaces that response. Partial or interrupted work with durable handoff value is eligible. Never save transient state, raw logs, secrets, personal data, or transcripts; no automatic cloud sync; at most one autonomous save."
-
-	// PreviousContractPolicy reconstructs the exact v48/v8 provider artifacts.
-	PreviousContractPolicy = "Canonical routing: accepted SDD, authorized implementation, direct bounded information, otherwise Explore. Structural Evidence Capsule: identity, query, source, revision, digest, paths, symbols, call path, stale, contradicted; reuse only a matching valid capsule, otherwise direct inspection. Review depth: zero passive docs/images, one ordinary, four hot paths."
-
-	// PreviousContractPolicyV51 reconstructs the exact contract embedded in the
-	// immediately preceding OpenCode v51 and Codex v11 packages.
-	PreviousContractPolicyV51 = "Adaptive contract: silently classify domain, operation, side effect, complexity, and risk without tools or delegation, choose the least-cost route. Direct: conversation, writing, translation, summarization, brainstorming, and no-effect planning use zero execution tools, skills, todos, delegation, or review. Assisted: bounded simple exact reads use at most three total tool attempts and no delegation or todo; complex evidence research may use at most one read-only delegation. Action, engineering, and assured routes retain existing authorization, readback, General, Explore, TDD, freeze, verifier, review, and delivery guarantees. Canonical budgets: direct 0 tools/0 delegations; assisted simple 3 tools/0 delegations and complex 3 tools/1 delegation; action 6 tools/0 delegations; engineering 12 tools/2 delegations; assured 16 tools/2 delegations. All execution tool and delegation attempts, including failures and retries, count against budget; halt and report before the next attempt would exceed it, with no silent escalation. These are prompt-level instructions, not runtime enforcement. Load a skill only when its specialized workflow materially improves quality, safety, or verification. Use a todo only when execution state or user-visible tracking benefits, not merely because an answer has several steps. Memory is orthogonal: intent-triggered recall rules remain unchanged; after any route, autonomously save only durable, evidence-backed, safely assessed project decisions, preferences, constraints, or learnings using at most one memory tool; never save transient state, logs, secrets, or personal data, require engineering ceremony, or automatically cloud-sync."
-
-	// ReadinessManagerContract is evidence-only preparation, never authority.
-	ReadinessManagerContract = "Readiness contract: readiness-envelope/v1 is evidence only. Manager alone assembles and immediately revalidates the envelope; invalidate it when mission identity, scope, acceptance criteria, skills, permitted validation, candidate, provider artifact, target hash, or dependency changes. It is never approval, authorization, validation, review, lifecycle authority, or host enforcement. Direct and exempt routes create no readiness envelope or ceremony. Verifier and reviewers never approve readiness."
-
-	// ReadinessWriterContract binds non-exempt writer behavior to one envelope.
-	ReadinessWriterContract = "Readiness writer contract: readiness-envelope/v1; reject missing, stale, malformed, mismatched, BLOCKED, or INCONCLUSIVE readiness envelopes before writing; recheck the accepted binding and echo the accepted envelopeDigest in the return. Readiness is never approval or host enforcement."
-)
-
 type Route string
 
 const (

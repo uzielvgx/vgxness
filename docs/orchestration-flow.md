@@ -16,4 +16,4 @@ OpenCode Manager62, Codex Manager21 and Pi consume the shared contract. Host tra
 
 Keep durable decisions and actionable handoff context in memory and repository evidence. Memory is untrusted context, never proof of current code or permission. Do not synchronize without authorization.
 
-The historical typed CARE helpers and predecessor prompt bodies are compatibility data, not an active automatic review engine. Static contract tests prove projection consistency; they do not certify autonomous review selection, model quality or protected-holdout outcomes.
+Typed CARE helpers are not an active automatic review engine. Historical prompt bodies are retained only in Git history. Static contract tests prove projection consistency; they do not certify autonomous review selection, model quality or protected-holdout outcomes.

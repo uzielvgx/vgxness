@@ -2,10 +2,10 @@
 
 Structured SDD is retired: no lifecycle tools, SDD worker profiles, or active `sdd-lifecycle` skill are installed. Historical records remain inert in SQLite for data preservation; there is no SDD runtime or archive command. Model-plan schemas retain inactive legacy slots for compatibility. Use a short plan, one writer, independent verification and proportional CARE review. See [the current workflow](orchestration-flow.md).
 
-Setup installs OpenCode Manager62 with seven agents across 11 provider artifacts, plus the global catalog of 18 skills across 46 files. Restart the host after installation.
+Setup installs OpenCode Manager62 with seven agents across 12 provider artifacts, plus the global catalog of 18 skills across 46 files. Restart the host after installation.
 
 
-Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Complete Manager61 and Manager20 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only.
+Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Each agent has one current definition. Installed file hashes are tracked in a local installation receipt; older unreceipted agents require the bridge procedure in `docs/agent-template-migration.md`.
 
 ## Commands
 
@@ -27,7 +27,7 @@ vgxness setup opencode --yes \
   --model-frontier acme/frontier --model-frontier-effort ultra
 ```
 
-With no model override flags, planning can retain the installed configuration or default selection. Once any slot reference or effort override is supplied, the public setup command requires all three slot references; if those references use mixed providers, it also requires all three effort values. Mixed profiles are recorded in manifest v2; homogeneous presets remain v1. Fresh no-flag setup selects `medium` with `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. Setup validates configuration and managed identities but does not authenticate or probe runtime availability, so custom slots display availability as `unknown`. Restart OpenCode Desktop whenever installed artifacts, a plan, a slot, or an effort changes. `--model` is accepted only as a temporary no-op compatibility flag.
+With no model override flags, planning can retain the installed configuration or default selection. Once any slot reference or effort override is supplied, the public setup command requires all three slot references; if those references use mixed providers, it also requires all three effort values. Fresh selections use per-agent manifest v3; installed v1/v2 model configurations remain readable. Fresh no-flag setup selects `medium` with `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. Setup validates configuration and managed identities but does not authenticate or probe runtime availability, so custom slots display availability as `unknown`. Restart OpenCode Desktop whenever installed artifacts, a plan, a slot, or an effort changes. `--model` is accepted only as a temporary no-op compatibility flag.
 
 ## Readiness
 
@@ -50,4 +50,4 @@ Restart OpenCode Desktop after setup, an artifact upgrade, or any plan/slot chan
 Setup installs the current CARE identities but does not establish an evaluation outcome. See [CARE architecture](care.md) and [CARE evaluation](care-evaluation.md). Historical runtime evidence was recorded on macOS; current-candidate native/model evidence must be recorded separately.
 
 
-Current integration contract: OpenCode Manager62 and Codex Manager21 use one workspace writer and the same frozen candidate for verification and applicable CARE review. SQLite schema v23 is preserved. OpenCode installs 11 managed artifacts and Codex installs nine; each exposes six delegated profiles. The auto-discovered `plugins/vgxness-memory-lifecycle.ts` has no `opencode.json` plugin entry; missing it is partial. `vgxness mcp --full` exposes eight memory tools. Complete Manager61 and Manager20 packages are recognized predecessors. During retirement, modified, malformed, foreign, unknown, or newer bytes block without removal.
+Current integration contract: OpenCode Manager62 and Codex Manager21 use one workspace writer and the same frozen candidate for verification and applicable CARE review. SQLite schema v23 is preserved. OpenCode installs 12 managed artifacts and Codex installs ten; each exposes six delegated profiles. The auto-discovered `plugins/vgxness-memory-lifecycle.ts` has no `opencode.json` plugin entry; missing it is partial. `vgxness mcp --full` exposes eight memory tools. Receipt-backed prior installations are recognized by exact local bytes. During retirement, modified, malformed, foreign, unknown, or newer bytes block without removal.

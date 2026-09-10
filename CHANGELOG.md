@@ -4,9 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Keep one current agent definition per role. Remove historical prompt templates, reconstruction chains and the previous shared registry; use local installation receipts for updates. OpenCode now owns 12 managed artifacts and Codex ten, including the receipt. Older unreceipted installations require the documented bridge.
+
 - Remove the remaining SDD engine and archive command, Pi service and fallback skill, lifecycle worker bindings and routing. Model configuration now lives in `internal/modelplan`; the setup matrix exposes only seven current agents. Immutable migrations and exact predecessor recognition remain for compatibility.
 
-- Retires structured SDD from active workflows, MCP, Pi tools and worker profiles. OpenCode Manager62 has 11 managed artifacts; Codex Manager21 has nine. The six shared workers retain General, Explore, Verifier and proportional CARE review. Exact Manager61/20 predecessors and retired skill ownership remain recognized for safe upgrades. SQLite history is preserved. The temporary read-only archive command introduced in the first pass is removed by the second pass.
+- Earlier in this unreleased cycle, retired structured SDD from active workflows, MCP, Pi tools and worker profiles. OpenCode Manager62 has 11 managed artifacts; Codex Manager21 has nine. The six shared workers retain General, Explore, Verifier and proportional CARE review. Exact Manager61/20 predecessors and retired skill ownership remain recognized for safe upgrades. SQLite history is preserved. The temporary read-only archive command introduced in the first pass is removed by the second pass.
 
 - Replaces active global `stacked-pr` v3 with `git-delivery` v1, retaining exact migration and policy-only isolated-worktree gates. OpenCode advances to CARE-v2 Manager59 (immediate Manager58); Codex advances to Manager18 (immediate Manager17).
 - Earlier in this unreleased cycle, installed 17 managed artifacts for OpenCode, including the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` lifecycle plugin with no `opencode.json` plugin entry.

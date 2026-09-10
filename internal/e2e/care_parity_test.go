@@ -48,7 +48,7 @@ func TestCAREParityCurrentProviderInventories(t *testing.T) {
 	for _, artifact := range pkg.Artifacts {
 		codexProfiles[artifact.Path] = string(artifact.Bytes)
 	}
-	if len(pkg.Artifacts) != 9 {
+	if len(pkg.Artifacts) != 10 {
 		t.Fatalf("Codex current artifact count = %d, want 9", len(pkg.Artifacts))
 	}
 	for _, path := range []string{".agents/plugins/marketplace.json", "plugins/vgxness/.codex-plugin/plugin.json"} {

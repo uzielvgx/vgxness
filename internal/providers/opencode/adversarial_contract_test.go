@@ -1,7 +1,6 @@
 package opencode
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,8 +10,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 // These are deterministic contract-shape checks over generated artifacts. They
@@ -106,203 +103,6 @@ func validContractSDDHandoff(value contractSDDHandoff) bool {
 
 func safeContractPath(value string) bool {
 	return value != "" && !strings.ContainsAny(value, `\\`+"\x00") && !strings.HasPrefix(value, "/") && path.Clean(value) == value && value != "." && !strings.HasPrefix(value, "../")
-}
-
-func TestGeneratedReviewAndSDDContractsHaveRoleSpecificClauses(t *testing.T) {
-	bundle, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, clauses := range map[string][]string{
-		reviewRiskName:        {"You are the Risk lens", "Use stable finding IDs prefixed RISK-", "Evidence Receipt needs a stable evidenceId"},
-		reviewReadabilityName: {"You are the Readability lens", "Use stable finding IDs prefixed READ-", "Evidence Receipt needs a stable evidenceId"},
-		reviewReliabilityName: {"You are the Reliability lens", "Use stable finding IDs prefixed REL-", "Evidence Receipt needs a stable evidenceId"},
-		reviewResilienceName:  {"You are the Resilience lens", "Use stable finding IDs prefixed RES-", "Evidence Receipt needs a stable evidenceId"},
-		reviewRefuterName:     {"You are the severe-finding refuter", "only supplied severe inferential finding IDs", "results only for supplied severe inferential IDs"},
-		sddResearchName:       {"You are the read-only SDD research agent", "Return bounded evidence and candidate artifact content"},
-		sddProposalName:       {"You are the read-only SDD proposal agent", "Return bounded evidence and candidate artifact content"},
-		sddSpecName:           {"You are the read-only SDD spec agent", "Return bounded evidence and candidate artifact content"},
-		sddDesignName:         {"You are the read-only SDD design agent", "Return bounded evidence and candidate artifact content"},
-		sddTasksName:          {"You are the read-only SDD tasks agent", "Return bounded evidence and candidate artifact content"},
-		sddApplyName:          {"exclusive SDD workspace and projection writer", "expectedStateVersion", "no-symlink constraints", "Immediately before each write recheck", "RED/GREEN evidence"},
-	} {
-		content := string(bundle.agents[name])
-		for _, clause := range clauses {
-			if !strings.Contains(content, clause) {
-				t.Errorf("%s missing role contract clause %q", name, clause)
-			}
-		}
-	}
-}
-
-func TestGeneratedPromptExamplesHaveStructuralContracts(t *testing.T) {
-	bundle, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName} {
-		example := promptJSONExample(t, bundle.agents[name], `{"schemaVersion"`)
-		requireJSONFields(t, example, "schemaVersion:number", "mode:string", "reviewBinding:object", "candidate:object", "summary:string", "evidence:array", "findings:array", "verdict:string")
-		requireJSONFields(t, objectField(t, example, "reviewBinding"), "candidateDigest:string", "changedPaths:array", "diffScope:string", "acceptanceCriteria:array")
-		requireJSONFields(t, objectField(t, example, "candidate"), "digest:string", "changedPaths:array")
-		requireJSONArrayObjectFields(t, example, "evidence", "evidenceId:string", "candidateDigest:string", "kind:string", "locator:string")
-		requireJSONArrayObjectFields(t, example, "findings", "id:string", "proofRefs:array", "severity:string")
-	}
-	refuter := promptJSONExample(t, bundle.agents[reviewRefuterName], `{"schemaVersion"`)
-	requireJSONFields(t, refuter, "role:string", "reviewBinding:object", "candidate:object", "evidence:array", "results:array")
-	if refuter["role"] != "refuter" {
-		t.Fatalf("refuter example role=%v", refuter["role"])
-	}
-	requireJSONArrayObjectFields(t, refuter, "results", "findingId:string", "outcome:string", "proofRefs:array")
-	apply := promptJSONExample(t, bundle.agents[sddApplyName], `{"status"`)
-	requireJSONFields(t, apply, "status:string", "missionIdentity:string", "replayNonce:string", "taskRevision:object", "acceptedInputs:array", "expectedStateVersion:number", "changedPaths:array", "validationEvidence:array", "tddEvidence:object")
-	requireJSONFields(t, objectField(t, apply, "taskRevision"), "id:string", "digest:string")
-	requireJSONArrayObjectFields(t, apply, "acceptedInputs", "artifactId:string", "revisionId:string", "digest:string")
-	requireJSONArrayObjectFields(t, apply, "changedPaths", "path:string", "expectedSHA256:string", "postWriteSHA256:string", "noSymlink:bool")
-	for _, name := range []string{sddResearchName, sddProposalName, sddSpecName, sddDesignName, sddTasksName} {
-		example := promptJSONExample(t, bundle.agents[name], `{"status"`)
-		requireJSONFields(t, example, "status:string", "candidateContent:string", "evidence:array", "openQuestions:array", "blockers:array")
-	}
-}
-
-func TestGeneratedManagerGeneralVerifierContractClauses(t *testing.T) {
-	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle = frozenManagerV60(t, bundle)
-	for name, clauses := range map[string][]string{
-		managerAgentName:  {"sole engineering, orchestration, SDD lifecycle, Git, and GitHub authority", "Route accepted SDD apply directly to vgxness-sdd-apply", "The verifier runs first; each applicable CARE role then reviews that same candidate.", "missing, stale, or mismatched evidence is INCONCLUSIVE"},
-		generalAgentName:  {"Reject SDD implementation or projection missions", "non-SDD implementation worker"},
-		sddApplyName:      {"Immediately before each write recheck", "exact post-write SHA-256", "do not eliminate TOCTOU risk", "Do not accept revisions, transition phases, or record projections"},
-		verifierAgentName: {"verification remains non-mutating", "Never edit, fix, format, delegate", "A validation command that unexpectedly changes the candidate makes the result INCONCLUSIVE"},
-	} {
-		for _, clause := range clauses {
-			if !strings.Contains(string(bundle.agents[name]), clause) {
-				t.Errorf("%s missing contract clause %q", name, clause)
-			}
-		}
-	}
-}
-
-func TestGeneratedRepositoryChildrenValidateAndEchoContextCapsule(t *testing.T) {
-	bundle, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{exploreAgentName, generalAgentName, verifierAgentName, reviewRiskName, reviewReadabilityName, reviewReliabilityName, reviewResilienceName, reviewRefuterName} {
-		content := string(bundle.agents[name])
-		for _, clause := range []string{"Context Capsule v1", "goal, criteria, nonGoals, decisions, authorization, constraints, evidenceRefs, lineage, and contextDigest", "Manager-attested digest", "capsule contextDigest and mission's external contextDigest", "parentContextDigest", "Echo the accepted contextDigest unchanged", "digest-bound synthesis", "Do not independently recompute", "not a security boundary"} {
-			if !strings.Contains(content, clause) {
-				t.Errorf("%s missing child context clause %q", name, clause)
-			}
-		}
-		for _, forbidden := range []string{"Recompute lowercase SHA-256", "object keys sorted lexicographically", "no insignificant whitespace", "array order preserved"} {
-			if strings.Contains(content, forbidden) {
-				t.Errorf("%s exceeds child capability with %q", name, forbidden)
-			}
-		}
-	}
-	manager := string(bundle.agents[managerAgentName])
-	for _, clause := range []string{"sole digest-computation owner", "non-SDD repository delegation", "object keys sorted lexicographically", "no insignificant whitespace", "array order preserved", "contextDigest field omitted", "compute lowercase SHA-256 with an available read-only local hashing capability before task launch", "compare the computed digest with both", "altered capsule content even when", "stale repeated digest", "Count this computation within the selected route budget", "If the capability is unavailable, do not delegate", "SDD missions retain their stronger accepted artifact, revision, digest, and stateVersion bindings without duplicating this capsule"} {
-		if !strings.Contains(manager, clause) {
-			t.Errorf("manager missing deterministic capsule clause %q", clause)
-		}
-	}
-}
-
-func TestActiveProfilesRenderOneCanonicalChildContextContract(t *testing.T) {
-	for name, base := range map[string]string{
-		generalAgentName:  canonicalGeneralPrompt,
-		verifierAgentName: canonicalVerifierPrompt,
-		exploreAgentName:  explorePrompt,
-	} {
-		if got := strings.Count(base, activeChildContextPlaceholder); got != 1 {
-			t.Errorf("%s placeholder count=%d, want 1", name, got)
-		}
-		if strings.Contains(base, "Require a Context Capsule v1") {
-			t.Errorf("%s duplicates the canonical child context contract", name)
-		}
-		active, err := activeProfilePrompt(base)
-		if err != nil {
-			t.Fatalf("%s active profile: %v", name, err)
-		}
-		if got := strings.Count(active, "Require a Context Capsule v1"); got != 1 {
-			t.Errorf("%s rendered context contract count=%d, want 1", name, got)
-		}
-	}
-}
-
-func TestActiveProfilesUseSmallerContextContractsWithoutLosingInvariants(t *testing.T) {
-	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle = frozenManagerV60(t, bundle)
-	for name := range map[string]string{generalAgentName: canonicalGeneralPrompt, verifierAgentName: canonicalVerifierPrompt, exploreAgentName: explorePrompt} {
-		legacy := strings.Replace(string(bundle.agents[name]), activeChildContextContract, nativeChildContextContract, 1)
-		if got := len(bundle.agents[name]); got >= len(legacy) {
-			t.Errorf("%s generated bytes=%d, want less than legacy %d", name, got, len(legacy))
-		}
-		for _, required := range []string{"Context Capsule v1", "Manager-attested digest", "parentContextDigest", "Echo the accepted contextDigest unchanged", "Do not independently recompute", "not a security boundary"} {
-			if !strings.Contains(string(bundle.agents[name]), required) {
-				t.Errorf("%s missing invariant %q", name, required)
-			}
-		}
-	}
-}
-
-func TestAlteredContextCapsuleWithRepeatedSuppliedDigestIsRejectedByContract(t *testing.T) {
-	canonicalDigest := func(capsule map[string]any) string {
-		copy := make(map[string]any, len(capsule))
-		for key, value := range capsule {
-			if key != "contextDigest" {
-				copy[key] = value
-			}
-		}
-		canonical, err := json.Marshal(copy)
-		if err != nil {
-			t.Fatal(err)
-		}
-		digest := sha256.Sum256(canonical)
-		return hex.EncodeToString(digest[:])
-	}
-	original := map[string]any{"goal": "bounded repair", "criteria": []any{"A", "B"}, "lineage": map[string]any{"origin": "request", "hops": []any{"manager", "general"}}}
-	supplied := canonicalDigest(original)
-	original["contextDigest"] = supplied
-	altered := map[string]any{"lineage": original["lineage"], "criteria": original["criteria"], "goal": "broadened repair", "contextDigest": supplied}
-	if recomputed := canonicalDigest(altered); recomputed == supplied {
-		t.Fatal("altered capsule retained the original canonical digest")
-	}
-	if capsuleDigest, externalDigest := altered["contextDigest"], supplied; capsuleDigest != externalDigest {
-		t.Fatal("adversarial setup must repeat one stale supplied digest")
-	}
-	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle = frozenManagerV60(t, bundle)
-	if !strings.Contains(string(bundle.agents[managerAgentName]), "Reject altered capsule content even when the capsule and mission repeat the same supplied digest") {
-		t.Error("manager does not reject the repeated stale-digest adversary")
-	}
-}
-
-func TestSDDProfilesRemainContextCapsuleFreeWithExactPredecessors(t *testing.T) {
-	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	frozen := frozenManagerV60(t, bundle)
-	for name, role := range map[string]modelplan.Role{sddResearchName: modelplan.RoleResearch, sddProposalName: modelplan.RoleProposal, sddSpecName: modelplan.RoleSpec, sddDesignName: modelplan.RoleDesign, sddTasksName: modelplan.RoleTasks, sddApplyName: modelplan.RoleApply} {
-		current := frozen.agents[name]
-		if bytes.Contains(current, []byte("Context Capsule v1")) {
-			t.Errorf("%s current identity gained Context Capsule bytes", name)
-		}
-		predecessor := previousSDDAgentPredecessor(role, current)
-		if len(predecessor) == 0 || bytes.Contains(predecessor, []byte("Context Capsule v1")) {
-			t.Errorf("%s exact predecessor identity changed", name)
-		}
-	}
 }
 
 func promptJSONExample(t *testing.T, content []byte, prefix string) map[string]any {
@@ -456,58 +256,6 @@ func hasContractSymlink(root, relative string) bool {
 		}
 	}
 	return false
-}
-
-func TestGeneratedPermissionMapsAndHoldoutMetadataLeakage(t *testing.T) {
-	bundle, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	general := map[string]string{"*": "allow", "vgxness_memory_save": "deny", "vgxness_memory_forget": "deny", "vgxness_sdd_create": "deny", "vgxness_sdd_set_interaction_mode": "deny", "vgxness_sdd_save_revision": "deny", "vgxness_sdd_accept_revision": "deny", "vgxness_sdd_transition": "deny", "vgxness_sdd_record_projection": "deny"}
-	apply := map[string]string{"*": "deny", "read": "allow", "grep": "allow", "glob": "allow", "list": "allow", "skill": "allow", "codegraph_explore": "allow", "edit": "allow", "bash": "ask", "question": "deny", "task": "deny", "webfetch": "deny", "websearch": "deny", "vgxness_sdd_list": "allow", "vgxness_sdd_get": "allow", "vgxness_sdd_get_revision": "allow", "vgxness_sdd_list_revisions": "allow", "vgxness_sdd_projection_status": "allow"}
-	reviewer := map[string]string{"*": "deny", "read": "allow", "grep": "allow", "glob": "allow", "list": "allow", "skill": "allow", "codegraph_explore": "allow", "vgxness_memory_search": "allow", "vgxness_memory_get": "allow", "task": "deny"}
-	for name, want := range map[string]map[string]string{managerAgentName: {"*": "allow"}, generalAgentName: general, verifierAgentName: general, sddApplyName: apply, reviewRiskName: reviewer, reviewReadabilityName: reviewer, reviewReliabilityName: reviewer, reviewResilienceName: reviewer, reviewRefuterName: reviewer} {
-		got, err := parseContractPermissions(bundle.agents[name])
-		if err != nil || !reflect.DeepEqual(got, want) {
-			t.Errorf("%s permissions=%v err=%v", name, got, err)
-		}
-	}
-	data, err := os.ReadFile("testdata/manager-context-v43-baseline.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var metadata map[string]json.RawMessage
-	if json.Unmarshal(data, &metadata) != nil || metadata["partitions"] == nil || metadata["aggregate"] == nil {
-		t.Fatal("baseline metadata malformed")
-	}
-	var baseline struct {
-		SchemaVersion int `json:"schema_version"`
-		Target        struct {
-			ManagerVersion int    `json:"manager_version"`
-			Commit         string `json:"commit"`
-			OpenCode       string `json:"opencode"`
-		} `json:"target"`
-		Partitions struct {
-			Development struct {
-				Count  int    `json:"count"`
-				Digest string `json:"digest"`
-			} `json:"development"`
-			ProtectedHoldout struct {
-				Count  int    `json:"count"`
-				Digest string `json:"digest"`
-			} `json:"protected_holdout"`
-		} `json:"partitions"`
-	}
-	if err := json.Unmarshal(data, &baseline); err != nil || baseline.SchemaVersion != contextEvalSchemaVersion || baseline.Target.ManagerVersion < 1 || baseline.Target.Commit == "" || baseline.Target.OpenCode == "" || baseline.Partitions.Development.Count < 0 || baseline.Partitions.ProtectedHoldout.Count < 0 || !sha256Text(baseline.Partitions.Development.Digest) || !sha256Text(baseline.Partitions.ProtectedHoldout.Digest) {
-		t.Fatalf("invalid available holdout metadata: %+v err=%v", baseline, err)
-	}
-	for _, leaked := range []string{"prompt", "answer", "label", "outcome", "raw_trace", "protected_holdout_cases"} {
-		if strings.Contains(string(data), leaked) {
-			t.Errorf("holdout metadata leaked %q", leaked)
-		}
-	}
-	// This is metadata-leakage validation only; it cannot prove external holdout
-	// custody, freeze timing, or dataset disjointness.
 }
 
 func parseContractPermissions(content []byte) (map[string]string, error) {

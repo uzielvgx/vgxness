@@ -18,7 +18,7 @@ func TestRecoveryManagedPathsAreExactAndOrdered(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := recovery.ManagedPaths()
-	expected := []string{".agents/plugins/marketplace.json", "AGENTS.md", "agents/care-challenger.toml", "agents/care-reviewer.toml", "agents/care-specialist.toml", "agents/explore.toml", "agents/general.toml", "agents/verifier.toml", "plugins/vgxness/.codex-plugin/plugin.json"}
+	expected := []string{".agents/plugins/marketplace.json", "AGENTS.md", "agents/care-challenger.toml", "agents/care-reviewer.toml", "agents/care-specialist.toml", "agents/explore.toml", "agents/general.toml", "agents/verifier.toml", "plugins/vgxness/.codex-plugin/plugin.json", receiptPath}
 	if !reflect.DeepEqual(paths, expected) {
 		t.Fatalf("paths=%v", paths)
 	}

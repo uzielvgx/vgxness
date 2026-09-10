@@ -107,94 +107,14 @@ func codexPackage(options integration.Options) (Package, error) {
 }
 
 func knownPackages() ([]Package, error) {
-	packages := make([]Package, 0, 50)
+	packages := []Package{}
 	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
-		current, err := RenderPlan("v0.0.0", plan)
-		if err != nil {
-			return nil, err
+		p, e := RenderPlan("v0.0.0", plan)
+		if e != nil {
+			return nil, e
 		}
-		packages = append(packages, current)
-		v20, err := renderActiveV20("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v20)
-		v19, err := renderActiveV19("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v19)
-		v18PreTerminalClosure, err := renderActiveV18PreTerminalClosure("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v18PreTerminalClosure)
-		v17, err := renderActiveV17("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v17)
-		v16, err := renderActiveV16("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v16)
-		v15, err := renderActiveV15("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v15)
-		v14, err := renderActiveV14("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v14)
-		v13, err := renderActiveV13("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v13)
-		v12, err := renderActiveV12("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v12)
-		v10, err := renderActiveV10("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v10)
-		v9, err := renderActiveV9("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v9)
-		v8, err := renderActiveV8("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v8)
-		v7, err := renderActiveV7("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v7)
-		v6, err := renderActiveV6("v0.0.0", plan)
-		if err != nil {
-			return nil, err
-		}
-		packages = append(packages, v6)
+		packages = append(packages, p)
 	}
-	preConsolidation, err := renderPreConsolidationV4("v0.0.0", modelplan.PlanMedium)
-	if err != nil {
-		return nil, err
-	}
-	packages = append(packages, preConsolidation)
-	legacy, err := renderLegacy("v0.0.0")
-	if err != nil {
-		return nil, err
-	}
-	packages = append(packages, legacy)
 	return packages, nil
 }
 
@@ -351,6 +271,17 @@ func migrateHistoricalCodexHooks(root *Root, pkg Package) (bool, error) {
 	return true, nil
 }
 func inspectKnown(ctx context.Context, root *Root, preferred Package) (inspection, Package, error) {
+	if previous, present, err := readReceiptPackage(root); err != nil {
+		if errors.Is(err, integration.ErrDrift) {
+			state := inspection{result: resultFor(root.Path, preferred)}
+			state.result.State = integration.StateDrifted
+			return state, preferred, nil
+		}
+		return inspection{}, Package{}, err
+	} else if present {
+		state, err := inspectRoot(ctx, root, previous)
+		return state, previous, err
+	}
 	packages, err := knownPackages()
 	if err != nil {
 		return inspection{}, Package{}, err
@@ -421,11 +352,6 @@ func collapsePartialCandidates(candidates []partialCandidate, preferred Package)
 	}
 	if current != -1 {
 		return candidates[current].state, candidates[current].pkg, nil
-	}
-	for _, candidate := range candidates {
-		if packageUsesManager(candidate.pkg, activeV9ManagerInstructions()) {
-			return candidate.state, candidate.pkg, nil
-		}
 	}
 	return inspection{}, Package{}, conflict("ambiguous managed Codex package")
 }
@@ -753,7 +679,7 @@ func (s *Integration) installAndActivate(ctx context.Context, root *Root, pkg Pa
 	}
 	plugin, market, safeRollback, activationErr := s.activate(ctx, root)
 	if activationErr == nil {
-		if err := root.ClearActivationPending(evidence.body); err != nil {
+		if err := clearVerifiedActivation(ctx, root, pkg, evidence.body); err != nil {
 			return integration.Result{}, recovery(err)
 		}
 		if migrated || plugin || market {
@@ -802,7 +728,7 @@ func (s *Integration) recoverActivation(ctx context.Context, root *Root, pkg Pac
 			}
 			changed = true
 		}
-		if err := root.ClearActivationPending(evidence.body); err != nil {
+		if err := clearVerifiedActivation(ctx, root, pkg, evidence.body); err != nil {
 			return integration.Result{}, recovery(err)
 		}
 		if changed {
@@ -816,7 +742,7 @@ func (s *Integration) recoverActivation(ctx context.Context, root *Root, pkg Pac
 	}
 	activation, activationErr := s.activation(ctx, root)
 	if activationErr == nil && activation == activationActive {
-		if err := root.ClearActivationPending(evidence.body); err != nil {
+		if err := clearVerifiedActivation(ctx, root, pkg, evidence.body); err != nil {
 			return integration.Result{}, recovery(err)
 		}
 		return reconciled(state.result), nil
@@ -841,7 +767,7 @@ func (s *Integration) recoverActivation(ctx context.Context, root *Root, pkg Pac
 		if err != nil || activation != activationActive {
 			return integration.Result{}, recovery(errors.Join(err, integration.ErrDrift))
 		}
-		if err = root.ClearActivationPending(evidence.body); err != nil {
+		if err = clearVerifiedActivation(ctx, root, pkg, evidence.body); err != nil {
 			return integration.Result{}, recovery(err)
 		}
 		state.result.Changed, state.result.RestartRequired = true, true
@@ -920,16 +846,13 @@ func (s *Integration) installProtected(ctx context.Context, options integration.
 		return integration.Result{}, err
 	}
 	if options.ModelPlan == "" && state.result.State == integration.StateInstalled {
-		pkg = installed
-	}
-	if state.result.State == integration.StateInstalled && installed.SHA256 != pkg.SHA256 {
-		if _, err := s.uninstall(ctx, root, installed, state); err != nil {
-			return integration.Result{}, err
-		}
-		state, err = inspectRoot(ctx, root, pkg)
+		pkg, err = RenderPlan("v0.0.0", installed.plan)
 		if err != nil {
 			return integration.Result{}, err
 		}
+	}
+	if state.result.State == integration.StateInstalled && installed.SHA256 != pkg.SHA256 {
+		return s.replacePackage(ctx, root, installed, pkg, state)
 	}
 	return s.installAndActivate(ctx, root, pkg, state)
 }
@@ -944,6 +867,19 @@ func recoveryPackage(root *Root, fallback Package, preferFallback bool, expected
 	packages, err := knownPackages()
 	if err != nil {
 		return Package{}, err
+	}
+	if previous, present, receiptErr := readReceiptPackageFrom(root, true); receiptErr != nil {
+		return Package{}, recovery(receiptErr)
+	} else if present {
+		found := false
+		for _, p := range packages {
+			if p.SHA256 == previous.SHA256 {
+				found = true
+			}
+		}
+		if !found {
+			packages = append(packages, previous)
+		}
 	}
 	if body, present, evidenceErr := root.PendingEvidence(); evidenceErr != nil {
 		return Package{}, evidenceErr
@@ -1320,25 +1256,12 @@ func (s *Integration) reinstallProtected(ctx context.Context, options integratio
 	switch state.result.State {
 	case integration.StateInstalled:
 		if installed.SHA256 != pkg.SHA256 {
-			if _, err := s.uninstall(ctx, root, installed, state); err != nil {
-				return integration.Result{}, err
-			}
-			state, err = inspectRoot(ctx, root, pkg)
-			if err != nil {
-				return integration.Result{}, err
-			}
-			return s.installAndActivate(ctx, root, pkg, state)
+			return s.replacePackage(ctx, root, installed, pkg, state)
 		}
 		return s.installAndActivate(ctx, root, pkg, state)
 	case integration.StatePartial:
 		if installed.SHA256 != pkg.SHA256 {
-			if _, err := s.uninstall(ctx, root, installed, state); err != nil {
-				return integration.Result{}, err
-			}
-			state, err = inspectRoot(ctx, root, pkg)
-			if err != nil {
-				return integration.Result{}, err
-			}
+			return s.replacePackage(ctx, root, installed, pkg, state)
 		}
 		return s.installAndActivate(ctx, root, pkg, state)
 	case integration.StateAbsent:
@@ -1349,4 +1272,14 @@ func (s *Integration) reinstallProtected(ctx context.Context, options integratio
 	default:
 		return integration.Result{}, fmt.Errorf("%w: managed Codex artifacts", integration.ErrDrift)
 	}
+}
+
+// clearVerifiedActivation observes the managed set after external CLI work.
+// It does not lock files against subsequent writes by the same user.
+func clearVerifiedActivation(ctx context.Context, root *Root, pkg Package, evidence []byte) error {
+	state, err := inspectRoot(ctx, root, pkg)
+	if err != nil || state.result.State != integration.StateInstalled {
+		return recovery(errors.Join(err, integration.ErrDrift))
+	}
+	return root.ClearActivationPending(evidence)
 }

@@ -6,30 +6,6 @@ import (
 	"github.com/vgxness/vgxness/internal/orchestration"
 )
 
-// Manager19 is frozen exclusively for complete-package predecessor recognition.
-func renderActiveV19(version string, plan modelplan.Plan) (Package, error) {
-	selected, e := profilesForPlan(plan)
-	if e != nil {
-		return Package{}, e
-	}
-	p, e := renderPackage(version, selected, plan, false)
-	if e != nil {
-		return Package{}, e
-	}
-	for i := range p.Artifacts {
-		if p.Artifacts[i].Path == "AGENTS.md" {
-			p.Artifacts[i].Bytes = []byte(activeV19ManagerInstructions())
-		}
-	}
-	p.Artifacts = append(p.Artifacts, lifecycleArtifacts(p.version)...)
-	p.current = true
-	p.SHA256 = aggregateSHA256(p.Artifacts)
-	return p, p.Validate()
-}
-func previousV20ManagerInstructions() string {
-	c := orchestration.PreviousManagerContract()
-	return "<!-- managed-by: vgxness; artifact: codex-agent/manager; version: 20; parity: opencode-v61 -->\n\n" + c.RenderManagerSections() + "\n# Native Codex adapter\nUse native Codex delegation with the exact configured agent_type matching the canonical role. Use native skills and the configured VGXNESS MCP memory/SDD tools. Native sandbox and tool permissions remain authoritative; missing tools or authentication are unavailable dependencies. Never treat native capability as user authorization.\nContract identity: " + c.Identity + "; content SHA256: " + orchestration.PreviousManagerContractDigest() + "\n"
-}
 func profilesFromContract(plan modelplan.Plan, c orchestration.ManagerContract) ([]profile, error) {
 	selected, e := profilesForPlan(plan)
 	if e != nil {
@@ -69,19 +45,4 @@ func activeManagerInstructions() string {
 		return ""
 	}
 	return "<!-- managed-by: vgxness; artifact: codex-agent/manager; version: 21; parity: opencode-v62 -->\n\n" + c.RenderManagerSections() + "\n# Native Codex adapter\nUse native delegation with the exact configured agent_type matching the canonical role. Use native skills and configured VGXNESS MCP memory tools. Native sandbox and tool permissions remain authoritative. Missing tools or authentication are unavailable dependencies; capabilities never grant authorization.\nContract identity: " + c.Identity + "; content SHA256: " + orchestration.ManagerContractDigest() + "\n"
-}
-func renderActiveV20(version string, plan modelplan.Plan) (Package, error) {
-	profiles, e := profilesFromContract(plan, orchestration.PreviousManagerContract())
-	if e != nil {
-		return Package{}, e
-	}
-	p, e := renderPackage(version, profiles, plan, false)
-	if e != nil {
-		return p, e
-	}
-	p.Artifacts[0].Bytes = []byte(previousV20ManagerInstructions())
-	p.Artifacts = append(p.Artifacts, lifecycleArtifacts(p.version)...)
-	p.current = true
-	p.SHA256 = aggregateSHA256(p.Artifacts)
-	return p, p.Validate()
 }

@@ -105,18 +105,3 @@ func (c ManagerContract) RenderManagerSections() string {
 	}
 	return c.Manager.Instructions + "\n\n# Delegated role contract\n" + strings.Join(roles, "\n\n") + "\n"
 }
-
-//go:embed manager_contract_v1.json
-var predecessorManagerContractBytes []byte
-
-// PreviousManagerContract is frozen only for exact installed-package recognition.
-func PreviousManagerContract() ManagerContract {
-	var c ManagerContract
-	if err := json.Unmarshal(predecessorManagerContractBytes, &c); err != nil {
-		panic(err)
-	}
-	return c
-}
-func PreviousManagerContractDigest() string {
-	return "b6675950128f60a52eec99a90ec6095e5b2d2d7fe3bbeda7ef74368edb2490a1"
-}

@@ -222,49 +222,6 @@ func (service *Integration) writeReinstallPending(ctx context.Context, root stri
 	return reinstallPendingEvidence{info: opened, digest: sha256.Sum256(body)}, nil
 }
 
-func readReinstallPending(root string) (reinstallPendingMarker, os.FileInfo, error) {
-	var marker reinstallPendingMarker
-	markerPath := filepath.Join(root, reinstallPendingName)
-	before, err := os.Lstat(markerPath)
-	if err != nil {
-		return marker, nil, err
-	}
-	if !privatePendingFile(before) || before.Size() <= 0 || before.Size() > maxReinstallPendingBytes {
-		return marker, nil, fmt.Errorf("invalid reinstall pending marker")
-	}
-	file, err := os.Open(markerPath)
-	if err != nil {
-		return marker, nil, err
-	}
-	opened, err := file.Stat()
-	if err != nil || !os.SameFile(before, opened) || !privatePendingFile(opened) {
-		_ = file.Close()
-		return marker, nil, fmt.Errorf("invalid reinstall pending marker identity")
-	}
-	body, readErr := io.ReadAll(io.LimitReader(file, maxReinstallPendingBytes+1))
-	closeErr := file.Close()
-	after, pathErr := os.Lstat(markerPath)
-	if readErr != nil || closeErr != nil || pathErr != nil || len(body) > maxReinstallPendingBytes || !os.SameFile(before, after) || !privatePendingFile(after) {
-		return marker, nil, errors.Join(fmt.Errorf("invalid reinstall pending marker after read"), readErr, closeErr, pathErr)
-	}
-	if err := rejectDuplicateJSONKeys(body); err != nil {
-		return marker, nil, fmt.Errorf("invalid reinstall pending marker: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&marker); err != nil {
-		return marker, nil, fmt.Errorf("invalid reinstall pending marker: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return marker, nil, fmt.Errorf("invalid reinstall pending marker trailing data")
-	}
-	if err := validateReinstallPending(root, marker); err != nil {
-		return marker, nil, err
-	}
-	return marker, before, nil
-}
-
 func validateReinstallPending(root string, marker reinstallPendingMarker) error {
 	if marker.Version != reinstallPendingVersion || marker.Root != root || filepath.Clean(root) != root || len(marker.Operation) != 32 || len(marker.Artifacts) == 0 || len(marker.Artifacts) > 64 {
 		return fmt.Errorf("invalid reinstall pending marker")
@@ -418,4 +375,47 @@ func consumeUniqueJSONValue(decoder *json.Decoder) error {
 	}
 	_, err = decoder.Token()
 	return err
+}
+
+func readReinstallPending(root string) (reinstallPendingMarker, os.FileInfo, error) {
+	var marker reinstallPendingMarker
+	markerPath := filepath.Join(root, reinstallPendingName)
+	before, err := os.Lstat(markerPath)
+	if err != nil {
+		return marker, nil, err
+	}
+	if !privatePendingFile(before) || before.Size() <= 0 || before.Size() > maxReinstallPendingBytes {
+		return marker, nil, fmt.Errorf("invalid reinstall pending marker")
+	}
+	file, err := os.Open(markerPath)
+	if err != nil {
+		return marker, nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) || !privatePendingFile(opened) {
+		_ = file.Close()
+		return marker, nil, fmt.Errorf("invalid reinstall pending marker identity")
+	}
+	body, readErr := io.ReadAll(io.LimitReader(file, maxReinstallPendingBytes+1))
+	closeErr := file.Close()
+	after, pathErr := os.Lstat(markerPath)
+	if readErr != nil || closeErr != nil || pathErr != nil || len(body) > maxReinstallPendingBytes || !os.SameFile(before, after) || !privatePendingFile(after) {
+		return marker, nil, errors.Join(fmt.Errorf("invalid reinstall pending marker after read"), readErr, closeErr, pathErr)
+	}
+	if err := rejectDuplicateJSONKeys(body); err != nil {
+		return marker, nil, fmt.Errorf("invalid reinstall pending marker: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&marker); err != nil {
+		return marker, nil, fmt.Errorf("invalid reinstall pending marker: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return marker, nil, fmt.Errorf("invalid reinstall pending marker trailing data")
+	}
+	if err := validateReinstallPending(root, marker); err != nil {
+		return marker, nil, err
+	}
+	return marker, before, nil
 }
