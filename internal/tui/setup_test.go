@@ -804,12 +804,6 @@ func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testi
 		{"agents/vgxness-care-reviewer.md", "CARE reviewer", "review", "review"},
 		{"agents/vgxness-care-specialist.md", "CARE specialist", "review", "review"},
 		{"agents/vgxness-care-challenger.md", "CARE challenger", "review", "review"},
-		{"agents/vgxness-sdd-research.md", "sdd-research", "research", "sdd"},
-		{"agents/vgxness-sdd-proposal.md", "sdd-proposal", "proposal", "sdd"},
-		{"agents/vgxness-sdd-spec.md", "sdd-spec", "spec", "sdd"},
-		{"agents/vgxness-sdd-design.md", "sdd-design", "design", "sdd"},
-		{"agents/vgxness-sdd-tasks.md", "sdd-tasks", "tasks", "sdd"},
-		{"agents/vgxness-sdd-apply.md", "sdd-apply", "apply", "sdd"},
 	}
 	if got := setupAgentRows[:]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("current setup identities=%+v want=%+v", got, want)
@@ -833,7 +827,7 @@ func TestSetupAssignmentMatrixCatalogNavigationPromotionAndFreshPreview(t *testi
 		t.Fatal("Esc lost matching preview")
 	}
 	model = updateModel(t, model, keyPress("m"))
-	for _, expected := range []string{"AGENT ASSIGNMENT MATRIX", "▸ manager", "core/manager", "sdd/apply", "[↑↓/j/k]", "[←→]", "[[/]]", "[Enter]", "[Esc]", "[q]"} {
+	for _, expected := range []string{"AGENT ASSIGNMENT MATRIX", "▸ manager", "core/manager", "review/review", "[↑↓/j/k]", "[←→]", "[[/]]", "[Enter]", "[Esc]", "[q]"} {
 		if !strings.Contains(model.View().Content, expected) {
 			t.Fatalf("matrix missing %q:\n%s", expected, model.View().Content)
 		}

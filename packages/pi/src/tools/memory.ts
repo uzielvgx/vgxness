@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
-type Backend = { verifyCurrentAcceptedBinding?(binding: unknown): Promise<boolean>; request(operation: string, payload: unknown, binding: { workspace: string; mode: "read-only" | "full"; role: string }, control?: { beforeMutation?: () => void; signal?: AbortSignal }): Promise<unknown> };
+type Backend = { request(operation: string, payload: unknown, binding: { workspace: string; mode: "read-only" | "full"; role: string }, control?: { beforeMutation?: () => void; signal?: AbortSignal }): Promise<unknown> };
 export type ToolHost = { workspace: string; mode: "read-only" | "full"; role: string; backend: () => Promise<Backend>; mutationGuard?: () => void; mutationSignal?: () => AbortSignal };
 const text = () => Type.String({ minLength: 1 });
 const scope = Type.Optional(Type.Literal("project"));

@@ -44,9 +44,9 @@ CI runs the standard lanes independently, including a separate vulnerability sca
 
 ## Direction
 
-SDD agents and lifecycle tools are no longer available. `vgxness sdd` rejects execution; `vgxness sdd-archive <list|get|list-revisions|get-revision>` retains read-only access to historical records with the existing workspace/storage selectors. No database migration deletes or changes those records. Model plans remain available independently of the retired workflow.
+SDD has no runtime, CLI archive, MCP or Pi tool, worker binding, or bundled skill. Historical database records and immutable migration files remain for data preservation. Exact predecessor profiles are compatibility fixtures only; current model selection exposes seven agents.
 
-By default, every workspace uses the project-isolated semantic and SDD domains in `~/.vgxness/memory.db`. Canonical workspace identity keeps same-named projects distinct. Older project-level databases are retained and are not imported automatically; explicit `--storage-root` and `--project-local` modes remain isolated overrides.
+By default, every workspace uses the project-isolated semantic memory in `~/.vgxness/memory.db`. Canonical workspace identity keeps same-named projects distinct. Older project-level databases are retained and are not imported automatically; explicit `--storage-root` and `--project-local` modes remain isolated overrides.
 
 For a new cloud, reset it first and run `vgxness memory sync reseed --workspace /absolute/workspace --confirm-cloud-empty` on the Mac/source device. Each later Linux or Windows device uses `vgxness memory sync rejoin --workspace /absolute/workspace --confirm-merge`. These operations are per-project, never run `git pull`, require their exact confirmation, and resume safely on retry; see [Synchronization service boundary](docs/sync.md).
 

@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 func TestRunCodexFailsClosed(t *testing.T) {
@@ -161,7 +161,7 @@ func openActivationRoot(t *testing.T) *Root {
 
 func TestActivationIgnoresUnrelatedAmbientState(t *testing.T) {
 	ctx, path := context.Background(), filepath.Join(t.TempDir(), "codex")
-	pkg, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	pkg, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestActivationIgnoresUnrelatedAmbientState(t *testing.T) {
 
 func TestActivateRecoveryIgnoresUnrelatedAmbientState(t *testing.T) {
 	ctx, path := context.Background(), filepath.Join(t.TempDir(), "codex")
-	pkg, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	pkg, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestCodexActivationRecoveryEvidenceSurvivesAbruptCLIMutations(t *testing.T)
 }
 
 func TestPendingJournalsBindExactPlanAndRejectTamperingBeforeMutation(t *testing.T) {
-	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
 		t.Run("exact-"+string(plan), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "codex")
 			fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: path}
@@ -306,7 +306,7 @@ func TestPendingJournalsBindExactPlanAndRejectTamperingBeforeMutation(t *testing
 			}
 		})
 	}
-	pkg, err := RenderPlan("v0.0.0", sdd.PlanHigh)
+	pkg, err := RenderPlan("v0.0.0", modelplan.PlanHigh)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +484,7 @@ func TestIntegrationRefreshesPluginVersionWithExactRemoveAddAndReadback(t *testi
 	defer root.Close()
 	fake := &fakeCodexCLI{fail: map[string]error{}, after: map[string]error{}, root: path, version: "1.0.0"}
 	s := fakeActivationIntegration(fake)
-	pkgA, _ := RenderPlan("v1.0.0", sdd.PlanMedium)
+	pkgA, _ := RenderPlan("v1.0.0", modelplan.PlanMedium)
 	stateA, _ := inspectRoot(ctx, root, pkgA)
 	if _, err := s.installAndActivate(ctx, root, pkgA, stateA); err != nil {
 		t.Fatal(err)
@@ -493,7 +493,7 @@ func TestIntegrationRefreshesPluginVersionWithExactRemoveAddAndReadback(t *testi
 	if _, err := s.uninstall(ctx, root, pkgA, stateA); err != nil {
 		t.Fatal(err)
 	}
-	pkgB, _ := RenderPlan("v2.0.0", sdd.PlanMedium)
+	pkgB, _ := RenderPlan("v2.0.0", modelplan.PlanMedium)
 	fake.version = "2.0.0"
 	stateB, _ := inspectRoot(ctx, root, pkgB)
 	if result, err := s.installAndActivate(ctx, root, pkgB, stateB); err != nil || result.State != integration.StateInstalled {

@@ -13,7 +13,6 @@ import (
 
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/secrets"
 	"github.com/vgxness/vgxness/internal/syncapi"
 	"github.com/vgxness/vgxness/internal/syncclient"
@@ -238,35 +237,5 @@ func TestSyncStatusAndWithStorePreserveAllErrors(t *testing.T) {
 	_, err := withStore(func() (*memory.Store, error) { return nil, nil }, func(*memory.Store) (string, error) { return "", operationErr }, func(*memory.Store) error { return closeErr })
 	if !errors.Is(err, operationErr) || !errors.Is(err, closeErr) {
 		t.Fatalf("joined error = %v", err)
-	}
-}
-
-func TestSDDFacadeCreatesAndReadsChangeAndRevision(t *testing.T) {
-	ctx := context.Background()
-	opts := config.Options{StorageRoot: t.TempDir()}
-	runtime := NewSDD()
-	change, err := runtime.CreateChange(ctx, opts, sdd.CreateChangeRequest{Project: "project", IdempotencyKey: "change-1", Title: "Runtime test", Backend: sdd.BackendMemory, InteractionMode: sdd.InteractionAutomatic, Plan: sdd.PlanLow})
-	if err != nil || change.ID == "" {
-		t.Fatalf("create = %+v, %v", change, err)
-	}
-	changes, err := runtime.ListChanges(ctx, opts, sdd.ListChangesRequest{Project: "project"})
-	if err != nil || len(changes) != 1 || changes[0].ID != change.ID {
-		t.Fatalf("list = %+v, %v", changes, err)
-	}
-	got, err := runtime.GetChange(ctx, opts, sdd.GetChangeRequest{Project: "project", ID: change.ID})
-	if err != nil || got.Title != change.Title {
-		t.Fatalf("get = %+v, %v", got, err)
-	}
-	revision, err := runtime.SaveRevision(ctx, opts, sdd.SaveRevisionRequest{Project: "project", ChangeID: change.ID, Artifact: sdd.PhaseExplore, Content: []byte("exploration"), ExpectedStateVersion: change.StateVersion})
-	if err != nil || revision.ID == "" {
-		t.Fatalf("save revision = %+v, %v", revision, err)
-	}
-	revisions, err := runtime.ListRevisions(ctx, opts, sdd.ListRevisionsRequest{Project: "project", ChangeID: change.ID})
-	if err != nil || len(revisions) != 1 || revisions[0].ID != revision.ID {
-		t.Fatalf("list revisions = %+v, %v", revisions, err)
-	}
-	gotRevision, err := runtime.GetRevision(ctx, opts, sdd.GetRevisionRequest{Project: "project", ChangeID: change.ID, RevisionID: revision.ID})
-	if err != nil || string(gotRevision.Content) != "exploration" {
-		t.Fatalf("get revision = %+v, %v", gotRevision, err)
 	}
 }

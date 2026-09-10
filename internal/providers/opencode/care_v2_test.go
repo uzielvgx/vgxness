@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 func TestCAREV2RolesKeepExactV1SnapshotsAndBindingContract(t *testing.T) {
@@ -42,15 +42,15 @@ func TestCAREV2RolesKeepExactV1SnapshotsAndBindingContract(t *testing.T) {
 func TestCAREV1PackagesUpgradeThroughInstallAndReinstall(t *testing.T) {
 	builders := map[string]func(t *testing.T) modelPlanBundle{
 		"schema-v1": func(t *testing.T) modelPlanBundle {
-			b, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+			b, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 			if err != nil {
 				t.Fatal(err)
 			}
 			return b
 		},
-		"schema-v2": func(t *testing.T) modelPlanBundle { return mustBuildModelPlanV2(t, sdd.DefaultModelPlanConfigV2()) },
+		"schema-v2": func(t *testing.T) modelPlanBundle { return mustBuildModelPlanV2(t, modelplan.DefaultModelPlanConfigV2()) },
 		"schema-v3": func(t *testing.T) modelPlanBundle {
-			b, err := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+			b, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,7 +119,7 @@ func assertCurrentBundleReadback(t *testing.T, root string, current modelPlanBun
 }
 
 func TestCAREV1PackageDriftFailsClosedWithoutMutation(t *testing.T) {
-	current, err := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+	current, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func careSeedUnchanged(t *testing.T, root string, before map[string][]byte) {
 }
 
 func TestCAREV2LifecyclePreservesOnlyRoleDelta(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}

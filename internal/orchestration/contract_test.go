@@ -14,7 +14,6 @@ func TestCanonicalRoutingOrder(t *testing.T) {
 	}{
 		{"non-repository", Request{}, RouteDirect},
 		{"exact local read", Request{Repository: true, ExactLocalRead: true}, RouteDirect},
-		{"SDD wins all conflicts", Request{Repository: true, ExactLocalRead: true, SDDAccepted: true, Implementation: true}, RouteSDD},
 		{"implementation beats direct", Request{Repository: true, ExactLocalRead: true, Implementation: true}, RouteGeneral},
 		{"implementation", Request{Repository: true, Implementation: true}, RouteGeneral},
 		{"repository fallback", Request{Repository: true}, RouteExplore},

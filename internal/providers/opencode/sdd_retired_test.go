@@ -6,7 +6,7 @@ import (
 	"errors"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +15,7 @@ import (
 
 func TestRetiredSDDManager61ManifestRecognition(t *testing.T) {
 	v2 := mustBuildModelPlanV2(t, schemaV2TestConfig(t))
-	v3, err := buildModelPlanBundleV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()})
+	v3, err := buildModelPlanBundleV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: modelplan.ModelPlanCLI, Assignments: completeModelAssignmentsV3()})
 	if err != nil {
 		t.Fatal(err)
 	}

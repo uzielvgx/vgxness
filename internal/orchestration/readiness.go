@@ -34,7 +34,6 @@ type BindingKind string
 
 const (
 	BindingGeneral BindingKind = "general"
-	BindingSDD     BindingKind = "sdd"
 )
 
 type EvidenceAvailability string
@@ -48,19 +47,18 @@ const (
 type ReasonCode string
 type RiskCategory string
 
-type ActivationFacts struct{ WriteIntent, DirectRoute, SimpleExactRead, SDDAccepted, Delivery, FrozenCandidate, CrossPlatform, LifecycleRecovery, AuthorizationSecurity, Secrets, Payments, Installer, DataLossExposure, ShellProcess, Durability, IdentityDigest, ProviderTemplate, ConcreteHotPath, UnknownRisk bool }
+type ActivationFacts struct{ WriteIntent, DirectRoute, SimpleExactRead, Delivery, FrozenCandidate, CrossPlatform, LifecycleRecovery, AuthorizationSecurity, Secrets, Payments, Installer, DataLossExposure, ShellProcess, Durability, IdentityDigest, ProviderTemplate, ConcreteHotPath, UnknownRisk bool }
 
 func ClassifyActivation(f ActivationFacts) ActivationClass {
 	if !f.WriteIntent || f.DirectRoute || f.SimpleExactRead {
 		return ActivationExempt
 	}
-	if f.SDDAccepted || f.Delivery || f.FrozenCandidate || f.CrossPlatform || f.LifecycleRecovery || f.AuthorizationSecurity || f.Secrets || f.Payments || f.Installer || f.DataLossExposure || f.ShellProcess || f.Durability || f.IdentityDigest || f.ProviderTemplate || f.ConcreteHotPath || f.UnknownRisk {
+	if f.Delivery || f.FrozenCandidate || f.CrossPlatform || f.LifecycleRecovery || f.AuthorizationSecurity || f.Secrets || f.Payments || f.Installer || f.DataLossExposure || f.ShellProcess || f.Durability || f.IdentityDigest || f.ProviderTemplate || f.ConcreteHotPath || f.UnknownRisk {
 		return ActivationFull
 	}
 	return ActivationLight
 }
 
-type AcceptedInput struct{ ArtifactID, RevisionID, Digest string }
 type ChangedPath struct {
 	Path, SHA256 string
 	NoSymlink    bool
@@ -71,13 +69,11 @@ type ReviewBinding struct {
 	DiffScope, AcceptanceCriteria []string
 }
 type ExpectedBinding struct {
-	Kind                                                                                        BindingKind
-	ChangeID, MissionID, ReplayNonce, ContextDigest, TaskArtifactID, TaskRevisionID, TaskDigest string
-	ExpectedStateVersion                                                                        int
-	Inputs                                                                                      []AcceptedInput
-	CandidateDigest, BaseIdentity                                                               string
-	ChangedPaths                                                                                []ChangedPath
-	ReviewBinding                                                                               ReviewBinding
+	Kind                                  BindingKind
+	MissionID, ReplayNonce, ContextDigest string
+	CandidateDigest, BaseIdentity         string
+	ChangedPaths                          []ChangedPath
+	ReviewBinding                         ReviewBinding
 }
 type Scope struct {
 	Authorized, WriteIntent              bool
@@ -238,7 +234,6 @@ func (in BuildInput) clone() BuildInput {
 	return out
 }
 func cloneBinding(b ExpectedBinding) ExpectedBinding {
-	b.Inputs = append([]AcceptedInput(nil), b.Inputs...)
 	b.ChangedPaths = append([]ChangedPath(nil), b.ChangedPaths...)
 	b.ReviewBinding.ChangedPaths = append([]ChangedPath(nil), b.ReviewBinding.ChangedPaths...)
 	b.ReviewBinding.DiffScope = append([]string(nil), b.ReviewBinding.DiffScope...)
@@ -271,20 +266,18 @@ func validateShape(e ReadinessEnvelope) ValidationResult {
 	if e.SchemaVersion != ReadinessSchemaVersion || !validActivation(e.Activation) || (e.Status != "" && !validStatus(e.Status)) || len(e.MissionEvidence) == 0 || len(e.MissionEvidence) > maxCanonicalBytes || !e.Scope.Authorized || !e.Scope.WriteIntent || !validStrings(e.Scope.Paths, true) || !validStrings(e.Scope.Criteria, false) || !validStrings(e.Scope.PermittedValidation, false) || !validText(e.Scope.AuthorizationReference) || !validText(e.Binding.MissionID) || !validText(e.Binding.ReplayNonce) || !validDigest(e.MissionEvidenceDigest) {
 		r = blocked(r, "required_field_missing")
 	}
-	if e.Activation == ActivationExempt || (e.Binding.Kind != BindingGeneral && e.Binding.Kind != BindingSDD) {
+	if e.Activation == ActivationExempt || (e.Binding.Kind != BindingGeneral) {
 		r = blocked(r, "binding_mismatch")
 	}
 	if e.Binding.Kind == BindingGeneral && !validDigest(e.Binding.ContextDigest) {
 		r = blocked(r, "binding_mismatch")
 	}
-	if e.Binding.Kind == BindingSDD && (!validText(e.Binding.ChangeID) || !validText(e.Binding.TaskArtifactID) || !validText(e.Binding.TaskRevisionID) || !validDigest(e.Binding.TaskDigest) || e.Binding.ExpectedStateVersion <= 0 || !validInputs(e.Binding.Inputs)) {
-		r = blocked(r, "binding_mismatch")
-	}
+
 	if !validCollection(e.Dependencies) || !validRisks(e.RiskCategories) || !validTargets(e.Scope.Targets) {
 		r = blocked(r, "required_field_missing")
 	}
 	for _, t := range e.Scope.Targets {
-		if !validPath(t.Path) || !t.NoSymlink || (t.Missing && t.SHA256 != "") || (!t.Missing && !validDigest(t.SHA256)) || (e.Binding.Kind == BindingSDD && !hasTargetDependency(e.Dependencies, t)) {
+		if !validPath(t.Path) || !t.NoSymlink || (t.Missing && t.SHA256 != "") || (!t.Missing && !validDigest(t.SHA256)) || (e.Activation == ActivationFull && !hasTargetDependency(e.Dependencies, t)) || !containsScopePath(e.Scope.Paths, t.Path) {
 			r = blocked(r, "target_hash_mismatch")
 		}
 	}
@@ -330,9 +323,7 @@ func validateShape(e ReadinessEnvelope) ValidationResult {
 		}
 		seenDependencies[key] = true
 	}
-	if e.Binding.Kind == BindingSDD && !hasDependency(e.Dependencies, "task", e.Binding.TaskArtifactID, e.Binding.TaskDigest) {
-		r = blocked(r, "binding_mismatch")
-	}
+
 	if len(e.Unknowns) > maxReadinessItems {
 		r = blocked(r, "required_field_missing")
 	} else {
@@ -451,20 +442,6 @@ func validStrings(v []string, paths bool) bool {
 	}
 	return true
 }
-func validInputs(v []AcceptedInput) bool {
-	if len(v) == 0 || len(v) > maxReadinessItems {
-		return false
-	}
-	seen := map[string]bool{}
-	for _, x := range v {
-		k := x.ArtifactID + "\x00" + x.RevisionID
-		if !validText(x.ArtifactID) || !validText(x.RevisionID) || !validDigest(x.Digest) || seen[k] {
-			return false
-		}
-		seen[k] = true
-	}
-	return true
-}
 func validCollection[T any](v []T) bool { return len(v) > 0 && len(v) <= maxReadinessItems }
 func validRisks(v []RiskCategory) bool {
 	if !validCollection(v) {
@@ -531,7 +508,7 @@ func hasTargetDependency(d []Dependency, t TargetIdentity) bool {
 }
 func validRisk(v RiskCategory) bool {
 	switch v {
-	case "sdd", "delivery", "frozen", "cross-platform", "lifecycle-recovery", "authorization-security", "secrets", "payments", "installer", "data-loss-exposure", "shell-process", "durability", "identity-digest", "provider-template", "unknown-risk":
+	case "delivery", "frozen", "cross-platform", "lifecycle-recovery", "authorization-security", "secrets", "payments", "installer", "data-loss-exposure", "shell-process", "durability", "identity-digest", "provider-template", "unknown-risk":
 		return true
 	}
 	return false
@@ -580,4 +557,13 @@ func validDigest(s string) bool {
 	}
 	_, err := hex.DecodeString(s)
 	return err == nil && s == strings.ToLower(s)
+}
+
+func containsScopePath(paths []string, target string) bool {
+	for _, path := range paths {
+		if path == target {
+			return true
+		}
+	}
+	return false
 }

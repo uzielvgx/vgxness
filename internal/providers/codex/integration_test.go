@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -40,7 +40,7 @@ func TestKnownPackagesOrderCurrentThenPreTerminalV18ThenV17ForEveryPlan(t *testi
 	if len(known) != 62 {
 		t.Fatalf("known packages length = %d, want 62", len(known))
 	}
-	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			t.Fatal(err)
@@ -110,14 +110,14 @@ func TestLogicalArtifactDirUsesSlashSeparators(t *testing.T) {
 }
 
 func TestActiveV16LifecycleStatusUpgradeAndDrift(t *testing.T) {
-	plan := sdd.PlanMedium
+	plan := modelplan.PlanMedium
 	v16, err := renderActiveV16("v0.0.0", plan)
 	require(t, err == nil)
 	for name, mutate := range map[string]func(*Package){
 		"exact":    func(*Package) {},
 		"one-byte": func(pkg *Package) { pkg.Artifacts[0].Bytes = append(pkg.Artifacts[0].Bytes, '\n') },
 		"mixed": func(pkg *Package) {
-			current, renderErr := renderActiveV16("v0.0.0", sdd.PlanUltra)
+			current, renderErr := renderActiveV16("v0.0.0", modelplan.PlanUltra)
 			require(t, renderErr == nil)
 			for index := range pkg.Artifacts {
 				if pkg.Artifacts[index].Path == "agents/general.toml" {
@@ -148,8 +148,8 @@ func TestActiveV16LifecycleStatusUpgradeAndDrift(t *testing.T) {
 	}
 }
 
-func planIndex(plan sdd.Plan) int {
-	for index, candidate := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+func planIndex(plan modelplan.Plan) int {
+	for index, candidate := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
 		if plan == candidate {
 			return index
 		}
@@ -159,7 +159,7 @@ func planIndex(plan sdd.Plan) int {
 
 func TestActiveV12LifecycleStatusReinstallAndProtection(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
-	plan := sdd.PlanMedium
+	plan := modelplan.PlanMedium
 	v12, err := renderActiveV12("v0.0.0", plan)
 	require(t, err == nil)
 	writePackage(t, root, v12)
@@ -195,7 +195,7 @@ func TestActiveV12LifecycleStatusReinstallAndProtection(t *testing.T) {
 
 func TestExactPredecessorIsUpgradeableButNotReportedInstalled(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
-	predecessor, err := renderActiveV12("v0.0.0", sdd.PlanMedium)
+	predecessor, err := renderActiveV12("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
 	writePackage(t, root, predecessor)
 
@@ -203,14 +203,14 @@ func TestExactPredecessorIsUpgradeableButNotReportedInstalled(t *testing.T) {
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
 	require(t, err == nil && status.State == integration.StatePartial && status.RestartRequired)
 
-	upgraded, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium})
-	current, currentErr := RenderPlan("v0.0.0", sdd.PlanMedium)
+	upgraded, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium})
+	current, currentErr := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil && currentErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && upgraded.ArtifactSHA256 == current.SHA256)
 }
 
 func TestIntegrationRecoveryRecognizesActiveV12Sidecar(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
-	plan := sdd.PlanMedium
+	plan := modelplan.PlanMedium
 	v12, err := renderActiveV12("v0.0.0", plan)
 	require(t, err == nil && os.MkdirAll(root, 0o700) == nil)
 	sentinel := []byte("unrelated recovery sentinel\n")
@@ -233,9 +233,9 @@ func TestIntegrationRecoveryRecognizesActiveV12Sidecar(t *testing.T) {
 }
 
 func TestPartialCandidateCollapseRejectsV12Conflict(t *testing.T) {
-	current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
-	v12, err := renderActiveV12("v0.0.0", sdd.PlanMedium)
+	v12, err := renderActiveV12("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
 	partial := func(pkg Package) partialCandidate {
 		state := inspection{result: integration.Result{State: integration.StatePartial}, artifacts: make([]inspectedArtifact, len(pkg.Artifacts))}
@@ -250,7 +250,7 @@ func TestPartialCandidateCollapseRejectsV12Conflict(t *testing.T) {
 }
 
 func TestActiveV8LifecycleStatusUpgradeUninstallAndDrift(t *testing.T) {
-	plan := sdd.PlanMedium
+	plan := modelplan.PlanMedium
 	v8, err := renderActiveV8("v0.0.0", plan)
 	require(t, err == nil)
 	for _, test := range []struct {
@@ -291,23 +291,23 @@ func TestActiveV8LifecycleStatusUpgradeUninstallAndDrift(t *testing.T) {
 func TestIntegrationReinstallsCurrentAndV7WhenManagerArtifactIsMissing(t *testing.T) {
 	for _, test := range []struct {
 		name string
-		pkg  func(string, sdd.Plan) (Package, error)
+		pkg  func(string, modelplan.Plan) (Package, error)
 	}{
 		{name: "current", pkg: RenderPlan},
 		{name: "v7", pkg: renderActiveV7},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "codex")
-			pkg, err := test.pkg("v0.0.0", sdd.PlanMedium)
+			pkg, err := test.pkg("v0.0.0", modelplan.PlanMedium)
 			require(t, err == nil)
 			writePackage(t, root, pkg)
 			require(t, os.Remove(filepath.Join(root, "AGENTS.md")) == nil)
 
-			result, err := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium})
+			result, err := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium})
 			if err != nil || result.State != integration.StateInstalled || !result.Changed {
 				t.Fatalf("Reinstall(%s missing AGENTS.md) = %+v, %v", test.name, result, err)
 			}
-			current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+			current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 			require(t, err == nil)
 			body, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
 			if err != nil || !bytes.Equal(body, artifact(t, current, "AGENTS.md").Bytes) {
@@ -318,9 +318,9 @@ func TestIntegrationReinstallsCurrentAndV7WhenManagerArtifactIsMissing(t *testin
 }
 
 func TestPartialCandidateCollapseRejectsConflictingPresentBytes(t *testing.T) {
-	current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
-	v7, err := renderActiveV7("v0.0.0", sdd.PlanMedium)
+	v7, err := renderActiveV7("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
 	partial := func(pkg Package) partialCandidate {
 		state := inspection{result: integration.Result{State: integration.StatePartial}, artifacts: make([]inspectedArtifact, len(pkg.Artifacts))}
@@ -337,20 +337,20 @@ func TestPartialCandidateCollapseRejectsConflictingPresentBytes(t *testing.T) {
 func TestIntegrationReinstallSwitchesAndPersistsModelPlan(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()
-	medium := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium}
+	medium := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium}
 	installed, err := service.Install(context.Background(), medium)
-	require(t, err == nil && installed.ModelPlan == sdd.PlanMedium)
+	require(t, err == nil && installed.ModelPlan == modelplan.PlanMedium)
 
-	ultra := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra}
+	ultra := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra}
 	switched, err := service.Reinstall(context.Background(), ultra)
-	require(t, err == nil && switched.State == integration.StateInstalled && switched.Changed && switched.ModelPlan == sdd.PlanUltra)
+	require(t, err == nil && switched.State == integration.StateInstalled && switched.Changed && switched.ModelPlan == modelplan.PlanUltra)
 	general, err := os.ReadFile(filepath.Join(root, "agents", "general.toml"))
 	require(t, err == nil && strings.Contains(string(general), `model = "gpt-5.6-sol"`) && strings.Contains(string(general), `model_reasoning_effort = "high"`))
 	retained, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root})
-	require(t, err == nil && retained.State == integration.StateInstalled && !retained.Changed && retained.ModelPlan == sdd.PlanUltra)
+	require(t, err == nil && retained.State == integration.StateInstalled && !retained.Changed && retained.ModelPlan == modelplan.PlanUltra)
 
 	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
-	require(t, err == nil && status.State == integration.StateInstalled && status.ModelPlan == sdd.PlanUltra)
+	require(t, err == nil && status.State == integration.StateInstalled && status.ModelPlan == modelplan.PlanUltra)
 	removed, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
 	require(t, err == nil && removed.State == integration.StateAbsent && removed.Changed)
 }
@@ -358,23 +358,23 @@ func TestIntegrationReinstallSwitchesAndPersistsModelPlan(t *testing.T) {
 func TestIntegrationPreviewReportsRequestedUltraPlan(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()
-	medium := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium}
+	medium := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium}
 	mustInstall(t, service, medium)
 
-	preview, err := service.Preview(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra})
-	require(t, err == nil && preview.State == integration.StatePartial && preview.Changed && preview.RestartRequired && preview.ModelPlan == sdd.PlanUltra)
+	preview, err := service.Preview(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra})
+	require(t, err == nil && preview.State == integration.StatePartial && preview.Changed && preview.RestartRequired && preview.ModelPlan == modelplan.PlanUltra)
 }
 
 func TestIntegrationPreviewPartialExplicitPlanUsesDesiredPackageIdentity(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()
-	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium})
+	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium})
 	require(t, os.Remove(filepath.Join(root, "agents", "general.toml")) == nil)
-	want, err := RenderPlan("v0.0.0", sdd.PlanUltra)
+	want, err := RenderPlan("v0.0.0", modelplan.PlanUltra)
 	require(t, err == nil)
 
-	preview, err := service.Preview(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra})
-	if err != nil || preview.State != integration.StatePartial || !preview.Changed || !preview.RestartRequired || preview.ArtifactSHA256 != want.SHA256 || preview.ArtifactCount != len(want.Artifacts) || preview.ModelPlan != sdd.PlanUltra || preview.ModelProvider == "" {
+	preview, err := service.Preview(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra})
+	if err != nil || preview.State != integration.StatePartial || !preview.Changed || !preview.RestartRequired || preview.ArtifactSHA256 != want.SHA256 || preview.ArtifactCount != len(want.Artifacts) || preview.ModelPlan != modelplan.PlanUltra || preview.ModelProvider == "" {
 		t.Fatalf("Preview(partial requested ultra) = %+v, %v", preview, err)
 	}
 }
@@ -384,8 +384,8 @@ func TestIntegrationRejectsModelSlotCustomizationBeforeWriting(t *testing.T) {
 	for _, options := range []integration.Options{
 		{ConfigDir: root, ModelEfficient: "openai/custom-fast", ModelBalanced: "openai/custom-balanced", ModelFrontier: "openai/custom-frontier"},
 		{ConfigDir: root, ModelEfficient: "openai/custom-fast", ModelBalanced: "anthropic/custom-balanced", ModelFrontier: "acme/custom-frontier"},
-		{ConfigDir: root, ModelEfficientEffort: sdd.EffortHigh, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortHigh},
-		{ConfigDir: root, ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra},
+		{ConfigDir: root, ModelEfficientEffort: modelplan.EffortHigh, ModelBalancedEffort: modelplan.EffortHigh, ModelFrontierEffort: modelplan.EffortHigh},
+		{ConfigDir: root, ModelEfficientEffort: modelplan.EffortLow, ModelBalancedEffort: modelplan.EffortHigh, ModelFrontierEffort: modelplan.EffortUltra},
 	} {
 		for name, call := range map[string]func(context.Context, integration.Options) (integration.Result, error){
 			"preview": NewIntegration().Preview, "status": NewIntegration().Status, "install": NewIntegration().Install, "reinstall": NewIntegration().Reinstall, "uninstall": NewIntegration().Uninstall,
@@ -404,16 +404,16 @@ func TestIntegrationRejectsModelSlotCustomizationBeforeWriting(t *testing.T) {
 func TestIntegrationStatusReportsRequestedUltraMismatch(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()
-	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: sdd.PlanLow})
+	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanLow})
 
-	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra})
-	if err != nil || status.State != integration.StatePartial || !status.Changed || !status.RestartRequired || status.ModelPlan != sdd.PlanUltra {
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra})
+	if err != nil || status.State != integration.StatePartial || !status.Changed || !status.RestartRequired || status.ModelPlan != modelplan.PlanUltra {
 		t.Fatalf("Status(requested ultra) = %+v, %v; want changed partial ultra", status, err)
 	}
 }
 
 func TestIntegrationNoOptionStatusAndReinstallPreserveExactPartialPlan(t *testing.T) {
-	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanHigh, sdd.PlanUltra} {
+	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanHigh, modelplan.PlanUltra} {
 		t.Run(string(plan), func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "codex")
 			service := NewIntegration()
@@ -435,15 +435,15 @@ func TestIntegrationNoOptionStatusAndReinstallPreserveExactPartialPlan(t *testin
 
 func TestIntegrationRecoversSharedRemoveSidecarWithExplicitPlan(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
-	options := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra}
-	pkg, err := RenderPlan("v0.0.0", sdd.PlanUltra)
+	options := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra}
+	pkg, err := RenderPlan("v0.0.0", modelplan.PlanUltra)
 	require(t, err == nil)
 	require(t, os.MkdirAll(root, 0o700) == nil)
 	require(t, os.WriteFile(filepath.Join(root, ".vgxness-pending"), []byte("codex-pending\n"), 0o600) == nil)
 	require(t, os.WriteFile(filepath.Join(root, "AGENTS.md.vgxness-remove"), artifact(t, pkg, "AGENTS.md").Bytes, 0o600) == nil)
 
 	result, err := NewIntegration().Reinstall(context.Background(), options)
-	if err != nil || result.State != integration.StateInstalled || !result.Changed || result.ModelPlan != sdd.PlanUltra {
+	if err != nil || result.State != integration.StateInstalled || !result.Changed || result.ModelPlan != modelplan.PlanUltra {
 		t.Fatalf("Reinstall(shared remove sidecar) = %+v, %v; want changed installed ultra", result, err)
 	}
 	assertNoEvidence(t, root)
@@ -452,12 +452,12 @@ func TestIntegrationRecoversSharedRemoveSidecarWithExplicitPlan(t *testing.T) {
 func TestIntegrationReinstallAbsentInstallsExplicitRequestedPlan(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()
-	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: sdd.PlanLow})
-	_, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanLow})
+	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanLow})
+	_, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanLow})
 	require(t, err == nil)
 
-	result, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra})
-	if err != nil || result.State != integration.StateInstalled || !result.Changed || result.ModelPlan != sdd.PlanUltra {
+	result, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra})
+	if err != nil || result.State != integration.StateInstalled || !result.Changed || result.ModelPlan != modelplan.PlanUltra {
 		t.Fatalf("Reinstall(absent requested ultra) = %+v, %v; want changed installed ultra", result, err)
 	}
 }
@@ -468,9 +468,9 @@ func TestIntegrationReinstallMigratesLegacyStaticPackage(t *testing.T) {
 	require(t, err == nil)
 	writePackage(t, root, legacy)
 
-	high := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanHigh}
+	high := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanHigh}
 	result, err := NewIntegration().Reinstall(context.Background(), high)
-	require(t, err == nil && result.State == integration.StateInstalled && result.Changed && result.ModelPlan == sdd.PlanHigh)
+	require(t, err == nil && result.State == integration.StateInstalled && result.Changed && result.ModelPlan == modelplan.PlanHigh)
 	general, err := os.ReadFile(filepath.Join(root, "agents", "general.toml"))
 	require(t, err == nil && strings.Contains(string(general), `model = "gpt-5.6-sol"`) && strings.Contains(string(general), `model_reasoning_effort = "high"`))
 }
@@ -480,19 +480,19 @@ func TestIntegrationReinstallsOnlyCompletePreConsolidationV4Package(t *testing.T
 		"exact":   func(pkg *Package) {},
 		"mutated": func(pkg *Package) { pkg.Artifacts[1].Bytes[0] ^= 1 },
 		"mixed": func(pkg *Package) {
-			current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+			current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 			require(t, err == nil)
 			pkg.Artifacts[0] = current.Artifacts[0]
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "codex")
-			pkg, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+			pkg, err := renderPreConsolidationV4("v0.0.0", modelplan.PlanMedium)
 			require(t, err == nil)
 			mutate(&pkg)
 			before := append([]byte(nil), pkg.Artifacts[1].Bytes...)
 			writePackage(t, root, pkg)
-			result, reinstallErr := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium})
+			result, reinstallErr := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium})
 			if name == "exact" {
 				require(t, reinstallErr == nil && result.State == integration.StateInstalled && result.Changed)
 				return
@@ -506,10 +506,10 @@ func TestIntegrationReinstallsOnlyCompletePreConsolidationV4Package(t *testing.T
 func TestIntegrationPlanSwitchBlocksUnknownDrift(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()
-	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: sdd.PlanLow})
+	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanLow})
 	require(t, os.WriteFile(filepath.Join(root, "agents", "general.toml"), []byte("user change\n"), 0o600) == nil)
 
-	_, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra})
+	_, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra})
 	require(t, errors.Is(err, integration.ErrDrift))
 	body, readErr := os.ReadFile(filepath.Join(root, "agents", "general.toml"))
 	require(t, readErr == nil && string(body) == "user change\n")
@@ -518,13 +518,13 @@ func TestIntegrationPlanSwitchBlocksUnknownDrift(t *testing.T) {
 func TestIntegrationRecoveryUsesInstalledPlanForSharedSidecar(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()
-	low := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanLow}
+	low := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanLow}
 	mustInstall(t, service, low)
 	require(t, os.WriteFile(filepath.Join(root, ".vgxness-pending"), []byte("codex-pending\n"), 0o600) == nil)
 	require(t, os.Link(filepath.Join(root, "AGENTS.md"), filepath.Join(root, "AGENTS.md.vgxness-stage")) == nil)
 
-	result, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra})
-	if err != nil || result.State != integration.StateInstalled || result.ModelPlan != sdd.PlanLow {
+	result, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra})
+	if err != nil || result.State != integration.StateInstalled || result.ModelPlan != modelplan.PlanLow {
 		t.Fatalf("recovery result = %+v, err = %v", result, err)
 	}
 	assertNoEvidence(t, root)
@@ -759,9 +759,9 @@ func TestActivationRecoveryReconcilesHistoricalCodexHookSidecarWithoutPendingMar
 
 func TestActivationRecoveryRejectsPendingPackageMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex")
-	a, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	a, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
-	b, err := RenderPlan("v0.0.0", sdd.PlanUltra)
+	b, err := RenderPlan("v0.0.0", modelplan.PlanUltra)
 	require(t, err == nil && a.SHA256 != b.SHA256)
 	writePackage(t, path, a)
 	sidecar := filepath.Join(path, "plugins", "vgxness", "hooks.json.vgxness-remove")
@@ -789,7 +789,7 @@ func TestActivationRecoveryRejectsPendingPackageMismatch(t *testing.T) {
 
 func TestActivationRecoveryRejectsLegacyPendingPackageMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex")
-	a, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	a, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
 	b, sidecar := uniqueLegacyRecoverySidecar(t, a)
 	writePackage(t, path, a)
@@ -862,7 +862,7 @@ func TestActivationRecoveryReportsSuccessfulCLIMutations(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "codex")
-			pkg, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+			pkg, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 			require(t, err == nil)
 			writePackage(t, path, pkg)
 			writeActivationPending(t, path, pkg, "activate")
@@ -879,7 +879,7 @@ func TestActivationRecoveryReportsSuccessfulCLIMutations(t *testing.T) {
 
 func TestActivationRecoveryFailureDoesNotReportReconciliation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex")
-	pkg, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	pkg, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
 	writePackage(t, path, pkg)
 	writeActivationPending(t, path, pkg, "activate")
@@ -1057,7 +1057,7 @@ func TestReinstallProtectedBindsOrPreservesMissingRoot(t *testing.T) {
 			info, err := sourceRootIdentity(root)
 			require(t, err == nil)
 			test.mutate(t, root)
-			_, err = NewIntegration().ReinstallProtected(context.Background(), integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium}, sourceIdentity{info: info})
+			_, err = NewIntegration().ReinstallProtected(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium}, sourceIdentity{info: info})
 			require(t, errors.Is(err, test.want))
 			if test.name == "missing" {
 				_, err = os.Stat(root)
@@ -1245,7 +1245,7 @@ func TestUninstallCleanupFailureReinstalls(t *testing.T) {
 }
 func TestReactivationKeepsDeactivateEvidenceUntilVerified(t *testing.T) {
 	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
-	pkg, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	pkg, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	require(t, err == nil)
 	writePackage(t, options.ConfigDir, pkg)
 	root, err := OpenRoot(context.Background(), options, false)

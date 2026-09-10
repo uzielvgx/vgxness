@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"os"
 	"strconv"
 	"strings"
@@ -54,7 +54,7 @@ func TestExactManager19Predecessors(t *testing.T) {
 		t.Fatal(e)
 	}
 	for name, want := range golden {
-		p, e := renderActiveV19("v0.0.0", sdd.Plan(name))
+		p, e := renderActiveV19("v0.0.0", modelplan.Plan(name))
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -79,7 +79,7 @@ func TestExactManager19Predecessors(t *testing.T) {
 		if !found {
 			t.Error("complete predecessor unrecognized")
 		}
-		current, e := RenderPlan("v0.0.0", sdd.Plan(name))
+		current, e := RenderPlan("v0.0.0", modelplan.Plan(name))
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -141,7 +141,7 @@ func TestCurrentCodexKeepsNativeProfileBindings(t *testing.T) {
 		}
 		return strings.Join(out, "\n")
 	}
-	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
 		current, e := RenderPlan("v0.0.0", plan)
 		if e != nil {
 			t.Fatal(e)

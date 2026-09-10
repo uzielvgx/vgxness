@@ -43,7 +43,6 @@ type Route string
 
 const (
 	RouteDirect  Route = "direct"
-	RouteSDD     Route = "sdd"
 	RouteGeneral Route = "general"
 	RouteExplore Route = "explore"
 )
@@ -52,15 +51,12 @@ const (
 type Request struct {
 	Repository     bool
 	ExactLocalRead bool
-	SDDAccepted    bool
 	Implementation bool
 }
 
 // RouteFor evaluates predicates in their canonical order.
 func RouteFor(request Request) Route {
 	switch {
-	case request.SDDAccepted:
-		return RouteSDD
 	case request.Implementation:
 		return RouteGeneral
 	case !request.Repository || request.ExactLocalRead:

@@ -539,7 +539,12 @@ func verifyPiTarball(path string) error {
 	if _, ok := entries["package/resources/prompts/manager.md"]; !ok {
 		return errors.New("main package lacks prompt resources")
 	}
-	if _, ok := entries["package/resources/skills/sdd-lifecycle/SKILL.md"]; !ok {
+	for _, retired := range []string{"package/resources/skills/sdd-lifecycle/SKILL.md", "package/src/tools/sdd.ts", "package/src/service/sdd.ts"} {
+		if _, ok := entries[retired]; ok {
+			return errors.New("Pi package contains retired lifecycle runtime")
+		}
+	}
+	if _, ok := entries["package/resources/skills/memory-sync/SKILL.md"]; !ok {
 		return errors.New("main package lacks skill fallback")
 	}
 	return nil

@@ -15,7 +15,7 @@ import (
 	"sort"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 const maxArtifactBytes = 512 << 10
@@ -101,14 +101,14 @@ func codexPackage(options integration.Options) (Package, error) {
 	}
 	plan := options.ModelPlan
 	if plan == "" {
-		plan = sdd.PlanMedium
+		plan = modelplan.PlanMedium
 	}
 	return RenderPlan("v0.0.0", plan)
 }
 
 func knownPackages() ([]Package, error) {
 	packages := make([]Package, 0, 50)
-	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
 		if err != nil {
 			return nil, err
@@ -185,7 +185,7 @@ func knownPackages() ([]Package, error) {
 		}
 		packages = append(packages, v6)
 	}
-	preConsolidation, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+	preConsolidation, err := renderPreConsolidationV4("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		return nil, err
 	}
@@ -203,10 +203,10 @@ func resultFor(root string, pkg Package) integration.Result {
 	if runtime.GOOS == "windows" {
 		durability = "file-sync-namespace-best-effort"
 	}
-	config := sdd.DefaultModelPlanConfig()
+	config := modelplan.DefaultModelPlanConfig()
 	plan := pkg.plan
 	if pkg.legacy {
-		plan = sdd.PlanMedium
+		plan = modelplan.PlanMedium
 	}
 	return integration.Result{
 		Provider: "codex", Path: root, ArtifactSHA256: pkg.SHA256, ArtifactCount: len(pkg.Artifacts), DirectoryDurability: durability,

@@ -3,11 +3,11 @@ package codex
 import (
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 // Manager19 is frozen exclusively for complete-package predecessor recognition.
-func renderActiveV19(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV19(version string, plan modelplan.Plan) (Package, error) {
 	selected, e := profilesForPlan(plan)
 	if e != nil {
 		return Package{}, e
@@ -30,7 +30,7 @@ func previousV20ManagerInstructions() string {
 	c := orchestration.PreviousManagerContract()
 	return "<!-- managed-by: vgxness; artifact: codex-agent/manager; version: 20; parity: opencode-v61 -->\n\n" + c.RenderManagerSections() + "\n# Native Codex adapter\nUse native Codex delegation with the exact configured agent_type matching the canonical role. Use native skills and the configured VGXNESS MCP memory/SDD tools. Native sandbox and tool permissions remain authoritative; missing tools or authentication are unavailable dependencies. Never treat native capability as user authorization.\nContract identity: " + c.Identity + "; content SHA256: " + orchestration.PreviousManagerContractDigest() + "\n"
 }
-func profilesFromContract(plan sdd.Plan, c orchestration.ManagerContract) ([]profile, error) {
+func profilesFromContract(plan modelplan.Plan, c orchestration.ManagerContract) ([]profile, error) {
 	selected, e := profilesForPlan(plan)
 	if e != nil {
 		return nil, e
@@ -56,7 +56,7 @@ func profilesFromContract(plan sdd.Plan, c orchestration.ManagerContract) ([]pro
 	return selected, nil
 }
 
-func sharedProfilesForPlan(plan sdd.Plan) ([]profile, error) {
+func sharedProfilesForPlan(plan modelplan.Plan) ([]profile, error) {
 	c, e := orchestration.LoadManagerContract()
 	if e != nil {
 		return nil, e
@@ -70,7 +70,7 @@ func activeManagerInstructions() string {
 	}
 	return "<!-- managed-by: vgxness; artifact: codex-agent/manager; version: 21; parity: opencode-v62 -->\n\n" + c.RenderManagerSections() + "\n# Native Codex adapter\nUse native delegation with the exact configured agent_type matching the canonical role. Use native skills and configured VGXNESS MCP memory tools. Native sandbox and tool permissions remain authoritative. Missing tools or authentication are unavailable dependencies; capabilities never grant authorization.\nContract identity: " + c.Identity + "; content SHA256: " + orchestration.ManagerContractDigest() + "\n"
 }
-func renderActiveV20(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV20(version string, plan modelplan.Plan) (Package, error) {
 	profiles, e := profilesFromContract(plan, orchestration.PreviousManagerContract())
 	if e != nil {
 		return Package{}, e

@@ -9,7 +9,7 @@ import (
 )
 
 func TestRetireSDDSkillPreservesModifiedBytes(t *testing.T) {
-	files, err := bundledFiles("sdd-lifecycle")
+	fixture, err := os.ReadFile("testdata/retired-lifecycle.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -17,7 +17,7 @@ func TestRetireSDDSkillPreservesModifiedBytes(t *testing.T) {
 		t.Run(map[bool]string{false: "exact", true: "modified"}[modified], func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "skills")
 			path := filepath.Join(root, "sdd-lifecycle", "SKILL.md")
-			data := append([]byte(nil), files["SKILL.md"]...)
+			data := append([]byte(nil), fixture...)
 			if modified {
 				data = append(data, '\n')
 			}

@@ -1,4 +1,4 @@
-package sdd
+package modelplan
 
 import "fmt"
 

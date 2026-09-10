@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultSetupPlan          = "medium"
-	SetupModelAssignmentCount = 13
+	SetupModelAssignmentCount = 7
 	setupDiscoveryDisclaimer  = "Local discovery proves identifier presence only; not authorization or support."
 )
 
@@ -117,12 +117,6 @@ var setupAgentRows = [SetupModelAssignmentCount]setupAgentIdentity{
 	{"agents/vgxness-care-reviewer.md", "CARE reviewer", "review", "review"},
 	{"agents/vgxness-care-specialist.md", "CARE specialist", "review", "review"},
 	{"agents/vgxness-care-challenger.md", "CARE challenger", "review", "review"},
-	{"agents/vgxness-sdd-research.md", "sdd-research", "research", "sdd"},
-	{"agents/vgxness-sdd-proposal.md", "sdd-proposal", "proposal", "sdd"},
-	{"agents/vgxness-sdd-spec.md", "sdd-spec", "spec", "sdd"},
-	{"agents/vgxness-sdd-design.md", "sdd-design", "design", "sdd"},
-	{"agents/vgxness-sdd-tasks.md", "sdd-tasks", "tasks", "sdd"},
-	{"agents/vgxness-sdd-apply.md", "sdd-apply", "apply", "sdd"},
 }
 
 type SetupStep struct {
@@ -1580,7 +1574,7 @@ func (m Model) modelAssignmentLines() []string {
 	if m.wide() {
 		return m.wideModelAssignmentLines()
 	}
-	lines := []string{"AGENT ASSIGNMENT MATRIX · 13 agents", "agent                  class/role          provider/model · variant"}
+	lines := []string{"AGENT ASSIGNMENT MATRIX · 7 agents", "agent                  class/role          provider/model · variant"}
 	for index, identity := range setupAgentRows {
 		marker := " "
 		if index == m.setupModelSlot {

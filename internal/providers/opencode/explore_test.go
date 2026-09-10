@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -25,10 +25,10 @@ func managerFrontmatter(t *testing.T, prompt string) string {
 }
 
 func TestManagedExploreAgentIsCodeGraphFirstAndStrictlyReadOnly(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
-	assignment := bundle.resolved.Roles[sdd.RoleResearch]
+	assignment := bundle.resolved.Roles[modelplan.RoleResearch]
 	prompt, ok := bundle.agents["explore.md"]
 	if !ok {
 		t.Fatal("managed explore override is missing")
@@ -62,7 +62,7 @@ permission:
 }
 
 func TestManagedExploreAgentEchoesAndValidatesContextDigest(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[exploreAgentName])
@@ -81,7 +81,7 @@ func TestManagedExploreAgentEchoesAndValidatesContextDigest(t *testing.T) {
 }
 
 func TestSDDResearchBootstrapContractKeepsDownstreamPredecessorsBound(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 
@@ -97,11 +97,11 @@ func TestSDDResearchBootstrapContractKeepsDownstreamPredecessorsBound(t *testing
 		}
 	}
 
-	for role, name := range map[sdd.Role]string{
-		sdd.RoleProposal: sddProposalName,
-		sdd.RoleSpec:     sddSpecName,
-		sdd.RoleDesign:   sddDesignName,
-		sdd.RoleTasks:    sddTasksName,
+	for role, name := range map[modelplan.Role]string{
+		modelplan.RoleProposal: sddProposalName,
+		modelplan.RoleSpec:     sddSpecName,
+		modelplan.RoleDesign:   sddDesignName,
+		modelplan.RoleTasks:    sddTasksName,
 	} {
 		prompt := string(bundle.agents[name])
 		for _, contract := range []string{
@@ -116,7 +116,7 @@ func TestSDDResearchBootstrapContractKeepsDownstreamPredecessorsBound(t *testing
 }
 
 func TestSDDApplyAndGeneralFailClosedHashBoundHandoffContract(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	apply, general := string(bundle.agents[sddApplyName]), string(bundle.agents[generalAgentName])
@@ -154,7 +154,7 @@ func previousExploreAgent(t *testing.T, current []byte) []byte {
 
 func completeV1ExploreBundle(t *testing.T) modelPlanBundle {
 	t.Helper()
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	current, err = previousV49ModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -179,7 +179,7 @@ func writeCompleteV1ExploreBundle(t *testing.T, configDirectory string, bundle m
 }
 
 func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	predecessorV3, err := previousSDDModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -188,10 +188,10 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 	}
 	for _, profile := range []struct {
 		name    string
-		role    sdd.Role
+		role    modelplan.Role
 		version int
 	}{
-		{sddResearchName, sdd.RoleResearch, 3}, {sddProposalName, sdd.RoleProposal, 3}, {sddSpecName, sdd.RoleSpec, 3}, {sddDesignName, sdd.RoleDesign, 3}, {sddTasksName, sdd.RoleTasks, 3}, {sddApplyName, sdd.RoleApply, 5},
+		{sddResearchName, modelplan.RoleResearch, 3}, {sddProposalName, modelplan.RoleProposal, 3}, {sddSpecName, modelplan.RoleSpec, 3}, {sddDesignName, modelplan.RoleDesign, 3}, {sddTasksName, modelplan.RoleTasks, 3}, {sddApplyName, modelplan.RoleApply, 5},
 	} {
 		if !strings.Contains(string(predecessorV3.agents[profile.name]), fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", profile.role, profile.version)) {
 			t.Fatalf("v41 %s does not have version %d", profile.name, profile.version)
@@ -219,7 +219,7 @@ func TestPreviousSDDBundleMatchesTrustedDigest(t *testing.T) {
 func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "opencode")
 	service, options := NewIntegration(), integration.Options{ConfigDir: config}
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	broadPredecessor, err := previousBroadPermissionModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -256,9 +256,9 @@ func TestIntegrationSDDPredecessorBundles(t *testing.T) {
 func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "opencode")
 	service, options := NewIntegration(), integration.Options{ConfigDir: config}
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	currentV3, err := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+	currentV3, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 	testutil.NoError(t, err)
 	v49, err := previousV49ModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -297,7 +297,7 @@ func TestIntegrationUpgradesExactManagerPredecessorCombinations(t *testing.T) {
 }
 
 func TestModelPlanBundleForManifestRejectsUnknownManagerPredecessor(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	unknown := append(append([]byte(nil), current.manifest...), ' ')
 	if _, err := modelPlanBundleForManifest(unknown, current.config); !errors.Is(err, integration.ErrDrift) {
@@ -306,7 +306,7 @@ func TestModelPlanBundleForManifestRejectsUnknownManagerPredecessor(t *testing.T
 }
 
 func TestModelPlanBundleForManifestRecognizesAllPredecessorCombinations(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	candidates, err := predecessorBundles(current)
 	testutil.NoError(t, err)
@@ -340,7 +340,7 @@ func TestIntegrationRejectsInvalidSDDPredecessorBundles(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := filepath.Join(t.TempDir(), "opencode")
-			current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+			current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 			testutil.NoError(t, err)
 			bundle, err := previousSDDModelPlanBundle(current)
 			testutil.NoError(t, err)
@@ -366,13 +366,13 @@ func TestIntegrationRejectsInvalidSDDPredecessorBundles(t *testing.T) {
 
 func TestIntegrationRejectsIncompleteSDDPredecessorManifest(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "opencode")
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	agents := map[string][]byte{}
 	for name, content := range current.agents {
 		agents[name] = content
 	}
-	agents[sddResearchName] = previousSDDAgentPredecessor(sdd.RoleResearch, current.agents[sddResearchName])
+	agents[sddResearchName] = previousSDDAgentPredecessor(modelplan.RoleResearch, current.agents[sddResearchName])
 	incomplete, err := encodeModelPlanBundle(current.config, current.resolved, agents)
 	testutil.NoError(t, err)
 	writeCompleteV1ExploreBundle(t, config, current)
@@ -393,7 +393,7 @@ func TestIntegrationUpgradesExactCompleteV1ExploreBundle(t *testing.T) {
 	_, err := service.Install(context.Background(), options)
 	testutil.NoError(t, err)
 
-	candidate, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	candidate, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	predecessor := completeV1ExploreBundle(t)
 	writeCompleteV1ExploreBundle(t, configDirectory, predecessor)

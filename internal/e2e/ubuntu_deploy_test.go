@@ -97,7 +97,7 @@ func TestUbuntuDeployPackageContract(t *testing.T) {
 		"systemctl is-active vgxness-syncd", "%{http_code}", "http://127.0.0.1:8787/v1/sync/capabilities", "systemctl enable --now vgxness-syncd-backup.timer")
 	assertExcludesOutsideSection(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "## Legacy Caddy retirement (upgrade only)", "\n## Backup and restore", "Caddy")
 	makefile, err := os.ReadFile(filepath.Join(repository, "Makefile"))
-	if err != nil || !strings.Contains(string(makefile), "TestCleanCheckoutSetupAndNativeSDD|TestUbuntuDeployPackageContract") {
+	if err != nil || !strings.Contains(string(makefile), "TestCleanCheckoutSetupAndMemory|TestUbuntuDeployPackageContract") {
 		t.Error("Makefile verify target does not select the Ubuntu deployment contract")
 	}
 	if _, err := os.Stat(filepath.Join(repository, "deploy", "ubuntu", "Caddyfile.example")); !errors.Is(err, os.ErrNotExist) {

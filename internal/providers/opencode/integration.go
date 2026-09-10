@@ -21,8 +21,8 @@ import (
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/launcher"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 //go:embed templates/manager.md
@@ -1362,9 +1362,9 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 		result.ModelSchemaVersion = 2
 		result.ModelPlan = plan.configV2.ActivePlan
 		result.ModelProvider = plan.resolvedV2.Provider
-		efficient := plan.configV2.Slots[sdd.CapabilityEfficient]
-		balanced := plan.configV2.Slots[sdd.CapabilityBalanced]
-		frontier := plan.configV2.Slots[sdd.CapabilityFrontier]
+		efficient := plan.configV2.Slots[modelplan.CapabilityEfficient]
+		balanced := plan.configV2.Slots[modelplan.CapabilityBalanced]
+		frontier := plan.configV2.Slots[modelplan.CapabilityFrontier]
 		result.ModelEfficient, result.ModelEfficientEffort, result.ModelEfficientVariant, result.ModelEfficientSource, result.ModelEfficientAvailability = efficient.Reference, efficient.RequestedEffort, efficient.Variant, efficient.Source, efficient.Availability
 		result.ModelBalanced, result.ModelBalancedEffort, result.ModelBalancedVariant, result.ModelBalancedSource, result.ModelBalancedAvailability = balanced.Reference, balanced.RequestedEffort, balanced.Variant, balanced.Source, balanced.Availability
 		result.ModelFrontier, result.ModelFrontierEffort, result.ModelFrontierVariant, result.ModelFrontierSource, result.ModelFrontierAvailability = frontier.Reference, frontier.RequestedEffort, frontier.Variant, frontier.Source, frontier.Availability
@@ -1419,7 +1419,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	if predecessorErr != nil {
 		return inspection{}, predecessorErr
 	}
-	fixedLensV53, fixedLensV53Err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	fixedLensV53, fixedLensV53Err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if fixedLensV53Err != nil {
 		return inspection{}, fixedLensV53Err
 	}
@@ -1527,7 +1527,7 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 			case verifierAgentName:
 				prior = append(prior, verifierV5, verifierV4, previousVerifierPredecessor(verifierV4))
 			default:
-				if identity.Class == sdd.ManagedAgentClassSDD {
+				if identity.Class == modelplan.ManagedAgentClassSDD {
 					prior = [][]byte{previousSDDAgentPredecessor(identity.Role, frozenPlan.agents[name])}
 				}
 			}
@@ -1870,21 +1870,28 @@ func completeHistoricalReviewBundle(configDirectory string, current modelPlanBun
 	return modelPlanBundle{}, false, nil
 }
 
-func resultModelAssignments(resolved []sdd.OpenCodeAgentAssignmentV3) (*[integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3, error) {
+func resultModelAssignments(resolved []modelplan.OpenCodeAgentAssignmentV3) (*[integration.ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3, error) {
+	current := make([]modelplan.OpenCodeAgentAssignmentV3, 0, 7)
+	for _, row := range resolved {
+		if !strings.HasPrefix(row.ArtifactKey, "agents/vgxness-sdd-") {
+			current = append(current, row)
+		}
+	}
+	resolved = current
 	if len(resolved) != integration.ModelAssignmentCount {
 		return nil, fmt.Errorf("%w: resolved OpenCode v3 assignment count", integration.ErrInvalid)
 	}
-	assignments := new([integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3)
+	assignments := new([integration.ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3)
 	copy(assignments[:], resolved)
 	return assignments, nil
 }
 
-func legacyResultModelAssignments(plan modelPlanBundle) (*[integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3, error) {
-	rows := make([]sdd.OpenCodeAgentAssignmentV3, 0, len(modelAgentInventoryV3))
+func legacyResultModelAssignments(plan modelPlanBundle) (*[integration.ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3, error) {
+	rows := make([]modelplan.OpenCodeAgentAssignmentV3, 0, len(modelAgentInventoryV3))
 	for _, identity := range modelAgentInventoryV3 {
-		row := sdd.OpenCodeAgentAssignmentV3{ArtifactKey: identity.ArtifactKey, Role: identity.Role, Class: identity.Class}
+		row := modelplan.OpenCodeAgentAssignmentV3{ArtifactKey: identity.ArtifactKey, Role: identity.Role, Class: identity.Class}
 		if plan.resolvedV2 != nil && plan.configV2 != nil {
-			resolved, err := sdd.ResolveOpenCodePlanV2(*plan.configV2)
+			resolved, err := modelplan.ResolveOpenCodePlanV2(*plan.configV2)
 			if err != nil {
 				return nil, fmt.Errorf("%w: resolve OpenCode v2 model plan", integration.ErrInvalid)
 			}
@@ -1901,7 +1908,7 @@ func legacyResultModelAssignments(plan modelPlanBundle) (*[integration.ModelAssi
 			row.VariantSpecified = slot.VariantSpecified
 			row.Source, row.Availability = slot.Source, slot.Availability
 		} else {
-			resolved, err := sdd.ResolveOpenCodePlan(plan.config)
+			resolved, err := modelplan.ResolveOpenCodePlan(plan.config)
 			if err != nil {
 				return nil, fmt.Errorf("%w: resolve OpenCode v1 model plan", integration.ErrInvalid)
 			}
@@ -1911,7 +1918,7 @@ func legacyResultModelAssignments(plan modelPlanBundle) (*[integration.ModelAssi
 			}
 			row.Provider, row.Model = plan.resolved.Provider, assignment.Model
 			row.RequestedEffort, row.Effort, row.Variant, row.Degradation = assignment.RequestedEffort, assignment.Effort, assignment.Variant, assignment.Degradation
-			row.Source, row.Availability = sdd.ModelSlotCustom, sdd.ModelSlotUnknown
+			row.Source, row.Availability = modelplan.ModelSlotCustom, modelplan.ModelSlotUnknown
 		}
 		rows = append(rows, row)
 	}

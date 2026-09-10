@@ -79,7 +79,7 @@ func TestExplicitMemorySyncJourney(t *testing.T) {
 		journeyRequireStatic(t, err == nil, "project B observation setup failed")
 		run := func(args []string) (int, string, string) {
 			var out, stderr bytes.Buffer
-			code := cli.RunProductSDDRuntime(ctx, args, strings.NewReader(""), &out, &stderr, nil, runtime, nil, nil, nil, nil, nil)
+			code := cli.RunProductRuntime(ctx, args, strings.NewReader(""), &out, &stderr, nil, runtime, nil, nil, nil, nil)
 			journeyRequireSafeOutput(t, out.String()+stderr.String(), journeyBearer(journeyDeviceID), server.URL, root, "A-only-observation", "B-only-observation")
 			return code, out.String(), stderr.String()
 		}

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 // These are deterministic contract-shape checks over generated artifacts. They
@@ -109,7 +109,7 @@ func safeContractPath(value string) bool {
 }
 
 func TestGeneratedReviewAndSDDContractsHaveRoleSpecificClauses(t *testing.T) {
-	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestGeneratedReviewAndSDDContractsHaveRoleSpecificClauses(t *testing.T) {
 }
 
 func TestGeneratedPromptExamplesHaveStructuralContracts(t *testing.T) {
-	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestGeneratedPromptExamplesHaveStructuralContracts(t *testing.T) {
 }
 
 func TestGeneratedManagerGeneralVerifierContractClauses(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestGeneratedManagerGeneralVerifierContractClauses(t *testing.T) {
 }
 
 func TestGeneratedRepositoryChildrenValidateAndEchoContextCapsule(t *testing.T) {
-	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestActiveProfilesRenderOneCanonicalChildContextContract(t *testing.T) {
 }
 
 func TestActiveProfilesUseSmallerContextContractsWithoutLosingInvariants(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestAlteredContextCapsuleWithRepeatedSuppliedDigestIsRejectedByContract(t *
 	if capsuleDigest, externalDigest := altered["contextDigest"], supplied; capsuleDigest != externalDigest {
 		t.Fatal("adversarial setup must repeat one stale supplied digest")
 	}
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,12 +288,12 @@ func TestAlteredContextCapsuleWithRepeatedSuppliedDigestIsRejectedByContract(t *
 }
 
 func TestSDDProfilesRemainContextCapsuleFreeWithExactPredecessors(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	frozen := frozenManagerV60(t, bundle)
-	for name, role := range map[string]sdd.Role{sddResearchName: sdd.RoleResearch, sddProposalName: sdd.RoleProposal, sddSpecName: sdd.RoleSpec, sddDesignName: sdd.RoleDesign, sddTasksName: sdd.RoleTasks, sddApplyName: sdd.RoleApply} {
+	for name, role := range map[string]modelplan.Role{sddResearchName: modelplan.RoleResearch, sddProposalName: modelplan.RoleProposal, sddSpecName: modelplan.RoleSpec, sddDesignName: modelplan.RoleDesign, sddTasksName: modelplan.RoleTasks, sddApplyName: modelplan.RoleApply} {
 		current := frozen.agents[name]
 		if bytes.Contains(current, []byte("Context Capsule v1")) {
 			t.Errorf("%s current identity gained Context Capsule bytes", name)
@@ -459,7 +459,7 @@ func hasContractSymlink(root, relative string) bool {
 }
 
 func TestGeneratedPermissionMapsAndHoldoutMetadataLeakage(t *testing.T) {
-	bundle, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}

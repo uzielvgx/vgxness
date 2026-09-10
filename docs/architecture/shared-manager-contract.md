@@ -53,14 +53,14 @@ charge of local artifacts; no replacement installer framework was added.
 
 Pi uses native SDK/RPC workers and host-provided model authentication. Windows
 worker process ownership and worker continuation remain unsupported. Codex and
-OpenCode retain their native delegation and configured memory/SDD transports;
+OpenCode retain their native delegation and configured memory transports;
 the adapter does not imply that one host implements another host's features.
 
 ## Evidence and limits
 
 The development corpus `internal/orchestration/testdata/manager-scenarios.json`
 covers direct answers, research, implementation, skill selection/absence/drift,
-SDD acceptance, frozen verification, unauthorized delivery, memory closure and
+retired SDD rejection, frozen verification, unauthorized delivery, memory closure and
 unsupported capabilities. Go and Pi tests assert those declared obligations in
 actual native projections. Separate executable Pi tests exercise tool schemas,
 skill snapshots, complete worker mission prompts, SDK/RPC and startup hooks.
@@ -76,4 +76,4 @@ Tests creating private install roots need a restrictive process umask (for
 example 077); a group-writable temporary root is correctly rejected by the
 existing installer. Do not weaken artifact ownership checks to accommodate it.
 
-SDD is retired. Exact Manager20/61 packages are retained for owned-file upgrade recognition. The frozen previous registry is not used to authorize current workers. Database records and schema migrations remain intact; archival CLI reads do not resume lifecycle execution.
+SDD is retired. Exact Manager20/61 packages are retained for owned-file upgrade recognition. The frozen previous registry is not used to authorize current workers. Historical database records and published schema migrations remain intact. There is no SDD runtime, transport, or archive CLI command.

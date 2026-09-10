@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -17,7 +17,7 @@ description: Use when autonomously delivering an eligible change as one review-r
 ---`
 
 func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	if len(bundle.agents) != 7 || len(bundle.resolved.Roles) != 12 {
 		t.Fatalf("current bundle agents=%d roles=%d", len(bundle.agents), len(bundle.resolved.Roles))
@@ -59,7 +59,7 @@ func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testi
 }
 
 func TestVersionEvolutionImmediatePredecessorIsExactManagerV60Package(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
@@ -106,7 +106,7 @@ func TestCurrentManagerAnchorValidationRejectsAbsentAndDuplicateAnchors(t *testi
 }
 
 func TestV54PreservesV53ThenV51ReliabilityPredecessorsAndSkillReceipts(t *testing.T) {
-	historical := mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
+	historical := mustLegacyV1Bundle(t, modelplan.DefaultModelPlanConfig())
 	if !bytes.Contains(historical.agents[reviewReliabilityName], []byte("artifact: opencode-agent/vgxness-review-reliability; version: 5")) {
 		t.Fatal("current reliability identity is not v5")
 	}
@@ -126,7 +126,7 @@ func TestV54PreservesV53ThenV51ReliabilityPredecessorsAndSkillReceipts(t *testin
 
 func TestV54UsesCompactProtocolAndReconstructsCompleteV45Bundle(t *testing.T) {
 
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	current = frozenManagerV60(t, current)
 	historical := mustLegacyFixedLensBundle(t, current)
@@ -186,15 +186,15 @@ func TestCurrentAndPredecessorProfileSnapshotsHaveFixedDigestsAndExactBoundShape
 	for _, tc := range []struct {
 		name, digest string
 		base         string
-		role         sdd.Role
+		role         modelplan.Role
 	}{
-		{"general", "17575c70cb52c372cd4e4bb469ee2e20f8b94bc32a3091df8120900f736e7a41", previousGeneralPromptV2, sdd.RoleImplementation},
-		{"verifier", "c42af55db5a0da34d31f02367e303f14d77ea6a6cd36b56bf19559e293136b7f", previousVerifierPromptV2, sdd.RoleVerification},
-		{"risk", "3499480ccd1c3d22e6aeae180898175bfedd50cd10c14703300b0648318e8ef7", previousReviewRiskPromptV2, sdd.RoleRisk},
-		{"readability", "81cd2ed7d7487f74e561c43e14c02033a380553c5a05cb28f65c2b2d304a18bf", previousReviewReadabilityPromptV2, sdd.RoleReadability},
-		{"reliability", "69d3293a7eaeccc02d27b38053d1fad54c5d316aec4fe5d0816f9d3719e51d5b", previousReviewReliabilityPromptV2, sdd.RoleReliability},
-		{"resilience", "36b431d4bb055a1cbc83d93a637c2a136cc4e256383c1933d0934666c3158e40", previousReviewResiliencePromptV2, sdd.RoleResilience},
-		{"refuter", "da8cb44eea50019ee84b439054254a98ab2077022e3998c5ac50db3a78c5c81f", previousReviewRefuterPromptV2, sdd.RoleRefuter},
+		{"general", "17575c70cb52c372cd4e4bb469ee2e20f8b94bc32a3091df8120900f736e7a41", previousGeneralPromptV2, modelplan.RoleImplementation},
+		{"verifier", "c42af55db5a0da34d31f02367e303f14d77ea6a6cd36b56bf19559e293136b7f", previousVerifierPromptV2, modelplan.RoleVerification},
+		{"risk", "3499480ccd1c3d22e6aeae180898175bfedd50cd10c14703300b0648318e8ef7", previousReviewRiskPromptV2, modelplan.RoleRisk},
+		{"readability", "81cd2ed7d7487f74e561c43e14c02033a380553c5a05cb28f65c2b2d304a18bf", previousReviewReadabilityPromptV2, modelplan.RoleReadability},
+		{"reliability", "69d3293a7eaeccc02d27b38053d1fad54c5d316aec4fe5d0816f9d3719e51d5b", previousReviewReliabilityPromptV2, modelplan.RoleReliability},
+		{"resilience", "36b431d4bb055a1cbc83d93a637c2a136cc4e256383c1933d0934666c3158e40", previousReviewResiliencePromptV2, modelplan.RoleResilience},
+		{"refuter", "da8cb44eea50019ee84b439054254a98ab2077022e3998c5ac50db3a78c5c81f", previousReviewRefuterPromptV2, modelplan.RoleRefuter},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := artifactSHA256([]byte(tc.base)); got != tc.digest {
@@ -205,7 +205,7 @@ func TestCurrentAndPredecessorProfileSnapshotsHaveFixedDigestsAndExactBoundShape
 			}
 		})
 	}
-	historical := mustLegacyV1Bundle(t, sdd.DefaultModelPlanConfig())
+	historical := mustLegacyV1Bundle(t, modelplan.DefaultModelPlanConfig())
 	v44, err := previousV44ModelPlanBundle(historical)
 	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(v44)
@@ -239,7 +239,7 @@ func previousManagerV42Must(t *testing.T, current modelPlanBundle) modelPlanBund
 }
 
 func TestManagerPromptKeepsDeliveryAuthorityWithinStaticBudget(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[managerAgentName])
@@ -279,7 +279,7 @@ func TestManagerV39PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	if digest := artifactSHA256([]byte(previousManagerPromptV39)); digest != "0e99ea9e8ecb8e51d80663543956e47cbc041177c6065535a39bf2cbf9767552" {
 		t.Fatalf("manager v39 template digest=%s", digest)
 	}
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -298,7 +298,7 @@ func TestManagerV40PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	if digest := artifactSHA256([]byte(previousManagerPromptV40)); digest != "e13863fd3abe4354d2319d1ee2ae0105c7bc1844842a0765b697dd11f93a3cf2" {
 		t.Fatalf("manager v40 template digest=%s", digest)
 	}
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -315,7 +315,7 @@ func TestManagerV41PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	if digest := artifactSHA256([]byte(previousManagerPromptV41)); digest != "28568b2ec532c4eded63fe62531f3601ef80f2e83077cc912e3017bcf3311358" {
 		t.Fatalf("manager v41 template digest=%s", digest)
 	}
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -330,7 +330,7 @@ func TestManagerV42PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	if digest := artifactSHA256([]byte(previousManagerPromptV42)); digest != "24ca61ef6f7642660a8ff32325c8d32df4b962a0b47df830d08a239e15f54bd3" {
 		t.Fatalf("manager v42 template digest=%s", digest)
 	}
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	v43, err := previousV43ModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -339,7 +339,7 @@ func TestManagerV42PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 	if !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 42")) || bytes.Equal(predecessor.agents[managerAgentName], current.agents[managerAgentName]) {
 		t.Fatal("manager predecessor was not exactly bound from the v42 template")
 	}
-	recognized, err := modelPlanBundleForManifest(predecessor.manifest, sdd.DefaultModelPlanConfig())
+	recognized, err := modelPlanBundleForManifest(predecessor.manifest, modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	if !bytes.Equal(recognized.agents[managerAgentName], predecessor.agents[managerAgentName]) {
 		t.Fatal("manager v42 manifest was not recognized as a predecessor")
@@ -347,7 +347,7 @@ func TestManagerV42PredecessorIsExactBaseTemplateBoundToCurrentRole(t *testing.T
 }
 
 func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	prompt := string(bundle.agents[managerAgentName])
@@ -377,7 +377,7 @@ func TestManagerPromptDelegatesRepositoryWorkWithoutDuplicatingChildExploration(
 }
 
 func TestPhase1ManagerPreservesDelegatedContextAndBoundsExpertEnsemble(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	manager, general := string(bundle.agents[managerAgentName]), string(bundle.agents[generalAgentName])
@@ -416,7 +416,7 @@ func TestPhase1ManagerPreservesDelegatedContextAndBoundsExpertEnsemble(t *testin
 }
 
 func TestGeneralV9RequiresConciseDecisiveReturns(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	general := string(bundle.agents[generalAgentName])
@@ -462,7 +462,7 @@ func TestRetiredAutonomousStackedPRSkillKeepsHistoricalIdentity(t *testing.T) {
 }
 
 func TestManagerMapsDeliveryMilestones(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
@@ -487,7 +487,7 @@ func TestManagerMapsDeliveryMilestones(t *testing.T) {
 }
 
 func TestManagerRetainsAuthorityWhileBroadProfilesDenyDurableMutations(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for _, name := range []string{managerAgentName, generalAgentName, verifierAgentName} {
 		parts := strings.SplitN(string(bundle.agents[name]), "---", 3)
@@ -508,7 +508,7 @@ func TestManagerRetainsAuthorityWhileBroadProfilesDenyDurableMutations(t *testin
 }
 
 func TestReadinessV54RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
@@ -526,7 +526,7 @@ func TestReadinessV54RoutesAdaptivelyAndKeepsFullAssuranceExceptions(t *testing.
 }
 
 func TestManagerUsesIntentTriggeredMemoryWithAllThenAnyFallback(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
@@ -551,7 +551,7 @@ func TestManagerUsesIntentTriggeredMemoryWithAllThenAnyFallback(t *testing.T) {
 }
 
 func TestManagerRequiresTerminalMemoryClosureBeforeTerminalReporting(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
@@ -569,7 +569,7 @@ func TestManagerRequiresTerminalMemoryClosureBeforeTerminalReporting(t *testing.
 }
 
 func TestReadinessGeneralV10UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	general := string(bundle.agents[generalAgentName])
@@ -588,7 +588,7 @@ func TestReadinessGeneralV10UsesCompactOrdinaryMissionAndReturn(t *testing.T) {
 }
 
 func TestReadinessSDDApplyIsExclusiveWorkspaceWriter(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	general, apply, manager := string(bundle.agents[generalAgentName]), string(bundle.agents[sddApplyName]), string(bundle.agents[managerAgentName])
@@ -608,7 +608,7 @@ func TestReadinessSDDApplyIsExclusiveWorkspaceWriter(t *testing.T) {
 }
 
 func TestReadinessV54ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV53ThenV52(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	bundle = frozenManagerV60(t, bundle)
 	manager := string(bundle.agents[managerAgentName])
@@ -638,10 +638,10 @@ func TestReadinessV54ManagerIsAdaptiveWithoutNegativeCeremonyAndRecognizesV53The
 }
 
 func TestVersionEvolutionUsesOnlyManagedHEADPredecessors(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	current = frozenManagerV60(t, current)
-	historical, err := fixedLensV53ModelPlanBundle(sdd.DefaultModelPlanConfig())
+	historical, err := fixedLensV53ModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	for name, marker := range map[string]string{
 		managerAgentName:  "artifact: opencode-agent/vgxness-manager; version: 60",
@@ -682,7 +682,7 @@ func TestVersionEvolutionUsesOnlyManagedHEADPredecessors(t *testing.T) {
 }
 
 func TestCurrentProfileAndManagerPredecessorStepsAreConstructible(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	if _, err = previousActiveProfilesModelPlanBundle(current); err != nil {
 		t.Fatalf("active profiles: %v", err)

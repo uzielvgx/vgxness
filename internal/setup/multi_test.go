@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/providers/codex"
-	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	"github.com/vgxness/vgxness/internal/skills"
 	"github.com/vgxness/vgxness/internal/testutil"
@@ -474,18 +474,18 @@ func TestIntegrationProviderReinstallsPartialCodex(t *testing.T) {
 func TestIntegrationProviderPartialCodexPlanMatchesReinstallStatusIdentity(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	runtime := codex.NewIntegrationWithRunner(testutil.NewCodexRunner())
-	medium := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium}
+	medium := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium}
 	if _, err := runtime.Install(context.Background(), medium); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(root, "agents", "general.toml")); err != nil {
 		t.Fatal(err)
 	}
-	want, err := codex.RenderPlan("v0.0.0", sdd.PlanUltra)
+	want, err := codex.RenderPlan("v0.0.0", modelplan.PlanUltra)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter := NewIntegrationProvider(ProviderCodex, runtime, integration.Options{ConfigDir: root, ModelPlan: sdd.PlanUltra})
+	adapter := NewIntegrationProvider(ProviderCodex, runtime, integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra})
 	plan, err := adapter.Plan(context.Background(), SharedPlan{})
 	if err != nil || plan.State != integration.StatePartial || plan.ArtifactSHA256 != want.SHA256 || plan.ArtifactCount != len(want.Artifacts) {
 		t.Fatalf("plan=%+v err=%v", plan, err)

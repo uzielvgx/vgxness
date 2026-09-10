@@ -17,11 +17,11 @@ import (
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/opencodebackup"
 	"github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
 	"github.com/vgxness/vgxness/internal/providers/pi"
-	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 	"github.com/vgxness/vgxness/internal/skills"
@@ -136,7 +136,7 @@ func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, 
 		}
 		return launchTUI(ctx, stdin, stdout, stderr, backend, tui.Options{Workspace: workspace})
 	}
-	return cli.RunProductSDDRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, codexIntegrationRuntime, installer, setupRuntime, appruntime.NewSDDWithHooks(dispatcher))
+	return cli.RunProductRuntime(ctx, args, stdin, stdout, stderr, inspection.Service{Health: memory.HealthFile}, cliMemory, integrationRuntime, codexIntegrationRuntime, installer, setupRuntime)
 }
 
 func mustWorkspace() string {
@@ -641,22 +641,22 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 	}
 	integrationOptions := integration.Options{}
 	if request.ModelAssignments != nil {
-		assignments := make(map[string]sdd.ManagedAgentModelConfig, tui.SetupModelAssignmentCount)
+		assignments := make(map[string]modelplan.ManagedAgentModelConfig, tui.SetupModelAssignmentCount)
 		providerSummary := ""
 		for _, row := range request.ModelAssignments {
 			provider, validReference := modelcatalog.ValidReference(row.Reference)
-			effort := sdd.Effort(row.RequestedEffort)
-			source, availability := sdd.ModelSlotSource(row.Source), sdd.ModelSlotAvailability(row.Availability)
-			validProvenance := source == sdd.ModelSlotCatalog && availability == sdd.ModelSlotCatalogKnown || source == sdd.ModelSlotCustom && availability == sdd.ModelSlotUnknown
+			effort := modelplan.Effort(row.RequestedEffort)
+			source, availability := modelplan.ModelSlotSource(row.Source), modelplan.ModelSlotAvailability(row.Availability)
+			validProvenance := source == modelplan.ModelSlotCatalog && availability == modelplan.ModelSlotCatalogKnown || source == modelplan.ModelSlotCustom && availability == modelplan.ModelSlotUnknown
 			if row.ArtifactKey == "" || !validReference || row.Provider != provider || !effort.Valid() || !validProvenance {
 				return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
 			}
 			if _, duplicate := assignments[row.ArtifactKey]; duplicate {
 				return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
 			}
-			assignments[row.ArtifactKey] = sdd.ManagedAgentModelConfig{
+			assignments[row.ArtifactKey] = modelplan.ManagedAgentModelConfig{
 				Provider: row.Provider, Reference: row.Reference, RequestedEffort: effort,
-				Variant: sdd.OpenCodeVariant(row.Variant), VariantSpecified: row.VariantSpecified,
+				Variant: modelplan.OpenCodeVariant(row.Variant), VariantSpecified: row.VariantSpecified,
 				Source: source, Availability: availability,
 			}
 			if providerSummary == "" {
@@ -668,19 +668,19 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 		if len(assignments) != integration.ModelAssignmentCount {
 			return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
 		}
-		if _, err := sdd.ResolveOpenCodePlanV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: providerSummary, Assignments: assignments, Provenance: sdd.ModelPlanCLI}, opencode.ModelAgentInventoryV3()); err != nil {
+		if _, err := modelplan.ResolveOpenCodePlanV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: providerSummary, Assignments: assignments, Provenance: modelplan.ModelPlanCLI}, opencode.ModelAgentInventoryV3()); err != nil {
 			return setupflow.Options{}, fmt.Errorf("invalid TUI setup model assignments")
 		}
 		integrationOptions.ModelAssignments = &assignments
 	} else {
-		plan := sdd.Plan(request.Plan)
+		plan := modelplan.Plan(request.Plan)
 		if !plan.Valid() {
 			return setupflow.Options{}, fmt.Errorf("invalid TUI setup plan")
 		}
 		integrationOptions = integration.Options{ModelPlan: plan,
 			ModelEfficient: request.ModelEfficient, ModelBalanced: request.ModelBalanced, ModelFrontier: request.ModelFrontier,
-			ModelEfficientEffort: sdd.Effort(request.ModelEfficientEffort), ModelBalancedEffort: sdd.Effort(request.ModelBalancedEffort), ModelFrontierEffort: sdd.Effort(request.ModelFrontierEffort),
-			ModelEfficientVariant: sdd.OpenCodeVariant(request.ModelEfficientVariant), ModelBalancedVariant: sdd.OpenCodeVariant(request.ModelBalancedVariant), ModelFrontierVariant: sdd.OpenCodeVariant(request.ModelFrontierVariant), ModelVariantsSpecified: request.ModelVariantsSpecified,
+			ModelEfficientEffort: modelplan.Effort(request.ModelEfficientEffort), ModelBalancedEffort: modelplan.Effort(request.ModelBalancedEffort), ModelFrontierEffort: modelplan.Effort(request.ModelFrontierEffort),
+			ModelEfficientVariant: modelplan.OpenCodeVariant(request.ModelEfficientVariant), ModelBalancedVariant: modelplan.OpenCodeVariant(request.ModelBalancedVariant), ModelFrontierVariant: modelplan.OpenCodeVariant(request.ModelFrontierVariant), ModelVariantsSpecified: request.ModelVariantsSpecified,
 		}
 	}
 	return setupflow.Options{Workspace: workspace, ExpectedPlanDigest: request.ExpectedPlanDigest, Integration: integrationOptions}, nil

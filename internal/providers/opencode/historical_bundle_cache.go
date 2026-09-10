@@ -9,7 +9,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 // Only deterministic, compiled-in historical transformations are cached. No
@@ -17,12 +17,12 @@ import (
 const historicalBundleCacheLimit = 8 << 20
 
 type historicalBundleSnapshot struct {
-	Config     sdd.ModelPlanConfig
-	Resolved   sdd.OpenCodePlan
-	ConfigV2   *sdd.ModelPlanConfigV2
-	ResolvedV2 *sdd.OpenCodePlanV2
-	ConfigV3   *sdd.ModelPlanConfigV3
-	ResolvedV3 *sdd.OpenCodePlanV3
+	Config     modelplan.ModelPlanConfig
+	Resolved   modelplan.OpenCodePlan
+	ConfigV2   *modelplan.ModelPlanConfigV2
+	ResolvedV2 *modelplan.OpenCodePlanV2
+	ConfigV3   *modelplan.ModelPlanConfigV3
+	ResolvedV3 *modelplan.OpenCodePlanV3
 	Agents     map[string][]byte
 	Manifest   []byte
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +13,7 @@ import (
 
 func TestManager20UpgradeRemovesRetiredProfiles(t *testing.T) {
 	root := t.TempDir()
-	old, err := renderActiveV20("v0.0.0", sdd.PlanMedium)
+	old, err := renderActiveV20("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}

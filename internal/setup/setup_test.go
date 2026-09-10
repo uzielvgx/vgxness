@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	"github.com/vgxness/vgxness/internal/skills"
 )
@@ -354,7 +354,7 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 	if !strings.Contains(plan.Steps[2].Title, "plugin y la skill") || !strings.Contains(plan.Steps[2].Explanation, "v1-v10") || !strings.Contains(plan.Steps[2].Explanation, "vgxness.ts") || !strings.Contains(plan.Steps[2].Explanation, "vgxness-autonomous-stacked-pr") {
 		t.Fatalf("step 3 does not identify safe legacy retirement: %#v", plan.Steps[2])
 	}
-	if !strings.Contains(plan.Steps[3].Title, "artefactos del proveedor") || !strings.Contains(plan.Steps[3].Explanation, "13 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[4].Explanation, "19 skills y 47 archivos") || !strings.Contains(plan.Steps[4].Explanation, "memory-sync y sdd-lifecycle") || !strings.Contains(plan.Steps[4].Explanation, "no pertenecen a OpenCode") {
+	if !strings.Contains(plan.Steps[3].Title, "artefactos del proveedor") || !strings.Contains(plan.Steps[3].Explanation, "7 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[4].Explanation, "18 skills y 46 archivos") || !strings.Contains(plan.Steps[4].Explanation, "memory-sync") || !strings.Contains(plan.Steps[4].Explanation, "no pertenecen a OpenCode") {
 		t.Fatalf("steps 4-5 do not describe model and provider ownership accurately: step4=%#v step5=%#v", plan.Steps[3], plan.Steps[4])
 	}
 }
@@ -1060,10 +1060,10 @@ func TestApplyErrorReadbackPreservesAndCopiesAssignmentRows(t *testing.T) {
 	}
 }
 
-func testModelAssignmentRows() [integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3 {
-	var rows [integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3
+func testModelAssignmentRows() [integration.ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3 {
+	var rows [integration.ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3
 	for index := range rows {
-		rows[index] = sdd.OpenCodeAgentAssignmentV3{ArtifactKey: fmt.Sprintf("agents/agent-%02d.md", index), Provider: "acme", Model: fmt.Sprintf("acme/model-%02d", index)}
+		rows[index] = modelplan.OpenCodeAgentAssignmentV3{ArtifactKey: fmt.Sprintf("agents/agent-%02d.md", index), Provider: "acme", Model: fmt.Sprintf("acme/model-%02d", index)}
 	}
 	return rows
 }

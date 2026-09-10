@@ -6,21 +6,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
 	codex "github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 func TestCAREParityCurrentProviderInventories(t *testing.T) {
-	want := map[sdd.Role]string{
-		sdd.RoleCAREReviewer:   "care-reviewer",
-		sdd.RoleCARESpecialist: "care-specialist",
-		sdd.RoleCAREChallenger: "care-challenger",
+	want := map[modelplan.Role]string{
+		modelplan.RoleCAREReviewer:   "care-reviewer",
+		modelplan.RoleCARESpecialist: "care-specialist",
+		modelplan.RoleCAREChallenger: "care-challenger",
 	}
-	openCode := map[sdd.Role]string{}
+	openCode := map[modelplan.Role]string{}
 	for _, identity := range opencode.ModelAgentInventoryV3() {
-		if identity.Class == sdd.ManagedAgentClassReview {
+		if identity.Class == modelplan.ManagedAgentClassReview {
 			openCode[identity.Role] = identity.ArtifactKey
 		}
 	}

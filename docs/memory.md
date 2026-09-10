@@ -2,8 +2,9 @@
 
 VGXNESS storage is an in-process Go subsystem backed by one owned SQLite/FTS5
 database. Semantic memory exposes `Remember`, `Recall`, `Recent`, `Get`, and
-`Forget`; structured SDD uses separate tables and lifecycle contracts. Neither
-domain requires a daemon, second binary, embeddings, or network service.
+`Forget`. It requires no daemon, second binary, embeddings, or network service.
+Historical SDD tables remain inert for database compatibility; there is no SDD
+service, tool, or archive command.
 
 ## Strict boundary, flexible core
 
@@ -30,12 +31,11 @@ to `Get` for durable history and persisted-data compatibility, while normal
 
 ## Schema v23 domains
 
-**Implemented:** SQLite schema v23 keeps semantic observations, references,
-sessions, and FTS rows isolated from structured SDD changes, artifacts,
-immutable revisions, input bindings, idempotency records, and OpenSpec projection
-evidence. Both domains share canonical workspace/project identity and the same
-transactional database, but SDD content never appears in semantic recall and a
-semantic observation is never treated as an SDD artifact.
+**Implemented:** SQLite schema v23 stores semantic observations, references,
+sessions, and FTS rows. Published migrations and historical SDD tables are
+preserved to open existing databases without deleting user history. No runtime
+reads or writes those archived lifecycle records; they are not semantic memories
+and do not appear in recall or memory synchronization.
 
 Sync enrollment uses a bounded durable previous-credential reference marker to
 finish interrupted keyring cleanup on the next enrollment; it never stores a

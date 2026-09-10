@@ -14,7 +14,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 // Dispatch is deliberately narrow: T03 supplies domain operation adapters.
@@ -42,7 +42,7 @@ type HelloLimits struct {
 	MaxCorrelationIDs int `json:"maxCorrelationIds"`
 }
 
-var serverCapabilities = []string{"memory.forget", "memory.get", "memory.project.initialize", "memory.project.resolve", "memory.recall", "memory.recent", "memory.remember", "memory.session.checkpoint", "memory.session.context", "memory.session.draft_save", "memory.session.end", "memory.session.renew", "memory.session.start", "memory.sync", "memory.sync.backfill", "memory.sync.configure", "memory.sync.rejoin", "memory.sync.repair_project", "memory.sync.reseed", "memory.sync.status", "model.resolve", "sdd.accept_revision", "sdd.cancel", "sdd.compare_projection", "sdd.create", "sdd.get", "sdd.get_revision", "sdd.list", "sdd.list_revisions", "sdd.projection_status", "sdd.record_projection", "sdd.render_projection", "sdd.save_revision", "sdd.set_interaction_mode", "sdd.transition"}
+var serverCapabilities = []string{"memory.forget", "memory.get", "memory.project.initialize", "memory.project.resolve", "memory.recall", "memory.recent", "memory.remember", "memory.session.checkpoint", "memory.session.context", "memory.session.draft_save", "memory.session.end", "memory.session.renew", "memory.session.start", "memory.sync", "memory.sync.backfill", "memory.sync.configure", "memory.sync.rejoin", "memory.sync.repair_project", "memory.sync.reseed", "memory.sync.status", "model.resolve"}
 
 // Server owns a single private stdin/stdout protocol session.
 type Server struct {
@@ -356,10 +356,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) (result
 					record = map[string]any{"type": "error", "id": req.ID, "code": "recovery_pending", "retrySafe": false, "recoveryState": "recovery_pending", "message": "mutation outcome uncertain"}
 				} else {
 					code := "unavailable"
-					if errors.Is(dispatchErr, sdd.ErrConflict) || errors.Is(dispatchErr, sdd.ErrStaleState) {
-						code = "conflict"
-					}
-					if errors.Is(dispatchErr, sdd.ErrInvalid) {
+					if errors.Is(dispatchErr, modelplan.ErrInvalid) {
 						code = "invalid_request"
 					}
 					record = map[string]any{"type": "error", "id": req.ID, "code": code, "retrySafe": true, "message": "operation rejected"}
@@ -386,9 +383,7 @@ func requestFingerprint(request Request) [sha256.Size]byte {
 	return sha256.Sum256(data)
 }
 
-func safeDomainError(err error) bool {
-	return errors.Is(err, sdd.ErrConflict) || errors.Is(err, sdd.ErrStaleState) || errors.Is(err, sdd.ErrInvalid) || errors.Is(err, sdd.ErrDigestMismatch) || errors.Is(err, sdd.ErrInputsChanged)
-}
+func safeDomainError(err error) bool { return errors.Is(err, modelplan.ErrInvalid) }
 
 var errOutputTooLarge = errors.New("output record too large")
 

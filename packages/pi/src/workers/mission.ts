@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { assertWorkerRole, type WorkerRole } from "./roles.ts";
-export type WorkerMission = { candidate?: CandidateReference; skills?: WorkerSkill[]; nonce: string; digest: string; role: WorkerRole; workspace: string; mode: "full" | "read-only"; model: string; effort: string; goal: string; criteria: string[]; commands: string[][]; resultLimit: number; exploration?: { roots: string[]; maxFiles: number; maxBytes: number; maxTokens: number }; acceptedBindings?: { changeId: string; artifactId: string; revisionId: string; digest: string; stateVersion: number; inputs: Array<{ artifactId: string; revisionId: string; digest: string }> }; targets: Record<string, string> };
+export type WorkerMission = { candidate?: CandidateReference; skills?: WorkerSkill[]; nonce: string; digest: string; role: WorkerRole; workspace: string; mode: "full" | "read-only"; model: string; effort: string; goal: string; criteria: string[]; commands: string[][]; resultLimit: number; exploration?: { roots: string[]; maxFiles: number; maxBytes: number; maxTokens: number }; targets: Record<string, string> };
 const used = new Set<string>();
 const issued = new Map<string, string>();
 const ledgers = new WeakMap<object, Record<string, string>>();
