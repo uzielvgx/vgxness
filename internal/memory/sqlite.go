@@ -70,9 +70,13 @@ func open(ctx context.Context, path string, now func() time.Time, afterConfigure
 		cleanup()
 		return nil, err
 	}
-	for _, pragma := range []string{`PRAGMA busy_timeout=25`, `PRAGMA foreign_keys=ON`, `PRAGMA journal_mode=WAL`} {
+	for _, setup := range []struct{ pragma, stage string }{
+		{`PRAGMA busy_timeout=25`, "busy-timeout"},
+		{`PRAGMA foreign_keys=ON`, "foreign-keys"},
+		{`PRAGMA journal_mode=WAL`, "wal"},
+	} {
 		for attempt := 0; ; attempt++ {
-			_, err = db.ExecContext(ctx, pragma)
+			_, err = db.ExecContext(ctx, setup.pragma)
 			if err == nil {
 				break
 			}
@@ -81,7 +85,7 @@ func open(ctx context.Context, path string, now func() time.Time, afterConfigure
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
-				return nil, fmt.Errorf("configure memory store: %w", ErrCorrupt)
+				return nil, configurationError(ctx, setup.stage, err)
 			}
 		}
 	}
@@ -105,7 +109,7 @@ func open(ctx context.Context, path string, now func() time.Time, afterConfigure
 	}
 	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
 		cleanup()
-		return nil, fmt.Errorf("configure memory store: %w", ErrCorrupt)
+		return nil, configurationError(ctx, "final-timeout", err)
 	}
 	store := &Store{db: db, now: now}
 	if store.now == nil {

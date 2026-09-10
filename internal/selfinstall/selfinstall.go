@@ -548,10 +548,16 @@ func openInstallRoot(path string, create bool) (*os.Root, error) {
 	if err != nil {
 		return nil, err
 	}
+	rootInfo, err := root.Stat(".")
+	if err != nil || (relative == "." && !ownedInstallDirectory(rootInfo)) || (relative != "." && !safeInstallAncestor(rootInfo)) {
+		_ = root.Close()
+		return nil, ErrDrift
+	}
 	if relative == "." {
 		return root, nil
 	}
-	for _, component := range strings.Split(relative, string(os.PathSeparator)) {
+	components := strings.Split(relative, string(os.PathSeparator))
+	for index, component := range components {
 		before, statErr := root.Lstat(component)
 		created := false
 		if errors.Is(statErr, os.ErrNotExist) && create {
@@ -562,7 +568,11 @@ func openInstallRoot(path string, create bool) (*os.Root, error) {
 			created = true
 			before, statErr = root.Lstat(component)
 		}
-		if statErr != nil || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+		valid := safeInstallAncestor(before)
+		if index == len(components)-1 {
+			valid = ownedInstallDirectory(before)
+		}
+		if statErr != nil || !valid {
 			_ = root.Close()
 			return nil, ErrDrift
 		}
@@ -572,7 +582,11 @@ func openInstallRoot(path string, create bool) (*os.Root, error) {
 			return nil, fmt.Errorf("%w: open install ancestor: %v", ErrDrift, err)
 		}
 		after, err := child.Stat(".")
-		if err != nil || !os.SameFile(before, after) {
+		valid = safeInstallAncestor(after)
+		if index == len(components)-1 {
+			valid = ownedInstallDirectory(after)
+		}
+		if err != nil || !os.SameFile(before, after) || !valid {
 			_ = child.Close()
 			_ = root.Close()
 			return nil, ErrDrift
@@ -600,7 +614,7 @@ func requireRootDirectory(root *os.Root, name string, create bool) error {
 		created = true
 		before, err = root.Lstat(name)
 	}
-	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+	if err != nil || !ownedInstallDirectory(before) {
 		return ErrDrift
 	}
 	child, err := root.OpenRoot(name)
@@ -609,7 +623,7 @@ func requireRootDirectory(root *os.Root, name string, create bool) error {
 	}
 	defer child.Close()
 	after, err := child.Stat(".")
-	if err != nil || !os.SameFile(before, after) {
+	if err != nil || !os.SameFile(before, after) || !ownedInstallDirectory(after) {
 		return ErrDrift
 	}
 	if created {

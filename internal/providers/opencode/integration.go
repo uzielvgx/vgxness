@@ -569,180 +569,27 @@ func (service *Integration) Reinstall(ctx context.Context, options integration.O
 		return integration.Result{}, fmt.Errorf("%w: open OpenCode config root: %v", integration.ErrConflict, err)
 	}
 	defer func() { returnErr = errors.Join(returnErr, root.Close()) }()
-	if pending, err := service.reinstallPendingAtRoot(ctx, options, root); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, integration.ErrInvalid) {
-			return integration.Result{}, err
-		}
-		return integration.Result{}, errors.Join(integration.ErrRecovery, err)
-	} else if pending {
-		return integration.Result{}, fmt.Errorf("%w: interrupted OpenCode reinstall evidence is present", integration.ErrRecovery)
-	}
-	state, err := service.inspect(ctx, options)
+	transaction, err := service.preflightReinstall(ctx, options, configDirectory, root)
 	if err != nil {
 		return integration.Result{}, err
 	}
-	switch state.result.State {
-	case integration.StateInstalled, integration.StatePartial:
-	case integration.StateAbsent:
-		return integration.Result{}, fmt.Errorf("%w: managed OpenCode artifacts are absent", integration.ErrInvalid)
-	default:
-		return integration.Result{}, fmt.Errorf("%w: managed OpenCode artifacts", integration.ErrDrift)
-	}
-	if err := ctx.Err(); err != nil {
-		return integration.Result{}, err
-	}
-	held, err := root.HeldAtPath()
-	if err != nil || !held {
-		return integration.Result{}, fmt.Errorf("%w: OpenCode config root changed after preflight", integration.ErrConflict)
-	}
-	expectedLayout, err := managedLayout(configDirectory, state.artifacts)
-	if err != nil {
-		return integration.Result{}, err
-	}
-	created := make([]rootInstalledArtifact, 0, len(state.artifacts))
-	retired := make([]rootRetiredArtifact, 0, len(state.retired))
-	var pendingEvidence reinstallPendingEvidence
 	rollback := true
 	defer func() {
-		if rollback {
-			var recoveryErr error
-			for index := len(retired) - 1; index >= 0; index-- {
-				if err := root.RestoreBackup(retired[index].backup, retired[index].name); err != nil {
-					recoveryErr = errors.Join(recoveryErr, recoveryFailure("restore retired OpenCode artifact", err))
-				}
-			}
-			for index := len(created) - 1; index >= 0; index-- {
-				if err := rollbackRootReinstalledArtifact(root, created[index]); err != nil {
-					recoveryErr = errors.Join(recoveryErr, recoveryFailure("restore OpenCode reinstall predecessor", err))
-				}
-			}
-			if recoveryErr == nil && pendingEvidence.info != nil {
-				recoveryErr = clearReinstallPendingAtRoot(root, pendingEvidence)
-			} else if recoveryErr != nil && pendingEvidence.info != nil {
-				recoveryErr = errors.Join(recoveryErr, fmt.Errorf("%w: reinstall pending marker retained at %q", integration.ErrRecovery, filepath.Join(root.path, reinstallPendingName)))
-			}
-			returnErr = errors.Join(returnErr, recoveryErr)
-		} else {
-			for _, item := range retired {
-				returnErr = errors.Join(returnErr, root.cleanupBackup(item.backup))
-			}
-			for _, item := range created {
-				if item.backup != nil {
-					returnErr = errors.Join(returnErr, root.cleanupBackup(*item.backup))
-				}
-				returnErr = errors.Join(returnErr, root.CleanupStaged(item.staged))
-			}
-			if pendingEvidence.info != nil {
-				returnErr = errors.Join(returnErr, clearReinstallPendingAtRoot(root, pendingEvidence))
-			}
-		}
+		returnErr = transaction.finish(returnErr, rollback)
 	}()
-	for _, item := range state.artifacts {
-		name, relativeErr := root.Relative(item.path)
-		if relativeErr != nil {
-			return integration.Result{}, fmt.Errorf("%w: OpenCode artifact outside config root", integration.ErrInvalid)
-		}
-		staged, stageErr := root.StageArtifact(name, item.content, 0o600)
-		if stageErr != nil {
-			return integration.Result{}, fmt.Errorf("stage OpenCode reinstall artifact: %w", stageErr)
-		}
-		created = append(created, rootInstalledArtifact{name: name, staged: staged})
+	if err := transaction.stage(); err != nil {
+		return integration.Result{}, err
 	}
-	if service.afterReinstallStaging != nil {
-		staged := make([]installedArtifact, 0, len(created))
-		for _, item := range created {
-			staged = append(staged, installedArtifact{path: filepath.Join(root.path, item.name), temporary: filepath.Join(root.path, item.staged.temporary), temporaryInfo: item.staged.temporaryInfo, staging: filepath.Join(root.path, item.staged.staging), stagingInfo: item.staged.stagingInfo, content: item.staged.content})
-		}
-		service.afterReinstallStaging(staged)
+	if err := transaction.publish(ctx); err != nil {
+		return integration.Result{}, err
 	}
-	held, err = root.HeldAtPath()
-	if err != nil || !held {
-		return integration.Result{}, fmt.Errorf("%w: OpenCode config root changed before mutation", integration.ErrConflict)
-	}
-	pendingEvidence, err = service.writeReinstallPendingAtRoot(ctx, root, expectedLayout)
-	if err != nil {
-		return integration.Result{}, errors.Join(integration.ErrRecovery, fmt.Errorf("write reinstall pending marker: %w", err))
-	}
-	for index, item := range state.artifacts {
-		if err := ctx.Err(); err != nil {
-			return integration.Result{}, err
-		}
-		installed := &created[index]
-		if item.present {
-			expected := item.content
-			if item.upgrade || item.defaultAgent != nil && item.prior != nil {
-				expected = item.prior
-			}
-			backup, backupErr := root.Anchor(installed.name, expected)
-			if backupErr != nil {
-				return integration.Result{}, fmt.Errorf("%w: protect OpenCode reinstall predecessor", integration.ErrConflict)
-			}
-			installed.backup = &backup
-			if service.afterReinstallAnchorPath != nil {
-				service.afterReinstallAnchorPath(filepath.Join(root.path, backup.name))
-			}
-			if err := root.RemoveExact(installed.name, backup.info, expected); err != nil {
-				return integration.Result{}, fmt.Errorf("%w: remove OpenCode reinstall predecessor: %v", integration.ErrConflict, err)
-			}
-		}
-		if service.reinstallCheckpoint != nil {
-			if err := service.reinstallCheckpoint(reinstallCheckpointMoved, item.path); err != nil {
-				return integration.Result{}, err
-			}
-		}
-		publication, publishErr := root.PublishStaged(installed.staged, installed.name)
-		if publishErr != nil {
-			if publication.state == rootPublicationPending {
-				installed.publication = publication
-			}
-			return integration.Result{}, fmt.Errorf("publish OpenCode reinstall artifact: %w", publishErr)
-		}
-		installed.published = publication.info
-		if service.reinstallCheckpoint != nil {
-			if err := service.reinstallCheckpoint(reinstallCheckpointPublished, item.path); err != nil {
-				return integration.Result{}, err
-			}
-		}
-	}
-	for _, item := range state.retired {
-		name, relativeErr := root.Relative(item.path)
-		if relativeErr != nil {
-			return integration.Result{}, fmt.Errorf("%w: retired OpenCode artifact outside config root", integration.ErrInvalid)
-		}
-		retiredItem, retireErr := retireRootArtifact(root, name, item)
-		if retireErr != nil {
-			return integration.Result{}, retireErr
-		}
-		retired = append(retired, retiredItem)
-		if service.afterRetirement != nil {
-			if err := service.afterRetirement(); err != nil {
-				return integration.Result{}, err
-			}
-		}
-	}
-	if err := verifyRootInstall(root, state); err != nil {
-		return integration.Result{}, fmt.Errorf("read back OpenCode reinstall artifacts: %w", integration.ErrDrift)
-	}
-	for _, item := range state.artifacts {
-		if service.reinstallCheckpoint != nil {
-			if err := service.reinstallCheckpoint(reinstallCheckpointVerified, item.path); err != nil {
-				return integration.Result{}, err
-			}
-		}
-	}
-	for _, item := range created {
-		if item.backup == nil {
-			continue
-		}
-		data, info, err := root.ReadRegularInfo(item.backup.name)
-		if err != nil || item.backup.info == nil || !os.SameFile(info, item.backup.info) || !bytes.Equal(data, item.backup.content) {
-			return integration.Result{}, fmt.Errorf("%w: reinstall predecessor anchor changed before cleanup", integration.ErrDrift)
-		}
+	if err := transaction.retireAndVerify(); err != nil {
+		return integration.Result{}, err
 	}
 	rollback = false
-	state.result.State = integration.StateInstalled
-	state.result.Changed, state.result.RestartRequired = true, true
-	return state.result, nil
+	transaction.state.result.State = integration.StateInstalled
+	transaction.state.result.Changed, transaction.state.result.RestartRequired = true, true
+	return transaction.state.result, nil
 }
 
 // reinstallLegacy is retained temporarily as a behavioral reference while the
