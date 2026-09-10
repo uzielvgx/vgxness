@@ -349,33 +349,12 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 				fmt.Fprintln(stderr, "operational: Pi setup runtime is unavailable")
 				return 1
 			}
-			if piAgent == "" {
-				piAgent = os.Getenv("PI_CODING_AGENT_DIR")
-				if piAgent == "" {
-					home, homeErr := os.UserHomeDir()
-					if homeErr != nil {
-						fmt.Fprintln(stderr, "operational: resolve Pi agent directory")
-						return 1
-					}
-					piAgent = filepath.Join(home, ".pi", "agent")
-				}
+			piOptions, pathErr := resolvePiSetupOptions(piAgent, piRoot, piRelease)
+			if pathErr != nil {
+				fmt.Fprintln(stderr, "invalid: Pi path is invalid")
+				return 2
 			}
-			if piRoot == "" {
-				piRoot = filepath.Join(piAgent, "vgxness-managed")
-			}
-			paths := []*string{&piAgent, &piRoot}
-			if piRelease != "" {
-				paths = append(paths, &piRelease)
-			}
-			for _, path := range paths {
-				absolute, pathErr := filepath.Abs(*path)
-				if pathErr != nil {
-					fmt.Fprintln(stderr, "invalid: Pi path is invalid")
-					return 2
-				}
-				*path = filepath.Clean(absolute)
-			}
-			runtimes = append(runtimes, factory.PiProvider(pi.Options{ReleaseDir: piRelease, AgentDir: piAgent, InstallRoot: piRoot}))
+			runtimes = append(runtimes, factory.PiProvider(piOptions))
 			continue
 		}
 		codexOptions, err := codexSetupOptions(options.Integration, codexHome)

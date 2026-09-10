@@ -1,11 +1,13 @@
 # Local agent-evaluation runner
+Python 3.11 or newer is required for this development tooling. Use that interpreter for the commands below. The offline suite canonicalizes only its own temporary directories, preserving runtime rejection of user-supplied symlink paths. On macOS and Windows it explicitly skips Linux-only Pi transport tests; those tests still execute in the Linux CI coverage job. A skipped test is not native support evidence.
+
 
 `tools/agent_eval/runner.py` is a development-only evidence transport for a locally installed Codex CLI. It never contacts a model for help, `--version`, or `self-test`. A model can run only through the explicit `run` command and all target values are required.
 
 Run the offline regression suite:
 
 ```powershell
-python -m unittest discover -s tools/agent_eval -p 'test_*.py'
+make eval-check PYTHON=python3.11
 ```
 
 Inspect the whole catalogue without invoking a target, or preview a selection and its fresh trial paths:

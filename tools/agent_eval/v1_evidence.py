@@ -1,9 +1,13 @@
 """Offline structural evidence validator; it never certifies trace authenticity."""
+import sys
+
+if sys.version_info < (3, 11):
+    raise SystemExit("VGXNESS evaluation tooling requires Python 3.11 or newer; use python3.11 or set PYTHON=python3.11 for make eval-check")
+
 import argparse
 import hashlib
 import json
 import re
-import sys
 
 HEX = set("0123456789abcdef")
 PROVIDERS = {"codex", "opencode", "pi"}

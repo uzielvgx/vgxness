@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """Offline planner and explicitly gated Pi development evaluation transport."""
+import sys
+
+if sys.version_info < (3, 11):
+    raise SystemExit("VGXNESS evaluation tooling requires Python 3.11 or newer; use python3.11 or set PYTHON=python3.11 for make eval-check")
+
 import argparse
 import hashlib
 import json
@@ -9,7 +14,6 @@ import selectors
 import signal
 import stat
 import subprocess
-import sys
 import time
 import re
 import shutil

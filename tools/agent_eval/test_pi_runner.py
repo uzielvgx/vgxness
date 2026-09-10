@@ -1,8 +1,14 @@
-import argparse, hashlib, json, os, pathlib, shutil, subprocess, tempfile, time, unittest, sys
+import argparse, hashlib, json, os, pathlib, shutil, subprocess, time, unittest, sys
 from unittest import mock
 sys.path.insert(0,str(pathlib.Path(__file__).parent)); import pi_runner
+from test_support import temporary_directory
 NODE=shutil.which('node')
 class T(unittest.TestCase):
+ def test_unsupported_platform_rejects_plan_before_probes_or_writes(self):
+  for platform in ('darwin', 'win32'):
+   with self.subTest(platform=platform), mock.patch.object(pi_runner.sys, 'platform', platform), mock.patch.object(pi_runner.subprocess, 'Popen', side_effect=AssertionError('must not spawn')):
+    with self.assertRaisesRegex(ValueError, 'Linux only'):
+     pi_runner.plan(argparse.Namespace())
  def test_plan_and_gate(self):
   self.assertEqual(64, pi_runner.MAX_CALLS)
  def test_events_normal_completion(self):
@@ -33,31 +39,35 @@ class T(unittest.TestCase):
   self.assertEqual('assistant content malformed',pi_runner._events('{"type":"message_end","message":{"role":"assistant","stopReason":"stop","provider":"p","model":"m","content":{}}}','p','m')[0])
  def test_events_failed_tool_fails(self):
   self.assertEqual('failed tool',pi_runner._events('{"type":"tool_execution_end","isError":true}','p','m')[0])
+ @unittest.skipIf(sys.platform == "win32", "POSIX filesystem fixture")
  def test_path_rejects_dangling_symlink_ancestor(self):
-  with tempfile.TemporaryDirectory() as d:
+  with temporary_directory() as d:
    d=pathlib.Path(d);(d/'link').symlink_to(d/'missing');self.assertRaises(ValueError,pi_runner._path,d/'link'/'x','x',False)
+ @unittest.skipIf(sys.platform == "win32", "POSIX filesystem fixture")
  def test_tree_rejects_directory_symlink(self):
-  with tempfile.TemporaryDirectory() as d:
+  with temporary_directory() as d:
    d=pathlib.Path(d);(d/'link').symlink_to(d,target_is_directory=True);self.assertRaises(ValueError,pi_runner._tree,d)
+ @unittest.skipIf(sys.platform == "win32", "POSIX filesystem fixture")
  def test_tree_ignores_known_state_and_includes_new_file_mode(self):
-  with tempfile.TemporaryDirectory() as d:
+  with temporary_directory() as d:
    d=pathlib.Path(d);(d/'.gitignore').write_text('.atl/\n.codegraph/\nagent-eval-output/\ntools/agent_eval/__pycache__/\n\nnode_modules/\n');(d/'.atl').mkdir();(d/'.atl'/'private').write_text('never');(d/'new').write_text('yes');os=__import__('os');os.chmod(d/'new',0o640);ignored,_=pi_runner._ignored_dirs(d);rows=pi_runner._tree(d,ignored);self.assertTrue(any(x['path'].endswith('/new') and x['mode']==0o640 for x in rows));self.assertFalse(any('.atl' in x['path'] for x in rows))
  def test_registry_rejects_protected_duplicates_and_unsafe_prompt(self):
-  with tempfile.TemporaryDirectory() as d:
+  with temporary_directory() as d:
    p=pathlib.Path(d)/'r';p.write_text(json.dumps({'schema':1,'partition':'public-development','cases':[{'id':'a','prompt':'@x'}]}));self.assertRaises(ValueError,pi_runner._registry,p)
    p.write_text(json.dumps({'schema':1,'partition':'public-development','cases':[{'id':'a','prompt':'x'},{'id':'a','prompt':'x'}]}));self.assertRaises(ValueError,pi_runner._registry,p)
  def test_registry_accepts_actual_partition_and_gpt_notes(self):
-  with tempfile.TemporaryDirectory() as d:
+  with temporary_directory() as d:
    p=pathlib.Path(d)/'r';p.write_text(json.dumps({'schema':1,'partition':'public development, not protected holdout','notes':'gpt-5.5 excluded elsewhere','cases':[{'id':'a','prompt':'x'}]}));self.assertEqual('a',pi_runner._registry(p)['cases'][0]['id'])
  def test_registry_rejects_unsafe_fixture(self):
-  with tempfile.TemporaryDirectory() as d:
+  with temporary_directory() as d:
    p=pathlib.Path(d)/'r';p.write_text(json.dumps({'schema':1,'partition':'public-development','cases':[{'id':'a','prompt':'x','fixtureFiles':{'.pi/settings.json':'x'}}]}));self.assertRaises(ValueError,pi_runner._registry,p)
  def test_catalog_filters_incompatible_and_binds_resources(self):
-  with tempfile.TemporaryDirectory() as d:
+  with temporary_directory() as d:
    d=pathlib.Path(d);(d/'good').mkdir();(d/'bad').mkdir();(d/'good'/'SKILL.md').write_text('name: good\ncompatibility: Agent Skills hosts\n<!-- managed-by: vgxness -->');(d/'good'/'r.txt').write_text('r');(d/'bad'/'SKILL.md').write_text('name: bad\ncompatibility: other\n<!-- managed-by: vgxness -->');rows=pi_runner._catalog(d);self.assertEqual(['good'],[x['name'] for x in rows]);self.assertEqual('r.txt',pathlib.Path(rows[0]['resources'][0]['path']).name)
+@unittest.skipIf(sys.platform == "win32", "POSIX fixture or process transport")
 class PlannerFixture(unittest.TestCase):
  def setUp(self):
-  self.temp=tempfile.TemporaryDirectory();self.root=pathlib.Path(self.temp.name);self.repo=self.root/'repo';self.repo.mkdir();(self.repo/'.gitignore').write_text('.atl/\n.codegraph/\nagent-eval-output/\ntools/agent_eval/__pycache__/\n\nnode_modules/\n');(self.repo/'.atl').mkdir();(self.repo/'.atl'/'secret').write_text('private');(self.repo/'new.txt').write_text('new')
+  self.temp=temporary_directory();self.root=pathlib.Path(self.temp.name);self.repo=self.root/'repo';self.repo.mkdir();(self.repo/'.gitignore').write_text('.atl/\n.codegraph/\nagent-eval-output/\ntools/agent_eval/__pycache__/\n\nnode_modules/\n');(self.repo/'.atl').mkdir();(self.repo/'.atl'/'secret').write_text('private');(self.repo/'new.txt').write_text('new')
   ext=self.repo/'packages/pi/src/extension.ts';ext.parent.mkdir(parents=True);ext.write_text('export default {}');pkg=self.repo/'packages/pi/package.json';pkg.parent.mkdir(parents=True,exist_ok=True);pkg.write_text('{"name":"@vgxness/pi","version":"0.84.4"}');(self.repo/'package-lock.json').write_text('{}')
   self.node=self.root/'node';self.node.write_text('#!/bin/sh\n');os.chmod(self.node,0o700);self.cli=self.root/'node_modules/@earendil-works/pi-coding-agent/dist/cli.js';self.cli.parent.mkdir(parents=True);self.cli.write_text('cli');(self.cli.parent.parent/'package.json').write_text('{"name":"@earendil-works/pi-coding-agent","version":"0.84.4"}');self.auth=self.root/'auth';self.auth.mkdir();self.skills=self.root/'skills'
   for name in ('one','two'):
@@ -67,21 +77,27 @@ class PlannerFixture(unittest.TestCase):
  def tearDown(self):self.temp.cleanup()
  def args(self,out,cases=None,model='m'):
   return argparse.Namespace(repo=str(self.repo),registry=str(self.registry),node=str(self.node),cli=str(self.cli),expected_version='0.84.4',provider='p',model=model,thinking='low',auth_dir=str(self.auth),skills_root=str(self.skills),extension=None,output=str(out),timeout='120',case=cases)
+ @unittest.skipUnless(sys.platform == "linux", "Pi evaluation planning requires Linux")
  def test_plan_has_zero_probes_and_per_case_isolation(self):
   out=self.root/'out'
   with mock.patch.object(pi_runner.subprocess,'run',side_effect=AssertionError('probe')): plan=pi_runner.plan(self.args(out,['case-a','case-b']))
   self.assertEqual(['case-a','case-b'],[x['id'] for x in plan['cases']]);self.assertNotEqual(plan['cases'][0]['home'],plan['cases'][1]['home'])
   for case in plan['cases']:
    self.assertEqual(['one','two'],[x['name'] for x in case['catalogCopy']]);self.assertEqual(case['prompt'],case['argv'][-1]);self.assertNotIn('secret',' '.join(case['argv']))
+ @unittest.skipUnless(sys.platform == "linux", "Pi evaluation planning requires Linux")
  def test_plan_digest_permissions_and_ignore(self):
   previous=os.umask(0o002);os.umask(previous);out=self.root/'out';pi_runner.plan(self.args(out,['case-a']));raw=(out/'plan.json').read_bytes();self.assertEqual(hashlib.sha256(raw).hexdigest(),(out/'plan.sha256').read_text().strip());self.assertEqual(previous,os.umask(previous));os.umask(previous)
   self.assertEqual(0o700,stat_mode(out));self.assertEqual(0o600,stat_mode(out/'plan.json'));self.assertFalse(any('.atl' in x['path'] for x in json.loads(raw)['bindings']['source']))
+ @unittest.skipUnless(sys.platform == "linux", "Pi evaluation planning requires Linux")
  def test_invalid_selection_output_and_model_do_not_create(self):
   out=self.root/'out';self.assertRaises(ValueError,pi_runner.plan,self.args(out,['unknown']));self.assertFalse(out.exists());self.assertRaises(ValueError,pi_runner.plan,self.args(self.root/'out2',None,'gpt-5.5'));self.assertFalse((self.root/'out2').exists())
+ @unittest.skipUnless(sys.platform == "linux", "Pi evaluation planning requires Linux")
  def test_catalog_copy_hash_and_bound_extension(self):
   out=self.root/'out';plan=pi_runner.plan(self.args(out,['case-a']));copy=plan['cases'][0]['catalogCopy'][0]['files'][0];self.assertEqual(copy['sha256'],hashlib.sha256(pathlib.Path(copy['path']).read_bytes()).hexdigest());self.assertEqual(str(self.repo/'packages/pi/src/extension.ts'),plan['bindings']['extension']['path'])
+ @unittest.skipUnless(sys.platform == "linux", "Pi evaluation planning requires Linux")
  def test_runtime_metadata_mismatch_fails_before_output(self):
   (self.cli.parent.parent/'package.json').write_text('{"name":"wrong","version":"0"}');out=self.root/'out';self.assertRaises(ValueError,pi_runner.plan,self.args(out));self.assertFalse(out.exists())
+ @unittest.skipUnless(sys.platform == "linux", "Pi evaluation planning requires Linux")
  def test_plan_records_runtime_metadata_and_paths(self):
   out=self.root/'out';plan=pi_runner.plan(self.args(out));self.assertEqual(str(self.repo),plan['repo']);self.assertIn('sdkPackage',plan['bindings']);self.assertIn('lock',plan['bindings'])
  def test_generated_wrapper_loads_real_extension_with_mock_pi(self):
@@ -98,7 +114,7 @@ class PlannerFixture(unittest.TestCase):
  def test_real_node_wrapper_matrix(self):
   cases={'fixture-read':0,'absolute-fixture-read':0,'paged-fixture-read':0,'manifest-read':0,'resource-read':0,'vgxread-known-resource':0,'outside-read':78,'symlink-read':78,'unknownskill':78,'unknownresource':78,'64calls':0,'65calls':78,'exactcatalog':0,'missingcatalog':78,'extracatalog':78,'duplicatecatalog':78,'changedmanifest':78,'changedresource':78}
   for scenario,expected in cases.items():
-   with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as d:
+   with self.subTest(scenario=scenario), temporary_directory() as d:
     d=pathlib.Path(d);workspace=d/'workspace';storage=d/'storage';workspace.mkdir();storage.mkdir();(workspace/'ok.txt').write_text('ok')
     skill=d/'skills/fixture';skill.mkdir(parents=True);manifest=skill/'SKILL.md';resource=skill/'refs/guide.txt';resource.parent.mkdir()
     manifest.write_text('name: fixture\ncompatibility: Agent Skills hosts\n<!-- managed-by: vgxness -->');resource.write_text('guide')
@@ -109,9 +125,10 @@ class PlannerFixture(unittest.TestCase):
     result=subprocess.run([NODE,'--experimental-strip-types',str(script),str(wrapper),json.dumps(payload)],cwd=d,env={'HOME':str(d/'home'),'PATH':os.environ['PATH'],'PI_CODING_AGENT_DIR':str(d/'home')},capture_output=True,text=True,timeout=15)
     self.assertEqual(expected,result.returncode,result.stderr)
     if expected==0:self.assertIn('wrapper-ok',result.stdout);self.assertIn('systemPromptSha256',(d/'guard.jsonl').read_text())
+@unittest.skipIf(sys.platform == "win32", "POSIX fixture or process transport")
 class ProcessTests(unittest.TestCase):
     def call_child(self, code, timeout=0.25, limit=4096):
-        with tempfile.TemporaryDirectory() as directory:
+        with temporary_directory() as directory:
             root = pathlib.Path(directory)
             result = pi_runner._process(
                 [sys.executable, '-c', code], root, dict(os.environ),
@@ -145,6 +162,7 @@ class ProcessTests(unittest.TestCase):
         self.assertTrue(result['reaped'])
         self.assertLess(result['elapsedSeconds'], 2)
 
+    @unittest.skipUnless(sys.platform == "linux", "descendant state assertion requires Linux /proc")
     def test_descendant_holding_pipes_is_killed(self):
         code = ("import subprocess,sys; p=subprocess.Popen([sys.executable,'-c',"
                 "'import time; time.sleep(60)']); print(p.pid,flush=True)")
@@ -162,7 +180,7 @@ class ProcessTests(unittest.TestCase):
             self.fail('descendant is still running')
 
     def test_spawn_failure_and_expired_deadline_do_not_leak(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with temporary_directory() as directory:
             root = pathlib.Path(directory)
             result = pi_runner._process(['/nonexistent-pi-test-executable'], root,
                                         dict(os.environ), root / 'out', root / 'err',
@@ -174,6 +192,7 @@ class ProcessTests(unittest.TestCase):
                                             root / 'out2', root / 'err2', time.monotonic() - 1)
             self.assertEqual('timeout', result['reason'])
 
+@unittest.skipUnless(sys.platform == "linux", "Pi evaluation transport requires Linux")
 class RunTests(unittest.TestCase):
     setUp = PlannerFixture.setUp
     tearDown = PlannerFixture.tearDown
@@ -254,6 +273,7 @@ for event in [{'type':'message_end','message':message},{'type':'agent_end','will
         self.assertEqual('failed-ungraded', self.receipt()['status'])
 def stat_mode(path): return os.stat(path).st_mode & 0o777
 class EarlyFailureTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "POSIX process transport")
     def test_fatal_lines_stop_a_child_that_would_keep_running(self):
         cases = [
             ('stdout', b'{bad', 'malformed NDJSON'),
@@ -263,7 +283,7 @@ class EarlyFailureTests(unittest.TestCase):
             ('stderr', b'EVALUATOR_FATAL fixture', 'extension guard/load failure'),
         ]
         for stream, payload, reason in cases:
-            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
+            with self.subTest(reason=reason), temporary_directory() as directory:
                 root = pathlib.Path(directory)
                 fd = 1 if stream == 'stdout' else 2
                 code = f'import os,time; os.write({fd},{payload + bytes([10])!r}); time.sleep(60)'
@@ -275,8 +295,9 @@ class EarlyFailureTests(unittest.TestCase):
                 self.assertTrue(result['reaped'])
                 self.assertLess(result['elapsedSeconds'], 2)
 
+    @unittest.skipIf(sys.platform == "win32", "POSIX process transport")
     def test_split_utf8_and_final_line_without_newline(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with temporary_directory() as directory:
             root = pathlib.Path(directory)
             code = "import os,time; os.write(1,b'{\"type\":\"note\",\"text\":\"\\xc3'); time.sleep(.01); os.write(1,b'\\xb1\"}')"
             result = pi_runner._process(
@@ -290,6 +311,7 @@ class EarlyFailureTests(unittest.TestCase):
             self.assertEqual(0, pi_runner.main(['self-test']))
 
 
+@unittest.skipUnless(sys.platform == "linux", "Pi evaluation transport requires Linux")
 class AdditionalPlanTests(unittest.TestCase):
     setUp = PlannerFixture.setUp
     tearDown = PlannerFixture.tearDown

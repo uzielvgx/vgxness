@@ -6,6 +6,11 @@ never execute a target CLI.  `run` must be selected explicitly.
 """
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 11):
+    raise SystemExit("VGXNESS evaluation tooling requires Python 3.11 or newer; use python3.11 or set PYTHON=python3.11 for make eval-check")
+
 import argparse
 import hashlib
 import json
@@ -14,7 +19,6 @@ import pathlib
 import secrets
 import signal
 import subprocess
-import sys
 import time
 from typing import Any
 

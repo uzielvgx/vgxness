@@ -10,7 +10,7 @@ The shared Manager owns authorization, scope, lifecycle decisions and final acce
 
 Memory recall is limited to relevant prior context: search before exact-ID reads and use recent recall only for explicit recent-work or recovery requests. Durable, evidence-backed knowledge is assessed under a stable topic; secrets, raw transcripts, logs and transient status are excluded. There is no automatic cloud synchronization. The OpenCode lifecycle plugin can inject a bounded prior completed same-project handoff as untrusted data and does not capture transcripts. Exact legacy plugin and provider-skill bytes are retirement identities; modified, foreign, mixed or unknown packages remain protected.
 
-The read-only `status` and `doctor` commands report storage root, database, and schema health. Compatibility execution commands and subsystems are not part of the product.
+The read-only `status` and `doctor` commands report storage root, database, and schema health. Use `vgxness doctor --all` to inspect storage, shared installation, and all three providers together; runtime/model evidence that is not observed is reported explicitly. See [system diagnostics](docs/diagnostics.md) for results and exit codes. Compatibility execution commands and subsystems are not part of the product.
 
 ## Documentation
 
@@ -33,6 +33,8 @@ The read-only `status` and `doctor` commands report storage root, database, and 
 | [Evaluation results](docs/agent-evaluation-results.md) | Sanitized, bounded results from provider, PostgreSQL, and two-client development evaluations. |
 
 ## Development
+
+The offline evaluation tooling requires Python 3.11 or newer. Run `make eval-check PYTHON=python3.11` and `make pi-check` for the Python and Pi lanes; these are separate from the Go `make verify` lane.
 
 Run `make fast` during iteration. It checks formatting and runs `go test -short ./...`; short mode omits only filesystem-heavy installation and durability lifecycles, not unit, security, drift, parsing, authorization, or repository contract tests.
 

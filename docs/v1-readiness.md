@@ -10,7 +10,7 @@ This source-backed audit records the local implementation and the evidence still
 | U2: obsolete owned MCP | Explicit proof-bound preview/repair and conflict-preserving recovery in `internal/providers/opencode/mcp_repair.go`; CLI tests | Independent review; no automatic repair of foreign entries |
 | D1: distribution | Strict portable envelope in `internal/piartifact`, bundle builder in `internal/release`, and tag workflow asset contract | Successful exact-tag workflow and native artifact evidence; no publication performed here |
 | D2: provisioning | Pinned acquisition, explicit offline directory, `setup all` includes three providers; real bundle/acquire/install and idempotence fixtures | Native target runs; package health does not establish model authentication |
-| Q1: reproducibility | Locked local TypeScript/SDK dependencies, full Pi test discovery and six Node/OS CI combinations | Observed remote matrix results |
+| Q1: reproducibility | Locked local TypeScript/SDK dependencies, full Pi test discovery and six Node/OS CI combinations | Baseline matrix observed on `64be730`; re-run on each changed candidate (see CI evidence below) |
 | Q2: backup toolchain | Go 1.26.6 toolchain pin and focused backup regression | Preserve matching toolchain in validation; no weakening of backup checks |
 | E1: behavioral evaluation | Nine development cases, normalized evidence validator and offline regressions in `tools/agent_eval` | Independent per-provider/model runs, retained traces and grading; synthetic tests are not behavioral passes |
 | S1: support and trust | Current shared Manager identities, explicit platform/trust limits and individual issue reconciliation | Accountable release acceptance after required evidence is available |
@@ -19,7 +19,13 @@ This source-backed audit records the local implementation and the evidence still
 | Pi R1: results/recovery | Bounded single terminal result, cancellation, reaping and retained recovery; actual SDK transport fixtures | Real selected-model behavior and target-native process evidence |
 | Pi V1: views | Read-only loading/available/stale/unavailable views with bounded memory provenance and worker results | Independent review; no broad observability claim |
 | Pi I1: independence/shared DB | TypeScript/Node runtime, existing SQLite migrations and memory contract; isolated package/SDK journey | No Go/VGXNESS process required by Pi runtime; cross-host checks remain separate |
-| Pi P1: platforms | Temporary installation and SDK load; native platform CI configuration | Observed macOS/Windows runs; Windows workers remain unsupported |
+| Pi P1: platforms | Temporary installation and SDK load; native platform CI configuration | Baseline native matrix observed on `64be730`; Windows workers remain unsupported |
+
+## Observed baseline CI evidence (2026-09-10)
+
+[Go CI run 34445246082](https://github.com/uzielvgx/vgxness/actions/runs/34445246082) completed successfully for exact commit `64be730df8c2fcd71a0a4dfdf36b4fe05cd56f96`. All 18 jobs succeeded, including the six Pi Node/OS combinations, PostgreSQL integration, race, static checks, vulnerability scanning, Darwin smoke and Windows installation. Aggregate Go coverage was 76.4% against the 74.5% floor. Windows Pi tests deliberately skip unsupported worker coverage; a green matrix does not establish Windows workers.
+
+This closes the absence of an observed **baseline CI matrix** in Q1/Pi P1, not all criteria in those rows. The baseline Darwin Go smoke omitted `internal/release`; the subsequent local audit reproduced three Pi bundle test failures under macOS's default `/var` temporary alias. The current follow-up adds this package to Darwin smoke and canonicalizes test-owned scratch paths. Any follow-up source changes require fresh checks and independent verification; the linked baseline cannot certify them. Native release artifact evidence, model authentication, behavioral acceptance, and exact-tag publication remain separate.
 
 ## Open issue reconciliation
 
@@ -48,7 +54,7 @@ Repositories, hosts and release publishers must be trusted. Prompt instructions,
 
 The downloader uses the fixed GitHub release origin, TLS, bounded parsing and checksums from that origin. This provides integrity relative to the trusted publisher, not an independent signature. Automatic attestation verification is not implemented. Acquisition cleanup removes only identified files through the held directory root and never recursively removes a mutable path. It preserves observed replacements, changed files and extra entries, reporting retained recovery state. Portable filesystems do not provide atomic compare-identity/content-and-unlink against another same-UID process; a replacement in that final per-file check/unlink window (or an empty-directory replacement before final nonrecursive removal) remains outside this trusted-host boundary.
 
-Local development checks have been exercised on Linux ARM64. The Node/OS matrix and release-native workflows are configured, not evidence of a successful run of this candidate on every platform. Windows worker process ownership is explicitly unavailable. A portable archive or cross-build does not promote native support. Previous model evaluations on other candidates cannot certify this one; protected holdouts remain with their independent owner.
+Local development checks have been exercised on Linux ARM64. The baseline Node/OS matrix has the observed run recorded above; release-native workflows still require exact-tag evidence. Baseline evidence does not certify later workspace changes or every platform capability. Windows worker process ownership is explicitly unavailable. A portable archive or cross-build does not promote native support. Previous model evaluations on other candidates cannot certify this one; protected holdouts remain with their independent owner.
 
 ## Pi Manager behavioral evidence
 
@@ -60,7 +66,7 @@ The follow-up evidence retains four separately bound cohorts of six sessions (24
 
 The user chose to retain the current workflow and document the limitation, without adding automatic independent review calls. This decision does not waive the failed correction criteria. The experimental prompt changes remain unaccepted as a correction and must not be represented as a published fix. Additional GPT-5.4 and GPT-5.5 coverage is excluded from this work; existing support and historical results are unchanged.
 
-Canonical evidence: SDD change `change-c60ed309940de92ddcb8cd6578b6d1c0`, verify candidate `revision-678afd120edfc3504bc42caaf45c284c`, digest `e31e112ea65733afed0ed6abaf5badbfbe1bbc9f3a0dbab10e4cb9e36324d9df`. This is a failed verification record, not an accepted correction. The VGXNESS Manager maintains this record; revisit it when Manager instructions, selected skills, evaluation criteria, or independently graded evidence change. Broader skills/orchestration coverage and protected holdouts remain pending. See [Pi usage guidance](pi-typescript.md#known-manager-evaluation-limitations).
+Canonical evidence: SDD change `change-c60ed309940de92ddcb8cd6578b6d1c0`, verify candidate `revision-678afd120edfc3504bc42caaf45c284c`, digest `e31e112ea65733afed0ed6abaf5badbfbe1bbc9f3a0dbab10e4cb9e36324d9df`. This is a failed verification record, not an accepted correction. The VGXNESS Manager maintains this record; revisit it when Manager instructions, selected skills, evaluation criteria, or independently graded evidence change. Broader skills/orchestration coverage and protected holdouts remain pending. The [2026-09-10 reevaluation](manager-reevaluation.md#acceptance-and-reporting) ran six further sessions on the frozen pre-report workspace candidate and independently scored **5 PASS / 1 FAIL**. All 16 concrete generated examples were reviewed; missing mandatory independent grading and duplicated authorization requests in two examples keep the correction criteria failed. Evidence integrity passed separately. This additional public-development cohort does not certify reliability or protected-holdout performance. See [Pi usage guidance](pi-typescript.md#known-manager-evaluation-limitations).
 
 ## SDD and release gates
 
