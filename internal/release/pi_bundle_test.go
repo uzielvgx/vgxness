@@ -15,6 +15,17 @@ import (
 	"github.com/vgxness/vgxness/internal/piartifact"
 )
 
+// Canonicalize only test-owned scratch space; production output paths must
+// continue rejecting symlink ancestors, including user-supplied aliases.
+func bundleTempDir(t *testing.T) string {
+	t.Helper()
+	path, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func bundleRepository(t *testing.T) string {
 	t.Helper()
 	repository, err := filepath.Abs(filepath.Join("..", ".."))
@@ -30,7 +41,7 @@ func TestPackagePiBundleRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := filepath.Join(t.TempDir(), "portable")
+	output := filepath.Join(bundleTempDir(t), "portable")
 	if err := PackagePiBundle(context.Background(), repository, output, "v1.2.3", commit); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +86,7 @@ func TestPackagePiBundleRejectsInvalidOrExistingOutput(t *testing.T) {
 		"mismatched head": {"v1.2.3", strings.Repeat("a", 40)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			output := filepath.Join(t.TempDir(), "portable")
+			output := filepath.Join(bundleTempDir(t), "portable")
 			err := PackagePiBundle(context.Background(), repository, output, request[0], request[1])
 			if err == nil {
 				t.Fatal("PackagePiBundle accepted invalid request")
@@ -85,7 +96,7 @@ func TestPackagePiBundleRejectsInvalidOrExistingOutput(t *testing.T) {
 			}
 		})
 	}
-	output := filepath.Join(t.TempDir(), "portable")
+	output := filepath.Join(bundleTempDir(t), "portable")
 	if err := os.Mkdir(output, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +113,7 @@ func TestPackagePiBundleCancelledLeavesNoOutput(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	output := filepath.Join(t.TempDir(), "portable")
+	output := filepath.Join(bundleTempDir(t), "portable")
 	err = PackagePiBundle(ctx, repository, output, "v1.2.3", commit)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("PackagePiBundle error = %v, want cancellation", err)
@@ -114,12 +125,12 @@ func TestPackagePiBundleCancelledLeavesNoOutput(t *testing.T) {
 
 func TestRunPiBundleFlagPairing(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := RunPi(context.Background(), []string{"--output", filepath.Join(t.TempDir(), "portable"), "--release-version", "v1.2.3"}, &stdout, &stderr); code != 2 {
+	if code := RunPi(context.Background(), []string{"--output", filepath.Join(bundleTempDir(t), "portable"), "--release-version", "v1.2.3"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("unpaired release flags exit = %d, stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := RunPi(context.Background(), []string{"--output", filepath.Join(t.TempDir(), "portable"), "--release-version", "v1.2.3", "--commit", "bad"}, &stdout, &stderr); code != 1 {
+	if code := RunPi(context.Background(), []string{"--output", filepath.Join(bundleTempDir(t), "portable"), "--release-version", "v1.2.3", "--commit", "bad"}, &stdout, &stderr); code != 1 {
 		t.Fatalf("invalid paired bundle flags exit = %d, stderr=%s", code, stderr.String())
 	}
 }
@@ -128,8 +139,8 @@ func TestPackagePiBundleCanonicalTemporaryParent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink alias fixture is not portable on Windows")
 	}
-	real := t.TempDir()
-	alias := filepath.Join(t.TempDir(), "tmp-alias")
+	real := bundleTempDir(t)
+	alias := filepath.Join(bundleTempDir(t), "tmp-alias")
 	if err := os.Symlink(real, alias); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +150,7 @@ func TestPackagePiBundleCanonicalTemporaryParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := filepath.Join(t.TempDir(), "portable")
+	output := filepath.Join(bundleTempDir(t), "portable")
 	if err := PackagePiBundle(context.Background(), repository, output, "v1.2.3", commit); err != nil {
 		t.Fatal(err)
 	}

@@ -3,18 +3,18 @@ import json
 import io
 import pathlib
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+from test_support import temporary_directory
 import runner
 
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = temporary_directory()
         self.root = pathlib.Path(self.temp.name)
         self.agents = self.root / "AGENTS.md"
         self.agents.write_text("rules\n", encoding="utf-8")

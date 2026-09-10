@@ -84,12 +84,19 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var opts config.Options
+	var all bool
+	if command == "doctor" {
+		flags.BoolVar(&all, "all", false, "inspect storage, managed setup and available provider runtime evidence")
+	}
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
 	flags.StringVar(&opts.ProjectDir, "workspace", "", "absolute workspace")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "use project-local storage")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "invalid command arguments")
 		return 2
+	}
+	if all {
+		return runDoctorAll(ctx, stdout, stderr, opts, inspector, setup, codexIntegration)
 	}
 	var result inspection.Result
 	var err error

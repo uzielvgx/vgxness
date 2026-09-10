@@ -1,4 +1,10 @@
-.PHONY: fast verify vuln codex-e2e pi-check
+.PHONY: fast verify vuln codex-e2e pi-check eval-check
+
+PYTHON ?= python3
+
+eval-check:
+	$(PYTHON) -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 'Python 3.11+ required; run make eval-check PYTHON=python3.11')"
+	$(PYTHON) -m unittest discover -s tools/agent_eval -p 'test_*.py'
 
 pi-check:
 	npm ci --ignore-scripts

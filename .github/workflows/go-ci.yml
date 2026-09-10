@@ -61,7 +61,7 @@ jobs:
           PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: Test agent-evaluation runner offline
-        run: python3 -m unittest discover -s tools/agent_eval -p 'test_*.py'
+        run: make eval-check
       - name: Enforce aggregate coverage floor
         run: |
           observed="$(go tool cover -func=coverage.out | awk '/^total:/{gsub("%", "", $3); print $3}')"
@@ -311,6 +311,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
       - name: Prefetch modules
         run: go mod download
       - name: Install pinned proper-lockfile fixture
@@ -322,7 +325,12 @@ jobs:
       - name: Test native filesystem and runtime packages
         env:
           PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
-        run: go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/selfinstall ./internal/providers/...
+        run: go test -count=1 ./internal/launcher ./internal/config ./internal/memory ./internal/selfinstall ./internal/providers/... ./internal/release
+
+      - name: Install Pi test dependencies
+        run: npm ci --ignore-scripts
+      - name: Test portable evaluation tooling
+        run: make eval-check
 
   pi-typescript:
     runs-on: ${{ matrix.os }}

@@ -1,4 +1,6 @@
 # Pi development evaluation transport
+Python 3.11 or newer is required for this development tooling. Use that interpreter for the commands below. The offline suite canonicalizes only its own temporary directories, preserving runtime rejection of user-supplied symlink paths. On macOS and Windows it explicitly skips Linux-only Pi transport tests; those tests still execute in the Linux CI coverage job. A skipped test is not native support evidence.
+
 
 `tools/agent_eval/pi_runner.py` prepares isolated public development cases and records opt-in Pi execution evidence. It is optional Python standard-library development tooling. The installed Pi package remains TypeScript/Node and does not depend on this runner, Go, the VGXNESS CLI, or a VGXNESS MCP server.
 
@@ -79,7 +81,7 @@ Offline checks:
 python3 tools/agent_eval/pi_runner.py --help
 python3 tools/agent_eval/pi_runner.py --version
 python3 tools/agent_eval/pi_runner.py self-test
-python3 -m unittest discover -s tools/agent_eval -p 'test_*.py'
+make eval-check PYTHON=python3.11
 ```
 
 The unit suite uses fake child processes and a real Node import of the extension with a simulated Pi event host. It makes no model/account calls. Passing it proves the tested transport boundaries, not live Manager behavior.
