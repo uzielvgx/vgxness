@@ -9,8 +9,8 @@ import (
 
 	"github.com/vgxness/vgxness/internal/buildinfo"
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/providers/pi"
-	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 	"github.com/vgxness/vgxness/internal/skills"
@@ -47,7 +47,7 @@ func (fake *fakeSetupRuntime) Status(_ context.Context, options setupflow.Option
 
 func TestSetupWizardModelPlanFlagsAndRestartMessaging(t *testing.T) {
 	plan := setupPlanFixture(true)
-	plan.Integration.ModelPlan = sdd.PlanHigh
+	plan.Integration.ModelPlan = modelplan.PlanHigh
 	plan.Integration.ModelProvider = "acme"
 	plan.Integration.ModelEfficient = "acme/fast"
 	plan.Integration.ModelBalanced = "acme/balanced"
@@ -60,7 +60,7 @@ func TestSetupWizardModelPlanFlagsAndRestartMessaging(t *testing.T) {
 		"opencode", "--preview", "--workspace", "/workspace", "--model-plan", "high",
 		"--model-efficient", "acme/fast", "--model-balanced", "acme/balanced", "--model-frontier", "acme/frontier",
 	}, strings.NewReader(""), &stdout, &stderr, fake)
-	if code != 0 || stderr.Len() != 0 || fake.options.Integration.ModelPlan != sdd.PlanHigh || fake.options.Integration.ModelFrontier != "acme/frontier" {
+	if code != 0 || stderr.Len() != 0 || fake.options.Integration.ModelPlan != modelplan.PlanHigh || fake.options.Integration.ModelFrontier != "acme/frontier" {
 		t.Fatalf("code=%d options=%+v stderr=%q", code, fake.options, stderr.String())
 	}
 	for _, expected := range []string{"Plan de modelos: high", "acme/fast", "acme/balanced", "acme/frontier", "Durabilidad de directorio: fsync.", "reinicia OpenCode"} {
@@ -72,24 +72,24 @@ func TestSetupWizardModelPlanFlagsAndRestartMessaging(t *testing.T) {
 
 func TestSetupWizardAcceptsUltraModelPlan(t *testing.T) {
 	plan := setupPlanFixture(true)
-	plan.Integration.ModelPlan = sdd.PlanUltra
+	plan.Integration.ModelPlan = modelplan.PlanUltra
 	fake := &fakeSetupRuntime{plan: plan}
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--preview", "--model-plan", "ultra"}, strings.NewReader(""), &stdout, &stderr, fake)
-	testutil.Require(t, code == 0 && stderr.Len() == 0 && fake.options.Integration.ModelPlan == sdd.PlanUltra && strings.Contains(stdout.String(), "Plan de modelos: ultra"), "exit=%d options=%+v stdout=%q stderr=%q", code, fake.options, stdout.String(), stderr.String())
+	testutil.Require(t, code == 0 && stderr.Len() == 0 && fake.options.Integration.ModelPlan == modelplan.PlanUltra && strings.Contains(stdout.String(), "Plan de modelos: ultra"), "exit=%d options=%+v stdout=%q stderr=%q", code, fake.options, stdout.String(), stderr.String())
 }
 
 func TestSetupWizardMixedSlotsCarryEffortsAndNeverClaimAuthorization(t *testing.T) {
 	plan := setupPlanFixture(true)
 	plan.Integration.ModelProvider = "mixed"
 	plan.Integration.ModelEfficient, plan.Integration.ModelBalanced, plan.Integration.ModelFrontier = "openai/fast", "anthropic/balanced", "acme/frontier"
-	plan.Integration.ModelEfficientEffort, plan.Integration.ModelBalancedEffort, plan.Integration.ModelFrontierEffort = sdd.EffortLow, sdd.EffortHigh, sdd.EffortUltra
-	plan.Integration.ModelEfficientSource, plan.Integration.ModelBalancedSource, plan.Integration.ModelFrontierSource = sdd.ModelSlotCatalog, sdd.ModelSlotCustom, sdd.ModelSlotCustom
-	plan.Integration.ModelEfficientAvailability, plan.Integration.ModelBalancedAvailability, plan.Integration.ModelFrontierAvailability = sdd.ModelSlotCatalogKnown, sdd.ModelSlotUnknown, sdd.ModelSlotUnknown
+	plan.Integration.ModelEfficientEffort, plan.Integration.ModelBalancedEffort, plan.Integration.ModelFrontierEffort = modelplan.EffortLow, modelplan.EffortHigh, modelplan.EffortUltra
+	plan.Integration.ModelEfficientSource, plan.Integration.ModelBalancedSource, plan.Integration.ModelFrontierSource = modelplan.ModelSlotCatalog, modelplan.ModelSlotCustom, modelplan.ModelSlotCustom
+	plan.Integration.ModelEfficientAvailability, plan.Integration.ModelBalancedAvailability, plan.Integration.ModelFrontierAvailability = modelplan.ModelSlotCatalogKnown, modelplan.ModelSlotUnknown, modelplan.ModelSlotUnknown
 	fake := &fakeSetupRuntime{plan: plan}
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--preview", "--model-efficient", "openai/fast", "--model-balanced", "anthropic/balanced", "--model-frontier", "acme/frontier", "--model-efficient-effort", "low", "--model-balanced-effort", "high", "--model-frontier-effort", "ultra"}, strings.NewReader(""), &stdout, &stderr, fake)
-	testutil.Require(t, code == 0 && stderr.Len() == 0 && fake.options.Integration.ModelFrontierEffort == sdd.EffortUltra, "code=%d options=%+v stderr=%q", code, fake.options, stderr.String())
+	testutil.Require(t, code == 0 && stderr.Len() == 0 && fake.options.Integration.ModelFrontierEffort == modelplan.EffortUltra, "code=%d options=%+v stderr=%q", code, fake.options, stderr.String())
 	for _, expected := range []string{
 		"Slot efficient:\n    provider=openai\n    ref=openai/fast\n    effort=low\n    source=catalog\n    availability=catalog-known",
 		"Slot balanced:\n    provider=anthropic\n    ref=anthropic/balanced\n    effort=high\n    source=custom\n    availability=unknown",
@@ -160,7 +160,7 @@ func TestSetupWizardPreviewExplainsAllStepsWithoutApplying(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--preview", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
 	output := stdout.String()
-	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "19 skills y 47 archivos") || !strings.Contains(output, "memory-sync y sdd-lifecycle") || !strings.Contains(output, "Paso 1 de 7") || !strings.Contains(output, "Paso 7 de 7") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "sustituciones administradas para Explore y general") || !strings.Contains(output, "workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "MCP --full administrado como único runtime") || !strings.Contains(output, "verificador independiente") || !strings.Contains(output, "Artefactos administrados: 18") || !strings.Contains(output, "Agente predeterminado: vgxness-manager") || !strings.Contains(output, "no se modificó ningún archivo") {
+	if code != 0 || fake.planCalls != 1 || fake.applyCalls != 0 || stderr.Len() != 0 || !strings.Contains(output, "18 skills y 46 archivos") || !strings.Contains(output, "memory-sync") || !strings.Contains(output, "Paso 1 de 7") || !strings.Contains(output, "Paso 7 de 7") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "sustituciones administradas para Explore y general") || !strings.Contains(output, "workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario") || !strings.Contains(output, "MCP --full administrado como único runtime") || !strings.Contains(output, "verificador independiente") || !strings.Contains(output, "Artefactos administrados: 18") || !strings.Contains(output, "Agente predeterminado: vgxness-manager") || !strings.Contains(output, "no se modificó ningún archivo") {
 		t.Fatalf("code=%d calls=%d/%d stdout=%q stderr=%q", code, fake.planCalls, fake.applyCalls, output, stderr.String())
 	}
 }
@@ -202,8 +202,8 @@ func TestSetupWizardShowsLifecycleActionAndExactDigestBeforePrompt(t *testing.T)
 func TestRenderModelSlotsWrapsMaximumReferenceWithoutLoss(t *testing.T) {
 	reference := strings.Repeat("a", 256) + "/" + strings.Repeat("b", 255)
 	result := integration.Result{
-		ModelEfficient: reference, ModelEfficientEffort: sdd.EffortUltra,
-		ModelEfficientSource: sdd.ModelSlotCustom, ModelEfficientAvailability: sdd.ModelSlotUnknown,
+		ModelEfficient: reference, ModelEfficientEffort: modelplan.EffortUltra,
+		ModelEfficientSource: modelplan.ModelSlotCustom, ModelEfficientAvailability: modelplan.ModelSlotUnknown,
 	}
 	var output bytes.Buffer
 	renderModelSlots(&output, result)
@@ -232,9 +232,9 @@ func TestRenderModelSlotsWrapsMaximumReferenceWithoutLoss(t *testing.T) {
 }
 
 func TestRenderModelSlotsV3UsesAssignmentOrderAndOmitsLegacySlots(t *testing.T) {
-	assignments := new([integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3)
-	assignments[0] = sdd.OpenCodeAgentAssignmentV3{ArtifactKey: "agents/first.md", Provider: "alpha", Model: "alpha/first", RequestedEffort: sdd.EffortUltra, Effort: sdd.EffortHigh, Variant: sdd.VariantXHigh, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown, Degradation: sdd.Degradation{Degraded: true, Reason: "bounded"}}
-	assignments[1] = sdd.OpenCodeAgentAssignmentV3{ArtifactKey: "agents/second.md", Provider: "beta", Model: "beta/second", RequestedEffort: sdd.EffortLow, Effort: sdd.EffortLow, Variant: sdd.VariantLow, Source: sdd.ModelSlotCatalog, Availability: sdd.ModelSlotCatalogKnown}
+	assignments := new([integration.ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3)
+	assignments[0] = modelplan.OpenCodeAgentAssignmentV3{ArtifactKey: "agents/first.md", Provider: "alpha", Model: "alpha/first", RequestedEffort: modelplan.EffortUltra, Effort: modelplan.EffortHigh, Variant: modelplan.VariantXHigh, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown, Degradation: modelplan.Degradation{Degraded: true, Reason: "bounded"}}
+	assignments[1] = modelplan.OpenCodeAgentAssignmentV3{ArtifactKey: "agents/second.md", Provider: "beta", Model: "beta/second", RequestedEffort: modelplan.EffortLow, Effort: modelplan.EffortLow, Variant: modelplan.VariantLow, Source: modelplan.ModelSlotCatalog, Availability: modelplan.ModelSlotCatalogKnown}
 	var output bytes.Buffer
 	renderModelSlots(&output, integration.Result{ModelSchemaVersion: 3, ModelAssignments: assignments})
 	got := output.String()
@@ -276,9 +276,9 @@ func TestSetupWizardSuccessfulApplyReportsGlobalSkillCatalog(t *testing.T) {
 	plan := setupPlanFixture(true)
 	resultPlan := plan
 	resultPlan.Skills.FileCount = 23
-	resultPlan.Integration.ModelEfficientEffort, resultPlan.Integration.ModelBalancedEffort, resultPlan.Integration.ModelFrontierEffort = sdd.EffortLow, sdd.EffortHigh, sdd.EffortUltra
-	resultPlan.Integration.ModelEfficientSource, resultPlan.Integration.ModelBalancedSource, resultPlan.Integration.ModelFrontierSource = sdd.ModelSlotCatalog, sdd.ModelSlotCustom, sdd.ModelSlotCustom
-	resultPlan.Integration.ModelEfficientAvailability, resultPlan.Integration.ModelBalancedAvailability, resultPlan.Integration.ModelFrontierAvailability = sdd.ModelSlotCatalogKnown, sdd.ModelSlotUnknown, sdd.ModelSlotUnknown
+	resultPlan.Integration.ModelEfficientEffort, resultPlan.Integration.ModelBalancedEffort, resultPlan.Integration.ModelFrontierEffort = modelplan.EffortLow, modelplan.EffortHigh, modelplan.EffortUltra
+	resultPlan.Integration.ModelEfficientSource, resultPlan.Integration.ModelBalancedSource, resultPlan.Integration.ModelFrontierSource = modelplan.ModelSlotCatalog, modelplan.ModelSlotCustom, modelplan.ModelSlotCustom
+	resultPlan.Integration.ModelEfficientAvailability, resultPlan.Integration.ModelBalancedAvailability, resultPlan.Integration.ModelFrontierAvailability = modelplan.ModelSlotCatalogKnown, modelplan.ModelSlotUnknown, modelplan.ModelSlotUnknown
 	fake := &fakeSetupRuntime{
 		plan: plan,
 		result: setupflow.Result{
@@ -292,7 +292,7 @@ func TestSetupWizardSuccessfulApplyReportsGlobalSkillCatalog(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"opencode", "--yes", "--workspace", "/workspace"}, strings.NewReader(""), &stdout, &stderr, fake)
 	output := stdout.String()
-	if code != 0 || fake.applyCalls != 1 || stderr.Len() != 0 || !strings.Contains(output, "Paso 3: retiro verificado") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "catálogo global de 23 archivos") || !strings.Contains(output, "skills-creator + git-delivery + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + memory-sync + sdd-lifecycle") || !strings.Contains(output, "Slot efficient:\n    provider=openai\n    ref=openai/gpt-5.6-luna\n    effort=low\n    source=catalog\n    availability=catalog-known") || !strings.Contains(output, "Slot balanced:\n    provider=openai\n    ref=openai/gpt-5.6-terra\n    effort=high\n    source=custom\n    availability=unknown") || !strings.Contains(output, "Slot frontier:\n    provider=openai\n    ref=openai/gpt-5.6-sol\n    effort=ultra\n    source=custom\n    availability=unknown") {
+	if code != 0 || fake.applyCalls != 1 || stderr.Len() != 0 || !strings.Contains(output, "Paso 3: retiro verificado") || !strings.Contains(output, "v1-v10") || !strings.Contains(output, "vgxness.ts") || !strings.Contains(output, "vgxness-autonomous-stacked-pr") || !strings.Contains(output, "catálogo global de 23 archivos") || !strings.Contains(output, "skills-creator + git-delivery + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + memory-sync") || !strings.Contains(output, "Slot efficient:\n    provider=openai\n    ref=openai/gpt-5.6-luna\n    effort=low\n    source=catalog\n    availability=catalog-known") || !strings.Contains(output, "Slot balanced:\n    provider=openai\n    ref=openai/gpt-5.6-terra\n    effort=high\n    source=custom\n    availability=unknown") || !strings.Contains(output, "Slot frontier:\n    provider=openai\n    ref=openai/gpt-5.6-sol\n    effort=ultra\n    source=custom\n    availability=unknown") {
 		t.Fatalf("code=%d apply=%d stdout=%q stderr=%q", code, fake.applyCalls, output, stderr.String())
 	}
 }
@@ -356,7 +356,7 @@ func setupPlanFixture(ready bool) setupflow.Plan {
 	return setupflow.Plan{
 		Provider: "opencode", Steps: setupflow.OpenCodeSteps(), Ready: ready,
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/stable/vgxness", DataDir: "/data"},
-		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ArtifactCount: 18, ModelPlan: sdd.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json", DefaultAgent: "vgxness-manager", DefaultAgentPath: "/config/opencode.json"},
+		Integration: integration.Result{State: integration.StateAbsent, Path: "/config/agents/vgxness-manager.md", ArtifactCount: 18, ModelPlan: modelplan.PlanMedium, ModelProvider: "openai", ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "openai/gpt-5.6-terra", ModelFrontier: "openai/gpt-5.6-sol", ManifestPath: "/config/vgxness/model-plan.json", DefaultAgent: "vgxness-manager", DefaultAgentPath: "/config/opencode.json"},
 		Skills:      skills.Result{State: skills.StateAbsent, Path: "/shared/skills", FileCount: 22},
 		Handshake:   integration.Handshake{OK: ready, Status: integration.HandshakeHealthy},
 	}

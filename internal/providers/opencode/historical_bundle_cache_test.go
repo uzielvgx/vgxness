@@ -13,8 +13,8 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 func TestModelPlanMarkerCountEquivalent(t *testing.T) {
@@ -48,15 +48,15 @@ func TestModelPlanMarkerCountEquivalent(t *testing.T) {
 }
 
 func TestHistoricalBundleCacheEquivalent(t *testing.T) {
-	v1, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	v1, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	v2, err := buildModelPlanBundleV2(sdd.DefaultModelPlanConfigV2())
+	v2, err := buildModelPlanBundleV2(modelplan.DefaultModelPlanConfigV2())
 	if err != nil {
 		t.Fatal(err)
 	}
-	v3, err := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+	v3, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,13 +86,13 @@ func TestHistoricalBundleCacheEquivalent(t *testing.T) {
 }
 
 func cacheTestBundle() modelPlanBundle {
-	v2 := sdd.DefaultModelPlanConfigV2()
-	v3 := projectModelPlanToV3(sdd.DefaultModelPlanConfig())
+	v2 := modelplan.DefaultModelPlanConfigV2()
+	v3 := projectModelPlanToV3(modelplan.DefaultModelPlanConfig())
 	return modelPlanBundle{
-		config:   sdd.DefaultModelPlanConfig(),
-		resolved: sdd.OpenCodePlan{Slots: map[sdd.Capability]string{sdd.CapabilityEfficient: "model"}},
-		configV2: &v2, resolvedV2: &sdd.OpenCodePlanV2{Slots: v2.Slots},
-		configV3: &v3, resolvedV3: &sdd.OpenCodePlanV3{Assignments: []sdd.OpenCodeAgentAssignmentV3{{Model: "model"}}},
+		config:   modelplan.DefaultModelPlanConfig(),
+		resolved: modelplan.OpenCodePlan{Slots: map[modelplan.Capability]string{modelplan.CapabilityEfficient: "model"}},
+		configV2: &v2, resolvedV2: &modelplan.OpenCodePlanV2{Slots: v2.Slots},
+		configV3: &v3, resolvedV3: &modelplan.OpenCodePlanV3{Assignments: []modelplan.OpenCodeAgentAssignmentV3{{Model: "model"}}},
 		agents: map[string][]byte{"agent": []byte("template")}, manifest: []byte("manifest"),
 	}
 }
@@ -114,15 +114,15 @@ func TestHistoricalBundleCacheIdentityAndIsolation(t *testing.T) {
 	}
 	changes := []func(*modelPlanBundle){
 		func(b *modelPlanBundle) { b.config.Provider = "other" },
-		func(b *modelPlanBundle) { b.resolved.Slots[sdd.CapabilityEfficient] = "other" },
+		func(b *modelPlanBundle) { b.resolved.Slots[modelplan.CapabilityEfficient] = "other" },
 		func(b *modelPlanBundle) { b.configV2.Provider = "other" },
 		func(b *modelPlanBundle) { b.resolvedV2.Provider = "other" },
 		func(b *modelPlanBundle) { b.configV3.Provider = "other" },
 		func(b *modelPlanBundle) { b.resolvedV3.Assignments[0].Model = "other" },
 		func(b *modelPlanBundle) { b.agents["agent"][0] = 'X' },
 		func(b *modelPlanBundle) { b.manifest[0] = 'X' },
-		func(b *modelPlanBundle) { delete(b.configV2.Slots, sdd.CapabilityEfficient) },
-		func(b *modelPlanBundle) { delete(b.resolvedV2.Slots, sdd.CapabilityEfficient) },
+		func(b *modelPlanBundle) { delete(b.configV2.Slots, modelplan.CapabilityEfficient) },
+		func(b *modelPlanBundle) { delete(b.resolvedV2.Slots, modelplan.CapabilityEfficient) },
 		func(b *modelPlanBundle) {
 			for name := range b.configV3.Assignments {
 				delete(b.configV3.Assignments, name)
@@ -308,7 +308,7 @@ func TestHistoricalBundleCacheConcurrent(t *testing.T) {
 }
 
 func BenchmarkHistoricalBundleCache(b *testing.B) {
-	input, err := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+	input, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func historicalBundlesIndependentOracle(current modelPlanBundle) ([]modelPlanBun
 		}
 		bundles = append(bundles, bundle)
 	}
-	legacyCurrent, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	legacyCurrent, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		return nil, err
 	}
@@ -389,9 +389,9 @@ func historicalBundlesIndependentOracle(current modelPlanBundle) ([]modelPlanBun
 }
 
 func TestHistoricalBundleChainEquivalent(t *testing.T) {
-	v1, e1 := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
-	v2, e2 := buildModelPlanBundleV2(sdd.DefaultModelPlanConfigV2())
-	v3, e3 := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+	v1, e1 := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
+	v2, e2 := buildModelPlanBundleV2(modelplan.DefaultModelPlanConfigV2())
+	v3, e3 := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 	if e1 != nil || e2 != nil || e3 != nil {
 		t.Fatal(e1, e2, e3)
 	}
@@ -400,8 +400,11 @@ func TestHistoricalBundleChainEquivalent(t *testing.T) {
 		for _, change := range []func(*modelPlanBundle){
 			func(b *modelPlanBundle) { b.configV2 = nil }, func(b *modelPlanBundle) { b.resolvedV2 = nil },
 			func(b *modelPlanBundle) { b.configV3 = nil }, func(b *modelPlanBundle) { b.resolvedV3 = nil },
-			func(b *modelPlanBundle) { v := sdd.DefaultModelPlanConfigV2(); b.configV2 = &v },
-			func(b *modelPlanBundle) { v := projectModelPlanToV3(sdd.DefaultModelPlanConfig()); b.configV3 = &v },
+			func(b *modelPlanBundle) { v := modelplan.DefaultModelPlanConfigV2(); b.configV2 = &v },
+			func(b *modelPlanBundle) {
+				v := projectModelPlanToV3(modelplan.DefaultModelPlanConfig())
+				b.configV3 = &v
+			},
 			func(b *modelPlanBundle) { b.manifest = []byte("invalid manifest") },
 		} {
 			altered := cloneHistoricalBundle(base)
@@ -437,7 +440,7 @@ func TestHistoricalBundleChainEquivalent(t *testing.T) {
 }
 
 func BenchmarkHistoricalBundleChain(b *testing.B) {
-	input, err := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+	input, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -456,7 +459,7 @@ func BenchmarkHistoricalBundleChain(b *testing.B) {
 }
 
 func TestHistoricalBundleCacheAlternatingProduction(t *testing.T) {
-	current, err := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+	current, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +711,7 @@ func TestHistoricalBundleCacheConcurrentPair(t *testing.T) {
 }
 
 func BenchmarkHistoricalBundleAlternating(b *testing.B) {
-	current, err := buildModelPlanBundleV3(projectModelPlanToV3(sdd.DefaultModelPlanConfig()))
+	current, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 	if err != nil {
 		b.Fatal(err)
 	}

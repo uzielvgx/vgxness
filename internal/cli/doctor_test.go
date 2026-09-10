@@ -24,8 +24,8 @@ func TestDoctorAllReportsObservedHealthWithoutClaimingRuntimeCoverage(t *testing
 	fake := doctorFixture()
 	codex := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactCount: 15}}
 	var out, stderr bytes.Buffer
-	code := RunProductSDDRuntime(context.Background(), []string{"doctor", "--all", "--workspace", t.TempDir()}, nil, &out, &stderr,
-		&fakeInspector{result: inspection.Result{Migration: 23}}, nil, nil, codex, nil, fake, nil)
+	code := RunProductRuntime(context.Background(), []string{"doctor", "--all", "--workspace", t.TempDir()}, nil, &out, &stderr,
+		&fakeInspector{result: inspection.Result{Migration: 23}}, nil, nil, codex, nil, fake)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("code=%d stderr=%s", code, &stderr)
 	}
@@ -44,8 +44,8 @@ func TestDoctorAllContinuesAfterIndependentFailures(t *testing.T) {
 	fake.sharedStatusErr = errors.New("private diagnostic\x1b")
 	codex := &fakeIntegrationRuntime{err: integration.ErrDrift}
 	var out, stderr bytes.Buffer
-	code := RunProductSDDRuntime(context.Background(), []string{"doctor", "--all"}, nil, &out, &stderr,
-		&fakeInspector{err: inspection.ErrCorrupt}, nil, nil, codex, nil, fake, nil)
+	code := RunProductRuntime(context.Background(), []string{"doctor", "--all"}, nil, &out, &stderr,
+		&fakeInspector{err: inspection.ErrCorrupt}, nil, nil, codex, nil, fake)
 	if code != 1 || !strings.Contains(out.String(), "doctor=attention") || !strings.Contains(out.String(), "pi.artifacts=installed") || codex.calls != 1 {
 		t.Fatalf("incomplete diagnosis code=%d out=%s stderr=%s", code, &out, &stderr)
 	}
@@ -61,7 +61,7 @@ func TestDoctorAllUnavailableAdaptersAndCancellation(t *testing.T) {
 			cancel()
 		}
 		var out, stderr bytes.Buffer
-		code := RunProductSDDRuntime(ctx, []string{"doctor", "--all"}, nil, &out, &stderr, nil, nil, nil, nil, nil, nil, nil)
+		code := RunProductRuntime(ctx, []string{"doctor", "--all"}, nil, &out, &stderr, nil, nil, nil, nil, nil, nil)
 		cancel()
 		if cancelled {
 			if code != 130 || out.Len() != 0 {

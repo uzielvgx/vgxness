@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 	"os"
 	"strings"
 	"testing"
@@ -35,9 +35,9 @@ func TestSharedOpenCodeProjectionAndPredecessors(t *testing.T) {
 	}
 	for key, want := range golden {
 		parts := strings.Split(key, "/")
-		config := sdd.DefaultModelPlanConfig()
-		config.ActivePlan = sdd.Plan(parts[1])
-		config2 := sdd.DefaultModelPlanConfigV2()
+		config := modelplan.DefaultModelPlanConfig()
+		config.ActivePlan = modelplan.Plan(parts[1])
+		config2 := modelplan.DefaultModelPlanConfigV2()
 		config2.ActivePlan = config.ActivePlan
 		config3 := projectModelPlanToV3(config)
 		var current modelPlanBundle
@@ -130,7 +130,7 @@ func TestNativeSharedDevelopmentScenarios(t *testing.T) {
 	if e = json.Unmarshal(raw, &corpus); e != nil {
 		t.Fatal(e)
 	}
-	p, e := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	p, e := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 func TestSchemaV2ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
@@ -134,10 +134,10 @@ func TestSchemaV2ImmediatePromptPredecessorKeepsModelBindings(t *testing.T) {
 }
 
 func TestSchemaV2LegacyReviewFamilyIsolatedFromCARE(t *testing.T) {
-	v3, err := buildModelPlanBundleV3(sdd.ModelPlanConfigV3{
+	v3, err := buildModelPlanBundleV3(modelplan.ModelPlanConfigV3{
 		SchemaVersion: 3,
 		Provider:      "acme",
-		Provenance:    sdd.ModelPlanCLI,
+		Provenance:    modelplan.ModelPlanCLI,
 		Assignments:   completeModelAssignmentsV3(),
 	})
 	if err != nil {
@@ -188,7 +188,7 @@ func TestSchemaV2LegacyReviewFamilyIsolatedFromCARE(t *testing.T) {
 	}
 }
 
-func mustBuildModelPlanV2(t *testing.T, config sdd.ModelPlanConfigV2) modelPlanBundle {
+func mustBuildModelPlanV2(t *testing.T, config modelplan.ModelPlanConfigV2) modelPlanBundle {
 	t.Helper()
 	bundle, err := buildModelPlanBundleV2(config)
 	if err != nil {
@@ -206,31 +206,31 @@ func mustRequestModelPlan(t *testing.T, options integration.Options) modelPlanBu
 	return bundle
 }
 
-func schemaV2TestConfig(t *testing.T) sdd.ModelPlanConfigV2 {
+func schemaV2TestConfig(t *testing.T) modelplan.ModelPlanConfigV2 {
 	t.Helper()
-	config, err := sdd.NewModelPlanConfigV2(sdd.PlanMedium,
-		sdd.ModelSlotConfig{Reference: "alpha/efficient", RequestedEffort: sdd.EffortLow, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
-		sdd.ModelSlotConfig{Reference: "beta/balanced", RequestedEffort: sdd.EffortMedium, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
-		sdd.ModelSlotConfig{Reference: "gamma/frontier", RequestedEffort: sdd.EffortHigh, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+	config, err := modelplan.NewModelPlanConfigV2(modelplan.PlanMedium,
+		modelplan.ModelSlotConfig{Reference: "alpha/efficient", RequestedEffort: modelplan.EffortLow, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
+		modelplan.ModelSlotConfig{Reference: "beta/balanced", RequestedEffort: modelplan.EffortMedium, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
+		modelplan.ModelSlotConfig{Reference: "gamma/frontier", RequestedEffort: modelplan.EffortHigh, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.Provenance = sdd.ModelPlanCLI
+	config.Provenance = modelplan.ModelPlanCLI
 	return config
 }
 
-func schemaV2ImmediatePromptPredecessorConfig(t *testing.T) sdd.ModelPlanConfigV2 {
+func schemaV2ImmediatePromptPredecessorConfig(t *testing.T) modelplan.ModelPlanConfigV2 {
 	t.Helper()
-	config, err := sdd.NewModelPlanConfigV2(sdd.PlanHigh,
-		sdd.ModelSlotConfig{Reference: "openai/gpt-5.6-luna", RequestedEffort: sdd.EffortLow, Variant: "xhigh", VariantSpecified: true, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
-		sdd.ModelSlotConfig{Reference: "anthropic/claude-sonnet", RequestedEffort: sdd.EffortHigh, Variant: "max", VariantSpecified: true, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
-		sdd.ModelSlotConfig{Reference: "acme/frontier", RequestedEffort: sdd.EffortUltra, VariantSpecified: true, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+	config, err := modelplan.NewModelPlanConfigV2(modelplan.PlanHigh,
+		modelplan.ModelSlotConfig{Reference: "openai/gpt-5.6-luna", RequestedEffort: modelplan.EffortLow, Variant: "xhigh", VariantSpecified: true, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
+		modelplan.ModelSlotConfig{Reference: "anthropic/claude-sonnet", RequestedEffort: modelplan.EffortHigh, Variant: "max", VariantSpecified: true, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
+		modelplan.ModelSlotConfig{Reference: "acme/frontier", RequestedEffort: modelplan.EffortUltra, VariantSpecified: true, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.Provenance = sdd.ModelPlanCLI
+	config.Provenance = modelplan.ModelPlanCLI
 	return config
 }
 

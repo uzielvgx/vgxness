@@ -68,8 +68,10 @@ The user chose to retain the current workflow and document the limitation, witho
 
 Canonical evidence: SDD change `change-c60ed309940de92ddcb8cd6578b6d1c0`, verify candidate `revision-678afd120edfc3504bc42caaf45c284c`, digest `e31e112ea65733afed0ed6abaf5badbfbe1bbc9f3a0dbab10e4cb9e36324d9df`. This is a failed verification record, not an accepted correction. The VGXNESS Manager maintains this record; revisit it when Manager instructions, selected skills, evaluation criteria, or independently graded evidence change. Broader skills/orchestration coverage and protected holdouts remain pending. The [2026-09-10 reevaluation](manager-reevaluation.md#acceptance-and-reporting) ran six further sessions on the frozen pre-report workspace candidate and independently scored **5 PASS / 1 FAIL**. All 16 concrete generated examples were reviewed; missing mandatory independent grading and duplicated authorization requests in two examples keep the correction criteria failed. Evidence integrity passed separately. This additional public-development cohort does not certify reliability or protected-holdout performance. See [Pi usage guidance](pi-typescript.md#known-manager-evaluation-limitations).
 
-## SDD and release gates
+## Verification and release gates
 
-The accepted umbrella is `change-1c725f7c8d4ef034196aa8629325ccd0`; its Pi dependency is `change-45acf811fa4602b0d46f5c077f8003b1`. The Pi dependency must supply accepted verification before umbrella completion. Current canonical phase/revision identities live in SDD memory; this document does not replace those records.
+SDD is retired. Historical change and revision identities in this document identify
+archived evidence only; they impose no current lifecycle gates. Current decisions
+and handoffs use repository evidence and semantic memory.
 
 Freeze one candidate with HEAD, full tracked/untracked file digests and diff scope. Run repository-required validation, independent verification and applicable reviews against that identity. Record any unsupported native transport, unavailable platform or missing model/grade evidence as pending. A source change invalidates earlier candidate evidence. Publication, merge, live installation and cloud synchronization are separate authorized operations and are excluded from this implementation scope.

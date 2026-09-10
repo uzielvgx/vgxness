@@ -610,7 +610,7 @@ func tinyRelease(t *testing.T, dir, source string) string {
 		sums[name] = checksum(data)
 	}
 	files := map[string][]byte{"package.json": []byte(`{"name":"@vgxness/pi","version":"0.1.0","type":"module","pi":{"extensions":["./src/extension.ts"]},"engines":{"node":">=22.19.0"},"peerDependencies":{"@earendil-works/pi-coding-agent":"^0.84.4","typebox":"1.3.7"}}`)}
-	for _, name := range []string{"src/extension.ts", "src/probe.ts", "resources/migrations/manifest.json", "resources/prompts/manager.md", "resources/skills/sdd-lifecycle/SKILL.md", "LICENSE"} {
+	for _, name := range []string{"src/extension.ts", "src/probe.ts", "resources/migrations/manifest.json", "resources/prompts/manager.md", "resources/skills/memory-sync/SKILL.md", "LICENSE"} {
 		files[name] = []byte("fixture")
 	}
 	migrations := []map[string]any{}

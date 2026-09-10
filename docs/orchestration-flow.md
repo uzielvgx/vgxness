@@ -2,7 +2,7 @@
 
 The active flow is understand, implement, check, review and deliver. Planning is a short artifact when complexity warrants it, not a mandatory phase machine. The shared Manager owns scope, authorization, candidate identity and delivery. Writers remain sequential.
 
-Structured SDD is retired for all hosts. Do not create or advance changes, invoke SDD phase workers, or treat historical accepted revisions as current authority. Historical SQLite schema v23 records and migrations are preserved. Read-only archival CLI access is documented in the README. Memory sync remains project/session/observation synchronization; it does not replicate archived SDD.
+Structured SDD is retired for all hosts. Do not create or advance changes, invoke SDD phase workers, or treat historical accepted revisions as current authority. Historical SQLite schema v23 records and migrations are preserved. No lifecycle or archive command remains; historical rows are inert data. Memory sync remains project/session/observation synchronization; it does not replicate archived SDD.
 
 ## Roles and evidence
 

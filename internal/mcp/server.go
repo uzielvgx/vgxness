@@ -1,12 +1,11 @@
 // Package mcp provides capability-gated MCP tools: read-only by default, with
-// explicit --full memory and SDD mutation capabilities.
+// explicit --full memory mutation capabilities.
 package mcp
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/vgxness/vgxness/internal/app/runtime"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 var (
@@ -22,8 +20,6 @@ var (
 	ErrUnavailable  = errors.New("memory service unavailable")
 	ErrNotFound     = errors.New("memory record not found")
 	ErrConflict     = errors.New("memory record conflict")
-	ErrStale        = errors.New("SDD state version changed")
-	ErrSDDCancelled = errors.New("SDD change is cancelled")
 )
 
 const maxLimit = 50
@@ -35,23 +31,6 @@ type Server struct {
 	reader  memoryReader
 	project string
 	full    bool
-	sdd     sddReader
-}
-
-type sddReader interface {
-	CreateChange(context.Context, sdd.CreateChangeRequest) (sdd.Change, error)
-	ListChanges(context.Context, sdd.ListChangesRequest) ([]sdd.Change, error)
-	GetChange(context.Context, sdd.GetChangeRequest) (sdd.Change, error)
-	UpdateInteractionMode(context.Context, sdd.UpdateInteractionModeRequest) (sdd.Change, error)
-	TransitionChange(context.Context, sdd.TransitionChangeRequest) (sdd.Change, error)
-	SaveRevision(context.Context, sdd.SaveRevisionRequest) (sdd.Revision, error)
-	GetRevision(context.Context, sdd.GetRevisionRequest) (sdd.Revision, error)
-	ListRevisions(context.Context, sdd.ListRevisionsRequest) ([]sdd.Revision, error)
-	AcceptRevision(context.Context, sdd.AcceptRevisionRequest) (sdd.Revision, error)
-	RenderProjection(context.Context, sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error)
-	CompareProjection(context.Context, sdd.CompareProjectionRequest) (sdd.ProjectionComparison, error)
-	RecordProjection(context.Context, sdd.RecordProjectionRequest) (sdd.Projection, error)
-	ProjectionStatus(context.Context, sdd.ProjectionStatusRequest) (sdd.Projection, error)
 }
 
 type memoryReader interface {
@@ -69,93 +48,6 @@ type memoryReader interface {
 type runtimeReader struct {
 	runtime runtime.Memory
 	opts    config.Options
-}
-
-type runtimeSDDReader struct {
-	runtime runtime.SDD
-	opts    config.Options
-}
-
-func (reader runtimeSDDReader) CreateChange(ctx context.Context, request sdd.CreateChangeRequest) (sdd.Change, error) {
-	return reader.runtime.CreateChange(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) ListChanges(ctx context.Context, request sdd.ListChangesRequest) ([]sdd.Change, error) {
-	return reader.runtime.ListChanges(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) GetChange(ctx context.Context, request sdd.GetChangeRequest) (sdd.Change, error) {
-	return reader.runtime.GetChange(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) UpdateInteractionMode(ctx context.Context, request sdd.UpdateInteractionModeRequest) (sdd.Change, error) {
-	return reader.runtime.UpdateInteractionMode(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) TransitionChange(ctx context.Context, request sdd.TransitionChangeRequest) (sdd.Change, error) {
-	return reader.runtime.TransitionChange(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) SaveRevision(ctx context.Context, request sdd.SaveRevisionRequest) (sdd.Revision, error) {
-	return reader.runtime.SaveRevision(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) GetRevision(ctx context.Context, request sdd.GetRevisionRequest) (sdd.Revision, error) {
-	return reader.runtime.GetRevision(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) ListRevisions(ctx context.Context, request sdd.ListRevisionsRequest) ([]sdd.Revision, error) {
-	return reader.runtime.ListRevisions(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) AcceptRevision(ctx context.Context, request sdd.AcceptRevisionRequest) (sdd.Revision, error) {
-	return reader.runtime.AcceptRevision(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) RenderProjection(ctx context.Context, request sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error) {
-	return reader.runtime.RenderProjection(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) CompareProjection(ctx context.Context, request sdd.CompareProjectionRequest) (sdd.ProjectionComparison, error) {
-	return reader.runtime.CompareProjection(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) RecordProjection(ctx context.Context, request sdd.RecordProjectionRequest) (sdd.Projection, error) {
-	return reader.runtime.RecordProjection(ctx, reader.opts, request)
-}
-func (reader runtimeSDDReader) ProjectionStatus(ctx context.Context, request sdd.ProjectionStatusRequest) (sdd.Projection, error) {
-	return reader.runtime.ProjectionStatus(ctx, reader.opts, request)
-}
-
-type unavailableSDDReader struct{}
-
-func (unavailableSDDReader) CreateChange(context.Context, sdd.CreateChangeRequest) (sdd.Change, error) {
-	return sdd.Change{}, ErrUnavailable
-}
-func (unavailableSDDReader) ListChanges(context.Context, sdd.ListChangesRequest) ([]sdd.Change, error) {
-	return nil, ErrUnavailable
-}
-func (unavailableSDDReader) GetChange(context.Context, sdd.GetChangeRequest) (sdd.Change, error) {
-	return sdd.Change{}, ErrUnavailable
-}
-func (unavailableSDDReader) UpdateInteractionMode(context.Context, sdd.UpdateInteractionModeRequest) (sdd.Change, error) {
-	return sdd.Change{}, ErrUnavailable
-}
-func (unavailableSDDReader) TransitionChange(context.Context, sdd.TransitionChangeRequest) (sdd.Change, error) {
-	return sdd.Change{}, ErrUnavailable
-}
-func (unavailableSDDReader) SaveRevision(context.Context, sdd.SaveRevisionRequest) (sdd.Revision, error) {
-	return sdd.Revision{}, ErrUnavailable
-}
-func (unavailableSDDReader) GetRevision(context.Context, sdd.GetRevisionRequest) (sdd.Revision, error) {
-	return sdd.Revision{}, ErrUnavailable
-}
-func (unavailableSDDReader) ListRevisions(context.Context, sdd.ListRevisionsRequest) ([]sdd.Revision, error) {
-	return nil, ErrUnavailable
-}
-func (unavailableSDDReader) AcceptRevision(context.Context, sdd.AcceptRevisionRequest) (sdd.Revision, error) {
-	return sdd.Revision{}, ErrUnavailable
-}
-func (unavailableSDDReader) RenderProjection(context.Context, sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error) {
-	return sdd.ProjectionDocument{}, ErrUnavailable
-}
-func (unavailableSDDReader) CompareProjection(context.Context, sdd.CompareProjectionRequest) (sdd.ProjectionComparison, error) {
-	return sdd.ProjectionComparison{}, ErrUnavailable
-}
-func (unavailableSDDReader) RecordProjection(context.Context, sdd.RecordProjectionRequest) (sdd.Projection, error) {
-	return sdd.Projection{}, ErrUnavailable
-}
-func (unavailableSDDReader) ProjectionStatus(context.Context, sdd.ProjectionStatusRequest) (sdd.Projection, error) {
-	return sdd.Projection{}, ErrUnavailable
 }
 
 func (reader runtimeReader) ResolveProject(ctx context.Context, workspace string) (string, error) {
@@ -200,7 +92,7 @@ func New(ctx context.Context, workspace string, opts config.Options) (*Server, e
 // NewFull creates an explicitly write-capable server. Callers must opt in; no
 // caller identity is inferred from the MCP transport.
 func NewFull(ctx context.Context, workspace string, opts config.Options) (*Server, error) {
-	return newFullWithReaders(ctx, workspace, runtimeReader{runtime: runtime.NewMemory("mcp", false), opts: opts}, runtimeSDDReader{runtime: runtime.NewSDD(), opts: opts})
+	return newFullWithReader(ctx, workspace, runtimeReader{runtime: runtime.NewMemory("mcp", false), opts: opts})
 }
 
 // RunStdio creates a server bound to workspace and serves it over process standard I/O.
@@ -228,16 +120,7 @@ func newWithReader(ctx context.Context, workspace string, reader memoryReader) (
 }
 
 func newFullWithReader(ctx context.Context, workspace string, reader memoryReader) (*Server, error) {
-	return newFullWithReaders(ctx, workspace, reader, unavailableSDDReader{})
-}
-
-func newFullWithReaders(ctx context.Context, workspace string, reader memoryReader, sddReader sddReader) (*Server, error) {
-	server, err := newServerWithReader(ctx, workspace, reader, true)
-	if err != nil {
-		return nil, err
-	}
-	server.sdd = sddReader
-	return server, nil
+	return newServerWithReader(ctx, workspace, reader, true)
 }
 
 func newServerWithReader(ctx context.Context, workspace string, reader memoryReader, full bool) (*Server, error) {
@@ -257,7 +140,7 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 	server := &Server{reader: reader, project: project, full: full}
 	server.server = sdk.NewServer(&sdk.Implementation{Name: "vgxness-memory", Version: "0.1.0"}, nil)
 	annotations := &sdk.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
-	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_recent", Description: "Read recent project memory entries. This tool never writes data.", Annotations: annotations, InputSchema: sddSchema(nil, map[string]any{"limit": sddNumber()}), OutputSchema: memoryEntriesOutputSchema()}, server.callRecent)
+	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_recent", Description: "Read recent project memory entries. This tool never writes data.", Annotations: annotations, InputSchema: jsonSchema(nil, map[string]any{"limit": jsonNumber()}), OutputSchema: memoryEntriesOutputSchema()}, server.callRecent)
 	sdk.AddTool(server.server, &sdk.Tool{
 		Name:        "memory_search",
 		Description: "Search project memory entries. This tool never writes data.",
@@ -274,85 +157,56 @@ func newServerWithReader(ctx context.Context, workspace string, reader memoryRea
 		},
 		OutputSchema: memoryEntriesOutputSchema(),
 	}, server.callSearch)
-	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_context", Description: "Read bounded untrusted handoff for an active local provider session.", Annotations: annotations, InputSchema: sddSchema([]string{"session_handle"}, map[string]any{"session_handle": sddString()}), OutputSchema: memoryContextOutputSchema()}, server.callContext)
+	sdk.AddTool(server.server, &sdk.Tool{Name: "memory_context", Description: "Read bounded untrusted handoff for an active local provider session.", Annotations: annotations, InputSchema: jsonSchema([]string{"session_handle"}, map[string]any{"session_handle": jsonString()}), OutputSchema: memoryContextOutputSchema()}, server.callContext)
 	if full {
 		writeAnnotations := &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(false)}
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()}), OutputSchema: memoryEntryOutputSchema()}, server.callGet)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_save", Description: "Write a durable project memory entry. This tool stores data.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"title", "content"}, map[string]any{"title": sddString(), "content": sddString(), "type": sddString(), "topic": sddString(), "session_handle": sddString()}), OutputSchema: memoryEntryOutputSchema()}, server.callSave)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_session_summary", Description: "Save one local pending provider-session summary.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"session_handle", "summary"}, map[string]any{"session_handle": sddString(), "summary": sddString(), "expected_updated_at": sddString()}), OutputSchema: memorySummaryOutputSchema()}, server.callSummary)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_update", Description: "Update one mutable memory entry using its exact timestamp.", Annotations: writeAnnotations, InputSchema: sddSchema([]string{"id", "content", "expected_updated_at"}, map[string]any{"id": sddString(), "content": sddString(), "expected_updated_at": sddString()}), OutputSchema: memoryEntryOutputSchema()}, server.callUpdate)
-		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_forget", Description: "Archive one exact project memory entry. This tool changes stored data and removes it from normal search.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}, InputSchema: sddSchema([]string{"id"}, map[string]any{"id": sddString()}), OutputSchema: memoryEntryOutputSchema()}, server.callForget)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_get", Description: "Read one full project memory entry by exact ID. This tool never writes data.", Annotations: annotations, InputSchema: jsonSchema([]string{"id"}, map[string]any{"id": jsonString()}), OutputSchema: memoryEntryOutputSchema()}, server.callGet)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_save", Description: "Write a durable project memory entry. This tool stores data.", Annotations: writeAnnotations, InputSchema: jsonSchema([]string{"title", "content"}, map[string]any{"title": jsonString(), "content": jsonString(), "type": jsonString(), "topic": jsonString(), "session_handle": jsonString()}), OutputSchema: memoryEntryOutputSchema()}, server.callSave)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_session_summary", Description: "Save one local pending provider-session summary.", Annotations: writeAnnotations, InputSchema: jsonSchema([]string{"session_handle", "summary"}, map[string]any{"session_handle": jsonString(), "summary": jsonString(), "expected_updated_at": jsonString()}), OutputSchema: memorySummaryOutputSchema()}, server.callSummary)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_update", Description: "Update one mutable memory entry using its exact timestamp.", Annotations: writeAnnotations, InputSchema: jsonSchema([]string{"id", "content", "expected_updated_at"}, map[string]any{"id": jsonString(), "content": jsonString(), "expected_updated_at": jsonString()}), OutputSchema: memoryEntryOutputSchema()}, server.callUpdate)
+		sdk.AddTool(server.server, &sdk.Tool{Name: "memory_forget", Description: "Archive one exact project memory entry. This tool changes stored data and removes it from normal search.", Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)}, InputSchema: jsonSchema([]string{"id"}, map[string]any{"id": jsonString()}), OutputSchema: memoryEntryOutputSchema()}, server.callForget)
 	}
 	return server, nil
 }
 
 func boolPtr(value bool) *bool { return &value }
 
-var sddPhases = []string{"explore", "proposal", "spec", "design", "tasks", "apply", "verify", "complete"}
-
-func sddSchema(required []string, properties map[string]any) map[string]any {
+func jsonSchema(required []string, properties map[string]any) map[string]any {
 	if required == nil {
 		required = []string{}
 	}
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}
 }
-func sddString(values ...string) map[string]any {
+func jsonString(values ...string) map[string]any {
 	schema := map[string]any{"type": "string"}
 	if len(values) > 0 {
 		schema["enum"] = values
 	}
 	return schema
 }
-func sddNumber() map[string]any  { return map[string]any{"type": "number"} }
-func sddBoolean() map[string]any { return map[string]any{"type": "boolean"} }
-func sddArray(items map[string]any) map[string]any {
+func jsonNumber() map[string]any  { return map[string]any{"type": "number"} }
+func jsonBoolean() map[string]any { return map[string]any{"type": "boolean"} }
+func jsonArray(items map[string]any) map[string]any {
 	return map[string]any{"type": "array", "items": items}
 }
-func sddNullableArray(items map[string]any) map[string]any {
+func jsonNullableArray(items map[string]any) map[string]any {
 	return map[string]any{"type": []string{"array", "null"}, "items": items}
 }
-func sddRevisionBindingSchema() map[string]any {
-	return sddSchema([]string{"artifactId", "revisionId", "digest"}, map[string]any{"artifactId": sddString(), "revisionId": sddString(), "digest": sddString()})
-}
-func sddGetRevisionInputSchema() map[string]any {
-	return sddSchema([]string{"changeId", "revisionId"}, map[string]any{"changeId": sddString(), "revisionId": sddString()})
-}
+
 func memoryEntryOutputSchema() map[string]any {
-	return sddSchema([]string{"id", "title", "type", "state", "preview", "updatedAt"}, map[string]any{"id": sddString(), "title": sddString(), "type": sddString(), "topicKey": sddString(), "state": sddString(), "preview": sddString(), "updatedAt": sddString(), "content": sddString(), "references": sddArray(sddString())})
+	return jsonSchema([]string{"id", "title", "type", "state", "preview", "updatedAt"}, map[string]any{"id": jsonString(), "title": jsonString(), "type": jsonString(), "topicKey": jsonString(), "state": jsonString(), "preview": jsonString(), "updatedAt": jsonString(), "content": jsonString(), "references": jsonArray(jsonString())})
 }
 func memoryEntriesOutputSchema() map[string]any {
 	entries := memoryEntryOutputSchema()
 	delete(entries["properties"].(map[string]any), "content")
 	delete(entries["properties"].(map[string]any), "references")
-	return sddSchema([]string{"entries"}, map[string]any{"entries": map[string]any{"type": "array", "items": entries, "maxItems": maxLimit}})
+	return jsonSchema([]string{"entries"}, map[string]any{"entries": map[string]any{"type": "array", "items": entries, "maxItems": maxLimit}})
 }
 func memoryContextOutputSchema() map[string]any {
-	return sddSchema([]string{"handoff"}, map[string]any{"handoff": sddString()})
+	return jsonSchema([]string{"handoff"}, map[string]any{"handoff": jsonString()})
 }
 func memorySummaryOutputSchema() map[string]any {
-	return sddSchema([]string{"status", "updated_at"}, map[string]any{"status": sddString(), "updated_at": sddString()})
-}
-func sddChangeOutputSchema() map[string]any {
-	return sddSchema(nil, map[string]any{"id": sddString(), "project": sddString(), "title": sddString(), "backend": sddString(), "interactionMode": sddString(), "plan": sddString(), "phase": sddString(), "status": sddString(), "stateVersion": sddNumber(), "createdAt": sddString(), "updatedAt": sddString()})
-}
-func sddRevisionOutputSchema() map[string]any {
-	return sddSchema(nil, map[string]any{"id": sddString(), "project": sddString(), "changeId": sddString(), "artifactId": sddString(), "artifact": sddString(), "artifactStatus": sddString(), "status": sddString(), "content": sddString(), "externalLocation": sddString(), "digest": sddString(), "inputDigest": sddString(), "inputs": sddNullableArray(sddRevisionBindingSchema()), "stateVersion": sddNumber(), "createdAt": sddString(), "acceptedAt": sddString()})
-}
-func sddChangesOutputSchema() map[string]any {
-	return sddSchema(nil, map[string]any{"changes": sddArray(sddChangeOutputSchema())})
-}
-func sddRevisionsOutputSchema() map[string]any {
-	return sddSchema(nil, map[string]any{"revisions": sddArray(sddRevisionOutputSchema())})
-}
-func sddProjectionOutputSchema() map[string]any {
-	return sddSchema(nil, map[string]any{"project": sddString(), "changeId": sddString(), "artifactId": sddString(), "revisionId": sddString(), "status": sddString(), "digest": sddString(), "location": sddString(), "stateVersion": sddNumber(), "recordedAt": sddString()})
-}
-func sddProjectionDocumentOutputSchema() map[string]any {
-	metadata := sddSchema(nil, map[string]any{"schemaVersion": sddNumber(), "changeId": sddString(), "artifact": sddString(), "revisionId": sddString(), "contentDigest": sddString(), "inputDigest": sddString()})
-	return sddSchema(nil, map[string]any{"relativePath": sddString(), "content": sddString(), "digest": sddString(), "metadata": metadata})
-}
-func sddProjectionComparisonOutputSchema() map[string]any {
-	return sddSchema(nil, map[string]any{"state": sddString(), "relativePath": sddString(), "canonicalDigest": sddString(), "observedDigest": sddString(), "memoryCanonical": sddBoolean(), "options": sddNullableArray(sddString()), "requiresSaveRevision": sddBoolean(), "candidateContent": sddString(), "candidateDigest": sddString()})
+	return jsonSchema([]string{"status", "updated_at"}, map[string]any{"status": jsonString(), "updated_at": jsonString()})
 }
 
 // Run serves MCP requests over an injected transport until ctx is cancelled or
@@ -396,104 +250,6 @@ type updateInput struct {
 	ExpectedUpdatedAt string `json:"expected_updated_at" jsonschema:"required"`
 }
 
-type sddCreateInput struct {
-	IdempotencyKey  string              `json:"idempotencyKey" jsonschema:"required"`
-	Title           string              `json:"title" jsonschema:"required"`
-	Backend         sdd.Backend         `json:"backend" jsonschema:"required"`
-	InteractionMode sdd.InteractionMode `json:"interactionMode" jsonschema:"required"`
-	Plan            sdd.Plan            `json:"plan" jsonschema:"required"`
-}
-type sddListInput struct {
-	Status sdd.ChangeStatus `json:"status,omitempty"`
-	Limit  float64          `json:"limit,omitempty"`
-}
-type sddGetInput struct {
-	ID string `json:"id" jsonschema:"required"`
-}
-type sddModeInput struct {
-	ChangeID             string              `json:"changeId" jsonschema:"required"`
-	InteractionMode      sdd.InteractionMode `json:"interactionMode" jsonschema:"required"`
-	ExpectedStateVersion float64             `json:"expectedStateVersion" jsonschema:"required"`
-}
-type sddTransitionInput struct {
-	ChangeID             string    `json:"changeId" jsonschema:"required"`
-	TargetPhase          sdd.Phase `json:"targetPhase,omitempty"`
-	Cancel               bool      `json:"cancel,omitempty"`
-	ExpectedStateVersion float64   `json:"expectedStateVersion" jsonschema:"required"`
-}
-type sddSaveRevisionInput struct {
-	ChangeID             string                    `json:"changeId" jsonschema:"required"`
-	Artifact             sdd.Phase                 `json:"artifact" jsonschema:"required"`
-	Content              string                    `json:"content" jsonschema:"required"`
-	ExternalLocation     string                    `json:"externalLocation,omitempty"`
-	Digest               sdd.Digest                `json:"digest,omitempty"`
-	Inputs               []sddRevisionBindingInput `json:"inputs,omitempty"`
-	InputDigest          sdd.Digest                `json:"inputDigest,omitempty"`
-	ExpectedStateVersion float64                   `json:"expectedStateVersion" jsonschema:"required"`
-}
-type sddRevisionBindingInput struct {
-	ArtifactID string     `json:"artifactId" jsonschema:"required"`
-	RevisionID string     `json:"revisionId" jsonschema:"required"`
-	Digest     sdd.Digest `json:"digest" jsonschema:"required"`
-}
-type sddGetRevisionInput struct {
-	ChangeID   string `json:"changeId" jsonschema:"required"`
-	RevisionID string `json:"revisionId" jsonschema:"required"`
-}
-type sddListRevisionsInput struct {
-	ChangeID string    `json:"changeId" jsonschema:"required"`
-	Artifact sdd.Phase `json:"artifact,omitempty"`
-	Limit    float64   `json:"limit,omitempty"`
-}
-type sddAcceptRevisionInput struct {
-	ChangeID             string  `json:"changeId" jsonschema:"required"`
-	RevisionID           string  `json:"revisionId" jsonschema:"required"`
-	ExpectedStateVersion float64 `json:"expectedStateVersion" jsonschema:"required"`
-}
-type sddRenderProjectionInput struct {
-	ChangeID   string `json:"changeId" jsonschema:"required"`
-	RevisionID string `json:"revisionId" jsonschema:"required"`
-}
-type sddCompareProjectionInput struct {
-	ChangeID          string `json:"changeId" jsonschema:"required"`
-	RevisionID        string `json:"revisionId" jsonschema:"required"`
-	RelativePath      string `json:"relativePath" jsonschema:"required"`
-	ProjectionContent string `json:"projectionContent,omitempty"`
-	Missing           bool   `json:"missing,omitempty"`
-	Symlink           bool   `json:"symlink,omitempty"`
-}
-type sddRecordProjectionInput struct {
-	ChangeID             string               `json:"changeId" jsonschema:"required"`
-	ArtifactID           string               `json:"artifactId" jsonschema:"required"`
-	RevisionID           string               `json:"revisionId" jsonschema:"required"`
-	Status               sdd.ProjectionStatus `json:"status" jsonschema:"required"`
-	Digest               sdd.Digest           `json:"digest" jsonschema:"required"`
-	Location             string               `json:"location" jsonschema:"required"`
-	ExpectedStateVersion float64              `json:"expectedStateVersion" jsonschema:"required"`
-}
-type sddProjectionStatusInput struct {
-	ChangeID   string `json:"changeId" jsonschema:"required"`
-	ArtifactID string `json:"artifactId" jsonschema:"required"`
-}
-
-type sddProjectionDocument struct {
-	RelativePath string                 `json:"relativePath"`
-	Content      string                 `json:"content"`
-	Digest       sdd.Digest             `json:"digest"`
-	Metadata     sdd.ProjectionMetadata `json:"metadata"`
-}
-
-func makeSDDProjectionDocument(value sdd.ProjectionDocument) sddProjectionDocument {
-	return sddProjectionDocument{RelativePath: value.RelativePath, Content: string(value.Content), Digest: value.Digest, Metadata: value.Metadata}
-}
-
-type sddInputError struct{ field string }
-
-func (err sddInputError) Error() string { return "invalid MCP tool input: " + err.field }
-func (err sddInputError) Unwrap() error { return ErrInvalidInput }
-
-func invalidSDDField(field string) error { return sddInputError{field: field} }
-
 type result struct {
 	Entries []entry `json:"entries"`
 }
@@ -503,14 +259,6 @@ type contextResult struct {
 type summaryResult struct {
 	Status    string    `json:"status"`
 	UpdatedAt time.Time `json:"updated_at"`
-}
-
-type sddChangesResult struct {
-	Changes []sdd.Change `json:"changes"`
-}
-
-type sddRevisionsResult struct {
-	Revisions []sdd.Revision `json:"revisions"`
 }
 
 type entry struct {
@@ -613,217 +361,6 @@ func (server *Server) forget(ctx context.Context, input getInput) (entry, error)
 	}
 	item, err := server.reader.Forget(ctx, memory.Forget{ID: input.ID, Project: server.project, Scope: memory.ScopeProject})
 	return shapeEntry(ctx, item, err, true)
-}
-
-func (server *Server) sddCreate(ctx context.Context, input sddCreateInput) (sdd.Change, error) {
-	request := sdd.CreateChangeRequest{Project: server.project, IdempotencyKey: input.IdempotencyKey, Title: input.Title, Backend: input.Backend, InteractionMode: input.InteractionMode, Plan: input.Plan}
-	if request.Validate() != nil {
-		return sdd.Change{}, ErrInvalidInput
-	}
-	return server.sddCall(ctx, func() (sdd.Change, error) {
-		return server.sdd.CreateChange(ctx, request)
-	})
-}
-func (server *Server) sddList(ctx context.Context, input sddListInput) ([]sdd.Change, error) {
-	limit, err := sddLimit(input.Limit)
-	if err != nil {
-		return nil, err
-	}
-	if err := (sdd.ListChangesRequest{Project: server.project, Status: input.Status, Limit: limit}).Validate(); err != nil {
-		return nil, ErrInvalidInput
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if server.sdd == nil {
-		return nil, ErrUnavailable
-	}
-	items, err := server.sdd.ListChanges(ctx, sdd.ListChangesRequest{Project: server.project, Status: input.Status, Limit: limit})
-	if len(items) > limit {
-		items = items[:limit]
-	}
-	if items == nil {
-		items = []sdd.Change{}
-	}
-	return items, shapeSDDError(ctx, err)
-}
-func (server *Server) sddGet(ctx context.Context, input sddGetInput) (sdd.Change, error) {
-	request := sdd.GetChangeRequest{Project: server.project, ID: input.ID}
-	if request.Validate() != nil {
-		return sdd.Change{}, ErrInvalidInput
-	}
-	return server.sddCall(ctx, func() (sdd.Change, error) {
-		return server.sdd.GetChange(ctx, request)
-	})
-}
-func (server *Server) sddSetInteractionMode(ctx context.Context, input sddModeInput) (sdd.Change, error) {
-	version, err := sddVersion(input.ExpectedStateVersion)
-	if err != nil {
-		return sdd.Change{}, err
-	}
-	request := sdd.UpdateInteractionModeRequest{Project: server.project, ChangeID: input.ChangeID, InteractionMode: input.InteractionMode, ExpectedStateVersion: version}
-	if request.Validate() != nil {
-		return sdd.Change{}, ErrInvalidInput
-	}
-	return server.sddCall(ctx, func() (sdd.Change, error) {
-		return server.sdd.UpdateInteractionMode(ctx, request)
-	})
-}
-func (server *Server) sddTransition(ctx context.Context, input sddTransitionInput) (sdd.Change, error) {
-	version, err := sddVersion(input.ExpectedStateVersion)
-	if err != nil {
-		return sdd.Change{}, err
-	}
-	request := sdd.TransitionChangeRequest{Project: server.project, ChangeID: input.ChangeID, TargetPhase: input.TargetPhase, Cancel: input.Cancel, ExpectedStateVersion: version}
-	if request.Validate() != nil {
-		return sdd.Change{}, ErrInvalidInput
-	}
-	return server.sddCall(ctx, func() (sdd.Change, error) {
-		return server.sdd.TransitionChange(ctx, request)
-	})
-}
-func (server *Server) sddSaveRevision(ctx context.Context, input sddSaveRevisionInput) (sdd.Revision, error) {
-	version, err := sddVersion(input.ExpectedStateVersion)
-	if err != nil {
-		return sdd.Revision{}, err
-	}
-	if len(input.Content) > 48<<10 {
-		return sdd.Revision{}, invalidSDDField("content")
-	}
-	if len(input.Inputs) > 32 {
-		return sdd.Revision{}, invalidSDDField("inputs")
-	}
-	inputs := make([]sdd.RevisionBinding, len(input.Inputs))
-	for index, value := range input.Inputs {
-		inputs[index] = sdd.RevisionBinding{ArtifactID: value.ArtifactID, RevisionID: value.RevisionID, Digest: value.Digest}
-	}
-	request := sdd.SaveRevisionRequest{Project: server.project, ChangeID: input.ChangeID, Artifact: input.Artifact, Content: []byte(input.Content), ExternalLocation: input.ExternalLocation, Digest: input.Digest, Inputs: inputs, InputDigest: input.InputDigest, ExpectedStateVersion: version}
-	return sddValue(server, ctx, request.Validate, func() (sdd.Revision, error) { return server.sdd.SaveRevision(ctx, request) })
-}
-func (server *Server) sddGetRevision(ctx context.Context, input sddGetRevisionInput) (sdd.Revision, error) {
-	request := sdd.GetRevisionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID}
-	return sddValue(server, ctx, request.Validate, func() (sdd.Revision, error) { return server.sdd.GetRevision(ctx, request) })
-}
-func (server *Server) sddListRevisions(ctx context.Context, input sddListRevisionsInput) ([]sdd.Revision, error) {
-	limit, err := sddRevisionLimit(input.Limit)
-	if err != nil {
-		return nil, err
-	}
-	request := sdd.ListRevisionsRequest{Project: server.project, ChangeID: input.ChangeID, Artifact: input.Artifact, Limit: limit}
-	items, err := sddValue(server, ctx, request.Validate, func() ([]sdd.Revision, error) { return server.sdd.ListRevisions(ctx, request) })
-	if len(items) > limit {
-		items = items[:limit]
-	}
-	if items == nil && err == nil {
-		items = []sdd.Revision{}
-	}
-	return items, err
-}
-func (server *Server) sddAcceptRevision(ctx context.Context, input sddAcceptRevisionInput) (sdd.Revision, error) {
-	version, err := sddVersion(input.ExpectedStateVersion)
-	if err != nil {
-		return sdd.Revision{}, err
-	}
-	request := sdd.AcceptRevisionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID, ExpectedStateVersion: version}
-	return sddValue(server, ctx, request.Validate, func() (sdd.Revision, error) { return server.sdd.AcceptRevision(ctx, request) })
-}
-func (server *Server) sddRenderProjection(ctx context.Context, input sddRenderProjectionInput) (sdd.ProjectionDocument, error) {
-	request := sdd.RenderProjectionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID}
-	return sddValue(server, ctx, request.Validate, func() (sdd.ProjectionDocument, error) { return server.sdd.RenderProjection(ctx, request) })
-}
-func (server *Server) sddCompareProjection(ctx context.Context, input sddCompareProjectionInput) (sdd.ProjectionComparison, error) {
-	if input.Symlink {
-		return sdd.ProjectionComparison{}, invalidSDDField("symlink")
-	}
-	if len(input.ProjectionContent) > 48<<10 {
-		return sdd.ProjectionComparison{}, invalidSDDField("projectionContent")
-	}
-	if len(input.RelativePath) > 512 {
-		return sdd.ProjectionComparison{}, invalidSDDField("relativePath")
-	}
-	request := sdd.CompareProjectionRequest{Project: server.project, ChangeID: input.ChangeID, RevisionID: input.RevisionID, Input: sdd.ProjectionInput{RelativePath: input.RelativePath, Content: []byte(input.ProjectionContent), Missing: input.Missing, Symlink: input.Symlink}}
-	return sddValue(server, ctx, request.Validate, func() (sdd.ProjectionComparison, error) { return server.sdd.CompareProjection(ctx, request) })
-}
-func (server *Server) sddRecordProjection(ctx context.Context, input sddRecordProjectionInput) (sdd.Projection, error) {
-	version, err := sddVersion(input.ExpectedStateVersion)
-	if err != nil {
-		return sdd.Projection{}, err
-	}
-	request := sdd.RecordProjectionRequest{Project: server.project, ChangeID: input.ChangeID, ArtifactID: input.ArtifactID, RevisionID: input.RevisionID, Status: input.Status, Digest: input.Digest, Location: input.Location, ExpectedStateVersion: version}
-	return sddValue(server, ctx, request.Validate, func() (sdd.Projection, error) { return server.sdd.RecordProjection(ctx, request) })
-}
-func (server *Server) sddProjectionStatus(ctx context.Context, input sddProjectionStatusInput) (sdd.Projection, error) {
-	request := sdd.ProjectionStatusRequest{Project: server.project, ChangeID: input.ChangeID, ArtifactID: input.ArtifactID}
-	return sddValue(server, ctx, request.Validate, func() (sdd.Projection, error) { return server.sdd.ProjectionStatus(ctx, request) })
-}
-func sddValue[T any](server *Server, ctx context.Context, validate func() error, call func() (T, error)) (T, error) {
-	var zero T
-	if err := ctx.Err(); err != nil {
-		return zero, err
-	}
-	if validate() != nil {
-		return zero, ErrInvalidInput
-	}
-	if server.sdd == nil {
-		return zero, ErrUnavailable
-	}
-	value, err := call()
-	return value, shapeSDDError(ctx, err)
-}
-func (server *Server) sddCall(ctx context.Context, call func() (sdd.Change, error)) (sdd.Change, error) {
-	if err := ctx.Err(); err != nil {
-		return sdd.Change{}, err
-	}
-	if server.sdd == nil {
-		return sdd.Change{}, ErrUnavailable
-	}
-	item, err := call()
-	return item, shapeSDDError(ctx, err)
-}
-func sddLimit(value float64) (int, error) {
-	if value == 0 {
-		return 20, nil
-	}
-	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < 1 || value > 100 {
-		return 0, invalidSDDField("limit")
-	}
-	return int(math.Trunc(value)), nil
-}
-func sddRevisionLimit(value float64) (int, error) {
-	if value == 0 {
-		return 50, nil
-	}
-	return sddLimit(value)
-}
-func sddVersion(value float64) (int64, error) {
-	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < 1 || value > maxJSONInteger {
-		return 0, invalidSDDField("expectedStateVersion")
-	}
-	return int64(math.Trunc(value)), nil
-}
-func shapeSDDError(ctx context.Context, err error) error {
-	if err == nil {
-		return nil
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if errors.Is(err, sdd.ErrInvalid) || errors.Is(err, sdd.ErrIllegalTransition) || errors.Is(err, sdd.ErrDigestMismatch) {
-		return ErrInvalidInput
-	}
-	if errors.Is(err, sdd.ErrNotFound) {
-		return ErrNotFound
-	}
-	if errors.Is(err, sdd.ErrStaleState) {
-		return ErrStale
-	}
-	if errors.Is(err, sdd.ErrConflict) || errors.Is(err, sdd.ErrInputsChanged) || errors.Is(err, sdd.ErrImmutable) {
-		return ErrConflict
-	}
-	if errors.Is(err, sdd.ErrChangeCancelled) {
-		return ErrSDDCancelled
-	}
-	return ErrUnavailable
 }
 
 func (server *Server) recent(ctx context.Context, input recentInput) (result, error) {
@@ -945,59 +482,6 @@ func (server *Server) callForget(ctx context.Context, _ *sdk.CallToolRequest, in
 	return entryResponse(err, output)
 }
 
-func (server *Server) callSDDCreate(ctx context.Context, _ *sdk.CallToolRequest, input sddCreateInput) (*sdk.CallToolResult, sdd.Change, error) {
-	output, err := server.sddCreate(ctx, input)
-	return sddResponse(err, output)
-}
-func (server *Server) callSDDList(ctx context.Context, _ *sdk.CallToolRequest, input sddListInput) (*sdk.CallToolResult, sddChangesResult, error) {
-	output, err := server.sddList(ctx, input)
-	return sddListResponse(err, sddChangesResult{Changes: output})
-}
-func (server *Server) callSDDGet(ctx context.Context, _ *sdk.CallToolRequest, input sddGetInput) (*sdk.CallToolResult, sdd.Change, error) {
-	output, err := server.sddGet(ctx, input)
-	return sddResponse(err, output)
-}
-func (server *Server) callSDDSetInteractionMode(ctx context.Context, _ *sdk.CallToolRequest, input sddModeInput) (*sdk.CallToolResult, sdd.Change, error) {
-	output, err := server.sddSetInteractionMode(ctx, input)
-	return sddResponse(err, output)
-}
-func (server *Server) callSDDTransition(ctx context.Context, _ *sdk.CallToolRequest, input sddTransitionInput) (*sdk.CallToolResult, sdd.Change, error) {
-	output, err := server.sddTransition(ctx, input)
-	return sddResponse(err, output)
-}
-func (server *Server) callSDDSaveRevision(ctx context.Context, _ *sdk.CallToolRequest, input sddSaveRevisionInput) (*sdk.CallToolResult, sdd.Revision, error) {
-	output, err := server.sddSaveRevision(ctx, input)
-	return sddToolResponse(err, output)
-}
-func (server *Server) callSDDGetRevision(ctx context.Context, _ *sdk.CallToolRequest, input sddGetRevisionInput) (*sdk.CallToolResult, sdd.Revision, error) {
-	output, err := server.sddGetRevision(ctx, input)
-	return sddToolResponse(err, output)
-}
-func (server *Server) callSDDListRevisions(ctx context.Context, _ *sdk.CallToolRequest, input sddListRevisionsInput) (*sdk.CallToolResult, sddRevisionsResult, error) {
-	output, err := server.sddListRevisions(ctx, input)
-	return sddToolResponse(err, sddRevisionsResult{Revisions: output})
-}
-func (server *Server) callSDDAcceptRevision(ctx context.Context, _ *sdk.CallToolRequest, input sddAcceptRevisionInput) (*sdk.CallToolResult, sdd.Revision, error) {
-	output, err := server.sddAcceptRevision(ctx, input)
-	return sddToolResponse(err, output)
-}
-func (server *Server) callSDDRenderProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddRenderProjectionInput) (*sdk.CallToolResult, sddProjectionDocument, error) {
-	output, err := server.sddRenderProjection(ctx, input)
-	return sddToolResponse(err, makeSDDProjectionDocument(output))
-}
-func (server *Server) callSDDCompareProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddCompareProjectionInput) (*sdk.CallToolResult, sdd.ProjectionComparison, error) {
-	output, err := server.sddCompareProjection(ctx, input)
-	return sddToolResponse(err, output)
-}
-func (server *Server) callSDDRecordProjection(ctx context.Context, _ *sdk.CallToolRequest, input sddRecordProjectionInput) (*sdk.CallToolResult, sdd.Projection, error) {
-	output, err := server.sddRecordProjection(ctx, input)
-	return sddToolResponse(err, output)
-}
-func (server *Server) callSDDProjectionStatus(ctx context.Context, _ *sdk.CallToolRequest, input sddProjectionStatusInput) (*sdk.CallToolResult, sdd.Projection, error) {
-	output, err := server.sddProjectionStatus(ctx, input)
-	return sddToolResponse(err, output)
-}
-
 func toolResponse(err error, output result) (*sdk.CallToolResult, result, error) {
 	if err == nil {
 		return memorySuccessResponse(output), output, nil
@@ -1030,32 +514,6 @@ func entryResponse(err error, output entry) (*sdk.CallToolResult, entry, error) 
 	return toolText("memory service unavailable", true), entry{}, nil
 }
 
-func sddResponse(err error, output sdd.Change) (*sdk.CallToolResult, sdd.Change, error) {
-	if err == nil {
-		return sddSuccessResponse(output), output, nil
-	}
-	return sddErrorResponse(err), sdd.Change{}, nil
-}
-func sddListResponse(err error, output sddChangesResult) (*sdk.CallToolResult, sddChangesResult, error) {
-	if err == nil {
-		return sddSuccessResponse(output), output, nil
-	}
-	return sddErrorResponse(err), sddChangesResult{}, nil
-}
-func sddToolResponse[T any](err error, output T) (*sdk.CallToolResult, T, error) {
-	if err == nil {
-		return sddSuccessResponse(output), output, nil
-	}
-	var zero T
-	return sddErrorResponse(err), zero, nil
-}
-func sddSuccessResponse(output any) *sdk.CallToolResult {
-	encoded, err := json.Marshal(output)
-	if err != nil {
-		return toolText("SDD service unavailable", true)
-	}
-	return toolText(string(encoded), false)
-}
 func memorySuccessResponse(output any) *sdk.CallToolResult {
 	encoded, err := json.Marshal(output)
 	if err != nil {
@@ -1070,31 +528,6 @@ func memorySuccessResponse(output any) *sdk.CallToolResult {
 		return toolText("memory service unavailable", true)
 	}
 	return toolText(string(encoded), false)
-}
-func sddErrorResponse(err error) *sdk.CallToolResult {
-	if errors.Is(err, ErrSDDCancelled) {
-		return toolText("SDD change is cancelled", true)
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return toolText("request cancelled", true)
-	}
-	var inputErr sddInputError
-	if errors.As(err, &inputErr) {
-		return toolText("invalid tool input: "+inputErr.field, true)
-	}
-	if errors.Is(err, ErrInvalidInput) {
-		return toolText("invalid tool input", true)
-	}
-	if errors.Is(err, ErrNotFound) {
-		return toolText("SDD record not found", true)
-	}
-	if errors.Is(err, ErrStale) {
-		return toolText("SDD state version changed", true)
-	}
-	if errors.Is(err, ErrConflict) {
-		return toolText("SDD state changed", true)
-	}
-	return toolText("SDD service unavailable", true)
 }
 
 func toolText(text string, isError bool) *sdk.CallToolResult {

@@ -441,7 +441,7 @@ func verifyPackage(root, target string) error {
 	if strictObjectFields(data, map[string]bool{"name": true, "version": true, "type": true, "pi": true, "engines": true, "peerDependencies": true, "files": true}) != nil || strictJSON(data, &main) != nil || main.Name != "@vgxness/pi" || main.Version != version || main.Type != "module" || len(main.Pi.Extensions) != 1 || main.Pi.Extensions[0] != "./src/extension.ts" || main.Engines["node"] != ">=22.19.0" || len(main.Peers) != 2 || main.Peers["typebox"] != "1.3.7" || main.Peers["@earendil-works/pi-coding-agent"] != "^0.84.4" {
 		return errors.New("invalid portable Pi package metadata")
 	}
-	for _, name := range []string{"src/extension.ts", "src/probe.ts", "resources/migrations/manifest.json", "resources/prompts/manager.md", "resources/skills/sdd-lifecycle/SKILL.md", "LICENSE"} {
+	for _, name := range []string{"src/extension.ts", "src/probe.ts", "resources/migrations/manifest.json", "resources/prompts/manager.md", "resources/skills/memory-sync/SKILL.md", "LICENSE"} {
 		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
 		if err != nil || !info.Mode().IsRegular() {
 			return errors.New("Pi package missing runtime resource")

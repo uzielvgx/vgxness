@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,18 +14,16 @@ import (
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/providers/pi"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 type Dispatcher struct {
 	Options  config.Options
 	Memory   runtime.Memory
-	SDD      runtime.SDD
 	sessions *sessionAuthority
 }
 
 func New(opts config.Options, readOnly bool) Dispatcher {
-	return Dispatcher{Options: opts, Memory: runtime.NewMemory("pi", readOnly), SDD: runtime.NewSDD(), sessions: &sessionAuthority{byHandle: map[string]sessionSecret{}}}
+	return Dispatcher{Options: opts, Memory: runtime.NewMemory("pi", readOnly), sessions: &sessionAuthority{byHandle: map[string]sessionSecret{}}}
 }
 
 var operationNames = []string{
@@ -39,9 +36,6 @@ func (d Dispatcher) project(ctx context.Context) (string, error) {
 	return d.Memory.ResolveProject(ctx, d.Options, d.Options.ProjectDir)
 }
 func (d Dispatcher) Dispatch(ctx context.Context, r pi.Request) (any, error) {
-	if strings.HasPrefix(r.Operation, "sdd.") {
-		return nil, errors.New("SDD is retired")
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -203,90 +197,6 @@ func (d Dispatcher) Dispatch(ctx context.Context, r pi.Request) (any, error) {
 		var v draftSave
 		if err = decode(r.Payload, &v, "handle", "summary", "expectedUpdatedAt"); err == nil {
 			return d.Memory.SaveProviderSessionDraft(ctx, d.Options, memory.ProviderSessionDraftSave{Project: project, Handle: v.Handle, Summary: v.Summary, ExpectedUpdatedAt: v.ExpectedUpdatedAt})
-		}
-	case "sdd.create":
-		var v sdd.CreateChangeRequest
-		if err = decode(r.Payload, &v, "idempotencyKey", "title", "backend", "interactionMode", "plan"); err == nil {
-			v.Project = project
-			return d.manager(r, func() (any, error) { return d.SDD.CreateChange(ctx, d.Options, v) })
-		}
-	case "sdd.list":
-		var v sdd.ListChangesRequest
-		if err = decode(r.Payload, &v, "status", "limit"); err == nil {
-			v.Project = project
-			return d.SDD.ListChanges(ctx, d.Options, v)
-		}
-	case "sdd.get":
-		var v sdd.GetChangeRequest
-		if err = decode(r.Payload, &v, "id"); err == nil {
-			v.Project = project
-			return d.SDD.GetChange(ctx, d.Options, v)
-		}
-	case "sdd.set_interaction_mode":
-		var v sdd.UpdateInteractionModeRequest
-		if err = decode(r.Payload, &v, "changeId", "interactionMode", "expectedStateVersion"); err == nil {
-			v.Project = project
-			return d.manager(r, func() (any, error) { return d.SDD.UpdateInteractionMode(ctx, d.Options, v) })
-		}
-	case "sdd.save_revision":
-		var v sdd.SaveRevisionRequest
-		if err = decode(r.Payload, &v, "changeId", "artifact", "content", "externalLocation", "digest", "inputs", "inputDigest", "expectedStateVersion"); err == nil {
-			v.Project = project
-			return d.manager(r, func() (any, error) { return d.SDD.SaveRevision(ctx, d.Options, v) })
-		}
-	case "sdd.get_revision":
-		var v sdd.GetRevisionRequest
-		if err = decode(r.Payload, &v, "changeId", "revisionId"); err == nil {
-			v.Project = project
-			return d.SDD.GetRevision(ctx, d.Options, v)
-		}
-	case "sdd.list_revisions":
-		var v sdd.ListRevisionsRequest
-		if err = decode(r.Payload, &v, "changeId", "artifact", "limit"); err == nil {
-			v.Project = project
-			return d.SDD.ListRevisions(ctx, d.Options, v)
-		}
-	case "sdd.accept_revision":
-		var v sdd.AcceptRevisionRequest
-		if err = decode(r.Payload, &v, "changeId", "revisionId", "expectedStateVersion"); err == nil {
-			v.Project = project
-			return d.manager(r, func() (any, error) { return d.SDD.AcceptRevision(ctx, d.Options, v) })
-		}
-	case "sdd.transition":
-		var v sdd.TransitionChangeRequest
-		if err = decode(r.Payload, &v, "changeId", "targetPhase", "expectedStateVersion"); err == nil {
-			v.Project = project
-			return d.manager(r, func() (any, error) { return d.SDD.TransitionChange(ctx, d.Options, v) })
-		}
-	case "sdd.cancel":
-		var v cancelChange
-		if err = decode(r.Payload, &v, "changeId", "expectedStateVersion"); err == nil {
-			return d.manager(r, func() (any, error) {
-				return d.SDD.TransitionChange(ctx, d.Options, sdd.TransitionChangeRequest{Project: project, ChangeID: v.ChangeID, Cancel: true, ExpectedStateVersion: v.ExpectedStateVersion})
-			})
-		}
-	case "sdd.projection_status":
-		var v sdd.ProjectionStatusRequest
-		if err = decode(r.Payload, &v, "changeId", "artifactId"); err == nil {
-			v.Project = project
-			return d.SDD.ProjectionStatus(ctx, d.Options, v)
-		}
-	case "sdd.record_projection":
-		var v sdd.RecordProjectionRequest
-		if err = decode(r.Payload, &v, "changeId", "artifactId", "revisionId", "status", "digest", "location", "expectedStateVersion"); err == nil {
-			v.Project = project
-			return d.manager(r, func() (any, error) { return d.SDD.RecordProjection(ctx, d.Options, v) })
-		}
-	case "sdd.render_projection":
-		var v sdd.RenderProjectionRequest
-		if err = decode(r.Payload, &v, "changeId", "revisionId"); err == nil {
-			v.Project = project
-			return d.SDD.RenderProjection(ctx, d.Options, v)
-		}
-	case "sdd.compare_projection":
-		var v compareProjection
-		if err = decode(r.Payload, &v, "changeId", "revisionId", "relativePath", "projectionContent", "missing", "symlink"); err == nil {
-			return d.SDD.CompareProjection(ctx, d.Options, sdd.CompareProjectionRequest{Project: project, ChangeID: v.ChangeID, RevisionID: v.RevisionID, Input: sdd.ProjectionInput{RelativePath: v.RelativePath, Content: []byte(v.ProjectionContent), Missing: v.Missing, Symlink: v.Symlink}})
 		}
 	default:
 		return nil, errors.New("unsupported operation")

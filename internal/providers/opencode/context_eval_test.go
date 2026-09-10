@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 const contextEvalSchemaVersion = 1
@@ -248,7 +248,7 @@ func TestManagerContextEvaluationAssets(t *testing.T) {
 }
 
 func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
-	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	contract, contractErr := orchestration.LoadManagerContract()
 	if err != nil || contractErr != nil || OrchestrationContractIdentity() != orchestration.ContractIdentity || !strings.Contains(string(bundle.agents[managerAgentName]), contract.RenderManagerSections()) {
 		t.Errorf("OpenCode manager lacks shared contract %q", orchestration.ContractIdentity)

@@ -14,8 +14,8 @@ import (
 	"strings"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 var releaseVersion = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)))*)?$`)
@@ -38,7 +38,7 @@ type Package struct {
 	SHA256    string
 	version   string
 	profiles  []profile
-	plan      sdd.Plan
+	plan      modelplan.Plan
 	legacy    bool
 	current   bool
 }
@@ -57,12 +57,12 @@ type profile struct {
 // Render returns the native Codex projection for a strict v-prefixed SemVer
 // release, optionally with a SemVer prerelease. It performs no host interaction.
 func Render(version string) (Package, error) {
-	return RenderPlan(version, sdd.PlanMedium)
+	return RenderPlan(version, modelplan.PlanMedium)
 }
 
 // RenderPlan returns the native Codex projection for one shared model plan.
 // The primary manager remains host-selected; the plan binds delegated profiles.
-func RenderPlan(version string, plan sdd.Plan) (Package, error) {
+func RenderPlan(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := sharedProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -83,7 +83,7 @@ func RenderPlan(version string, plan sdd.Plan) (Package, error) {
 // renderActiveV18PreTerminalClosure retains the exact Manager18 package from
 // immediately before the terminal memory-save closure was added. It exists
 // solely so lifecycle inspection can safely upgrade that complete package.
-func renderActiveV18PreTerminalClosure(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV18PreTerminalClosure(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := profilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -144,7 +144,7 @@ func renderLegacy(version string) (Package, error) {
 
 // renderActiveV13 retains the complete pre-CARE package exclusively for
 // lifecycle recognition. It must never be used by the current renderer.
-func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV13(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := preCAREProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -159,7 +159,7 @@ func renderActiveV13(version string, plan sdd.Plan) (Package, error) {
 }
 
 // renderActiveV17 retains the complete v17 package exclusively for lifecycle recognition.
-func renderActiveV17(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV17(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := profilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -175,7 +175,7 @@ func renderActiveV17(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV16 retains the complete v16 package exclusively for lifecycle
 // recognition. It is a historical predecessor.
-func renderActiveV16(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV16(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := profilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -191,7 +191,7 @@ func renderActiveV16(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV15 retains the complete v15 package exclusively for lifecycle
 // recognition.
-func renderActiveV15(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV15(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := profilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -207,7 +207,7 @@ func renderActiveV15(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV14 retains the complete v14 package exclusively for lifecycle
 // recognition.
-func renderActiveV14(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV14(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := profilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -224,7 +224,7 @@ func renderActiveV14(version string, plan sdd.Plan) (Package, error) {
 // renderPreConsolidationV4 reconstructs the complete v4 package rather than
 // recognizing individual artifact digests. Its package shape remains subject
 // to the same validation as a current projection.
-func renderPreConsolidationV4(version string, plan sdd.Plan) (Package, error) {
+func renderPreConsolidationV4(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := preConsolidationProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -240,7 +240,7 @@ func renderPreConsolidationV4(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV6 reconstructs the immediately preceding active package so
 // lifecycle inspection can upgrade it without treating it as user drift.
-func renderActiveV6(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV6(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -256,7 +256,7 @@ func renderActiveV6(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV7 reconstructs the immediately preceding active package so
 // lifecycle inspection can upgrade it without treating it as user drift.
-func renderActiveV7(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV7(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -271,7 +271,7 @@ func renderActiveV7(version string, plan sdd.Plan) (Package, error) {
 }
 
 // renderActiveV8 reconstructs the immediately preceding managed predecessor.
-func renderActiveV8(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV8(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -287,7 +287,7 @@ func renderActiveV8(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV9 reconstructs the exact package immediately before repository
 // children gained Context Capsule validation and echo requirements.
-func renderActiveV9(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV9(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -301,7 +301,7 @@ func renderActiveV9(version string, plan sdd.Plan) (Package, error) {
 	return pkg, nil
 }
 
-func renderActiveV10(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV10(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := activeV10ProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -317,7 +317,7 @@ func renderActiveV10(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV11 reconstructs the exact package immediately before the
 // resumable orchestration and reliability skill-receipt contract.
-func renderActiveV11(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV11(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := activeV11ProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -333,7 +333,7 @@ func renderActiveV11(version string, plan sdd.Plan) (Package, error) {
 
 // renderActiveV12 reconstructs the complete v12 package while v12 is the
 // active identity, allowing lifecycle recognition to remain package-wide.
-func renderActiveV12(version string, plan sdd.Plan) (Package, error) {
+func renderActiveV12(version string, plan modelplan.Plan) (Package, error) {
 	selected, err := activeV12ProfilesForPlan(plan)
 	if err != nil {
 		return Package{}, err
@@ -360,7 +360,7 @@ func preConsolidationManagerInstructions() string {
 	return value
 }
 
-func preConsolidationProfilesForPlan(plan sdd.Plan) ([]profile, error) {
+func preConsolidationProfilesForPlan(plan modelplan.Plan) ([]profile, error) {
 	selected, err := predecessorProfilesForPlan(plan)
 	if err != nil {
 		return nil, err
@@ -385,7 +385,7 @@ func preConsolidationProfilesForPlan(plan sdd.Plan) ([]profile, error) {
 	return profiles, nil
 }
 
-func renderPackage(version string, selected []profile, plan sdd.Plan, legacy bool) (Package, error) {
+func renderPackage(version string, selected []profile, plan modelplan.Plan, legacy bool) (Package, error) {
 	if !releaseVersion.MatchString(version) {
 		return Package{}, errors.New("version must be a strict v-prefixed SemVer release")
 	}
@@ -682,31 +682,31 @@ func formerGeneralProfile(model, reasoning string) profile {
 	return workspaceProfile("agents/general.toml", "general", "Authorized workspace implementation", model, reasoning, nil, `Implement only the manager-authorized workspace scope. Diagnose before editing, preserve unrelated changes, and use the smallest correct change. For safely testable behavior, add a focused failing test and observe RED before production edits, then validate GREEN. Manager missions supply accepted SDD inputs and evidence. Do not spawn agents, access external directories or network services, install packages, mutate durable memory, or mutate SDD lifecycle state. General may implement workspace changes but must not own the SDD lifecycle. Do not commit or push.`)
 }
 
-var profileRoles = map[string]sdd.Role{
-	"agents/explore.toml":         sdd.RoleResearch,
-	"agents/general.toml":         sdd.RoleImplementation,
-	"agents/verifier.toml":        sdd.RoleVerification,
-	"agents/care-reviewer.toml":   sdd.RoleCAREReviewer,
-	"agents/care-specialist.toml": sdd.RoleCARESpecialist,
-	"agents/care-challenger.toml": sdd.RoleCAREChallenger,
-	"agents/sdd-research.toml":    sdd.RoleResearch,
-	"agents/sdd-proposal.toml":    sdd.RoleProposal,
-	"agents/sdd-spec.toml":        sdd.RoleSpec,
-	"agents/sdd-design.toml":      sdd.RoleDesign,
-	"agents/sdd-tasks.toml":       sdd.RoleTasks,
-	"agents/sdd-apply.toml":       sdd.RoleApply,
+var profileRoles = map[string]modelplan.Role{
+	"agents/explore.toml":         modelplan.RoleResearch,
+	"agents/general.toml":         modelplan.RoleImplementation,
+	"agents/verifier.toml":        modelplan.RoleVerification,
+	"agents/care-reviewer.toml":   modelplan.RoleCAREReviewer,
+	"agents/care-specialist.toml": modelplan.RoleCARESpecialist,
+	"agents/care-challenger.toml": modelplan.RoleCAREChallenger,
+	"agents/sdd-research.toml":    modelplan.RoleResearch,
+	"agents/sdd-proposal.toml":    modelplan.RoleProposal,
+	"agents/sdd-spec.toml":        modelplan.RoleSpec,
+	"agents/sdd-design.toml":      modelplan.RoleDesign,
+	"agents/sdd-tasks.toml":       modelplan.RoleTasks,
+	"agents/sdd-apply.toml":       modelplan.RoleApply,
 }
 
-var legacyProfileRoles = map[string]sdd.Role{
-	"agents/explore.toml": sdd.RoleResearch, "agents/general.toml": sdd.RoleImplementation, "agents/verifier.toml": sdd.RoleVerification,
-	"agents/risk.toml": sdd.RoleRisk, "agents/readability.toml": sdd.RoleReadability, "agents/reliability.toml": sdd.RoleReliability, "agents/resilience.toml": sdd.RoleResilience, "agents/refuter.toml": sdd.RoleRefuter,
-	"agents/sdd-research.toml": sdd.RoleResearch, "agents/sdd-proposal.toml": sdd.RoleProposal, "agents/sdd-spec.toml": sdd.RoleSpec, "agents/sdd-design.toml": sdd.RoleDesign, "agents/sdd-tasks.toml": sdd.RoleTasks, "agents/sdd-apply.toml": sdd.RoleApply,
+var legacyProfileRoles = map[string]modelplan.Role{
+	"agents/explore.toml": modelplan.RoleResearch, "agents/general.toml": modelplan.RoleImplementation, "agents/verifier.toml": modelplan.RoleVerification,
+	"agents/risk.toml": modelplan.RoleRisk, "agents/readability.toml": modelplan.RoleReadability, "agents/reliability.toml": modelplan.RoleReliability, "agents/resilience.toml": modelplan.RoleResilience, "agents/refuter.toml": modelplan.RoleRefuter,
+	"agents/sdd-research.toml": modelplan.RoleResearch, "agents/sdd-proposal.toml": modelplan.RoleProposal, "agents/sdd-spec.toml": modelplan.RoleSpec, "agents/sdd-design.toml": modelplan.RoleDesign, "agents/sdd-tasks.toml": modelplan.RoleTasks, "agents/sdd-apply.toml": modelplan.RoleApply,
 }
 
-func profilesForPlan(plan sdd.Plan) ([]profile, error) {
-	config := sdd.DefaultModelPlanConfig()
+func profilesForPlan(plan modelplan.Plan) ([]profile, error) {
+	config := modelplan.DefaultModelPlanConfig()
 	config.ActivePlan = plan
-	resolved, err := sdd.ResolveOpenCodePlan(config)
+	resolved, err := modelplan.ResolveOpenCodePlan(config)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Codex model plan: %w", err)
 	}
@@ -726,25 +726,25 @@ func profilesForPlan(plan sdd.Plan) ([]profile, error) {
 	return selected, nil
 }
 
-func preCAREProfilesForPlan(plan sdd.Plan) ([]profile, error) {
-	config := sdd.DefaultModelPlanConfig()
+func preCAREProfilesForPlan(plan modelplan.Plan) ([]profile, error) {
+	config := modelplan.DefaultModelPlanConfig()
 	config.ActivePlan = plan
-	resolved, err := sdd.ResolveOpenCodePlan(config)
+	resolved, err := modelplan.ResolveOpenCodePlan(config)
 	if err != nil {
 		return nil, fmt.Errorf("invalid legacy Codex model plan: %w", err)
 	}
 	type legacyAssignment struct{ slot, effort string }
-	fixed := map[sdd.Plan]map[string]legacyAssignment{
-		sdd.PlanLow: {
+	fixed := map[modelplan.Plan]map[string]legacyAssignment{
+		modelplan.PlanLow: {
 			"risk": {"efficient", "medium"}, "readability": {"efficient", "low"}, "reliability": {"efficient", "medium"}, "resilience": {"efficient", "medium"}, "refuter": {"balanced", "medium"},
 		},
-		sdd.PlanMedium: {
+		modelplan.PlanMedium: {
 			"risk": {"frontier", "medium"}, "readability": {"efficient", "medium"}, "reliability": {"balanced", "high"}, "resilience": {"balanced", "high"}, "refuter": {"frontier", "medium"},
 		},
-		sdd.PlanHigh: {
+		modelplan.PlanHigh: {
 			"risk": {"frontier", "high"}, "readability": {"efficient", "high"}, "reliability": {"frontier", "high"}, "resilience": {"frontier", "high"}, "refuter": {"frontier", "high"},
 		},
-		sdd.PlanUltra: {
+		modelplan.PlanUltra: {
 			"risk": {"frontier", "high"}, "readability": {"balanced", "high"}, "reliability": {"frontier", "high"}, "resilience": {"frontier", "high"}, "refuter": {"frontier", "high"},
 		},
 	}
@@ -783,7 +783,7 @@ func preCAREProfilesForPlan(plan sdd.Plan) ([]profile, error) {
 	return selected, nil
 }
 
-func predecessorProfilesForPlan(plan sdd.Plan) ([]profile, error) {
+func predecessorProfilesForPlan(plan modelplan.Plan) ([]profile, error) {
 	selected, err := preCAREProfilesForPlan(plan)
 	if err != nil {
 		return nil, err
@@ -803,7 +803,7 @@ func predecessorProfilesForPlan(plan sdd.Plan) ([]profile, error) {
 // activeV10ProfilesForPlan reconstructs the exact former HEAD package: native
 // repository children already carried Context Capsule continuity, while General
 // still accepted SDD handoffs and Apply remained read-only.
-func activeV10ProfilesForPlan(plan sdd.Plan) ([]profile, error) {
+func activeV10ProfilesForPlan(plan modelplan.Plan) ([]profile, error) {
 	selected, err := activeV11ProfilesForPlan(plan)
 	if err != nil {
 		return nil, err
@@ -820,7 +820,7 @@ func activeV10ProfilesForPlan(plan sdd.Plan) ([]profile, error) {
 	return selected, nil
 }
 
-func activeV11ProfilesForPlan(plan sdd.Plan) ([]profile, error) {
+func activeV11ProfilesForPlan(plan modelplan.Plan) ([]profile, error) {
 	selected, err := preCAREProfilesForPlan(plan)
 	if err != nil {
 		return nil, err
@@ -828,7 +828,7 @@ func activeV11ProfilesForPlan(plan sdd.Plan) ([]profile, error) {
 	return withoutReliabilitySkillReceipt(selected), nil
 }
 
-func activeV12ProfilesForPlan(plan sdd.Plan) ([]profile, error) {
+func activeV12ProfilesForPlan(plan modelplan.Plan) ([]profile, error) {
 	selected, err := preCAREProfilesForPlan(plan)
 	if err != nil {
 		return nil, err

@@ -54,7 +54,7 @@ func TestPiSourceIdentityIgnoresCoverageOutputButDetectsSourceDrift(t *testing.T
 
 func TestPiTarballContainsPackageMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vgxness-pi-0.1.0.tgz")
-	if err := writeNpmTarball(path, []archiveFile{{name: "package.json", data: []byte(`{"name":"@vgxness/pi"}`), mode: 0o644}, {name: "LICENSE", data: []byte("license"), mode: 0o644}, {name: "resources/prompts/manager.md", data: []byte("prompt"), mode: 0o644}, {name: "resources/skills/sdd-lifecycle/SKILL.md", data: []byte("skill"), mode: 0o644}}); err != nil {
+	if err := writeNpmTarball(path, []archiveFile{{name: "package.json", data: []byte(`{"name":"@vgxness/pi"}`), mode: 0o644}, {name: "LICENSE", data: []byte("license"), mode: 0o644}, {name: "resources/prompts/manager.md", data: []byte("prompt"), mode: 0o644}, {name: "resources/skills/memory-sync/SKILL.md", data: []byte("skill"), mode: 0o644}}); err != nil {
 		t.Fatal(err)
 	}
 	file, err := os.Open(path)

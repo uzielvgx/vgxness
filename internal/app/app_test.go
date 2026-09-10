@@ -20,9 +20,9 @@ import (
 	"github.com/vgxness/vgxness/internal/launcher"
 	"github.com/vgxness/vgxness/internal/memory"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/providers/codex"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
-	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 	"github.com/vgxness/vgxness/internal/skills"
@@ -324,7 +324,7 @@ func TestTUIBackendMultiSetupPlansSelectionsAndPreservesProviderOptions(t *testi
 	if err != nil || len(plan.Providers) != 2 || plan.Providers[0].Provider != setupflow.ProviderOpenCode || plan.Providers[1].Provider != setupflow.ProviderCodex {
 		t.Fatalf("plan=%#v err=%v", plan, err)
 	}
-	if openCode.previewOptions.ModelEfficient != "openai/fast" || codex.previewOptions.ModelPlan != sdd.PlanHigh || codex.previewOptions.ConfigDir != "" || codex.previewOptions.HomeDir == "" || codex.previewOptions.ModelEfficient != "" {
+	if openCode.previewOptions.ModelEfficient != "openai/fast" || codex.previewOptions.ModelPlan != modelplan.PlanHigh || codex.previewOptions.ConfigDir != "" || codex.previewOptions.HomeDir == "" || codex.previewOptions.ModelEfficient != "" {
 		t.Fatalf("opencode=%#v codex=%#v", openCode.previewOptions, codex.previewOptions)
 	}
 	result, err := backend.ApplyMultiSetup(context.Background(), tui.MultiSetupRequest{Setup: request.Setup, Providers: request.Providers, ExpectedPlanDigest: plan.Digest})
@@ -495,8 +495,8 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/bin/vgxness", Changed: true, UpdateAvailable: true, RollbackAvailable: true, ActiveSHA256: "active", PreviousSHA256: "previous"},
 		Integration: integration.Result{
 			State: integration.StatePartial, Path: "/config/manager.md", ArtifactCount: 17,
-			ModelPlan: sdd.PlanHigh, ModelProvider: "acme", ModelEfficient: "acme/fast",
-			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra, ModelFrontierSource: sdd.ModelSlotCustom, ModelFrontierAvailability: sdd.ModelSlotUnknown, Changed: true, RestartRequired: true,
+			ModelPlan: modelplan.PlanHigh, ModelProvider: "acme", ModelEfficient: "acme/fast",
+			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", ModelEfficientEffort: modelplan.EffortLow, ModelBalancedEffort: modelplan.EffortHigh, ModelFrontierEffort: modelplan.EffortUltra, ModelFrontierSource: modelplan.ModelSlotCustom, ModelFrontierAvailability: modelplan.ModelSlotUnknown, Changed: true, RestartRequired: true,
 		},
 		Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy},
 		Skills:    skills.Result{State: skills.StateInstalled, Changed: true, UpdateNeeded: true},
@@ -512,17 +512,17 @@ func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
 		preview, err := backend.PlanSetup(context.Background(), tui.SetupRequest{Workspace: "workspace/../project", Plan: selected})
 		testutil.Require(t, err == nil && preview.Ready && preview.ModelPlan == "high" && len(preview.Steps) == 2, "preview=%+v err=%v", preview, err)
 		expectedWorkspace, _ := filepath.Abs("project")
-		testutil.Require(t, runtime.planOptions.Workspace == filepath.Clean(expectedWorkspace) && runtime.planOptions.Integration.ModelPlan == sdd.Plan(selected), "selected=%s options=%+v", selected, runtime.planOptions)
+		testutil.Require(t, runtime.planOptions.Workspace == filepath.Clean(expectedWorkspace) && runtime.planOptions.Integration.ModelPlan == modelplan.Plan(selected), "selected=%s options=%+v", selected, runtime.planOptions)
 	}
 	preview, _ := backend.PlanSetup(context.Background(), tui.SetupRequest{Workspace: "/workspace", Plan: "high", ModelEfficient: "openai/fast", ModelBalanced: "anthropic/balanced", ModelFrontier: "acme/frontier", ModelEfficientEffort: "low", ModelBalancedEffort: "high", ModelFrontierEffort: "ultra"})
-	testutil.Require(t, runtime.planOptions.Integration.ModelEfficient == "openai/fast" && runtime.planOptions.Integration.ModelBalanced == "anthropic/balanced" && runtime.planOptions.Integration.ModelFrontier == "acme/frontier" && runtime.planOptions.Integration.ModelEfficientEffort == sdd.EffortLow && runtime.planOptions.Integration.ModelBalancedEffort == sdd.EffortHigh && runtime.planOptions.Integration.ModelFrontierEffort == sdd.EffortUltra, "exact profile options=%+v", runtime.planOptions)
+	testutil.Require(t, runtime.planOptions.Integration.ModelEfficient == "openai/fast" && runtime.planOptions.Integration.ModelBalanced == "anthropic/balanced" && runtime.planOptions.Integration.ModelFrontier == "acme/frontier" && runtime.planOptions.Integration.ModelEfficientEffort == modelplan.EffortLow && runtime.planOptions.Integration.ModelBalancedEffort == modelplan.EffortHigh && runtime.planOptions.Integration.ModelFrontierEffort == modelplan.EffortUltra, "exact profile options=%+v", runtime.planOptions)
 	preview.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.plan.Steps[0].Title == "Check", "preview steps alias setupflow plan: %+v", runtime.plan.Steps)
 
 	applyWorkspace := filepath.Join(t.TempDir(), "workspace")
 	result, err := backend.ApplySetup(context.Background(), tui.SetupRequest{Workspace: applyWorkspace, Plan: "low", ExpectedPlanDigest: "confirmed-digest"})
 	testutil.Require(t, err == nil && result.Changed && result.SelfInstallState == "installed" && result.IntegrationState == "installed" && result.ArtifactCount == 17 && result.HandshakeOK && result.RestartRequired && result.Recovery == "safe recovery", "result=%+v err=%v", result, err)
-	testutil.Require(t, runtime.applyOptions.Workspace == filepath.Clean(applyWorkspace) && runtime.applyOptions.Integration.ModelPlan == sdd.PlanLow && runtime.applyOptions.ExpectedPlanDigest == "confirmed-digest", "apply options=%+v", runtime.applyOptions)
+	testutil.Require(t, runtime.applyOptions.Workspace == filepath.Clean(applyWorkspace) && runtime.applyOptions.Integration.ModelPlan == modelplan.PlanLow && runtime.applyOptions.ExpectedPlanDigest == "confirmed-digest", "apply options=%+v", runtime.applyOptions)
 	result.Plan.Steps[0].Title = "changed"
 	testutil.Require(t, runtime.result.Plan.Steps[0].Title == "Check", "result steps alias setupflow result: %+v", runtime.result.Plan.Steps)
 	testutil.Require(t, preview.SelfInstallChanged && preview.IntegrationChanged && preview.IntegrationRestartRequired && preview.SkillsChanged && preview.SkillsUpdateNeeded, "preview change signals=%+v", preview)
@@ -547,9 +547,9 @@ func TestTUISetupAssignmentTransportIsComparableValidatedAndCopied(t *testing.T)
 	_ = map[tui.SetupRequest]bool{request: true}
 	options, err := tuiSetupOptions(request)
 	testutil.Require(t, err == nil && options.Integration.ModelAssignments != nil && len(*options.Integration.ModelAssignments) == integration.ModelAssignmentCount, "options=%+v err=%v", options, err)
-	resolved, resolveErr := sdd.ResolveOpenCodePlanV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: sdd.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
+	resolved, resolveErr := modelplan.ResolveOpenCodePlanV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: modelplan.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
 	first := (*options.Integration.ModelAssignments)[requestRows[0].ArtifactKey]
-	testutil.Require(t, resolveErr == nil && first.Variant == "" && !first.VariantSpecified && resolved.Assignments[0].Variant == sdd.VariantMedium, "legacy variant changed config=%+v resolved=%+v err=%v", first, resolved.Assignments[0], resolveErr)
+	testutil.Require(t, resolveErr == nil && first.Variant == "" && !first.VariantSpecified && resolved.Assignments[0].Variant == modelplan.VariantMedium, "legacy variant changed config=%+v resolved=%+v err=%v", first, resolved.Assignments[0], resolveErr)
 	firstKey := requestRows[0].ArtifactKey
 	requestRows[0].Reference = "mutated/request"
 	testutil.Require(t, (*options.Integration.ModelAssignments)[firstKey].Reference == "acme/model", "request aliases integration map: %+v", *options.Integration.ModelAssignments)
@@ -576,11 +576,11 @@ func TestTUISetupAssignmentTransportIsComparableValidatedAndCopied(t *testing.T)
 }
 
 func TestTUISetupPlanAssignmentRowsAreMappedAndCopied(t *testing.T) {
-	var rows [integration.ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3
-	rows[0] = sdd.OpenCodeAgentAssignmentV3{
-		ArtifactKey: "agents/vgxness-manager.md", Role: sdd.RoleManager, Class: sdd.ManagedAgentClassCore,
-		Provider: "acme", Model: "acme/frontier", RequestedEffort: sdd.EffortUltra, Effort: sdd.EffortHigh,
-		Variant: sdd.VariantHigh, Degradation: sdd.Degradation{Degraded: true, Reason: "bounded"}, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown,
+	var rows [integration.ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3
+	rows[0] = modelplan.OpenCodeAgentAssignmentV3{
+		ArtifactKey: "agents/vgxness-manager.md", Role: modelplan.RoleManager, Class: modelplan.ManagedAgentClassCore,
+		Provider: "acme", Model: "acme/frontier", RequestedEffort: modelplan.EffortUltra, Effort: modelplan.EffortHigh,
+		Variant: modelplan.VariantHigh, Degradation: modelplan.Degradation{Degraded: true, Reason: "bounded"}, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown,
 	}
 	source := setupflow.Plan{Integration: integration.Result{ModelSchemaVersion: 3, ModelAssignments: &rows}}
 	plan := tuiSetupPlan(source)
@@ -609,8 +609,8 @@ func TestTUIBackendCatalogMapsNeutralRowsAndRefreshFlag(t *testing.T) {
 		requestRows[index] = tui.SetupModelAssignmentRequest{ArtifactKey: identity.ArtifactKey, Provider: rows[0].Provider, Reference: rows[0].Reference, RequestedEffort: "ultra", Source: rows[0].Source, Availability: rows[0].Availability}
 	}
 	options, err := tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", ModelAssignments: &requestRows})
-	resolved, err := sdd.ResolveOpenCodePlanV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: sdd.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
-	testutil.Require(t, err == nil && resolved.Assignments[0].Variant == sdd.VariantXHigh && resolved.Assignments[0].Effort == sdd.EffortUltra && !resolved.Assignments[0].Degradation.Degraded, "resolved=%+v err=%v", resolved, err)
+	resolved, err := modelplan.ResolveOpenCodePlanV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: modelplan.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
+	testutil.Require(t, err == nil && resolved.Assignments[0].Variant == modelplan.VariantXHigh && resolved.Assignments[0].Effort == modelplan.EffortUltra && !resolved.Assignments[0].Degradation.Degraded, "resolved=%+v err=%v", resolved, err)
 	rows, err = backend.ModelCatalog(context.Background(), true)
 	testutil.Require(t, err == nil && catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 1 && rows[0].Reference == "acme/a:b@c+d", "refreshed rows=%+v err=%v", rows, err)
 }

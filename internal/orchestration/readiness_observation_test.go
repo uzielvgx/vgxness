@@ -8,7 +8,7 @@ import (
 
 func TestReadinessObservationSanitizesFullControlledVocabulary(t *testing.T) {
 	o := NewAggregateObserver(2)
-	risks := []RiskCategory{"sdd", "delivery", "frozen", "cross-platform", "lifecycle-recovery", "authorization-security", "secrets", "payments", "installer", "data-loss-exposure", "shell-process", "durability", "identity-digest", "provider-template", "unknown-risk"}
+	risks := []RiskCategory{"delivery", "frozen", "cross-platform", "lifecycle-recovery", "authorization-security", "secrets", "payments", "installer", "data-loss-exposure", "shell-process", "durability", "identity-digest", "provider-template", "unknown-risk"}
 	o.Observe(ReadinessObservation{Activation: "bad", Status: "bad", Reasons: []ReasonCode{"z", "a", "a"}, Risks: append(risks, "secret"), ElapsedBucket: "unbounded"})
 	s := o.Snapshot()
 	if len(s) != 1 || s[0].Activation != ActivationFull || s[0].Status != ReadinessBlocked || s[0].ElapsedBucket != "unknown" || len(s[0].Risks) != len(risks) {
@@ -27,7 +27,7 @@ func TestReadinessObservationHardLimitAndConcurrentSnapshots(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			o.Observe(ReadinessObservation{Activation: ActivationFull, Status: ReadinessBlocked, Reasons: []ReasonCode{"binding_mismatch"}, Risks: []RiskCategory{"sdd"}})
+			o.Observe(ReadinessObservation{Activation: ActivationFull, Status: ReadinessBlocked, Reasons: []ReasonCode{"binding_mismatch"}, Risks: []RiskCategory{"delivery"}})
 			_ = o.Snapshot()
 		}()
 	}

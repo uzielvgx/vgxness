@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
@@ -22,7 +22,7 @@ type fakeIntegrationRuntime struct {
 
 func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
 	runtime := &fakeIntegrationRuntime{result: integration.Result{
-		Provider: "opencode", State: integration.StateAbsent, ModelPlan: sdd.PlanHigh, ModelProvider: "acme",
+		Provider: "opencode", State: integration.StateAbsent, ModelPlan: modelplan.PlanHigh, ModelProvider: "acme",
 		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
 		ManifestPath: "/tmp/config/vgxness/model-plan.json", RestartRequired: true, DirectoryDurability: "fsync",
 	}}
@@ -31,7 +31,7 @@ func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
 		"--model-efficient", "acme/fast", "--model-balanced", "acme/balanced", "--model-frontier", "acme/frontier",
 		"--model", "legacy/ignored",
 	}, runtime)
-	if code != 0 || stderr != "" || runtime.options.ModelPlan != sdd.PlanHigh || runtime.options.ModelEfficient != "acme/fast" {
+	if code != 0 || stderr != "" || runtime.options.ModelPlan != modelplan.PlanHigh || runtime.options.ModelEfficient != "acme/fast" {
 		t.Fatalf("code=%d options=%+v stderr=%q", code, runtime.options, stderr)
 	}
 	for _, expected := range []string{"model_plan=high", "model_provider=acme", "model_efficient=acme/fast", "model_balanced=acme/balanced", "model_frontier=acme/frontier", "model_manifest=/tmp/config/vgxness/model-plan.json", "restart_required=true", "directory_durability=fsync"} {
@@ -45,15 +45,15 @@ func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
 }
 
 func TestIntegrationCLI_AcceptsUltraModelPlan(t *testing.T) {
-	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, ModelPlan: sdd.PlanUltra}}
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, ModelPlan: modelplan.PlanUltra}}
 	code, _, stderr := runIntegrationTest([]string{"integrate", "opencode", "preview", "--model-plan", "ultra"}, runtime)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.options.ModelPlan == sdd.PlanUltra && runtime.calls == 1, "exit=%d options=%+v calls=%d stderr=%q", code, runtime.options, runtime.calls, stderr)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.options.ModelPlan == modelplan.PlanUltra && runtime.calls == 1, "exit=%d options=%+v calls=%d stderr=%q", code, runtime.options, runtime.calls, stderr)
 }
 
 func TestIntegrationCLI_CodexReinstallAcceptsModelPlan(t *testing.T) {
-	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateInstalled, ModelPlan: sdd.PlanUltra}}
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "codex", State: integration.StateInstalled, ModelPlan: modelplan.PlanUltra}}
 	code, stdout, stderr := runIntegrationTest([]string{"integrate", "codex", "reinstall", "--config-dir", "/tmp/codex", "--model-plan", "ultra"}, runtime)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.action == "reinstall" && runtime.options.ModelPlan == sdd.PlanUltra, "exit=%d action=%q options=%+v stderr=%q", code, runtime.action, runtime.options, stderr)
+	testutil.Require(t, code == 0 && stderr == "" && runtime.action == "reinstall" && runtime.options.ModelPlan == modelplan.PlanUltra, "exit=%d action=%q options=%+v stderr=%q", code, runtime.action, runtime.options, stderr)
 	testutil.Require(t, strings.Contains(stdout, "model_plan=ultra\n"), "output=%q", stdout)
 }
 
@@ -101,7 +101,7 @@ func (runtime *fakeIntegrationRuntime) call(action string, options integration.O
 
 func runIntegrationTest(args []string, runtime integration.Runtime) (int, string, string) {
 	var stdout, stderr bytes.Buffer
-	code := RunProductSDDRuntime(context.Background(), args, strings.NewReader(""), &stdout, &stderr, &fakeInspector{}, nil, runtime, runtime, nil, nil, nil)
+	code := RunProductRuntime(context.Background(), args, strings.NewReader(""), &stdout, &stderr, &fakeInspector{}, nil, runtime, runtime, nil, nil)
 	return code, stdout.String(), stderr.String()
 }
 

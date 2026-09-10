@@ -23,7 +23,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
+func TestCleanCheckoutSetupAndMemory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("native Windows runtime smoke is tracked separately")
 	}
@@ -219,7 +219,7 @@ func TestCleanCheckoutSetupAndNativeSDD(t *testing.T) {
 		output, err := command.CombinedOutput()
 		cancel()
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 2 || (!bytes.Contains(output, []byte("retired")) && !bytes.Contains(output, []byte("read-only"))) {
+		if !errors.As(err, &exit) || exit.ExitCode() != 2 || !bytes.Contains(output, []byte("usage:")) {
 			t.Fatalf("SDD request not rejected: %v err=%v output=%q", args, err, output)
 		}
 	}

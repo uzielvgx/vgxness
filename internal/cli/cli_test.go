@@ -25,7 +25,7 @@ func TestFailureClassifiesUnsupportedCredentialFiles(t *testing.T) {
 }
 
 func runBasicCLI(ctx context.Context, args []string, stdout, stderr *bytes.Buffer, inspector Inspector) int {
-	return RunProductSDDRuntime(ctx, args, strings.NewReader(""), stdout, stderr, inspector, nil, nil, nil, nil, nil, nil)
+	return RunProductRuntime(ctx, args, strings.NewReader(""), stdout, stderr, inspector, nil, nil, nil, nil, nil)
 }
 
 func (f *fakeInspector) Status(context.Context, config.Options) (inspection.Result, error) {

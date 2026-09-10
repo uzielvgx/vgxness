@@ -250,23 +250,23 @@ test("SDK skill tool returns a readable manifest identity and rejects arbitrary 
 });
 
 
-test("SDK task canonicalizes every shared alias before authority and SDD checks", async t => {
+test("SDK task canonicalizes every shared alias before authority checks", async t => {
  const root = await mkdtemp(join(tmpdir(), "pi-task-alias-"));
  t.after(() => import("node:fs/promises").then(fs => fs.rm(root,{recursive:true,force:true})));
  const { loadManagerContract } = await import("../src/orchestration/contract.ts");
- const contract=loadManagerContract(); let received:any; let bindingChecks=0;
- const binding={changeId:"c",artifactId:"a",revisionId:"r",digest:"a".repeat(64),stateVersion:1,inputs:[{artifactId:"s",revisionId:"sr",digest:"b".repeat(64)}]};
+ const contract=loadManagerContract(); let received:any;
  const key="__taskAlias_"+crypto.randomUUID();
- const host:any={role:"manager",mode:"full",workspace:root,mutationGrant:()=>({expiresAt:Date.now()+60000,signal:new AbortController().signal}),verifyAcceptedBinding:async(value:any)=>{bindingChecks++;return JSON.stringify(value)===JSON.stringify(binding);},executeWorker:async(mission:any)=>{received=mission;return "ok";}};
+ const host:any={role:"manager",mode:"full",workspace:root,mutationGrant:()=>({expiresAt:Date.now()+60000,signal:new AbortController().signal}),executeWorker:async(mission:any)=>{received=mission;return "ok";}};
  (globalThis as any)[key]=host;t.after(()=>{delete(globalThis as any)[key];});
  const wrapper=join(root,"task.ts");
  await writeFile(wrapper,`import { createTaskTool } from ${JSON.stringify(join(process.cwd(),"src/tools/task.ts"))}; export default pi=>pi.registerTool(createTaskTool(globalThis[${JSON.stringify(key)}]));`);
  const loaded=await loadExtensions([wrapper],root);assert.deepEqual(loaded.errors,[]);
  const tool:any=[...loaded.extensions[0].tools.values()][0].definition;
- const input=(role:string,mode="read-only",acceptedBindings?:any)=>({nonce:crypto.randomUUID(),role,mode,model:"fixture/model",effort:"low",goal:"Exercise alias",criteria:["Canonical bounded mission"],commands:[],targets:{},resultLimit:8192,...(acceptedBindings?{acceptedBindings}:{})});
- for(const role of contract.roles)for(const alias of role.aliases){const before=bindingChecks;await tool.execute("alias",input(alias,role.writeAuthority?"full":"read-only",role.id==="sdd-apply"?binding:undefined));assert.equal(received.role,role.id);assert.match(received.digest,/^[0-9a-f]{64}$/);if(role.id==="sdd-apply")assert.equal(bindingChecks-before,2);}
+ const input=(role:string,mode="read-only")=>({nonce:crypto.randomUUID(),role,mode,model:"fixture/model",effort:"low",goal:"Exercise alias",criteria:["Canonical bounded mission"],commands:[],targets:{},resultLimit:8192});
+ for(const role of contract.roles)for(const alias of role.aliases){await tool.execute("alias",input(alias,role.writeAuthority?"full":"read-only"));assert.equal(received.role,role.id);assert.match(received.digest,/^[0-9a-f]{64}$/);}
  await assert.rejects(tool.execute("readonly",input("verification","full")),/full mode/);
  await assert.rejects(tool.execute("apply",input("apply","full")),/launchable|unsupported/);
+ await assert.rejects(tool.execute("retired-binding",{...input("general","full"),acceptedBindings:{}}),/invalid task input/);
  await assert.rejects(tool.execute("invalid",input("manager")),/launchable|unsupported/);
  await assert.rejects(tool.execute("invalid",input("unknown")),/launchable|unsupported/);
  host.mode="read-only";await assert.rejects(tool.execute("parent",input("worker","full")),/parent authority/);

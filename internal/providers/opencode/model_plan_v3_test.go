@@ -12,22 +12,22 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 func TestCAREInventoryUsesThreeCurrentRolesOnly(t *testing.T) {
 	got := ModelAgentInventoryV3()
-	want := map[string]sdd.Role{
-		"agents/vgxness-care-reviewer.md":   sdd.RoleCAREReviewer,
-		"agents/vgxness-care-specialist.md": sdd.RoleCARESpecialist,
-		"agents/vgxness-care-challenger.md": sdd.RoleCAREChallenger,
+	want := map[string]modelplan.Role{
+		"agents/vgxness-care-reviewer.md":   modelplan.RoleCAREReviewer,
+		"agents/vgxness-care-specialist.md": modelplan.RoleCARESpecialist,
+		"agents/vgxness-care-challenger.md": modelplan.RoleCAREChallenger,
 	}
-	seen := map[string]sdd.Role{}
+	seen := map[string]modelplan.Role{}
 	for _, item := range got {
 		seen[item.ArtifactKey] = item.Role
 	}
-	if len(got) != 13 {
-		t.Errorf("current OpenCode inventory has %d agents, want 13", len(got))
+	if len(got) != 7 {
+		t.Errorf("current OpenCode inventory has %d agents, want 7", len(got))
 	}
 	for path, role := range want {
 		if seen[path] != role {
@@ -41,33 +41,27 @@ func TestCAREInventoryUsesThreeCurrentRolesOnly(t *testing.T) {
 	}
 }
 
-func completeModelAssignmentsV3() map[string]sdd.ManagedAgentModelConfig {
-	assignments := make(map[string]sdd.ManagedAgentModelConfig, len(modelAgentInventoryV3))
-	efforts := []sdd.Effort{sdd.EffortLow, sdd.EffortMedium, sdd.EffortHigh, sdd.EffortUltra}
+func completeModelAssignmentsV3() map[string]modelplan.ManagedAgentModelConfig {
+	assignments := make(map[string]modelplan.ManagedAgentModelConfig, len(modelAgentInventoryV3))
+	efforts := []modelplan.Effort{modelplan.EffortLow, modelplan.EffortMedium, modelplan.EffortHigh, modelplan.EffortUltra}
 	for index, identity := range modelAgentInventoryV3 {
-		assignments[identity.ArtifactKey] = sdd.ManagedAgentModelConfig{
+		assignments[identity.ArtifactKey] = modelplan.ManagedAgentModelConfig{
 			Provider: "acme", Reference: fmt.Sprintf("acme/model-%02d", index), RequestedEffort: efforts[index%len(efforts)],
-			Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown,
+			Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown,
 		}
 	}
 	return assignments
 }
 
 func TestModelAgentInventoryV3IsCanonical(t *testing.T) {
-	want := []sdd.ManagedAgentIdentity{
-		{ArtifactKey: "agents/vgxness-manager.md", Role: sdd.RoleManager, Class: sdd.ManagedAgentClassCore},
-		{ArtifactKey: "agents/explore.md", Role: sdd.RoleResearch, Class: sdd.ManagedAgentClassCore},
-		{ArtifactKey: "agents/general.md", Role: sdd.RoleImplementation, Class: sdd.ManagedAgentClassCore},
-		{ArtifactKey: "agents/vgxness-verifier.md", Role: sdd.RoleVerification, Class: sdd.ManagedAgentClassCore},
-		{ArtifactKey: "agents/vgxness-care-reviewer.md", Role: sdd.RoleCAREReviewer, Class: sdd.ManagedAgentClassReview},
-		{ArtifactKey: "agents/vgxness-care-specialist.md", Role: sdd.RoleCARESpecialist, Class: sdd.ManagedAgentClassReview},
-		{ArtifactKey: "agents/vgxness-care-challenger.md", Role: sdd.RoleCAREChallenger, Class: sdd.ManagedAgentClassReview},
-		{ArtifactKey: "agents/vgxness-sdd-research.md", Role: sdd.RoleResearch, Class: sdd.ManagedAgentClassSDD},
-		{ArtifactKey: "agents/vgxness-sdd-proposal.md", Role: sdd.RoleProposal, Class: sdd.ManagedAgentClassSDD},
-		{ArtifactKey: "agents/vgxness-sdd-spec.md", Role: sdd.RoleSpec, Class: sdd.ManagedAgentClassSDD},
-		{ArtifactKey: "agents/vgxness-sdd-design.md", Role: sdd.RoleDesign, Class: sdd.ManagedAgentClassSDD},
-		{ArtifactKey: "agents/vgxness-sdd-tasks.md", Role: sdd.RoleTasks, Class: sdd.ManagedAgentClassSDD},
-		{ArtifactKey: "agents/vgxness-sdd-apply.md", Role: sdd.RoleApply, Class: sdd.ManagedAgentClassSDD},
+	want := []modelplan.ManagedAgentIdentity{
+		{ArtifactKey: "agents/vgxness-manager.md", Role: modelplan.RoleManager, Class: modelplan.ManagedAgentClassCore},
+		{ArtifactKey: "agents/explore.md", Role: modelplan.RoleResearch, Class: modelplan.ManagedAgentClassCore},
+		{ArtifactKey: "agents/general.md", Role: modelplan.RoleImplementation, Class: modelplan.ManagedAgentClassCore},
+		{ArtifactKey: "agents/vgxness-verifier.md", Role: modelplan.RoleVerification, Class: modelplan.ManagedAgentClassCore},
+		{ArtifactKey: "agents/vgxness-care-reviewer.md", Role: modelplan.RoleCAREReviewer, Class: modelplan.ManagedAgentClassReview},
+		{ArtifactKey: "agents/vgxness-care-specialist.md", Role: modelplan.RoleCARESpecialist, Class: modelplan.ManagedAgentClassReview},
+		{ArtifactKey: "agents/vgxness-care-challenger.md", Role: modelplan.RoleCAREChallenger, Class: modelplan.ManagedAgentClassReview},
 	}
 	if len(want) != integration.ModelAssignmentCount {
 		t.Fatalf("inventory count=%d transport count=%d", len(want), integration.ModelAssignmentCount)
@@ -83,10 +77,10 @@ func TestModelAgentInventoryV3IsCanonical(t *testing.T) {
 }
 
 func TestResultModelAssignmentsRejectsNonCanonicalCountAndCopies(t *testing.T) {
-	if _, err := resultModelAssignments(make([]sdd.OpenCodeAgentAssignmentV3, integration.ModelAssignmentCount-1)); !errors.Is(err, integration.ErrInvalid) {
+	if _, err := resultModelAssignments(make([]modelplan.OpenCodeAgentAssignmentV3, integration.ModelAssignmentCount-1)); !errors.Is(err, integration.ErrInvalid) {
 		t.Fatalf("short resolved rows accepted: %v", err)
 	}
-	rows := make([]sdd.OpenCodeAgentAssignmentV3, integration.ModelAssignmentCount)
+	rows := make([]modelplan.OpenCodeAgentAssignmentV3, integration.ModelAssignmentCount)
 	rows[0].ArtifactKey = "agents/original.md"
 	result, err := resultModelAssignments(rows)
 	if err != nil {
@@ -100,16 +94,16 @@ func TestResultModelAssignmentsRejectsNonCanonicalCountAndCopies(t *testing.T) {
 
 func TestResolveModelPlanV3SupportsHomogeneousAndThreeProviderAssignments(t *testing.T) {
 	inventory := ModelAgentInventoryV3()
-	assignments := make(map[string]sdd.ManagedAgentModelConfig, len(inventory))
-	efforts := []sdd.Effort{sdd.EffortLow, sdd.EffortMedium, sdd.EffortHigh, sdd.EffortUltra}
+	assignments := make(map[string]modelplan.ManagedAgentModelConfig, len(inventory))
+	efforts := []modelplan.Effort{modelplan.EffortLow, modelplan.EffortMedium, modelplan.EffortHigh, modelplan.EffortUltra}
 	for index, identity := range inventory {
 		provider := []string{"alpha", "beta", "gamma"}[index%3]
-		assignments[identity.ArtifactKey] = sdd.ManagedAgentModelConfig{
+		assignments[identity.ArtifactKey] = modelplan.ManagedAgentModelConfig{
 			Provider: provider, Reference: provider + "/model", RequestedEffort: efforts[index%len(efforts)],
-			Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown,
+			Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown,
 		}
 	}
-	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "mixed", Provenance: sdd.ModelPlanCLI, Assignments: assignments}
+	config := modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "mixed", Provenance: modelplan.ModelPlanCLI, Assignments: assignments}
 	resolved, err := ResolveModelPlanV3(config)
 	if err != nil || resolved.Provider != "mixed" || len(resolved.Assignments) != integration.ModelAssignmentCount {
 		t.Fatalf("resolved=%+v err=%v", resolved, err)
@@ -117,7 +111,7 @@ func TestResolveModelPlanV3SupportsHomogeneousAndThreeProviderAssignments(t *tes
 	for index, assignment := range resolved.Assignments {
 		want := assignments[inventory[index].ArtifactKey]
 		if assignment.ArtifactKey != inventory[index].ArtifactKey || assignment.Provider != want.Provider || assignment.Model != want.Reference || assignment.RequestedEffort != want.RequestedEffort ||
-			assignment.Effort != want.RequestedEffort || assignment.Variant != sdd.OpenCodeVariantForEffort(want.RequestedEffort) || assignment.Degradation.Degraded {
+			assignment.Effort != want.RequestedEffort || assignment.Variant != modelplan.OpenCodeVariantForEffort(want.RequestedEffort) || assignment.Degradation.Degraded {
 			t.Fatalf("assignment %d=%+v want=%+v", index, assignment, want)
 		}
 	}
@@ -136,9 +130,9 @@ func TestResolveModelPlanV3SupportsHomogeneousAndThreeProviderAssignments(t *tes
 		assignments[key] = assignment
 	}
 	catalogKey := inventory[0].ArtifactKey
-	assignments[catalogKey] = sdd.ManagedAgentModelConfig{
-		Provider: "openai", Reference: "openai/gpt-5.6-luna", RequestedEffort: sdd.EffortUltra,
-		Source: sdd.ModelSlotCatalog, Availability: sdd.ModelSlotCatalogKnown,
+	assignments[catalogKey] = modelplan.ManagedAgentModelConfig{
+		Provider: "openai", Reference: "openai/gpt-5.6-luna", RequestedEffort: modelplan.EffortUltra,
+		Source: modelplan.ModelSlotCatalog, Availability: modelplan.ModelSlotCatalogKnown,
 	}
 	config.Provider = "openai"
 	catalog, err := ResolveModelPlanV3(config)
@@ -146,15 +140,15 @@ func TestResolveModelPlanV3SupportsHomogeneousAndThreeProviderAssignments(t *tes
 		t.Fatal(err)
 	}
 	got := catalog.Assignments[0]
-	if got.ArtifactKey != catalogKey || got.Effort != sdd.EffortUltra || got.Variant != sdd.VariantXHigh || got.Degradation.Degraded {
+	if got.ArtifactKey != catalogKey || got.Effort != modelplan.EffortUltra || got.Variant != modelplan.VariantXHigh || got.Degradation.Degraded {
 		t.Fatalf("catalog effective assignment=%+v", got)
 	}
 }
 
 func TestResolveModelPlanV3KeepsDuplicateRolePeersDistinct(t *testing.T) {
-	assignments := make(map[string]sdd.ManagedAgentModelConfig, integration.ModelAssignmentCount)
-	for _, identity := range ModelAgentInventoryV3() {
-		assignments[identity.ArtifactKey] = sdd.ManagedAgentModelConfig{Provider: "acme", Reference: "acme/default", RequestedEffort: sdd.EffortMedium, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown}
+	assignments := make(map[string]modelplan.ManagedAgentModelConfig, integration.ModelAssignmentCount)
+	for _, identity := range modelAgentInventoryV3 {
+		assignments[identity.ArtifactKey] = modelplan.ManagedAgentModelConfig{Provider: "acme", Reference: "acme/default", RequestedEffort: modelplan.EffortMedium, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown}
 	}
 	explore := assignments["agents/explore.md"]
 	explore.Reference = "acme/explore"
@@ -163,7 +157,7 @@ func TestResolveModelPlanV3KeepsDuplicateRolePeersDistinct(t *testing.T) {
 	research.Reference = "acme/sdd-research"
 	assignments["agents/vgxness-sdd-research.md"] = research
 
-	resolved, err := ResolveModelPlanV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: assignments})
+	resolved, err := modelplan.ResolveOpenCodePlanV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: modelplan.ModelPlanCLI, Assignments: assignments}, modelAgentInventoryV3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +212,7 @@ func TestRequestedModelPlanV3RendersArtifactAssignmentsAndStrictManifest(t *test
 
 	for name, mutate := range map[string]func(map[string]any){
 		"unknown":          func(value map[string]any) { value["unknown"] = true },
-		"schema confusion": func(value map[string]any) { value["config"] = sdd.DefaultModelPlanConfig() },
+		"schema confusion": func(value map[string]any) { value["config"] = modelplan.DefaultModelPlanConfig() },
 		"nil artifacts":    func(value map[string]any) { value["artifacts"] = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -258,7 +252,7 @@ func TestRequestedModelPlanV3OmitsEmptyVariant(t *testing.T) {
 func TestRequestedModelPlanV3SlotFlagsRequireExactInstalledProjection(t *testing.T) {
 	options := integration.Options{
 		ModelEfficient: "openai/gpt-5.6-luna", ModelBalanced: "anthropic/claude-sonnet", ModelFrontier: "acme/frontier",
-		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+		ModelEfficientEffort: modelplan.EffortLow, ModelBalancedEffort: modelplan.EffortHigh, ModelFrontierEffort: modelplan.EffortUltra,
 	}
 	directory := t.TempDir()
 	first, err := requestedModelPlan(options, directory)
@@ -291,7 +285,7 @@ func TestOmitEmptyVariantLinesRemovesOnlyFirstLine(t *testing.T) {
 
 func TestRequestedModelPlanSameProviderVariantsProjectToV3AndRenderVerbatim(t *testing.T) {
 	bundle, err := requestedModelPlan(integration.Options{
-		ModelPlan:              sdd.PlanMedium,
+		ModelPlan:              modelplan.PlanMedium,
 		ModelEfficient:         "openai/gpt-5.6-luna",
 		ModelBalanced:          "openai/gpt-5.6-terra",
 		ModelFrontier:          "openai/gpt-5.6-sol",
@@ -327,15 +321,15 @@ func TestRequestedModelPlanV3OmitsExplicitEmptyVariants(t *testing.T) {
 }
 
 func TestRequestedModelPlanV2ReferenceOverrideClearsLegacyVariant(t *testing.T) {
-	installed, err := sdd.NewModelPlanConfigV2(sdd.PlanMedium,
-		sdd.ModelSlotConfig{Reference: "alpha/old", RequestedEffort: sdd.EffortLow, Variant: "max", VariantSpecified: true, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
-		sdd.ModelSlotConfig{Reference: "beta/balanced", RequestedEffort: sdd.EffortMedium, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
-		sdd.ModelSlotConfig{Reference: "gamma/frontier", RequestedEffort: sdd.EffortHigh, Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown},
+	installed, err := modelplan.NewModelPlanConfigV2(modelplan.PlanMedium,
+		modelplan.ModelSlotConfig{Reference: "alpha/old", RequestedEffort: modelplan.EffortLow, Variant: "max", VariantSpecified: true, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
+		modelplan.ModelSlotConfig{Reference: "beta/balanced", RequestedEffort: modelplan.EffortMedium, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
+		modelplan.ModelSlotConfig{Reference: "gamma/frontier", RequestedEffort: modelplan.EffortHigh, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed.Provenance = sdd.ModelPlanCLI
+	installed.Provenance = modelplan.ModelPlanCLI
 	encoded, err := buildModelPlanBundleV2(installed)
 	if err != nil {
 		t.Fatal(err)
@@ -351,14 +345,14 @@ func TestRequestedModelPlanV2ReferenceOverrideClearsLegacyVariant(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot := bundle.configV2.Slots[sdd.CapabilityEfficient]
+	slot := bundle.configV2.Slots[modelplan.CapabilityEfficient]
 	if slot.Reference != "alpha/new" || slot.Variant != "" || slot.VariantSpecified {
 		t.Fatalf("legacy variant survived reference override: %+v", slot)
 	}
 }
 
 func TestV46ManagerPredecessorPreservesTrustedV1Digest(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +366,7 @@ func TestV46ManagerPredecessorPreservesTrustedV1Digest(t *testing.T) {
 }
 
 func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +391,7 @@ func TestV46PredecessorIsRecognizedWithAndWithoutManifest(t *testing.T) {
 }
 
 func TestV47ManagerPredecessorHasFrozenSHA256(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +423,7 @@ func TestSchemaV3ManifestRecognizesExactV47PredecessorOnly(t *testing.T) {
 }
 
 func TestSchemaV3RecognizesImmediateProfileManifest(t *testing.T) {
-	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
+	config := modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: modelplan.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
 	current, err := buildModelPlanBundleV3(config)
 	if err != nil {
 		t.Fatal(err)
@@ -470,7 +464,7 @@ func TestSchemaV3RecognizesImmediatePromptPredecessorsWithoutNewContext(t *testi
 }
 
 func TestSchemaV3PredecessorRecognizesV53V6BeforeOlderTransitions(t *testing.T) {
-	config := sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: sdd.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
+	config := modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Provenance: modelplan.ModelPlanCLI, Assignments: completeModelAssignmentsV3()}
 	current, err := buildModelPlanBundleV3(config)
 	if err != nil {
 		t.Fatal(err)
@@ -494,12 +488,12 @@ func TestSchemaV3PredecessorRecognizesV53V6BeforeOlderTransitions(t *testing.T) 
 }
 
 func TestModelBoundV3V46ManagerPredecessorIsExact(t *testing.T) {
-	plan, err := ResolveModelPlanV3(sdd.ModelPlanConfigV3{
+	plan, err := modelplan.ResolveOpenCodePlanV3(modelplan.ModelPlanConfigV3{
 		SchemaVersion: 3,
 		Provider:      "acme",
-		Provenance:    sdd.ModelPlanCLI,
+		Provenance:    modelplan.ModelPlanCLI,
 		Assignments:   completeModelAssignmentsV3(),
-	})
+	}, modelAgentInventoryV3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +544,7 @@ func TestPreConsolidationV1MediumBundleIsExactAndRejectsMutations(t *testing.T) 
 		t.Fatalf("exact predecessor manifest rejected: %v", err)
 	}
 	setupCLI := bundle.config
-	setupCLI.Provenance = sdd.ModelPlanCLI
+	setupCLI.Provenance = modelplan.ModelPlanCLI
 	setup, err := preConsolidationV1MediumBundleForConfig(setupCLI)
 	if err != nil {
 		t.Fatal(err)
@@ -575,7 +569,7 @@ func TestPreConsolidationV1MediumBundleIsExactAndRejectsMutations(t *testing.T) 
 }
 
 func TestV52PredecessorPackageRequiresExactBytes(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,11 +602,11 @@ func TestV52PredecessorPackageRequiresExactBytes(t *testing.T) {
 }
 
 func TestRequestedModelPlanV3RejectsIncompleteAssignments(t *testing.T) {
-	for name, mutate := range map[string]func(map[string]sdd.ManagedAgentModelConfig){
-		"missing": func(assignments map[string]sdd.ManagedAgentModelConfig) {
+	for name, mutate := range map[string]func(map[string]modelplan.ManagedAgentModelConfig){
+		"missing": func(assignments map[string]modelplan.ManagedAgentModelConfig) {
 			delete(assignments, modelAgentInventoryV3[0].ArtifactKey)
 		},
-		"extra": func(assignments map[string]sdd.ManagedAgentModelConfig) {
+		"extra": func(assignments map[string]modelplan.ManagedAgentModelConfig) {
 			assignments["agents/extra.md"] = assignments[modelAgentInventoryV3[0].ArtifactKey]
 		},
 	} {
@@ -634,16 +628,16 @@ func TestRequestedModelPlanProjectsFreshDefaultsAndSlotsToV3(t *testing.T) {
 	}
 
 	slots := integration.Options{
-		ModelPlan:      sdd.PlanHigh,
+		ModelPlan:      modelplan.PlanHigh,
 		ModelEfficient: "alpha/efficient", ModelBalanced: "beta/balanced", ModelFrontier: "gamma/frontier",
-		ModelEfficientEffort: sdd.EffortLow, ModelBalancedEffort: sdd.EffortHigh, ModelFrontierEffort: sdd.EffortUltra,
+		ModelEfficientEffort: modelplan.EffortLow, ModelBalancedEffort: modelplan.EffortHigh, ModelFrontierEffort: modelplan.EffortUltra,
 		ModelEfficientVariant: "thinking", ModelBalancedVariant: "max", ModelFrontierVariant: "xhigh", ModelVariantsSpecified: true,
 	}
 	bundle, err := requestedModelPlan(slots, t.TempDir())
 	if err != nil || bundle.configV3 == nil || bundle.configV2 != nil || len(bundle.configV3.Assignments) != integration.ModelAssignmentCount {
 		t.Fatalf("fresh slots did not select v3: bundle=%+v err=%v", bundle, err)
 	}
-	for _, identity := range modelAgentInventoryV3 {
+	for _, identity := range ModelAgentInventoryV3() {
 		assignment := bundle.configV3.Assignments[identity.ArtifactKey]
 		if assignment.Provider == "" || assignment.Reference == "" || assignment.RequestedEffort == "" || !assignment.VariantSpecified || assignment.Source == "" || assignment.Availability == "" {
 			t.Fatalf("%s lost slot metadata: %+v", identity.ArtifactKey, assignment)
@@ -652,11 +646,11 @@ func TestRequestedModelPlanProjectsFreshDefaultsAndSlotsToV3(t *testing.T) {
 	if _, ok := bundle.configV3.Assignments["agents/explore.md"]; !ok {
 		t.Fatal("core research artifact is missing")
 	}
-	if _, ok := bundle.configV3.Assignments["agents/vgxness-sdd-research.md"]; !ok {
-		t.Fatal("SDD research artifact is missing")
+	if _, ok := bundle.configV3.Assignments["agents/vgxness-sdd-research.md"]; ok {
+		t.Fatal("retired research artifact remains in a new plan")
 	}
 
-	var assignments map[string]sdd.ManagedAgentModelConfig
+	var assignments map[string]modelplan.ManagedAgentModelConfig
 	if _, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir()); !errors.Is(err, integration.ErrInvalid) {
 		t.Fatalf("explicit nil underlying map accepted: %v", err)
 	}

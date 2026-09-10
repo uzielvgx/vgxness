@@ -10,11 +10,11 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 func TestCodexV16PackageIsExactPredecessorAndRejectsDrift(t *testing.T) {
-	predecessor, err := renderActiveV16("v1.2.3", sdd.PlanMedium)
+	predecessor, err := renderActiveV16("v1.2.3", modelplan.PlanMedium)
 	if err != nil || predecessor.Validate() != nil {
 		t.Fatalf("v16 predecessor = %v", err)
 	}
@@ -29,7 +29,7 @@ func TestCodexV16PackageIsExactPredecessorAndRejectsDrift(t *testing.T) {
 }
 
 func TestCodexV14PackageIsExactPredecessorAndMixedBytesDrift(t *testing.T) {
-	predecessor, err := renderActiveV14("v1.2.3", sdd.PlanMedium)
+	predecessor, err := renderActiveV14("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,18 +68,18 @@ func TestCodexV14PackageIsExactPredecessorAndMixedBytesDrift(t *testing.T) {
 }
 
 func TestCodexV14CAREPackageRecoversPendingMarkerThenUpgrades(t *testing.T) {
-	profiles, err := profilesForPlan(sdd.PlanMedium)
+	profiles, err := profilesForPlan(modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
-	historical, err := renderPackage("v1.2.3", profiles, sdd.PlanMedium, false)
+	historical, err := renderPackage("v1.2.3", profiles, modelplan.PlanMedium, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	historical.Artifacts[0].Bytes = []byte(activeV14ManagerInstructions())
 	historical.SHA256 = aggregate(historical.Artifacts)
 
-	predecessor, err := renderActiveV14("v1.2.3", sdd.PlanMedium)
+	predecessor, err := renderActiveV14("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestCodexV14CAREPackageRecoversPendingMarkerThenUpgrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewIntegration()
-	options := integration.Options{ConfigDir: root, ModelPlan: sdd.PlanMedium}
+	options := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium}
 	if _, err := service.Reinstall(context.Background(), options); err != nil {
 		t.Fatalf("recover pending v14 CARE package: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestCodexV14CAREPackageRecoversPendingMarkerThenUpgrades(t *testing.T) {
 	if _, err := service.Reinstall(context.Background(), options); err != nil {
 		t.Fatalf("upgrade recovered v14 package: %v", err)
 	}
-	current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestCodexV14CAREPackageRecoversPendingMarkerThenUpgrades(t *testing.T) {
 }
 
 func TestCodexPreTerminalClosureV18PackageUpgradesAndRejectsDrift(t *testing.T) {
-	plan := sdd.PlanMedium
+	plan := modelplan.PlanMedium
 	predecessor, err := renderActiveV18PreTerminalClosure("v0.0.0", plan)
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +171,7 @@ func TestCodexPreTerminalClosureV18PackageUpgradesAndRejectsDrift(t *testing.T) 
 }
 
 func TestCodexPreTerminalClosureV18NoFlagReinstallInfersPlanAndUpgrades(t *testing.T) {
-	plan := sdd.PlanHigh
+	plan := modelplan.PlanHigh
 	predecessor, err := renderActiveV18PreTerminalClosure("v0.0.0", plan)
 	if err != nil {
 		t.Fatal(err)

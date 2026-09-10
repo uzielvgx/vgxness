@@ -11,7 +11,7 @@ export const applyPatchSchema = Type.Object({ patch: Type.String({ minLength: 1,
 type Hunk = { oldStart: number; oldCount: number; newStart: number; newCount: number; lines: string[]; oldNoNewline: boolean; newNoNewline: boolean };
 type Edit = { oldPath: string | undefined; newPath: string | undefined; hunks: Hunk[] };
 type Snapshot = { path: string; before: Buffer | undefined; after: Buffer | undefined; mode?: number; temporary?: string; restoreTemporary?: string; committed?: boolean; restored?: boolean };
-export type ApplyPatchOptions = { fault?: (point: "after-stage" | "before-commit" | "after-commit" | "before-rollback") => void | Promise<void>; workerRole?: "general" | "sdd-apply"; allowedTargets?: Record<string, string>; onWorkerWrite?: (targets: string[]) => Promise<void>; acceptedBindings?: { changeId: string; artifactId: string; revisionId: string; digest: string; stateVersion: number } };
+export type ApplyPatchOptions = { fault?: (point: "after-stage" | "before-commit" | "after-commit" | "before-rollback") => void | Promise<void>; workerRole?: "general"; allowedTargets?: Record<string, string>; onWorkerWrite?: (targets: string[]) => Promise<void> };
 
 function inWorkspace(root: string, path: string) {
   const value = relative(root, path);
@@ -127,7 +127,7 @@ export function createApplyPatchTool(host: ToolHost, options: ApplyPatchOptions 
       host.mutationGuard?.();
       signal?.throwIfAborted();
       const worker = options.workerRole !== undefined;
-      if (host.mode !== "full" || (host.role !== "manager" && !worker) || (worker && (!options.allowedTargets || !workerCanWrite(options.workerRole!))) || (options.workerRole === "sdd-apply" && !options.acceptedBindings)) throw new Error("patch requires authorized full authority");
+      if (host.mode !== "full" || (host.role !== "manager" && !worker) || (worker && (!options.allowedTargets || !workerCanWrite(options.workerRole!)))) throw new Error("patch requires authorized full authority");
       const root = await realpath(host.workspace);
       const rootIdentity = await stat(root);
       const verifyRoot = async () => { const current = await stat(root); if (current.dev !== rootIdentity.dev || current.ino !== rootIdentity.ino) throw new Error("workspace root changed during patch"); };

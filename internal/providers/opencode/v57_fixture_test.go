@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 func TestV57E2EFixtureMatchesBinder(t *testing.T) {
-	want, err := bindManagerV57(sdd.OpenCodeRoleAssignment{Model: "acme/frontier", Variant: sdd.VariantXHigh})
+	want, err := bindManagerV57(modelplan.OpenCodeRoleAssignment{Model: "acme/frontier", Variant: modelplan.VariantXHigh})
 	if err != nil {
 		t.Fatal(err)
 	}

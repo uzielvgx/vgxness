@@ -3,8 +3,8 @@ package opencode
 import (
 	"bytes"
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 	"strings"
 )
 
@@ -12,27 +12,73 @@ const sharedManagerMarker = "artifact: opencode-agent/vgxness-manager; version: 
 
 // The original modelBoundAgents/bindManager paths are frozen v60 rendering.
 // Current packages consume their native headers, replacing ALL policy bodies.
-func buildModelPlanBundle(c sdd.ModelPlanConfig) (modelPlanBundle, error) {
+func buildModelPlanBundle(c modelplan.ModelPlanConfig) (modelPlanBundle, error) {
 	b, e := buildV60ModelPlanBundle(c)
 	if e != nil {
 		return b, e
 	}
 	return sharedManagerBundle(b)
 }
-func buildModelPlanBundleV2(c sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
+func buildModelPlanBundleV2(c modelplan.ModelPlanConfigV2) (modelPlanBundle, error) {
 	b, e := buildV60ModelPlanBundleV2(c)
 	if e != nil {
 		return b, e
 	}
 	return sharedManagerBundle(b)
 }
-func buildModelPlanBundleV3(c sdd.ModelPlanConfigV3) (modelPlanBundle, error) {
+func buildModelPlanBundleV3(c modelplan.ModelPlanConfigV3) (modelPlanBundle, error) {
 	b, e := buildV60ModelPlanBundleV3(c)
 	if e != nil {
 		return b, e
 	}
-	return sharedManagerBundle(b)
+	b, e = sharedManagerBundle(b)
+	if e != nil {
+		return b, e
+	}
+	if len(c.Assignments) == 7 {
+		resolved, e := modelplan.ResolveOpenCodePlanV3(c, ModelAgentInventoryV3())
+		if e != nil {
+			return modelPlanBundle{}, e
+		}
+		return encodeModelPlanBundleV3(c, resolved, b.agents)
+	}
+	return b, nil
 }
+
+// Legacy slots exist only while reconstructing immutable predecessor bytes.
+func expandLegacyModelConfig(c modelplan.ModelPlanConfigV3) (modelplan.ModelPlanConfigV3, error) {
+	if len(c.Assignments) != 7 {
+		return c, nil
+	}
+	if _, e := modelplan.ResolveOpenCodePlanV3(c, ModelAgentInventoryV3()); e != nil {
+		return c, e
+	}
+	assignments := make(map[string]modelplan.ManagedAgentModelConfig, 13)
+	for k, v := range c.Assignments {
+		assignments[k] = v
+	}
+	for _, identity := range modelAgentInventoryV3[7:] {
+		source := "agents/general.md"
+		if identity.Role == modelplan.RoleResearch {
+			source = "agents/explore.md"
+		}
+		assignments[identity.ArtifactKey] = assignments[source]
+	}
+	c.Assignments = assignments
+	return c, nil
+}
+func currentModelConfig(c modelplan.ModelPlanConfigV3) modelplan.ModelPlanConfigV3 {
+	assignments := make(map[string]modelplan.ManagedAgentModelConfig, len(c.Assignments))
+	for k, v := range c.Assignments {
+		assignments[k] = v
+	}
+	for _, identity := range modelAgentInventoryV3[7:] {
+		delete(assignments, identity.ArtifactKey)
+	}
+	c.Assignments = assignments
+	return c
+}
+
 func isSharedManagerBundle(b modelPlanBundle) bool {
 	return bytes.Contains(b.agents[managerAgentName], []byte(sharedManagerMarker)) || bytes.Contains(b.agents[managerAgentName], []byte("artifact: opencode-agent/vgxness-manager; version: 61"))
 }

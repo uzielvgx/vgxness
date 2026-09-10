@@ -7,12 +7,12 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/testutil"
 )
 
 func TestOpenCodeManager59PackageIsExactImmediatePredecessorAndRejectsDrift(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	current = frozenManagerV60(t, current)
 	predecessor, err := immediatePredecessor(current)
@@ -31,7 +31,7 @@ func TestOpenCodeManager59PackageIsExactImmediatePredecessorAndRejectsDrift(t *t
 }
 
 func TestOpenCodeV54PackageIsExactUpgradeablePredecessor(t *testing.T) {
-	current, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	current, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
 	predecessor, err := previousV54ModelPlanBundle(current)
 	testutil.NoError(t, err)
@@ -39,7 +39,7 @@ func TestOpenCodeV54PackageIsExactUpgradeablePredecessor(t *testing.T) {
 		bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 54")) &&
 			!bytes.Contains(predecessor.agents[managerAgentName], []byte(currentManagerCandidateCapsuleContract)),
 		"v54 predecessor is not exact: %s", predecessor.agents[managerAgentName])
-	fixedLens, err := sdd.NewModelPlanConfig(sdd.PlanMedium, "openai/gpt-5.6-luna", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol")
+	fixedLens, err := modelplan.NewModelPlanConfig(modelplan.PlanMedium, "openai/gpt-5.6-luna", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol")
 	testutil.NoError(t, err)
 	v53, err := fixedLensV53ModelPlanBundle(fixedLens)
 	testutil.NoError(t, err)

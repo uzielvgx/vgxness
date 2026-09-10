@@ -230,7 +230,7 @@ func (f *fakeMemoryRuntime) SaveProviderSessionDraft(_ context.Context, _ config
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
 	var out, stderr bytes.Buffer
-	code := RunProductSDDRuntime(context.Background(), args, strings.NewReader(input), &out, &stderr, &fakeInspector{}, runtime, nil, nil, nil, nil, nil)
+	code := RunProductRuntime(context.Background(), args, strings.NewReader(input), &out, &stderr, &fakeInspector{}, runtime, nil, nil, nil, nil)
 	return code, out.String(), stderr.String()
 }
 

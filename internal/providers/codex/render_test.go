@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 func TestPluginManifestNormalizesAndBindsSemanticVersion(t *testing.T) {
@@ -77,22 +77,22 @@ func TestCurrentPackageValidationRejectsMissingOrRetiredProfiles(t *testing.T) {
 }
 
 func TestRenderPlanUsesSharedModelMatrix(t *testing.T) {
-	roles := map[string]sdd.Role{
-		"agents/explore.toml":         sdd.RoleResearch,
-		"agents/general.toml":         sdd.RoleImplementation,
-		"agents/verifier.toml":        sdd.RoleVerification,
-		"agents/care-reviewer.toml":   sdd.RoleCAREReviewer,
-		"agents/care-specialist.toml": sdd.RoleCARESpecialist,
-		"agents/care-challenger.toml": sdd.RoleCAREChallenger,
+	roles := map[string]modelplan.Role{
+		"agents/explore.toml":         modelplan.RoleResearch,
+		"agents/general.toml":         modelplan.RoleImplementation,
+		"agents/verifier.toml":        modelplan.RoleVerification,
+		"agents/care-reviewer.toml":   modelplan.RoleCAREReviewer,
+		"agents/care-specialist.toml": modelplan.RoleCARESpecialist,
+		"agents/care-challenger.toml": modelplan.RoleCAREChallenger,
 	}
-	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
+	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
 		pkg, err := RenderPlan("v1.2.3", plan)
 		if err != nil {
 			t.Fatalf("RenderPlan(%s): %v", plan, err)
 		}
-		config := sdd.DefaultModelPlanConfig()
+		config := modelplan.DefaultModelPlanConfig()
 		config.ActivePlan = plan
-		resolved, err := sdd.ResolveOpenCodePlan(config)
+		resolved, err := modelplan.ResolveOpenCodePlan(config)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +119,7 @@ func TestLegacyStaticPackageHasFrozenAggregateSHA256(t *testing.T) {
 }
 
 func TestActiveV6PackageIsRecognizedPredecessor(t *testing.T) {
-	pkg, err := renderActiveV6("v0.0.0", sdd.PlanMedium)
+	pkg, err := renderActiveV6("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestActiveV6PackageIsRecognizedPredecessor(t *testing.T) {
 }
 
 func TestActiveV7PackageIsRecognizedExactPredecessor(t *testing.T) {
-	pkg, err := renderActiveV7("v0.0.0", sdd.PlanMedium)
+	pkg, err := renderActiveV7("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestActiveV7PackageIsRecognizedExactPredecessor(t *testing.T) {
 }
 
 func TestPreConsolidationV4PackageValidatesExactly(t *testing.T) {
-	pkg, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+	pkg, err := renderPreConsolidationV4("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,11 +190,11 @@ func TestPreConsolidationV4PackageValidatesExactly(t *testing.T) {
 }
 
 func TestPackageValidateRejectsMixedCurrentAndPreConsolidationArtifacts(t *testing.T) {
-	current, err := RenderPlan("v0.0.0", sdd.PlanMedium)
+	current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
-	predecessor, err := renderPreConsolidationV4("v0.0.0", sdd.PlanMedium)
+	predecessor, err := renderPreConsolidationV4("v0.0.0", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,14 +256,14 @@ func TestReadinessV13PreservesV11AndReliabilitySkillReceipts(t *testing.T) {
 	if loadErr != nil || !strings.Contains(manager, "artifact: codex-agent/manager; version: 21; parity: opencode-v62") || !strings.Contains(manager, contract.RenderManagerSections()) {
 		t.Fatal("current Codex manager is not the canonical v21 projection")
 	}
-	predecessor, err := renderActiveV13("v1.2.3", sdd.PlanMedium)
+	predecessor, err := renderActiveV13("v1.2.3", modelplan.PlanMedium)
 	if err != nil || predecessor.Validate() != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: 13; parity: opencode-v53") {
 		t.Fatalf("exact Codex v13 predecessor is not preserved: %v", err)
 	}
 }
 
 func TestManager18DerivesFromExactManager17Package(t *testing.T) {
-	predecessor, err := renderActiveV17("v1.2.3", sdd.PlanMedium)
+	predecessor, err := renderActiveV17("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,11 +275,11 @@ func TestManager18DerivesFromExactManager17Package(t *testing.T) {
 }
 
 func TestManager19PreservesExactManager18AndNativePedagogicalWording(t *testing.T) {
-	current, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	current, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
-	predecessor, err := renderPackage("v1.2.3", func() []profile { profiles, _ := profilesForPlan(sdd.PlanMedium); return profiles }(), sdd.PlanMedium, false)
+	predecessor, err := renderPackage("v1.2.3", func() []profile { profiles, _ := profilesForPlan(modelplan.PlanMedium); return profiles }(), modelplan.PlanMedium, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestManager19PreservesExactManager18AndNativePedagogicalWording(t *testing.
 }
 
 func TestCurrentCAREContractIsStrictAndV55RemainsHistorical(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestCurrentCAREContractIsStrictAndV55RemainsHistorical(t *testing.T) {
 	if !strings.Contains(current, "CARE challenger handles severe inferential findings") || !strings.Contains(current, "every selected CARE role echoes") {
 		t.Fatal("current manager lacks CARE-only review routing")
 	}
-	predecessor, err := renderActiveV15("v1.2.3", sdd.PlanMedium)
+	predecessor, err := renderActiveV15("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestCurrentManagerAnchorValidationRejectsAbsentAndDuplicateAnchors(t *testi
 }
 
 func TestActiveV12PredecessorPackageRequiresExactBytes(t *testing.T) {
-	pkg, err := renderActiveV12("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV12("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestActiveV12PredecessorPackageRequiresExactBytes(t *testing.T) {
 }
 
 func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestManagerRequiresProviderNativeFreshSpecialistDelegation(t *testing.T) {
 }
 
 func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func TestManagerInstructionsCoverOpenCodeV54SectionParity(t *testing.T) {
 }
 
 func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +545,7 @@ func TestRenderProfilesUseNativeFieldsAndRoleBoundaries(t *testing.T) {
 }
 
 func TestRenderedRepositoryChildrenValidateAndEchoContextCapsule(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,11 +571,11 @@ func TestRenderedRepositoryChildrenValidateAndEchoContextCapsule(t *testing.T) {
 }
 
 func TestRenderedSDDProfilesRemainExactAndContextCapsuleFree(t *testing.T) {
-	current, err := profilesForPlan(sdd.PlanMedium)
+	current, err := profilesForPlan(modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
-	predecessor, err := predecessorProfilesForPlan(sdd.PlanMedium)
+	predecessor, err := predecessorProfilesForPlan(modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +602,7 @@ func TestRenderedSDDProfilesRemainExactAndContextCapsuleFree(t *testing.T) {
 }
 
 func TestRenderUsesIntentTriggeredMemoryWithoutRoutineRecentFirst(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +626,7 @@ func TestRenderUsesIntentTriggeredMemoryWithoutRoutineRecentFirst(t *testing.T) 
 }
 
 func TestManagerRequiresTerminalMemoryClosureBeforeTerminalReporting(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,13 +669,13 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 			t.Errorf("current Codex manager retains unconditional ceremony %q", forbidden)
 		}
 	}
-	for version, render := range map[string]func(string, sdd.Plan) (Package, error){"17": renderActiveV17, "16": renderActiveV16} {
-		predecessor, err := render("v1.2.3", sdd.PlanMedium)
+	for version, render := range map[string]func(string, modelplan.Plan) (Package, error){"17": renderActiveV17, "16": renderActiveV16} {
+		predecessor, err := render("v1.2.3", modelplan.PlanMedium)
 		if err != nil || !strings.Contains(string(artifact(t, predecessor, "AGENTS.md").Bytes), "artifact: codex-agent/manager; version: "+version) {
 			t.Fatalf("Codex manager v%s predecessor is not exact: %v", version, err)
 		}
 	}
-	v10, err := renderActiveV10("v1.2.3", sdd.PlanMedium)
+	v10, err := renderActiveV10("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +686,7 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 	if !strings.Contains(v10Manager, "artifact: codex-agent/manager; version: 10; parity: opencode-v50") || !strings.Contains(v10Manager, currentCodexContextCapsule) || !strings.Contains(string(artifact(t, v10, "agents/general.toml").Bytes), "Context Capsule v1") || !strings.Contains(string(artifact(t, v10, "agents/sdd-apply.toml").Bytes), `sandbox_mode = "read-only"`) {
 		t.Fatal("exact v10 predecessor lost former HEAD identity")
 	}
-	predecessor, err := renderActiveV9("v1.2.3", sdd.PlanMedium)
+	predecessor, err := renderActiveV9("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +706,7 @@ func TestV13ManagerHasAdaptiveParityAndRecognizesV12ThenV11(t *testing.T) {
 }
 
 func TestOpenCodeAndCodexManagersHaveIdenticalNormalizedMemoryPolicy(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,7 +730,7 @@ func TestOpenCodeAndCodexManagersHaveIdenticalNormalizedMemoryPolicy(t *testing.
 }
 
 func TestDelegationProfileMatrix(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -758,7 +758,7 @@ func TestDelegationProfileMatrix(t *testing.T) {
 }
 
 func TestAssuranceProfilesRequireAndEchoReviewBinding(t *testing.T) {
-	pkg, err := renderActiveV19("v1.2.3", sdd.PlanMedium)
+	pkg, err := renderActiveV19("v1.2.3", modelplan.PlanMedium)
 	if err != nil {
 		t.Fatal(err)
 	}

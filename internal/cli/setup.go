@@ -14,10 +14,10 @@ import (
 	"github.com/vgxness/vgxness/internal/buildinfo"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/piartifact"
 	"github.com/vgxness/vgxness/internal/providers/opencode"
 	"github.com/vgxness/vgxness/internal/providers/pi"
-	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
 	"github.com/vgxness/vgxness/internal/skills"
@@ -173,7 +173,7 @@ func runOpenCodeSetup(ctx context.Context, args []string, stdin io.Reader, stdou
 	if result.Integration.RetainedPredecessorCount != 0 {
 		fmt.Fprintf(stdout, "Recuperación retenida: %d anclas en %s\n", result.Integration.RetainedPredecessorCount, terminalSafe(result.Integration.RetainedPredecessorPath))
 	}
-	fmt.Fprintf(stdout, "Paso 5: catálogo global de %d archivos skills-creator + git-delivery + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + memory-sync + sdd-lifecycle verificado en %s\n", result.Plan.Skills.FileCount, terminalSafe(result.Plan.Skills.Path))
+	fmt.Fprintf(stdout, "Paso 5: catálogo global de %d archivos skills-creator + git-delivery + cross-platform + installer-lifecycle + agent-evaluation + ci-triage + security-boundary + documentation-strategy + product-requirements + software-architecture-docs + user-documentation + api-documentation + quality-test-documentation + operations-runbooks + governance-compliance-docs + release-lifecycle-docs + end-to-end-testing + memory-sync verificado en %s\n", result.Plan.Skills.FileCount, terminalSafe(result.Plan.Skills.Path))
 	fmt.Fprintf(stdout, "Paso 6: handshake OpenCode=%s workspace=%s\n", terminalSafe(result.Handshake.Status.String()), terminalSafe(options.Workspace))
 	if result.Integration.RetainedPredecessorCount == 0 {
 		fmt.Fprintln(stdout, "Paso 7: no fue necesaria recuperación.")
@@ -572,7 +572,7 @@ func renderSetupPlan(writer io.Writer, plan setupflow.Plan, workspace string) {
 	fmt.Fprintf(writer, "  Versiones: %s\n", terminalSafe(plan.SelfInstall.DataDir))
 	fmt.Fprintf(writer, "  Manager: %s (estado=%s)\n", terminalSafe(plan.Integration.Path), plan.Integration.State)
 	fmt.Fprintf(writer, "  Skills globales: %s (estado=%s, archivos=%d)\n", terminalSafe(plan.Skills.Path), plan.Skills.State, plan.Skills.FileCount)
-	fmt.Fprintln(writer, "  Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario + Explore + general escritor + verificador + tres perfiles CARE de revisión + seis agentes SDD + MCP --full administrado como único runtime")
+	fmt.Fprintln(writer, "  Proyección: manager con workspace de solo lectura y operaciones Git aprobadas por el usuario + Explore + general escritor + verificador + tres perfiles CARE de revisión + MCP --full administrado como único runtime")
 	fmt.Fprintf(writer, "  Artefactos administrados: %d\n", plan.Integration.ArtifactCount)
 	fmt.Fprintf(writer, "  Plan de modelos: %s provider=%s\n", plan.Integration.ModelPlan, terminalSafe(plan.Integration.ModelProvider))
 	renderModelSlots(writer, plan.Integration)
@@ -612,11 +612,11 @@ func renderSetupStatus(writer io.Writer, plan setupflow.Plan, workspace string) 
 	}
 }
 
-type effortFlag struct{ target *sdd.Effort }
+type effortFlag struct{ target *modelplan.Effort }
 
 func (value effortFlag) String() string { return string(*value.target) }
 func (value effortFlag) Set(input string) error {
-	effort := sdd.Effort(input)
+	effort := modelplan.Effort(input)
 	if !effort.Valid() {
 		return setupflow.ErrInvalid
 	}
@@ -637,9 +637,9 @@ func renderModelSlots(writer io.Writer, result integration.Result) {
 	}
 	for _, slot := range []struct {
 		name, ref    string
-		effort       sdd.Effort
-		source       sdd.ModelSlotSource
-		availability sdd.ModelSlotAvailability
+		effort       modelplan.Effort
+		source       modelplan.ModelSlotSource
+		availability modelplan.ModelSlotAvailability
 	}{
 		{"efficient", result.ModelEfficient, result.ModelEfficientEffort, result.ModelEfficientSource, result.ModelEfficientAvailability},
 		{"balanced", result.ModelBalanced, result.ModelBalancedEffort, result.ModelBalancedSource, result.ModelBalancedAvailability},

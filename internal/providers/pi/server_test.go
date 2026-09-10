@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 type lockedBuffer struct {
@@ -220,7 +220,7 @@ func TestServerMutationDomainErrors(t *testing.T) {
 		err        error
 		safe       bool
 	}{
-		{"conflict", "conflict", sdd.ErrConflict, true}, {"stale", "conflict", sdd.ErrStaleState, true}, {"invalid", "invalid_request", sdd.ErrInvalid, true}, {"digest", "unavailable", sdd.ErrDigestMismatch, true}, {"inputs", "unavailable", sdd.ErrInputsChanged, true}, {"unknown", "recovery_pending", errors.New("unknown"), false},
+		{"invalid model plan", "invalid_request", modelplan.ErrInvalid, true}, {"unknown", "recovery_pending", errors.New("unknown"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := testWorkspace(t)

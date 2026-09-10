@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/vgxness/vgxness/internal/sdd"
+	"github.com/vgxness/vgxness/internal/modelplan"
 )
 
 var (
@@ -18,7 +18,7 @@ type State string
 type HandshakeStatus string
 
 const (
-	ModelAssignmentCount = 13
+	ModelAssignmentCount = 7
 
 	StateAbsent    State = "absent"
 	StatePartial   State = "partial"
@@ -40,17 +40,17 @@ func (status HandshakeStatus) String() string { return string(status) }
 type Options struct {
 	ConfigDir              string
 	HomeDir                string
-	ModelAssignments       *map[string]sdd.ManagedAgentModelConfig
-	ModelPlan              sdd.Plan
+	ModelAssignments       *map[string]modelplan.ManagedAgentModelConfig
+	ModelPlan              modelplan.Plan
 	ModelEfficient         string
 	ModelBalanced          string
 	ModelFrontier          string
-	ModelEfficientEffort   sdd.Effort
-	ModelEfficientVariant  sdd.OpenCodeVariant
-	ModelBalancedEffort    sdd.Effort
-	ModelBalancedVariant   sdd.OpenCodeVariant
-	ModelFrontierEffort    sdd.Effort
-	ModelFrontierVariant   sdd.OpenCodeVariant
+	ModelEfficientEffort   modelplan.Effort
+	ModelEfficientVariant  modelplan.OpenCodeVariant
+	ModelBalancedEffort    modelplan.Effort
+	ModelBalancedVariant   modelplan.OpenCodeVariant
+	ModelFrontierEffort    modelplan.Effort
+	ModelFrontierVariant   modelplan.OpenCodeVariant
 	ModelVariantsSpecified bool
 }
 
@@ -65,25 +65,25 @@ type Result struct {
 	BackupPath                 string
 	ToolBackupPath             string
 	ModelSchemaVersion         int
-	ModelPlan                  sdd.Plan
+	ModelPlan                  modelplan.Plan
 	ModelProvider              string
-	ModelAssignments           *[ModelAssignmentCount]sdd.OpenCodeAgentAssignmentV3
+	ModelAssignments           *[ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3
 	ModelEfficient             string
 	ModelBalanced              string
 	ModelFrontier              string
-	ModelEfficientEffort       sdd.Effort
-	ModelEfficientVariant      sdd.OpenCodeVariant
-	ModelBalancedEffort        sdd.Effort
-	ModelBalancedVariant       sdd.OpenCodeVariant
-	ModelFrontierEffort        sdd.Effort
-	ModelFrontierVariant       sdd.OpenCodeVariant
+	ModelEfficientEffort       modelplan.Effort
+	ModelEfficientVariant      modelplan.OpenCodeVariant
+	ModelBalancedEffort        modelplan.Effort
+	ModelBalancedVariant       modelplan.OpenCodeVariant
+	ModelFrontierEffort        modelplan.Effort
+	ModelFrontierVariant       modelplan.OpenCodeVariant
 	ModelVariantsSpecified     bool
-	ModelEfficientSource       sdd.ModelSlotSource
-	ModelBalancedSource        sdd.ModelSlotSource
-	ModelFrontierSource        sdd.ModelSlotSource
-	ModelEfficientAvailability sdd.ModelSlotAvailability
-	ModelBalancedAvailability  sdd.ModelSlotAvailability
-	ModelFrontierAvailability  sdd.ModelSlotAvailability
+	ModelEfficientSource       modelplan.ModelSlotSource
+	ModelBalancedSource        modelplan.ModelSlotSource
+	ModelFrontierSource        modelplan.ModelSlotSource
+	ModelEfficientAvailability modelplan.ModelSlotAvailability
+	ModelBalancedAvailability  modelplan.ModelSlotAvailability
+	ModelFrontierAvailability  modelplan.ModelSlotAvailability
 	ManifestPath               string
 	ManifestSHA256             string
 	DefaultAgent               string

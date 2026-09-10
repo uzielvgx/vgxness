@@ -12,7 +12,6 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/vgxness/vgxness/internal/config"
 	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
@@ -140,47 +139,6 @@ func TestSearchMatchModeControlsRecallAndRejectsInvalidBeforeBackend(t *testing.
 	}
 }
 
-func TestFullServerProtocolListResultsUseObjectEnvelopes(t *testing.T) {
-	backend := &fakeReader{project: "project-1"}
-	sdds := &fakeSDDReader{change: sdd.Change{ID: "change-1", Project: "project-1"}, revision: sdd.Revision{ID: "revision-1", ChangeID: "change-1"}}
-	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientTransport, serverTransport := sdk.NewInMemoryTransports()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = server.Run(ctx, serverTransport) }()
-	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, test := range []struct {
-		name string
-		args map[string]any
-		key  string
-	}{} {
-		t.Run(test.name, func(t *testing.T) {
-			result, callErr := session.CallTool(ctx, &sdk.CallToolParams{Name: test.name, Arguments: test.args})
-			if callErr != nil || result.IsError {
-				t.Fatalf("CallTool() result=%+v err=%v", result, callErr)
-			}
-			encoded, marshalErr := json.Marshal(result.StructuredContent)
-			if marshalErr != nil {
-				t.Fatal(marshalErr)
-			}
-			var envelope map[string]json.RawMessage
-			if err := json.Unmarshal(encoded, &envelope); err != nil || len(envelope) != 1 || envelope[test.key] == nil {
-				t.Fatalf("structured content=%s err=%v", encoded, err)
-			}
-			var values []json.RawMessage
-			if err := json.Unmarshal(envelope[test.key], &values); err != nil {
-				t.Fatalf("structured content field %q=%s is not an array: %v", test.key, envelope[test.key], err)
-			}
-		})
-	}
-}
-
 func TestFullServerProtocolMemoryResultsExposeCanonicalJSONTextAndSchemas(t *testing.T) {
 	updatedAt := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.UTC)
 	entry := memory.Entry{ID: "entry-1", Title: "Decision", Type: "observation", TopicKey: "testing", State: memory.StateActive, Content: "private content", Preview: "private preview", References: []string{"ref-1"}, UpdatedAt: updatedAt}
@@ -245,42 +203,6 @@ func TestFullServerProtocolMemoryResultsExposeCanonicalJSONTextAndSchemas(t *tes
 			}
 			if test.secret != "" && strings.Contains(text.Text, test.secret) {
 				t.Fatalf("text leaked full content: %q", text.Text)
-			}
-		})
-	}
-}
-
-func TestFullServerProtocolSDDValidationIsSafeAndFieldSpecific(t *testing.T) {
-	server, err := newFullWithReaders(context.Background(), "/workspace", &fakeReader{project: "project-1"}, &fakeSDDReader{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientTransport, serverTransport := sdk.NewInMemoryTransports()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = server.Run(ctx, serverTransport) }()
-	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, args := range map[string]map[string]any{
-		"enum":          {"idempotencyKey": "key-1", "title": "Title", "backend": "invalid", "interactionMode": "automatic", "plan": "low"},
-		"state version": {"changeId": "change-1", "interactionMode": "automatic", "expectedStateVersion": 1.5},
-	} {
-		t.Run(name, func(t *testing.T) {
-			tool := "sdd_create"
-			if name == "state version" {
-				tool = "sdd_set_interaction_mode"
-			}
-			result, callErr := session.CallTool(ctx, &sdk.CallToolParams{Name: tool, Arguments: args})
-			if callErr == nil {
-				if result == nil || !result.IsError {
-					t.Fatalf("invalid %s accepted: result=%+v", name, result)
-				}
-				text := result.Content[0].(*sdk.TextContent).Text
-				if name == "state version" && text != "invalid tool input: expectedStateVersion" {
-					t.Fatalf("state version text=%q", text)
-				}
 			}
 		})
 	}
@@ -450,21 +372,6 @@ func TestFullServerToolSchemasUseRequiredArrays(t *testing.T) {
 	}
 }
 
-func TestSDDGetRevisionInputSchemaRequiresChangeAndRevision(t *testing.T) {
-	encoded, err := json.Marshal(sddGetRevisionInputSchema())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema map[string]any
-	if err := json.Unmarshal(encoded, &schema); err != nil {
-		t.Fatal(err)
-	}
-	assertSchemaProperties(t, schema, map[string]schemaExpectation{
-		"changeId":   {required: true, kind: "string"},
-		"revisionId": {required: true, kind: "string"},
-	})
-}
-
 func TestFullServerMemoryMutationsStayProjectScoped(t *testing.T) {
 	backend := &fakeReader{project: "project-1", entry: memory.Entry{ID: "obs-1", Title: "Decision", Content: "durable", Project: "project-1", Scope: memory.ScopeProject, State: memory.StateActive}}
 	server, err := newFullWithReader(context.Background(), "/workspace", backend)
@@ -548,156 +455,6 @@ func TestFullServerMemoryErrorsAndCancellation(t *testing.T) {
 	cancel()
 	if _, err := server.save(ctx, saveInput{Title: "T", Content: "C"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled save error = %v", err)
-	}
-}
-
-func TestFullServerSDDLifecycleBindsProjectAndMapsErrors(t *testing.T) {
-	backend := &fakeReader{project: "project-1"}
-	sdds := &fakeSDDReader{change: sdd.Change{ID: "change-1", Project: "project-1", StateVersion: 1}}
-	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	create := sddCreateInput{IdempotencyKey: "key-1", Title: "Title", Backend: sdd.BackendMemory, InteractionMode: sdd.InteractionAutomatic, Plan: sdd.PlanLow}
-	if _, err := server.sddCreate(context.Background(), create); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddList(context.Background(), sddListInput{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddGet(context.Background(), sddGetInput{ID: "change-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddSetInteractionMode(context.Background(), sddModeInput{ChangeID: "change-1", InteractionMode: sdd.InteractionInteractive, ExpectedStateVersion: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddTransition(context.Background(), sddTransitionInput{ChangeID: "change-1", TargetPhase: sdd.PhaseProposal, ExpectedStateVersion: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if sdds.create.Project != "project-1" || sdds.list.Project != "project-1" || sdds.get.Project != "project-1" || sdds.mode.Project != "project-1" || sdds.transition.Project != "project-1" {
-		t.Fatalf("requests not project scoped: %+v", sdds)
-	}
-	sdds.modeErr = sdd.ErrStaleState
-	if _, err := server.sddSetInteractionMode(context.Background(), sddModeInput{ChangeID: "change-1", InteractionMode: sdd.InteractionAutomatic, ExpectedStateVersion: 1}); !errors.Is(err, ErrStale) {
-		t.Fatalf("stale error = %v", err)
-	}
-	sdds.transitionErr = sdd.ErrConflict
-	if _, err := server.sddTransition(context.Background(), sddTransitionInput{ChangeID: "change-1", Cancel: true, ExpectedStateVersion: 1}); !errors.Is(err, ErrConflict) {
-		t.Fatalf("conflict error = %v", err)
-	}
-	if _, err := server.sddCreate(context.Background(), sddCreateInput{}); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("invalid create error = %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := server.sddGet(ctx, sddGetInput{ID: "change-1"}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled get error = %v", err)
-	}
-}
-
-func TestSDDNumericInputsRejectFractionsAndUnsafeVersions(t *testing.T) {
-	for _, value := range []float64{1.5, 9007199254740992} {
-		if _, err := sddVersion(value); !errors.Is(err, ErrInvalidInput) {
-			t.Errorf("sddVersion(%v) error = %v, want invalid", value, err)
-		}
-	}
-	if _, err := sddLimit(1.5); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("sddLimit(1.5) error = %v, want invalid", err)
-	}
-	if got, err := sddVersion(9007199254740991); err != nil || got != 9007199254740991 {
-		t.Fatalf("sddVersion(safe max) = %d, %v", got, err)
-	}
-}
-
-func TestFullServerRemainingSDDOperations(t *testing.T) {
-	backend := &fakeReader{project: "project-1"}
-	sdds := &fakeSDDReader{revision: sdd.Revision{ID: "rev-1"}, projection: sdd.Projection{ArtifactID: "artifact-1"}}
-	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := sdd.ContentDigest([]byte("content"))
-	if _, err := server.sddSaveRevision(context.Background(), sddSaveRevisionInput{ChangeID: "change-1", Artifact: sdd.PhaseExplore, Content: "content", Digest: digest, ExpectedStateVersion: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddGetRevision(context.Background(), sddGetRevisionInput{ChangeID: "change-1", RevisionID: "rev-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddListRevisions(context.Background(), sddListRevisionsInput{ChangeID: "change-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddAcceptRevision(context.Background(), sddAcceptRevisionInput{ChangeID: "change-1", RevisionID: "rev-1", ExpectedStateVersion: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddRenderProjection(context.Background(), sddRenderProjectionInput{ChangeID: "change-1", RevisionID: "rev-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddCompareProjection(context.Background(), sddCompareProjectionInput{ChangeID: "change-1", RevisionID: "rev-1", RelativePath: "openspec/changes/change-1/research.md", ProjectionContent: "content"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddRecordProjection(context.Background(), sddRecordProjectionInput{ChangeID: "change-1", ArtifactID: "artifact-1", RevisionID: "rev-1", Status: sdd.ProjectionCurrent, Digest: digest, Location: "openspec/changes/change-1/research.md", ExpectedStateVersion: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.sddProjectionStatus(context.Background(), sddProjectionStatusInput{ChangeID: "change-1", ArtifactID: "artifact-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if sdds.saveRevision.Project != "project-1" || sdds.compare.Project != "project-1" || sdds.record.Project != "project-1" {
-		t.Fatalf("requests not project scoped: %+v", sdds)
-	}
-	if _, err := server.sddCompareProjection(context.Background(), sddCompareProjectionInput{ChangeID: "change-1", RevisionID: "rev-1", RelativePath: "x", Missing: true, Symlink: true}); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("invalid projection = %v", err)
-	}
-	if _, err := server.sddSaveRevision(context.Background(), sddSaveRevisionInput{ChangeID: "change-1", Artifact: sdd.PhaseExplore, Content: "content", Inputs: make([]sddRevisionBindingInput, 33), ExpectedStateVersion: 1}); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("oversized inputs error = %v", err)
-	}
-}
-
-func TestSDDDigestMismatchIsInvalidAtToolBoundary(t *testing.T) {
-	backend := &fakeReader{project: "project-1"}
-	sdds := &fakeSDDReader{saveErr: sdd.ErrDigestMismatch}
-	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, _, err := server.callSDDSaveRevision(context.Background(), nil, sddSaveRevisionInput{ChangeID: "change-1", Artifact: sdd.PhaseExplore, Content: "content", ExpectedStateVersion: 1})
-	if err != nil || !result.IsError {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	text := result.Content[0].(*sdk.TextContent).Text
-	if text != "invalid tool input" {
-		t.Fatalf("text=%q", text)
-	}
-}
-
-func TestSDDToolErrorsDistinguishCancelledNotFoundAndUnavailable(t *testing.T) {
-	backend := &fakeReader{project: "project-1"}
-	sdds := &fakeSDDReader{getErr: sdd.ErrChangeCancelled}
-	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertSDDToolText(t, server, context.Background(), "SDD change is cancelled")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	assertSDDToolText(t, server, ctx, "request cancelled")
-	sdds.getErr = sdd.ErrNotFound
-	assertSDDToolText(t, server, context.Background(), "SDD record not found")
-	sdds.getErr = errors.New("storage path leak")
-	assertSDDToolText(t, server, context.Background(), "SDD service unavailable")
-}
-
-func TestSDDToolValidationNamesSafeInvalidField(t *testing.T) {
-	server, err := newFullWithReaders(context.Background(), "/workspace", &fakeReader{project: "project-1"}, &fakeSDDReader{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, _, err := server.callSDDSetInteractionMode(context.Background(), nil, sddModeInput{ChangeID: "change-1", InteractionMode: sdd.InteractionAutomatic, ExpectedStateVersion: 1.5})
-	if err != nil || !result.IsError {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	text := result.Content[0].(*sdk.TextContent).Text
-	if text != "invalid tool input: expectedStateVersion" {
-		t.Fatalf("text=%q", text)
 	}
 }
 
@@ -805,114 +562,6 @@ func (reader *fakeReader) UpdateObservation(_ context.Context, request memory.Ob
 	}
 	reader.update = request
 	return memory.Observation{ID: request.ID, Project: request.Project, Content: request.Content, State: memory.StateActive}, nil
-}
-
-type fakeSDDReader struct {
-	lifecycle                      bool
-	change                         sdd.Change
-	create                         sdd.CreateChangeRequest
-	list                           sdd.ListChangesRequest
-	get                            sdd.GetChangeRequest
-	mode                           sdd.UpdateInteractionModeRequest
-	transition                     sdd.TransitionChangeRequest
-	getErr, modeErr, transitionErr error
-	saveErr                        error
-	revision                       sdd.Revision
-	projection                     sdd.Projection
-	rendered                       sdd.ProjectionDocument
-	saveRevision                   sdd.SaveRevisionRequest
-	getRevision                    sdd.GetRevisionRequest
-	listRevisions                  sdd.ListRevisionsRequest
-	accept                         sdd.AcceptRevisionRequest
-	render                         sdd.RenderProjectionRequest
-	compare                        sdd.CompareProjectionRequest
-	record                         sdd.RecordProjectionRequest
-	projectionStatus               sdd.ProjectionStatusRequest
-}
-
-func (reader *fakeSDDReader) CreateChange(_ context.Context, request sdd.CreateChangeRequest) (sdd.Change, error) {
-	reader.create = request
-	if reader.lifecycle {
-		reader.change = sdd.Change{ID: "change-1", Project: request.Project, Title: request.Title, Backend: request.Backend, InteractionMode: request.InteractionMode, Plan: request.Plan, Phase: sdd.PhaseExplore, Status: sdd.ChangeActive, StateVersion: 1}
-	}
-	return reader.change, nil
-}
-func (reader *fakeSDDReader) ListChanges(_ context.Context, request sdd.ListChangesRequest) ([]sdd.Change, error) {
-	reader.list = request
-	return []sdd.Change{reader.change}, nil
-}
-func (reader *fakeSDDReader) GetChange(_ context.Context, request sdd.GetChangeRequest) (sdd.Change, error) {
-	reader.get = request
-	return reader.change, reader.getErr
-}
-
-func assertSDDToolText(t *testing.T, server *Server, ctx context.Context, want string) {
-	t.Helper()
-	result, _, err := server.callSDDGet(ctx, nil, sddGetInput{ID: "change-1"})
-	if err != nil || !result.IsError {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	text, ok := result.Content[0].(*sdk.TextContent)
-	if !ok || text.Text != want {
-		t.Fatalf("text=%#v want=%q", result.Content, want)
-	}
-}
-func (reader *fakeSDDReader) UpdateInteractionMode(_ context.Context, request sdd.UpdateInteractionModeRequest) (sdd.Change, error) {
-	reader.mode = request
-	return reader.change, reader.modeErr
-}
-func (reader *fakeSDDReader) TransitionChange(_ context.Context, request sdd.TransitionChangeRequest) (sdd.Change, error) {
-	reader.transition = request
-	if reader.lifecycle {
-		reader.change.Phase = request.TargetPhase
-		reader.change.StateVersion = request.ExpectedStateVersion + 1
-	}
-	return reader.change, reader.transitionErr
-}
-func (reader *fakeSDDReader) SaveRevision(_ context.Context, request sdd.SaveRevisionRequest) (sdd.Revision, error) {
-	reader.saveRevision = request
-	if reader.lifecycle {
-		reader.revision = sdd.Revision{ID: "revision-1", Project: request.Project, ChangeID: request.ChangeID, ArtifactID: "artifact-1", Artifact: request.Artifact, ArtifactStatus: sdd.ArtifactDraft, Status: sdd.RevisionCandidate, Content: request.Content, Digest: sdd.ContentDigest(request.Content), StateVersion: request.ExpectedStateVersion + 1}
-	}
-	return reader.revision, reader.saveErr
-}
-func (reader *fakeSDDReader) GetRevision(_ context.Context, request sdd.GetRevisionRequest) (sdd.Revision, error) {
-	reader.getRevision = request
-	return reader.revision, nil
-}
-func (reader *fakeSDDReader) ListRevisions(_ context.Context, request sdd.ListRevisionsRequest) ([]sdd.Revision, error) {
-	reader.listRevisions = request
-	return []sdd.Revision{reader.revision}, nil
-}
-func (reader *fakeSDDReader) AcceptRevision(_ context.Context, request sdd.AcceptRevisionRequest) (sdd.Revision, error) {
-	reader.accept = request
-	if reader.lifecycle {
-		reader.revision.Status = sdd.RevisionAccepted
-		reader.revision.StateVersion = request.ExpectedStateVersion + 1
-	}
-	return reader.revision, nil
-}
-func (reader *fakeSDDReader) RenderProjection(_ context.Context, request sdd.RenderProjectionRequest) (sdd.ProjectionDocument, error) {
-	reader.render = request
-	return reader.rendered, nil
-}
-func (reader *fakeSDDReader) CompareProjection(_ context.Context, request sdd.CompareProjectionRequest) (sdd.ProjectionComparison, error) {
-	reader.compare = request
-	if request.Input.RelativePath == reader.rendered.RelativePath && string(request.Input.Content) == string(reader.rendered.Content) {
-		return sdd.ProjectionComparison{State: sdd.DriftSynced}, nil
-	}
-	return sdd.ProjectionComparison{State: sdd.DriftDrifted}, nil
-}
-func (reader *fakeSDDReader) RecordProjection(_ context.Context, request sdd.RecordProjectionRequest) (sdd.Projection, error) {
-	reader.record = request
-	if reader.lifecycle {
-		reader.projection = sdd.Projection{Project: request.Project, ChangeID: request.ChangeID, ArtifactID: request.ArtifactID, RevisionID: request.RevisionID, Status: request.Status, Digest: request.Digest, Location: request.Location, StateVersion: request.ExpectedStateVersion + 1}
-	}
-	return reader.projection, nil
-}
-func (reader *fakeSDDReader) ProjectionStatus(_ context.Context, request sdd.ProjectionStatusRequest) (sdd.Projection, error) {
-	reader.projectionStatus = request
-	return reader.projection, nil
 }
 
 func (reader *fakeReader) ResolveProject(_ context.Context, workspace string) (string, error) {

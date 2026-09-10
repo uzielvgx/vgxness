@@ -17,7 +17,7 @@ func TestReadinessActivationPrecedenceAndZeroCeremony(t *testing.T) {
 		{"simple exact read is exempt", ActivationFacts{SimpleExactRead: true}, ActivationExempt},
 		{"exempt does not escalate from unrelated full facts", ActivationFacts{DirectRoute: true, IdentityDigest: true}, ActivationExempt},
 		{"ordinary authorized write is light", ActivationFacts{WriteIntent: true}, ActivationLight},
-		{"sdd is full", ActivationFacts{WriteIntent: true, SDDAccepted: true}, ActivationFull},
+		{"delivery is full", ActivationFacts{WriteIntent: true, Delivery: true}, ActivationFull},
 		{"frozen candidate is full", ActivationFacts{WriteIntent: true, FrozenCandidate: true}, ActivationFull},
 		{"provider template is full", ActivationFacts{WriteIntent: true, ProviderTemplate: true}, ActivationFull},
 		{"unknown risk is full", ActivationFacts{WriteIntent: true, UnknownRisk: true}, ActivationFull},
@@ -47,10 +47,10 @@ func TestReadinessLightAndFullHappyPaths(t *testing.T) {
 	full := completeBuildInput()
 	e, got := BuildReadiness(full)
 	if got.Status != ReadinessReady || e.Activation != ActivationFull {
-		t.Fatalf("complete SDD envelope = %+v, %+v", e, got)
+		t.Fatalf("complete general envelope = %+v, %+v", e, got)
 	}
-	if e.Binding.Kind != BindingSDD || e.Binding.TaskArtifactID == "" || len(e.Binding.Inputs) == 0 {
-		t.Fatalf("SDD binding is incomplete: %+v", e.Binding)
+	if e.Binding.Kind != BindingGeneral || e.Binding.ContextDigest == "" {
+		t.Fatalf("general binding is incomplete: %+v", e.Binding)
 	}
 }
 
@@ -68,26 +68,12 @@ func TestReadinessRejectsEveryFreshnessMutation(t *testing.T) {
 			e.MissionEvidence = json.RawMessage(`{"mission":"changed"}`)
 		}},
 		{"mission digest", func(e *ReadinessEnvelope, _ *ExpectedBinding) { e.MissionEvidenceDigest = digest64('z') }},
-		{"change", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.ChangeID = "other" }},
-		{"task artifact", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.TaskArtifactID = "other" }},
-		{"task revision", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.TaskRevisionID = "other" }},
-		{"task digest", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.TaskDigest = digest64('z') }},
-		{"input identity", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.Inputs[0].ArtifactID = "other" }},
-		{"input revision", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.Inputs[0].RevisionID = "other" }},
-		{"input digest", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.Inputs[0].Digest = digest64('z') }},
-		{"input order", func(_ *ReadinessEnvelope, w *ExpectedBinding) {
-			w.Inputs = append(w.Inputs, w.Inputs[0])
-			w.Inputs[0], w.Inputs[1] = w.Inputs[1], w.Inputs[0]
-		}},
-		{"state", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.ExpectedStateVersion++ }},
 		{"mission identity", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.MissionID = "other" }},
 		{"replay", func(_ *ReadinessEnvelope, w *ExpectedBinding) { w.ReplayNonce = "other" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := envelope
-			e.Binding.Inputs = append([]AcceptedInput(nil), envelope.Binding.Inputs...)
 			want := base.Binding
-			want.Inputs = append([]AcceptedInput(nil), base.Binding.Inputs...)
 			tc.mutate(&e, &want)
 			if got := ValidateReadiness(e, want, nil); got.Status != ReadinessBlocked {
 				t.Fatalf("%s = %+v, want BLOCKED", tc.name, got)
@@ -148,8 +134,8 @@ func TestReadinessStatusSemanticsAndWriterEcho(t *testing.T) {
 
 func completeBuildInput() BuildInput {
 	paths := []ChangedPath{{Path: "a.go", SHA256: digest64('c'), NoSymlink: true}}
-	b := ExpectedBinding{Kind: BindingSDD, ChangeID: "change", MissionID: "mission", ReplayNonce: "nonce", TaskArtifactID: "task", TaskRevisionID: "revision", TaskDigest: digest64('a'), ExpectedStateVersion: 18, Inputs: []AcceptedInput{{ArtifactID: "input", RevisionID: "revision", Digest: digest64('b')}}, CandidateDigest: digest64('d'), BaseIdentity: "base", ChangedPaths: paths, ReviewBinding: ReviewBinding{CandidateDigest: digest64('d'), ChangedPaths: paths, DiffScope: []string{"a.go"}, AcceptanceCriteria: []string{"C1"}}}
-	return BuildInput{MissionEvidence: json.RawMessage(`{"mission":"m"}`), Activation: ActivationFacts{WriteIntent: true, SDDAccepted: true, IdentityDigest: true, AuthorizationSecurity: true, ShellProcess: true, ProviderTemplate: true, FrozenCandidate: true}, Binding: b, Scope: Scope{Authorized: true, WriteIntent: true, Paths: []string{"a.go"}, Criteria: []string{"C1"}, AuthorizationReference: "auth", PermittedValidation: []string{"go test"}, Targets: []TargetIdentity{{Path: "a.go", SHA256: digest64('c'), NoSymlink: true}}}, RiskCategories: []RiskCategory{"sdd", "authorization-security", "shell-process", "identity-digest", "provider-template", "frozen"}, Evidence: []EvidenceReceipt{{Kind: EvidenceKindContract, Locator: "task", Digest: digest64('a'), Availability: EvidenceAvailable, Current: true, ObservedResult: "accepted", RiskCategory: "sdd"}, {Kind: EvidenceKindAuthorization, Locator: "authorization", Availability: EvidenceAvailable, Current: true, ObservedResult: "granted", RiskCategory: "authorization-security"}, {Kind: EvidenceKindCommand, Locator: "go test", Availability: EvidenceAvailable, Current: true, ObservedResult: "passed", RiskCategory: "shell-process"}, {Kind: EvidenceKindTarget, Locator: "a.go", Digest: digest64('c'), Availability: EvidenceAvailable, Current: true, ObservedResult: "hashed", RiskCategory: "identity-digest"}, {Kind: EvidenceKindProvider, Locator: "provider", Availability: EvidenceAvailable, Current: true, ObservedResult: "resolved", RiskCategory: "provider-template"}, {Kind: EvidenceKindContract, Locator: "candidate", CandidateDigest: digest64('d'), Availability: EvidenceAvailable, Current: true, ObservedResult: "reviewed", RiskCategory: "frozen"}}, Dependencies: []Dependency{{Kind: "task", Identity: "task", Digest: digest64('a')}, {Kind: "target", Identity: "a.go", Digest: digest64('c'), NoSymlink: true}}}
+	b := ExpectedBinding{Kind: BindingGeneral, ContextDigest: digest64('e'), MissionID: "mission", ReplayNonce: "nonce", CandidateDigest: digest64('d'), BaseIdentity: "base", ChangedPaths: paths, ReviewBinding: ReviewBinding{CandidateDigest: digest64('d'), ChangedPaths: paths, DiffScope: []string{"a.go"}, AcceptanceCriteria: []string{"C1"}}}
+	return BuildInput{MissionEvidence: json.RawMessage(`{"mission":"m"}`), Activation: ActivationFacts{WriteIntent: true, IdentityDigest: true, AuthorizationSecurity: true, ShellProcess: true, ProviderTemplate: true, FrozenCandidate: true}, Binding: b, Scope: Scope{Authorized: true, WriteIntent: true, Paths: []string{"a.go"}, Criteria: []string{"C1"}, AuthorizationReference: "auth", PermittedValidation: []string{"go test"}, Targets: []TargetIdentity{{Path: "a.go", SHA256: digest64('c'), NoSymlink: true}}}, RiskCategories: []RiskCategory{"delivery", "authorization-security", "shell-process", "identity-digest", "provider-template", "frozen"}, Evidence: []EvidenceReceipt{{Kind: EvidenceKindContract, Locator: "task", Digest: digest64('a'), Availability: EvidenceAvailable, Current: true, ObservedResult: "accepted", RiskCategory: "delivery"}, {Kind: EvidenceKindAuthorization, Locator: "authorization", Availability: EvidenceAvailable, Current: true, ObservedResult: "granted", RiskCategory: "authorization-security"}, {Kind: EvidenceKindCommand, Locator: "go test", Availability: EvidenceAvailable, Current: true, ObservedResult: "passed", RiskCategory: "shell-process"}, {Kind: EvidenceKindTarget, Locator: "a.go", Digest: digest64('c'), Availability: EvidenceAvailable, Current: true, ObservedResult: "hashed", RiskCategory: "identity-digest"}, {Kind: EvidenceKindProvider, Locator: "provider", Availability: EvidenceAvailable, Current: true, ObservedResult: "resolved", RiskCategory: "provider-template"}, {Kind: EvidenceKindContract, Locator: "candidate", CandidateDigest: digest64('d'), Availability: EvidenceAvailable, Current: true, ObservedResult: "reviewed", RiskCategory: "frozen"}}, Dependencies: []Dependency{{Kind: "task", Identity: "task", Digest: digest64('a')}, {Kind: "target", Identity: "a.go", Digest: digest64('c'), NoSymlink: true}}}
 }
 
 func writerEcho(b ExpectedBinding, e ReadinessEnvelope) WriterReturnEcho {
@@ -184,6 +170,7 @@ func TestReadinessRequiresCandidateAndReviewBindings(t *testing.T) {
 
 func TestReadinessAllowsAuthorizedExplicitlyMissingTarget(t *testing.T) {
 	in := completeBuildInput()
+	in.Scope.Paths[0] = "new.go"
 	in.Scope.Targets[0] = TargetIdentity{Path: "new.go", Missing: true, NoSymlink: true}
 	in.Dependencies[1] = Dependency{Kind: "target", Identity: "new.go", NoSymlink: true}
 	in.Evidence[3].Locator, in.Evidence[3].Digest = "new.go", ""
@@ -206,7 +193,7 @@ func TestBuildReadinessExemptEmitsNoEnvelope(t *testing.T) {
 func TestReadinessRejectsDuplicateCollections(t *testing.T) {
 	in := completeBuildInput()
 	in.Scope.Paths = []string{"a.go", "a.go"}
-	in.RiskCategories = []RiskCategory{"sdd", "sdd"}
+	in.RiskCategories = []RiskCategory{"delivery", "delivery"}
 	if _, got := BuildReadiness(in); got.Status != ReadinessBlocked {
 		t.Fatalf("duplicate collections = %+v, want BLOCKED", got)
 	}
@@ -302,7 +289,6 @@ func TestReadinessRejectsIsolatedDuplicateAndOversizeValues(t *testing.T) {
 		{"review path", func(v *BuildInput) {
 			v.Binding.ReviewBinding.ChangedPaths = append(v.Binding.ReviewBinding.ChangedPaths, v.Binding.ReviewBinding.ChangedPaths[0])
 		}},
-		{"input", func(v *BuildInput) { v.Binding.Inputs = append(v.Binding.Inputs, v.Binding.Inputs[0]) }},
 		{"oversize collection", func(v *BuildInput) {
 			for i := 0; i <= maxReadinessItems; i++ {
 				v.Unknowns = append(v.Unknowns, Unknown{Question: "q" + string(rune(i)), Requirement: "r"})
@@ -344,7 +330,7 @@ func TestReadinessOversizedEvidenceIsMalformed(t *testing.T) {
 			Availability:   EvidenceAvailable,
 			Current:        true,
 			ObservedResult: "accepted",
-			RiskCategory:   "sdd",
+			RiskCategory:   "delivery",
 		})
 	}
 	in.Evidence = evidence

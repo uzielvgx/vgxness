@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/modelplan"
 	"github.com/vgxness/vgxness/internal/orchestration"
-	"github.com/vgxness/vgxness/internal/sdd"
 )
 
 const (
@@ -76,30 +76,30 @@ func alpha2ManagedArtifactRecognizer(name string) func([]byte) bool {
 }
 
 type modelPlanManifest struct {
-	SchemaVersion int                    `json:"schemaVersion"`
-	ManagedBy     string                 `json:"managedBy"`
-	Config        *sdd.ModelPlanConfig   `json:"config,omitempty"`
-	Resolved      *sdd.OpenCodePlan      `json:"resolved,omitempty"`
-	ConfigV2      *sdd.ModelPlanConfigV2 `json:"configV2,omitempty"`
-	ResolvedV2    *sdd.OpenCodePlanV2    `json:"resolvedV2,omitempty"`
-	ConfigV3      *sdd.ModelPlanConfigV3 `json:"configV3,omitempty"`
-	ResolvedV3    *sdd.OpenCodePlanV3    `json:"resolvedV3,omitempty"`
-	Artifacts     map[string]string      `json:"artifacts"`
+	SchemaVersion int                          `json:"schemaVersion"`
+	ManagedBy     string                       `json:"managedBy"`
+	Config        *modelplan.ModelPlanConfig   `json:"config,omitempty"`
+	Resolved      *modelplan.OpenCodePlan      `json:"resolved,omitempty"`
+	ConfigV2      *modelplan.ModelPlanConfigV2 `json:"configV2,omitempty"`
+	ResolvedV2    *modelplan.OpenCodePlanV2    `json:"resolvedV2,omitempty"`
+	ConfigV3      *modelplan.ModelPlanConfigV3 `json:"configV3,omitempty"`
+	ResolvedV3    *modelplan.OpenCodePlanV3    `json:"resolvedV3,omitempty"`
+	Artifacts     map[string]string            `json:"artifacts"`
 }
 
 type modelPlanBundle struct {
-	config     sdd.ModelPlanConfig
-	resolved   sdd.OpenCodePlan
-	configV2   *sdd.ModelPlanConfigV2
-	resolvedV2 *sdd.OpenCodePlanV2
-	configV3   *sdd.ModelPlanConfigV3
-	resolvedV3 *sdd.OpenCodePlanV3
+	config     modelplan.ModelPlanConfig
+	resolved   modelplan.OpenCodePlan
+	configV2   *modelplan.ModelPlanConfigV2
+	resolvedV2 *modelplan.OpenCodePlanV2
+	configV3   *modelplan.ModelPlanConfigV3
+	resolvedV3 *modelplan.OpenCodePlanV3
 	agents     map[string][]byte
 	manifest   []byte
 }
 
-func buildV60ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
-	resolved, err := sdd.ResolveOpenCodePlan(config)
+func buildV60ModelPlanBundle(config modelplan.ModelPlanConfig) (modelPlanBundle, error) {
+	resolved, err := modelplan.ResolveOpenCodePlan(config)
 	if err != nil {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
 	}
@@ -115,14 +115,14 @@ func buildV60ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error
 // bytes, rather than a digest allowlist, so every artifact remains bound to
 // the one complete package identity.
 func preConsolidationV1MediumBundle() (modelPlanBundle, error) {
-	return preConsolidationV1MediumBundleForConfig(sdd.DefaultModelPlanConfig())
+	return preConsolidationV1MediumBundleForConfig(modelplan.DefaultModelPlanConfig())
 }
 
-func fixedLensV53ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
-	if config.ActivePlan != sdd.PlanMedium || config.Efficient != "openai/gpt-5.6-luna" || config.Balanced != "openai/gpt-5.6-terra" || config.Frontier != "openai/gpt-5.6-sol" || (config.Provenance != sdd.ModelPlanDefault && config.Provenance != sdd.ModelPlanCLI) {
+func fixedLensV53ModelPlanBundle(config modelplan.ModelPlanConfig) (modelPlanBundle, error) {
+	if config.ActivePlan != modelplan.PlanMedium || config.Efficient != "openai/gpt-5.6-luna" || config.Balanced != "openai/gpt-5.6-terra" || config.Frontier != "openai/gpt-5.6-sol" || (config.Provenance != modelplan.ModelPlanDefault && config.Provenance != modelplan.ModelPlanCLI) {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
-	resolved, err := sdd.ResolveOpenCodePlan(config)
+	resolved, err := modelplan.ResolveOpenCodePlan(config)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -132,7 +132,7 @@ func fixedLensV53ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, e
 		return modelPlanBundle{}, err
 	}
 	managerTemplate := strings.Replace(strings.Replace(previousManagerPromptV56, managerPreviousMarker, managerV53Marker, 1), managerReviewDepthV56Previous, currentManagerReviewDepth, 1)
-	manager, err := bindManagerTemplate(managerTemplate, managerV53Marker, resolved.Roles[sdd.RoleManager])
+	manager, err := bindManagerTemplate(managerTemplate, managerV53Marker, resolved.Roles[modelplan.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -145,8 +145,8 @@ func fixedLensV53ModelPlanBundle(config sdd.ModelPlanConfig) (modelPlanBundle, e
 	return encodeModelPlanBundle(config, resolved, agents)
 }
 
-func preConsolidationV1MediumBundleForConfig(config sdd.ModelPlanConfig) (modelPlanBundle, error) {
-	if config.ActivePlan != sdd.PlanMedium || config.Efficient != "openai/gpt-5.6-luna" || config.Balanced != "openai/gpt-5.6-terra" || config.Frontier != "openai/gpt-5.6-sol" || (config.Provenance != sdd.ModelPlanDefault && config.Provenance != sdd.ModelPlanCLI) {
+func preConsolidationV1MediumBundleForConfig(config modelplan.ModelPlanConfig) (modelPlanBundle, error) {
+	if config.ActivePlan != modelplan.PlanMedium || config.Efficient != "openai/gpt-5.6-luna" || config.Balanced != "openai/gpt-5.6-terra" || config.Frontier != "openai/gpt-5.6-sol" || (config.Provenance != modelplan.ModelPlanDefault && config.Provenance != modelplan.ModelPlanCLI) {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	current, err := buildModelPlanBundle(config)
@@ -171,7 +171,7 @@ func preConsolidationV1MediumBundleForConfig(config sdd.ModelPlanConfig) (modelP
 	agents[verifierAgentName] = []byte(strings.Replace(string(agents[verifierAgentName]), currentVerifierBinding, preConsolidationVerifierBinding, 1))
 	agents[verifierAgentName] = []byte(strings.Replace(string(agents[verifierAgentName]), "include status PASS|FAIL|INCONCLUSIVE, reviewBinding, candidate, summary,", "include status PASS|FAIL|INCONCLUSIVE, candidate, summary,", 1))
 	for name, prompt := range preConsolidationReviewPrompts() {
-		assignment := current.resolved.Roles[map[string]sdd.Role{reviewRiskName: sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability, reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience, reviewRefuterName: sdd.RoleRefuter}[name]]
+		assignment := current.resolved.Roles[map[string]modelplan.Role{reviewRiskName: modelplan.RoleRisk, reviewReadabilityName: modelplan.RoleReadability, reviewReliabilityName: modelplan.RoleReliability, reviewResilienceName: modelplan.RoleResilience, reviewRefuterName: modelplan.RoleRefuter}[name]]
 		content, bindErr := bindAgent(prompt, assignment.Role, assignment)
 		if bindErr != nil {
 			return modelPlanBundle{}, bindErr
@@ -239,8 +239,8 @@ var currentManagerSDDBoundaryV51 = strings.Replace(strings.Replace(currentManage
 
 const preConsolidationManagerSDDBoundary = "Use SDD only after the user explicitly requests or accepts it. Load `sdd-lifecycle` before creating an accepted SDD change. Verify the managed global portable catalog marker `<!-- managed-by: vgxness; artifact: global-skill/sdd-lifecycle; version: 1 -->`; block if source, scope, or marker cannot be verified, a same-name/project-local skill collides, or loading fails. If `sdd-lifecycle` is unavailable or fails to load, block the SDD request. Never fall back inline or accept a local skill with the same name. The manager alone creates changes, saves and accepts revisions, records projections, sets interaction mode, and transitions state. Validate accepted-input artifact IDs, revision IDs, SHA-256 digests, and latest stateVersion before every mutation. SDD phase agents are read-only; managed general alone writes workspace, OpenSpec, or hybrid projections, verifier validates the frozen candidate, and the `sdd-lifecycle` skill is the sole detailed lifecycle policy."
 
-func buildV60ModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
-	resolved, err := sdd.ResolveOpenCodePlanV2(config)
+func buildV60ModelPlanBundleV2(config modelplan.ModelPlanConfigV2) (modelPlanBundle, error) {
+	resolved, err := modelplan.ResolveOpenCodePlanV2(config)
 	if err != nil {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
 	}
@@ -251,8 +251,12 @@ func buildV60ModelPlanBundleV2(config sdd.ModelPlanConfigV2) (modelPlanBundle, e
 	return encodeModelPlanBundleV2(config, resolved, agents)
 }
 
-func buildV60ModelPlanBundleV3(config sdd.ModelPlanConfigV3) (modelPlanBundle, error) {
-	resolved, err := ResolveModelPlanV3(config)
+func buildV60ModelPlanBundleV3(config modelplan.ModelPlanConfigV3) (modelPlanBundle, error) {
+	config, err := expandLegacyModelConfig(config)
+	if err != nil {
+		return modelPlanBundle{}, err
+	}
+	resolved, err := modelplan.ResolveOpenCodePlanV3(config, modelAgentInventoryV3)
 	if err != nil {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
 	}
@@ -263,7 +267,7 @@ func buildV60ModelPlanBundleV3(config sdd.ModelPlanConfigV3) (modelPlanBundle, e
 	return encodeModelPlanBundleV3(config, resolved, agents)
 }
 
-func encodeModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, agents map[string][]byte) (modelPlanBundle, error) {
+func encodeModelPlanBundle(config modelplan.ModelPlanConfig, resolved modelplan.OpenCodePlan, agents map[string][]byte) (modelPlanBundle, error) {
 	manifest := modelPlanManifest{SchemaVersion: 1, ManagedBy: "vgxness", Config: &config, Resolved: &resolved, Artifacts: make(map[string]string, len(agents))}
 	for name, content := range agents {
 		manifest.Artifacts[filepath.ToSlash(filepath.Join("agents", name))] = artifactSHA256(content)
@@ -276,7 +280,7 @@ func encodeModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan
 	return modelPlanBundle{config: config, resolved: resolved, agents: agents, manifest: data}, nil
 }
 
-func encodeModelPlanBundleV2(config sdd.ModelPlanConfigV2, resolved sdd.OpenCodePlanV2, agents map[string][]byte) (modelPlanBundle, error) {
+func encodeModelPlanBundleV2(config modelplan.ModelPlanConfigV2, resolved modelplan.OpenCodePlanV2, agents map[string][]byte) (modelPlanBundle, error) {
 	manifest := modelPlanManifest{SchemaVersion: 2, ManagedBy: "vgxness", ConfigV2: &config, ResolvedV2: &resolved, Artifacts: make(map[string]string, len(agents))}
 	for name, content := range agents {
 		manifest.Artifacts[filepath.ToSlash(filepath.Join("agents", name))] = artifactSHA256(content)
@@ -289,7 +293,7 @@ func encodeModelPlanBundleV2(config sdd.ModelPlanConfigV2, resolved sdd.OpenCode
 	return modelPlanBundle{configV2: &config, resolvedV2: &resolved, agents: agents, manifest: data}, nil
 }
 
-func encodeModelPlanBundleV3(config sdd.ModelPlanConfigV3, resolved sdd.OpenCodePlanV3, agents map[string][]byte) (modelPlanBundle, error) {
+func encodeModelPlanBundleV3(config modelplan.ModelPlanConfigV3, resolved modelplan.OpenCodePlanV3, agents map[string][]byte) (modelPlanBundle, error) {
 	manifest := modelPlanManifest{SchemaVersion: 3, ManagedBy: "vgxness", ConfigV3: &config, ResolvedV3: &resolved, Artifacts: make(map[string]string, len(agents))}
 	for name, content := range agents {
 		manifest.Artifacts[filepath.ToSlash(filepath.Join("agents", name))] = artifactSHA256(content)
@@ -313,11 +317,11 @@ func requestedModelPlanForMigration(options integration.Options, configDirectory
 		return modelPlanBundle{}, fmt.Errorf("%w: per-agent assignments cannot be combined with model slots", integration.ErrInvalid)
 	}
 	manifestPath := filepath.Join(configDirectory, "vgxness", modelPlanManifestName)
-	base := sdd.DefaultModelPlanConfig()
+	base := modelplan.DefaultModelPlanConfig()
 	installedV1 := false
 	var installedBundle modelPlanBundle
-	var installedV2 *sdd.ModelPlanConfigV2
-	var installedV3 *sdd.ModelPlanConfigV3
+	var installedV2 *modelplan.ModelPlanConfigV2
+	var installedV3 *modelplan.ModelPlanConfigV3
 	if data, err := readRegularFile(manifestPath); err == nil {
 		installed, bundle, parseErr := parseInstalledModelPlanManifest(data)
 		if parseErr != nil {
@@ -336,7 +340,7 @@ func requestedModelPlanForMigration(options integration.Options, configDirectory
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan manifest", integration.ErrConflict)
 	}
 	if v3Requested {
-		assignments := make(map[string]sdd.ManagedAgentModelConfig, len(*options.ModelAssignments))
+		assignments := make(map[string]modelplan.ManagedAgentModelConfig, len(*options.ModelAssignments))
 		provider := ""
 		for key, assignment := range *options.ModelAssignments {
 			assignments[key] = assignment
@@ -346,7 +350,7 @@ func requestedModelPlanForMigration(options integration.Options, configDirectory
 				provider = "mixed"
 			}
 		}
-		return buildModelPlanBundleV3(sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: provider, Assignments: assignments, Provenance: sdd.ModelPlanCLI})
+		return buildModelPlanBundleV3(currentModelConfig(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: provider, Assignments: assignments, Provenance: modelplan.ModelPlanCLI}))
 	}
 	if installedV3 != nil && !explicit && !hasSlotEffort(options) && !hasSlotVariant(options) {
 		return buildModelPlanBundleV3(*installedV3)
@@ -386,7 +390,7 @@ func requestedModelPlanForMigration(options integration.Options, configDirectory
 		if !explicit && !hasSlotEffort(options) {
 			config.Provenance = base.Provenance
 		}
-		candidate, candidateErr := buildModelPlanBundleV3(projectModelPlanV2ToV3(config))
+		candidate, candidateErr := buildModelPlanBundleV3(currentModelConfig(projectModelPlanV2ToV3(config)))
 		return verifyInstalledV3SlotProjection(installedV3, installedBundle, candidate, candidateErr)
 	}
 	if hasSlotEffort(options) {
@@ -397,10 +401,10 @@ func requestedModelPlanForMigration(options integration.Options, configDirectory
 		if !explicit {
 			config.Provenance = base.Provenance
 		}
-		candidate, candidateErr := buildModelPlanBundleV3(projectModelPlanV2ToV3(config))
+		candidate, candidateErr := buildModelPlanBundleV3(currentModelConfig(projectModelPlanV2ToV3(config)))
 		return verifyInstalledV3SlotProjection(installedV3, installedBundle, candidate, candidateErr)
 	}
-	config, err := sdd.NewModelPlanConfig(plan, efficient, balanced, frontier)
+	config, err := modelplan.NewModelPlanConfig(plan, efficient, balanced, frontier)
 	if err != nil {
 		return modelPlanBundle{}, fmt.Errorf("%w: model plan", integration.ErrInvalid)
 	}
@@ -422,27 +426,42 @@ func requestedModelPlanForMigration(options integration.Options, configDirectory
 	if installedV1 && !migrateInstalledV1 {
 		return buildModelPlanBundle(config)
 	}
-	candidate, candidateErr := buildModelPlanBundleV3(projectModelPlanToV3(config))
+	// Missing manifests can still belong to an exact historical installation.
+	// Retain its original model slots only after matching the complete package.
+	if !installedV1 && installedV3 == nil && !explicit {
+		legacy, legacyErr := buildModelPlanBundleV3(projectModelPlanToV3(config))
+		if legacyErr != nil {
+			return modelPlanBundle{}, legacyErr
+		}
+		matched, _, matchErr := manifestlessModelGeneration(configDirectory, legacy)
+		if matchErr != nil {
+			return modelPlanBundle{}, matchErr
+		}
+		if len(matched.agents) != 0 {
+			return legacy, nil
+		}
+	}
+	candidate, candidateErr := buildModelPlanBundleV3(currentModelConfig(projectModelPlanToV3(config)))
 	return verifyInstalledV3SlotProjection(installedV3, installedBundle, candidate, candidateErr)
 }
 
-func isExactSetupCLIV1Plan(config sdd.ModelPlanConfig, installed modelPlanBundle) bool {
+func isExactSetupCLIV1Plan(config modelplan.ModelPlanConfig, installed modelPlanBundle) bool {
 	exact, err := buildModelPlanBundle(config)
 	if err != nil {
 		return false
 	}
-	defaults := sdd.DefaultModelPlanConfig()
+	defaults := modelplan.DefaultModelPlanConfig()
 	return config.SchemaVersion == defaults.SchemaVersion &&
 		config.Provider == defaults.Provider &&
 		config.ActivePlan == defaults.ActivePlan &&
 		config.Efficient == defaults.Efficient &&
 		config.Balanced == defaults.Balanced &&
 		config.Frontier == defaults.Frontier &&
-		(config.Provenance == sdd.ModelPlanDefault || config.Provenance == sdd.ModelPlanCLI) &&
+		(config.Provenance == modelplan.ModelPlanDefault || config.Provenance == modelplan.ModelPlanCLI) &&
 		bytes.Equal(installed.manifest, exact.manifest)
 }
 
-func verifyInstalledV3SlotProjection(installed *sdd.ModelPlanConfigV3, existing, candidate modelPlanBundle, err error) (modelPlanBundle, error) {
+func verifyInstalledV3SlotProjection(installed *modelplan.ModelPlanConfigV3, existing, candidate modelPlanBundle, err error) (modelPlanBundle, error) {
 	if err != nil || installed == nil {
 		return candidate, err
 	}
@@ -452,102 +471,102 @@ func verifyInstalledV3SlotProjection(installed *sdd.ModelPlanConfigV3, existing,
 	return candidate, nil
 }
 
-func projectModelPlanToV3(config sdd.ModelPlanConfig) sdd.ModelPlanConfigV3 {
-	plan, err := sdd.ResolveOpenCodePlan(config)
+func projectModelPlanToV3(config modelplan.ModelPlanConfig) modelplan.ModelPlanConfigV3 {
+	plan, err := modelplan.ResolveOpenCodePlan(config)
 	if err != nil {
-		return sdd.ModelPlanConfigV3{}
+		return modelplan.ModelPlanConfigV3{}
 	}
-	defaults := sdd.DefaultModelPlanConfig()
-	assignments := make(map[string]sdd.ManagedAgentModelConfig, len(modelAgentInventoryV3))
+	defaults := modelplan.DefaultModelPlanConfig()
+	assignments := make(map[string]modelplan.ManagedAgentModelConfig, len(modelAgentInventoryV3))
 	for _, identity := range modelAgentInventoryV3 {
 		assignment, ok := plan.Roles[identity.Role]
 		if !ok {
-			return sdd.ModelPlanConfigV3{}
+			return modelplan.ModelPlanConfigV3{}
 		}
 		provider := modelProvider(assignment.Model)
 		if provider == "" {
-			return sdd.ModelPlanConfigV3{}
+			return modelplan.ModelPlanConfigV3{}
 		}
-		source, availability := sdd.ModelSlotCustom, sdd.ModelSlotUnknown
+		source, availability := modelplan.ModelSlotCustom, modelplan.ModelSlotUnknown
 		if plan.Slots[assignment.Capability] == modelPlanReference(defaults, assignment.Capability) {
-			source, availability = sdd.ModelSlotCatalog, sdd.ModelSlotCatalogKnown
+			source, availability = modelplan.ModelSlotCatalog, modelplan.ModelSlotCatalogKnown
 		}
-		assignments[identity.ArtifactKey] = sdd.ManagedAgentModelConfig{
+		assignments[identity.ArtifactKey] = modelplan.ManagedAgentModelConfig{
 			Provider: provider, Reference: assignment.Model, RequestedEffort: assignment.RequestedEffort,
 			Variant: assignment.Variant, Source: source, Availability: availability,
 		}
 	}
-	return sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: assignmentProviderSummary(assignments), Assignments: assignments, Provenance: config.Provenance}
+	return modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: assignmentProviderSummary(assignments), Assignments: assignments, Provenance: config.Provenance}
 }
 
-func projectModelPlanV2ToV3(config sdd.ModelPlanConfigV2) sdd.ModelPlanConfigV3 {
-	plan, err := sdd.ResolveOpenCodePlanV2(config)
+func projectModelPlanV2ToV3(config modelplan.ModelPlanConfigV2) modelplan.ModelPlanConfigV3 {
+	plan, err := modelplan.ResolveOpenCodePlanV2(config)
 	if err != nil {
-		return sdd.ModelPlanConfigV3{}
+		return modelplan.ModelPlanConfigV3{}
 	}
-	assignments := make(map[string]sdd.ManagedAgentModelConfig, len(modelAgentInventoryV3))
+	assignments := make(map[string]modelplan.ManagedAgentModelConfig, len(modelAgentInventoryV3))
 	for _, identity := range modelAgentInventoryV3 {
 		assignment, ok := plan.Roles[identity.Role]
 		if !ok {
-			return sdd.ModelPlanConfigV3{}
+			return modelplan.ModelPlanConfigV3{}
 		}
 		slot, ok := plan.Slots[assignment.Capability]
 		if !ok || modelProvider(assignment.Model) == "" {
-			return sdd.ModelPlanConfigV3{}
+			return modelplan.ModelPlanConfigV3{}
 		}
-		assignments[identity.ArtifactKey] = sdd.ManagedAgentModelConfig{
+		assignments[identity.ArtifactKey] = modelplan.ManagedAgentModelConfig{
 			Provider: assignment.Provider, Reference: assignment.Model, RequestedEffort: assignment.RequestedEffort,
 			Variant: slot.Variant, VariantSpecified: slot.VariantSpecified, Source: slot.Source, Availability: slot.Availability,
 		}
 	}
-	return sdd.ModelPlanConfigV3{SchemaVersion: 3, Provider: assignmentProviderSummary(assignments), Assignments: assignments, Provenance: config.Provenance}
+	return modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: assignmentProviderSummary(assignments), Assignments: assignments, Provenance: config.Provenance}
 }
 
-func modelPlanReference(config sdd.ModelPlanConfig, capability sdd.Capability) string {
+func modelPlanReference(config modelplan.ModelPlanConfig, capability modelplan.Capability) string {
 	switch capability {
-	case sdd.CapabilityEfficient:
+	case modelplan.CapabilityEfficient:
 		return config.Efficient
-	case sdd.CapabilityBalanced:
+	case modelplan.CapabilityBalanced:
 		return config.Balanced
-	case sdd.CapabilityFrontier:
+	case modelplan.CapabilityFrontier:
 		return config.Frontier
 	default:
 		return ""
 	}
 }
 
-func overrideModelPlanConfigV2(installed sdd.ModelPlanConfigV2, options integration.Options) (sdd.ModelPlanConfigV2, error) {
+func overrideModelPlanConfigV2(installed modelplan.ModelPlanConfigV2, options integration.Options) (modelplan.ModelPlanConfigV2, error) {
 	plan := installed.ActivePlan
 	if options.ModelPlan != "" {
 		plan = options.ModelPlan
 	}
-	slots := make(map[sdd.Capability]sdd.ModelSlotConfig, len(installed.Slots))
+	slots := make(map[modelplan.Capability]modelplan.ModelSlotConfig, len(installed.Slots))
 	for capability, slot := range installed.Slots {
 		slots[capability] = slot
 	}
 	for _, override := range []struct {
-		capability sdd.Capability
+		capability modelplan.Capability
 		reference  string
-		effort     sdd.Effort
-		variant    sdd.OpenCodeVariant
+		effort     modelplan.Effort
+		variant    modelplan.OpenCodeVariant
 	}{
-		{sdd.CapabilityEfficient, options.ModelEfficient, options.ModelEfficientEffort, options.ModelEfficientVariant},
-		{sdd.CapabilityBalanced, options.ModelBalanced, options.ModelBalancedEffort, options.ModelBalancedVariant},
-		{sdd.CapabilityFrontier, options.ModelFrontier, options.ModelFrontierEffort, options.ModelFrontierVariant},
+		{modelplan.CapabilityEfficient, options.ModelEfficient, options.ModelEfficientEffort, options.ModelEfficientVariant},
+		{modelplan.CapabilityBalanced, options.ModelBalanced, options.ModelBalancedEffort, options.ModelBalancedVariant},
+		{modelplan.CapabilityFrontier, options.ModelFrontier, options.ModelFrontierEffort, options.ModelFrontierVariant},
 	} {
 		slot := slots[override.capability]
 		if override.reference != "" {
 			slot.Reference = override.reference
-			defaultSlot := sdd.DefaultModelPlanConfigV2().Slots[override.capability]
+			defaultSlot := modelplan.DefaultModelPlanConfigV2().Slots[override.capability]
 			if slot.Reference == defaultSlot.Reference {
-				slot.Source, slot.Availability = sdd.ModelSlotCatalog, sdd.ModelSlotCatalogKnown
+				slot.Source, slot.Availability = modelplan.ModelSlotCatalog, modelplan.ModelSlotCatalogKnown
 			} else {
-				slot.Source, slot.Availability = sdd.ModelSlotCustom, sdd.ModelSlotUnknown
+				slot.Source, slot.Availability = modelplan.ModelSlotCustom, modelplan.ModelSlotUnknown
 			}
 		}
 		if override.effort != "" {
 			if !override.effort.Valid() {
-				return sdd.ModelPlanConfigV2{}, integration.ErrInvalid
+				return modelplan.ModelPlanConfigV2{}, integration.ErrInvalid
 			}
 			slot.RequestedEffort = override.effort
 		}
@@ -558,9 +577,9 @@ func overrideModelPlanConfigV2(installed sdd.ModelPlanConfigV2, options integrat
 		}
 		slots[override.capability] = slot
 	}
-	config, err := sdd.NewModelPlanConfigV2(plan, slots[sdd.CapabilityEfficient], slots[sdd.CapabilityBalanced], slots[sdd.CapabilityFrontier])
+	config, err := modelplan.NewModelPlanConfigV2(plan, slots[modelplan.CapabilityEfficient], slots[modelplan.CapabilityBalanced], slots[modelplan.CapabilityFrontier])
 	if err != nil {
-		return sdd.ModelPlanConfigV2{}, err
+		return modelplan.ModelPlanConfigV2{}, err
 	}
 	config.Provenance = installed.Provenance
 	return config, nil
@@ -586,36 +605,36 @@ func modelProvider(reference string) string {
 	return provider
 }
 
-func modelPlanConfigV2(options integration.Options, plan sdd.Plan, efficient, balanced, frontier string) (sdd.ModelPlanConfigV2, error) {
-	defaults := sdd.DefaultModelPlanConfigV2().Slots
+func modelPlanConfigV2(options integration.Options, plan modelplan.Plan, efficient, balanced, frontier string) (modelplan.ModelPlanConfigV2, error) {
+	defaults := modelplan.DefaultModelPlanConfigV2().Slots
 	slots := []struct {
-		capability sdd.Capability
+		capability modelplan.Capability
 		reference  string
-		effort     sdd.Effort
-		variant    sdd.OpenCodeVariant
+		effort     modelplan.Effort
+		variant    modelplan.OpenCodeVariant
 	}{
-		{sdd.CapabilityEfficient, efficient, options.ModelEfficientEffort, options.ModelEfficientVariant},
-		{sdd.CapabilityBalanced, balanced, options.ModelBalancedEffort, options.ModelBalancedVariant},
-		{sdd.CapabilityFrontier, frontier, options.ModelFrontierEffort, options.ModelFrontierVariant},
+		{modelplan.CapabilityEfficient, efficient, options.ModelEfficientEffort, options.ModelEfficientVariant},
+		{modelplan.CapabilityBalanced, balanced, options.ModelBalancedEffort, options.ModelBalancedVariant},
+		{modelplan.CapabilityFrontier, frontier, options.ModelFrontierEffort, options.ModelFrontierVariant},
 	}
-	config := make([]sdd.ModelSlotConfig, len(slots))
+	config := make([]modelplan.ModelSlotConfig, len(slots))
 	for index, slot := range slots {
 		if slot.effort == "" {
 			if !options.ModelVariantsSpecified {
-				return sdd.ModelPlanConfigV2{}, integration.ErrInvalid
+				return modelplan.ModelPlanConfigV2{}, integration.ErrInvalid
 			}
 			slot.effort = defaults[slot.capability].RequestedEffort
 		}
 		if !slot.effort.Valid() {
-			return sdd.ModelPlanConfigV2{}, integration.ErrInvalid
+			return modelplan.ModelPlanConfigV2{}, integration.ErrInvalid
 		}
-		config[index] = sdd.ModelSlotConfig{Reference: slot.reference, RequestedEffort: slot.effort, Variant: slot.variant, VariantSpecified: options.ModelVariantsSpecified || slot.variant != "", Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown}
+		config[index] = modelplan.ModelSlotConfig{Reference: slot.reference, RequestedEffort: slot.effort, Variant: slot.variant, VariantSpecified: options.ModelVariantsSpecified || slot.variant != "", Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown}
 		if slot.reference == defaults[slot.capability].Reference {
-			config[index].Source = sdd.ModelSlotCatalog
-			config[index].Availability = sdd.ModelSlotCatalogKnown
+			config[index].Source = modelplan.ModelSlotCatalog
+			config[index].Availability = modelplan.ModelSlotCatalogKnown
 		}
 	}
-	return sdd.NewModelPlanConfigV2(plan, config[0], config[1], config[2])
+	return modelplan.NewModelPlanConfigV2(plan, config[0], config[1], config[2])
 }
 
 func parseInstalledModelPlanManifest(data []byte) (modelPlanManifest, modelPlanBundle, error) {
@@ -687,7 +706,7 @@ func modelPlanBundleForDecodedManifest(data []byte, manifest modelPlanManifest) 
 	return modelPlanBundleForManifest(data, *manifest.Config)
 }
 
-func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (modelPlanBundle, error) {
+func modelPlanBundleForManifestV3(data []byte, config modelplan.ModelPlanConfigV3) (modelPlanBundle, error) {
 	current, err := buildModelPlanBundleV3(config)
 	if err != nil {
 		return modelPlanBundle{}, integration.ErrDrift
@@ -770,7 +789,7 @@ func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (mo
 	return modelPlanBundle{}, integration.ErrDrift
 }
 
-func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (modelPlanBundle, error) {
+func modelPlanBundleForManifestV2(data []byte, config modelplan.ModelPlanConfigV2) (modelPlanBundle, error) {
 	current, err := buildModelPlanBundleV2(config)
 	if err != nil {
 		return modelPlanBundle{}, integration.ErrDrift
@@ -848,7 +867,7 @@ func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (mo
 	return modelPlanBundle{}, integration.ErrDrift
 }
 
-func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelPlanBundle, error) {
+func modelPlanBundleForManifest(data []byte, config modelplan.ModelPlanConfig) (modelPlanBundle, error) {
 	current, err := buildModelPlanBundle(config)
 	if err != nil {
 		return modelPlanBundle{}, integration.ErrDrift
@@ -902,26 +921,26 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 	return modelPlanBundle{}, integration.ErrDrift
 }
 
-func historicalHighPlanWithLunaFastBundle(config sdd.ModelPlanConfig) (modelPlanBundle, bool, error) {
-	historicalConfig, err := sdd.NewModelPlanConfig(sdd.PlanHigh, "openai/gpt-5.6-luna-fast", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol")
+func historicalHighPlanWithLunaFastBundle(config modelplan.ModelPlanConfig) (modelPlanBundle, bool, error) {
+	historicalConfig, err := modelplan.NewModelPlanConfig(modelplan.PlanHigh, "openai/gpt-5.6-luna-fast", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol")
 	if err != nil {
 		return modelPlanBundle{}, false, err
 	}
 	if config != historicalConfig {
 		return modelPlanBundle{}, false, nil
 	}
-	plan, err := sdd.ResolveOpenCodePlan(historicalConfig)
+	plan, err := modelplan.ResolveOpenCodePlan(historicalConfig)
 	if err != nil {
 		return modelPlanBundle{}, false, err
 	}
 	populateLegacyReviewAssignments(&plan)
 	for role, assignment := range plan.Roles {
-		if assignment.Capability != sdd.CapabilityEfficient || assignment.RequestedEffort != sdd.EffortHigh {
+		if assignment.Capability != modelplan.CapabilityEfficient || assignment.RequestedEffort != modelplan.EffortHigh {
 			continue
 		}
-		assignment.Effort = sdd.EffortMedium
-		assignment.Variant = sdd.OpenCodeVariantForEffort(assignment.Effort)
-		assignment.Degradation = sdd.Degradation{Degraded: true, Reason: fmt.Sprintf("requested effort %s is unsupported by %s; using highest declared effort %s", assignment.RequestedEffort, assignment.Model, assignment.Effort)}
+		assignment.Effort = modelplan.EffortMedium
+		assignment.Variant = modelplan.OpenCodeVariantForEffort(assignment.Effort)
+		assignment.Degradation = modelplan.Degradation{Degraded: true, Reason: fmt.Sprintf("requested effort %s is unsupported by %s; using highest declared effort %s", assignment.RequestedEffort, assignment.Model, assignment.Effort)}
 		plan.Roles[role] = assignment
 	}
 	agents, err := legacyModelBoundAgents(plan)
@@ -1109,7 +1128,7 @@ func previousActiveProfilesModelPlanBundle(current modelPlanBundle) (modelPlanBu
 	agents[generalAgentName] = previousGeneralV8(agents[generalAgentName])
 	agents[exploreAgentName] = previousExploreV3(agents[exploreAgentName])
 	agents[verifierAgentName] = previousVerifierV5(agents[verifierAgentName])
-	agents[sddApplyName] = previousSDDAgentPredecessor(sdd.RoleApply, agents[sddApplyName])
+	agents[sddApplyName] = previousSDDAgentPredecessor(modelplan.RoleApply, agents[sddApplyName])
 	for _, name := range []string{managerAgentName, generalAgentName, exploreAgentName, verifierAgentName, sddApplyName} {
 		if len(agents[name]) == 0 {
 			return modelPlanBundle{}, integration.ErrInvalid
@@ -1304,19 +1323,19 @@ func legacyFixedLensBundle(current modelPlanBundle) (modelPlanBundle, error) {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
 		legacy := *current.resolvedV2
-		legacy.Roles = make(map[sdd.Role]sdd.OpenCodeRoleAssignmentV2, len(current.resolvedV2.Roles)+2)
+		legacy.Roles = make(map[modelplan.Role]modelplan.OpenCodeRoleAssignmentV2, len(current.resolvedV2.Roles)+2)
 		for role, assignment := range current.resolvedV2.Roles {
 			legacy.Roles[role] = assignment
 		}
-		for _, role := range []sdd.Role{sdd.RoleCAREReviewer, sdd.RoleCARESpecialist, sdd.RoleCAREChallenger} {
+		for _, role := range []modelplan.Role{modelplan.RoleCAREReviewer, modelplan.RoleCARESpecialist, modelplan.RoleCAREChallenger} {
 			delete(legacy.Roles, role)
 		}
 		for role, assignment := range legacyReviewAssignmentsV2(*current.resolvedV2) {
-			legacy.Roles[role] = sdd.OpenCodeRoleAssignmentV2{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
+			legacy.Roles[role] = modelplan.OpenCodeRoleAssignmentV2{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
 		}
-		agentPlan := sdd.OpenCodePlan{Roles: make(map[sdd.Role]sdd.OpenCodeRoleAssignment, len(legacy.Roles))}
+		agentPlan := modelplan.OpenCodePlan{Roles: make(map[modelplan.Role]modelplan.OpenCodeRoleAssignment, len(legacy.Roles))}
 		for role, assignment := range legacy.Roles {
-			agentPlan.Roles[role] = sdd.OpenCodeRoleAssignment{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
+			agentPlan.Roles[role] = modelplan.OpenCodeRoleAssignment{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
 		}
 		agents, err := legacyModelBoundAgents(agentPlan)
 		if err != nil {
@@ -1371,7 +1390,7 @@ func previousV50ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	agents := cloneAgents(current.agents)
 	agents[managerAgentName] = previousManagerV50(agents[managerAgentName])
 	agents[generalAgentName] = previousGeneralV8(agents[generalAgentName])
-	agents[sddApplyName] = previousSDDAgentPredecessor(sdd.RoleApply, agents[sddApplyName])
+	agents[sddApplyName] = previousSDDAgentPredecessor(modelplan.RoleApply, agents[sddApplyName])
 	for _, name := range []string{managerAgentName, generalAgentName, sddApplyName} {
 		if len(agents[name]) == 0 {
 			return modelPlanBundle{}, integration.ErrInvalid
@@ -1540,23 +1559,23 @@ func fullHistoricalModelPlanBundle(current modelPlanBundle, managerBase, manager
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	applyV6 := previousSDDAgentPredecessor(sdd.RoleApply, bundle.agents[sddApplyName])
+	applyV6 := previousSDDAgentPredecessor(modelplan.RoleApply, bundle.agents[sddApplyName])
 	if len(applyV6) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
-	bundle.agents[sddApplyName] = previousSDDAgentPredecessor(sdd.RoleApply, applyV6)
+	bundle.agents[sddApplyName] = previousSDDAgentPredecessor(modelplan.RoleApply, applyV6)
 	if len(bundle.agents[sddApplyName]) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	return encodeModelPlanBundle(bundle.config, bundle.resolved, bundle.agents)
 }
 
-func fullHistoricalModelPlanBundleV3(config sdd.ModelPlanConfigV3, resolved sdd.OpenCodePlanV3, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
+func fullHistoricalModelPlanBundleV3(config modelplan.ModelPlanConfigV3, resolved modelplan.OpenCodePlanV3, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
 	assignments, err := legacyModelBoundAssignmentsV3(resolved)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+	managerBinder := func(assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 		return bindManagerTemplate(managerBase, managerMarker, assignment)
 	}
 	agents, err := fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, legacyReviewBindings(reviews), false, false)
@@ -1567,11 +1586,11 @@ func fullHistoricalModelPlanBundleV3(config sdd.ModelPlanConfigV3, resolved sdd.
 	if len(agents[exploreAgentName]) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
-	applyV6 := previousSDDAgentPredecessor(sdd.RoleApply, agents[sddApplyName])
+	applyV6 := previousSDDAgentPredecessor(modelplan.RoleApply, agents[sddApplyName])
 	if len(applyV6) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
-	agents[sddApplyName] = previousSDDAgentPredecessor(sdd.RoleApply, applyV6)
+	agents[sddApplyName] = previousSDDAgentPredecessor(modelplan.RoleApply, applyV6)
 	if len(agents[sddApplyName]) == 0 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
@@ -1587,7 +1606,7 @@ func previousManagerModelPlanBundleV42(current modelPlanBundle) (modelPlanBundle
 		}
 	}
 
-	manager, err := bindManagerTemplate(previousManagerPromptV42, "artifact: opencode-agent/vgxness-manager; version: 42", current.resolved.Roles[sdd.RoleManager])
+	manager, err := bindManagerTemplate(previousManagerPromptV42, "artifact: opencode-agent/vgxness-manager; version: 42", current.resolved.Roles[modelplan.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -1605,7 +1624,7 @@ func previousManagerModelPlanBundleV41(current modelPlanBundle) (modelPlanBundle
 		}
 	}
 
-	manager, err := bindManagerTemplate(previousManagerPromptV41, "artifact: opencode-agent/vgxness-manager; version: 41", current.resolved.Roles[sdd.RoleManager])
+	manager, err := bindManagerTemplate(previousManagerPromptV41, "artifact: opencode-agent/vgxness-manager; version: 41", current.resolved.Roles[modelplan.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -1623,7 +1642,7 @@ func previousManagerModelPlanBundleV40(current modelPlanBundle) (modelPlanBundle
 		}
 	}
 
-	manager, err := bindManagerTemplate(previousManagerPromptV40, "artifact: opencode-agent/vgxness-manager; version: 40", current.resolved.Roles[sdd.RoleManager])
+	manager, err := bindManagerTemplate(previousManagerPromptV40, "artifact: opencode-agent/vgxness-manager; version: 40", current.resolved.Roles[modelplan.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -1641,7 +1660,7 @@ func previousManagerModelPlanBundleV39(current modelPlanBundle) (modelPlanBundle
 		}
 	}
 
-	manager, err := bindManagerTemplate(previousManagerPromptV39, "artifact: opencode-agent/vgxness-manager; version: 39", current.resolved.Roles[sdd.RoleManager])
+	manager, err := bindManagerTemplate(previousManagerPromptV39, "artifact: opencode-agent/vgxness-manager; version: 39", current.resolved.Roles[modelplan.RoleManager])
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
@@ -1745,9 +1764,9 @@ func previousSDDModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	}
 	for _, profile := range []struct {
 		name string
-		role sdd.Role
+		role modelplan.Role
 	}{
-		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec}, {sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks},
+		{sddResearchName, modelplan.RoleResearch}, {sddProposalName, modelplan.RoleProposal}, {sddSpecName, modelplan.RoleSpec}, {sddDesignName, modelplan.RoleDesign}, {sddTasksName, modelplan.RoleTasks},
 	} {
 		agents[profile.name] = previousSDDAgentPredecessor(profile.role, agents[profile.name])
 		if len(agents[profile.name]) == 0 {
@@ -1795,9 +1814,9 @@ func previousSDDModelPlanBundleV2(current modelPlanBundle) (modelPlanBundle, err
 	}
 	for _, profile := range []struct {
 		name string
-		role sdd.Role
+		role modelplan.Role
 	}{
-		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec}, {sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
+		{sddResearchName, modelplan.RoleResearch}, {sddProposalName, modelplan.RoleProposal}, {sddSpecName, modelplan.RoleSpec}, {sddDesignName, modelplan.RoleDesign}, {sddTasksName, modelplan.RoleTasks}, {sddApplyName, modelplan.RoleApply},
 	} {
 		predecessor.agents[profile.name] = legacySDDAgentPredecessor(profile.role, predecessor.agents[profile.name])
 		if len(predecessor.agents[profile.name]) == 0 {
@@ -1833,8 +1852,8 @@ func previousExploreModelPlanBundle(current modelPlanBundle) (modelPlanBundle, e
 	return encodeModelPlanBundle(current.config, current.resolved, agents)
 }
 
-func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
-	assignments := make(map[string]sdd.OpenCodeRoleAssignment, len(modelAgentInventoryV3))
+func modelBoundAgents(plan modelplan.OpenCodePlan) (map[string][]byte, error) {
+	assignments := make(map[string]modelplan.OpenCodeRoleAssignment, len(modelAgentInventoryV3))
 	for _, identity := range modelAgentInventoryV3 {
 		assignment, ok := plan.Roles[identity.Role]
 		if !ok {
@@ -1845,8 +1864,8 @@ func modelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, currentCAREReviewBindings(), true, true)
 }
 
-func legacyModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
-	assignments := make(map[string]sdd.OpenCodeRoleAssignment, len(modelAgentInventoryV3)+2)
+func legacyModelBoundAgents(plan modelplan.OpenCodePlan) (map[string][]byte, error) {
+	assignments := make(map[string]modelplan.OpenCodeRoleAssignment, len(modelAgentInventoryV3)+2)
 	for _, identity := range modelAgentInventoryV3 {
 		if assignment, ok := plan.Roles[identity.Role]; ok {
 			assignments[strings.TrimPrefix(identity.ArtifactKey, "agents/")] = assignment
@@ -1862,10 +1881,10 @@ func legacyModelBoundAgents(plan sdd.OpenCodePlan) (map[string][]byte, error) {
 	return fullModelBoundAgentsByName(assignments, bindManager, canonicalGeneralPrompt, generalCurrentMarker, canonicalVerifierPrompt, verifierCurrentMarker, legacyReviewBindings(currentReviewPrompts()), true, false)
 }
 
-func modelBoundAgentsV2(plan sdd.OpenCodePlanV2) (map[string][]byte, error) {
-	legacy := sdd.OpenCodePlan{Roles: make(map[sdd.Role]sdd.OpenCodeRoleAssignment, len(plan.Roles))}
+func modelBoundAgentsV2(plan modelplan.OpenCodePlanV2) (map[string][]byte, error) {
+	legacy := modelplan.OpenCodePlan{Roles: make(map[modelplan.Role]modelplan.OpenCodeRoleAssignment, len(plan.Roles))}
 	for role, assignment := range plan.Roles {
-		legacy.Roles[role] = sdd.OpenCodeRoleAssignment{
+		legacy.Roles[role] = modelplan.OpenCodeRoleAssignment{
 			Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model,
 			RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant,
 			Degradation: assignment.Degradation, Strength: assignment.Strength,
@@ -1880,7 +1899,7 @@ func modelBoundAgentsV2(plan sdd.OpenCodePlanV2) (map[string][]byte, error) {
 	return omitEmptyVariantLines(agents), err
 }
 
-func modelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error) {
+func modelBoundAgentsV3(plan modelplan.OpenCodePlanV3) (map[string][]byte, error) {
 	assignments, err := modelBoundAssignmentsV3(plan)
 	if err != nil {
 		return nil, err
@@ -1892,7 +1911,7 @@ func modelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error) {
 	return omitEmptyVariantLines(agents), nil
 }
 
-func legacyModelBoundAgentsV3(plan sdd.OpenCodePlanV3) (map[string][]byte, error) {
+func legacyModelBoundAgentsV3(plan modelplan.OpenCodePlanV3) (map[string][]byte, error) {
 	assignments, err := legacyModelBoundAssignmentsV3(plan)
 	if err != nil {
 		return nil, err
@@ -1911,11 +1930,11 @@ func omitEmptyVariantLines(agents map[string][]byte) map[string][]byte {
 	return agents
 }
 
-func modelBoundAssignmentsV3(plan sdd.OpenCodePlanV3) (map[string]sdd.OpenCodeRoleAssignment, error) {
-	assignments := make(map[string]sdd.OpenCodeRoleAssignment, len(plan.Assignments))
+func modelBoundAssignmentsV3(plan modelplan.OpenCodePlanV3) (map[string]modelplan.OpenCodeRoleAssignment, error) {
+	assignments := make(map[string]modelplan.OpenCodeRoleAssignment, len(plan.Assignments))
 	for _, assignment := range plan.Assignments {
 		name := strings.TrimPrefix(assignment.ArtifactKey, "agents/")
-		assignments[name] = sdd.OpenCodeRoleAssignment{
+		assignments[name] = modelplan.OpenCodeRoleAssignment{
 			Role: assignment.Role, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort,
 			Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation,
 		}
@@ -1926,13 +1945,13 @@ func modelBoundAssignmentsV3(plan sdd.OpenCodePlanV3) (map[string]sdd.OpenCodeRo
 	return assignments, nil
 }
 
-func legacyModelBoundAssignmentsV3(plan sdd.OpenCodePlanV3) (map[string]sdd.OpenCodeRoleAssignment, error) {
+func legacyModelBoundAssignmentsV3(plan modelplan.OpenCodePlanV3) (map[string]modelplan.OpenCodeRoleAssignment, error) {
 	assignments, err := modelBoundAssignmentsV3(plan)
 	if err != nil {
 		return nil, err
 	}
 	for _, review := range legacyReviewBindings(nil) {
-		name := map[sdd.Role]string{sdd.RoleRisk: "vgxness-care-reviewer.md", sdd.RoleReadability: "vgxness-care-specialist.md", sdd.RoleReliability: "vgxness-care-reviewer.md", sdd.RoleResilience: "vgxness-care-specialist.md", sdd.RoleRefuter: "vgxness-care-challenger.md"}[review.role]
+		name := map[modelplan.Role]string{modelplan.RoleRisk: "vgxness-care-reviewer.md", modelplan.RoleReadability: "vgxness-care-specialist.md", modelplan.RoleReliability: "vgxness-care-reviewer.md", modelplan.RoleResilience: "vgxness-care-specialist.md", modelplan.RoleRefuter: "vgxness-care-challenger.md"}[review.role]
 		assignment, ok := assignments[name]
 		if !ok {
 			return nil, integration.ErrInvalid
@@ -1942,13 +1961,13 @@ func legacyModelBoundAssignmentsV3(plan sdd.OpenCodePlanV3) (map[string]sdd.Open
 	return assignments, nil
 }
 
-func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte, error) {
+func modelBoundAgentPredecessorsV3(plan modelplan.OpenCodePlanV3) (map[string][][]byte, error) {
 	assignments, err := legacyModelBoundAssignmentsV3(plan)
 	if err != nil {
 		return nil, err
 	}
 	build := func(managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (map[string][]byte, error) {
-		managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+		managerBinder := func(assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 			return bindManagerTemplate(managerBase, managerMarker, assignment)
 		}
 		agents, buildErr := fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, legacyReviewBindings(reviews), false, false)
@@ -2015,28 +2034,32 @@ func modelBoundAgentPredecessorsV3(plan sdd.OpenCodePlanV3) (map[string][][]byte
 	return predecessors, nil
 }
 
-func modelBoundAgentPredecessorRecognizerV3(config sdd.ModelPlanConfigV3, artifactKey string) func([]byte) bool {
+func modelBoundAgentPredecessorRecognizerV3(config modelplan.ModelPlanConfigV3, artifactKey string) func([]byte) bool {
 	return func(candidate []byte) bool {
 		model, effort, ok := modelBinding(candidate)
 		provider, _, found := strings.Cut(model, "/")
 		if !ok || !found || provider == "" {
 			return false
 		}
-		assignments := make(map[string]sdd.ManagedAgentModelConfig, len(config.Assignments))
+		assignments := make(map[string]modelplan.ManagedAgentModelConfig, len(config.Assignments))
 		for key, assignment := range config.Assignments {
 			assignments[key] = assignment
 		}
 		if _, present := assignments[artifactKey]; !present {
 			return false
 		}
-		assignments[artifactKey] = sdd.ManagedAgentModelConfig{
+		assignments[artifactKey] = modelplan.ManagedAgentModelConfig{
 			Provider: provider, Reference: model, RequestedEffort: effort,
-			Source: sdd.ModelSlotCustom, Availability: sdd.ModelSlotUnknown,
+			Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown,
 		}
 		candidateConfig := config
 		candidateConfig.Assignments = assignments
 		candidateConfig.Provider = assignmentProviderSummary(assignments)
-		resolved, err := ResolveModelPlanV3(candidateConfig)
+		candidateConfig, err := expandLegacyModelConfig(candidateConfig)
+		if err != nil {
+			return false
+		}
+		resolved, err := modelplan.ResolveOpenCodePlanV3(candidateConfig, modelAgentInventoryV3)
 		if err != nil {
 			return false
 		}
@@ -2054,7 +2077,7 @@ func modelBoundAgentPredecessorRecognizerV3(config sdd.ModelPlanConfigV3, artifa
 	}
 }
 
-func modelBinding(content []byte) (string, sdd.Effort, bool) {
+func modelBinding(content []byte) (string, modelplan.Effort, bool) {
 	var model, variant string
 	for _, line := range strings.Split(string(content), "\n") {
 		if strings.HasPrefix(line, "model: ") {
@@ -2073,21 +2096,21 @@ func modelBinding(content []byte) (string, sdd.Effort, bool) {
 	if model == "" {
 		return "", "", false
 	}
-	switch sdd.OpenCodeVariant(variant) {
-	case sdd.VariantLow:
-		return model, sdd.EffortLow, true
-	case sdd.VariantMedium:
-		return model, sdd.EffortMedium, true
-	case sdd.VariantHigh:
-		return model, sdd.EffortHigh, true
-	case sdd.VariantXHigh:
-		return model, sdd.EffortUltra, true
+	switch modelplan.OpenCodeVariant(variant) {
+	case modelplan.VariantLow:
+		return model, modelplan.EffortLow, true
+	case modelplan.VariantMedium:
+		return model, modelplan.EffortMedium, true
+	case modelplan.VariantHigh:
+		return model, modelplan.EffortHigh, true
+	case modelplan.VariantXHigh:
+		return model, modelplan.EffortUltra, true
 	default:
 		return "", "", false
 	}
 }
 
-func assignmentProviderSummary(assignments map[string]sdd.ManagedAgentModelConfig) string {
+func assignmentProviderSummary(assignments map[string]modelplan.ManagedAgentModelConfig) string {
 	summary := ""
 	for _, assignment := range assignments {
 		if summary == "" {
@@ -2099,7 +2122,7 @@ func assignmentProviderSummary(assignments map[string]sdd.ManagedAgentModelConfi
 	return summary
 }
 
-func modelBoundAgentPredecessorCandidatesV3(plan sdd.OpenCodePlanV3, name string) ([][]byte, error) {
+func modelBoundAgentPredecessorCandidatesV3(plan modelplan.OpenCodePlanV3, name string) ([][]byte, error) {
 	predecessors, err := modelBoundAgentPredecessorsV3(plan)
 	if err != nil {
 		return nil, err
@@ -2144,7 +2167,7 @@ func modelBoundAgentPredecessorCandidatesV3(plan sdd.OpenCodePlanV3, name string
 		appendCandidate(previousVerifierPredecessor(v4))
 	default:
 		for _, identity := range modelAgentInventoryV3 {
-			if identity.ArtifactKey == "agents/"+name && identity.Class == sdd.ManagedAgentClassSDD {
+			if identity.ArtifactKey == "agents/"+name && identity.Class == modelplan.ManagedAgentClassSDD {
 				appendCandidate(previousSDDAgentPredecessor(identity.Role, agents[name]))
 				break
 			}
@@ -2153,8 +2176,8 @@ func modelBoundAgentPredecessorCandidatesV3(plan sdd.OpenCodePlanV3, name string
 	return candidates, nil
 }
 
-func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
-	managerBinder := func(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func fullModelPlanBundle(config modelplan.ModelPlanConfig, resolved modelplan.OpenCodePlan, managerBase, managerMarker, generalBase, generalMarker, verifierBase, verifierMarker string, reviews map[string]string) (modelPlanBundle, error) {
+	managerBinder := func(assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 		return bindManagerTemplate(managerBase, managerMarker, assignment)
 	}
 	agents, err := fullModelBoundAgents(resolved, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, legacyReviewBindings(reviews), false)
@@ -2168,9 +2191,9 @@ func fullModelPlanBundle(config sdd.ModelPlanConfig, resolved sdd.OpenCodePlan, 
 	return encodeModelPlanBundle(config, resolved, agents)
 }
 
-func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews []reviewBinding, protectDurableMutations bool) (map[string][]byte, error) {
+func fullModelBoundAgents(plan modelplan.OpenCodePlan, managerBinder func(modelplan.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews []reviewBinding, protectDurableMutations bool) (map[string][]byte, error) {
 	populateLegacyReviewAssignments(&plan)
-	assignments := make(map[string]sdd.OpenCodeRoleAssignment, len(modelAgentInventoryV3))
+	assignments := make(map[string]modelplan.OpenCodeRoleAssignment, len(modelAgentInventoryV3))
 	for _, identity := range modelAgentInventoryV3 {
 		assignments[strings.TrimPrefix(identity.ArtifactKey, "agents/")] = plan.Roles[identity.Role]
 	}
@@ -2180,13 +2203,13 @@ func fullModelBoundAgents(plan sdd.OpenCodePlan, managerBinder func(sdd.OpenCode
 	return fullModelBoundAgentsByName(assignments, managerBinder, generalBase, generalMarker, verifierBase, verifierMarker, baseReviews, protectDurableMutations, true)
 }
 
-func populateLegacyReviewAssignments(plan *sdd.OpenCodePlan) {
+func populateLegacyReviewAssignments(plan *modelplan.OpenCodePlan) {
 	if plan.Roles == nil {
 		return
 	}
-	delete(plan.Roles, sdd.RoleCAREReviewer)
-	delete(plan.Roles, sdd.RoleCARESpecialist)
-	delete(plan.Roles, sdd.RoleCAREChallenger)
+	delete(plan.Roles, modelplan.RoleCAREReviewer)
+	delete(plan.Roles, modelplan.RoleCARESpecialist)
+	delete(plan.Roles, modelplan.RoleCAREChallenger)
 	for _, review := range legacyReviewBindings(nil) {
 		if _, present := plan.Roles[review.role]; present {
 			continue
@@ -2198,20 +2221,20 @@ func populateLegacyReviewAssignments(plan *sdd.OpenCodePlan) {
 	}
 }
 
-func legacyReviewAssignmentV1(plan sdd.OpenCodePlan, role sdd.Role) (sdd.OpenCodeRoleAssignment, bool) {
+func legacyReviewAssignmentV1(plan modelplan.OpenCodePlan, role modelplan.Role) (modelplan.OpenCodeRoleAssignment, bool) {
 	matrix, ok := legacyReviewMatrix(plan.ActivePlan, role)
 	if !ok {
-		return sdd.OpenCodeRoleAssignment{}, false
+		return modelplan.OpenCodeRoleAssignment{}, false
 	}
-	return sdd.OpenCodeRoleAssignment{
+	return modelplan.OpenCodeRoleAssignment{
 		Role: role, Capability: matrix.Capability, Model: plan.Slots[matrix.Capability],
 		RequestedEffort: matrix.Effort, Effort: matrix.Effort,
-		Variant: sdd.OpenCodeVariantForEffort(matrix.Effort), Strength: matrix.Strength(),
+		Variant: modelplan.OpenCodeVariantForEffort(matrix.Effort), Strength: matrix.Strength(),
 	}, true
 }
 
-func legacyReviewAssignmentsV2(plan sdd.OpenCodePlanV2) map[sdd.Role]sdd.OpenCodeRoleAssignment {
-	assignments := make(map[sdd.Role]sdd.OpenCodeRoleAssignment, 5)
+func legacyReviewAssignmentsV2(plan modelplan.OpenCodePlanV2) map[modelplan.Role]modelplan.OpenCodeRoleAssignment {
+	assignments := make(map[modelplan.Role]modelplan.OpenCodeRoleAssignment, 5)
 	for _, review := range legacyReviewBindings(nil) {
 		if _, present := plan.Roles[review.role]; present {
 			continue
@@ -2224,7 +2247,7 @@ func legacyReviewAssignmentsV2(plan sdd.OpenCodePlanV2) map[sdd.Role]sdd.OpenCod
 			if candidate.Capability != matrix.Capability {
 				continue
 			}
-			assignments[review.role] = sdd.OpenCodeRoleAssignment{
+			assignments[review.role] = modelplan.OpenCodeRoleAssignment{
 				Role: review.role, Capability: candidate.Capability, Model: candidate.Model,
 				RequestedEffort: candidate.RequestedEffort, Effort: candidate.Effort,
 				Variant: candidate.Variant, Degradation: candidate.Degradation, Strength: candidate.Strength,
@@ -2233,33 +2256,33 @@ func legacyReviewAssignmentsV2(plan sdd.OpenCodePlanV2) map[sdd.Role]sdd.OpenCod
 		}
 		if _, ok := assignments[review.role]; !ok {
 			if slot, ok := plan.Slots[matrix.Capability]; ok {
-				assignments[review.role] = sdd.OpenCodeRoleAssignment{Role: review.role, Capability: matrix.Capability, Model: slot.Reference, RequestedEffort: matrix.Effort, Effort: matrix.Effort, Variant: sdd.OpenCodeVariantForEffort(matrix.Effort), Strength: matrix.Strength()}
+				assignments[review.role] = modelplan.OpenCodeRoleAssignment{Role: review.role, Capability: matrix.Capability, Model: slot.Reference, RequestedEffort: matrix.Effort, Effort: matrix.Effort, Variant: modelplan.OpenCodeVariantForEffort(matrix.Effort), Strength: matrix.Strength()}
 			}
 		}
 	}
 	return assignments
 }
 
-func legacyReviewMatrix(plan sdd.Plan, role sdd.Role) (sdd.RoleAssignment, bool) {
-	matrix := map[sdd.Plan]map[sdd.Role]sdd.RoleAssignment{
-		sdd.PlanLow: {
-			sdd.RoleRisk: {Capability: sdd.CapabilityEfficient, Effort: sdd.EffortMedium}, sdd.RoleReadability: {Capability: sdd.CapabilityEfficient, Effort: sdd.EffortLow}, sdd.RoleReliability: {Capability: sdd.CapabilityEfficient, Effort: sdd.EffortMedium}, sdd.RoleResilience: {Capability: sdd.CapabilityEfficient, Effort: sdd.EffortMedium}, sdd.RoleRefuter: {Capability: sdd.CapabilityBalanced, Effort: sdd.EffortMedium},
+func legacyReviewMatrix(plan modelplan.Plan, role modelplan.Role) (modelplan.RoleAssignment, bool) {
+	matrix := map[modelplan.Plan]map[modelplan.Role]modelplan.RoleAssignment{
+		modelplan.PlanLow: {
+			modelplan.RoleRisk: {Capability: modelplan.CapabilityEfficient, Effort: modelplan.EffortMedium}, modelplan.RoleReadability: {Capability: modelplan.CapabilityEfficient, Effort: modelplan.EffortLow}, modelplan.RoleReliability: {Capability: modelplan.CapabilityEfficient, Effort: modelplan.EffortMedium}, modelplan.RoleResilience: {Capability: modelplan.CapabilityEfficient, Effort: modelplan.EffortMedium}, modelplan.RoleRefuter: {Capability: modelplan.CapabilityBalanced, Effort: modelplan.EffortMedium},
 		},
-		sdd.PlanMedium: {
-			sdd.RoleRisk: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortMedium}, sdd.RoleReadability: {Capability: sdd.CapabilityEfficient, Effort: sdd.EffortMedium}, sdd.RoleReliability: {Capability: sdd.CapabilityBalanced, Effort: sdd.EffortHigh}, sdd.RoleResilience: {Capability: sdd.CapabilityBalanced, Effort: sdd.EffortHigh}, sdd.RoleRefuter: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortMedium},
+		modelplan.PlanMedium: {
+			modelplan.RoleRisk: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortMedium}, modelplan.RoleReadability: {Capability: modelplan.CapabilityEfficient, Effort: modelplan.EffortMedium}, modelplan.RoleReliability: {Capability: modelplan.CapabilityBalanced, Effort: modelplan.EffortHigh}, modelplan.RoleResilience: {Capability: modelplan.CapabilityBalanced, Effort: modelplan.EffortHigh}, modelplan.RoleRefuter: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortMedium},
 		},
-		sdd.PlanHigh: {
-			sdd.RoleRisk: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortHigh}, sdd.RoleReadability: {Capability: sdd.CapabilityEfficient, Effort: sdd.EffortHigh}, sdd.RoleReliability: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortHigh}, sdd.RoleResilience: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortHigh}, sdd.RoleRefuter: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortHigh},
+		modelplan.PlanHigh: {
+			modelplan.RoleRisk: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortHigh}, modelplan.RoleReadability: {Capability: modelplan.CapabilityEfficient, Effort: modelplan.EffortHigh}, modelplan.RoleReliability: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortHigh}, modelplan.RoleResilience: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortHigh}, modelplan.RoleRefuter: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortHigh},
 		},
-		sdd.PlanUltra: {
-			sdd.RoleRisk: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortHigh}, sdd.RoleReadability: {Capability: sdd.CapabilityBalanced, Effort: sdd.EffortHigh}, sdd.RoleReliability: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortHigh}, sdd.RoleResilience: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortHigh}, sdd.RoleRefuter: {Capability: sdd.CapabilityFrontier, Effort: sdd.EffortHigh},
+		modelplan.PlanUltra: {
+			modelplan.RoleRisk: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortHigh}, modelplan.RoleReadability: {Capability: modelplan.CapabilityBalanced, Effort: modelplan.EffortHigh}, modelplan.RoleReliability: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortHigh}, modelplan.RoleResilience: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortHigh}, modelplan.RoleRefuter: {Capability: modelplan.CapabilityFrontier, Effort: modelplan.EffortHigh},
 		},
 	}
 	assignment, ok := matrix[plan][role]
 	return assignment, ok
 }
 
-func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignment, managerBinder func(sdd.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews []reviewBinding, protectDurableMutations, currentDurablePolicy bool) (map[string][]byte, error) {
+func fullModelBoundAgentsByName(assignments map[string]modelplan.OpenCodeRoleAssignment, managerBinder func(modelplan.OpenCodeRoleAssignment) ([]byte, error), generalBase, generalMarker, verifierBase, verifierMarker string, baseReviews []reviewBinding, protectDurableMutations, currentDurablePolicy bool) (map[string][]byte, error) {
 	agents := make(map[string][]byte, integration.ModelAssignmentCount)
 	manager, err := managerBinder(assignments[managerAgentName])
 	if err != nil {
@@ -2305,17 +2328,17 @@ func fullModelBoundAgentsByName(assignments map[string]sdd.OpenCodeRoleAssignmen
 	}
 	for _, profile := range []struct {
 		name string
-		role sdd.Role
+		role modelplan.Role
 	}{
-		{sddResearchName, sdd.RoleResearch}, {sddProposalName, sdd.RoleProposal}, {sddSpecName, sdd.RoleSpec},
-		{sddDesignName, sdd.RoleDesign}, {sddTasksName, sdd.RoleTasks}, {sddApplyName, sdd.RoleApply},
+		{sddResearchName, modelplan.RoleResearch}, {sddProposalName, modelplan.RoleProposal}, {sddSpecName, modelplan.RoleSpec},
+		{sddDesignName, modelplan.RoleDesign}, {sddTasksName, modelplan.RoleTasks}, {sddApplyName, modelplan.RoleApply},
 	} {
 		agents[profile.name] = []byte(sddAgentPrompt(profile.role, assignments[profile.name]))
 	}
 	return agents, nil
 }
 
-func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func bindManager(assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 	value, err := bindManagerTemplate(canonicalManagerPrompt, managerPreviousMarker, assignment)
 	if err != nil {
 		return nil, err
@@ -2331,7 +2354,7 @@ func bindManager(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	return activateManagerV60(value)
 }
 
-func bindManagerV56(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func bindManagerV56(assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 	value, err := bindManagerTemplate(previousManagerPromptV56, managerPreviousMarker, assignment)
 	if err != nil {
 		return nil, err
@@ -2339,7 +2362,7 @@ func bindManagerV56(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
 	return activateManagerV57(value, managerV56Marker)
 }
 
-func bindManagerV57(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func bindManagerV57(assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 	value, err := bindManagerTemplate(previousManagerPromptV57, managerPreviousMarker, assignment)
 	if err != nil {
 		return nil, err
@@ -2731,19 +2754,19 @@ func previousV51ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
 		legacy := *current.resolvedV2
-		legacy.Roles = make(map[sdd.Role]sdd.OpenCodeRoleAssignmentV2, len(current.resolvedV2.Roles)+2)
+		legacy.Roles = make(map[modelplan.Role]modelplan.OpenCodeRoleAssignmentV2, len(current.resolvedV2.Roles)+2)
 		for role, assignment := range current.resolvedV2.Roles {
 			legacy.Roles[role] = assignment
 		}
-		for _, role := range []sdd.Role{sdd.RoleCAREReviewer, sdd.RoleCARESpecialist, sdd.RoleCAREChallenger} {
+		for _, role := range []modelplan.Role{modelplan.RoleCAREReviewer, modelplan.RoleCARESpecialist, modelplan.RoleCAREChallenger} {
 			delete(legacy.Roles, role)
 		}
 		for role, assignment := range legacyReviewAssignmentsV2(*current.resolvedV2) {
-			legacy.Roles[role] = sdd.OpenCodeRoleAssignmentV2{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
+			legacy.Roles[role] = modelplan.OpenCodeRoleAssignmentV2{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
 		}
-		plan := sdd.OpenCodePlan{Roles: make(map[sdd.Role]sdd.OpenCodeRoleAssignment, len(legacy.Roles))}
+		plan := modelplan.OpenCodePlan{Roles: make(map[modelplan.Role]modelplan.OpenCodeRoleAssignment, len(legacy.Roles))}
 		for role, assignment := range legacy.Roles {
-			plan.Roles[role] = sdd.OpenCodeRoleAssignment{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
+			plan.Roles[role] = modelplan.OpenCodeRoleAssignment{Role: assignment.Role, Capability: assignment.Capability, Model: assignment.Model, RequestedEffort: assignment.RequestedEffort, Effort: assignment.Effort, Variant: assignment.Variant, Degradation: assignment.Degradation, Strength: assignment.Strength}
 		}
 		agents, err := legacyModelBoundAgents(plan)
 		if err != nil {
@@ -3055,12 +3078,12 @@ func normalizeCAREV1(current modelPlanBundle) (modelPlanBundle, error) {
 	present := 0
 	for _, item := range []struct {
 		name string
-		role sdd.Role
+		role modelplan.Role
 		base string
 	}{
-		{"vgxness-care-reviewer.md", sdd.RoleCAREReviewer, previousCAREReviewerPromptV1},
-		{"vgxness-care-specialist.md", sdd.RoleCARESpecialist, previousCARESpecialistPromptV1},
-		{"vgxness-care-challenger.md", sdd.RoleCAREChallenger, previousCAREChallengerPromptV1},
+		{"vgxness-care-reviewer.md", modelplan.RoleCAREReviewer, previousCAREReviewerPromptV1},
+		{"vgxness-care-specialist.md", modelplan.RoleCARESpecialist, previousCARESpecialistPromptV1},
+		{"vgxness-care-challenger.md", modelplan.RoleCAREChallenger, previousCAREChallengerPromptV1},
 	} {
 		content, ok := agents[item.name]
 		if !ok {
@@ -3190,7 +3213,7 @@ func supportedHistoricalModelPlanBundlesUncached(current modelPlanBundle) ([]mod
 			bundles = append(bundles, bundle)
 		}
 	}
-	legacyCurrent, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
+	legacyCurrent, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
 	if err != nil {
 		return nil, err
 	}
@@ -3269,25 +3292,25 @@ func legacyManagerPrompt(value string) string {
 
 type reviewBinding struct {
 	name   string
-	role   sdd.Role
+	role   modelplan.Role
 	prompt string
 }
 
 func currentCAREReviewBindings() []reviewBinding {
 	return []reviewBinding{
-		{name: "vgxness-care-reviewer.md", role: sdd.RoleCAREReviewer, prompt: careReviewerPrompt},
-		{name: "vgxness-care-specialist.md", role: sdd.RoleCARESpecialist, prompt: careSpecialistPrompt},
-		{name: "vgxness-care-challenger.md", role: sdd.RoleCAREChallenger, prompt: careChallengerPrompt},
+		{name: "vgxness-care-reviewer.md", role: modelplan.RoleCAREReviewer, prompt: careReviewerPrompt},
+		{name: "vgxness-care-specialist.md", role: modelplan.RoleCARESpecialist, prompt: careSpecialistPrompt},
+		{name: "vgxness-care-challenger.md", role: modelplan.RoleCAREChallenger, prompt: careChallengerPrompt},
 	}
 }
 
 func legacyReviewBindings(prompts map[string]string) []reviewBinding {
 	return []reviewBinding{
-		{name: reviewRiskName, role: sdd.RoleRisk, prompt: prompts[reviewRiskName]},
-		{name: reviewReadabilityName, role: sdd.RoleReadability, prompt: prompts[reviewReadabilityName]},
-		{name: reviewReliabilityName, role: sdd.RoleReliability, prompt: prompts[reviewReliabilityName]},
-		{name: reviewResilienceName, role: sdd.RoleResilience, prompt: prompts[reviewResilienceName]},
-		{name: reviewRefuterName, role: sdd.RoleRefuter, prompt: prompts[reviewRefuterName]},
+		{name: reviewRiskName, role: modelplan.RoleRisk, prompt: prompts[reviewRiskName]},
+		{name: reviewReadabilityName, role: modelplan.RoleReadability, prompt: prompts[reviewReadabilityName]},
+		{name: reviewReliabilityName, role: modelplan.RoleReliability, prompt: prompts[reviewReliabilityName]},
+		{name: reviewResilienceName, role: modelplan.RoleResilience, prompt: prompts[reviewResilienceName]},
+		{name: reviewRefuterName, role: modelplan.RoleRefuter, prompt: prompts[reviewRefuterName]},
 	}
 }
 
@@ -3361,10 +3384,10 @@ func compactProtocolPredecessors(current map[string][]byte) (map[string][][]byte
 	if err := bindProfileSnapshot(verifierAgentName, previousVerifierPromptV2, "artifact: opencode-agent/vgxness-verifier; version: 2"); err != nil {
 		return nil, err
 	}
-	for name, role := range map[string]sdd.Role{
-		reviewRiskName: sdd.RoleRisk, reviewReadabilityName: sdd.RoleReadability,
-		reviewReliabilityName: sdd.RoleReliability, reviewResilienceName: sdd.RoleResilience,
-		reviewRefuterName: sdd.RoleRefuter,
+	for name, role := range map[string]modelplan.Role{
+		reviewRiskName: modelplan.RoleRisk, reviewReadabilityName: modelplan.RoleReadability,
+		reviewReliabilityName: modelplan.RoleReliability, reviewResilienceName: modelplan.RoleResilience,
+		reviewRefuterName: modelplan.RoleRefuter,
 	} {
 		assignment, err := promptAssignment(current[name])
 		if err != nil {
@@ -3384,7 +3407,7 @@ func compactProtocolPredecessors(current map[string][]byte) (map[string][][]byte
 	return result, nil
 }
 
-func bindManagerTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func bindManagerTemplate(base, marker string, assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 	value := base
 	anchor := "color: primary\n"
 	if strings.Count(value, anchor) != 1 || strings.Count(value, marker) != 1 {
@@ -3394,7 +3417,7 @@ func bindManagerTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignm
 	return []byte(value), nil
 }
 
-func bindProfile(base, marker, nextMarker string, assignment sdd.OpenCodeRoleAssignment, protectDurableMutations, currentDurablePolicy bool) ([]byte, error) {
+func bindProfile(base, marker, nextMarker string, assignment modelplan.OpenCodeRoleAssignment, protectDurableMutations, currentDurablePolicy bool) ([]byte, error) {
 	if marker == generalCurrentMarker || marker == verifierCurrentMarker {
 		var err error
 		base, err = activeProfilePrompt(base)
@@ -3422,8 +3445,8 @@ func bindProfile(base, marker, nextMarker string, assignment sdd.OpenCodeRoleAss
 	return []byte(value), nil
 }
 
-func promptAssignment(content []byte) (sdd.OpenCodeRoleAssignment, error) {
-	var assignment sdd.OpenCodeRoleAssignment
+func promptAssignment(content []byte) (modelplan.OpenCodeRoleAssignment, error) {
+	var assignment modelplan.OpenCodeRoleAssignment
 	modelCount, variantCount := 0, 0
 	for _, line := range strings.Split(string(content), "\n") {
 		switch {
@@ -3432,11 +3455,11 @@ func promptAssignment(content []byte) (sdd.OpenCodeRoleAssignment, error) {
 			assignment.Model = strings.TrimPrefix(line, "model: ")
 		case strings.HasPrefix(line, "variant: "):
 			variantCount++
-			assignment.Variant = sdd.OpenCodeVariant(strings.TrimPrefix(line, "variant: "))
+			assignment.Variant = modelplan.OpenCodeVariant(strings.TrimPrefix(line, "variant: "))
 		}
 	}
 	if modelCount != 1 || variantCount > 1 || assignment.Model == "" {
-		return sdd.OpenCodeRoleAssignment{}, integration.ErrInvalid
+		return modelplan.OpenCodeRoleAssignment{}, integration.ErrInvalid
 	}
 	return assignment, nil
 }
@@ -3537,11 +3560,11 @@ func previousVerifierV6(current []byte) []byte {
 const durableMutationDenies = "  vgxness_memory_save: deny\n  vgxness_memory_forget: deny\n  vgxness_memory_session_summary: deny\n  vgxness_memory_update: deny\n  vgxness_sdd_create: deny\n  vgxness_sdd_set_interaction_mode: deny\n  vgxness_sdd_save_revision: deny\n  vgxness_sdd_accept_revision: deny\n  vgxness_sdd_transition: deny\n  vgxness_sdd_record_projection: deny\n"
 const legacyDurableMutationDenies = "  vgxness_memory_save: deny\n  vgxness_memory_forget: deny\n  vgxness_sdd_create: deny\n  vgxness_sdd_set_interaction_mode: deny\n  vgxness_sdd_save_revision: deny\n  vgxness_sdd_accept_revision: deny\n  vgxness_sdd_transition: deny\n  vgxness_sdd_record_projection: deny\n"
 
-func bindExplore(assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func bindExplore(assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 	return bindExploreTemplate(explorePrompt, exploreCurrentMarker, assignment)
 }
 
-func bindExploreTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func bindExploreTemplate(base, marker string, assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 	if marker == exploreCurrentMarker {
 		var err error
 		base, err = activeProfilePrompt(base)
@@ -3605,13 +3628,13 @@ func previousReliabilityV4(current []byte) []byte {
 	})
 }
 
-func bindAgent(base string, role sdd.Role, assignment sdd.OpenCodeRoleAssignment) ([]byte, error) {
+func bindAgent(base string, role modelplan.Role, assignment modelplan.OpenCodeRoleAssignment) ([]byte, error) {
 	value := base
 	marker := fmt.Sprintf("artifact: opencode-agent/vgxness-review-%s; version:", role)
-	if careMarker, ok := map[sdd.Role]string{
-		sdd.RoleCAREReviewer:   "artifact: opencode-agent/vgxness-care-reviewer; version:",
-		sdd.RoleCARESpecialist: "artifact: opencode-agent/vgxness-care-specialist; version:",
-		sdd.RoleCAREChallenger: "artifact: opencode-agent/vgxness-care-challenger; version:",
+	if careMarker, ok := map[modelplan.Role]string{
+		modelplan.RoleCAREReviewer:   "artifact: opencode-agent/vgxness-care-reviewer; version:",
+		modelplan.RoleCARESpecialist: "artifact: opencode-agent/vgxness-care-specialist; version:",
+		modelplan.RoleCAREChallenger: "artifact: opencode-agent/vgxness-care-challenger; version:",
 	}[role]; ok {
 		marker = careMarker
 	}
@@ -3622,8 +3645,8 @@ func bindAgent(base string, role sdd.Role, assignment sdd.OpenCodeRoleAssignment
 	return []byte(value), nil
 }
 
-func sddAgentPrompt(role sdd.Role, assignment sdd.OpenCodeRoleAssignment) string {
-	if role == sdd.RoleApply {
+func sddAgentPrompt(role modelplan.Role, assignment modelplan.OpenCodeRoleAssignment) string {
+	if role == modelplan.RoleApply {
 		return fmt.Sprintf(`---
 description: Native exclusive SDD workspace and projection writer for one exact accepted task revision
 mode: subagent
@@ -3664,7 +3687,7 @@ Return exactly one compact JSON object and no Markdown:
 	return readOnlySDDAgentPrompt(role, assignment)
 }
 
-func readOnlySDDAgentPrompt(role sdd.Role, assignment sdd.OpenCodeRoleAssignment) string {
+func readOnlySDDAgentPrompt(role modelplan.Role, assignment modelplan.OpenCodeRoleAssignment) string {
 	return fmt.Sprintf(`---
 description: Native read-only SDD %s artifact agent
 mode: subagent
@@ -3707,9 +3730,9 @@ const sddSkillLoadingContract = `
 Mission schema requires "skills":["exact relevant native skill name"]. The exact skill list is required; an empty list is allowed only when the manager determined none apply. Load every supplied applicable native skill with the skill tool before phase work. Do not discover, invent, or self-route skills. If a supplied skill cannot be loaded, report it as unavailable in the bounded result.
 `
 
-func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
+func previousSDDAgentPredecessor(role modelplan.Role, current []byte) []byte {
 	target, prior := sddReadOnlyTargetVersion, sddReadOnlyPredecessorVersion
-	if role == sdd.RoleApply {
+	if role == modelplan.RoleApply {
 		v7Marker := fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: 7", role)
 		v6Marker := fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: 6", role)
 		v5Marker := fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: 5", role)
@@ -3734,7 +3757,7 @@ func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 		return nil
 	}
 	replacements := []textReplacement{{old: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, target), new: fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: %d", role, prior)}}
-	if role == sdd.RoleResearch {
+	if role == modelplan.RoleResearch {
 		replacements = append(replacements, textReplacement{old: researchBootstrapPhaseAgentContract(), new: legacyPhaseAgentContract(role)})
 	}
 	return derivePredecessor(current, replacements)
@@ -3743,7 +3766,7 @@ func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 // readOnlySDDApplyV5Prompt reconstructs the complete pre-exclusive-writer
 // apply handoff. It is deliberately generated independently of v6: a marker
 // substitution would admit a workspace-writing package under the v5 identity.
-func readOnlySDDApplyV5Prompt(assignment sdd.OpenCodeRoleAssignment) string {
+func readOnlySDDApplyV5Prompt(assignment modelplan.OpenCodeRoleAssignment) string {
 	return fmt.Sprintf(`---
 description: Native read-only SDD implementation and patch composer for one exact accepted task revision
 mode: subagent
@@ -3782,8 +3805,8 @@ Return exactly one compact JSON object and no Markdown:
 	`, assignment.Model, assignment.Variant) + sddSkillLoadingContract
 }
 
-func legacySDDAgentPredecessor(role sdd.Role, current []byte) []byte {
-	if role == sdd.RoleApply {
+func legacySDDAgentPredecessor(role modelplan.Role, current []byte) []byte {
+	if role == modelplan.RoleApply {
 		prior := previousSDDAgentPredecessor(role, current)
 		return derivePredecessor(prior, []textReplacement{
 			{old: "artifact: opencode-agent/vgxness-sdd-apply; version: 4", new: "artifact: opencode-agent/vgxness-sdd-apply; version: 3"},
@@ -3796,8 +3819,8 @@ func legacySDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 	})
 }
 
-func phaseAgentContract(role sdd.Role) string {
-	if role == sdd.RoleResearch {
+func phaseAgentContract(role modelplan.Role) string {
+	if role == modelplan.RoleResearch {
 		return researchBootstrapPhaseAgentContract()
 	}
 	return legacyPhaseAgentContract(role)
@@ -3815,13 +3838,13 @@ Return exactly one compact JSON object and no Markdown:
 `
 }
 
-func legacyPhaseAgentContract(role sdd.Role) string {
-	objective := map[sdd.Role]string{
-		sdd.RoleResearch: "Establish repository evidence, constraints, affected surfaces, unknowns, and decisions needed before proposing a change.",
-		sdd.RoleProposal: "Define the problem, intended outcomes, scope, non-goals, risks, and measurable success criteria.",
-		sdd.RoleSpec:     "Define normative behavior, scenarios, edge cases, failure behavior, and testable acceptance criteria without choosing incidental implementation detail.",
-		sdd.RoleDesign:   "Define architecture, data and control flow, interfaces, safety boundaries, migration or rollback needs, and verification strategy against accepted specifications.",
-		sdd.RoleTasks:    "Produce ordered implementation tasks with stable IDs, dependencies, allowed paths, RED or regression evidence, validation commands, and completion criteria.",
+func legacyPhaseAgentContract(role modelplan.Role) string {
+	objective := map[modelplan.Role]string{
+		modelplan.RoleResearch: "Establish repository evidence, constraints, affected surfaces, unknowns, and decisions needed before proposing a change.",
+		modelplan.RoleProposal: "Define the problem, intended outcomes, scope, non-goals, risks, and measurable success criteria.",
+		modelplan.RoleSpec:     "Define normative behavior, scenarios, edge cases, failure behavior, and testable acceptance criteria without choosing incidental implementation detail.",
+		modelplan.RoleDesign:   "Define architecture, data and control flow, interfaces, safety boundaries, migration or rollback needs, and verification strategy against accepted specifications.",
+		modelplan.RoleTasks:    "Produce ordered implementation tasks with stable IDs, dependencies, allowed paths, RED or regression evidence, validation commands, and completion criteria.",
 	}[role]
 	return fmt.Sprintf(`
 

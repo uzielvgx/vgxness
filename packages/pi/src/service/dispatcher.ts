@@ -110,35 +110,6 @@ export class NativeDispatcher {
             throw error;
         }
     }
-    // Host-only proof: accepted historical revisions do not authorize a new worker.
-    verifyCurrentAcceptedBinding(binding: any): Promise<boolean> {
-        binding = structuredClone(binding);
-        const work = async () => {
-            if (this.#closed)
-                return false;
-            const identity = await lstat(this.ctx.workspace);
-            if (identity.isSymbolicLink() || identity.dev !== this.identity.dev || identity.ino !== this.identity.ino)
-                return false;
-            return this.ctx.database.transaction(() => {
-                const db = this.ctx.database.db;
-                const change = db.prepare("SELECT phase,status,state_version FROM sdd_changes WHERE project_id=? AND id=?").get(this.ctx.project, binding.changeId);
-                if (!change || change.phase !== "apply" || change.status !== "active" || Number(change.state_version) !== binding.stateVersion || !Array.isArray(binding.inputs) || !binding.inputs.length)
-                    return false;
-                for (const [index, ref] of [binding, ...binding.inputs].entries()) {
-                    const row = db.prepare("SELECT a.phase FROM sdd_artifacts a JOIN sdd_revisions r ON r.id=a.current_revision_id AND r.artifact_id=a.id AND r.project_id=a.project_id AND r.change_id=a.change_id WHERE a.project_id=? AND a.change_id=? AND a.id=? AND a.current_revision_id=? AND a.status='accepted' AND r.status='accepted' AND r.content_digest=?").get(this.ctx.project, binding.changeId, ref.artifactId, ref.revisionId, ref.digest);
-                    if (!row || (index === 0 && row.phase !== "tasks"))
-                        return false;
-                }
-                const key = (ref: any) => JSON.stringify([ref.artifactId, ref.revisionId, ref.digest]);
-                const required = db.prepare("SELECT input_artifact_id artifactId,input_revision_id revisionId,input_digest digest FROM sdd_revision_links WHERE project_id=? AND change_id=? AND revision_id=?").all(this.ctx.project, binding.changeId, binding.revisionId).map(key).sort();
-                const supplied = binding.inputs.map(key).sort();
-                return required.length === supplied.length && new Set(supplied).size === supplied.length && required.every((value, index) => value === supplied[index]);
-            });
-        };
-        const result = this.#queue.then(work);
-        this.#queue = result.catch(() => undefined);
-        return result;
-    }
     request(operation: string, payload: unknown, binding: RuntimeBinding, control?: { beforeMutation?: () => void; signal?: AbortSignal }): Promise<any> {
         try {
             if (Buffer.byteLength(JSON.stringify(payload) ?? "", "utf8") > 1048576)
@@ -168,8 +139,6 @@ export class NativeDispatcher {
                 control?.beforeMutation?.();
             if (operation === "model.resolve")
                 return resolveModel(payload);
-            if (operation.startsWith("sdd."))
-                throw new Error("SDD is retired; historical records are preserved");
             if (operation === "memory.sync.configure") {
                 const reference = this.sync?.credentialRef;
                 if (!reference || !this.sync?.credentials)

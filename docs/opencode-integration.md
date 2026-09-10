@@ -1,6 +1,6 @@
 # OpenCode integration
 
-Structured SDD is retired: no lifecycle tools, SDD worker profiles, or active `sdd-lifecycle` skill are installed. Historical records remain in SQLite; `vgxness sdd-archive` permits only list/get and revision reads. Model-plan schemas retain inactive legacy slots for compatibility. Use a short plan, one writer, independent verification and proportional CARE review. See [the current workflow](orchestration-flow.md).
+Structured SDD is retired: no lifecycle tools, SDD worker profiles, or active `sdd-lifecycle` skill are installed. Historical records remain inert in SQLite for data preservation; there is no SDD runtime or archive command. Model-plan schemas retain inactive legacy slots for compatibility. Use a short plan, one writer, independent verification and proportional CARE review. See [the current workflow](orchestration-flow.md).
 
 OpenCode Manager62 owns 11 managed artifacts: seven agents (Manager, Explore, General, Verifier and three CARE roles), the memory lifecycle plugin, model-plan manifest, default-agent configuration and restoration metadata. Full MCP exposes eight memory tools; read-only MCP exposes three. The global catalog contains 18 skills across 46 files.
 

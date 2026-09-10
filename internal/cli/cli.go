@@ -57,24 +57,12 @@ func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	return 0
 }
 
-func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, opencodeIntegration, codexIntegration integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime, sdds SDDRuntime) int {
+func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, opencodeIntegration, codexIntegration integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime) int {
 	if len(args) > 0 && args[0] == "version" {
 		return RunVersion(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "memory" {
 		return runMemory(ctx, args[1:], stdin, stdout, stderr, memories)
-	}
-	if len(args) > 1 && args[0] == "sdd-archive" {
-		switch args[1] {
-		case "list", "get", "list-revisions", "get-revision":
-			return runSDD(ctx, args[1:], stdin, stdout, stderr, sdds)
-		}
-		fmt.Fprintln(stderr, "archive is read-only")
-		return 2
-	}
-	if len(args) > 0 && args[0] == "sdd" {
-		fmt.Fprintln(stderr, "SDD is retired; historical records are preserved. Use sdd-archive for read-only access.")
-		return 2
 	}
 	if len(args) > 0 && args[0] == "integrate" {
 		return runIntegration(ctx, args[1:], stdout, stderr, opencodeIntegration, codexIntegration)
