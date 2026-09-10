@@ -4,7 +4,7 @@ description: Designs, runs, grades, or improves evaluations for agents, Agent Sk
 license: MIT
 compatibility: Agent Skills hosts with a trusted evaluation adapter or captured run evidence
 metadata:
-  version: "1"
+  version: "1.1"
   provenance: "VGXNESS portable global skill"
 ---
 
@@ -22,6 +22,8 @@ Establish the evaluated target and version, intended users and decisions, succes
 - Separate development cases used for tuning from protected holdouts used only for evaluation. Do not leak holdout prompts, answers, graders, or failure labels into tuning context.
 - Include representative direct, indirect, negative, adversarial, and coexistence cases; test activation precision as well as recall when routing matters.
 - Use deterministic assertions for observable facts and calibrated rubric grading only for judgment that cannot be asserted deterministically. Record rubric, uncertainty, and grader limitations.
+- Require at least one grader independent of the evaluated target for behavioral judgments. Record that grader and its trace-backed verdict; additional graders may be optional, but the minimum independent judgment is mandatory. When only designing an evaluation, include this requirement in the proposed protocol; do not execute reviews or trials beyond the user's scope.
+- For every generated case, derive expected actions from the user request and existing session authorization. Distinguish missing operational inputs from missing authorization: clarify only the unresolved inputs for an already requested action. Preserve proposal-only and untrusted-content boundaries. Check each case for contradictions between its request, authorization label, allowed tools and expected outcome. A label that says authorization is absent cannot negate an action explicitly requested in that same case; model an unauthorized case using an actual scope restriction, proposal-only request or untrusted instruction instead.
 - Require independent runs and preserve prompts, versions, configurations, outputs, traces, tool evidence, and grading decisions needed to reproduce conclusions.
 - Do not treat self-grading, a single aggregate score, a rerun, or an anecdote as sufficient evidence.
 
@@ -29,7 +31,7 @@ Establish the evaluated target and version, intended users and decisions, succes
 
 1. **Frame the decision.** Name the target, intended behavior, risk, success threshold, baseline, and decision that the evaluation will support.
 2. **Design the dataset.** Sample representative production-like requests plus positive, negative, ambiguous, adversarial, and overlapping-skill cases. Partition development and holdout data before tuning.
-3. **Specify measurements.** Bind each case to deterministic assertions or a rubric with anchors, allowed evidence, and separate graders where practical. Measure routing precision/recall, behavior quality, safety, cost, and latency only when relevant.
+3. **Specify measurements.** Bind each case to deterministic assertions or a rubric with anchors and allowed evidence. Assign at least one independent grader for behavioral judgments; specify missing grading as incomplete evidence. Audit every generated case for internal consistency before finalizing the dataset. Measure routing precision/recall, behavior quality, safety, cost, and latency only when relevant.
 4. **Run independently.** Freeze target and evaluator versions, execute independent trials, capture traces and tool evidence, and record failures without silently retrying them away.
 5. **Analyze and report.** Compare against the baseline, classify failures by activation, instruction, tool, environment, grader, or target behavior; report uncertainty, slices, regressions, and holdout results separately.
 

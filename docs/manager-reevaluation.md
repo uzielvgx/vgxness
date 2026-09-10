@@ -47,3 +47,5 @@ Independent reviewer `/root/review_improvements` graded the responses (mission `
 Preparation failures are retained: the initial container's non-executable temporary directory broke offline fixtures, and the initial source mount contained ignored files outside the candidate manifest. These were corrected before live execution using an executable temporary filesystem and an exact source snapshot. The initial plan was never executed. No live case was retried.
 
 This cohort is separate from the historical 5/6 baseline and establishes no correction, reliability or protected-holdout result. Reporting-only edits after execution do not represent a newly evaluated candidate. The current workflow remains unchanged; no automatic review calls were added. The VGXNESS Manager owns this evidence record and must revisit it after changes to source, model, skills, prompts, transport or grading criteria.
+
+A later, separately bound [local authorization and evaluation follow-up](manager-authorization-followup.md) records a failed skill-only attempt and a six-pass second candidate. It does not change this cohort's failed verdict.
