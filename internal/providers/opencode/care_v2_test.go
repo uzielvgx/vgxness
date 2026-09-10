@@ -48,7 +48,9 @@ func TestCAREV1PackagesUpgradeThroughInstallAndReinstall(t *testing.T) {
 			}
 			return b
 		},
-		"schema-v2": func(t *testing.T) modelPlanBundle { return mustBuildModelPlanV2(t, modelplan.DefaultModelPlanConfigV2()) },
+		"schema-v2": func(t *testing.T) modelPlanBundle {
+			return mustBuildModelPlanV2(t, modelplan.DefaultModelPlanConfigV2())
+		},
 		"schema-v3": func(t *testing.T) modelPlanBundle {
 			b, err := buildModelPlanBundleV3(projectModelPlanToV3(modelplan.DefaultModelPlanConfig()))
 			if err != nil {

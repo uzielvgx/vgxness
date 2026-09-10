@@ -13,8 +13,8 @@ import (
 	"testing"
 
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/modelplan"
+	"github.com/vgxness/vgxness/internal/orchestration"
 )
 
 func TestModelPlanMarkerCountEquivalent(t *testing.T) {
@@ -401,7 +401,10 @@ func TestHistoricalBundleChainEquivalent(t *testing.T) {
 			func(b *modelPlanBundle) { b.configV2 = nil }, func(b *modelPlanBundle) { b.resolvedV2 = nil },
 			func(b *modelPlanBundle) { b.configV3 = nil }, func(b *modelPlanBundle) { b.resolvedV3 = nil },
 			func(b *modelPlanBundle) { v := modelplan.DefaultModelPlanConfigV2(); b.configV2 = &v },
-			func(b *modelPlanBundle) { v := projectModelPlanToV3(modelplan.DefaultModelPlanConfig()); b.configV3 = &v },
+			func(b *modelPlanBundle) {
+				v := projectModelPlanToV3(modelplan.DefaultModelPlanConfig())
+				b.configV3 = &v
+			},
 			func(b *modelPlanBundle) { b.manifest = []byte("invalid manifest") },
 		} {
 			altered := cloneHistoricalBundle(base)

@@ -2,8 +2,8 @@ package codex
 
 import (
 	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/modelplan"
+	"github.com/vgxness/vgxness/internal/orchestration"
 )
 
 // Manager19 is frozen exclusively for complete-package predecessor recognition.

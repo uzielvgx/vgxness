@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/orchestration"
 	"github.com/vgxness/vgxness/internal/modelplan"
+	"github.com/vgxness/vgxness/internal/orchestration"
 )
 
 const contextEvalSchemaVersion = 1
