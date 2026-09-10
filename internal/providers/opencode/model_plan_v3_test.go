@@ -190,6 +190,9 @@ func TestRequestedModelPlanV3RendersArtifactAssignmentsAndStrictManifest(t *test
 		t.Fatalf("bundle=%+v", bundle)
 	}
 	for _, row := range bundle.resolvedV3.Assignments {
+		if strings.Contains(row.ArtifactKey, "vgxness-sdd-") {
+			continue
+		}
 		name := strings.TrimPrefix(row.ArtifactKey, "agents/")
 		content := bundle.agents[name]
 		if !bytes.Contains(content, []byte("model: "+row.Model+"\nvariant: "+string(row.Variant)+"\n")) {

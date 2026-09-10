@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,7 +31,6 @@ func New(opts config.Options, readOnly bool) Dispatcher {
 
 var operationNames = []string{
 	"model.resolve", "memory.remember", "memory.recall", "memory.recent", "memory.get", "memory.forget", "memory.project.resolve", "memory.project.initialize", "memory.sync.configure", "memory.sync.status", "memory.sync", "memory.sync.backfill", "memory.sync.repair_project", "memory.sync.reseed", "memory.sync.rejoin", "memory.session.start", "memory.session.checkpoint", "memory.session.renew", "memory.session.end", "memory.session.context", "memory.session.draft_save",
-	"sdd.create", "sdd.list", "sdd.get", "sdd.set_interaction_mode", "sdd.save_revision", "sdd.get_revision", "sdd.list_revisions", "sdd.accept_revision", "sdd.transition", "sdd.cancel", "sdd.projection_status", "sdd.record_projection", "sdd.render_projection", "sdd.compare_projection",
 }
 
 func OperationNames() []string { return append([]string(nil), operationNames...) }
@@ -39,6 +39,9 @@ func (d Dispatcher) project(ctx context.Context) (string, error) {
 	return d.Memory.ResolveProject(ctx, d.Options, d.Options.ProjectDir)
 }
 func (d Dispatcher) Dispatch(ctx context.Context, r pi.Request) (any, error) {
+	if strings.HasPrefix(r.Operation, "sdd.") {
+		return nil, errors.New("SDD is retired")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

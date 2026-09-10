@@ -2,7 +2,7 @@
 
 `internal/orchestration/manager_contract.json` is the maintained Manager and
 worker policy source. Its versioned schema defines ordered Manager instructions,
-twelve canonical worker roles, aliases, write authority, role instructions and
+six canonical worker roles, aliases, write authority, role instructions and
 model-plan role identifiers. Provider adapters supply native tool names,
 transport, permissions and model configuration. Historical prompt bodies are
 frozen compatibility data; they do not define current behavior.
@@ -34,15 +34,15 @@ Pi derives worker roles, model aliases and write eligibility from the registry.
 `task.skills` requires the returned manifest SHA-256. Snapshots are bounded,
 reject missing/drifted inputs, symlinks and traversal, and do not expand command
 or target authority. Worker prompts include role instructions and the complete
-bounded mission, including accepted SDD bindings where required.
+bounded mission, without an active SDD phase workflow.
 
 ## Native compatibility
 
-Codex Manager20 and its actual native profiles render shared policy while
+Codex Manager21 and its actual native profiles render shared policy while
 retaining native model, tool and sandbox bindings. Complete Manager19 packages,
 including lifecycle artifacts, remain recognized for all four plans.
 
-OpenCode Manager61 and every current worker body use the shared registry.
+OpenCode Manager62 and every current worker body use the shared registry.
 The adapter preserves the native frontmatter, model and permission bindings
 from the frozen native renderer. Complete Manager60 model-plan packages remain
 recognized for schema versions 1, 2 and 3, including configuration-specific
@@ -75,3 +75,5 @@ integrated adapter. Validation must identify the exact tested candidate.
 Tests creating private install roots need a restrictive process umask (for
 example 077); a group-writable temporary root is correctly rejected by the
 existing installer. Do not weaken artifact ownership checks to accommodate it.
+
+SDD is retired. Exact Manager20/61 packages are retained for owned-file upgrade recognition. The frozen previous registry is not used to authorize current workers. Database records and schema migrations remain intact; archival CLI reads do not resume lifecycle execution.

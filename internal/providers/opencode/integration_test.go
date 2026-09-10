@@ -1114,7 +1114,7 @@ func TestIntegration_PreviewIsNonMutating(t *testing.T) {
 			result.State == integration.StateAbsent &&
 			result.Path == expected &&
 			result.ToolPath == "" &&
-			result.ToolSHA256 == "" && result.ModelSchemaVersion == 3 && result.ModelAssignments != nil && result.ArtifactCount == 17 &&
+			result.ToolSHA256 == "" && result.ModelSchemaVersion == 3 && result.ModelAssignments != nil && result.ArtifactCount == 11 &&
 			result.Changed &&
 			len(result.ArtifactSHA256) == 64,
 		"unexpected preview: %#v", result,
@@ -1196,7 +1196,7 @@ func TestNewPreviewIntegrationRendersProspectiveLifecyclePluginWithoutWrites(t *
 	_, launcherErr := os.Stat(launcherPath)
 	_, configErr := os.Stat(configDirectory)
 	testutil.Require(t,
-		previewErr == nil && result.State == integration.StateAbsent && result.ArtifactCount == 17 && result.Changed && result.RestartRequired &&
+		previewErr == nil && result.State == integration.StateAbsent && result.ArtifactCount == 11 && result.Changed && result.RestartRequired &&
 			os.IsNotExist(launcherErr) && os.IsNotExist(configErr),
 		"preview=%+v err=%v launcher=%v config=%v", result, previewErr, launcherErr, configErr)
 }
@@ -1254,7 +1254,7 @@ func TestIntegration_InstallReadbackStatusAndIdempotence(t *testing.T) {
 			installed.ToolPath == "" &&
 			installed.ToolSHA256 == "" &&
 			installed.ModelSchemaVersion == 3 && installed.ModelProvider == "openai" && installed.ModelAssignments != nil &&
-			installed.ArtifactCount == 17 &&
+			installed.ArtifactCount == 11 &&
 			installed.ManifestSHA256 == artifactSHA256(manifestData) && installed.RestartRequired &&
 			installed.DefaultAgent == defaultAgentName &&
 			installed.DefaultAgentPath == filepath.Join(configDirectory, defaultAgentConfigName) &&
@@ -1734,7 +1734,7 @@ func TestIntegrationResumesExactMixedModelPlanSwitch(t *testing.T) {
 	testutil.NoError(t, err)
 	newBundle, err := buildModelPlanBundle(newConfig)
 	testutil.NoError(t, err)
-	for _, name := range []string{managerAgentName, sddResearchName, sddProposalName} {
+	for _, name := range []string{managerAgentName, exploreAgentName, generalAgentName} {
 		testutil.NoError(t, os.WriteFile(filepath.Join(configDirectory, "agents", name), newBundle.agents[name], 0o600))
 	}
 	manifest, err := os.ReadFile(filepath.Join(configDirectory, "vgxness", modelPlanManifestName))
@@ -1801,7 +1801,7 @@ func TestEveryManagedAgentHasResolvedModelAndVariant(t *testing.T) {
 		assignments := completeModelAssignmentsV3()
 		bundle, err := requestedModelPlan(integration.Options{ModelAssignments: &assignments}, t.TempDir())
 		testutil.NoError(t, err)
-		if len(bundle.agents) != 13 {
+		if len(bundle.agents) != 7 {
 			t.Fatalf("plan %s agents=%d", plan, len(bundle.agents))
 		}
 		for name, content := range bundle.agents {
@@ -2574,7 +2574,7 @@ func TestIntegrationMigratesExactCurrentV1ToCAREWithoutOverrides(t *testing.T) {
 					t.Errorf("exact current V1 reviewer %s was not retired: %v", name, err)
 				}
 			}
-			testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 1 && installed.ArtifactCount == 17 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
+			testutil.Require(t, installErr == nil && installed.ModelSchemaVersion == 1 && installed.ArtifactCount == 11 && installed.RestartRequired && statusErr == nil && status.State == integration.StateInstalled, "installed=%+v install=%v status=%+v statusErr=%v", installed, installErr, status, statusErr)
 		})
 	}
 }
@@ -2601,7 +2601,7 @@ func TestIntegrationMigratesCustomV1ToCARE(t *testing.T) {
 	testutil.Require(t,
 		statusBeforeErr == nil && statusBefore.ModelSchemaVersion == 1 && statusBefore.ModelPlan == sdd.PlanHigh && statusBefore.ModelEfficient == "acme/fast" && statusBefore.ModelBalanced == "acme/balanced" && statusBefore.ModelFrontier == "acme/frontier" &&
 			previewBeforeErr == nil && previewBefore.ModelSchemaVersion == 1 &&
-			installErr == nil && installed.ModelSchemaVersion == 1 && installed.ModelPlan == sdd.PlanHigh && installed.ModelEfficient == "acme/fast" && installed.ModelBalanced == "acme/balanced" && installed.ModelFrontier == "acme/frontier" && installed.ArtifactCount == 17 &&
+			installErr == nil && installed.ModelSchemaVersion == 1 && installed.ModelPlan == sdd.PlanHigh && installed.ModelEfficient == "acme/fast" && installed.ModelBalanced == "acme/balanced" && installed.ModelFrontier == "acme/frontier" && installed.ArtifactCount == 11 &&
 			careErr == nil && os.IsNotExist(reviewerErr),
 		"status before=%+v statusErr=%v preview before=%+v previewErr=%v installed=%+v install=%v care=%v reviewer=%v",
 		statusBefore, statusBeforeErr, previewBefore, previewBeforeErr, installed, installErr, careErr, reviewerErr)
@@ -2887,7 +2887,7 @@ func TestIntegrationRejectsOlderManagedAgentVersion(t *testing.T) {
 	testutil.NoError(t, err)
 	current, err := os.ReadFile(installed.Path)
 	testutil.NoError(t, err)
-	older := bytes.Replace(current, []byte("version: 61"), []byte("version: 53"), 1)
+	older := bytes.Replace(current, []byte("version: 62"), []byte("version: 53"), 1)
 	testutil.Require(t, !bytes.Equal(older, current), "manager version marker was not replaced")
 	testutil.NoError(t, os.WriteFile(installed.Path, older, 0o600))
 
@@ -4926,7 +4926,7 @@ func TestIntegrationV3InstallStatusChangeAndUninstall(t *testing.T) {
 	resolved, err := ResolveModelPlanV3(*parsed.ConfigV3)
 	testutil.NoError(t, err)
 	testutil.Require(t,
-		installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired && installed.ArtifactCount == 17 &&
+		installed.State == integration.StateInstalled && installed.Changed && installed.RestartRequired && installed.ArtifactCount == 11 &&
 			parsed.SchemaVersion == 3 && parsed.Config == nil && parsed.Resolved == nil && parsed.ConfigV2 == nil && parsed.ResolvedV2 == nil &&
 			len(parsed.ConfigV3.Assignments) == integration.ModelAssignmentCount && len(parsed.ResolvedV3.Assignments) == integration.ModelAssignmentCount &&
 			status.State == integration.StateInstalled && status.ModelProvider == "acme" && status.ModelAssignments != nil && reflect.DeepEqual(status.ModelAssignments[:], resolved.Assignments) &&
@@ -4935,6 +4935,9 @@ func TestIntegrationV3InstallStatusChangeAndUninstall(t *testing.T) {
 
 	before := make(map[string][]byte, 16)
 	for _, identity := range ModelAgentInventoryV3() {
+		if identity.Class == sdd.ManagedAgentClassSDD {
+			continue
+		}
 		data, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(identity.ArtifactKey)))
 		testutil.NoError(t, readErr)
 		before[identity.ArtifactKey] = data
@@ -4956,6 +4959,9 @@ func TestIntegrationV3InstallStatusChangeAndUninstall(t *testing.T) {
 	reinstalled, err := service.Reinstall(context.Background(), changedOptions)
 	testutil.NoError(t, err)
 	for _, identity := range ModelAgentInventoryV3() {
+		if identity.Class == sdd.ManagedAgentClassSDD {
+			continue
+		}
 		after, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(identity.ArtifactKey)))
 		testutil.NoError(t, readErr)
 		wantChanged := identity.ArtifactKey == generalKey
@@ -5229,6 +5235,9 @@ func TestModelPlanV2SlotChangeOnlyChangesDependentAgentHashes(t *testing.T) {
 		sddDesignName: sdd.RoleDesign, sddTasksName: sdd.RoleTasks, sddApplyName: sdd.RoleApply,
 	}
 	for name, role := range roles {
+		if strings.HasPrefix(name, "vgxness-sdd-") {
+			continue
+		}
 		changed := artifactSHA256(first.agents[name]) != artifactSHA256(second.agents[name])
 		assignment, found := first.resolvedV2.Roles[role]
 		capability := assignment.Capability

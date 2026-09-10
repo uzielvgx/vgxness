@@ -695,6 +695,13 @@ func modelPlanBundleForManifestV3(data []byte, config sdd.ModelPlanConfigV3) (mo
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
+	prior60, priorErr := managerV60Bundle(current)
+	if priorErr == nil {
+		prior61, priorErr := sharedBundleForContract(prior60, orchestration.PreviousManagerContract(), true)
+		if priorErr == nil && bytes.Equal(prior61.manifest, data) {
+			return prior61, nil
+		}
+	}
 	current, err = managerV60Bundle(current)
 	if err != nil {
 		return modelPlanBundle{}, integration.ErrDrift
@@ -771,6 +778,13 @@ func modelPlanBundleForManifestV2(data []byte, config sdd.ModelPlanConfigV2) (mo
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
 	}
+	prior60, priorErr := managerV60Bundle(current)
+	if priorErr == nil {
+		prior61, priorErr := sharedBundleForContract(prior60, orchestration.PreviousManagerContract(), true)
+		if priorErr == nil && bytes.Equal(prior61.manifest, data) {
+			return prior61, nil
+		}
+	}
 	current, err = managerV60Bundle(current)
 	if err != nil {
 		return modelPlanBundle{}, integration.ErrDrift
@@ -841,6 +855,13 @@ func modelPlanBundleForManifest(data []byte, config sdd.ModelPlanConfig) (modelP
 	}
 	if bytes.Equal(current.manifest, data) {
 		return current, nil
+	}
+	prior60, priorErr := managerV60Bundle(current)
+	if priorErr == nil {
+		prior61, priorErr := sharedBundleForContract(prior60, orchestration.PreviousManagerContract(), true)
+		if priorErr == nil && bytes.Equal(prior61.manifest, data) {
+			return prior61, nil
+		}
 	}
 	current, err = managerV60Bundle(current)
 	if err != nil {
@@ -3080,6 +3101,11 @@ func supportedHistoricalModelPlanBundlesUncached(current modelPlanBundle) ([]mod
 			return nil, e
 		}
 		bundles = append(bundles, old)
+		previous, e := sharedBundleForContract(old, orchestration.PreviousManagerContract(), true)
+		if e != nil {
+			return nil, e
+		}
+		bundles = append(bundles, previous)
 	}
 	// V1 has distinct role-map normalization paths; mixed schema pointers
 	// also retain the original conversion and error ordering.

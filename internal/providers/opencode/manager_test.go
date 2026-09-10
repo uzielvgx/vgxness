@@ -19,18 +19,18 @@ description: Use when autonomously delivering an eligible change as one review-r
 func TestCurrentBundleUsesCanonicalManagerAndKeepsSkillOutsideModelPlan(t *testing.T) {
 	bundle, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	testutil.NoError(t, err)
-	if len(bundle.agents) != 13 || len(bundle.resolved.Roles) != 12 {
+	if len(bundle.agents) != 7 || len(bundle.resolved.Roles) != 12 {
 		t.Fatalf("current bundle agents=%d roles=%d", len(bundle.agents), len(bundle.resolved.Roles))
 	}
 	manager := string(bundle.agents[managerAgentName])
 	for _, required := range []string{
-		"artifact: opencode-agent/vgxness-manager; version: 61",
+		"artifact: opencode-agent/vgxness-manager; version: 62",
 		"# Native OpenCode adapter",
 		"Contract identity: vgxness-orchestration/v1",
 		"# Delegated role contract",
 		"Authority: may write only within its bounded mission.",
 		"Authority: read-only.",
-		"Write only Manager-authorized accepted SDD targets.",
+		"The structured SDD lifecycle is retired",
 	} {
 		if !strings.Contains(manager, required) {
 			t.Errorf("canonical current manager missing %q", required)
@@ -63,7 +63,7 @@ func TestVersionEvolutionImmediatePredecessorIsExactManagerV60Package(t *testing
 	testutil.NoError(t, err)
 	predecessor, err := immediatePredecessor(current)
 	testutil.NoError(t, err)
-	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 61")) || bytes.Contains(current.agents[managerAgentName], []byte(orchestration.PedagogicalExecutionBrief)) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 60")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte(orchestration.PedagogicalExecutionBrief)) {
+	if !bytes.Contains(current.agents[managerAgentName], []byte("version: 62")) || bytes.Contains(current.agents[managerAgentName], []byte(orchestration.PedagogicalExecutionBrief)) || !bytes.Contains(predecessor.agents[managerAgentName], []byte("version: 60")) || !bytes.Contains(predecessor.agents[managerAgentName], []byte(orchestration.PedagogicalExecutionBrief)) {
 		t.Fatal("immediate predecessor did not retain exact Manager60 artifact identity")
 	}
 	for name, want := range current.agents {

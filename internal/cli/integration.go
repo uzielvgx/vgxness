@@ -107,7 +107,7 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 		return code
 	}
 	var output strings.Builder
-	fmt.Fprintf(&output, "provider=%s\nstate=%s\nprojection=native+sdd-storage\nmanaged_artifacts=%d\npath=%s\nartifact_sha256=%s\nchanged=%t\n", terminalSafe(result.Provider), result.State, result.ArtifactCount, terminalSafe(result.Path), terminalSafe(result.ArtifactSHA256), result.Changed)
+	fmt.Fprintf(&output, "provider=%s\nstate=%s\nprojection=native+memory\nmanaged_artifacts=%d\npath=%s\nartifact_sha256=%s\nchanged=%t\n", terminalSafe(result.Provider), result.State, result.ArtifactCount, terminalSafe(result.Path), terminalSafe(result.ArtifactSHA256), result.Changed)
 	fmt.Fprintf(&output, "model_plan=%s\nmodel_provider=%s\nmodel_efficient=%s\nmodel_balanced=%s\nmodel_frontier=%s\nmodel_manifest=%s\nmodel_manifest_sha256=%s\nrestart_required=%t\n", result.ModelPlan, terminalSafe(result.ModelProvider), terminalSafe(result.ModelEfficient), terminalSafe(result.ModelBalanced), terminalSafe(result.ModelFrontier), terminalSafe(result.ManifestPath), result.ManifestSHA256, result.RestartRequired)
 	fmt.Fprintf(&output, "directory_durability=%s\n", terminalSafe(result.DirectoryDurability))
 	if result.RetainedPredecessorCount != 0 {

@@ -923,7 +923,9 @@ func (pkg Package) Validate() error {
 		shared, sharedErr := sharedProfilesForPlan(pkg.plan)
 		matchesCurrent = sharedErr == nil && packageMatchesWithLifecycle(pkg, shared, activeManagerInstructions())
 	}
+	v20, v20Err := profilesFromContract(pkg.plan, orchestration.PreviousManagerContract())
 	matchesKnown := matchesCurrent ||
+		(v20Err == nil && packageMatchesWithLifecycle(pkg, v20, previousV20ManagerInstructions())) ||
 		(currentErr == nil && packageMatchesWithLifecycle(pkg, current, activeV19ManagerInstructions())) ||
 		(currentErr == nil && packageMatches(pkg, current, activeV18ManagerInstructions())) ||
 		(currentErr == nil && packageMatches(pkg, current, activeV16ManagerInstructions())) ||

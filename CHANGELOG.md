@@ -4,8 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Retires structured SDD from active workflows, MCP, Pi tools and worker profiles. OpenCode Manager62 has 11 managed artifacts; Codex Manager21 has nine. The six shared workers retain General, Explore, Verifier and proportional CARE review. Exact Manager61/20 predecessors and retired skill ownership remain recognized for safe upgrades. SQLite history is preserved; `sdd-archive` provides read-only historical access.
+
 - Replaces active global `stacked-pr` v3 with `git-delivery` v1, retaining exact migration and policy-only isolated-worktree gates. OpenCode advances to CARE-v2 Manager59 (immediate Manager58); Codex advances to Manager18 (immediate Manager17).
-- Installs the current 17 managed artifacts for OpenCode, including the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` lifecycle plugin with no `opencode.json` plugin entry.
+- Earlier in this unreleased cycle, installed 17 managed artifacts for OpenCode, including the exact auto-discovered `plugins/vgxness-memory-lifecycle.ts` lifecycle plugin with no `opencode.json` plugin entry.
 
 - Earlier in this unreleased cycle, upgrades OpenCode CARE reviewer, specialist, and challenger prompts to v2 while retaining fixed exact CARE-v1 snapshots. OpenCode current was CARE v2 with Manager58; OpenCode immediate predecessor was CARE-v1 with Manager58; OpenCode next predecessor was CARE-v1 with Manager57; OpenCode v56 is deeper. Codex current was Manager17, with immediate Manager16 and deeper Manager15/v14 identities separate.
 - Recognizes exact accepted or previously accepted project-pull echoes from durable push receipts after portable-ID mapping, preserving local project, session, and observation create/update state while atomically advancing the project inbox and cursor; receipt mismatches, foreign creates, conflicts, and active transitions retain fail-closed handling.

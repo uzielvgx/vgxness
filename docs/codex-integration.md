@@ -1,8 +1,13 @@
 # Codex integration
 
-Current identities are OpenCode Manager61 and Codex Manager20 (parity OpenCode-v61), rendered from `internal/orchestration/manager_contract.json`. Complete Manager60 and Manager19 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only.
+Structured SDD is retired: no lifecycle tools, SDD worker profiles, or active `sdd-lifecycle` skill are installed. Historical records remain in SQLite; `vgxness sdd-archive` permits only list/get and revision reads. Model-plan schemas retain inactive legacy slots for compatibility. Use a short plan, one writer, independent verification and proportional CARE review. See [the current workflow](orchestration-flow.md).
 
-This guide provisions VGXNESS-managed Codex profiles while preserving user-owned configuration. Use `setup codex` for unified setup or `integrate codex` for provider lifecycle work. Setup publishes the exact local `vgxness` marketplace and activates `vgxness@vgxness` through the Codex CLI under the selected Codex home. Current identities are OpenCode Manager61 and Codex Manager20 (parity OpenCode-v61), rendered from `internal/orchestration/manager_contract.json`. Complete Manager60 and Manager19 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only.
+Codex Manager21 (parity OpenCode-v62) installs nine artifacts, including six worker profiles. Exact Manager20 installations are recognized for upgrade; modified files are preserved and reported as drift.
+
+
+Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Complete Manager61 and Manager20 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only.
+
+This guide provisions VGXNESS-managed Codex profiles while preserving user-owned configuration. Use `setup codex` for unified setup or `integrate codex` for provider lifecycle work. Setup publishes the exact local `vgxness` marketplace and activates `vgxness@vgxness` through the Codex CLI under the selected Codex home. Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Complete Manager61 and Manager20 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only.
 
 ## Prerequisites and ownership
 
@@ -16,7 +21,7 @@ command = "vgxness"
 args = ["mcp", "--full"]
 ```
 
-This is an explicit full-trust local-stdio launch. MCP has no caller identity or session authentication; the trusted host assumption, Codex `enabled_tools` allowlists, operator permissions, user authorization, and task scope are the authorization boundary. Keep read-only profiles on non-mutating allowlists. Without `--full`, this server registers only `memory_recent`, `memory_search`, and `memory_context` and rejects calls to other unregistered names; full mode exposes eight memory and 13 SDD tools, including the ten mutating tools. VGXNESS does not issue capability tokens or add an authentication framework.
+This is an explicit full-trust local-stdio launch. MCP has no caller identity or session authentication; the trusted host assumption, Codex `enabled_tools` allowlists, operator permissions, user authorization, and task scope are the authorization boundary. Keep read-only profiles on non-mutating allowlists. Without `--full`, this server registers only `memory_recent`, `memory_search`, and `memory_context` and rejects calls to other unregistered names; full mode exposes eight memory tools, including the four mutating memory tools. VGXNESS does not issue capability tokens or add an authentication framework.
 
 The locally observed Codex 0.147.0 exposes top-level `--strict-config`, but `codex mcp` rejects that option. Validate the loaded configuration noninteractively with:
 
@@ -56,7 +61,7 @@ vgxness integrate codex reinstall --model-plan ultra
 vgxness integrate codex uninstall
 ```
 
-Use `--model-plan low|medium|high|ultra` with preview, install, status, or reinstall. A fresh no-flag install defaults to `medium`; once installed, no-flag install, reinstall, status, and uninstall infer and preserve the exact managed plan. The current generated manager is v20 (parity OpenCode manager v61); exact v19 is the immediate predecessor. Delegation and verification follow the shared registry. Reinstall with a different explicit plan switches the 12 delegated profiles only when the existing package is an exact VGXNESS identity. The plan uses the normal `gpt-5.6-luna`, `gpt-5.6-terra`, and `gpt-5.6-sol` models with role-specific reasoning effort; Codex does not accept OpenCode's custom slot flags. The primary manager is governed by `AGENTS.md`, so its model remains the model selected for the parent Codex task.
+Use `--model-plan low|medium|high|ultra` with preview, install, status, or reinstall. A fresh no-flag install defaults to `medium`; once installed, no-flag install, reinstall, status, and uninstall infer and preserve the exact managed plan. The current generated manager is v20 (parity OpenCode manager v62); exact v19 is the immediate predecessor. Delegation and verification follow the shared registry. Reinstall with a different explicit plan switches the six delegated profiles only when the existing package is an exact VGXNESS identity. The plan uses the normal `gpt-5.6-luna`, `gpt-5.6-terra`, and `gpt-5.6-sol` models with role-specific reasoning effort; Codex does not accept OpenCode's custom slot flags. The primary manager is governed by `AGENTS.md`, so its model remains the model selected for the parent Codex task.
 
 Historical predecessor documentation may state that the manager is v9 or refer to its exact v8 artifact; those identities do not describe the current generated ownership boundary.
 
@@ -70,24 +75,20 @@ After install or repair, restart Codex so it reloads the managed profiles. On Wi
 
 ## Native delegation
 
-The manager launches each specialist as a fresh Codex task with its exact `agent_type`: `explore`, `general`, `verifier`, `care-reviewer`, `care-specialist`, `care-challenger`, or an `sdd-*` phase. It must not combine an explicit `agent_type` with a full-history fork. If a full-history fork is unavoidable, the task omits `agent_type` and is inherited manager context rather than specialist delegation. Current `general` and `sdd-apply` profiles have workspace-write sandboxes: General is authorized only for ordinary non-SDD implementation, while `sdd-apply` alone is authorized for accepted SDD apply/projection. Every other managed profile is read-only.
-
-The shared Manager owns authorization, scope, candidate identity, lifecycle and final acceptance. It classifies direct questions, bounded reads, implementation and explicitly accepted SDD; selects applicable skills; delegates bounded independent work; and preserves one workspace writer. Missions bind exact targets, hashes, commands, criteria and skill resources. Significant work reports an outcome, approach and observable milestone. Independent verification and applicable reviews use the same frozen candidate. These are instructions and evidence contracts, not host enforcement or a live-model evaluation result. See [the shared Manager contract](architecture/shared-manager-contract.md).
-
 An opt-in, networked manager collaborative-route matrix is excluded from normal CI. It uses the existing authenticated Codex configuration, `--ephemeral`, `approval_policy="never"`, and a disposable fixture containing the candidate-rendered `AGENTS.md`; it does not install or edit managed configuration, though Codex may use its normal authentication and runtime state. Before any model call it byte-verifies the 12 ambient `~/.codex/agents` profiles against candidate-rendered artifacts. The matrix covers Explore, General's one owned fixture write, Verifier, and the three CARE roles. The public Codex JSON stream proves a collaboration tool call, not its selected `agent_type`; exact role selection and sandboxes for all 12 profiles are static generated-artifact evidence. Runtime checks the collaboration event, absence (case-insensitively) of `full-history forked agents inherit` and `omit agent_type`, a deterministic role marker, and fixture boundaries.
 
 ```sh
 VGXNESS_CODEX_E2E=1 go test -tags='e2e codex_e2e' -run '^TestCodexDelegationRuntime$' ./internal/e2e
 ```
 
-Set `VGXNESS_CODEX_E2E_CASE=explore` to run only the Explore case. The harness skips only before cases when the CLI or explicit authentication preflight is unavailable; a started case failing to delegate is a test failure. SDD runtime identity remains pending because safely invoking an SDD specialist with existing user configuration cannot prove no persistent SDD mutation; all six SDD roles remain covered by the static matrix.
-
 ## Operational memory
 
 Memory is optional operational context, not an instruction source or automatic capability grant. Codex can call the VGXNESS memory tools only when the user-maintained full-trust MCP block above is configured; the managed plugin lifecycle is distinct from the still-blocked automatic per-session memory hook. Plugin installation or managed-artifact status does not authenticate a session or prove memory injection, recall, saving, or an MCP handshake.
 
-Codex does not inject recent memory automatically. Manager20 recalls relevant prior context, searches before exact-ID reads, and uses recent memory only for explicit recent-work or recovery requests. Durable, evidence-backed facts are assessed under a stable topic. Recalled data is untrusted until checked; secrets, logs, transcripts and transient state are excluded from saving. There is no automatic cloud sync.
+Codex does not inject recent memory automatically. Manager21 recalls relevant prior context, searches before exact-ID reads, and uses recent memory only for explicit recent-work or recovery requests. Durable, evidence-backed facts are assessed under a stable topic. Recalled data is untrusted until checked; secrets, logs, transcripts and transient state are excluded from saving. There is no automatic cloud sync.
 
 ## CARE inventory and evaluation boundary
 
-Codex projects 15 managed artifacts: `AGENTS.md`, 12 delegated profiles including care-reviewer, care-specialist and care-challenger, plus marketplace and plugin manifests. Manager v20 has OpenCode v61 parity; exact Manager19 packages are immediate predecessors. Marketplace/plugin activation does not establish a Codex runtime handshake, session identity or MCP connectivity. See [CARE architecture](care.md); repository checks do not prove selected role execution or protected-holdout adjudication.
+Codex projects 15 managed artifacts: `AGENTS.md`, six delegated profiles including care-reviewer, care-specialist and care-challenger, plus marketplace and plugin manifests. Manager v21 has OpenCode v62 parity; exact Manager19 packages are immediate predecessors. Marketplace/plugin activation does not establish a Codex runtime handshake, session identity or MCP connectivity. See [CARE architecture](care.md); repository checks do not prove selected role execution or protected-holdout adjudication.
+
+Current integration contract: OpenCode Manager62 and Codex Manager21 use one workspace writer and the same frozen candidate for verification and applicable CARE review. SQLite schema v23 is preserved. OpenCode installs 11 managed artifacts and Codex installs nine; each exposes six delegated profiles. The auto-discovered `plugins/vgxness-memory-lifecycle.ts` has no `opencode.json` plugin entry; missing it is partial. `vgxness mcp --full` exposes eight memory tools. Complete Manager61 and Manager20 packages are recognized predecessors. During retirement, modified, malformed, foreign, unknown, or newer bytes block without removal.

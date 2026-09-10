@@ -1499,17 +1499,22 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 	}
 	state := inspection{result: result, artifacts: make([]artifact, 0, len(modelAgentInventoryV3)+4)}
 	manifestlessCoherent := false
+	var manifestlessBundle modelPlanBundle
 	if !installedPlanOK && errors.Is(predecessorManifestErr, os.ErrNotExist) {
 		bundle, _, coherenceErr := manifestlessModelGeneration(configDirectory, plan)
 		if coherenceErr != nil {
 			return inspection{}, coherenceErr
 		}
 		manifestlessCoherent = len(bundle.agents) != 0
+		manifestlessBundle = bundle
 	}
 	for _, identity := range modelAgentInventoryV3 {
 		name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
 		content := plan.agents[name]
 		if len(content) == 0 {
+			if strings.HasPrefix(name, "vgxness-sdd-") {
+				continue
+			}
 			return inspection{}, fmt.Errorf("%w: missing current OpenCode agent artifact", integration.ErrInvalid)
 		}
 		prior := predecessors[name]
@@ -1586,6 +1591,31 @@ func (service *Integration) inspectWithV1Migration(ctx context.Context, options 
 			state.result.State = integration.StateDrifted
 			return state, nil
 		}
+	}
+
+	for _, identity := range modelAgentInventoryV3 {
+		name := strings.TrimPrefix(identity.ArtifactKey, "agents/")
+		if !strings.HasPrefix(name, "vgxness-sdd-") {
+			continue
+		}
+		expected := installedPlan.agents[name]
+		retirementCandidates = append(retirementCandidates, retiredArtifact{path: filepath.Join(configDirectory, filepath.FromSlash(identity.ArtifactKey)), recognize: func(data []byte) bool {
+			if installedPlanOK {
+				return len(expected) > 0 && bytes.Equal(data, expected)
+			}
+			if !manifestlessCoherent {
+				return false
+			}
+			if exact := manifestlessBundle.agents[name]; len(exact) > 0 {
+				return bytes.Equal(data, exact)
+			}
+			for _, prior := range predecessors[name] {
+				if bytes.Equal(data, prior) {
+					return true
+				}
+			}
+			return false
+		}})
 	}
 	retired, retirementErr := inspectRetiredArtifacts(retirementCandidates...)
 	if retirementErr != nil {

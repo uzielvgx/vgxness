@@ -105,7 +105,7 @@ func TestDecodeRejectsNullPayloadAndWorkerRolesRemainReadOnly(t *testing.T) {
 	if _, err := DecodeRecord([]byte(`{"type":"request","id":"x","operation":"memory.recall","workspace":"/workspace","mode":"read-only","role":"explore","payload":null}` + "\n")); err == nil {
 		t.Fatal("null payload accepted")
 	}
-	for _, role := range []string{"explore", "sdd-research", "sdd-proposal", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply"} {
+	for _, role := range []string{"explore", "general", "verifier", "care-reviewer", "care-specialist", "care-challenger"} {
 		binding := Binding{Workspace: "/workspace", Mode: ReadOnly, Role: role}
 		if err := binding.Authorize(Request{Workspace: "/workspace", Mode: ReadOnly, Role: role, Operation: "memory.recall"}); err != nil {
 			t.Fatalf("read worker %s denied: %v", role, err)
@@ -123,8 +123,8 @@ func TestAuthorizeRejectsUnknownFullModeOperation(t *testing.T) {
 	}
 }
 
-func TestAuthorizeAllowsManagerSDDLifecycleButDeniesReaderMutations(t *testing.T) {
-	for _, operation := range []string{"memory.remember", "memory.session.start", "sdd.create", "sdd.accept_revision", "sdd.transition", "sdd.record_projection"} {
+func TestAuthorizeAllowsManagerMemoryButDeniesReaderMutations(t *testing.T) {
+	for _, operation := range []string{"memory.remember", "memory.session.start"} {
 		if err := (Binding{Workspace: "/workspace", Mode: Full, Role: "manager"}).Authorize(Request{Workspace: "/workspace", Mode: Full, Role: "manager", Operation: operation}); err != nil {
 			t.Fatalf("manager %s: %v", operation, err)
 		}

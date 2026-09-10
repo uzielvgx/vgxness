@@ -47,13 +47,13 @@ func TestCAREDocumentationContract(t *testing.T) {
 	}
 
 	themes := map[string][]string{
-		"docs/care.md":                  {"Manager61", "Manager20", "exact frozen candidate", "care-reviewer", "care-specialist", "care-challenger", "PASS, FAIL, or INCONCLUSIVE", "independent verification and applicable review", "no current fixed-lens aliases"},
+		"docs/care.md":                  {"Manager62", "Manager21", "exact frozen candidate", "care-reviewer", "care-specialist", "care-challenger", "PASS, FAIL, or INCONCLUSIVE", "independent verification and applicable review", "no current fixed-lens aliases"},
 		"docs/care-evaluation.md":       {"Direct covers no-tool conversation, writing, and planning", "Assisted covers bounded exact reads and evidence work", "authorized actions", "ordinary engineering", "assured high-risk work", "positive routing", "negative non-activation", "ambiguous requests", "adversarial", "coexistence", "critical cases"},
-		"docs/orchestration-flow.md":    {"CARE records the route, risk, evidence ledger"},
-		"docs/opencode-integration.md":  {"17 OpenCode-managed artifacts", "13 agents", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager61", "Complete Manager60", "same frozen candidate", "repair-mcp-preview", "--expected-mcp-sha256"},
-		"docs/codex-integration.md":     {"12 delegated profiles", "Manager v20", "OpenCode v61", "care-reviewer", "care-specialist", "care-challenger", "same frozen candidate"},
-		"docs/opencode-setup-wizard.md": {"17 OpenCode artifacts", "13 agents", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager61", "Manager60", "same frozen candidate"},
-		"docs/go-implementation.md":     {"17 managed artifacts", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager61", "Manager20", "immediate Manager60", "Codex Manager19 as immediate predecessor", "12 delegated profiles", "not a Go provider runtime or a new schema/transport surface"},
+		"docs/orchestration-flow.md":    {"Avoid duplicate missions and a fixed reviewer-count matrix."},
+		"docs/opencode-integration.md":  {"11 managed artifacts", "seven agents", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "Complete Manager61", "same frozen candidate", "repair-mcp-preview", "--expected-mcp-sha256"},
+		"docs/codex-integration.md":     {"six delegated profiles", "Manager v21", "OpenCode v62", "care-reviewer", "care-specialist", "care-challenger", "same frozen candidate"},
+		"docs/opencode-setup-wizard.md": {"11 provider artifacts", "seven agents", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "Manager61", "same frozen candidate"},
+		"docs/go-implementation.md":     {"11 managed artifacts", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "Manager21", "Complete Manager61", "Manager20 packages are recognized predecessors", "six delegated profiles", "not a Go provider runtime or a new schema/transport surface"},
 		"docs/self-install.md":          {"predecessors only for lifecycle and upgrade handling"},
 		"docs/legacy-compatibility.md":  {"no current fixed-lens aliases"},
 	}

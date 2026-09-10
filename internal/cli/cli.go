@@ -64,8 +64,17 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 	if len(args) > 0 && args[0] == "memory" {
 		return runMemory(ctx, args[1:], stdin, stdout, stderr, memories)
 	}
+	if len(args) > 1 && args[0] == "sdd-archive" {
+		switch args[1] {
+		case "list", "get", "list-revisions", "get-revision":
+			return runSDD(ctx, args[1:], stdin, stdout, stderr, sdds)
+		}
+		fmt.Fprintln(stderr, "archive is read-only")
+		return 2
+	}
 	if len(args) > 0 && args[0] == "sdd" {
-		return runSDD(ctx, args[1:], stdin, stdout, stderr, sdds)
+		fmt.Fprintln(stderr, "SDD is retired; historical records are preserved. Use sdd-archive for read-only access.")
+		return 2
 	}
 	if len(args) > 0 && args[0] == "integrate" {
 		return runIntegration(ctx, args[1:], stdout, stderr, opencodeIntegration, codexIntegration)
@@ -77,7 +86,7 @@ func RunProductSDDRuntime(ctx context.Context, args []string, stdin io.Reader, s
 		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup, codexIntegration)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|sdd|integrate|self|skills|setup>")
+		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|integrate|self|skills|setup>")
 		return 2
 	}
 	command := args[0]

@@ -37,8 +37,8 @@ func TestKnownPackagesOrderCurrentThenPreTerminalV18ThenV17ForEveryPlan(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(known) != 58 {
-		t.Fatalf("known packages length = %d, want 58", len(known))
+	if len(known) != 62 {
+		t.Fatalf("known packages length = %d, want 62", len(known))
 	}
 	for _, plan := range []sdd.Plan{sdd.PlanLow, sdd.PlanMedium, sdd.PlanHigh, sdd.PlanUltra} {
 		current, err := RenderPlan("v0.0.0", plan)
@@ -85,14 +85,16 @@ func TestKnownPackagesOrderCurrentThenPreTerminalV18ThenV17ForEveryPlan(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []string{current.SHA256, v19.SHA256, v18PreTerminalClosure.SHA256, v17.SHA256, v16.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
+		v20, err := renderActiveV20("v0.0.0", plan)
+		require(t, err == nil)
+		want := []string{current.SHA256, v20.SHA256, v19.SHA256, v18PreTerminalClosure.SHA256, v17.SHA256, v16.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
 		foundV12 := 0
 		for index, pkg := range known {
 			if pkg.SHA256 == v12.SHA256 {
 				foundV12++
 			}
-			if index >= int(planIndex(plan))*14 && index < int(planIndex(plan))*14+14 && pkg.SHA256 != want[index-int(planIndex(plan))*14] {
-				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*14])
+			if index >= int(planIndex(plan))*15 && index < int(planIndex(plan))*15+15 && pkg.SHA256 != want[index-int(planIndex(plan))*15] {
+				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*15])
 			}
 		}
 		if foundV12 != 1 {
@@ -532,7 +534,7 @@ func TestIntegrationInstallAndIdempotence(t *testing.T) {
 	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	service := NewIntegration()
 	before, err := service.Status(context.Background(), options)
-	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 15)
+	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 9)
 	installed, err := service.Install(context.Background(), options)
 	if err != nil || installed.State != integration.StateInstalled || !installed.Changed || !installed.RestartRequired {
 		t.Fatalf("Install() = %+v, %v", installed, err)
@@ -1136,7 +1138,7 @@ func TestStatusReportsRecoveryWhenClearPendingFails(t *testing.T) {
 }
 func TestManagedLayoutExcludesPluginArtifacts(t *testing.T) {
 	layout, err := NewIntegration().ManagedLayout(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")})
-	require(t, err == nil && len(layout.Artifacts) == 15)
+	require(t, err == nil && len(layout.Artifacts) == 9)
 	for _, item := range layout.Artifacts {
 		require(t, item.RelativePath != "config.toml" && item.RelativePath != ".mcp.json" && filepath.Ext(item.RelativePath) != ".plugin")
 	}

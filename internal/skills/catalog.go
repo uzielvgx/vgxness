@@ -116,6 +116,7 @@ func bundledCatalog() (catalog, error) {
 	}
 	creator.files = entries
 	gitDelivery := skillDefinition{name: "git-delivery", source: "git-delivery", legacy: []legacyDefinition{{name: "stacked-pr", exactOnly: true, digests: map[string]string{"SKILL.md": "43d30fc18b5bf23c1ec450248bad2ba9283f5f63c9c5946733a4f5d2971c197f"}}}}
+	gitDelivery.legacy = append(gitDelivery.legacy, legacyDefinition{name: "sdd-lifecycle", exactOnly: true, digests: map[string]string{"SKILL.md": "0a274b364b153a6d0cf85427d3928a243ca55fa87b0641e33f621270f8372ea9"}})
 	gitDelivery.files, err = bundledFiles(gitDelivery.source)
 	if err != nil {
 		return catalog{}, err
@@ -200,12 +201,7 @@ func bundledCatalog() (catalog, error) {
 	if err != nil {
 		return catalog{}, err
 	}
-	sddLifecycle := skillDefinition{name: "sdd-lifecycle", source: "sdd-lifecycle"}
-	sddLifecycle.files, err = bundledFiles(sddLifecycle.source)
-	if err != nil {
-		return catalog{}, err
-	}
-	return catalog{definitions: []skillDefinition{creator, gitDelivery, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary, documentationStrategy, productRequirements, softwareArchitectureDocs, userDocumentation, apiDocumentation, qualityTestDocumentation, operationsRunbooks, governanceComplianceDocs, releaseLifecycleDocs, endToEndTesting, memorySync, sddLifecycle}}, nil
+	return catalog{definitions: []skillDefinition{creator, gitDelivery, crossPlatform, installerLifecycle, agentEvaluation, ciTriage, securityBoundary, documentationStrategy, productRequirements, softwareArchitectureDocs, userDocumentation, apiDocumentation, qualityTestDocumentation, operationsRunbooks, governanceComplianceDocs, releaseLifecycleDocs, endToEndTesting, memorySync}}, nil
 }
 
 func validSkillName(name string) bool {

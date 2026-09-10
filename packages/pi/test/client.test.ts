@@ -13,7 +13,7 @@ async function fixture(t: test.TestContext) {
 }
 test("native dispatcher enforces closed payloads and exact local bindings", async t => {
   const { client, binding } = await fixture(t);
-  assert.equal(operationNames.length, 35);
+  assert.equal(operationNames.length, 21);
   for (const payload of [null, [], { project: "other" }, { unexpected: true }]) await assert.rejects(client.request("memory.recent", payload, binding), /invalid operation/);
   for (const key of ["workspace", "mode", "role"]) await assert.rejects(client.request("memory.recent", {}, { ...binding, [key]: "forged" }), /binding mismatch/);
   await assert.rejects(client.request("arbitrary.shell", {}, binding), /invalid operation/);
@@ -35,7 +35,7 @@ test("workspace replacement and read-only or worker authority fail closed", asyn
   const { client, workspace, root, storageRoot, binding } = await fixture(t);
   for (const [mode, role] of [["read-only", "manager"], ["full", "general"], ["read-only", "explore"]]) {
     const b = { workspace, mode, role }, other = await createNativeDispatcher({ ...b, storageRoot });
-    try { assert.deepEqual(await other.request("memory.recent", {}, b), []); await assert.rejects(other.request("memory.remember", { content: "denied" }, b), /authority/); await assert.rejects(other.request("sdd.create", { title: "x", idempotencyKey: "x", backend: "memory", interactionMode: "automatic", plan: "low" }, b), /authority/); } finally { await other.close(); }
+    try { assert.deepEqual(await other.request("memory.recent", {}, b), []); await assert.rejects(other.request("memory.remember", { content: "denied" }, b), /authority/); await assert.rejects(other.request("sdd.create", { title: "x", idempotencyKey: "x", backend: "memory", interactionMode: "automatic", plan: "low" }, b), /invalid operation/); } finally { await other.close(); }
   }
   await rename(workspace, join(root, "original")); await mkdir(workspace);
   await assert.rejects(client.request("memory.recent", {}, binding), /identity changed/);
@@ -94,28 +94,11 @@ test("production credential file stays private and resolves only the fixed confi
  } finally { await client.close(); }
 });
 
-test("native apply proof rejects superseded accepted tasks and inputs at the current state version", async t => {
-  const { client, binding, storageRoot } = await fixture(t);
-  const { SQLiteDatabase } = await import("../src/sqlite/node-sqlite.ts");
-  const { createHash } = await import("node:crypto");
-  const change = await client.request("sdd.create", { idempotencyKey: "current-proof", title: "Proof", backend: "memory", interactionMode: "automatic", plan: "low" }, binding);
-  const project = await client.request("memory.project.resolve", {}, binding);
-  const db = new SQLiteDatabase(join(storageRoot, "memory.db"));
-  try {
-  const sha = (value: string) => createHash("sha256").update(value).digest("hex");
-  db.db.prepare("UPDATE sdd_changes SET phase='apply',state_version=7 WHERE id=?").run(change.id);
-  for (const phase of ["design", "tasks"]) {
-    db.db.prepare("INSERT INTO sdd_artifacts VALUES(?,?,?,?,?,?,?,?)").run(phase, project, change.id, phase, "accepted", phase + "2", 1n, 1n);
-    for (const suffix of ["1", "2"]) db.db.prepare("INSERT INTO sdd_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(phase + suffix, project, change.id, phase, "accepted", Buffer.from(phase), null, sha(phase), sha(""), 1n, 1n);
-  }
-  for (const task of ["tasks1", "tasks2"]) db.db.prepare("INSERT INTO sdd_revision_links VALUES(?,?,?,?,?,?)").run(project, change.id, task, "design", "design2", sha("design"));
-  const proof = { changeId: change.id, stateVersion: 7, artifactId: "tasks", revisionId: "tasks2", digest: sha("tasks"), inputs: [{ artifactId: "design", revisionId: "design2", digest: sha("design") }] };
-  assert.equal(await client.verifyCurrentAcceptedBinding(proof), true);
-  const old = await client.request("sdd.get_revision", { changeId: change.id, revisionId: "tasks1" }, binding);
-  assert.equal(old.status, "accepted"); assert.equal(old.artifactStatus, "accepted");
-  assert.equal(await client.verifyCurrentAcceptedBinding({ ...proof, revisionId: "tasks1" }), false);
-  db.db.prepare("UPDATE sdd_revision_links SET input_revision_id='design1' WHERE revision_id='tasks2'").run();
-  assert.equal(await client.verifyCurrentAcceptedBinding({ ...proof, inputs: [{ ...proof.inputs[0], revisionId: "design1" }] }), false);
-  assert.equal(await client.verifyCurrentAcceptedBinding({ ...proof, stateVersion: 6 }), false);
-  } finally { db.close(); }
+
+test("retired SDD operations are absent and cannot mutate native memory", async t => {
+ const {client,binding}=await fixture(t);
+ assert.equal(operationNames.some((name:string)=>name.startsWith("sdd.")),false);
+ const entry=await client.request("memory.remember",{content:"retirement sentinel"},binding);
+ await assert.rejects(client.request("sdd.create",{idempotencyKey:"no",title:"retired",backend:"memory",interactionMode:"automatic",plan:"low"},binding),/invalid operation|retired/);
+ assert.equal((await client.request("memory.get",{id:entry.ID},binding)).Content,"retirement sentinel");
 });

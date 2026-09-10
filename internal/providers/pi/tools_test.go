@@ -23,7 +23,6 @@ func TestDispatcherRejectsMissingAndUnknownPayloads(t *testing.T) {
 func TestOperationCatalogIsCompleteAndClosed(t *testing.T) {
 	want := []string{
 		"model.resolve", "memory.remember", "memory.recall", "memory.recent", "memory.get", "memory.forget", "memory.project.resolve", "memory.project.initialize", "memory.sync.configure", "memory.sync.status", "memory.sync", "memory.sync.backfill", "memory.sync.repair_project", "memory.sync.reseed", "memory.sync.rejoin", "memory.session.start", "memory.session.checkpoint", "memory.session.renew", "memory.session.end", "memory.session.context", "memory.session.draft_save",
-		"sdd.create", "sdd.list", "sdd.get", "sdd.set_interaction_mode", "sdd.save_revision", "sdd.get_revision", "sdd.list_revisions", "sdd.accept_revision", "sdd.transition", "sdd.cancel", "sdd.projection_status", "sdd.record_projection", "sdd.render_projection", "sdd.compare_projection",
 	}
 	got := tools.OperationNames()
 	if len(got) != len(want) {
@@ -64,8 +63,8 @@ func TestDispatcherUsesBoundProjectForMemoryAndManagerSDD(t *testing.T) {
 	if _, err := d.Dispatch(ctx, pi.Request{Role: "general", Operation: "sdd.create", Payload: []byte(`{"idempotencyKey":"pi-general","title":"denied","backend":"memory","interactionMode":"automatic","plan":"low"}`)}); err == nil {
 		t.Fatal("non-manager SDD create was accepted")
 	}
-	if _, err := d.Dispatch(ctx, pi.Request{Role: "manager", Operation: "sdd.create", Payload: []byte(`{"idempotencyKey":"pi-manager","title":"accepted","backend":"memory","interactionMode":"automatic","plan":"low"}`)}); err != nil {
-		t.Fatalf("manager SDD create: %v", err)
+	if _, err := d.Dispatch(ctx, pi.Request{Role: "manager", Operation: "sdd.create", Payload: []byte(`{"idempotencyKey":"pi-manager","title":"accepted","backend":"memory","interactionMode":"automatic","plan":"low"}`)}); err == nil {
+		t.Fatal("retired manager SDD create accepted")
 	}
 }
 

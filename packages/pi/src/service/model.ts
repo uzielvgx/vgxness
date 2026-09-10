@@ -20,7 +20,7 @@ Object.assign(matrix.high, { manager: ["frontier", "ultra"], research: ["balance
 for (const role of roles)
     matrix.ultra[role] = ["frontier", role === "manager" ? "ultra" : "high"];
 function validText(v: unknown, max: number) { return typeof v === "string" && v.trim() === v && v.length > 0 && [...v].length <= max && !/[\x00-\x1f\x7f-\x9f]/.test(v); }
-function fail(message = "invalid SDD request"): never { throw new Error(message); }
+function fail(message = "invalid model request"): never { throw new Error(message); }
 export function resolveModel(payload: unknown): ResolvedPlan {
     const { catalog, plan } = payload as {
         catalog?: Catalog;
@@ -30,7 +30,7 @@ export function resolveModel(payload: unknown): ResolvedPlan {
         fail();
     for (const m of catalog.models)
         if (m.provider !== catalog.provider || !validText(m.id, 256) || !validText(m.name, 256) || (m.capability && !capabilities.includes(m.capability)) || !Array.isArray(m.supportedEfforts) || !m.supportedEfforts.length || m.supportedEfforts.some(e => !efforts.includes(e)))
-            fail(m.provider !== catalog.provider ? "SDD model provider mismatch" : undefined);
+            fail(m.provider !== catalog.provider ? "model provider mismatch" : undefined);
     const models = catalog.models.slice(0, 3);
     const slots = {} as Record<Capability, Model>;
     const used = new Set<number>();

@@ -159,10 +159,7 @@ func TestFullServerProtocolListResultsUseObjectEnvelopes(t *testing.T) {
 		name string
 		args map[string]any
 		key  string
-	}{
-		{"sdd_list", nil, "changes"},
-		{"sdd_list_revisions", map[string]any{"changeId": "change-1"}, "revisions"},
-	} {
+	}{} {
 		t.Run(test.name, func(t *testing.T) {
 			result, callErr := session.CallTool(ctx, &sdk.CallToolParams{Name: test.name, Arguments: test.args})
 			if callErr != nil || result.IsError {
@@ -253,115 +250,6 @@ func TestFullServerProtocolMemoryResultsExposeCanonicalJSONTextAndSchemas(t *tes
 	}
 }
 
-func TestFullServerProtocolSDDChangeResultsIncludeDeterministicJSONText(t *testing.T) {
-	backend := &fakeReader{project: "project-1"}
-	sdds := &fakeSDDReader{change: sdd.Change{ID: "change-1", Project: "project-1", Title: "Title", StateVersion: 1}}
-	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientTransport, serverTransport := sdk.NewInMemoryTransports()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = server.Run(ctx, serverTransport) }()
-	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, tool := range []string{"sdd_create", "sdd_get", "sdd_set_interaction_mode", "sdd_transition"} {
-		t.Run(tool, func(t *testing.T) {
-			args := map[string]any{"id": "change-1"}
-			if tool == "sdd_create" {
-				args = map[string]any{"idempotencyKey": "key-1", "title": "Title", "backend": "memory", "interactionMode": "automatic", "plan": "low"}
-			} else if tool != "sdd_get" {
-				args = map[string]any{"changeId": "change-1", "expectedStateVersion": 1}
-				if tool == "sdd_set_interaction_mode" {
-					args["interactionMode"] = "interactive"
-				} else {
-					args["targetPhase"] = "proposal"
-				}
-			}
-			result, callErr := session.CallTool(ctx, &sdk.CallToolParams{Name: tool, Arguments: args})
-			if callErr != nil || result.IsError {
-				t.Fatalf("CallTool() result=%+v err=%v", result, callErr)
-			}
-			text, ok := result.Content[0].(*sdk.TextContent)
-			if !ok {
-				t.Fatalf("content=%#v", result.Content)
-			}
-			var change sdd.Change
-			if err := json.Unmarshal([]byte(text.Text), &change); err != nil || change.ID != "change-1" || change.Project != "project-1" {
-				t.Fatalf("text=%q change=%+v err=%v", text.Text, change, err)
-			}
-			if text.Text != `{"id":"change-1","project":"project-1","title":"Title","backend":"","interactionMode":"","plan":"","phase":"","status":"","stateVersion":1,"createdAt":"0001-01-01T00:00:00Z","updatedAt":"0001-01-01T00:00:00Z"}` {
-				t.Fatalf("text is not deterministic: %q", text.Text)
-			}
-		})
-	}
-}
-
-func TestFullServerProtocolSDDLifecycleVisibleJSONContinuity(t *testing.T) {
-	backend := &fakeReader{project: "project-1"}
-	sdds := &fakeSDDReader{lifecycle: true}
-	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientTransport, serverTransport := sdk.NewInMemoryTransports()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = server.Run(ctx, serverTransport) }()
-	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	call := func(name string, arguments map[string]any, output any) {
-		t.Helper()
-		result, err := session.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: arguments})
-		if err != nil || result.IsError {
-			t.Fatalf("%s result=%+v err=%v", name, result, err)
-		}
-		text := result.Content[0].(*sdk.TextContent).Text
-		if err := json.Unmarshal([]byte(text), output); err != nil {
-			t.Fatalf("%s visible text=%q: %v", name, text, err)
-		}
-	}
-	var change, fetched, transitioned sdd.Change
-	call("sdd_create", map[string]any{"idempotencyKey": "journey-1", "title": "Journey", "backend": "memory", "interactionMode": "automatic", "plan": "low"}, &change)
-	call("sdd_get", map[string]any{"id": change.ID}, &fetched)
-	if change.ID == "" || fetched.ID != change.ID || fetched.StateVersion != change.StateVersion {
-		t.Fatalf("create/get continuity: create=%+v get=%+v", change, fetched)
-	}
-	var revision, accepted sdd.Revision
-	call("sdd_save_revision", map[string]any{"changeId": change.ID, "artifact": "explore", "content": "research", "expectedStateVersion": change.StateVersion}, &revision)
-	call("sdd_accept_revision", map[string]any{"changeId": change.ID, "revisionId": revision.ID, "expectedStateVersion": revision.StateVersion}, &accepted)
-	call("sdd_transition", map[string]any{"changeId": change.ID, "targetPhase": "proposal", "expectedStateVersion": accepted.StateVersion}, &transitioned)
-	if revision.ID == "" || revision.ChangeID != change.ID || revision.Digest == "" || accepted.ID != revision.ID || accepted.Status != sdd.RevisionAccepted || transitioned.ID != change.ID || transitioned.StateVersion != accepted.StateVersion+1 {
-		t.Fatalf("revision/transition continuity: revision=%+v accepted=%+v transitioned=%+v", revision, accepted, transitioned)
-	}
-	var changes struct {
-		Changes []sdd.Change `json:"changes"`
-	}
-	call("sdd_list", nil, &changes)
-	if len(changes.Changes) != 1 || changes.Changes[0].ID != change.ID {
-		t.Fatalf("visible list=%+v", changes)
-	}
-	var revisions struct {
-		Revisions []sdd.Revision `json:"revisions"`
-	}
-	call("sdd_list_revisions", map[string]any{"changeId": change.ID}, &revisions)
-	if len(revisions.Revisions) != 1 || revisions.Revisions[0].ID != revision.ID || revisions.Revisions[0].Digest != revision.Digest {
-		t.Fatalf("visible revisions=%+v", revisions)
-	}
-	var projection, status sdd.Projection
-	call("sdd_record_projection", map[string]any{"changeId": change.ID, "artifactId": revision.ArtifactID, "revisionId": revision.ID, "status": "current", "digest": string(revision.Digest), "location": "openspec/changes/change-1/explore.md", "expectedStateVersion": transitioned.StateVersion}, &projection)
-	call("sdd_projection_status", map[string]any{"changeId": change.ID, "artifactId": revision.ArtifactID}, &status)
-	if projection.ChangeID != change.ID || projection.ArtifactID != revision.ArtifactID || projection.RevisionID != revision.ID || projection.Digest != revision.Digest || status != projection {
-		t.Fatalf("projection continuity: record=%+v status=%+v", projection, status)
-	}
-}
-
 func TestFullServerProtocolSDDValidationIsSafeAndFieldSpecific(t *testing.T) {
 	server, err := newFullWithReaders(context.Background(), "/workspace", &fakeReader{project: "project-1"}, &fakeSDDReader{})
 	if err != nil {
@@ -398,49 +286,6 @@ func TestFullServerProtocolSDDValidationIsSafeAndFieldSpecific(t *testing.T) {
 	}
 }
 
-func TestFullServerProtocolRenderContentCanBeComparedUnchanged(t *testing.T) {
-	backend := &fakeReader{project: "project-1"}
-	sdds := &fakeSDDReader{rendered: sdd.ProjectionDocument{RelativePath: "openspec/changes/change-1/explore.md", Content: []byte("<!-- managed -->\nresearch\n"), Digest: sdd.ContentDigest([]byte("<!-- managed -->\nresearch\n"))}}
-	server, err := newFullWithReaders(context.Background(), "/workspace", backend, sdds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientTransport, serverTransport := sdk.NewInMemoryTransports()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = server.Run(ctx, serverTransport) }()
-	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rendered, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "sdd_render_projection", Arguments: map[string]any{"changeId": "change-1", "revisionId": "revision-1"}})
-	if err != nil || rendered.IsError {
-		t.Fatalf("render result=%+v err=%v", rendered, err)
-	}
-	var visible, structured struct {
-		RelativePath string `json:"relativePath"`
-		Content      string `json:"content"`
-	}
-	if err := json.Unmarshal([]byte(rendered.Content[0].(*sdk.TextContent).Text), &visible); err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(rendered.StructuredContent)
-	if err != nil || json.Unmarshal(encoded, &structured) != nil {
-		t.Fatalf("structured=%s err=%v", encoded, err)
-	}
-	if visible.Content != string(sdds.rendered.Content) || structured.Content != visible.Content {
-		t.Fatalf("visible=%+v structured=%+v", visible, structured)
-	}
-	compared, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "sdd_compare_projection", Arguments: map[string]any{"changeId": "change-1", "revisionId": "revision-1", "relativePath": visible.RelativePath, "projectionContent": visible.Content}})
-	if err != nil || compared.IsError {
-		t.Fatalf("compare result=%+v err=%v", compared, err)
-	}
-	var comparison sdd.ProjectionComparison
-	if err := json.Unmarshal([]byte(compared.Content[0].(*sdk.TextContent).Text), &comparison); err != nil || comparison.State != sdd.DriftSynced {
-		t.Fatalf("comparison=%+v err=%v", comparison, err)
-	}
-}
-
 func TestServerBindsWorkspaceAndExposesOnlyReadTools(t *testing.T) {
 	backend := &fakeReader{project: "project-1"}
 	server, err := newWithReader(context.Background(), "/canonical/workspace", backend)
@@ -464,7 +309,7 @@ func TestFullServerExposesExactToolAndMutationInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newFullWithReader() error = %v", err)
 	}
-	want := []string{"memory_recent", "memory_search", "memory_context", "memory_get", "memory_save", "memory_forget", "memory_session_summary", "memory_update", "sdd_create", "sdd_list", "sdd_get", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_get_revision", "sdd_list_revisions", "sdd_accept_revision", "sdd_render_projection", "sdd_compare_projection", "sdd_record_projection", "sdd_projection_status"}
+	want := []string{"memory_recent", "memory_search", "memory_context", "memory_get", "memory_save", "memory_forget", "memory_session_summary", "memory_update"}
 	sort.Strings(want)
 	names := discoveredNames(t, server)
 	if !sameStrings(names, want) {
@@ -481,8 +326,8 @@ func TestFullServerExposesExactToolAndMutationInventory(t *testing.T) {
 			t.Fatal("full server exposed memory sync")
 		}
 	}
-	if mutations != 10 {
-		t.Fatalf("full mode mutation set = %d, want 10", mutations)
+	if mutations != 4 {
+		t.Fatalf("full mode mutation set = %d, want 4", mutations)
 	}
 }
 
@@ -495,7 +340,7 @@ func isMutationTool(name string) bool {
 	return false
 }
 
-var mutationToolNames = []string{"memory_save", "memory_forget", "memory_session_summary", "memory_update", "sdd_create", "sdd_set_interaction_mode", "sdd_transition", "sdd_save_revision", "sdd_accept_revision", "sdd_record_projection"}
+var mutationToolNames = []string{"memory_save", "memory_forget", "memory_session_summary", "memory_update"}
 
 func TestFullServerAdvertisesExactMutationSchemas(t *testing.T) {
 	server, err := newFullWithReader(context.Background(), "/workspace", &fakeReader{project: "project-1"})
@@ -558,7 +403,7 @@ func TestFullServerAdvertisesExactMutationSchemas(t *testing.T) {
 			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"changeId": {true, "string"}, "artifact": {true, "string"}, "content": {true, "string"}, "externalLocation": {false, "string"}, "digest": {false, "string"}, "inputs": {false, "array"}, "inputDigest": {false, "string"}, "expectedStateVersion": {true, "number"}})
 			assertSchemaEnum(t, tool.InputSchema, "artifact", []string{"explore", "proposal", "spec", "design", "tasks", "apply", "verify", "complete"})
 			assertRevisionBindingSchema(t, tool.InputSchema)
-		case "sdd_get_revision", "sdd_render_projection":
+		case "sdd_get_revision":
 			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"changeId": {true, "string"}, "revisionId": {true, "string"}})
 		case "sdd_list_revisions":
 			assertSchemaProperties(t, tool.InputSchema, map[string]schemaExpectation{"changeId": {true, "string"}, "artifact": {false, "string"}, "limit": {false, "number"}})

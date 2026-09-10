@@ -187,27 +187,13 @@ var operations = map[string]operationPolicy{
 	"memory.session.end":         {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
 	"memory.session.context":     {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
 	"memory.session.draft_save":  {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
-	"sdd.get":                    {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
-	"sdd.get_revision":           {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
-	"sdd.list":                   {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
-	"sdd.list_revisions":         {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
-	"sdd.create":                 {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
-	"sdd.set_interaction_mode":   {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
-	"sdd.save_revision":          {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
-	"sdd.accept_revision":        {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
-	"sdd.transition":             {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
-	"sdd.cancel":                 {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
-	"sdd.projection_status":      {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
-	"sdd.record_projection":      {modes: map[Mode]bool{Full: true}, roles: managerOnly, mutates: true},
-	"sdd.render_projection":      {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
-	"sdd.compare_projection":     {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
 	"model.resolve":              {modes: map[Mode]bool{ReadOnly: true, Full: true}, roles: allRoles},
 }
 
 var allRoles = map[string]bool{
 	"manager": true, "general": true, "verifier": true, "care-reviewer": true,
 	"care-specialist": true, "care-challenger": true,
-	"explore": true, "sdd-research": true, "sdd-proposal": true, "sdd-spec": true, "sdd-design": true, "sdd-tasks": true, "sdd-apply": true,
+	"explore": true,
 }
 var managerOnly = map[string]bool{"manager": true}
 

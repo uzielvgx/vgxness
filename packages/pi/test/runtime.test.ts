@@ -22,7 +22,7 @@ async function fixture(t: test.TestContext) {
 }
 test("native views register alongside tools, report unavailable stores without creating them, and work without UI", async t => {
  const f = await fixture(t);
- for (const name of ["vgx-status", "vgx-workers", "vgx-memory", "vgx-sdd"]) assert.ok(f.extension.commands.has(name));
+ for (const name of ["vgx-status", "vgx-workers", "vgx-memory"]) assert.ok(f.extension.commands.has(name));
  const status = await f.extension.commands.get("vgx-status")!.handler("", {}); assert.match(JSON.stringify(status), /native-typescript/);
  const unavailable = await f.extension.commands.get("vgx-memory")!.handler("", {}); assert.match(JSON.stringify(unavailable), /unavailable/); await assert.rejects(stat(f.storageRoot));
  await f.fire("session_start", { reason: "startup" });
