@@ -70,6 +70,14 @@ with native Pi tool guidance supplied by its adapter. See
 [Shared Manager and native adapters](architecture/shared-manager-contract.md)
 for regeneration, exact predecessor preservation and evidence limits.
 
+## Known Manager evaluation limitations
+
+Pi keeps its current Manager workflow; it does not automatically add an independent model review of every proposed evaluation. Loading a skill successfully does not establish that the resulting proposal follows all of its requirements.
+
+In the six-case public development evaluation described in [V1 readiness](v1-readiness.md#pi-manager-behavioral-evidence), the five direct scenarios passed, but the generated-evaluation scenario failed. The proposal made independent grading optional and included an expected action that contradicted its own example request. Prompt-only follow-up changes did not establish a correction.
+
+When using a Manager-generated evaluation, check every example against the action actually requested and check whether its grading procedure satisfies the selected skill's independence requirements before relying on the conclusion. An explicitly requested action can still need execution details; missing details do not erase authorization for that action. This is guidance for reviewing a proposal, not an additional automatic runtime gate. The selected model, skill and task can affect the result; these development cases do not certify general reliability.
+
 ## Portable release and setup behavior
 
 Pi uses the TypeScript package and the shared SQLite data model; its runtime does not require the old Go Pi package, MCP, or a VGXNESS process. Use an existing pinned release tag with `vgxness setup pi --yes --pi-release-version <vSemVer>`. A release binary defaults to its own build tag; a development or non-release build requires an explicit pin. There is no implicit `latest`. `--pi-release-dir PATH` supplies an offline release and cannot be combined with the version flag. Preview and status do not acquire or activate a release. `setup all` includes OpenCode, Codex, and Pi.

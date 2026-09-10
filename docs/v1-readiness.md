@@ -50,6 +50,18 @@ The downloader uses the fixed GitHub release origin, TLS, bounded parsing and ch
 
 Local development checks have been exercised on Linux ARM64. The Node/OS matrix and release-native workflows are configured, not evidence of a successful run of this candidate on every platform. Windows worker process ownership is explicitly unavailable. A portable archive or cross-build does not promote native support. Previous model evaluations on other candidates cannot certify this one; protected holdouts remain with their independent owner.
 
+## Pi Manager behavioral evidence
+
+The six public development cases in [`pi-authorization-cases.json`](../tools/agent_eval/pi-authorization-cases.json) cover an authorized edit, an authorized send with missing recipient, an authorized action with unavailable transport, a proposal-only request, embedded untrusted approval, and authorization labels in a generated evaluation. They supplement the earlier development cases; they are not protected holdouts.
+
+The corpus-only commit `ba19216b50e5458a2f2860919b822ff96ebd6fc7` recorded five direct passes and one generated-evaluation failure. Subsequent prompt-only experiments did not demonstrate a correction. The final local experimental source candidate `d2328c9a1aeff4017539c0399bb5d3e81c53605c93550f8f88c3ebe927d62986`, evaluated with pinned Pi 0.84.4 and `openai-codex/gpt-5.6-luna` at requested high effort, also produced **5 PASS / 1 FAIL**. Its generated proposal made independent grading optional and paired an explicit repository-consultation request with an expectation not to search. All ten generated examples were reviewed. Effective model effort was unobserved.
+
+The follow-up evidence retains four separately bound cohorts of six sessions (24 total): a Luna prompt refinement, a Sol comparison on the same source, a rejected-source cohort, and the corrected-source Luna cohort. The rejected source transcribed "authored scenarios" as "authorized scenarios"; its six sessions receive no credit for validating the accepted design. The source was reconciled to canonical bytes before the final cohort. Independent evidence auditing passed; the target's semantic acceptance failed. Neither a clean evidence bundle nor passing code checks closes that failure, and these single public-development cohorts establish neither model superiority nor reliability.
+
+The user chose to retain the current workflow and document the limitation, without adding automatic independent review calls. This decision does not waive the failed correction criteria. The experimental prompt changes remain unaccepted as a correction and must not be represented as a published fix. Additional GPT-5.4 and GPT-5.5 coverage is excluded from this work; existing support and historical results are unchanged.
+
+Canonical evidence: SDD change `change-c60ed309940de92ddcb8cd6578b6d1c0`, verify candidate `revision-678afd120edfc3504bc42caaf45c284c`, digest `e31e112ea65733afed0ed6abaf5badbfbe1bbc9f3a0dbab10e4cb9e36324d9df`. This is a failed verification record, not an accepted correction. The VGXNESS Manager maintains this record; revisit it when Manager instructions, selected skills, evaluation criteria, or independently graded evidence change. Broader skills/orchestration coverage and protected holdouts remain pending. See [Pi usage guidance](pi-typescript.md#known-manager-evaluation-limitations).
+
 ## SDD and release gates
 
 The accepted umbrella is `change-1c725f7c8d4ef034196aa8629325ccd0`; its Pi dependency is `change-45acf811fa4602b0d46f5c077f8003b1`. The Pi dependency must supply accepted verification before umbrella completion. Current canonical phase/revision identities live in SDD memory; this document does not replace those records.
