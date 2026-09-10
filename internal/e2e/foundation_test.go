@@ -69,9 +69,8 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		lane := workflow[start:end]
 		for _, want := range []string{
 			"os: [ubuntu-24.04, macos-15, windows-latest]",
-			"node: ['22.19.0', '24']", "node-version: ${{ matrix.node }}",
-			"node packages/pi/scripts/test.mjs", "metadata.test.mjs", "package-artifact.test.mjs",
-			"package_contract.test.ts", "sqlite-adapter.test.ts", "migrations.test.ts",
+			"node: ['22.19.0', '24']", "node-version: ${{ matrix.node }}", "go-version: 1.26.6",
+			"npm ci --ignore-scripts", "npm run typecheck --workspace packages/pi", "npm test --workspace packages/pi", "go mod download",
 		} {
 			if !strings.Contains(lane, want) {
 				t.Errorf("Pi lane missing %q", want)
@@ -176,8 +175,8 @@ func TestGoCIWorkflowContract(t *testing.T) {
 		if strings.Contains(workflow, "go mod tidy\n") || strings.Contains(workflow, "go test -c -o") || strings.Contains(workflow, "while IFS=") {
 			t.Error("workflow contains a mutating tidy or serial Windows test compilation")
 		}
-		if strings.Count(workflow, "run: go mod download") != 8 {
-			t.Error("the eight cold-runner test and smoke jobs must prefetch modules")
+		if strings.Count(workflow, "run: go mod download") != 9 {
+			t.Error("the nine cold-runner test and smoke jobs must prefetch modules")
 		}
 	})
 	t.Run("coverage upload survives failure", func(t *testing.T) {
@@ -206,7 +205,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"uses: ./.github/workflows/go-ci.yml", "ref: ${{ github.sha }}", "  build:\n    runs-on: ubuntu-24.04",
 		"release_commit: ${{ steps.release_metadata.outputs.commit }}", "release_date: ${{ steps.release_metadata.outputs.date }}", "id: release_metadata",
 		"  darwin-smoke:\n    needs: build\n    runs-on: macos-15", "needs: [standard-validation, build, windows-smoke, darwin-smoke]",
-		"contents: write", "id-token: write", "attestations: write", "sha256sum -c SHA256SUMS",
+		"contents: write", "id-token: write", "attestations: write", `pi_dist="$pi_root/release"`, "sha256sum -c SHA256SUMS",
 		"go-version: 1.26.6",
 		"Verify Linux artifact and self-install", "Verify Windows artifact and self-install", "Verify Darwin artifact and self-install", "--verify-tag", "--prerelease",
 		"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
@@ -220,7 +219,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	for _, asset := range []string{
 		"linux_amd64.tar.gz", "linux_arm64.tar.gz", "darwin_amd64.tar.gz", "darwin_arm64.tar.gz",
-		"windows_amd64.zip", "windows_arm64.zip", "dist/SHA256SUMS",
+		"windows_amd64.zip", "windows_arm64.zip", "vgxness-pi_${version}_portable.tar.gz", "dist/SHA256SUMS",
 	} {
 		if strings.Count(workflow, asset) == 0 {
 			t.Errorf("release workflow missing asset %q", asset)
@@ -434,13 +433,13 @@ func TestFoundationProductContract(t *testing.T) {
 func assertOpenCodeDocumentationContract(t *testing.T) {
 	t.Helper()
 	documents := map[string][]string{
-		"../../README.md":                     {"17 managed artifacts", "13 model-bound agents", "`vgxness-manager` v60", "Codex Manager19", "CARE-v2 Manager60", "Manager59", "CARE-v2 Manager58", "CARE-v1 Manager58/Manager57", "Execution Brief", "git-delivery` v1", "three CARE v2 profiles", "`general` v10", "verifier v7", "zero execution tools", "at most one autonomous save", "not runtime enforcement", "`vgxness mcp --full`", "eight memory and 13 SDD tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "no caller identity", "automatic memory injection", "runtime-security guarantee", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "Modified, malformed, foreign, unknown, or newer bytes block without removal"},
-		"../../docs/opencode-integration.md":  {"17 managed artifacts", "13 agents", "OpenCode current is CARE-v2 Manager60", "immediate predecessor is exact Manager59", "CARE-v2 Manager58", "CARE-v1 Manager58/Manager57", "Execution Brief", "OpenCode v56/verifier-v6 is deeper", "`general` v10", "verifier v7", "three CARE v2 roles", "six SDD roles", "zero execution tools", "at most one durable", "not runtime enforcement", "`vgxness mcp --full`", "eight memory and 13 SDD tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "missing it is partial", "no caller identity", "automatic memory injection", "schema v23", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
-		"../../docs/product-blueprint.md":     {"17 provider artifacts", "Managed OpenCode CARE-v2 Manager60 and generated Codex Manager19", "manager v60", "Execution Brief", "zero-execution-tool fast path", "at most one autonomous save", "not runtime enforcement", "`vgxness mcp --full`", "eight memory tools and 13 SDD tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "No additional installed plugin", "automatic memory injection", "OpenCode manager v57 and Codex manager v16 artifacts remain recognized historical predecessors", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
-		"../../docs/product-blueprint.es.md":  {"17 artefactos", "OpenCode administrado CARE-v2 Manager60 y Codex generado Manager19", "manager v60", "Execution Brief", "ruta rápida sin herramientas de ejecución", "como máximo un guardado autónomo", "no enforcement de runtime", "`vgxness mcp --full`", "ocho herramientas de memoria y 13 de SDD", "plugins/vgxness-memory-lifecycle.ts", "no tiene entrada `plugin` en `opencode.json`", "No hay plugins adicionales", "no tiene identidad del llamador", "inyección automática de memoria", "manager v57 de OpenCode y el manager v16 de Codex", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modificados, malformados, extranjeros, desconocidos o más nuevos bloquean sin eliminación"},
-		"../../docs/go-implementation.md":     {"17 managed artifacts", "OpenCode current CARE-v2 Manager60 roles", "immediate Manager59 predecessor", "CARE-v2/Manager58", "CARE-v1/Manager58/Manager57", "OpenCode v56/verifier-v6 deeper lifecycle identity", "Codex current Manager19", "Codex Manager18 as immediate predecessor", "Manager17, Manager16 and deeper Manager15/v14", "12 delegated profiles", "schema v23", "not a Go provider runtime or a new schema/transport surface", "`vgxness mcp --full`", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes are drift"},
-		"../../docs/opencode-setup-wizard.md": {"17 managed artifacts", "Manager60", "OpenCode immediate Manager59", "CARE-v2/Manager58", "CARE-v1/Manager58/Manager57", "Execution Brief", "`general` v10", "verifier v7", "three CARE v2 roles", "six SDD roles", "not a runtime broker", "`vgxness mcp --full`", "eight memory and 13 SDD tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "vgxness.ts", "v1-v10", "vgxness-autonomous-stacked-pr", "v1/v2/v3", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
-		"../../docs/codex-integration.md":     {"Codex current identity is Manager19", "immediately preceded by exact Manager18", "Manager17/16/15/14", "OpenCode current identity is CARE-v2 Manager60", "Execution Brief", "memory_context", "eight memory and 13 SDD tools", "ten mutating tools", "zero execution tools", "at most one autonomous `memory_save`", "rather than Codex runtime enforcement"},
+		"../../README.md":                     {"17 managed artifacts", "13 model-bound agents", "`vgxness-manager` v61", "Codex Manager20", "Manager60 and Codex Manager19", "one workspace writer", "same frozen candidate", "`vgxness mcp --full`", "eight memory and 13 SDD tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "no caller identity", "untrusted data", "modified, foreign, mixed or unknown packages", "no automatic cloud synchronization", "shared SQLite"},
+		"../../docs/opencode-integration.md":  {"17 OpenCode-managed artifacts", "13 agents", "OpenCode Manager61", "Codex Manager20", "Complete Manager60 and Manager19", "same frozen candidate", "`general` v10", "verifier v7", "three CARE v2 roles", "six SDD roles", "`vgxness mcp --full`", "eight memory and 13 SDD tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "missing it is partial", "no caller identity", "schema v23", "vgxness-autonomous-stacked-pr", "modified, malformed, foreign, unknown, or newer bytes block without removal", "repair-mcp-preview"},
+		"../../docs/product-blueprint.md":     {"17 provider artifacts", "Managed OpenCode Manager61", "generated Codex Manager20", "Manager v61", "one workspace writer", "same frozen candidate", "`vgxness mcp --full`", "eight memory tools and 13 SDD tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "No additional installed plugin", "automatic memory injection", "OpenCode manager v57 and Codex manager v16 artifacts remain recognized historical predecessors", "vgxness-autonomous-stacked-pr", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
+		"../../docs/product-blueprint.es.md":  {"17 artefactos", "OpenCode administrado Manager61", "Codex generado Manager20", "Manager v61", "un solo escritor", "mismo candidato congelado", "`vgxness mcp --full`", "ocho herramientas de memoria y 13 de SDD", "plugins/vgxness-memory-lifecycle.ts", "no tiene entrada `plugin` en `opencode.json`", "No hay plugins adicionales", "no tiene identidad del llamador", "inyecci\u00f3n autom\u00e1tica de memoria", "manager v57 de OpenCode y el manager v16 de Codex", "vgxness-autonomous-stacked-pr", "modificados, malformados, extranjeros, desconocidos o m\u00e1s nuevos bloquean sin eliminaci\u00f3n"},
+		"../../docs/go-implementation.md":     {"17 managed artifacts", "OpenCode current shared Manager61 roles", "immediate Manager60 predecessor", "CARE-v2/Manager58", "CARE-v1/Manager58/Manager57", "Codex current Manager20", "Codex Manager19 as immediate predecessor", "12 delegated profiles", "schema v23", "not a Go provider runtime or a new schema/transport surface", "`vgxness mcp --full`", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "modified, malformed, foreign, unknown, or newer bytes are drift"},
+		"../../docs/opencode-setup-wizard.md": {"17 OpenCode artifacts", "Manager61", "complete Manager60 packages", "`general` v10", "verifier v7", "three CARE v2 roles", "six SDD roles", "same frozen candidate", "`vgxness mcp --full`", "eight memory and 13 SDD tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
+		"../../docs/codex-integration.md":     {"Codex Manager20", "OpenCode Manager61", "Complete Manager60 and Manager19", "memory_context", "eight memory and 13 SDD tools", "ten mutating tools", "same frozen candidate", "no automatic cloud sync", "Recalled data is untrusted"},
 		"../../docs/hooks.md":                 {"exact auto-discovered OpenCode lifecycle plugin", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "top-level session", "bounded isolated context handoff", "transcript-free compaction checkpoint", "summary completion", "completed` or `interrupted", "shell or Git hooks", "broad observability", "automatic memory injection", "no caller identity", "no runtime-security claim"},
 	}
 	for path, claims := range documents {

@@ -4,7 +4,7 @@ VGXNESS alpha releases are built from pushed, annotated or lightweight tags that
 
 ## Artifacts
 
-For version `<version>`, a release contains exactly these assets:
+The configured tag workflow produces the following assets for `<version>`; this describes the asset contract, not proof that a tag has been published:
 
 - `vgxness_<version>_linux_amd64.tar.gz`
 - `vgxness_<version>_linux_arm64.tar.gz`
@@ -12,9 +12,10 @@ For version `<version>`, a release contains exactly these assets:
 - `vgxness_<version>_darwin_arm64.tar.gz`
 - `vgxness_<version>_windows_amd64.zip`
 - `vgxness_<version>_windows_arm64.zip`
+- `vgxness-pi_<version>_portable.tar.gz`
 - `SHA256SUMS`
 
-Each archive expands to one directory named after the archive stem. That directory contains `vgxness` on Linux and macOS or `vgxness.exe` on Windows, plus `LICENSE` and `README.md`.
+Each of the six Go archives expands to one directory named after the archive stem. The portable Pi envelope has the separate layout described below. That directory contains `vgxness` on Linux and macOS or `vgxness.exe` on Windows, plus `LICENSE` and `README.md`.
 
 ## Support matrix
 
@@ -27,7 +28,7 @@ Each archive expands to one directory named after the archive stem. That directo
 | `darwin/amd64` | Preview / compile-only | Cross-built archive; no native amd64 release-archive smoke. |
 | `darwin/arm64` | Preview / workflow-gated | The active tag workflow requires release-archive version, `self preview`, `self install`, and installed-launcher `self status` smoke on standard `macos-15` ARM64; promotion awaits an observed successful tag run. |
 
-The complete repository test suite runs on Linux and Windows in CI. Windows also runs the native self-install lifecycle. The active tag workflow includes Darwin arm64 release-archive smoke on standard `macos-15` ARM64, but the support level remains preview until a successful tag run supplies observed native evidence; Darwin amd64 remains compile-only.
+CI is configured to run the complete repository test suite on Linux and Windows; support claims require observed results for the exact candidate. Windows also runs the native self-install lifecycle. The active tag workflow includes Darwin arm64 release-archive smoke on standard `macos-15` ARM64, but the support level remains preview until a successful tag run supplies observed native evidence; Darwin amd64 remains compile-only.
 
 ## Release process
 
@@ -35,7 +36,7 @@ The complete repository test suite runs on Linux and Windows in CI. Windows also
 2. Run `make verify`; native Windows installation evidence remains CI-only.
 3. After any required maintainer approval under the repository's external release policy, create and push the tag. Branch pushes do not create releases.
 4. The active tag workflow calls the complete standard validation workflow at the exact tagged SHA while independently deriving the exact 40-character commit and its committer RFC3339 date and running `go run ./cmd/vgxness-release` with those values.
-5. Publication requires standard validation, complete asset construction, checksum verification, native Linux amd64 smoke, Windows amd64 smoke, and Darwin arm64 release-archive smoke on standard `macos-15` ARM64. The publish job verifies `SHA256SUMS`, attests `dist/*` with GitHub Actions provenance, then publishes the six archives and `SHA256SUMS` with `gh release create --verify-tag`.
+5. Publication requires standard validation, complete asset construction, checksum verification, native Linux amd64 smoke, Windows amd64 smoke, and Darwin arm64 release-archive smoke on standard `macos-15` ARM64. The publish job verifies `SHA256SUMS`, attests `dist/*` with GitHub Actions provenance, then publishes the six Go archives, portable Pi archive and `SHA256SUMS` with `gh release create --verify-tag`.
 
 If a future execution of the proposed workflow fails after GitHub creates a
 draft release or uploads only part of the asset set, a workflow rerun is not
@@ -164,3 +165,11 @@ Application rollback is local and one level deep; it changes the active immutabl
 ## Pi portable package
 
 The separate `vgxness-release pi --output /absolute/new-directory` assembler emits one portable TypeScript tarball plus checksums and provenance. It performs no Pi backend cross-builds and does not publish or install. See [Pi TypeScript packaging and setup](pi-typescript.md) for the Node/host requirements, offline provisioning, migration resources, and isolated health check.
+
+## Pi portable asset
+
+The configured release distribution contains six Go archives, one portable Pi archive, and `SHA256SUMS`. The Pi asset is `vgxness-pi_<version>_portable.tar.gz`; its outer archive contains the inner Pi tgz, `PROVENANCE.json`, `SHA256SUMS`, and `RELEASE.json`, binding tag, commit, package version, and source digest. Build into a new directory outside the repository with `vgxness-release pi --output <new-dir> --release-version vX.Y.Z --commit <40-lowercase-hex>`.
+
+The workflow builds this pinned Pi asset before Go assets and appends its validated checksum. Download integrity is the trusted GitHub publisher plus TLS and same-origin checksum validation; it is not an independent signature or automatic attestation verification. Operators may inspect existing GitHub attestations manually.
+
+The inner offline package still contains exactly its tgz, `PROVENANCE.json` and `SHA256SUMS`. Its historical `local source snapshot; unpublished` provenance label describes offline assembly; the outer `RELEASE.json` binds release metadata, while actual publication is a separate observed operation. Acquisition trusts the fixed `uzielvgx/vgxness` GitHub release publisher. It does not verify attestations automatically. No public release is performed by a local rehearsal.

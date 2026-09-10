@@ -40,11 +40,16 @@ jobs:
           set -euo pipefail
           commit="$(git rev-parse "$GITHUB_REF_NAME^{commit}")"
           date="$(git show -s --format=%cI "$commit")"
+          pi_root="$(mktemp -d)"
+          pi_dist="$pi_root/release"
+          go run ./cmd/vgxness-release pi --output "$pi_dist" --release-version "$GITHUB_REF_NAME" --commit "$commit"
           go run ./cmd/vgxness-release \
             --version "$GITHUB_REF_NAME" \
             --commit "$commit" \
             --date "$date" \
             --output dist
+          cp "$pi_dist"/vgxness-pi_*_portable.tar.gz dist/
+          cat "$pi_dist/SHA256SUMS" >> dist/SHA256SUMS
           printf 'RELEASE_COMMIT=%s\nRELEASE_DATE=%s\n' "$commit" "$date" >> "$GITHUB_ENV"
           printf 'commit=%s\ndate=%s\n' "$commit" "$date" >> "$GITHUB_OUTPUT"
       - name: Verify Linux artifact and self-install
@@ -196,6 +201,7 @@ jobs:
             "dist/vgxness_${version}_darwin_arm64.tar.gz"
             "dist/vgxness_${version}_windows_amd64.zip"
             "dist/vgxness_${version}_windows_arm64.zip"
+            "dist/vgxness-pi_${version}_portable.tar.gz"
             "dist/SHA256SUMS"
           )
           release_flags=()

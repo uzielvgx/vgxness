@@ -923,7 +923,7 @@ func predecessorBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
 	v1 := current
 	careV1 := current
 	var err error
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
 		v1, err = immediatePredecessor(current)
 		if err != nil {
 			return nil, err
@@ -2340,7 +2340,7 @@ func activateManagerV57(value []byte, marker string) ([]byte, error) {
 }
 
 func activateManagerV59(value []byte) ([]byte, error) {
-	if bytes.Count(value, []byte(managerV58Marker)) != 1 || bytes.Count(value, []byte("`stacked-pr`")) != 1 {
+	if countModelPlanMarker(value, []byte(managerV58Marker)) != 1 || countModelPlanMarker(value, []byte("`stacked-pr`")) != 1 {
 		return nil, integration.ErrInvalid
 	}
 	value = bytes.Replace(value, []byte(managerV58Marker), []byte(managerV59Marker), 1)
@@ -2349,12 +2349,12 @@ func activateManagerV59(value []byte) ([]byte, error) {
 }
 
 func activateManagerV60(value []byte) ([]byte, error) {
-	if bytes.Count(value, []byte(managerV59Marker)) != 1 || bytes.Count(value, []byte("\n\nContract identity:")) != 1 || bytes.Contains(value, []byte(orchestration.PedagogicalExecutionBrief)) {
+	if countModelPlanMarker(value, []byte(managerV59Marker)) != 1 || countModelPlanMarker(value, []byte("\n\nContract identity:")) != 1 || bytes.Contains(value, []byte(orchestration.PedagogicalExecutionBrief)) {
 		return nil, integration.ErrInvalid
 	}
 	value = bytes.Replace(value, []byte(managerV59Marker), []byte(managerCurrentMarker), 1)
 	value = bytes.Replace(value, []byte("\n\nContract identity:"), []byte("\n\n"+orchestration.PedagogicalExecutionBrief+"\n\nContract identity:"), 1)
-	if bytes.Count(value, []byte(managerCurrentMarker)) != 1 || bytes.Count(value, []byte(orchestration.PedagogicalExecutionBrief)) != 1 {
+	if countModelPlanMarker(value, []byte(managerCurrentMarker)) != 1 || countModelPlanMarker(value, []byte(orchestration.PedagogicalExecutionBrief)) != 1 {
 		return nil, integration.ErrInvalid
 	}
 	return value, nil
@@ -2362,7 +2362,7 @@ func activateManagerV60(value []byte) ([]byte, error) {
 
 // activateManagerV58 independently preserves the complete CARE-v2 Manager58 package.
 func activateManagerV58(value []byte) ([]byte, error) {
-	if bytes.Count(value, []byte(managerPreviousMarker)) != 1 {
+	if countModelPlanMarker(value, []byte(managerPreviousMarker)) != 1 {
 		return nil, integration.ErrInvalid
 	}
 	value = bytes.Replace(value, []byte(managerPreviousMarker), []byte(managerV58Marker), 1)
@@ -2370,7 +2370,7 @@ func activateManagerV58(value []byte) ([]byte, error) {
 }
 
 func validateCurrentManagerAnchors(value []byte) error {
-	if bytes.Count(value, []byte(currentManagerAssurance)) != 1 || bytes.Count(value, []byte(managerReviewDepthV56Previous)) != 1 || bytes.Count(value, []byte(historicalOpenCodeRefuterRouting)) != 1 || bytes.Count(value, []byte(historicalOpenCodeRefuterBinding)) != 1 || bytes.Count(value, []byte(historicalOpenCodeRefuterHandoff)) != 1 {
+	if countModelPlanMarker(value, []byte(currentManagerAssurance)) != 1 || countModelPlanMarker(value, []byte(managerReviewDepthV56Previous)) != 1 || countModelPlanMarker(value, []byte(historicalOpenCodeRefuterRouting)) != 1 || countModelPlanMarker(value, []byte(historicalOpenCodeRefuterBinding)) != 1 || countModelPlanMarker(value, []byte(historicalOpenCodeRefuterHandoff)) != 1 {
 		return integration.ErrInvalid
 	}
 	return nil
@@ -2406,31 +2406,31 @@ func previousManagerV49(current []byte) []byte {
 		current = preserveVariantShape(current, old)
 	}
 
-	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV57(current)
 	}
-	if bytes.Count(current, []byte(managerV57Marker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerV57Marker)) == 1 {
 		current = previousManagerV56(current)
 	}
-	if bytes.Count(current, []byte(managerV56Marker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerV56Marker)) == 1 {
 		current = previousManagerV55(current)
 	}
-	if bytes.Count(current, []byte(managerPreviousMarker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerPreviousMarker)) == 1 {
 		current = previousManagerV54(current)
 	}
-	if bytes.Count(current, []byte(managerV54Marker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerV54Marker)) == 1 {
 		current = previousManagerV53(current)
 	}
-	if bytes.Count(current, []byte(managerV53Marker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerV53Marker)) == 1 {
 		current = previousManagerV52(current)
 	}
-	if bytes.Count(current, []byte(managerV52Marker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerV52Marker)) == 1 {
 		current = previousManagerV51(current)
 	}
-	if bytes.Count(current, []byte(managerV51Marker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerV51Marker)) == 1 {
 		current = previousManagerV50(current)
 	}
-	if bytes.Count(current, []byte(managerV50Marker)) != 1 {
+	if countModelPlanMarker(current, []byte(managerV50Marker)) != 1 {
 		return nil
 	}
 	assignment, err := promptAssignment(current)
@@ -2493,7 +2493,7 @@ func previousManagerV52(current []byte) []byte {
 		{old: managerV53Marker, new: managerV52Marker},
 		{old: "\n\n" + orchestration.ReadinessManagerContract + "\n", new: ""},
 	}
-	if bytes.Count(current, []byte(managerReviewerCandidateCapsule)) == 1 {
+	if countModelPlanMarker(current, []byte(managerReviewerCandidateCapsule)) == 1 {
 		replacements = append(replacements, textReplacement{old: managerReviewerCandidateCapsule, new: "Reviewer mission schema: mode, the Review Binding, candidate identity (candidateIdentity), exact changedPaths, diffScope, exact skills, verificationEvidence"})
 	}
 	return derivePredecessor(current, replacements)
@@ -2512,7 +2512,7 @@ func previousManagerV53(current []byte) []byte {
 		current = preserveVariantShape(current, old)
 	}
 
-	if bytes.Count(current, []byte(managerV54Marker)) != 1 || bytes.Count(current, []byte(managerV53Marker)) != 0 {
+	if countModelPlanMarker(current, []byte(managerV54Marker)) != 1 || countModelPlanMarker(current, []byte(managerV53Marker)) != 0 {
 		return nil
 	}
 	return derivePredecessor(current, []textReplacement{
@@ -2534,10 +2534,10 @@ func previousManagerV54(current []byte) []byte {
 		current = preserveVariantShape(current, old)
 	}
 
-	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV55(current)
 	}
-	if bytes.Count(current, []byte(managerPreviousMarker)) != 1 || bytes.Count(current, []byte(managerCurrentMarker)) != 0 {
+	if countModelPlanMarker(current, []byte(managerPreviousMarker)) != 1 || countModelPlanMarker(current, []byte(managerCurrentMarker)) != 0 {
 		return nil
 	}
 	return derivePredecessor(current, []textReplacement{{old: managerPreviousMarker, new: managerV54Marker}, {old: "\n\n" + currentManagerCandidateCapsuleContract, new: ""}})
@@ -2556,10 +2556,10 @@ func previousManagerV55(current []byte) []byte {
 		current = preserveVariantShape(current, old)
 	}
 
-	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV57(current)
 	}
-	if bytes.Count(current, []byte(managerV56Marker)) != 1 || bytes.Count(current, []byte(managerPreviousMarker)) > 0 {
+	if countModelPlanMarker(current, []byte(managerV56Marker)) != 1 || countModelPlanMarker(current, []byte(managerPreviousMarker)) > 0 {
 		return nil
 	}
 	return derivePredecessor(current, []textReplacement{{old: managerV56Marker, new: managerPreviousMarker}, {old: strictOpenCodeCAREAssurance, new: historicalOpenCodeCAREBypass}, {old: currentOpenCodeCAREChallengerRouting, new: historicalOpenCodeRefuterRouting}, {old: currentOpenCodeCAREBinding, new: historicalOpenCodeRefuterBinding}, {old: currentOpenCodeCAREHandoff, new: historicalOpenCodeRefuterHandoff}, {old: managerReviewDepthV56, new: currentManagerReviewDepth}})
@@ -2578,10 +2578,10 @@ func previousManagerV56(current []byte) []byte {
 		current = preserveVariantShape(current, old)
 	}
 
-	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV57(current)
 	}
-	if bytes.Count(current, []byte(managerV57Marker)) != 1 {
+	if countModelPlanMarker(current, []byte(managerV57Marker)) != 1 {
 		return nil
 	}
 	assignment, err := promptAssignment(current)
@@ -2608,13 +2608,13 @@ func previousManagerV57(current []byte) []byte {
 		current = preserveVariantShape(current, old)
 	}
 
-	if bytes.Count(current, []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerCurrentMarker)) == 1 {
 		current = previousManagerV59(current)
 	}
-	if bytes.Count(current, []byte(managerV59Marker)) == 1 {
+	if countModelPlanMarker(current, []byte(managerV59Marker)) == 1 {
 		current = previousManagerV58(current)
 	}
-	if bytes.Count(current, []byte(managerV58Marker)) != 1 {
+	if countModelPlanMarker(current, []byte(managerV58Marker)) != 1 {
 		return nil
 	}
 	return previousManagerV57FromV58(current)
@@ -2633,7 +2633,7 @@ func previousManagerV58(current []byte) []byte {
 		current = preserveVariantShape(current, old)
 	}
 
-	if bytes.Count(current, []byte(managerV59Marker)) != 1 || bytes.Count(current, []byte("`git-delivery`")) != 1 {
+	if countModelPlanMarker(current, []byte(managerV59Marker)) != 1 || countModelPlanMarker(current, []byte("`git-delivery`")) != 1 {
 		return nil
 	}
 	value := bytes.Replace(current, []byte(managerV59Marker), []byte(managerV58Marker), 1)
@@ -2654,7 +2654,7 @@ func previousManagerV59(current []byte) []byte {
 		current = preserveVariantShape(current, old)
 	}
 
-	if bytes.Count(current, []byte(managerCurrentMarker)) != 1 || bytes.Count(current, []byte(orchestration.PedagogicalExecutionBrief)) != 1 {
+	if countModelPlanMarker(current, []byte(managerCurrentMarker)) != 1 || countModelPlanMarker(current, []byte(orchestration.PedagogicalExecutionBrief)) != 1 {
 		return nil
 	}
 	value := bytes.Replace(current, []byte(managerCurrentMarker), []byte(managerV59Marker), 1)
@@ -2825,7 +2825,7 @@ func previousV53ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		}
 	}
 	for name, marker := range map[string]string{managerAgentName: managerV54Marker, verifierAgentName: verifierCurrentMarker} {
-		if bytes.Count(current.agents[name], []byte(marker)) != 1 {
+		if countModelPlanMarker(current.agents[name], []byte(marker)) != 1 {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
 	}
@@ -2855,13 +2855,13 @@ func previousV54ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
 		current, err = previousV55ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
 		}
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) != 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerPreviousMarker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	agents := cloneAgents(current.agents)
@@ -2886,30 +2886,30 @@ func previousV55ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
 		current, err = previousV57ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
 		}
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 {
 		current, err = previousV56ModelPlanBundle(current)
 		if err != nil {
 			return modelPlanBundle{}, err
 		}
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
 		return current, nil
 	}
-	if current.configV3 == nil && current.resolvedV3 == nil && bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) == 0 {
+	if current.configV3 == nil && current.resolvedV3 == nil && countModelPlanMarker(current.agents[managerAgentName], []byte(managerV56Marker)) == 0 {
 		if _, ok := current.agents[reviewRiskName]; !ok {
 			return legacyFixedLensBundle(current)
 		}
-		if bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
+		if countModelPlanMarker(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
 			return current, nil
 		}
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) != 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerV56Marker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	agents := cloneAgents(current.agents)
@@ -2929,7 +2929,7 @@ func previousV56ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		}
 	}
 
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
 		var err error
 		current, err = previousCAREV1ModelPlanBundle(current)
 		if err != nil {
@@ -2940,10 +2940,10 @@ func previousV56ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 			return modelPlanBundle{}, err
 		}
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerV56Marker)) == 1 || countModelPlanMarker(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
 		return current, nil
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) != 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerV57Marker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	agents := cloneAgents(current.agents)
@@ -2963,10 +2963,10 @@ func previousV57ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, error
 		}
 	}
 
-	if bytes.Count(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerV56Marker)) == 1 || bytes.Count(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerV57Marker)) == 1 || countModelPlanMarker(current.agents[managerAgentName], []byte(managerV56Marker)) == 1 || countModelPlanMarker(current.agents[managerAgentName], []byte(managerPreviousMarker)) == 1 {
 		return current, nil
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 && bytes.Count(current.agents[managerAgentName], []byte(managerV59Marker)) != 1 && bytes.Count(current.agents[managerAgentName], []byte(managerV58Marker)) != 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerCurrentMarker)) != 1 && countModelPlanMarker(current.agents[managerAgentName], []byte(managerV59Marker)) != 1 && countModelPlanMarker(current.agents[managerAgentName], []byte(managerV58Marker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	var err error
@@ -2991,7 +2991,7 @@ func previousCAREV1ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, er
 		}
 	}
 
-	if bytes.Count(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerCurrentMarker)) == 1 {
 		agents := cloneAgents(current.agents)
 		agents[managerAgentName] = previousManagerV59(agents[managerAgentName])
 		if len(agents[managerAgentName]) == 0 {
@@ -3003,14 +3003,14 @@ func previousCAREV1ModelPlanBundle(current modelPlanBundle) (modelPlanBundle, er
 		}
 		return previousCAREV1ModelPlanBundle(predecessor)
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerV59Marker)) != 1 && bytes.Count(current.agents[managerAgentName], []byte(managerV58Marker)) != 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerV59Marker)) != 1 && countModelPlanMarker(current.agents[managerAgentName], []byte(managerV58Marker)) != 1 {
 		return modelPlanBundle{}, integration.ErrInvalid
 	}
 	current, err := normalizeCAREV1(current)
 	if err != nil {
 		return modelPlanBundle{}, err
 	}
-	if bytes.Count(current.agents[managerAgentName], []byte(managerV59Marker)) == 1 {
+	if countModelPlanMarker(current.agents[managerAgentName], []byte(managerV59Marker)) == 1 {
 		agents := cloneAgents(current.agents)
 		agents[managerAgentName] = previousManagerV58(agents[managerAgentName])
 		if len(agents[managerAgentName]) == 0 {
@@ -3058,7 +3058,7 @@ func normalizeCAREV1(current modelPlanBundle) (modelPlanBundle, error) {
 			continue
 		}
 		marker := "artifact: opencode-agent/vgxness-care-" + strings.TrimSuffix(strings.TrimPrefix(item.name, "vgxness-care-"), ".md") + "; version: 2"
-		if bytes.Count(content, []byte(marker)) != 1 {
+		if countModelPlanMarker(content, []byte(marker)) != 1 {
 			return modelPlanBundle{}, integration.ErrInvalid
 		}
 		agents[item.name] = bound
@@ -3072,7 +3072,7 @@ func normalizeCAREV1(current modelPlanBundle) (modelPlanBundle, error) {
 	return encodeLike(current, agents)
 }
 
-func supportedHistoricalModelPlanBundles(current modelPlanBundle) ([]modelPlanBundle, error) {
+func supportedHistoricalModelPlanBundlesUncached(current modelPlanBundle) ([]modelPlanBundle, error) {
 	bundles := []modelPlanBundle{current}
 	if isSharedManagerBundle(current) {
 		old, e := managerV60Bundle(current)
@@ -3081,30 +3081,88 @@ func supportedHistoricalModelPlanBundles(current modelPlanBundle) ([]modelPlanBu
 		}
 		bundles = append(bundles, old)
 	}
-	for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
-		immediatePredecessor,
-		previousCAREV1ModelPlanBundle,
-		previousV57ModelPlanBundle,
-		previousV56ModelPlanBundle,
-		previousV55ModelPlanBundle,
-		previousV54ModelPlanBundle,
-		previousV53ModelPlanBundle,
-		previousV52ModelPlanBundle,
-		previousV51ModelPlanBundle,
-		previousV50ModelPlanBundle,
-		previousV49ModelPlanBundle,
-		previousV48ModelPlanBundle,
-		previousV47ModelPlanBundle,
-		previousV46ModelPlanBundle,
-		previousV45ModelPlanBundle,
-		previousV44ModelPlanBundle,
-		previousV43ModelPlanBundle,
-	} {
-		bundle, err := predecessor(current)
+	// V1 has distinct role-map normalization paths; mixed schema pointers
+	// also retain the original conversion and error ordering.
+	v2 := current.configV2 != nil && current.resolvedV2 != nil && current.configV3 == nil && current.resolvedV3 == nil
+	v3 := current.configV3 != nil && current.resolvedV3 != nil && current.configV2 == nil && current.resolvedV2 == nil
+	if v2 || v3 {
+		immediate, err := immediatePredecessor(current)
 		if err != nil {
 			return nil, err
 		}
-		bundles = append(bundles, bundle)
+		bundles = append(bundles, immediate)
+		careV1, err := previousCAREV1ModelPlanBundle(current)
+		if err != nil {
+			return nil, err
+		}
+		bundles = append(bundles, careV1)
+		// Retain each intermediate instead of repeating its predecessor chain.
+		chain, err := previousV57ModelPlanBundle(current)
+		if err != nil {
+			return nil, err
+		}
+		bundles = append(bundles, chain)
+		for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
+			previousV56ModelPlanBundle, previousV55ModelPlanBundle,
+			previousV54ModelPlanBundle, previousV53ModelPlanBundle,
+			previousV52ModelPlanBundle, previousV51ModelPlanBundle,
+			previousV50ModelPlanBundle,
+		} {
+			chain, err = predecessor(chain)
+			if err != nil {
+				return nil, err
+			}
+			bundles = append(bundles, chain)
+		}
+		v49, err := previousV49ModelPlanBundle(chain)
+		if err != nil {
+			return nil, err
+		}
+		bundles = append(bundles, v49)
+		for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
+			previousV48ModelPlanBundle, previousV47ModelPlanBundle, previousV46ModelPlanBundle,
+		} {
+			bundle, err := predecessor(v49)
+			if err != nil {
+				return nil, err
+			}
+			bundles = append(bundles, bundle)
+		}
+		for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
+			previousV45ModelPlanBundle, previousV44ModelPlanBundle, previousV43ModelPlanBundle,
+		} {
+			bundle, err := predecessor(current)
+			if err != nil {
+				return nil, err
+			}
+			bundles = append(bundles, bundle)
+		}
+	} else {
+		for _, predecessor := range []func(modelPlanBundle) (modelPlanBundle, error){
+			immediatePredecessor,
+			previousCAREV1ModelPlanBundle,
+			previousV57ModelPlanBundle,
+			previousV56ModelPlanBundle,
+			previousV55ModelPlanBundle,
+			previousV54ModelPlanBundle,
+			previousV53ModelPlanBundle,
+			previousV52ModelPlanBundle,
+			previousV51ModelPlanBundle,
+			previousV50ModelPlanBundle,
+			previousV49ModelPlanBundle,
+			previousV48ModelPlanBundle,
+			previousV47ModelPlanBundle,
+			previousV46ModelPlanBundle,
+			previousV45ModelPlanBundle,
+			previousV44ModelPlanBundle,
+			previousV43ModelPlanBundle,
+		} {
+			bundle, err := predecessor(current)
+			if err != nil {
+				return nil, err
+			}
+			bundles = append(bundles, bundle)
+		}
 	}
 	legacyCurrent, err := buildModelPlanBundle(sdd.DefaultModelPlanConfig())
 	if err != nil {
@@ -3365,7 +3423,7 @@ func preserveVariantShape(current, candidate []byte) []byte {
 }
 
 func previousGeneralV7(current []byte) []byte {
-	if bytes.Count(current, []byte(generalCurrentMarker)) == 1 {
+	if countModelPlanMarker(current, []byte(generalCurrentMarker)) == 1 {
 		current = previousGeneralV9(current)
 		if len(current) == 0 {
 			return nil
@@ -3378,7 +3436,7 @@ func previousGeneralV7(current []byte) []byte {
 	if predecessor := derivePredecessor(current, []textReplacement{{old: generalV8Marker, new: generalV7Marker}, {old: "\n\n" + currentGeneralSDDHandoff, new: ""}, {old: activeChildContextContract, new: nativeChildContextContract}}); len(predecessor) != 0 {
 		return predecessor
 	}
-	if bytes.Count(current, []byte(generalV7Marker)) != 1 {
+	if countModelPlanMarker(current, []byte(generalV7Marker)) != 1 {
 		return nil
 	}
 	return derivePredecessor(previousGeneralV6FromCurrent(current), []textReplacement{{old: generalV6Marker, new: generalV7Marker}})
@@ -3400,7 +3458,7 @@ func legacyMutationReplacements(current []byte, replacements []textReplacement) 
 }
 
 func previousGeneralV6(current []byte) []byte {
-	if bytes.Count(current, []byte(generalV7Marker)) != 1 {
+	if countModelPlanMarker(current, []byte(generalV7Marker)) != 1 {
 		return nil
 	}
 	assignment, err := promptAssignment(current)
@@ -3422,7 +3480,7 @@ func previousVerifierPredecessor(current []byte) []byte {
 }
 
 func previousVerifierV4(current []byte) []byte {
-	if bytes.Count(current, []byte(verifierV5Marker)) != 1 {
+	if countModelPlanMarker(current, []byte(verifierV5Marker)) != 1 {
 		return nil
 	}
 	assignment, err := promptAssignment(current)
@@ -3437,14 +3495,14 @@ func previousVerifierV4(current []byte) []byte {
 }
 
 func previousVerifierV5(current []byte) []byte {
-	if bytes.Count(current, []byte(verifierCurrentMarker)) == 1 {
+	if countModelPlanMarker(current, []byte(verifierCurrentMarker)) == 1 {
 		current = previousVerifierV6(current)
 	}
 	return derivePredecessor(current, []textReplacement{{old: verifierV6Marker, new: verifierV5Marker}, {old: activeChildContextContract, new: nativeChildContextContract}})
 }
 
 func previousVerifierV6(current []byte) []byte {
-	if bytes.Count(current, []byte(verifierCurrentMarker)) != 1 || bytes.Count(current, []byte(verifierV6Marker)) != 0 {
+	if countModelPlanMarker(current, []byte(verifierCurrentMarker)) != 1 || countModelPlanMarker(current, []byte(verifierV6Marker)) != 0 {
 		return nil
 	}
 	return derivePredecessor(current, legacyMutationReplacements(current, []textReplacement{{old: verifierCurrentMarker, new: verifierV6Marker}}))
@@ -3475,7 +3533,7 @@ func bindExploreTemplate(base, marker string, assignment sdd.OpenCodeRoleAssignm
 }
 
 func previousExploreV2(current []byte) []byte {
-	if bytes.Count(current, []byte(exploreV3Marker)) != 1 {
+	if countModelPlanMarker(current, []byte(exploreV3Marker)) != 1 {
 		return nil
 	}
 	assignment, err := promptAssignment(current)
@@ -3631,20 +3689,20 @@ func previousSDDAgentPredecessor(role sdd.Role, current []byte) []byte {
 		v5Marker := fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: 5", role)
 		v4Marker := fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: 4", role)
 		v3Marker := fmt.Sprintf("artifact: opencode-agent/vgxness-sdd-%s; version: 3", role)
-		if bytes.Count(current, []byte(v7Marker)) == 1 {
+		if countModelPlanMarker(current, []byte(v7Marker)) == 1 {
 			return derivePredecessor(current, []textReplacement{{old: v7Marker, new: v6Marker}, {old: "\n\n" + orchestration.ReadinessWriterContract, new: ""}})
 		}
-		if bytes.Count(current, []byte(v6Marker)) == 1 {
+		if countModelPlanMarker(current, []byte(v6Marker)) == 1 {
 			assignment, err := promptAssignment(current)
 			if err != nil {
 				return nil
 			}
 			return []byte(readOnlySDDApplyV5Prompt(assignment))
 		}
-		if bytes.Count(current, []byte(v5Marker)) == 1 {
+		if countModelPlanMarker(current, []byte(v5Marker)) == 1 {
 			return derivePredecessor(current, []textReplacement{{old: v5Marker, new: v4Marker}})
 		}
-		if bytes.Count(current, []byte(v4Marker)) == 1 {
+		if countModelPlanMarker(current, []byte(v4Marker)) == 1 {
 			return derivePredecessor(current, []textReplacement{{old: v4Marker, new: v3Marker}})
 		}
 		return nil
@@ -3767,4 +3825,10 @@ func installedModelPlan(configDirectory string) (modelPlanBundle, map[string][]b
 	}
 	current[manifestPath] = data
 	return bundle, current, true
+}
+
+// Count the same bytes through an immutable string snapshot. This avoids
+// repeated mutable-byte race instrumentation during historical reconstruction.
+func countModelPlanMarker(data, marker []byte) int {
+	return strings.Count(string(data), string(marker))
 }

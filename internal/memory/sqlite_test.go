@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -1091,13 +1092,18 @@ func TestOpenHelperProcess(t *testing.T) {
 func TestOpen_ConcurrentFreshProcesses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	commands := make([]*exec.Cmd, 4)
+	outputs := make([]bytes.Buffer, len(commands))
 	for index := range commands {
 		commands[index] = exec.Command(os.Args[0], "-test.run=^TestOpenHelperProcess$")
 		commands[index].Env = append(os.Environ(), "VGXNESS_OPEN_HELPER=1", "VGXNESS_DB_PATH="+path)
+		commands[index].Stdout = &outputs[index]
+		commands[index].Stderr = &outputs[index]
 		testutil.NoError(t, commands[index].Start())
 	}
-	for _, command := range commands {
-		testutil.NoError(t, command.Wait())
+	for index, command := range commands {
+		if err := command.Wait(); err != nil {
+			t.Errorf("open child %d: %v\n%s", index, err, outputs[index].String())
+		}
 	}
 	version, err := HealthFile(context.Background(), path)
 	testutil.Require(t, err == nil && version == 23, "concurrent health=%d err=%v", version, err)

@@ -1,7 +1,9 @@
+import { frameReadOutcome } from "./tools/read-outcome.ts";
 import { renderPiManagerPrompt } from "./orchestration/adapter.ts";
 import { createSkillTool } from "./tools/skill.ts";
 import { loadManagerContract, renderManagerPrompt } from "./orchestration/contract.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { delimiter, dirname, join } from "node:path";
 import { constants } from "node:fs";
@@ -19,6 +21,8 @@ import { SessionAdapter } from "./session/adapter.ts";
 import { discoverSkillPaths } from "./skills/catalog.ts";
 import { createTaskTool } from "./tools/task.ts";
 import { executePiWorker } from "./workers/runner.ts";
+import { nativeStatusView, nativeWorkersView, nativeMemoryView, readonlySnapshot, loadingView } from "./views.ts";
+import { WorkerResultError } from "./workers/result.ts";
 
 const handoffSchema = Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4096 }) }, { additionalProperties: false });
 type ExtensionApi = { registerCommand?(name: string, command: any): void; getCommands?(): any[]; registerTool(tool: unknown): void; on(event: string, handler: (event: any, ctx: any) => unknown): void; appendEntry(type: string, data: unknown): void };
@@ -118,19 +122,19 @@ async function prepareWorkerAuthentication(context: any, mission: any) {
   const id = mission.model.slice(slash + 1);
   const registry = context?.modelRegistry;
   const model = runtimeModels(context).find((item: any) => item.provider === provider && item.id === id);
-  if (!model || !registry?.find?.(provider, id) || !registry?.hasConfiguredAuth?.(model)) throw new Error("selected worker model authentication unavailable");
+  if (!model || !registry?.find?.(provider, id) || !registry?.hasConfiguredAuth?.(model)) throw Object.assign(new Error("worker authentication unavailable"), { code: "worker_unavailable" });
   const auth = await registry.getApiKeyAndHeaders(model);
-  if (!auth?.ok || auth.env || typeof auth.apiKey !== "string") throw new Error("selected worker authentication transport unsupported");
+  if (!auth?.ok || auth.env || typeof auth.apiKey !== "string") throw Object.assign(new Error("worker authentication unavailable"), { code: "worker_unavailable" });
   return { provider, apiKey: auth.apiKey, headers: auth.headers, baseUrl: auth.baseUrl, model: { id: model.id, name: model.name, api: model.api, baseUrl: model.baseUrl, reasoning: model.reasoning, thinkingLevelMap: model.thinkingLevelMap, input: model.input, cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens, samplingParams: model.samplingParams, headers: model.headers, compat: model.compat } };
 }
 
-function runtimeTaskTool(host: PiToolHost, context: () => any, workerCli?: string) {
+function runtimeTaskTool(host: PiToolHost, context: () => any, workerCli?: string, injected?: (mission: any, signal?: AbortSignal, auth?: unknown, authority?: Readonly<{ expiresAt: number }>) => Promise<string>) {
   const runnerModule = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "workers/runner.ts")).href;
   return createTaskTool({
     ...host,
-    supportsModel: (selected, effort) => supportsWorkerModel(context(), selected, effort),
-    prepareWorker: async (mission) => await prepareWorkerAuthentication(context(), mission),
-    executeWorker: workerCli ? async (mission, signal, auth) => await executePiWorker(mission, { cli: workerCli, runnerModule, signal, auth }) : undefined,
+    supportsModel: injected ? undefined : (selected, effort) => supportsWorkerModel(context(), selected, effort),
+    prepareWorker: injected ? undefined : async (mission) => await prepareWorkerAuthentication(context(), mission),
+    executeWorker: injected ?? (workerCli ? async (mission, signal, auth, authority) => await executePiWorker(mission, { cli: workerCli, runnerModule, signal, auth, authority }) : undefined),
     verifyAcceptedBinding: acceptedBindingVerifier(host),
   });
 }
@@ -138,7 +142,7 @@ function runtimeTaskTool(host: PiToolHost, context: () => any, workerCli?: strin
 export function createPiTools(host: PiToolHost, pi: ExtensionApi) {
   return [createQuestionTool(), createTodoWriteTool(pi), createApplyPatchTool(host), ...createMemoryTools(host), createSddTool(host), createModelTool(host), ...(host.role === "manager" ? [createTaskTool(host), createSkillTool()] : [])];
 }
-export function createPiExtension(options: { workspace?: string; storageRoot?: string; credentialFile?: string; mode?: "full" | "read-only"; role?: string; resolvePackage?: (name: string) => Promise<string>; backend?: () => Promise<any>; workerCli?: string } = {}) {
+export function createPiExtension(options: { workspace?: string; storageRoot?: string; credentialFile?: string; mode?: "full" | "read-only"; role?: string; resolvePackage?: (name: string) => Promise<string>; backend?: () => Promise<any>; workerCli?: string; executeWorker?: (mission: any, signal?: AbortSignal, auth?: unknown, authority?: Readonly<{ expiresAt: number }>) => Promise<string> } = {}) {
   return async function extension(pi: ExtensionApi) {
     const workspace = await realpath(options.workspace ?? process.cwd());
     let startup: Promise<any> | undefined;
@@ -147,17 +151,18 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
     const managerPrompt = role === "manager" ? await readFile(join(dirname(fileURLToPath(import.meta.url)), "../resources/prompts/manager.md"), "utf8") : "";
     if (role === "manager" && managerPrompt !== renderPiManagerPrompt(loadManagerContract())) throw new Error("generated Manager prompt drift");
     let runtimeContext: any;
-    const host: PiToolHost & { modelCatalog: () => any } = { workspace, mode, role, storageRoot: options.storageRoot, modelCatalog: () => modelCatalog(runtimeContext), backend: () => {
+    let sessions: SessionAdapter;
+    const host: PiToolHost & { modelCatalog: () => any; mutationGrant: () => import("./session/adapter.ts").MutationGrant } = { workspace, mode, role, storageRoot: options.storageRoot, modelCatalog: () => modelCatalog(runtimeContext), mutationGuard: () => sessions.assertMutation(), mutationSignal: () => sessions.mutationSignal(), mutationGrant: () => sessions.mutationGrant(), backend: () => {
       if (!startup) startup = (async () => {
         if (options.backend) return await options.backend();
         return createNativeDispatcher({ workspace, storageRoot: options.storageRoot, credentialFile: options.credentialFile ?? process.env.VGXNESS_PI_CREDENTIAL_FILE, mode, role });
       })();
       return startup;
     } };
-    const sessions = new SessionAdapter(host);
+    sessions = new SessionAdapter(host);
     const workerCli = options.workerCli ?? process.env.VGXNESS_PI_CLI ?? await discoverWorkerCli();
-    const workerStates = new Map<string, { role: string; state: string; startedAt: string; durationMs?: number; error?: string }>();
-    const tools = createPiTools(host, pi).map((tool: any) => tool.name === "task" ? runtimeTaskTool(host, () => runtimeContext, workerCli) : tool);
+    const workerStates = new Map<string, any>();
+    const tools = createPiTools(host, pi).map((tool: any) => tool.name === "task" ? runtimeTaskTool(host, () => runtimeContext, workerCli, options.executeWorker) : tool);
     for (const tool of tools) {
       if (tool.name === "task") {
         const execute = tool.execute;
@@ -165,8 +170,8 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
           const started = Date.now();
           workerStates.set(id, { role: input?.role ?? "unknown", state: "running", startedAt: new Date(started).toISOString() });
           while (workerStates.size > 32) workerStates.delete(workerStates.keys().next().value!);
-          try { const result = await execute(id, input, ...args); workerStates.set(id, { role: input.role, state: "completed", startedAt: new Date(started).toISOString(), durationMs: Date.now() - started }); return result; }
-          catch (error) { workerStates.set(id, { role: input?.role ?? "unknown", state: args[0]?.aborted ? "cancelled" : "failed", startedAt: new Date(started).toISOString(), durationMs: Date.now() - started, error: error instanceof Error ? error.message.slice(0, 256) : "worker failed" }); throw error; }
+          try { const result = await execute(id, input, ...args); const terminal=(result as any)?.details?.result; if (terminal) workerStates.set(id, terminal); while(workerStates.size>32)workerStates.delete(workerStates.keys().next().value!); return result; }
+          catch (error) { const terminal=(error as any)?.result; if (terminal) workerStates.set(id, terminal); else workerStates.delete(id); while(workerStates.size>32)workerStates.delete(workerStates.keys().next().value!); throw error; }
         };
       }
       pi.registerTool(tool);
@@ -177,15 +182,21 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
       const client = await createNativeDispatcher({ ...binding, storageRoot: options.storageRoot, credentialFile: options.credentialFile ?? process.env.VGXNESS_PI_CREDENTIAL_FILE });
       try { return await client.request(operation, payload, binding); } finally { await client.close(); }
     };
+    const packageVersion = JSON.parse(await readFile(join(dirname(fileURLToPath(import.meta.url)), "../package.json"), "utf8")).version ?? "unknown";
+    const commonRuntimeMetadata = { runtime: "native-typescript", packageVersion, backendVersion: packageVersion, piVersion: PI_VERSION, nodeVersion: process.version, platform: process.platform, arch: process.arch };
+    const snapshots = new Map<string, any>();
+    const snapshot = async (name: string, read: () => Promise<any>) => { const value=await readonlySnapshot(read,snapshots.get(name)); if(value.state==="available")snapshots.set(name,value); return value; };
     const views: Record<string, () => Promise<unknown>> = {
-      "vgx-status": async () => ({ runtime: "native-typescript", workspace, mode, role, session: sessions.status(), workers: workerCli ? "available" : "unavailable", modelCatalog: modelCatalog(runtimeContext) ? "available" : "unavailable" }),
-      "vgx-workers": async () => ({ available: Boolean(workerCli), workers: [...workerStates.values()] }),
-      "vgx-memory": async () => ({ trust: "UNTRUSTED", entries: await viewRequest("memory.recent", { limit: 10 }) }),
-      "vgx-sdd": async () => ({ changes: await viewRequest("sdd.list", { status: "active", limit: 10 }) }),
+      "vgx-status": async () => await snapshot("vgx-status",async()=>{await viewRequest("memory.project.resolve",{});return nativeStatusView({ workspace, mode, role, session: sessions.status(), workerCli, packageVersion, backendVersion: packageVersion, piVersion: PI_VERSION, modelCatalog: modelCatalog(runtimeContext) });}),
+      "vgx-workers": async () => await snapshot("vgx-workers",async()=>nativeWorkersView(workerCli,[...workerStates.values()])),
+      "vgx-memory": async () => await snapshot("vgx-memory",async()=>nativeMemoryView(await viewRequest("memory.recent",{limit:10}))),
+      "vgx-sdd": async () => await snapshot("vgx-sdd",async()=>({changes:await viewRequest("sdd.list",{status:"active",limit:10})})),
     };
     for (const [name, read] of Object.entries(views)) pi.registerCommand?.(name, { description: `Read VGXNESS ${name.slice(4)} status`, async handler(_args: string, ctx: any) {
       let value: unknown;
-      try { value = await read(); } catch (error) { value = { status: "unavailable", error: error instanceof Error ? error.message.slice(0, 256) : "local data unavailable" }; }
+      ctx?.ui?.notify?.(JSON.stringify(loadingView()), "info");
+      try { value = await read(); } catch (error) { value = { ...commonRuntimeMetadata, state: "unavailable", reason: "read_unavailable" }; }
+      if(value && typeof value === "object" && "value" in (value as any)){const snap:any=value; const nested=snap.value&&typeof snap.value==="object"?snap.value:{}; value={...commonRuntimeMetadata,...nested,state:snap.state==="available"&&nested.state?snap.value.state:snap.state,observedAt:snap.observedAt,...(snap.reason?{reason:snap.reason}:{})};} else if(value && typeof value === "object") value={...commonRuntimeMetadata,...(value as any)};
       const text = JSON.stringify(value, null, 2);
       ctx?.ui?.notify?.(text, "info");
       return { content: [{ type: "text", text }] };
@@ -193,6 +204,7 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
     pi.registerTool({ name: "session_handoff", label: "Save session handoff", description: "Save an explicit, sanitized summary for the current manager session.", parameters: handoffSchema, async execute(_id: string, input: { summary: string }) { if (!Value.Check(handoffSchema, input)) throw new Error("invalid tool input"); if (mode !== "full" || role !== "manager") throw new Error("session handoff requires full manager authority"); await sessions.saveDraft(input.summary); return { content: [{ type: "text", text: "Saved session handoff." }] }; } });
     pi.registerTool({ name: "session_context", label: "Read session handoff", description: "Read the bounded, untrusted handoff for the current manager session.", parameters: Type.Object({}, { additionalProperties: false }), async execute(_id: string, input: Record<string, never>) { if (Object.keys(input).length) throw new Error("invalid tool input"); return { content: [{ type: "text", text: JSON.stringify(sessions.context()) }] }; } });
     pi.on("resources_discover", async () => ({ skillPaths: await discoverSkillPaths({ existingNames: pi.getCommands?.().filter((command: any) => command.source === "skill").map((command: any) => command.name) }), promptPaths: [join(dirname(fileURLToPath(import.meta.url)), "../resources/prompts")] }));
+    pi.on("tool_result", (event) => frameReadOutcome(event));
     pi.on("before_agent_start", async (event, ctx) => { runtimeContext = ctx; return managerPrompt ? { systemPrompt: `${event.systemPrompt}\n\n${managerPrompt}` } : undefined; });
     pi.on("session_start", async (_event, ctx) => { runtimeContext = ctx; await sessions.start(ctx.sessionManager.getSessionId()); });
     pi.on("session_tree", async () => { await sessions.checkpoint(); });

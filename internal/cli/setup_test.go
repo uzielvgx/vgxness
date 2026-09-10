@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vgxness/vgxness/internal/buildinfo"
 	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/providers/pi"
 	"github.com/vgxness/vgxness/internal/sdd"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
@@ -553,6 +555,8 @@ type fakeUnifiedSetup struct {
 	openCodeOptions integration.Options
 	sharedStatus    *setupflow.SharedPlan
 	sharedStatusErr error
+	piReady         *bool
+	piApplyCalls    int
 }
 
 func (fake *fakeUnifiedSetup) Shared(setupflow.Options) setupflow.SharedRuntime {
@@ -598,4 +602,134 @@ func (fakeSetupProvider) Status(context.Context, setupflow.SharedPlan) (setupflo
 }
 func (fakeSetupProvider) Apply(context.Context, setupflow.ProviderPlan, setupflow.SharedResult) (setupflow.ProviderResult, error) {
 	return setupflow.ProviderResult{Provider: setupflow.ProviderOpenCode, Verified: true}, nil
+}
+
+func (fake *fakeUnifiedSetup) PiProvider(options pi.Options) setupflow.ProviderRuntime {
+	return fakePiSetupProvider{owner: fake}
+}
+
+type fakePiSetupProvider struct{ owner *fakeUnifiedSetup }
+
+func (fakePiSetupProvider) Provider() setupflow.Provider { return setupflow.ProviderPi }
+func (provider fakePiSetupProvider) Plan(context.Context, setupflow.SharedPlan) (setupflow.ProviderPlan, error) {
+	ready := true
+	if provider.owner.piReady != nil {
+		ready = *provider.owner.piReady
+	}
+	return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: ready, Blocker: func() string {
+		if !ready {
+			return "injected Pi plan failure"
+		}
+		return ""
+	}()}, nil
+}
+func (fakePiSetupProvider) Status(context.Context, setupflow.SharedPlan) (setupflow.ProviderPlan, error) {
+	return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Installed: true, State: integration.StateInstalled}, nil
+}
+func (provider fakePiSetupProvider) Apply(context.Context, setupflow.ProviderPlan, setupflow.SharedResult) (setupflow.ProviderResult, error) {
+	provider.owner.piApplyCalls++
+	return setupflow.ProviderResult{Provider: setupflow.ProviderPi, Verified: true}, nil
+}
+
+func TestSetupWizardPiOnlyDoesNotRequireCodex(t *testing.T) {
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	var stdout, stderr bytes.Buffer
+	code := runSetup(context.Background(), []string{"pi", "--preview", "--workspace", t.TempDir()}, strings.NewReader(""), &stdout, &stderr, setup, nil)
+	if code != 0 || strings.Contains(stderr.String(), "runtime is unavailable") || !strings.Contains(stdout.String(), "Pi release: acquisition required") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestPiAcquisitionRoutingAndCleanup(t *testing.T) {
+	oldAcquire := acquirePiRelease
+	defer func() { acquirePiRelease = oldAcquire }()
+	calls, cleanups := 0, 0
+	var requested []string
+	acquirePiRelease = func(_ context.Context, value string) (string, func() error, error) {
+		calls++
+		requested = append(requested, value)
+		return t.TempDir(), func() error { cleanups++; return nil }, nil
+	}
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	for _, args := range [][]string{{"pi", "--preview"}, {"pi", "--status"}, {"pi", "--yes", "--pi-release-dir", t.TempDir()}} {
+		var stdout, stderr bytes.Buffer
+		if code := runSetup(context.Background(), args, strings.NewReader(""), &stdout, &stderr, setup, nil); code != 0 {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+	}
+	if calls != 0 || cleanups != 0 {
+		t.Fatalf("offline/readonly acquired=%d cleanup=%d", calls, cleanups)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runSetup(context.Background(), []string{"pi", "--yes", "--pi-release-version", "v1.2.3"}, strings.NewReader(""), &stdout, &stderr, setup, nil); code != 0 || calls != 1 || cleanups != 1 || len(requested) != 1 || requested[0] != "v1.2.3" {
+		t.Fatalf("apply code=%d calls=%d cleanups=%d stderr=%q", code, calls, cleanups, stderr.String())
+	}
+}
+
+func TestPiDevelopmentBuildRequiresExplicitPinWithoutAcquire(t *testing.T) {
+	oldAcquire := acquirePiRelease
+	defer func() { acquirePiRelease = oldAcquire }()
+	calls := 0
+	acquirePiRelease = func(context.Context, string) (string, func() error, error) {
+		calls++
+		return "", nil, errors.New("unexpected")
+	}
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	var stdout, stderr bytes.Buffer
+	if code := runSetup(context.Background(), []string{"pi", "--yes"}, strings.NewReader(""), &stdout, &stderr, setup, nil); code != 2 || calls != 0 {
+		t.Fatalf("code=%d calls=%d stderr=%q", code, calls, stderr.String())
+	}
+}
+
+func TestPiAcquireCleanupOnDeclineAndFailedPlan(t *testing.T) {
+	old := acquirePiRelease
+	defer func() { acquirePiRelease = old }()
+	calls, clean := 0, 0
+	acquirePiRelease = func(context.Context, string) (string, func() error, error) {
+		calls++
+		return t.TempDir(), func() error { clean++; return nil }, nil
+	}
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	var out, err bytes.Buffer
+	if code := runSetup(context.Background(), []string{"pi", "--pi-release-version", "v1.2.3"}, strings.NewReader("n\n"), &out, &err, setup, nil); code != 0 || clean != 1 || setup.piApplyCalls != 0 {
+		t.Fatalf("decline code=%d clean=%d apply=%d", code, clean, setup.piApplyCalls)
+	}
+	ready := false
+	setup = &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}, piReady: &ready}
+	out.Reset()
+	err.Reset()
+	if code := runSetup(context.Background(), []string{"pi", "--yes", "--pi-release-version", "v1.2.3"}, strings.NewReader(""), &out, &err, setup, nil); code != 1 || clean != 2 || setup.piApplyCalls != 0 {
+		t.Fatalf("failed plan code=%d clean=%d apply=%d", code, clean, setup.piApplyCalls)
+	}
+}
+
+func TestPiAcquireCleanupFailureChangesSuccessfulExit(t *testing.T) {
+	old := acquirePiRelease
+	defer func() { acquirePiRelease = old }()
+	acquirePiRelease = func(context.Context, string) (string, func() error, error) {
+		return t.TempDir(), func() error { return errors.New("cleanup failed") }, nil
+	}
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	var out, err bytes.Buffer
+	if code := runSetup(context.Background(), []string{"pi", "--yes", "--pi-release-version", "v1.2.3"}, strings.NewReader(""), &out, &err, setup, nil); code != 1 || setup.piApplyCalls != 1 || !strings.Contains(err.String(), "cleanup failed") {
+		t.Fatalf("code=%d apply=%d stderr=%q", code, setup.piApplyCalls, err.String())
+	}
+}
+
+func TestPiDefaultReleasePinUsesBuildVersion(t *testing.T) {
+	old := buildinfo.Version
+	buildinfo.Version = "v1.2.3"
+	defer func() { buildinfo.Version = old }()
+	oldAcquire := acquirePiRelease
+	defer func() { acquirePiRelease = oldAcquire }()
+	var got string
+	acquirePiRelease = func(_ context.Context, v string) (string, func() error, error) {
+		got = v
+		return t.TempDir(), func() error { return nil }, nil
+	}
+	setup := &fakeUnifiedSetup{fakeSetupRuntime: &fakeSetupRuntime{plan: setupPlanFixture(true)}}
+	var out, err bytes.Buffer
+	if code := runSetup(context.Background(), []string{"pi", "--yes"}, strings.NewReader(""), &out, &err, setup, nil); code != 0 || got != "v1.2.3" {
+		t.Fatalf("code=%d got=%q stderr=%q", code, got, err.String())
+	}
 }

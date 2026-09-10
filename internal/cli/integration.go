@@ -22,18 +22,34 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 	flags.SetOutput(io.Discard)
 	var options integration.Options
 	var deprecatedModel string
+	var repairOldExecutable, repairEntrySHA256 string
 	flags.StringVar(&options.ConfigDir, "config-dir", "", provider+" config directory")
 	if provider == "opencode" {
 		flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
 		flags.StringVar(&options.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
 		flags.StringVar(&options.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
 		flags.StringVar(&options.ModelFrontier, "model-frontier", "", "exact provider/model for the frontier slot")
+		flags.StringVar(&repairOldExecutable, "old-executable", "", "absolute obsolete managed MCP executable")
+		flags.StringVar(&repairEntrySHA256, "expected-mcp-sha256", "", "SHA-256 of the canonical obsolete MCP entry")
 	}
 	flags.Var((*planFlag)(&options.ModelPlan), "model-plan", "active model plan: low, medium, high, or ultra")
 	if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "invalid integration arguments")
 		fmt.Fprintln(stderr, integrationUsage(provider))
 		return 2
+	}
+	if provider == "opencode" && action != "repair-mcp-preview" && action != "repair-mcp" {
+		invalidRepairFlag := false
+		flags.Visit(func(flag *flag.Flag) {
+			if flag.Name == "old-executable" || flag.Name == "expected-mcp-sha256" {
+				invalidRepairFlag = true
+			}
+		})
+		if invalidRepairFlag {
+			fmt.Fprintln(stderr, "invalid integration arguments")
+			fmt.Fprintln(stderr, integrationUsage(provider))
+			return 2
+		}
 	}
 	if provider == "codex" && options.ConfigDir == "" {
 		home, err := os.UserHomeDir()
@@ -69,8 +85,23 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 		result, err = managed.Reinstall(ctx, options)
 	case "uninstall":
 		result, err = runtime.Uninstall(ctx, options)
+	case "repair-mcp-preview", "repair-mcp":
+		repair, ok := runtime.(integration.MCPRepairRuntime)
+		if !ok || provider != "opencode" {
+			fmt.Fprintln(stderr, "operational: MCP repair runtime is unavailable")
+			return 1
+		}
+		proof := integration.MCPRepairProof{OldExecutable: repairOldExecutable, ExpectedEntrySHA256: repairEntrySHA256}
+		if action == "repair-mcp-preview" {
+			result, err = repair.PreviewMCPRepair(ctx, options, proof)
+		} else {
+			result, err = repair.RepairMCP(ctx, options, proof)
+		}
 	}
 	if err != nil {
+		if result.BackupPath != "" {
+			fmt.Fprintf(stderr, "recovery_backup=%s\n", terminalSafe(result.BackupPath))
+		}
 		code, message := failure(err)
 		fmt.Fprintln(stderr, message)
 		return code
@@ -86,13 +117,16 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 	if result.BackupPath != "" {
 		fmt.Fprintf(&output, "backup=%s\n", terminalSafe(result.BackupPath))
 	}
+	if result.MCPRepairOldExecutable != "" {
+		fmt.Fprintf(&output, "mcp_repair_old_executable=%s\nmcp_repair_entry_sha256=%s\nmcp_repair_mode=%s\n", terminalSafe(result.MCPRepairOldExecutable), result.MCPRepairEntrySHA256, terminalSafe(result.MCPRepairMode))
+	}
 	_, _ = io.WriteString(stdout, output.String())
 	return 0
 }
 
 func integrationUsage(provider string) string {
 	if provider == "opencode" {
-		return "usage: vgxness integrate opencode <preview|install|status|uninstall> [--config-dir PATH] [--model MODEL] [--model-plan low|medium|high|ultra] [--model-efficient PROVIDER/MODEL] [--model-balanced PROVIDER/MODEL] [--model-frontier PROVIDER/MODEL]"
+		return "usage: vgxness integrate opencode <preview|install|status|uninstall|repair-mcp-preview|repair-mcp> [--config-dir PATH] [--old-executable ABSOLUTE_PATH --expected-mcp-sha256 SHA256] [--model MODEL] [--model-plan low|medium|high|ultra] [--model-efficient PROVIDER/MODEL] [--model-balanced PROVIDER/MODEL] [--model-frontier PROVIDER/MODEL]"
 	}
 	return "usage: vgxness integrate codex <preview|install|status|reinstall|uninstall> [--config-dir PATH] [--model-plan low|medium|high|ultra]"
 }
@@ -115,6 +149,8 @@ func integrationAction(provider, value string) bool {
 	switch value {
 	case "preview", "install", "status", "uninstall":
 		return true
+	case "repair-mcp-preview", "repair-mcp":
+		return provider == "opencode"
 	case "reinstall":
 		return provider == "codex"
 	default:

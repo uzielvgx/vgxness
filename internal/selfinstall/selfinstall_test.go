@@ -185,6 +185,13 @@ func TestInstallPreservesExistingDirectoryPermissions(t *testing.T) {
 	if err := os.Mkdir(dataDir, 0o711); err != nil {
 		t.Fatal(err)
 	}
+	// Establish the exact pre-install modes independently of the process umask.
+	if err := os.Chmod(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dataDir, 0o711); err != nil {
+		t.Fatal(err)
+	}
 	service := New(Config{SourceExecutable: writeSource(t, root, "source", "vgxness")})
 	if _, err := service.Install(context.Background(), Options{BinDir: binDir, DataDir: dataDir}); err != nil {
 		t.Fatal(err)

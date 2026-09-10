@@ -22,12 +22,26 @@ func NewProvider(options Options) setupflow.ProviderRuntime { return provider{op
 type provider struct{ options Options }
 
 var probeTimeout = 2 * time.Second
+var piLookPath = exec.LookPath
+
+func providerPrerequisiteBlocker() string {
+	if _, err := piLookPath("node"); err != nil {
+		return "Pi prerequisite unavailable: node"
+	}
+	if _, err := piLookPath("pi"); err != nil {
+		return "Pi prerequisite unavailable: pi CLI"
+	}
+	return ""
+}
 
 func (provider) Provider() setupflow.Provider { return setupflow.ProviderPi }
 
 func (p provider) Plan(ctx context.Context, _ setupflow.SharedPlan) (setupflow.ProviderPlan, error) {
 	if err := ctx.Err(); err != nil {
 		return setupflow.ProviderPlan{}, err
+	}
+	if p.options.ReleaseDir == "" {
+		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: "Pi release acquisition required"}, nil
 	}
 	options, target, err := normalize(p.options)
 	if err != nil {
@@ -42,7 +56,12 @@ func (p provider) Plan(ctx context.Context, _ setupflow.SharedPlan) (setupflow.P
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: err.Error()}, nil
 	}
-	return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Changed: !installed, Installed: installed, State: piState(installed), ArtifactSHA256: source, ArtifactCount: 1}, nil
+	plan := setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Changed: !installed, Installed: installed, State: piState(installed), ArtifactSHA256: source, ArtifactCount: 1}
+	if blocker := providerPrerequisiteBlocker(); blocker != "" {
+		plan.Ready = false
+		plan.Blocker = blocker
+	}
+	return plan, nil
 }
 
 func (p provider) Status(ctx context.Context, shared setupflow.SharedPlan) (setupflow.ProviderPlan, error) {
@@ -154,6 +173,11 @@ func installedStatus(ctx context.Context, options Options) (setupflow.ProviderPl
 	plan := setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Installed: true, State: integration.StateInstalled, ArtifactSHA256: manifest.SourceSHA, ArtifactCount: 1}
 	if pending := retainedStatus(options, path); pending.Blocker != "" {
 		return pending, nil
+	}
+	if blocker := providerPrerequisiteBlocker(); blocker != "" {
+		plan.Ready = false
+		plan.Blocker = blocker
+		return plan, nil
 	}
 	plan.Handshake = probe(ctx, options, path)
 	plan.Ready = plan.Handshake.OK

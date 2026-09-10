@@ -2,6 +2,7 @@ import { access, realpath } from "node:fs/promises";
 import { createRequire, globalPaths } from "node:module";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 
@@ -14,17 +15,18 @@ export async function piPaths() {
   const explicitSdk = process.env.VGXNESS_PI_SDK_ROOT;
   let packageJson;
   if (!explicitSdk) {
-    try { packageJson = require.resolve("@earendil-works/pi-coding-agent/package.json", { paths: globalPaths }); }
+    try { packageJson = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "..", "package.json"); }
+    catch { try { packageJson = require.resolve("@earendil-works/pi-coding-agent/package.json", { paths: globalPaths }); }
     catch {
       const npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
       packageJson = join(npmRoot, "@earendil-works", "pi-coding-agent", "package.json");
       if (!(await existing(packageJson))) {
-        const piExecutable = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
+        const piExecutable = (process.platform === "win32" ? execFileSync("where.exe", ["pi"], { encoding: "utf8" }).trim().split(/\r?\n/)[0] : execFileSync("which", ["pi"], { encoding: "utf8" }).trim());
         const cli = await realpath(piExecutable);
         packageJson = join(dirname(cli), "..", "..", "package.json");
       }
       if (!(await existing(packageJson))) throw new Error("installed Pi SDK is unavailable for this native fixture");
-    }
+    } }
   }
   const root = explicitSdk ?? dirname(packageJson);
   const cli = explicitCli ?? join(root, "dist", "bundle", "cli.js");
@@ -34,5 +36,5 @@ export async function piPaths() {
 
 export async function loadPiExtensions() {
   const { root } = await piPaths();
-  return await import(join(root, "dist", "core", "extensions", "loader.js"));
+  return await import(pathToFileURL(join(root, "dist", "core", "extensions", "loader.js")).href);
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+const mkdtemp = async (prefix: string) => realpath(await rawMkdtemp(prefix));
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp as rawMkdtemp, realpath, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -36,7 +37,7 @@ test("session lifecycle checkpoints, renews, and closes only its private handle"
   const source = join(process.cwd(), "src/extension.ts");
   const wrapper = join(workspace, "extension.ts");
   await (await import("node:fs/promises")).writeFile(wrapper, `import { createPiExtension } from ${JSON.stringify(source)}; export default createPiExtension(globalThis.__piSessionOptions);`);
-  (globalThis as any).__piSessionOptions = { workspace, mode: "full", role: "manager", backend: async () => ({ request: async (operation: string, payload: any) => { calls.push({ operation, payload }); return { handle: "private-handle", updatedAt: new Date().toISOString() }; } }) };
+  (globalThis as any).__piSessionOptions = { workspace, mode: "full", role: "manager", backend: async () => ({ request: async (operation: string, payload: any) => { calls.push({ operation, payload }); return { handle: "private-handle", state: "active", leaseUntil: new Date(Date.now()+60000).toISOString(), updatedAt: new Date().toISOString() }; } }) };
   const loaded = await loadExtensions([wrapper], workspace);
   assert.deepEqual(loaded.errors, []);
   const handlers = loaded.extensions[0].handlers;
@@ -80,11 +81,10 @@ test("skill discovery prefers compatible shared skills and de-duplicates bundled
 test("temporary native storage accepts only explicit session handoff content", async (t) => {
   const root = join(process.cwd(), "../..");
   const temp = await mkdtemp(join(tmpdir(), "pi-session-go-"));
-  t.after(() => rm(temp, { recursive: true, force: true }));
   const binary = join(temp, "backend"), workspace = join(temp, "workspace"), storageRoot = join(temp, "storage");
   await mkdir(workspace); await mkdir(storageRoot);
   const client = await createNativeDispatcher({ workspace, storageRoot, mode: "full", role: "manager" });
-  t.after(() => client.close());
+  t.after(async () => { await client.close(); await rm(temp, { recursive: true, force: true }); });
   const binding = { workspace, mode: "full" as const, role: "manager" };
   await client.request("memory.project.initialize", {}, binding, "initialize");
   const first: any = await client.request("memory.session.start", { externalId: "sdk-one" }, binding, "start");
@@ -152,6 +152,22 @@ test("native role mapping preserves CARE roles and rejects manager", async () =>
   assert.equal(nativeWorkerRole("care-specialist"), "care-specialist");
   assert.equal(nativeWorkerRole("sdd-apply"), "sdd-apply");
   assert.throws(() => nativeWorkerRole("manager"));
+});
+
+test("session adapter restarts periodic renewal after explicit transient recovery", async () => {
+ const { SessionAdapter } = await import("../src/session/adapter.ts");
+ let renewals = 0;
+ const host: any = { workspace: "/fixture", mode: "full", role: "manager", backend: async () => ({ request: async (operation: string) => {
+   if (operation === "memory.session.context") return {};
+   if (operation === "memory.session.start") return { handle: "h", state: "active", leaseUntil: new Date(Date.now() + 500).toISOString() };
+   if (operation === "memory.session.renew") { renewals++; if (renewals === 1) throw new Error("transient renewal failure"); return { handle: "h", state: "active", leaseUntil: new Date(Date.now() + 500).toISOString() }; }
+   return {};
+ } }) };
+ const adapter = new SessionAdapter(host, 20); await adapter.start("periodic");
+ await new Promise(resolve => setTimeout(resolve, 35)); assert.throws(() => adapter.assertMutation(), /unavailable/);
+ await adapter.renew(); const recovered = renewals;
+ await new Promise(resolve => setTimeout(resolve, 45)); assert.ok(renewals > recovered, `renewals=${renewals}`);
+ await adapter.detach(); const stopped = renewals; await new Promise(resolve => setTimeout(resolve, 35)); assert.equal(renewals, stopped);
 });
 
 test("OpenSpec apply bindings verify exact tasks and input file bytes without following symlinks", async t => {

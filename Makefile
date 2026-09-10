@@ -1,4 +1,10 @@
-.PHONY: fast verify vuln codex-e2e
+.PHONY: fast verify vuln codex-e2e pi-check
+
+pi-check:
+	npm ci --ignore-scripts
+	npm run typecheck --workspace packages/pi
+	npm test --workspace packages/pi
+	npm run build --workspace packages/pi
 
 fast:
 	test -z "$$(gofmt -l .)"

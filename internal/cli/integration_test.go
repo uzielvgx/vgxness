@@ -80,6 +80,12 @@ func (runtime *fakeIntegrationRuntime) Uninstall(_ context.Context, options inte
 func (runtime *fakeIntegrationRuntime) Reinstall(_ context.Context, options integration.Options) (integration.Result, error) {
 	return runtime.call("reinstall", options)
 }
+func (runtime *fakeIntegrationRuntime) PreviewMCPRepair(_ context.Context, options integration.Options, _ integration.MCPRepairProof) (integration.Result, error) {
+	return runtime.call("repair-mcp-preview", options)
+}
+func (runtime *fakeIntegrationRuntime) RepairMCP(_ context.Context, options integration.Options, _ integration.MCPRepairProof) (integration.Result, error) {
+	return runtime.call("repair-mcp", options)
+}
 func (*fakeIntegrationRuntime) ManagedLayout(context.Context, integration.Options) (integration.ManagedLayout, error) {
 	return integration.ManagedLayout{}, nil
 }
@@ -128,6 +134,14 @@ func TestIntegrationCLI_RoutesEverySupportedAction(t *testing.T) {
 	}
 }
 
+func TestIntegrationCLI_RoutesExplicitOpenCodeMCPRepair(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateInstalled}}
+	code, _, stderr := runIntegrationTest([]string{"integrate", "opencode", "repair-mcp", "--config-dir", "/tmp/config", "--old-executable", "/opt/vgxness-old", "--expected-mcp-sha256", strings.Repeat("a", 64)}, runtime)
+	if code != 0 || stderr != "" || runtime.calls != 1 || runtime.action != "repair-mcp" || runtime.options.ConfigDir != "/tmp/config" {
+		t.Fatalf("code=%d calls=%d action=%q options=%+v stderr=%q", code, runtime.calls, runtime.action, runtime.options, stderr)
+	}
+}
+
 func TestIntegrationCLI_RejectsUnsupportedInputWithoutCallingRuntime(t *testing.T) {
 	for _, args := range [][]string{
 		{"integrate"},
@@ -153,7 +167,7 @@ func TestIntegrationCLI_InvalidProviderArgumentsShowAccurateUsage(t *testing.T) 
 		{
 			name:     "opencode",
 			args:     []string{"integrate", "opencode", "status", "--unknown"},
-			contains: []string{"usage: vgxness integrate opencode <preview|install|status|uninstall>", "--model-plan", "--model-efficient"},
+			contains: []string{"usage: vgxness integrate opencode <preview|install|status|uninstall|repair-mcp-preview|repair-mcp>", "--old-executable", "--expected-mcp-sha256", "--model-plan", "--model-efficient"},
 			absent:   []string{"reinstall"},
 		},
 		{
@@ -214,4 +228,20 @@ func TestIntegrationCLI_EscapesPathsAndPrintsRecoverableBackup(t *testing.T) {
 	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, Path: "/tmp/line\nagent", ArtifactSHA256: strings.Repeat("b", 64), Changed: true, BackupPath: "/tmp/backup\x1b"}}
 	code, stdout, stderr := runIntegrationTest([]string{"integrate", "opencode", "uninstall"}, runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(stdout, `path=/tmp/line\nagent`) && strings.Contains(stdout, `backup=/tmp/backup\x1b`) && !strings.Contains(stdout, `storage_plugin_backup=`), "exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+}
+func TestIntegrationCLIRejectsRepairFlagsOutsideRepair(t *testing.T) {
+	for _, action := range []string{"install", "status", "preview", "reinstall", "uninstall"} {
+		runtime := &fakeIntegrationRuntime{}
+		code, _, _ := runIntegrationTest([]string{"integrate", "opencode", action, "--old-executable", ""}, runtime)
+		if code != 2 || runtime.calls != 0 {
+			t.Fatalf("%s code=%d calls=%d", action, code, runtime.calls)
+		}
+	}
+}
+func TestIntegrationCLIReportsRecoveryBackup(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{result: integration.Result{BackupPath: "/tmp/backup"}, err: integration.ErrRecovery}
+	_, _, stderr := runIntegrationTest([]string{"integrate", "opencode", "repair-mcp"}, runtime)
+	if !strings.Contains(stderr, "recovery_backup=/tmp/backup") {
+		t.Fatal(stderr)
+	}
 }

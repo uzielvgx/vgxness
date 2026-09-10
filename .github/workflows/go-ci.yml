@@ -51,6 +51,8 @@ jobs:
           node-version: '24'
       - name: Prefetch modules
         run: go mod download
+      - name: Install Pi test dependencies
+        run: npm ci --ignore-scripts
       - name: Install pinned proper-lockfile fixture
         run: npm install --prefix "$RUNNER_TEMP/vgxness-pi-lockfile" --ignore-scripts --no-package-lock proper-lockfile@4.1.2
       - name: Test with coverage
@@ -59,7 +61,7 @@ jobs:
           PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: Test agent-evaluation runner offline
-        run: python3 -m unittest tools/agent_eval/test_runner.py
+        run: python3 -m unittest discover -s tools/agent_eval -p 'test_*.py'
       - name: Enforce aggregate coverage floor
         run: |
           observed="$(go tool cover -func=coverage.out | awk '/^total:/{gsub("%", "", $3); print $3}')"
@@ -286,6 +288,8 @@ jobs:
       - name: Install pinned proper-lockfile fixture
         shell: pwsh
         run: npm install --prefix "$env:RUNNER_TEMP/vgxness-pi-lockfile" --ignore-scripts --no-package-lock proper-lockfile@4.1.2
+      - name: Stress concurrent fresh memory opens
+        run: go test -count=25 -v -run '^TestOpen_ConcurrentFreshProcesses$' ./internal/memory
       - name: Installer tests
         env:
           PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
@@ -335,8 +339,19 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Portable package and native SQLite contract
-        run: node packages/pi/scripts/test.mjs metadata.test.mjs package-artifact.test.mjs package_contract.test.ts sqlite-adapter.test.ts migrations.test.ts database-compatibility.test.ts memory-service.test.ts session-service.test.ts sdd-service.test.ts model-service.test.ts sync-wire.test.ts sync-service.test.ts sync-recovery.test.ts credentials.test.ts worker-context.test.ts
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+      - name: Prefetch modules
+        run: go mod download
+      - name: Install Pi dependencies
+        run: npm ci --ignore-scripts
+      - name: Typecheck Pi
+        run: npm run typecheck --workspace packages/pi
+      - name: Test Pi
+        run: npm test --workspace packages/pi
+      - name: Verify assembled Pi release artifact
+        run: node packages/pi/scripts/check-release-artifact.mjs
 
   quality:
     name: quality

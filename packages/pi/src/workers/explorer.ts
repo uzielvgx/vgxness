@@ -13,7 +13,7 @@ export function createExplorerTools(mission: WorkerMission) {
   async function checked(path: string) {
     if (typeof path !== "string" || isAbsolute(path) || path.split(/[\\/]/).includes("..")) throw new Error("explorer path rejected");
     const full = resolve(mission.workspace, path);
-    if (!budget.roots.some(root => { const rel = relative(resolve(mission.workspace, root), full); return rel === "" || (rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)); })) throw new Error("explorer path outside allowed roots");
+    if (!budget.roots.some(root => { const rel = relative(resolve(mission.workspace, root), full); return rel === "" || (rel.split(/[\\/]/)[0] !== ".." && !isAbsolute(rel)); })) throw new Error("explorer path outside allowed roots");
     let ancestor = resolve(mission.workspace);
     for (const part of ["", ...relative(ancestor, full).split(/[\\/]/).filter(Boolean)]) {
       ancestor = resolve(ancestor, part); const info = await lstat(ancestor);
@@ -47,7 +47,11 @@ export function createExplorerTools(mission: WorkerMission) {
   }
   const schema = (properties: any, required: string[]) => ({ type: "object", properties, required, additionalProperties: false });
   const path = { type: "string", maxLength: 512 }, cursor = { type: "string", maxLength: 1024 };
-  function offset(cursor: string | undefined, digest: string) { if (!cursor) return 0; const [hash, number] = cursor.split(":"); const at = Number(number); if (hash !== digest || !Number.isSafeInteger(at) || at < 0) throw new Error("explorer stale cursor"); return at; }
+  // Bind continuations to the accepted mission, then to the operation snapshot.
+  // A cursor may be replayed only by the exact mission that produced it.
+  const missionBinding = createHash("sha256").update(mission.nonce).update("\0").update(mission.digest).digest("hex");
+  function offset(cursor: string | undefined, digest: string) { if (!cursor) return 0; const [binding, hash, number] = cursor.split(":"); const at = Number(number); if (binding !== missionBinding || hash !== digest || !Number.isSafeInteger(at) || at < 0) throw new Error("explorer stale cursor"); return at; }
+  const continuation = (digest: string, at: number) => `${missionBinding}:${digest}:${at}`;
   const tools = [
     { name: "worker_list", label: "List authorized directory", parameters: schema({ path, cursor }, ["path"]), async execute(_id: string, input: any) {
       const full = await checked(input.path); if (!(await lstat(full)).isDirectory()) throw new Error("explorer directory required");
@@ -64,19 +68,19 @@ export function createExplorerTools(mission: WorkerMission) {
       const count = Math.min(50, remaining), page = entries.slice(start, start + count);
       files += page.length;
       const exhausted = files >= budget.maxFiles;
-      return response({ entries: page.filter(e=>e.type !== "symlink"), nextCursor: !exhausted && start + count < entries.length ? `${digest}:${start + count}` : null }, [...(capped ? ["directory truncated by file budget"] : []), ...(exhausted ? ["file budget exhausted"] : [])]);
+      return response({ entries: page.filter(e=>e.type !== "symlink"), nextCursor: !exhausted && start + count < entries.length ? continuation(digest, start + count) : null }, [...(capped ? ["directory truncated by file budget"] : []), ...(exhausted ? ["file budget exhausted"] : [])]);
     } },
     { name: "worker_read_page", label: "Read authorized file page", parameters: schema({ path, cursor, limit: { type: "integer", minimum: 1, maximum: 4096 } }, ["path"]), async execute(_id: string, input: any) {
       const data = await read(input.path), digest = createHash("sha256").update(input.path).update("\0").update(data).digest("hex"), start = offset(input.cursor, digest), limit = input.limit ?? 2048;
       if (!Number.isInteger(limit) || limit < 1 || limit > 4096) throw new Error("explorer limit rejected");
       const chars = Array.from(data.toString("utf8")), text = chars.slice(start, start + limit).join(""), end = start + Array.from(text).length;
-      return response({ path: input.path, digest, text, nextCursor: end < chars.length ? `${digest}:${end}` : null });
+      return response({ path: input.path, digest, text, nextCursor: end < chars.length ? continuation(digest, end) : null });
     } },
     { name: "worker_search", label: "Search authorized file", parameters: schema({ path, query: { type: "string", minLength: 1, maxLength: 256 }, cursor }, ["path", "query"]), async execute(_id: string, input: any) {
       if (typeof input.query !== "string" || !input.query.length || input.query.length > 256) throw new Error("explorer query rejected");
       const data = await read(input.path), digest = createHash("sha256").update(input.path).update("\0").update(input.query).update("\0").update(data).digest("hex"), lines = data.toString("utf8").split("\n"), start = offset(input.cursor, digest);
       const matches: any[] = []; let next = null;
-      for (let i = start; i < lines.length; i++) if (lines[i].includes(input.query)) { if (matches.length === 20) { next = `${digest}:${i}`; break; } matches.push({ line: i + 1, text: Array.from(lines[i]).slice(0, 256).join("") }); }
+      for (let i = start; i < lines.length; i++) if (lines[i].includes(input.query)) { if (matches.length === 20) { next = continuation(digest, i); break; } matches.push({ line: i + 1, text: Array.from(lines[i]).slice(0, 256).join("") }); }
       return response({ path: input.path, digest, matches, nextCursor: next });
     } },
   ];

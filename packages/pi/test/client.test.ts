@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+const mkdtemp = async (prefix: string) => realpath(await rawMkdtemp(prefix));
 import test from "node:test";
-import { mkdtemp, mkdir, rename, rm, symlink } from "node:fs/promises";
+import { mkdtemp as rawMkdtemp, realpath, mkdir, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadNativeRuntime } from "./runtime-fixture.mjs";
@@ -99,7 +100,8 @@ test("native apply proof rejects superseded accepted tasks and inputs at the cur
   const { createHash } = await import("node:crypto");
   const change = await client.request("sdd.create", { idempotencyKey: "current-proof", title: "Proof", backend: "memory", interactionMode: "automatic", plan: "low" }, binding);
   const project = await client.request("memory.project.resolve", {}, binding);
-  const db = new SQLiteDatabase(join(storageRoot, "memory.db")); t.after(() => db.close());
+  const db = new SQLiteDatabase(join(storageRoot, "memory.db"));
+  try {
   const sha = (value: string) => createHash("sha256").update(value).digest("hex");
   db.db.prepare("UPDATE sdd_changes SET phase='apply',state_version=7 WHERE id=?").run(change.id);
   for (const phase of ["design", "tasks"]) {
@@ -115,4 +117,5 @@ test("native apply proof rejects superseded accepted tasks and inputs at the cur
   db.db.prepare("UPDATE sdd_revision_links SET input_revision_id='design1' WHERE revision_id='tasks2'").run();
   assert.equal(await client.verifyCurrentAcceptedBinding({ ...proof, inputs: [{ ...proof.inputs[0], revisionId: "design1" }] }), false);
   assert.equal(await client.verifyCurrentAcceptedBinding({ ...proof, stateVersion: 6 }), false);
+  } finally { db.close(); }
 });
