@@ -308,101 +308,107 @@ func OpenCodeSteps() []Step {
 	}
 }
 
+type preflightMode bool
+
+const (
+	preflightPlan   preflightMode = false
+	preflightStatus preflightMode = true
+)
+
+func preflightReadiness(mode preflightMode, self selfinstall.Result, integrated integration.Result, skillResult skills.Result, handshake integration.Handshake) (bool, string) {
+	if mode == preflightPlan {
+		if handshake.Status == integration.HandshakeUnavailable {
+			return false, "OpenCode no está disponible o el workspace no es válido. Instala una versión compatible y vuelve a ejecutar el wizard."
+		}
+		if !handshake.OK {
+			return false, "OpenCode respondió, pero el adaptador no está saludable o la versión es incompatible. Corrige el requisito antes de continuar."
+		}
+		if self.State == selfinstall.StateDrifted || integrated.State == integration.StateDrifted || skillResult.State == skills.StateDrifted || skillResult.State == skills.StateConflict {
+			return false, "Hay contenido administrado modificado o un destino en conflicto. El wizard no sobrescribirá esos archivos."
+		}
+		return true, ""
+	}
+	if !handshake.OK {
+		return false, "OpenCode no está disponible, es incompatible o el workspace no es válido."
+	}
+	if self.State == selfinstall.StateInstalled && integrated.State == integration.StateInstalled && skillResult.State == skills.StateInstalled {
+		return true, ""
+	}
+	return false, "La configuración todavía no está completa o presenta drift. Ejecuta el wizard para revisar el plan de reparación."
+}
+
+type preflightObservation struct {
+	selfInstall selfinstall.Result
+	skills      skills.Result
+	integration integration.Result
+}
+
+func (service *Service) observePreflight(ctx context.Context, options Options, mode preflightMode, plan *Plan) error {
+	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.prober == nil || options.Workspace == "" {
+		return ErrInvalid
+	}
+	var observed preflightObservation
+	var err error
+	if mode == preflightPlan {
+		observed.selfInstall, err = service.installer.Preview(ctx, options.SelfInstall)
+	} else {
+		observed.selfInstall, err = service.installer.Status(ctx, options.SelfInstall)
+	}
+	if err != nil {
+		return err
+	}
+	observed.skills = skills.Result{State: skills.StateInstalled}
+	if service.skills != nil {
+		if mode == preflightPlan {
+			observed.skills, err = service.skills.Preview(ctx, options.Skills)
+		} else {
+			observed.skills, err = service.skills.Status(ctx, options.Skills)
+		}
+		if err != nil && !errors.Is(err, skills.ErrDrift) && !errors.Is(err, skills.ErrConflict) {
+			return err
+		}
+	}
+	runtime := service.preview
+	if observed.selfInstall.State == selfinstall.StateInstalled {
+		runtime, err = service.integrations(observed.selfInstall.LauncherPath)
+		if err != nil {
+			return err
+		}
+	}
+	if mode == preflightPlan {
+		observed.integration, err = runtime.Preview(ctx, options.Integration)
+	} else {
+		observed.integration, err = runtime.Status(ctx, options.Integration)
+	}
+	if err != nil {
+		return err
+	}
+	// Keep observations private until every prerequisite, including the
+	// integration read, has succeeded. This preserves the public error result
+	// boundary while retaining all facts if the following probe fails.
+	plan.SelfInstall = observed.selfInstall
+	plan.Integration = cloneIntegrationResult(observed.integration)
+	plan.Skills = observed.skills
+	plan.Handshake, err = service.prober.Probe(ctx, options.Workspace)
+	return err
+}
+
 func (service *Service) Plan(ctx context.Context, options Options) (plan Plan, err error) {
 	plan = Plan{Provider: "opencode", Workspace: options.Workspace, Steps: OpenCodeSteps()}
 	defer func() { plan.Digest = planDigest(plan) }()
-	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.prober == nil || options.Workspace == "" {
-		return plan, ErrInvalid
-	}
-	selfResult, err := service.installer.Preview(ctx, options.SelfInstall)
-	if err != nil {
+	if err := service.observePreflight(ctx, options, preflightPlan, &plan); err != nil {
 		return plan, err
 	}
-	skillResult := skills.Result{State: skills.StateInstalled}
-	if service.skills != nil {
-		skillResult, err = service.skills.Preview(ctx, options.Skills)
-		if err != nil && !errors.Is(err, skills.ErrDrift) && !errors.Is(err, skills.ErrConflict) {
-			return plan, err
-		}
-	}
-	integrationRuntime := service.preview
-	if selfResult.State == selfinstall.StateInstalled {
-		integrationRuntime, err = service.integrations(selfResult.LauncherPath)
-		if err != nil {
-			return plan, err
-		}
-	}
-	integrationResult, err := integrationRuntime.Preview(ctx, options.Integration)
-	if err != nil {
-		return plan, err
-	}
-	plan.SelfInstall = selfResult
-	plan.Integration = cloneIntegrationResult(integrationResult)
-	plan.Skills = skillResult
-	handshake, handshakeErr := service.prober.Probe(ctx, options.Workspace)
-	plan.Handshake = handshake
-	if handshakeErr != nil {
-		return plan, handshakeErr
-	}
-	if handshake.Status == integration.HandshakeUnavailable {
-		plan.Blocker = "OpenCode no está disponible o el workspace no es válido. Instala una versión compatible y vuelve a ejecutar el wizard."
-		return plan, nil
-	}
-	if !handshake.OK {
-		plan.Blocker = "OpenCode respondió, pero el adaptador no está saludable o la versión es incompatible. Corrige el requisito antes de continuar."
-		return plan, nil
-	}
-	if selfResult.State == selfinstall.StateDrifted || integrationResult.State == integration.StateDrifted || skillResult.State == skills.StateDrifted || skillResult.State == skills.StateConflict {
-		plan.Blocker = "Hay contenido administrado modificado o un destino en conflicto. El wizard no sobrescribirá esos archivos."
-		return plan, nil
-	}
-	plan.Ready = true
+	plan.Ready, plan.Blocker = preflightReadiness(preflightPlan, plan.SelfInstall, plan.Integration, plan.Skills, plan.Handshake)
 	return plan, nil
 }
 
 func (service *Service) Status(ctx context.Context, options Options) (Plan, error) {
 	plan := Plan{Provider: "opencode", Workspace: options.Workspace, Steps: OpenCodeSteps()}
-	if service == nil || service.installer == nil || service.preview == nil || service.integrations == nil || service.prober == nil || options.Workspace == "" {
-		return plan, ErrInvalid
-	}
-	selfResult, err := service.installer.Status(ctx, options.SelfInstall)
-	if err != nil {
+	if err := service.observePreflight(ctx, options, preflightStatus, &plan); err != nil {
 		return plan, err
 	}
-	skillResult := skills.Result{State: skills.StateInstalled}
-	if service.skills != nil {
-		skillResult, err = service.skills.Status(ctx, options.Skills)
-		if err != nil && !errors.Is(err, skills.ErrDrift) && !errors.Is(err, skills.ErrConflict) {
-			return plan, err
-		}
-	}
-	integrationRuntime := service.preview
-	if selfResult.State == selfinstall.StateInstalled {
-		integrationRuntime, err = service.integrations(selfResult.LauncherPath)
-		if err != nil {
-			return plan, err
-		}
-	}
-	integrationResult, err := integrationRuntime.Status(ctx, options.Integration)
-	if err != nil {
-		return plan, err
-	}
-	plan.SelfInstall = selfResult
-	plan.Integration = cloneIntegrationResult(integrationResult)
-	plan.Skills = skillResult
-	handshake, handshakeErr := service.prober.Probe(ctx, options.Workspace)
-	plan.Handshake = handshake
-	if handshakeErr != nil {
-		return plan, handshakeErr
-	}
-	if !handshake.OK {
-		plan.Blocker = "OpenCode no está disponible, es incompatible o el workspace no es válido."
-		return plan, nil
-	}
-	plan.Ready = selfResult.State == selfinstall.StateInstalled && integrationResult.State == integration.StateInstalled && skillResult.State == skills.StateInstalled
-	if !plan.Ready {
-		plan.Blocker = "La configuración todavía no está completa o presenta drift. Ejecuta el wizard para revisar el plan de reparación."
-	}
+	plan.Ready, plan.Blocker = preflightReadiness(preflightStatus, plan.SelfInstall, plan.Integration, plan.Skills, plan.Handshake)
 	return plan, nil
 }
 

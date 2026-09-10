@@ -271,9 +271,9 @@ func waitForSQLite(ctx context.Context, attempt int, err error) error {
 	}
 }
 
-func migrationError(ctx context.Context, operation string, _ error) error {
+func migrationError(ctx context.Context, operation string, cause error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return fmt.Errorf("%w: %s", ErrMigration, operation)
+	return fmt.Errorf("%w: %s%s", ErrMigration, operation, sqliteDiagnostic(cause))
 }

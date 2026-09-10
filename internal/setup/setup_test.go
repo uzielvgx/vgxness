@@ -24,10 +24,14 @@ type fakeInstaller struct {
 	rollbackErr    error
 	rollbackCtxErr error
 	calls          []string
+	orderedEvents  *[]string
 }
 
 func (fake *fakeInstaller) Preview(context.Context, selfinstall.Options) (selfinstall.Result, error) {
 	fake.calls = append(fake.calls, "self-preview")
+	if fake.orderedEvents != nil {
+		*fake.orderedEvents = append(*fake.orderedEvents, "self-preview")
+	}
 	return fake.previewResult, fake.previewErr
 }
 func (fake *fakeInstaller) Install(context.Context, selfinstall.Options) (selfinstall.Result, error) {
@@ -36,6 +40,9 @@ func (fake *fakeInstaller) Install(context.Context, selfinstall.Options) (selfin
 }
 func (fake *fakeInstaller) Status(context.Context, selfinstall.Options) (selfinstall.Result, error) {
 	fake.calls = append(fake.calls, "self-status")
+	if fake.orderedEvents != nil {
+		*fake.orderedEvents = append(*fake.orderedEvents, "self-status")
+	}
 	return fake.statusResult, fake.statusErr
 }
 func (fake *fakeInstaller) Rollback(ctx context.Context, _ selfinstall.Options) (selfinstall.Result, error) {
@@ -62,10 +69,14 @@ type fakeIntegration struct {
 	statusErr     error
 	calls         []string
 	events        *[]string
+	orderedEvents *[]string
 }
 
 func (fake *fakeIntegration) Preview(context.Context, integration.Options) (integration.Result, error) {
 	fake.calls = append(fake.calls, "integration-preview")
+	if fake.orderedEvents != nil {
+		*fake.orderedEvents = append(*fake.orderedEvents, "integration-preview")
+	}
 	return fake.previewResult, fake.previewErr
 }
 func (fake *fakeIntegration) Install(context.Context, integration.Options) (integration.Result, error) {
@@ -77,6 +88,9 @@ func (fake *fakeIntegration) Install(context.Context, integration.Options) (inte
 }
 func (fake *fakeIntegration) Status(context.Context, integration.Options) (integration.Result, error) {
 	fake.calls = append(fake.calls, "integration-status")
+	if fake.orderedEvents != nil {
+		*fake.orderedEvents = append(*fake.orderedEvents, "integration-status")
+	}
 	return fake.statusResult, fake.statusErr
 }
 func (fake *fakeIntegration) Uninstall(context.Context, integration.Options) (integration.Result, error) {
@@ -94,10 +108,11 @@ func (fake *fakeIntegration) Reinstall(context.Context, integration.Options) (in
 }
 
 type fakeProber struct {
-	result  integration.Handshake
-	results []integration.Handshake
-	err     error
-	calls   int
+	result        integration.Handshake
+	results       []integration.Handshake
+	err           error
+	calls         int
+	orderedEvents *[]string
 }
 
 type fakeSkills struct {
@@ -105,10 +120,14 @@ type fakeSkills struct {
 	previewErr, installErr, statusErr error
 	calls                             []string
 	events                            *[]string
+	orderedEvents                     *[]string
 }
 
 func (fake *fakeSkills) Preview(context.Context, skills.Options) (skills.Result, error) {
 	fake.calls = append(fake.calls, "skills-preview")
+	if fake.orderedEvents != nil {
+		*fake.orderedEvents = append(*fake.orderedEvents, "skills-preview")
+	}
 	return fake.preview, fake.previewErr
 }
 func (fake *fakeSkills) Install(context.Context, skills.Options) (skills.Result, error) {
@@ -120,6 +139,9 @@ func (fake *fakeSkills) Install(context.Context, skills.Options) (skills.Result,
 }
 func (fake *fakeSkills) Status(context.Context, skills.Options) (skills.Result, error) {
 	fake.calls = append(fake.calls, "skills-status")
+	if fake.orderedEvents != nil {
+		*fake.orderedEvents = append(*fake.orderedEvents, "skills-status")
+	}
 	return fake.status, fake.statusErr
 }
 func (fake *fakeSkills) Uninstall(context.Context, skills.Options) (skills.Result, error) {
@@ -127,6 +149,9 @@ func (fake *fakeSkills) Uninstall(context.Context, skills.Options) (skills.Resul
 }
 
 func (fake *fakeProber) Probe(context.Context, string) (integration.Handshake, error) {
+	if fake.orderedEvents != nil {
+		*fake.orderedEvents = append(*fake.orderedEvents, "probe")
+	}
 	if len(fake.results) > fake.calls {
 		result := fake.results[fake.calls]
 		fake.calls++
@@ -332,6 +357,278 @@ func TestPlanExplainsEveryStepAndDoesNotMutate(t *testing.T) {
 	if !strings.Contains(plan.Steps[3].Title, "artefactos del proveedor") || !strings.Contains(plan.Steps[3].Explanation, "13 agentes enlazados al plan de modelos") || !strings.Contains(plan.Steps[4].Explanation, "19 skills y 47 archivos") || !strings.Contains(plan.Steps[4].Explanation, "memory-sync y sdd-lifecycle") || !strings.Contains(plan.Steps[4].Explanation, "no pertenecen a OpenCode") {
 		t.Fatalf("steps 4-5 do not describe model and provider ownership accurately: step4=%#v step5=%#v", plan.Steps[3], plan.Steps[4])
 	}
+}
+
+func TestPlanAndStatusPreflightCharacterization(t *testing.T) {
+	tests := []struct {
+		name, method, wantBlocker, wantInstaller, wantIntegration string
+		launcher                                                  selfinstall.State
+		handshake                                                 integration.Handshake
+		ready                                                     bool
+	}{
+		{"plan installable", "plan", "", "self-preview", "integration-preview", selfinstall.StateAbsent, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, true},
+		{"status not installed", "status", "La configuración todavía no está completa o presenta drift. Ejecuta el wizard para revisar el plan de reparación.", "self-status", "integration-status", selfinstall.StateAbsent, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, false},
+		{"plan unavailable", "plan", "OpenCode no está disponible o el workspace no es válido. Instala una versión compatible y vuelve a ejecutar el wizard.", "self-preview", "integration-preview", selfinstall.StateAbsent, integration.Handshake{Status: integration.HandshakeUnavailable}, false},
+		{"status unhealthy", "status", "OpenCode no está disponible, es incompatible o el workspace no es válido.", "self-status", "integration-status", selfinstall.StateInstalled, integration.Handshake{Status: integration.HandshakeUnavailable}, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			installer := &fakeInstaller{previewResult: selfinstall.Result{State: test.launcher}, statusResult: selfinstall.Result{State: test.launcher}}
+			integrationRuntime := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, statusResult: integration.Result{State: integration.StateAbsent}}
+			service := New(installer, integrationRuntime, func(string) (integration.Runtime, error) { return integrationRuntime, nil }, &fakeProber{result: test.handshake})
+			var plan Plan
+			var err error
+			if test.method == "plan" {
+				plan, err = service.Plan(context.Background(), Options{Workspace: "/workspace"})
+			} else {
+				plan, err = service.Status(context.Background(), Options{Workspace: "/workspace"})
+			}
+			if err != nil || plan.Ready != test.ready || plan.Blocker != test.wantBlocker || strings.Join(installer.calls, ",") != test.wantInstaller || strings.Join(integrationRuntime.calls, ",") != test.wantIntegration {
+				t.Fatalf("plan=%+v err=%v installer=%v integration=%v", plan, err, installer.calls, integrationRuntime.calls)
+			}
+		})
+	}
+}
+
+func TestPlanAndStatusKeepObservedPreflightOnProbeError(t *testing.T) {
+	for _, method := range []string{"plan", "status"} {
+		t.Run(method, func(t *testing.T) {
+			probeErr := errors.New("probe failed")
+			installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/preview"}, statusResult: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/status"}}
+			integrationRuntime := &fakeIntegration{previewResult: integration.Result{State: integration.StatePartial, Path: "/preview-agent"}, statusResult: integration.Result{State: integration.StatePartial, Path: "/status-agent"}}
+			service := New(installer, integrationRuntime, func(string) (integration.Runtime, error) { return integrationRuntime, nil }, &fakeProber{result: integration.Handshake{Status: integration.HandshakeUnavailable}, err: probeErr})
+			var plan Plan
+			var err error
+			if method == "plan" {
+				plan, err = service.Plan(context.Background(), Options{Workspace: "/workspace"})
+			} else {
+				plan, err = service.Status(context.Background(), Options{Workspace: "/workspace"})
+			}
+			if !errors.Is(err, probeErr) || plan.SelfInstall.State != selfinstall.StateAbsent || plan.Integration.State != integration.StatePartial || plan.Handshake.Status != integration.HandshakeUnavailable {
+				t.Fatalf("plan=%+v err=%v", plan, err)
+			}
+			if method == "plan" && plan.Digest == "" {
+				t.Fatalf("plan digest missing")
+			}
+			if method == "status" && plan.Digest != "" {
+				t.Fatalf("status digest=%q", plan.Digest)
+			}
+		})
+	}
+}
+
+func TestPlanAndStatusPreflightStatesAndDispatch(t *testing.T) {
+	const (
+		planDrift   = "Hay contenido administrado modificado o un destino en conflicto. El wizard no sobrescribirá esos archivos."
+		statusDrift = "La configuración todavía no está completa o presenta drift. Ejecuta el wizard para revisar el plan de reparación."
+	)
+	tests := []struct {
+		name                       string
+		self                       selfinstall.State
+		integrated                 integration.State
+		skill                      skills.State
+		skillErr                   error
+		handshake                  integration.Handshake
+		planReady, statusReady     bool
+		planBlocker, statusBlocker string
+		factory                    bool
+	}{
+		{"absent", selfinstall.StateAbsent, integration.StateAbsent, skills.StateAbsent, nil, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, true, false, "", statusDrift, false},
+		{"partial skills", selfinstall.StateAbsent, integration.StatePartial, skills.StatePartial, nil, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, true, false, "", statusDrift, false},
+		{"installed", selfinstall.StateInstalled, integration.StateInstalled, skills.StateInstalled, nil, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, true, true, "", "", true},
+		{"launcher drift", selfinstall.StateDrifted, integration.StateAbsent, skills.StateAbsent, nil, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, false, false, planDrift, statusDrift, false},
+		{"integration drift", selfinstall.StateAbsent, integration.StateDrifted, skills.StateAbsent, nil, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, false, false, planDrift, statusDrift, false},
+		{"skills drift", selfinstall.StateAbsent, integration.StateAbsent, skills.StateDrifted, skills.ErrDrift, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, false, false, planDrift, statusDrift, false},
+		{"skills conflict", selfinstall.StateAbsent, integration.StateAbsent, skills.StateConflict, skills.ErrConflict, integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, false, false, planDrift, statusDrift, false},
+		{"unavailable", selfinstall.StateAbsent, integration.StateAbsent, skills.StateAbsent, nil, integration.Handshake{Status: integration.HandshakeUnavailable}, false, false, "OpenCode no está disponible o el workspace no es válido. Instala una versión compatible y vuelve a ejecutar el wizard.", "OpenCode no está disponible, es incompatible o el workspace no es válido.", false},
+		{"incompatible", selfinstall.StateAbsent, integration.StateAbsent, skills.StateAbsent, nil, integration.Handshake{Status: integration.HandshakeIncompatible}, false, false, "OpenCode respondió, pero el adaptador no está saludable o la versión es incompatible. Corrige el requisito antes de continuar.", "OpenCode no está disponible, es incompatible o el workspace no es válido.", false},
+		{"unhealthy", selfinstall.StateAbsent, integration.StateAbsent, skills.StateAbsent, nil, integration.Handshake{Status: integration.HandshakeHealthy}, false, false, "OpenCode respondió, pero el adaptador no está saludable o la versión es incompatible. Corrige el requisito antes de continuar.", "OpenCode no está disponible, es incompatible o el workspace no es válido.", false},
+	}
+	for _, test := range tests {
+		for _, method := range []string{"plan", "status"} {
+			t.Run(test.name+"/"+method, func(t *testing.T) {
+				installer := &fakeInstaller{previewResult: selfinstall.Result{State: test.self, LauncherPath: "/launcher"}, statusResult: selfinstall.Result{State: test.self, LauncherPath: "/launcher"}}
+				preview := &fakeIntegration{previewResult: integration.Result{State: test.integrated}, statusResult: integration.Result{State: test.integrated}}
+				managed := &fakeIntegration{previewResult: integration.Result{State: test.integrated}, statusResult: integration.Result{State: test.integrated}}
+				skillRuntime := &fakeSkills{preview: skills.Result{State: test.skill}, status: skills.Result{State: test.skill}, previewErr: test.skillErr, statusErr: test.skillErr}
+				factoryCalls := 0
+				service := New(installer, preview, func(path string) (integration.Runtime, error) {
+					factoryCalls++
+					if path != "/launcher" {
+						t.Fatalf("factory path=%q", path)
+					}
+					return managed, nil
+				}, &fakeProber{result: test.handshake})
+				service.skills = skillRuntime
+
+				var plan Plan
+				var err error
+				if method == "plan" {
+					plan, err = service.Plan(context.Background(), Options{Workspace: "/workspace"})
+				} else {
+					plan, err = service.Status(context.Background(), Options{Workspace: "/workspace"})
+				}
+				wantReady, wantBlocker, wantSelf, wantSkill, wantIntegration := test.planReady, test.planBlocker, "self-preview", "skills-preview", "integration-preview"
+				if method == "status" {
+					wantReady, wantBlocker, wantSelf, wantSkill, wantIntegration = test.statusReady, test.statusBlocker, "self-status", "skills-status", "integration-status"
+				}
+				active := preview
+				if test.factory {
+					active = managed
+				}
+				if err != nil || plan.Ready != wantReady || plan.Blocker != wantBlocker || strings.Join(installer.calls, ",") != wantSelf || strings.Join(skillRuntime.calls, ",") != wantSkill || strings.Join(active.calls, ",") != wantIntegration || factoryCalls != btoi(test.factory) {
+					t.Fatalf("plan=%+v err=%v installer=%v skills=%v preview=%v managed=%v factory=%d", plan, err, installer.calls, skillRuntime.calls, preview.calls, managed.calls, factoryCalls)
+				}
+				if method == "plan" && plan.Digest == "" {
+					t.Fatal("Plan did not publish a digest")
+				}
+				if method == "status" && plan.Digest != "" {
+					t.Fatalf("Status published digest %q", plan.Digest)
+				}
+			})
+		}
+	}
+}
+
+func TestPlanAndStatusPreflightFatalErrorsKeepOriginalPublicationBoundary(t *testing.T) {
+	tests := []struct{ name, phase string }{
+		{"self", "self"}, {"skills", "skills"}, {"factory", "factory"}, {"integration", "integration"}, {"probe", "probe"},
+	}
+	for _, test := range tests {
+		for _, method := range []string{"plan", "status"} {
+			t.Run(test.name+"/"+method, func(t *testing.T) {
+				fatal := errors.New(test.phase + " failed")
+				var events []string
+				installer := &fakeInstaller{previewResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/launcher"}, statusResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/launcher"}, orderedEvents: &events}
+				if test.phase == "self" {
+					installer.previewErr, installer.statusErr = fatal, fatal
+				}
+				preview := &fakeIntegration{previewResult: integration.Result{State: integration.StatePartial}, statusResult: integration.Result{State: integration.StatePartial}}
+				managed := &fakeIntegration{previewResult: integration.Result{State: integration.StatePartial}, statusResult: integration.Result{State: integration.StatePartial}, orderedEvents: &events}
+				if test.phase == "integration" {
+					managed.previewErr, managed.statusErr = fatal, fatal
+				}
+				skillRuntime := &fakeSkills{preview: skills.Result{State: skills.StatePartial}, status: skills.Result{State: skills.StatePartial}, orderedEvents: &events}
+				if test.phase == "skills" {
+					skillRuntime.previewErr, skillRuntime.statusErr = fatal, fatal
+				}
+				factoryCalls := 0
+				service := New(installer, preview, func(string) (integration.Runtime, error) {
+					factoryCalls++
+					events = append(events, "factory")
+					if test.phase == "factory" {
+						return nil, fatal
+					}
+					return managed, nil
+				}, &fakeProber{result: integration.Handshake{Status: integration.HandshakeUnavailable}, orderedEvents: &events, err: func() error {
+					if test.phase == "probe" {
+						return fatal
+					}
+					return nil
+				}()})
+				service.skills = skillRuntime
+				var plan Plan
+				var err error
+				if method == "plan" {
+					plan, err = service.Plan(context.Background(), Options{Workspace: "/workspace"})
+				} else {
+					plan, err = service.Status(context.Background(), Options{Workspace: "/workspace"})
+				}
+				if !errors.Is(err, fatal) {
+					t.Fatalf("err=%v", err)
+				}
+				if test.phase == "probe" {
+					if plan.SelfInstall.State != selfinstall.StateInstalled || plan.Skills.State != skills.StatePartial || plan.Integration.State != integration.StatePartial || plan.Handshake.Status != integration.HandshakeUnavailable {
+						t.Fatalf("probe did not retain observations: %+v", plan)
+					}
+				} else if plan.SelfInstall.State != "" || plan.Skills.State != "" || plan.Integration.State != "" || plan.Handshake.Status != "" {
+					t.Fatalf("%s leaked observations: %+v", test.phase, plan)
+				}
+				if method == "plan" && plan.Digest == "" {
+					t.Fatal("Plan error lacks digest")
+				}
+				if method == "status" && plan.Digest != "" {
+					t.Fatalf("Status error digest=%q", plan.Digest)
+				}
+				operation := "preview"
+				if method == "status" {
+					operation = "status"
+				}
+				wantEvents := []string{"self-" + operation}
+				if test.phase != "self" {
+					wantEvents = append(wantEvents, "skills-"+operation)
+				}
+				if test.phase != "self" && test.phase != "skills" {
+					wantEvents = append(wantEvents, "factory")
+				}
+				if test.phase == "integration" || test.phase == "probe" {
+					wantEvents = append(wantEvents, "integration-"+operation)
+				}
+				if test.phase == "probe" {
+					wantEvents = append(wantEvents, "probe")
+				}
+				if got := strings.Join(events, ","); got != strings.Join(wantEvents, ",") || len(preview.calls) != 0 || factoryCalls != btoi(test.phase != "self" && test.phase != "skills") {
+					t.Fatalf("events=%v want=%v preview=%v factory=%d", events, wantEvents, preview.calls, factoryCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestPlanAndStatusSharePrerequisiteValidation(t *testing.T) {
+	tests := []struct{ name string }{
+		{"nil service"}, {"missing installer"}, {"missing preview"}, {"missing factory"}, {"missing prober"}, {"empty workspace"},
+	}
+	for _, test := range tests {
+		for _, method := range []string{"plan", "status"} {
+			t.Run(test.name+"/"+method, func(t *testing.T) {
+				installer := &fakeInstaller{}
+				preview := &fakeIntegration{}
+				prober := &fakeProber{}
+				factoryCalls := 0
+				factory := func(string) (integration.Runtime, error) { factoryCalls++; return preview, nil }
+				service := New(installer, preview, factory, prober)
+				workspace := "/workspace"
+				switch test.name {
+				case "nil service":
+					service = nil
+				case "missing installer":
+					service = New(nil, preview, factory, prober)
+				case "missing preview":
+					service = New(installer, nil, factory, prober)
+				case "missing factory":
+					service = New(installer, preview, nil, prober)
+				case "missing prober":
+					service = New(installer, preview, factory, nil)
+				case "empty workspace":
+					workspace = ""
+				}
+				var plan Plan
+				var err error
+				if method == "plan" {
+					plan, err = service.Plan(context.Background(), Options{Workspace: workspace})
+				} else {
+					plan, err = service.Status(context.Background(), Options{Workspace: workspace})
+				}
+				if !errors.Is(err, ErrInvalid) || len(installer.calls) != 0 || len(preview.calls) != 0 || prober.calls != 0 || factoryCalls != 0 {
+					t.Fatalf("plan=%+v err=%v installer=%v preview=%v probe=%d factory=%d", plan, err, installer.calls, preview.calls, prober.calls, factoryCalls)
+				}
+				if method == "plan" && plan.Digest == "" {
+					t.Fatal("Plan invalid response lacks digest")
+				}
+				if method == "status" && plan.Digest != "" {
+					t.Fatalf("Status invalid response digest=%q", plan.Digest)
+				}
+			})
+		}
+	}
+}
+
+func btoi(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func TestPlanDigestIsStableAndBindsFullPlan(t *testing.T) {
