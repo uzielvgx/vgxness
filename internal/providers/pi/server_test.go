@@ -77,10 +77,9 @@ func testRecord(t *testing.T, request Request) []byte {
 func TestServerHandshakeBindsAndDispatchesOnce(t *testing.T) {
 	workspace := testWorkspace(t)
 	called := 0
-	started := make(chan struct{})
+	completed := make(chan struct{})
 	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(_ context.Context, request Request) (any, error) {
 		called++
-		close(started)
 		return map[string]string{"operation": request.Operation}, nil
 	})
 	if err != nil {
@@ -93,8 +92,16 @@ func TestServerHandshakeBindsAndDispatchesOnce(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer writer.Close()
 	var output lockedBuffer
+	var resultOnce sync.Once
+	outputWriter := writerFunc(func(record []byte) (int, error) {
+		n, err := output.Write(record)
+		if err == nil && n == len(record) && bytes.Contains(record, []byte(`"id":"one"`)) && bytes.Contains(record, []byte(`"type":"result"`)) {
+			resultOnce.Do(func() { close(completed) })
+		}
+		return n, err
+	})
 	done := make(chan error, 1)
-	go func() { done <- server.Serve(context.Background(), reader, &output) }()
+	go func() { done <- server.Serve(context.Background(), reader, outputWriter) }()
 	if _, err := writer.Write(append(hello, '\n')); err != nil {
 		t.Fatal(err)
 	}
@@ -102,11 +109,11 @@ func TestServerHandshakeBindsAndDispatchesOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-started:
+	case <-completed:
 	case err := <-done:
-		t.Fatalf("server returned before dispatch: %v", err)
+		t.Fatalf("server returned before result: %v", err)
 	case <-time.After(time.Second):
-		t.Fatal("request did not dispatch")
+		t.Fatal("request did not complete")
 	}
 	_ = writer.Close()
 	if err := <-done; err != nil {
