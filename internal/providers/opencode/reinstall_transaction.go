@@ -205,6 +205,14 @@ func (transaction *reinstallTransaction) finish(returnErr error, rollback bool) 
 		}
 		returnErr = errors.Join(returnErr, transaction.root.CleanupStaged(item.staged))
 	}
+	// Cleanup is a separate mutation phase. Re-read the managed set before
+	// removing its pending evidence; a changed file must never report success.
+	if err := verifyRootInstall(transaction.root, transaction.state); err != nil {
+		returnErr = errors.Join(returnErr, integration.ErrDrift, err)
+	}
+	if returnErr != nil {
+		return errors.Join(integration.ErrRecovery, returnErr)
+	}
 	if transaction.pendingEvidence.info != nil {
 		returnErr = errors.Join(returnErr, clearReinstallPendingAtRoot(transaction.root, transaction.pendingEvidence))
 	}

@@ -160,6 +160,11 @@ func readKnownActivationEvidence(root *Root) (Package, activationPending, bool, 
 	if err != nil {
 		return Package{}, activationPending{}, true, err
 	}
+	if previous, present, receiptErr := readReceiptPackageFrom(root, true); receiptErr != nil {
+		return Package{}, activationPending{}, true, recovery(receiptErr)
+	} else if present {
+		packages = append(packages, previous)
+	}
 	for _, pkg := range packages {
 		if !pkg.current {
 			continue

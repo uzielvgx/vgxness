@@ -32,119 +32,9 @@ func windowsRootRenameBlocked(err error) bool {
 		(errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation))
 }
 
-func TestKnownPackagesOrderCurrentThenPreTerminalV18ThenV17ForEveryPlan(t *testing.T) {
-	known, err := knownPackages()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(known) != 62 {
-		t.Fatalf("known packages length = %d, want 62", len(known))
-	}
-	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
-		current, err := RenderPlan("v0.0.0", plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v19, err := renderActiveV19("v0.0.0", plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v18PreTerminalClosure, err := renderActiveV18PreTerminalClosure("v0.0.0", plan)
-		require(t, err == nil)
-		v17, err := renderActiveV17("v0.0.0", plan)
-		require(t, err == nil)
-		v16, err := renderActiveV16("v0.0.0", plan)
-		require(t, err == nil)
-		v15, err := renderActiveV15("v0.0.0", plan)
-		require(t, err == nil)
-		v14, err := renderActiveV14("v0.0.0", plan)
-		require(t, err == nil)
-		v13, err := renderActiveV13("v0.0.0", plan)
-		require(t, err == nil)
-		v12, err := renderActiveV12("v0.0.0", plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v10, err := renderActiveV10("v0.0.0", plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v9, err := renderActiveV9("v0.0.0", plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v7, err := renderActiveV7("v0.0.0", plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v6, err := renderActiveV6("v0.0.0", plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v8, err := renderActiveV8("v0.0.0", plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v20, err := renderActiveV20("v0.0.0", plan)
-		require(t, err == nil)
-		want := []string{current.SHA256, v20.SHA256, v19.SHA256, v18PreTerminalClosure.SHA256, v17.SHA256, v16.SHA256, v15.SHA256, v14.SHA256, v13.SHA256, v12.SHA256, v10.SHA256, v9.SHA256, v8.SHA256, v7.SHA256, v6.SHA256}
-		foundV12 := 0
-		for index, pkg := range known {
-			if pkg.SHA256 == v12.SHA256 {
-				foundV12++
-			}
-			if index >= int(planIndex(plan))*15 && index < int(planIndex(plan))*15+15 && pkg.SHA256 != want[index-int(planIndex(plan))*15] {
-				t.Fatalf("known packages order for %s at %d = %s, want %s", plan, index, pkg.SHA256, want[index-int(planIndex(plan))*15])
-			}
-		}
-		if foundV12 != 1 {
-			t.Fatalf("known packages v12 count for %s = %d, want 1", plan, foundV12)
-		}
-	}
-}
-
 func TestLogicalArtifactDirUsesSlashSeparators(t *testing.T) {
 	if got := logicalArtifactDir(".agents/plugins/marketplace.json"); got != ".agents/plugins" {
 		t.Fatalf("logicalArtifactDir() = %q, want .agents/plugins", got)
-	}
-}
-
-func TestActiveV16LifecycleStatusUpgradeAndDrift(t *testing.T) {
-	plan := modelplan.PlanMedium
-	v16, err := renderActiveV16("v0.0.0", plan)
-	require(t, err == nil)
-	for name, mutate := range map[string]func(*Package){
-		"exact":    func(*Package) {},
-		"one-byte": func(pkg *Package) { pkg.Artifacts[0].Bytes = append(pkg.Artifacts[0].Bytes, '\n') },
-		"mixed": func(pkg *Package) {
-			current, renderErr := renderActiveV16("v0.0.0", modelplan.PlanUltra)
-			require(t, renderErr == nil)
-			for index := range pkg.Artifacts {
-				if pkg.Artifacts[index].Path == "agents/general.toml" {
-					pkg.Artifacts[index] = artifact(t, current, "agents/general.toml")
-					return
-				}
-			}
-			t.Fatal("v16 package lacks general profile")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "codex")
-			candidate := clonePackage(v16)
-			mutate(&candidate)
-			writePackage(t, root, candidate)
-			service := NewIntegration()
-			status, statusErr := service.Status(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
-			if name != "exact" {
-				if statusErr != nil || status.State != integration.StateDrifted {
-					t.Fatalf("Status(%s) = %+v, %v; want drifted", name, status, statusErr)
-				}
-				return
-			}
-			require(t, statusErr == nil && status.State == integration.StatePartial && status.RestartRequired)
-			upgraded, reinstallErr := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
-			require(t, reinstallErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed)
-		})
 	}
 }
 
@@ -155,183 +45,6 @@ func planIndex(plan modelplan.Plan) int {
 		}
 	}
 	panic("unknown plan")
-}
-
-func TestActiveV12LifecycleStatusReinstallAndProtection(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "codex")
-	plan := modelplan.PlanMedium
-	v12, err := renderActiveV12("v0.0.0", plan)
-	require(t, err == nil)
-	writePackage(t, root, v12)
-	sentinel := []byte("unrelated sentinel\n")
-	sentinelPath := filepath.Join(root, "config.toml")
-	require(t, os.WriteFile(sentinelPath, sentinel, 0o600) == nil)
-	service := NewIntegration()
-
-	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
-	require(t, err == nil && status.State == integration.StatePartial && status.RestartRequired && status.ArtifactSHA256 == v12.SHA256)
-	reinstalled, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
-	if err != nil || reinstalled.State != integration.StateInstalled || !reinstalled.Changed || reinstalled.ArtifactSHA256 == v12.SHA256 {
-		t.Fatalf("upgrade=%+v err=%v", reinstalled, err)
-	}
-	preserved, err := os.ReadFile(sentinelPath)
-	require(t, err == nil && bytes.Equal(preserved, sentinel))
-
-	writePackage(t, root, v12)
-	path := filepath.Join(root, "AGENTS.md")
-	body, err := os.ReadFile(path)
-	require(t, err == nil && os.WriteFile(path, append(body, []byte("modified")...), 0o600) == nil)
-	modified, err := os.ReadFile(path)
-	require(t, err == nil)
-	status, statusErr := service.Status(context.Background(), integration.Options{ConfigDir: root})
-	_, reinstallErr := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
-	_, uninstallErr := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
-	require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(reinstallErr, integration.ErrDrift) && errors.Is(uninstallErr, integration.ErrDrift))
-	after, err := os.ReadFile(path)
-	require(t, err == nil && bytes.Equal(after, modified))
-	preserved, err = os.ReadFile(sentinelPath)
-	require(t, err == nil && bytes.Equal(preserved, sentinel))
-}
-
-func TestExactPredecessorIsUpgradeableButNotReportedInstalled(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "codex")
-	predecessor, err := renderActiveV12("v0.0.0", modelplan.PlanMedium)
-	require(t, err == nil)
-	writePackage(t, root, predecessor)
-
-	service := NewIntegration()
-	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
-	require(t, err == nil && status.State == integration.StatePartial && status.RestartRequired)
-
-	upgraded, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium})
-	current, currentErr := RenderPlan("v0.0.0", modelplan.PlanMedium)
-	require(t, err == nil && currentErr == nil && upgraded.State == integration.StateInstalled && upgraded.Changed && upgraded.ArtifactSHA256 == current.SHA256)
-}
-
-func TestIntegrationRecoveryRecognizesActiveV12Sidecar(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "codex")
-	plan := modelplan.PlanMedium
-	v12, err := renderActiveV12("v0.0.0", plan)
-	require(t, err == nil && os.MkdirAll(root, 0o700) == nil)
-	sentinel := []byte("unrelated recovery sentinel\n")
-	sentinelPath := filepath.Join(root, "config.toml")
-	require(t, os.WriteFile(sentinelPath, sentinel, 0o600) == nil)
-	require(t, os.WriteFile(filepath.Join(root, ".vgxness-pending"), []byte("codex-pending\n"), 0o600) == nil)
-	for _, item := range v12.Artifacts {
-		path := filepath.Join(root, filepath.FromSlash(item.Path+".vgxness-stage"))
-		require(t, os.MkdirAll(filepath.Dir(path), 0o700) == nil)
-		require(t, os.WriteFile(path, item.Bytes, 0o600) == nil)
-	}
-
-	result, err := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
-	if err != nil || result.State != integration.StateInstalled || !result.Changed || result.ArtifactSHA256 != v12.SHA256 {
-		t.Fatalf("Reinstall(v12 sidecar) = %+v, %v", result, err)
-	}
-	assertNoEvidence(t, root)
-	preserved, err := os.ReadFile(sentinelPath)
-	require(t, err == nil && bytes.Equal(preserved, sentinel))
-}
-
-func TestPartialCandidateCollapseRejectsV12Conflict(t *testing.T) {
-	current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
-	require(t, err == nil)
-	v12, err := renderActiveV12("v0.0.0", modelplan.PlanMedium)
-	require(t, err == nil)
-	partial := func(pkg Package) partialCandidate {
-		state := inspection{result: integration.Result{State: integration.StatePartial}, artifacts: make([]inspectedArtifact, len(pkg.Artifacts))}
-		for index, item := range pkg.Artifacts {
-			state.artifacts[index] = inspectedArtifact{artifact: item, present: item.Path == "AGENTS.md", exact: item.Path == "AGENTS.md"}
-		}
-		return partialCandidate{state: state, pkg: pkg}
-	}
-	if _, _, err := collapsePartialCandidates([]partialCandidate{partial(current), partial(v12)}, current); !errors.Is(err, integration.ErrConflict) {
-		t.Fatalf("conflicting v12 manager bytes error=%v, want conflict", err)
-	}
-}
-
-func TestActiveV8LifecycleStatusUpgradeUninstallAndDrift(t *testing.T) {
-	plan := modelplan.PlanMedium
-	v8, err := renderActiveV8("v0.0.0", plan)
-	require(t, err == nil)
-	for _, test := range []struct {
-		name string
-		run  func(*testing.T, string, *Integration)
-	}{
-		{"status", func(t *testing.T, root string, service *Integration) {
-			result, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
-			require(t, err == nil && result.State == integration.StatePartial && result.RestartRequired && result.ArtifactSHA256 == v8.SHA256)
-		}},
-		{"upgrade", func(t *testing.T, root string, service *Integration) {
-			result, err := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
-			require(t, err == nil && result.State == integration.StateInstalled && result.Changed && result.ArtifactSHA256 != v8.SHA256)
-		}},
-		{"uninstall", func(t *testing.T, root string, service *Integration) {
-			result, err := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
-			require(t, err == nil && result.State == integration.StateAbsent && result.Changed)
-		}},
-		{"modified bytes drift", func(t *testing.T, root string, service *Integration) {
-			path := filepath.Join(root, "AGENTS.md")
-			body, err := os.ReadFile(path)
-			require(t, err == nil)
-			require(t, os.WriteFile(path, append(body, []byte("\nmodified\n")...), 0o600) == nil)
-			status, statusErr := service.Status(context.Background(), integration.Options{ConfigDir: root})
-			_, reinstallErr := service.Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: plan})
-			_, uninstallErr := service.Uninstall(context.Background(), integration.Options{ConfigDir: root})
-			require(t, statusErr == nil && status.State == integration.StateDrifted && errors.Is(reinstallErr, integration.ErrDrift) && errors.Is(uninstallErr, integration.ErrDrift))
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "codex")
-			writePackage(t, root, v8)
-			test.run(t, root, NewIntegration())
-		})
-	}
-}
-
-func TestIntegrationReinstallsCurrentAndV7WhenManagerArtifactIsMissing(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		pkg  func(string, modelplan.Plan) (Package, error)
-	}{
-		{name: "current", pkg: RenderPlan},
-		{name: "v7", pkg: renderActiveV7},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "codex")
-			pkg, err := test.pkg("v0.0.0", modelplan.PlanMedium)
-			require(t, err == nil)
-			writePackage(t, root, pkg)
-			require(t, os.Remove(filepath.Join(root, "AGENTS.md")) == nil)
-
-			result, err := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium})
-			if err != nil || result.State != integration.StateInstalled || !result.Changed {
-				t.Fatalf("Reinstall(%s missing AGENTS.md) = %+v, %v", test.name, result, err)
-			}
-			current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
-			require(t, err == nil)
-			body, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-			if err != nil || !bytes.Equal(body, artifact(t, current, "AGENTS.md").Bytes) {
-				t.Fatalf("Reinstall(%s) did not publish current manager: %v", test.name, err)
-			}
-		})
-	}
-}
-
-func TestPartialCandidateCollapseRejectsConflictingPresentBytes(t *testing.T) {
-	current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
-	require(t, err == nil)
-	v7, err := renderActiveV7("v0.0.0", modelplan.PlanMedium)
-	require(t, err == nil)
-	partial := func(pkg Package) partialCandidate {
-		state := inspection{result: integration.Result{State: integration.StatePartial}, artifacts: make([]inspectedArtifact, len(pkg.Artifacts))}
-		for index, item := range pkg.Artifacts {
-			state.artifacts[index] = inspectedArtifact{artifact: item, present: item.Path == "AGENTS.md", exact: item.Path == "AGENTS.md"}
-		}
-		return partialCandidate{state: state, pkg: pkg}
-	}
-	if _, _, err := collapsePartialCandidates([]partialCandidate{partial(current), partial(v7)}, current); !errors.Is(err, integration.ErrConflict) {
-		t.Fatalf("conflicting present manager bytes error=%v, want conflict", err)
-	}
 }
 
 func TestIntegrationReinstallSwitchesAndPersistsModelPlan(t *testing.T) {
@@ -462,47 +175,6 @@ func TestIntegrationReinstallAbsentInstallsExplicitRequestedPlan(t *testing.T) {
 	}
 }
 
-func TestIntegrationReinstallMigratesLegacyStaticPackage(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "codex")
-	legacy, err := renderLegacy("v0.0.0")
-	require(t, err == nil)
-	writePackage(t, root, legacy)
-
-	high := integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanHigh}
-	result, err := NewIntegration().Reinstall(context.Background(), high)
-	require(t, err == nil && result.State == integration.StateInstalled && result.Changed && result.ModelPlan == modelplan.PlanHigh)
-	general, err := os.ReadFile(filepath.Join(root, "agents", "general.toml"))
-	require(t, err == nil && strings.Contains(string(general), `model = "gpt-5.6-sol"`) && strings.Contains(string(general), `model_reasoning_effort = "high"`))
-}
-
-func TestIntegrationReinstallsOnlyCompletePreConsolidationV4Package(t *testing.T) {
-	for name, mutate := range map[string]func(*Package){
-		"exact":   func(pkg *Package) {},
-		"mutated": func(pkg *Package) { pkg.Artifacts[1].Bytes[0] ^= 1 },
-		"mixed": func(pkg *Package) {
-			current, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
-			require(t, err == nil)
-			pkg.Artifacts[0] = current.Artifacts[0]
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "codex")
-			pkg, err := renderPreConsolidationV4("v0.0.0", modelplan.PlanMedium)
-			require(t, err == nil)
-			mutate(&pkg)
-			before := append([]byte(nil), pkg.Artifacts[1].Bytes...)
-			writePackage(t, root, pkg)
-			result, reinstallErr := NewIntegration().Reinstall(context.Background(), integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium})
-			if name == "exact" {
-				require(t, reinstallErr == nil && result.State == integration.StateInstalled && result.Changed)
-				return
-			}
-			after, readErr := os.ReadFile(filepath.Join(root, pkg.Artifacts[1].Path))
-			require(t, errors.Is(reinstallErr, integration.ErrDrift) && readErr == nil && string(after) == string(before))
-		})
-	}
-}
-
 func TestIntegrationPlanSwitchBlocksUnknownDrift(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "codex")
 	service := NewIntegration()
@@ -534,7 +206,7 @@ func TestIntegrationInstallAndIdempotence(t *testing.T) {
 	options := integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")}
 	service := NewIntegration()
 	before, err := service.Status(context.Background(), options)
-	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 9)
+	require(t, err == nil && before.State == integration.StateAbsent && before.ArtifactCount == 10)
 	installed, err := service.Install(context.Background(), options)
 	if err != nil || installed.State != integration.StateInstalled || !installed.Changed || !installed.RestartRequired {
 		t.Fatalf("Install() = %+v, %v", installed, err)
@@ -1138,7 +810,7 @@ func TestStatusReportsRecoveryWhenClearPendingFails(t *testing.T) {
 }
 func TestManagedLayoutExcludesPluginArtifacts(t *testing.T) {
 	layout, err := NewIntegration().ManagedLayout(context.Background(), integration.Options{ConfigDir: filepath.Join(t.TempDir(), "codex")})
-	require(t, err == nil && len(layout.Artifacts) == 9)
+	require(t, err == nil && len(layout.Artifacts) == 10)
 	for _, item := range layout.Artifacts {
 		require(t, item.RelativePath != "config.toml" && item.RelativePath != ".mcp.json" && filepath.Ext(item.RelativePath) != ".plugin")
 	}

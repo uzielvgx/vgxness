@@ -103,4 +103,4 @@ If `~/.local/bin` is not already on `PATH`, invoke the permanent launcher by its
 
 ## CARE lifecycle boundary
 
-CARE recognizes exact predecessors only for lifecycle and upgrade handling; it does not make them current aliases or change self-install activation. See [CARE architecture](care.md) for markers and authority, and [CARE evaluation](care-evaluation.md) for static-check limits.
+Agent updates recognize exact receipt-backed local files; retired agent definitions are absent from the current renderer. This does not change self-install activation. See [CARE architecture](care.md) for markers and authority, and [CARE evaluation](care-evaluation.md) for static-check limits.

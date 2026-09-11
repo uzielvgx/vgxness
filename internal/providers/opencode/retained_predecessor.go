@@ -3,6 +3,7 @@ package opencode
 import (
 	"bytes"
 	"crypto/rand"
+
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,81 +37,6 @@ func retainedPredecessorRoot(root string) string {
 
 func retainedAnchorRoot(root string) string {
 	return filepath.Join(retainedPredecessorRoot(root), retainedAnchorDirectory)
-}
-
-func prepareRetainedPredecessorDirectories(root string) error {
-	for _, directory := range []string{retainedPredecessorRoot(root), retainedAnchorRoot(root)} {
-		if err := prepareDirectory(directory); err != nil {
-			return err
-		}
-		info, err := os.Lstat(directory)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
-			return fmt.Errorf("invalid retained predecessor directory")
-		}
-	}
-	return nil
-}
-
-func persistRetainedPredecessor(root, target, anchor string, predecessor []byte) (string, error) {
-	if root == "" {
-		root = filepath.Dir(target)
-	}
-	root = filepath.Clean(root)
-	if !validRetainedPaths(root, target, anchor) {
-		return "", fmt.Errorf("invalid retained predecessor path")
-	}
-	anchorBytes, err := readRegularFile(anchor)
-	if err != nil || !bytes.Equal(anchorBytes, predecessor) {
-		return "", fmt.Errorf("invalid retained predecessor anchor")
-	}
-	if err := prepareRetainedPredecessorDirectories(root); err != nil {
-		return "", err
-	}
-	operation := make([]byte, 16)
-	if _, err := rand.Read(operation); err != nil {
-		return "", err
-	}
-	marker := retainedPredecessorMarker{Version: retainedPredecessorVersion, Operation: hex.EncodeToString(operation), Root: root, Target: target, Anchor: anchor, SHA256: artifactSHA256(predecessor)}
-	body, err := json.Marshal(marker)
-	if err != nil || len(body)+1 > maxRetainedPredecessorBytes {
-		return "", fmt.Errorf("encode retained predecessor")
-	}
-	body = append(body, '\n')
-	path := filepath.Join(retainedPredecessorRoot(root), marker.Operation+".json")
-	file, err := os.CreateTemp(retainedPredecessorRoot(root), ".vgxness-retained-*.tmp")
-	if err != nil {
-		return "", err
-	}
-	temporary := file.Name()
-	defer os.Remove(temporary)
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return "", err
-	}
-	if _, err := file.Write(body); err != nil {
-		_ = file.Close()
-		return "", err
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return "", err
-	}
-	if err := file.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Link(temporary, path); err != nil {
-		return "", err
-	}
-	if err := syncDirectory(retainedPredecessorRoot(root)); err != nil {
-		return path, err
-	}
-	if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return path, err
-	}
-	if err := syncDirectory(retainedPredecessorRoot(root)); err != nil {
-		return path, err
-	}
-	return path, nil
 }
 
 type retainedInventory struct {
@@ -260,4 +186,79 @@ func validRetainedPaths(root, target, anchor string) bool {
 	}
 	name := filepath.Base(anchor)
 	return strings.HasPrefix(name, ".vgxness-previous-") && strings.HasSuffix(name, ".tmp")
+}
+
+func persistRetainedPredecessor(root, target, anchor string, predecessor []byte) (string, error) {
+	if root == "" {
+		root = filepath.Dir(target)
+	}
+	root = filepath.Clean(root)
+	if !validRetainedPaths(root, target, anchor) {
+		return "", fmt.Errorf("invalid retained predecessor path")
+	}
+	anchorBytes, err := readRegularFile(anchor)
+	if err != nil || !bytes.Equal(anchorBytes, predecessor) {
+		return "", fmt.Errorf("invalid retained predecessor anchor")
+	}
+	if err := prepareRetainedPredecessorDirectories(root); err != nil {
+		return "", err
+	}
+	operation := make([]byte, 16)
+	if _, err := rand.Read(operation); err != nil {
+		return "", err
+	}
+	marker := retainedPredecessorMarker{Version: retainedPredecessorVersion, Operation: hex.EncodeToString(operation), Root: root, Target: target, Anchor: anchor, SHA256: artifactSHA256(predecessor)}
+	body, err := json.Marshal(marker)
+	if err != nil || len(body)+1 > maxRetainedPredecessorBytes {
+		return "", fmt.Errorf("encode retained predecessor")
+	}
+	body = append(body, '\n')
+	path := filepath.Join(retainedPredecessorRoot(root), marker.Operation+".json")
+	file, err := os.CreateTemp(retainedPredecessorRoot(root), ".vgxness-retained-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	if _, err := file.Write(body); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Link(temporary, path); err != nil {
+		return "", err
+	}
+	if err := syncDirectory(retainedPredecessorRoot(root)); err != nil {
+		return path, err
+	}
+	if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return path, err
+	}
+	if err := syncDirectory(retainedPredecessorRoot(root)); err != nil {
+		return path, err
+	}
+	return path, nil
+}
+
+func prepareRetainedPredecessorDirectories(root string) error {
+	for _, directory := range []string{retainedPredecessorRoot(root), retainedAnchorRoot(root)} {
+		if err := prepareDirectory(directory); err != nil {
+			return err
+		}
+		info, err := os.Lstat(directory)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
+			return fmt.Errorf("invalid retained predecessor directory")
+		}
+	}
+	return nil
 }

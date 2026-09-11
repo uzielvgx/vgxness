@@ -310,7 +310,7 @@ func TestPendingJournalsBindExactPlanAndRejectTamperingBeforeMutation(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := renderLegacy("v0.0.0")
+	legacy, err := RenderPlan("v0.0.0", modelplan.PlanLow)
 	if err != nil {
 		t.Fatal(err)
 	}

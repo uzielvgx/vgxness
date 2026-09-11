@@ -1,8 +1,8 @@
 # CARE architecture
 
-Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Complete Manager60 and Manager19 packages are the immediate compatibility predecessors. Older Manager59/18, CARE-v2 Manager58/17, CARE-v1 Manager58/16 and deeper packages remain lifecycle identities only.
+Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v62), rendered from `internal/orchestration/manager_contract.json`. Local receipts bind installed files for updates. Historical agent templates are removed; older unreceipted installations require the [migration bridge](agent-template-migration.md).
 
-CARE roles provide evidence review for the Manager's selected scope. The current shared registry defines their authority; frozen predecessor prompts do not define current behavior. This is not a Go provider runtime or a new schema/transport surface.
+CARE roles provide evidence review for the Manager's selected scope. The current shared registry defines their authority; historical prompts remain only in Git history. This is not a Go provider runtime or a new schema/transport surface.
 
 ## Roles and candidate binding
 
@@ -12,7 +12,7 @@ The current contract requires independent verification and applicable review. It
 
 ## Native inventory and limits
 
-OpenCode has seven agents and 11 managed artifacts, including the auto-discovered `plugins/vgxness-memory-lifecycle.ts`, with no `opencode.json` plugin entry. Codex has `AGENTS.md`, six delegated profiles and its marketplace/plugin lifecycle artifacts. Pi uses the same registry with its own native SDK/RPC adapter and TypeScript runtime. Native transport, permissions, authentication and platform support differ; Windows Pi workers remain unsupported.
+OpenCode has seven agents and 12 managed artifacts, including the auto-discovered `plugins/vgxness-memory-lifecycle.ts`, with no `opencode.json` plugin entry. Codex has `AGENTS.md`, six delegated profiles and its marketplace/plugin lifecycle artifacts. Pi uses the same registry with its own native SDK/RPC adapter and TypeScript runtime. Native transport, permissions, authentication and platform support differ; Windows Pi workers remain unsupported.
 
 SDD lifecycle execution is retired. Manager alone owns delivery authority. Deterministic projection tests and local SDK fixtures do not prove selected model behavior. Historical macOS evaluations do not certify a new candidate; independent current-candidate model/platform evidence remains pending.
 

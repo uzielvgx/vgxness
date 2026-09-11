@@ -339,7 +339,7 @@ func TestUnreleasedChangelogManagedArtifactVersions(t *testing.T) {
 		unreleased = unreleased[:nextSection]
 	}
 	for _, current := range []string{
-		"11 managed artifacts",
+		"12 managed artifacts",
 		"vgxness-memory-lifecycle.ts",
 	} {
 		if !strings.Contains(unreleased, current) {
@@ -432,7 +432,7 @@ func TestFoundationProductContract(t *testing.T) {
 func assertOpenCodeDocumentationContract(t *testing.T) {
 	t.Helper()
 	documents := map[string][]string{
-		"../../README.md":                     {"11 managed artifacts", "seven agents", "OpenCode Manager62", "Codex Manager21", "Manager60 and Codex Manager19", "one workspace writer", "same frozen candidate", "`vgxness mcp --full`", "eight memory tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "no caller identity", "untrusted data", "modified, foreign, mixed or unknown packages", "no automatic cloud synchronization", "shared SQLite"},
+		"../../README.md":                     {"12 managed artifacts", "seven agents", "OpenCode Manager62", "Codex Manager21", "Local installation receipts", "one workspace writer", "same frozen candidate", "`vgxness mcp --full`", "eight memory tools", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "no caller identity", "untrusted data", "modified, foreign, mixed or unknown packages", "no automatic cloud synchronization", "shared SQLite"},
 		"../../docs/opencode-integration.md":  {"Structured SDD is retired", "OpenCode Manager62", "Codex Manager21", "same frozen candidate", "schema v23", "eight memory tools", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
 		"../../docs/product-blueprint.md":     {"Structured SDD is retired", "OpenCode Manager62", "Codex Manager21", "same frozen candidate", "schema v23", "eight memory tools", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
 		"../../docs/product-blueprint.es.md":  {"Structured SDD is retired", "OpenCode Manager62", "Codex Manager21", "same frozen candidate", "schema v23", "eight memory tools", "modified, malformed, foreign, unknown, or newer bytes block without removal"},
