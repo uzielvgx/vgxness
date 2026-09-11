@@ -24,11 +24,25 @@ only the six retired SDD assignments.
 Older agent packages must first use the previous bridge implementation at Git
 commit `f8645cd1db990e54cac2f735dc50829d76f1dae9`. Its source remains available in
 Git; build that pinned revision in a separate checkout using the repository's
-Go toolchain and normal build instructions. Run its normal provider reinstall
-against the intended configuration root. It recognizes and retires only its
-known exact old files and produces Manager62/21. Then run the current installer
-to create the receipt. Do not overwrite the old installed executable before
-completing the first step. The current installer does not fetch or execute a
+Go toolchain and normal build instructions. Activate that bridge through its normal `self install` command, then use the
+permanent launcher against the intended configuration root:
+
+```sh
+vgxness integrate opencode install
+vgxness integrate codex reinstall
+```
+
+Run only the commands for providers you use; preserve explicit `--config-dir`
+paths when configured. OpenCode uses `install` for both installation and updates;
+`reinstall` is a Codex-only CLI action. Use the permanent launcher because
+OpenCode MCP ownership is bound to its executable path. The published bridge is
+[v0.1.0-bridge.1](https://github.com/uzielvgx/vgxness/releases/tag/v0.1.0-bridge.1).
+
+The bridge recognizes and retires only its
+known exact old files and produces Manager62/21. After the bridge commands succeed, activate the current installer through
+`self install`, repeat the same provider commands, and check each provider with
+`vgxness integrate <provider> status` to confirm `state=installed` and the receipt.
+Do not activate the current executable before completing the bridge step. The current installer does not fetch or execute a
 bridge automatically. A separately published bridge binary is a release
 prerequisite, not an artifact produced by this code cleanup.
 
