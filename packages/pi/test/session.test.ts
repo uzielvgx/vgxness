@@ -116,12 +116,13 @@ test("model resolution uses only trusted scoped runtime candidates and native ef
   const calls: any[] = [];
   const model = { provider: "fixture", id: "family/model", name: "Fixture", reasoning: true, thinkingLevelMap: { low: null, medium: "medium", high: "high" } };
   await writeFile(wrapper, `import { createPiExtension } from ${JSON.stringify(source)}; export default createPiExtension(globalThis.__modelOptions);`);
-  (globalThis as any).__modelOptions = { workspace, backend: async () => ({ request: async (operation: string, payload: any) => { calls.push({ operation, payload }); return { ok: true }; } }) };
+  (globalThis as any).__modelOptions = { workspace, backend: async () => ({ request: async (operation: string, payload: any) => { calls.push({ operation, payload }); return (await import("../src/service/model.ts")).resolveModel(payload); } }) };
   const loaded = await loadExtensions([wrapper], workspace); assert.deepEqual(loaded.errors, []);
   const handler: any = (loaded.extensions[0].handlers.get("before_agent_start") ?? [])[0];
   await handler({ type: "before_agent_start", systemPrompt: "base" }, { model, scopedModels: [{ provider: "fixture", id: "family/model" }], modelRegistry: { getAvailable: () => [model] } });
   const resolve: any = [...loaded.extensions[0].tools.values()].map((item: any) => item.definition).find((item: any) => item.name === "model_resolve");
-  await resolve.execute("resolve", { plan: "ultra" });
+  const resolved = JSON.parse((await resolve.execute("resolve", { plan: "ultra" })).content[0].text);
+  assert.equal(resolved.roles.research.taskModel, "fixture/family/model");
   assert.equal(calls[0].operation, "model.resolve");
   assert.deepEqual(calls[0].payload.catalog, { provider: "fixture", models: [{ provider: "fixture", id: "family/model", name: "Fixture", supportedEfforts: ["medium", "high"] }] });
   delete (globalThis as any).__modelOptions;
