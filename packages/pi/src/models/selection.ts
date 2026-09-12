@@ -4,12 +4,22 @@ import { join } from "node:path";
 export const agentRoles = ["manager", "explore", "general", "verifier", "care-reviewer", "care-specialist", "care-challenger"] as const;
 export type ModelAssignment = { model: string; effort: string };
 export type ModelSelection = { schemaVersion: 1; mode: "single" | "per-agent"; assignments: Record<string, ModelAssignment> };
+function closedObject(value: unknown, keys: readonly string[]): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === keys.length
+    && Object.keys(value).every(key => keys.includes(key));
+}
+function validReference(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 385 || value.startsWith("@")) return false;
+  const segments = value.split("/");
+  return segments.length >= 2 && segments.every(segment => segment.length <= 256 && /^[a-zA-Z0-9_.:@+-]+$/.test(segment));
+}
 export function validateSelection(value: unknown): ModelSelection {
   const c = value as ModelSelection;
-  if (!c || c.schemaVersion !== 1 || !["single", "per-agent"].includes(c.mode) || !c.assignments || Object.keys(c.assignments).length !== agentRoles.length) throw new Error("invalid Pi model selection");
+  if (!closedObject(c, ["schemaVersion", "mode", "assignments"]) || c.schemaVersion !== 1 || !["single", "per-agent"].includes(c.mode) || !closedObject(c.assignments, agentRoles)) throw new Error("invalid Pi model selection");
   for (const role of agentRoles) {
     const a = c.assignments[role];
-    if (!a || typeof a.model !== "string" || a.model.length > 385 || !/^[^/\s]+\/[^\s]+$/.test(a.model) || a.model.split("/").some(part => !part) || !["off", "minimal", "low", "medium", "high", "xhigh"].includes(a.effort)) throw new Error("invalid Pi agent model");
+    if (!closedObject(a, ["model", "effort"]) || !validReference(a.model) || !["off", "minimal", "low", "medium", "high", "xhigh"].includes(a.effort)) throw new Error("invalid Pi agent model");
     if (c.mode === "single" && (a.model !== c.assignments.manager.model || a.effort !== c.assignments.manager.effort)) throw new Error("single model assignments differ");
   }
   return structuredClone(c);

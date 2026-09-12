@@ -50,3 +50,15 @@ func TestModelSelectionSeparatesProvidersAndCodexPlans(t *testing.T) {
 		t.Fatal("preview snapshot mutated")
 	}
 }
+
+func TestModelSelectionCanReplaceInheritedUnknownEffort(t *testing.T) {
+	m := NewModel(context.Background(), &recordingMultiSetupBackend{}, Options{Workspace: "/workspace"})
+	m.setupProviders = []setupflow.Provider{setupflow.ProviderOpenCode}
+	m.modelChoices[0].Mode = "single"
+	m.modelChoices[0].Rows[0].Model = "vendor/model"
+	m.modelChoices[0].Rows[0].Effort = "max"
+	m.updateModelChoices(keyPress("e"))
+	if c := m.modelChoices[0].config(); c == nil || c.Validate() != nil {
+		t.Fatalf("inherited effort could not be replaced: %+v", c)
+	}
+}

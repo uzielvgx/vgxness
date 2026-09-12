@@ -35,12 +35,12 @@ Pi needs Node and `pi` plus an offline `--pi-release-dir` or pinned `--pi-releas
 
 Self-install version cleanup is separate from this integration. `vgxness self gc preview`, `apply`, and `recover` manage only verified immutable application versions and never delete OpenCode-managed artifacts, configuration, model plans, agents, global skills, backups, or restoration metadata.
 
-Fresh no-flag setup installs the medium plan with `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS creates or updates `opencode.json` with `default_agent: "vgxness-manager"`, preserving every unrelated JSON value. It preserves any existing `opencode.jsonc` byte-for-byte. Bounded metadata at `<config-dir>/vgxness/default-agent.json` restores a prior explicit default during uninstall. Model routing remains OpenCode-owned.
+Fresh no-flag setup assigns `openai/gpt-5.6-terra` to all seven agents using the provider default effort. The canonical manifest is stored at `<config-dir>/vgxness/model-plan.json`; it contains no credentials and binds the resolved role assignments to exact managed agent digests. VGXNESS creates or updates `opencode.json` with `default_agent: "vgxness-manager"`, preserving every unrelated JSON value. It preserves any existing `opencode.jsonc` byte-for-byte. Bounded metadata at `<config-dir>/vgxness/default-agent.json` restores a prior explicit default during uninstall. Model routing remains OpenCode-owned.
 
 
 Installation stages each artifact in a private same-filesystem `0700` directory with a `0600` regular file, then publishes by no-overwrite link. Cleanup verifies the creation identity and exact expected bytes, retaining observed replacements, mutations, or extra staging entries as recovery evidence. This protects observable path replacement and content drift. POSIX provides no atomic compare-content-and-unlink operation against any external same-UID process holding a pre-opened writable descriptor, hostile or accidental; that situation is outside this supported boundary.
 
-Changing the plan or a slot regenerates the same managed agent set only when every current byte still matches the installed current manifest. An interrupted switch containing an exact mixture of the verified source and requested target bytes resumes safely; any unrelated byte drift blocks regeneration. The change becomes active only after OpenCode restarts. Manual modification of an agent or manifest blocks regeneration; historical plugin bytes remain retirement evidence.
+Changing model assignments regenerates the same managed agent set only when every current byte still matches the installed current manifest. An interrupted switch containing an exact mixture of the verified source and requested target bytes resumes safely; any unrelated byte drift blocks regeneration. The change becomes active only after OpenCode restarts. Manual modification of an agent or manifest blocks regeneration; historical plugin bytes remain retirement evidence.
 
 ## Memory authority
 
@@ -92,7 +92,7 @@ Manager, managed `general`, and verifier use a single global `allow` permission 
 
 ## Health contract
 
-Restart OpenCode Desktop after installation or a plan switch so it reloads the profiles, model bindings, variants, MCP configuration, and global portable skills.
+Restart OpenCode Desktop after installation or a model selection change so it reloads the profiles, model bindings, variants, MCP configuration, and global portable skills.
 # Shared portable skills
 
 ## CARE inventory and evaluation boundary

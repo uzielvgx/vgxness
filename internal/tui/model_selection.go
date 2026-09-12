@@ -205,12 +205,14 @@ func (m *Model) updateModelChoices(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "e":
 		efforts := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
 		a := &c.Rows[m.modelChoiceRow]
+		next := "off"
 		for i, e := range efforts {
 			if a.Effort == e {
-				a.Effort = efforts[(i+1)%len(efforts)]
+				next = efforts[(i+1)%len(efforts)]
 				break
 			}
 		}
+		a.Effort = next
 		c.Edited = true
 		m.invalidateModelChoice()
 	}

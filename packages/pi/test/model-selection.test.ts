@@ -35,3 +35,18 @@ test("Manager activates the exact configured provider/model and checks effort re
   await assert.rejects(activateManagerModel(c, { find: () => undefined }, api), /model unavailable/);
   await assert.rejects(activateManagerModel(c, registry, { ...api, getThinkingLevel: () => "high" }), /effort unavailable/);
 });
+
+
+test("persisted selection uses the installer's closed schema and reference grammar", () => {
+  const original = selectedModels(undefined, { model: { provider: "fixture", id: "model" } });
+  for (const model of ["provider?/model", "@provider/model", "p/" + "a".repeat(257), "p//model"]) {
+    const c = structuredClone(original);
+    for (const a of Object.values(c.assignments)) a.model = model;
+    assert.throws(() => validateSelection(c), model);
+  }
+  assert.throws(() => validateSelection({ ...original, extra: true }));
+  const extra = structuredClone(original);
+  Object.assign(extra.assignments.manager, { extra: true });
+  assert.throws(() => validateSelection(extra));
+  assert.throws(() => validateSelection([]));
+});
