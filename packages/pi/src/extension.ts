@@ -1,9 +1,10 @@
+import { readSelection, selectedModels, activateManagerModel, supportsEffort, type ModelSelection } from "./models/selection.ts";
 import { frameReadOutcome } from "./tools/read-outcome.ts";
 import { renderPiManagerPrompt } from "./orchestration/adapter.ts";
 import { createSkillTool } from "./tools/skill.ts";
 import { loadManagerContract, renderManagerPrompt } from "./orchestration/contract.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { delimiter, dirname, join } from "node:path";
 import { readFile, realpath } from "node:fs/promises";
 import { Type } from "typebox";
@@ -22,8 +23,8 @@ import { nativeStatusView, nativeWorkersView, nativeMemoryView, readonlySnapshot
 import { WorkerResultError } from "./workers/result.ts";
 
 const handoffSchema = Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4096 }) }, { additionalProperties: false });
-type ExtensionApi = { registerCommand?(name: string, command: any): void; getCommands?(): any[]; registerTool(tool: unknown): void; on(event: string, handler: (event: any, ctx: any) => unknown): void; appendEntry(type: string, data: unknown): void };
-export type PiToolHost = ToolHost & { storageRoot?: string };
+type ExtensionApi = { setModel?(model: any): Promise<boolean>; setThinkingLevel?(level: any): void; getThinkingLevel?(): string; registerCommand?(name: string, command: any): void; getCommands?(): any[]; registerTool(tool: unknown): void; on(event: string, handler: (event: any, ctx: any) => unknown): void; appendEntry(type: string, data: unknown): void };
+export type PiToolHost = ToolHost & { storageRoot?: string; modelSelection?: () => ModelSelection };
 
 
 /** Discover the currently installed Pi CLI without spawning a package manager. */
@@ -52,7 +53,7 @@ function runtimeModels(context: any) {
 }
 
 function nativeEffort(model: any, effort: string) {
-  return ["low", "medium", "high"].includes(effort) && model?.reasoning === true && model.thinkingLevelMap?.[effort] !== null;
+  return supportsEffort(model, effort);
 }
 
 function modelCatalog(context: any) {
@@ -93,6 +94,7 @@ function runtimeTaskTool(host: PiToolHost, context: () => any, workerCli?: strin
   const runnerModule = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "workers/runner.ts")).href;
   return createTaskTool({
     ...host,
+    configuredModel: role => host.modelSelection?.().assignments[role],
     supportsModel: injected ? undefined : (selected, effort) => supportsWorkerModel(context(), selected, effort),
     prepareWorker: injected ? undefined : async (mission) => await prepareWorkerAuthentication(context(), mission),
     executeWorker: injected ?? (workerCli ? async (mission, signal, auth, authority) => await executePiWorker(mission, { cli: workerCli, runnerModule, signal, auth, authority }) : undefined),
@@ -111,8 +113,9 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
     const managerPrompt = role === "manager" ? await readFile(join(dirname(fileURLToPath(import.meta.url)), "../resources/prompts/manager.md"), "utf8") : "";
     if (role === "manager" && managerPrompt !== renderPiManagerPrompt(loadManagerContract())) throw new Error("generated Manager prompt drift");
     let runtimeContext: any;
+    const selection = await readSelection(getAgentDir());
     let sessions: SessionAdapter;
-    const host: PiToolHost & { modelCatalog: () => any; mutationGrant: () => import("./session/adapter.ts").MutationGrant } = { workspace, mode, role, storageRoot: options.storageRoot, modelCatalog: () => modelCatalog(runtimeContext), mutationGuard: () => sessions.assertMutation(), mutationSignal: () => sessions.mutationSignal(), mutationGrant: () => sessions.mutationGrant(), backend: () => {
+    const host: PiToolHost & { modelCatalog: () => any; mutationGrant: () => import("./session/adapter.ts").MutationGrant } = { workspace, mode, role, storageRoot: options.storageRoot, modelSelection: () => selectedModels(selection, runtimeContext), modelCatalog: () => modelCatalog(runtimeContext), mutationGuard: () => sessions.assertMutation(), mutationSignal: () => sessions.mutationSignal(), mutationGrant: () => sessions.mutationGrant(), backend: () => {
       if (!startup) startup = (async () => {
         if (options.backend) return await options.backend();
         return createNativeDispatcher({ workspace, storageRoot: options.storageRoot, credentialFile: options.credentialFile ?? process.env.VGXNESS_PI_CREDENTIAL_FILE, mode, role });
@@ -165,7 +168,9 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
     pi.on("resources_discover", async () => ({ skillPaths: await discoverSkillPaths({ existingNames: pi.getCommands?.().filter((command: any) => command.source === "skill").map((command: any) => command.name) }), promptPaths: [join(dirname(fileURLToPath(import.meta.url)), "../resources/prompts")] }));
     pi.on("tool_result", (event) => frameReadOutcome(event));
     pi.on("before_agent_start", async (event, ctx) => { runtimeContext = ctx; return managerPrompt ? { systemPrompt: `${event.systemPrompt}\n\n${managerPrompt}` } : undefined; });
-    pi.on("session_start", async (_event, ctx) => { runtimeContext = ctx; await sessions.start(ctx.sessionManager.getSessionId()); });
+    pi.on("session_start", async (_event, ctx) => { runtimeContext = ctx;
+      if (selection && role === "manager") await activateManagerModel(selection, ctx.modelRegistry, pi);
+      await sessions.start(ctx.sessionManager.getSessionId()); });
     pi.on("session_tree", async () => { await sessions.checkpoint(); });
     pi.on("session_compact", async () => { await sessions.checkpoint(); });
     pi.on("agent_settled", async () => { await sessions.renew(); });

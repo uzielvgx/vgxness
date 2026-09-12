@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vgxness/vgxness/internal/agentmodels"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/modelplan"
 )
@@ -146,6 +147,17 @@ func requestedModelPlanForMigration(options integration.Options, configDirectory
 			return modelPlanBundle{}, fmt.Errorf("%w: v2 model plan must remain mixed", integration.ErrInvalid)
 		}
 		return buildModelPlanBundleV2(config)
+	}
+	if !installedV1 && installedV3 == nil && installedV2 == nil && !explicit && !hasSlotEffort(options) && !hasSlotVariant(options) {
+		selection, err := agentmodels.Single(base.Balanced, "off")
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+		assignments, err := ExplicitModels(selection)
+		if err != nil {
+			return modelPlanBundle{}, err
+		}
+		return buildModelPlanBundleV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: base.Provider, Assignments: assignments, Provenance: modelplan.ModelPlanDefault})
 	}
 	plan := base.ActivePlan
 	if options.ModelPlan != "" {

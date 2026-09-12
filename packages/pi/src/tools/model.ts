@@ -1,4 +1,5 @@
 import type { ResolvedPlan, ResolvedAssignment } from "../ports/model.ts";
+import type { ModelSelection } from "../models/selection.ts";
 import { Type } from "typebox";
 import { validate, type ToolHost } from "./memory.ts";
 import { normalizePiCatalog, type PiModel } from "../models/plan.ts";
@@ -11,9 +12,9 @@ const effort = Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Lit
 const capability = Type.Union([Type.Literal("efficient"), Type.Literal("balanced"), Type.Literal("frontier")]);
 export const modelSchema = Type.Object({ plan: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("ultra")]) }, { additionalProperties: false });
 
-export function createModelTool(host: ToolHost & { modelCatalog?: () => { provider: string; models: PiModel[] } | undefined }) {
-  return { name: "model_resolve", label: "Resolve model plan", description: "Resolve the configured model plan. Copy the selected role taskModel and effort into task; taskModel includes the provider.", parameters: modelSchema,
-    async execute(_id: string, payload: unknown) { validate(modelSchema, payload); const catalog = host.modelCatalog?.(); if (!catalog) throw new Error("current Pi model catalog unavailable"); const value = await (await host.backend()).request("model.resolve", { catalog: normalizePiCatalog(catalog.provider, catalog.models), plan: (payload as any).plan }, host); return { content: [{ type: "text", text: JSON.stringify(withTaskModels(value as ResolvedPlan)) }] }; },
+export function createModelTool(host: ToolHost & { modelSelection?: () => ModelSelection; modelCatalog?: () => { provider: string; models: PiModel[] } | undefined }) {
+  return { name: "model_resolve", label: "Configured agent models", description: "Read the user's exact single-model or per-agent selection. Copy the selected role taskModel and effort into task. No plans or automatic model substitutions.", parameters: Type.Object({}, { additionalProperties: false }),
+    async execute(_id: string, payload: unknown) { validate(Type.Object({}, { additionalProperties: false }), payload); const selection = host.modelSelection?.(); if (!selection) throw new Error("Pi model selection unavailable"); return { content: [{ type: "text", text: JSON.stringify({ mode: selection.mode, roles: Object.fromEntries(Object.entries(selection.assignments).map(([role,a]) => [role,{ role, taskModel:a.model, effort:a.effort }])) }) }] }; },
   };
 }
 export function createModelPlanTool(host: ToolHost, provider: string, models: PiModel[]) {

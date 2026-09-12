@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/vgxness/vgxness/internal/integration"
+	opencodeprovider "github.com/vgxness/vgxness/internal/providers/opencode"
 )
 
 func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer, opencode, codex integration.Runtime) int {
@@ -21,11 +22,11 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 	flags := flag.NewFlagSet("integrate "+provider+" "+action, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var options integration.Options
-	var deprecatedModel string
+	var models agentModelFlags
 	var repairOldExecutable, repairEntrySHA256 string
 	flags.StringVar(&options.ConfigDir, "config-dir", "", provider+" config directory")
 	if provider == "opencode" {
-		flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
+		models.register(flags, "")
 		flags.StringVar(&options.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
 		flags.StringVar(&options.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
 		flags.StringVar(&options.ModelFrontier, "model-frontier", "", "exact provider/model for the frontier slot")
@@ -37,6 +38,25 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "invalid integration arguments")
 		fmt.Fprintln(stderr, integrationUsage(provider))
 		return 2
+	}
+	if provider == "opencode" {
+		if options.ModelPlan != "" || hasSetupSlotRef(options) {
+			fmt.Fprintln(stderr, "invalid: OpenCode uses --model-mode single|per-agent, not plans or slots")
+			return 2
+		}
+		c, err := models.config()
+		if err != nil {
+			fmt.Fprintln(stderr, "invalid model selection")
+			return 2
+		}
+		if c != nil {
+			a, err := opencodeprovider.ExplicitModels(*c)
+			if err != nil {
+				fmt.Fprintln(stderr, "invalid model selection")
+				return 2
+			}
+			options.ModelAssignments = &a
+		}
 	}
 	if provider == "opencode" && action != "repair-mcp-preview" && action != "repair-mcp" {
 		invalidRepairFlag := false
@@ -126,7 +146,7 @@ func runIntegration(ctx context.Context, args []string, stdout, stderr io.Writer
 
 func integrationUsage(provider string) string {
 	if provider == "opencode" {
-		return "usage: vgxness integrate opencode <preview|install|status|uninstall|repair-mcp-preview|repair-mcp> [--config-dir PATH] [--old-executable ABSOLUTE_PATH --expected-mcp-sha256 SHA256] [--model MODEL] [--model-plan low|medium|high|ultra] [--model-efficient PROVIDER/MODEL] [--model-balanced PROVIDER/MODEL] [--model-frontier PROVIDER/MODEL]"
+		return "usage: vgxness integrate opencode <preview|install|status|uninstall|repair-mcp-preview|repair-mcp> [--config-dir PATH] [--old-executable ABSOLUTE_PATH --expected-mcp-sha256 SHA256] [--model-mode single|per-agent] [--model PROVIDER/MODEL | --agent-model ROLE=PROVIDER/MODEL ...] [--model-effort EFFORT]"
 	}
 	return "usage: vgxness integrate codex <preview|install|status|reinstall|uninstall> [--config-dir PATH] [--model-plan low|medium|high|ultra]"
 }

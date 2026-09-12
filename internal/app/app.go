@@ -221,6 +221,7 @@ func (backend tuiBackend) multiSetup(request tui.MultiSetupRequest) (*setupflow.
 	runtimes := make([]setupflow.ProviderRuntime, 0, len(request.Providers))
 	for _, provider := range request.Providers {
 		if provider == setupflow.ProviderOpenCode {
+			options.Integration.ModelPlan = ""
 			runtimes = append(runtimes, openCode.OpenCodeProvider(options, func(path string) (integration.Runtime, error) {
 				runtime, err := opencode.NewPreviewIntegration(path)
 				if err != nil {
@@ -244,10 +245,10 @@ func (backend tuiBackend) multiSetup(request tui.MultiSetupRequest) (*setupflow.
 			if root == "" {
 				root = filepath.Join(agentDir, "vgxness-managed")
 			}
-			runtimes = append(runtimes, pi.NewProvider(pi.Options{ReleaseDir: releaseDir, AgentDir: agentDir, InstallRoot: root}))
+			runtimes = append(runtimes, pi.NewProvider(pi.Options{ReleaseDir: releaseDir, AgentDir: agentDir, InstallRoot: root, Models: request.Setup.PiModels}))
 			continue
 		}
-		codexOptions, err := codexSetupOptions(options.Integration)
+		codexOptions, err := codexSetupOptions(integration.Options{ModelPlan: modelplan.Plan(request.Setup.Plan)})
 		if err != nil {
 			return nil, setupflow.MultiOptions{}, err
 		}
@@ -640,7 +641,18 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 		return setupflow.Options{}, err
 	}
 	integrationOptions := integration.Options{}
-	if request.ModelAssignments != nil {
+	if request.PiModels != nil {
+		if err := request.PiModels.Validate(); err != nil {
+			return setupflow.Options{}, err
+		}
+	}
+	if request.OpenCodeModels != nil {
+		assignments, err := opencode.ExplicitModels(*request.OpenCodeModels)
+		if err != nil {
+			return setupflow.Options{}, err
+		}
+		integrationOptions.ModelAssignments = &assignments
+	} else if request.ModelAssignments != nil {
 		assignments := make(map[string]modelplan.ManagedAgentModelConfig, tui.SetupModelAssignmentCount)
 		providerSummary := ""
 		for _, row := range request.ModelAssignments {
@@ -674,7 +686,7 @@ func tuiSetupOptions(request tui.SetupRequest) (setupflow.Options, error) {
 		integrationOptions.ModelAssignments = &assignments
 	} else {
 		plan := modelplan.Plan(request.Plan)
-		if !plan.Valid() {
+		if plan != "" && !plan.Valid() {
 			return setupflow.Options{}, fmt.Errorf("invalid TUI setup plan")
 		}
 		integrationOptions = integration.Options{ModelPlan: plan,

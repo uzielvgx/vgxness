@@ -380,7 +380,7 @@ func TestSetupWizardAllSanitizesOpenCodeOptionsForCodex(t *testing.T) {
 	openCodeConfigDir := t.TempDir()
 	codexHome := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"all", "--preview", "--config-dir", openCodeConfigDir, "--codex-home", codexHome, "--model-efficient", "openai/a", "--model-balanced", "openai/b", "--model-frontier", "openai/c"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
+	code := runSetup(context.Background(), []string{"all", "--preview", "--config-dir", openCodeConfigDir, "--codex-home", codexHome, "--model-mode", "single", "--model", "openai/a"}, strings.NewReader(""), &stdout, &stderr, setup, codex)
 	if code != 0 || stderr.Len() != 0 || codex.options.ModelEfficient != "" || codex.options.ModelBalanced != "" || codex.options.ModelFrontier != "" {
 		t.Fatalf("code=%d codex=%+v stdout=%q stderr=%q", code, codex.options, stdout.String(), stderr.String())
 	}

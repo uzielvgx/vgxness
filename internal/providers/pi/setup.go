@@ -57,6 +57,12 @@ func (p provider) Plan(ctx context.Context, _ setupflow.SharedPlan) (setupflow.P
 		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: err.Error()}, nil
 	}
 	plan := setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Changed: !installed, Installed: installed, State: piState(installed), ArtifactSHA256: source, ArtifactCount: 1}
+	digest, models, modelChanged, modelErr := modelSettings(options.AgentDir, options.Models)
+	if modelErr != nil {
+		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: modelErr.Error()}, nil
+	}
+	plan.ModelSettingsSHA256, plan.Models = digest, models
+	plan.Changed = plan.Changed || modelChanged
 	if blocker := providerPrerequisiteBlocker(); blocker != "" {
 		plan.Ready = false
 		plan.Blocker = blocker
@@ -72,7 +78,7 @@ func (p provider) Status(ctx context.Context, shared setupflow.SharedPlan) (setu
 	if err != nil || !plan.Ready {
 		return plan, err
 	}
-	plan.Ready = plan.Installed
+	plan.Ready = plan.Installed && !plan.Changed
 	if !plan.Ready {
 		plan.Blocker = "Pi package is not activated"
 		return plan, nil
@@ -90,7 +96,9 @@ func (p provider) Apply(ctx context.Context, plan setupflow.ProviderPlan, _ setu
 	if !plan.Ready || plan.Provider != setupflow.ProviderPi {
 		return result, setupflow.ErrPrerequisite
 	}
-	installed, err := install(ctx, p.options, plan.ArtifactSHA256)
+	options := p.options
+	options.expectedSettingsSHA = plan.ModelSettingsSHA256
+	installed, err := install(ctx, options, plan.ArtifactSHA256)
 	if err != nil {
 		if detail, ok := recoveryDetail(err); ok {
 			result.Recovery = detail
@@ -107,7 +115,7 @@ func (p provider) Apply(ctx context.Context, plan setupflow.ProviderPlan, _ setu
 		}
 		return result, err
 	}
-	result.Changed, result.Verified = installed.Changed, true
+	result.Changed, result.Verified = installed.Changed || plan.Changed, true
 	return result, nil
 }
 
@@ -171,6 +179,11 @@ func installedStatus(ctx context.Context, options Options) (setupflow.ProviderPl
 		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: "invalid Pi managed manifest"}, nil
 	}
 	plan := setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Ready: true, Installed: true, State: integration.StateInstalled, ArtifactSHA256: manifest.SourceSHA, ArtifactCount: 1}
+	digest, models, _, modelErr := modelSettings(options.AgentDir, nil)
+	if modelErr != nil {
+		return setupflow.ProviderPlan{Provider: setupflow.ProviderPi, Blocker: modelErr.Error()}, nil
+	}
+	plan.ModelSettingsSHA256, plan.Models = digest, models
 	if pending := retainedStatus(options, path); pending.Blocker != "" {
 		return pending, nil
 	}

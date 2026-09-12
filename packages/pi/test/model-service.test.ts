@@ -21,7 +21,7 @@ test("low plan preserves low effort for research and verification", () => { cons
 test("model tools return copyable provider-qualified task models", async () => {
   const { createModelTool, createModelPlanTool } = await import("../src/tools/model.ts");
   const host = { modelCatalog: () => catalog, backend: async () => ({ request: async (_operation: string, payload: unknown) => resolveModel(payload) }) } as any;
-  for (const tool of [createModelTool(host), createModelPlanTool(host, catalog.provider, catalog.models as any)]) {
+  for (const tool of [createModelPlanTool(host, catalog.provider, catalog.models as any)]) {
     const result = JSON.parse((await tool.execute("resolve", { plan: "low" })).content[0].text);
     assert.equal(result.roles.research.taskModel, "openai/luna");
     assert.equal(result.roles.research.effort, "low");

@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/vgxness/vgxness/internal/agentmodels"
+	"reflect"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -33,6 +35,8 @@ func (action installationAction) label() string {
 }
 
 type SetupRequest struct {
+	OpenCodeModels         *agentmodels.Config
+	PiModels               *agentmodels.Config
 	Workspace              string
 	Plan                   string
 	ModelEfficient         string
@@ -358,6 +362,7 @@ func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
 	if msg.err == nil {
 		if msg.multi != nil {
 			m.setupMultiPlan = *msg.multi
+			m.seedModelChoices(*msg.multi)
 			m.setupPlan = SetupPlan{Digest: msg.multi.Digest, Ready: msg.multi.Ready, Blocker: msg.multi.Blocker, ModelPlan: m.setupSelected}
 			m.setupPreviewRequest, m.setupPreviewed = m.setupRequest(), true
 			m.setupViewport.GotoTop()
@@ -433,6 +438,10 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 	}
+	if m.multiSetupEnabled() && m.setupView == setupViewReview && msg.String() == "m" {
+		m.setupView = setupViewPlan
+		return true, nil
+	}
 	if m.setupModelEditing {
 		return m.updateModelEditorKey(msg)
 	}
@@ -486,29 +495,7 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, nil
 			}
 		case setupViewPlan:
-			switch msg.String() {
-			case "up", "k":
-				return true, m.selectSetupPlan(-1)
-			case "down", "j":
-				return true, m.selectSetupPlan(1)
-			case "enter":
-				if m.setupPreviewed {
-					m.setupView = setupViewReview
-					return true, nil
-				}
-				return true, m.loadSetupPlan()
-			case "esc":
-				m.setupView = setupViewProviders
-				return true, nil
-			case "m":
-				return m.enterModelEditor()
-			case "left", "h":
-				return true, m.selectSetupPlan(-1)
-			case "right", "l":
-				return true, m.selectSetupPlan(1)
-			case "r":
-				return true, m.loadSetupPlan()
-			}
+			return m.updateModelChoices(msg)
 		case setupViewReview:
 			if msg.String() == "esc" {
 				m.setupView = setupViewPlan
@@ -666,6 +653,11 @@ func (m Model) multiSetupHasUnverifiedProvider() bool {
 
 func (m Model) setupRequest() SetupRequest {
 	request := SetupRequest{Workspace: m.options.Workspace, Plan: m.setupSelected}
+	if m.multiSetupEnabled() && !m.codexPlanEdited {
+		request.Plan = ""
+	}
+	request.OpenCodeModels = m.modelChoices[0].config()
+	request.PiModels = m.modelChoices[1].config()
 	if m.setupAssignmentsExact {
 		rows := m.setupAssignmentRows
 		request.ModelAssignments = &rows
@@ -1033,7 +1025,10 @@ func validSetupModelReference(reference string) bool {
 }
 
 func (m *Model) selectSetupPlan(offset int) tea.Cmd {
-	if m.setupAssignmentsExact {
+	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderCodex) {
+		return nil
+	}
+	if m.setupAssignmentsExact && !m.multiSetupEnabled() {
 		return nil
 	}
 	index := setupPlanIndex(m.setupSelected)
@@ -1042,6 +1037,9 @@ func (m *Model) selectSetupPlan(offset int) tea.Cmd {
 		return nil
 	}
 	m.setupSelected = setupPlans[next]
+	if m.multiSetupEnabled() {
+		m.codexPlanEdited = true
+	}
 	return m.loadSetupPlan()
 }
 
@@ -1274,7 +1272,7 @@ func (m Model) multiSetupHomeLines() []string {
 	}{
 		{actionInstall, "Install", "Select providers, preview a plan, then review before apply."},
 		{actionReinstall, "Reinstall", "Open protected backup and recovery before any replacement."},
-		{actionConfigure, "Configure", "Choose providers and tune the OpenCode model plan."},
+		{actionConfigure, "Configure", "Choose a model for all agents or one per agent. Codex keeps plans."},
 	} {
 		marker := " "
 		if m.installationAction == card.action {
@@ -1316,43 +1314,6 @@ func (m Model) multiSetupProviderLines() []string {
 	return append(lines, "└────────────────────────────────────────────────────────────────────────")
 }
 
-func (m Model) multiSetupPlanLines() []string {
-	lines := []string{studioAccent.Render("INSTALL · 2 OF 3 · PLAN"), studioMuted.Render("Choose the shared plan, or configure OpenCode assignments."), "", "┌ PLAN ────────────────────────────────────────────────────────────────────"}
-	for _, plan := range setupPlans {
-		marker := " "
-		if plan == m.setupSelected {
-			marker = "▸"
-		}
-		description := map[string]string{
-			"low":    "fewer local assignment defaults",
-			"medium": "balanced local assignment defaults",
-			"high":   "broader local assignment defaults",
-			"ultra":  "widest local assignment defaults",
-		}[plan]
-		row := fmt.Sprintf("%s %-7s %s", marker, plan, description)
-		if plan == m.setupSelected {
-			row = studioFocus.Width(max(1, m.setupViewport.Width()-6)).Render(row)
-		}
-		lines = append(lines, "│ "+row)
-	}
-	lines = append(lines, "└────────────────────────────────────────────────────────────────────────")
-	if m.hasSetupProvider(setupflow.ProviderCodex) {
-		lines = append(lines, "! Codex uses managed presets. Configure changes OpenCode only.")
-	}
-	if m.setupPlanLoading {
-		return append(lines, "", "… Refreshing local preview.")
-	}
-	if m.setupPlanErr != nil {
-		return append(lines, "", "✕ Preview failed: "+setupActionableError(m.setupPlanErr), "Action: [r] retry the local preview.")
-	}
-	if m.setupPreviewed {
-		lines = append(lines, "✓ Preview ready. [Enter] review the plan.")
-	} else {
-		lines = append(lines, "[Enter] create a local preview before review.")
-	}
-	return lines
-}
-
 func setupActionableError(err error) string {
 	if err == nil {
 		return "-"
@@ -1379,14 +1340,14 @@ func (m Model) multiSetupReviewLines() []string {
 	lines := []string{
 		studioAccent.Render("INSTALLATION STUDIO · PROVIDER SETUP"),
 		installationActionBar(m.installationAction),
-		studioMuted.Render("01 PROVIDERS") + "   →   " + studioMuted.Render("02 PLAN") + "   →   " + studioMuted.Render("03 MODELS") + "   →   " + studioMuted.Render("04 REVIEW"),
+		studioMuted.Render("01 PROVIDERS") + "   →   " + studioMuted.Render("02 MODELS") + "   →   " + studioMuted.Render("03 REVIEW"),
 		"",
 		"┌ PROVIDERS ─────────────────────────────────────────────────────────────",
 		"│ " + strings.TrimSpace(providers),
-		"└ shared plan  " + sanitizeTerminal(m.setupSelected),
+		"└ model selections are independent for each provider",
 	}
 	if m.hasSetupProvider(setupflow.ProviderCodex) {
-		lines = append(lines, "! Codex uses its managed presets; only OpenCode has editable per-agent models.")
+		lines = append(lines, "Codex plan: "+sanitizeTerminal(m.setupSelected)+". OpenCode and Pi use explicit model selections.")
 	}
 	if m.setupPlanLoading {
 		return append(lines, "", "... Loading verified provider preview...")
@@ -1431,6 +1392,17 @@ func (m Model) multiSetupReviewLines() []string {
 			status = "installed"
 		}
 		lines = append(lines, "│ "+glyph+" "+string(row.Provider)+"  "+status)
+		if row.Models != nil {
+			for _, role := range agentmodels.Roles {
+				a := row.Models.Assignments[role]
+				lines = appendSetupWrapped(lines, "│   ", role+" "+a.Model+" effort="+a.Effort, m.setupViewport.Width()-6)
+			}
+		}
+		if row.Integration.ModelAssignments != nil {
+			for _, a := range row.Integration.ModelAssignments {
+				lines = appendSetupWrapped(lines, "│   ", a.ArtifactKey+" "+a.Model+" variant="+string(a.Variant), m.setupViewport.Width()-6)
+			}
+		}
 		if row.Blocker != "" {
 			lines = append(lines, "│   blocker  "+sanitizeTerminal(row.Blocker))
 		}
@@ -1499,7 +1471,7 @@ func (m Model) setupHelp() string {
 		case setupViewProviders:
 			return "[↑↓/j/k] focus  [Space] toggle  [o/c/p] toggle  [Enter] choose plan  [Esc] home"
 		case setupViewPlan:
-			return "[↑↓/j/k] plan  [m] OpenCode models  [Enter] review  [Esc] providers"
+			return "[Tab] provider  [1] single  [2] per agent  [↑↓] agent/plan  [m] edit model  [e] effort  [Enter] review"
 		}
 		if m.setupApplying {
 			return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
@@ -1731,13 +1703,7 @@ func setupPreviewRequest(request SetupRequest) SetupRequest {
 }
 
 func setupRequestsEqual(left, right SetupRequest) bool {
-	left, right = setupPreviewRequest(left), setupPreviewRequest(right)
-	if left.ModelAssignments == nil || right.ModelAssignments == nil {
-		return left == right
-	}
-	leftRows, rightRows := *left.ModelAssignments, *right.ModelAssignments
-	left.ModelAssignments, right.ModelAssignments = nil, nil
-	return left == right && leftRows == rightRows
+	return reflect.DeepEqual(setupPreviewRequest(left), setupPreviewRequest(right))
 }
 
 func setupPlanModelProfile(plan SetupPlan, width int) []string {
@@ -1948,6 +1914,8 @@ func cloneSetupStatus(value SetupStatus) SetupStatus {
 }
 
 func cloneSetupRequest(value SetupRequest) SetupRequest {
+	value.OpenCodeModels = cloneModelChoice(value.OpenCodeModels)
+	value.PiModels = cloneModelChoice(value.PiModels)
 	if value.ModelAssignments != nil {
 		rows := *value.ModelAssignments
 		value.ModelAssignments = &rows
