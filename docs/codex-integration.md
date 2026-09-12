@@ -48,9 +48,11 @@ vgxness setup codex --preview
 vgxness setup all --preview
 ```
 
+Codex retains `--model-plan low|medium|high|ultra`; OpenCode and Pi use [explicit model selections](model-selection.md).
+
 `setup all` also prepares Pi, using an offline `--pi-release-dir` or a pinned `--pi-release-version` (a release binary can default to its own tag). Preview and status do not download the Pi package. See [Pi setup](pi-typescript.md).
 
-`setup all` applies OpenCode-only model slot options only to OpenCode. `--config-dir` remains the OpenCode root and `--codex-home` independently selects Codex's home. Codex continues to own `config.toml` and accepts only its own configuration root and model plan.
+`setup all` applies unprefixed explicit model selections only to OpenCode and `--pi-model-*` selections only to Pi. `--config-dir` remains the OpenCode root and `--codex-home` independently selects Codex's home. Codex continues to own `config.toml` and accepts only its own configuration root and model plan.
 
 The lower-level provider lifecycle remains available for install, inspect, repair an exact partial installation, and uninstall:
 

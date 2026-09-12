@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vgxness/vgxness/internal/agentmodels"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,9 +29,11 @@ const (
 )
 
 type Options struct {
-	ReleaseDir  string
-	AgentDir    string
-	InstallRoot string
+	Models              *agentmodels.Config
+	expectedSettingsSHA string
+	ReleaseDir          string
+	AgentDir            string
+	InstallRoot         string
 	// GOOS and GOARCH are retained for caller compatibility; portable artifacts do not select a target.
 	GOOS   string
 	GOARCH string
@@ -101,6 +104,11 @@ func reservationOperation(name string) error {
 }
 
 func normalize(options Options) (Options, string, error) {
+	if options.Models != nil {
+		if err := options.Models.Validate(); err != nil {
+			return Options{}, "", err
+		}
+	}
 	if options.ReleaseDir == "" || options.AgentDir == "" || options.InstallRoot == "" || !filepath.IsAbs(options.ReleaseDir) || !filepath.IsAbs(options.AgentDir) || !filepath.IsAbs(options.InstallRoot) {
 		return Options{}, "", errors.New("Pi release, agent, and managed roots must be absolute")
 	}
@@ -136,6 +144,13 @@ func install(ctx context.Context, options Options, expectedSource string) (resul
 	if _, err := preflightSettings(options.AgentDir, options.InstallRoot, ""); err != nil {
 		return Result{}, err
 	}
+	digest, _, modelsChanged, modelErr := modelSettings(options.AgentDir, options.Models)
+	if modelErr != nil {
+		return Result{}, modelErr
+	}
+	if options.expectedSettingsSHA != "" && options.expectedSettingsSHA != digest {
+		return Result{}, errors.New("Pi settings changed since preview")
+	}
 	if err := claimInstallRoot(options.InstallRoot); err != nil {
 		return Result{}, err
 	}
@@ -151,13 +166,13 @@ func install(ctx context.Context, options Options, expectedSource string) (resul
 				return Result{}, fmt.Errorf("managed Pi destination is occupied: %w", err)
 			}
 		} else {
-			if err := activate(ctx, options.AgentDir, options.InstallRoot, packagePath); err != nil {
+			if err := activate(ctx, options.AgentDir, options.InstallRoot, packagePath, activationModels{options.Models, options.expectedSettingsSHA}); err != nil {
 				return Result{PackagePath: packagePath, State: "published-inactive"}, retained("published-inactive", packagePath, err)
 			}
 			if err := finalizeReservation(destination, packagePath, source); err != nil {
 				return Result{PackagePath: packagePath, State: "activated-finalization-pending"}, retained("activated-finalization-pending", filepath.Join(destination, ".vgxness-pi-reservation"), err)
 			}
-			return Result{PackagePath: packagePath, State: "installed"}, nil
+			return Result{PackagePath: packagePath, State: "installed", Changed: modelsChanged}, nil
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Result{}, err
@@ -248,7 +263,7 @@ func install(ctx context.Context, options Options, expectedSource string) (resul
 	if err := ctx.Err(); err != nil {
 		return Result{PackagePath: packagePath, State: "published-inactive"}, retained("published-inactive", packagePath, err)
 	}
-	if err := activate(ctx, options.AgentDir, options.InstallRoot, packagePath); err != nil {
+	if err := activate(ctx, options.AgentDir, options.InstallRoot, packagePath, activationModels{options.Models, options.expectedSettingsSHA}); err != nil {
 		return Result{}, err
 	}
 	if err := finalizeReservation(destination, packagePath, source); err != nil {
@@ -496,7 +511,18 @@ func verifyPackage(root, target string) error {
 	})
 }
 
-func activate(ctx context.Context, agent, installRoot, packagePath string) error {
+type activationModels struct {
+	models   *agentmodels.Config
+	expected string
+}
+
+func activate(ctx context.Context, agent, installRoot, packagePath string, selection ...activationModels) error {
+	var models *agentmodels.Config
+	var expected string
+	if len(selection) > 0 {
+		models, expected = selection[0].models, selection[0].expected
+	}
+
 	if err := noLinkAncestors(agent); err != nil {
 		return err
 	}
@@ -537,11 +563,20 @@ func activate(ctx context.Context, agent, installRoot, packagePath string) error
 	if count > 1 {
 		return errors.New("ambiguous Pi managed package entries")
 	}
-	if count == 1 {
+	if expected != "" && settingsDigest(before) != expected {
+		return errors.New("Pi settings changed since preview")
+	}
+	if models != nil {
+		if err := models.Validate(); err != nil {
+			return err
+		}
+		applyModelSettings(value, *models)
+	}
+	if count == 1 && models == nil {
 		return nil
 	}
 	for index, existing := range packages {
-		if path, ok := packageEntryPath(existing); ok && isManagedPackagePath(path, installRoot) {
+		if path, ok := packageEntryPath(existing); ok && path != packagePath && isManagedPackagePath(path, installRoot) {
 			if err := verifyManaged(path, ""); err != nil {
 				return fmt.Errorf("managed Pi predecessor drift: %w", err)
 			}

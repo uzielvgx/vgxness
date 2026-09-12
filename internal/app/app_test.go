@@ -375,7 +375,7 @@ func TestOpenCodeIntegrationRuntime_InstallStatusAndRecoverableUninstall(t *test
 	run := func(args []string) int {
 		return runWithMCPAndRuntimes(context.Background(), args, strings.NewReader(""), &out, &stderr, tui.Run, cli.RunMCP, appRuntimes{opencode: integrationRuntime})
 	}
-	code := run([]string{"integrate", "opencode", "install", "--model", "openai/gpt-5.6-sol", "--config-dir", configDirectory})
+	code := run([]string{"integrate", "opencode", "install", "--model-mode", "single", "--model", "openai/gpt-5.6-sol", "--config-dir", configDirectory})
 	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=installed") && stderr.Len() == 0, "install exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
 	out.Reset()
 	code = run([]string{"integrate", "opencode", "status", "--config-dir", configDirectory})

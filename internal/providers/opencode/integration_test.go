@@ -1884,7 +1884,7 @@ func TestIntegration_RepairsOnlyMissingManagedArtifact(t *testing.T) {
 	skipShortIntegration(t)
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	managerPath := filepath.Join(configDirectory, "agents", managerAgentName)
-	bundle, err := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
+	bundle, err := requestedModelPlan(integration.Options{}, configDirectory)
 	testutil.NoError(t, err)
 	testutil.NoError(t, os.MkdirAll(filepath.Dir(managerPath), 0o700))
 	testutil.NoError(t, os.WriteFile(managerPath, bundle.agents[managerAgentName], 0o600))
@@ -2802,7 +2802,7 @@ func TestIntegration_UninstallIsRecoverableAndRefusesDrift(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(configDirectory, "skills", autonomousStackedPRSkillName, "SKILL.md")); !os.IsNotExist(statErr) {
 		t.Errorf("managed stacked-PR skill was not removed: %v", statErr)
 	}
-	bundle, bundleErr := buildModelPlanBundle(modelplan.DefaultModelPlanConfig())
+	bundle, bundleErr := requestedModelPlan(integration.Options{}, configDirectory)
 	testutil.NoError(t, bundleErr)
 	testutil.Require(t,
 		removed.State == integration.StateAbsent &&

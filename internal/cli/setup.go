@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/vgxness/vgxness/internal/agentmodels"
 	"github.com/vgxness/vgxness/internal/buildinfo"
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/modelcatalog"
@@ -200,13 +201,14 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	var workspace string
 	var codexHome string
 	var piRelease, piReleaseVersion, piAgent, piRoot string
-	var deprecatedModel string
+	var modelFlags, piModelFlags agentModelFlags
 	var options setupflow.Options
 	flags.BoolVar(&preview, "preview", false, "explain the complete plan without writing")
 	flags.BoolVar(&status, "status", false, "inspect the complete setup without writing")
 	flags.BoolVar(&yes, "yes", false, "approve the explained plan non-interactively")
 	flags.StringVar(&workspace, "workspace", "", "workspace used for the OpenCode handshake")
-	flags.StringVar(&deprecatedModel, "model", "", "deprecated compatibility flag; the native integration does not use a child model")
+	modelFlags.register(flags, "")
+	piModelFlags.register(flags, "pi-")
 	flags.Var((*planFlag)(&options.Integration.ModelPlan), "model-plan", "active model plan: low, medium, high, or ultra")
 	flags.StringVar(&options.Integration.ModelEfficient, "model-efficient", "", "exact provider/model for the efficient slot")
 	flags.StringVar(&options.Integration.ModelBalanced, "model-balanced", "", "exact provider/model for the balanced slot")
@@ -224,6 +226,46 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	flags.StringVar(&piRoot, "pi-root", "", "VGXNESS-managed Pi package root")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || preview && status || yes && (preview || status) {
 		fmt.Fprintln(stderr, "invalid setup arguments")
+		return 2
+	}
+	selection, selectionErr := modelFlags.config()
+	piSelection, piSelectionErr := piModelFlags.config()
+	if selectionErr != nil || piSelectionErr != nil {
+		fmt.Fprintln(stderr, "invalid: provide single or complete per-agent model selection")
+		return 2
+	}
+	if hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration) {
+		fmt.Fprintln(stderr, "invalid: model slots are retired; use --model-mode single|per-agent")
+		return 2
+	}
+	if options.Integration.ModelPlan != "" && !includesCodex(providers) {
+		fmt.Fprintln(stderr, "invalid: --model-plan applies only to Codex")
+		return 2
+	}
+	codexPlan := options.Integration.ModelPlan
+	options.Integration.ModelPlan = ""
+	if selection != nil {
+		switch args[0] {
+		case "opencode", "all":
+			assignments, err := opencode.ExplicitModels(*selection)
+			if err != nil {
+				fmt.Fprintln(stderr, "invalid model selection")
+				return 2
+			}
+			options.Integration.ModelAssignments = &assignments
+		case "pi":
+			if piSelection != nil {
+				fmt.Fprintln(stderr, "invalid: duplicate Pi selection")
+				return 2
+			}
+			piSelection = selection
+		default:
+			fmt.Fprintln(stderr, "invalid: Codex uses --model-plan")
+			return 2
+		}
+	}
+	if piSelection != nil && !includesPi(providers) {
+		fmt.Fprintln(stderr, "invalid: Pi model selection requires Pi")
 		return 2
 	}
 	piVersionProvided := false
@@ -350,6 +392,7 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 				return 1
 			}
 			piOptions, pathErr := resolvePiSetupOptions(piAgent, piRoot, piRelease)
+			piOptions.Models = piSelection
 			if pathErr != nil {
 				fmt.Fprintln(stderr, "invalid: Pi path is invalid")
 				return 2
@@ -357,7 +400,7 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 			runtimes = append(runtimes, factory.PiProvider(piOptions))
 			continue
 		}
-		codexOptions, err := codexSetupOptions(options.Integration, codexHome)
+		codexOptions, err := codexSetupOptions(integration.Options{ModelPlan: codexPlan}, codexHome)
 		if err != nil {
 			fmt.Fprintln(stderr, "operational: resolve Codex home directory")
 			return 1
@@ -503,6 +546,16 @@ func renderMultiSetupPlan(writer io.Writer, plan setupflow.MultiPlan) {
 	fmt.Fprintf(writer, "Plan digest: %s\n", terminalSafe(plan.Digest))
 	fmt.Fprintln(writer, "Preflight compartido: launcher y skills")
 	for _, provider := range plan.Providers {
+		if provider.Models != nil {
+			fmt.Fprintf(writer, "Provider %s model mode: %s\n", provider.Provider, provider.Models.Mode)
+			for _, role := range agentmodels.Roles {
+				a := provider.Models.Assignments[role]
+				fmt.Fprintf(writer, "  %s=%s effort=%s\n", role, terminalSafe(a.Model), a.Effort)
+			}
+		}
+		if provider.Integration.ModelAssignments != nil {
+			renderModelSlots(writer, provider.Integration)
+		}
 		fmt.Fprintf(writer, "Provider %s: ready=%t changed=%t state=%s artifacts=%d\n", provider.Provider, provider.Ready, provider.Changed, provider.State, provider.ArtifactCount)
 		if provider.Provider == setupflow.ProviderCodex {
 			renderCodexDiagnostics(writer, provider)

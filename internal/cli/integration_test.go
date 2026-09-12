@@ -20,34 +20,26 @@ type fakeIntegrationRuntime struct {
 	calls   int
 }
 
-func TestIntegrationCLI_ModelPlanFlagsAndResolvedOutput(t *testing.T) {
-	runtime := &fakeIntegrationRuntime{result: integration.Result{
-		Provider: "opencode", State: integration.StateAbsent, ModelPlan: modelplan.PlanHigh, ModelProvider: "acme",
-		ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier",
-		ManifestPath: "/tmp/config/vgxness/model-plan.json", RestartRequired: true, DirectoryDurability: "fsync",
-	}}
-	code, stdout, stderr := runIntegrationTest([]string{
-		"integrate", "opencode", "preview", "--model-plan", "high",
-		"--model-efficient", "acme/fast", "--model-balanced", "acme/balanced", "--model-frontier", "acme/frontier",
-		"--model", "legacy/ignored",
-	}, runtime)
-	if code != 0 || stderr != "" || runtime.options.ModelPlan != modelplan.PlanHigh || runtime.options.ModelEfficient != "acme/fast" {
-		t.Fatalf("code=%d options=%+v stderr=%q", code, runtime.options, stderr)
+func TestIntegrationCLIExplicitModelsReplaceSlots(t *testing.T) {
+	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent}}
+	code, _, stderr := runIntegrationTest([]string{"integrate", "opencode", "preview", "--model-mode", "single", "--model", "acme/model"}, runtime)
+	if code != 0 || stderr != "" || runtime.options.ModelAssignments == nil || len(*runtime.options.ModelAssignments) != 7 {
+		t.Fatalf("code=%d options=%+v error=%s", code, runtime.options, stderr)
 	}
-	for _, expected := range []string{"model_plan=high", "model_provider=acme", "model_efficient=acme/fast", "model_balanced=acme/balanced", "model_frontier=acme/frontier", "model_manifest=/tmp/config/vgxness/model-plan.json", "restart_required=true", "directory_durability=fsync"} {
-		if !strings.Contains(stdout, expected+"\n") {
-			t.Fatalf("output missing %q: %q", expected, stdout)
+	for _, a := range *runtime.options.ModelAssignments {
+		if a.Reference != "acme/model" || a.Variant != "" || !a.VariantSpecified {
+			t.Fatal(a)
 		}
 	}
-	if strings.Contains(stdout, "retained_predecessors=") {
-		t.Fatalf("zero retained predecessors were rendered: %q", stdout)
-	}
 }
-
-func TestIntegrationCLI_AcceptsUltraModelPlan(t *testing.T) {
-	runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent, ModelPlan: modelplan.PlanUltra}}
-	code, _, stderr := runIntegrationTest([]string{"integrate", "opencode", "preview", "--model-plan", "ultra"}, runtime)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.options.ModelPlan == modelplan.PlanUltra && runtime.calls == 1, "exit=%d options=%+v calls=%d stderr=%q", code, runtime.options, runtime.calls, stderr)
+func TestIntegrationCLIRejectsOpenCodePlans(t *testing.T) {
+	for _, plan := range []string{"low", "medium", "high", "ultra"} {
+		runtime := &fakeIntegrationRuntime{}
+		code, _, _ := runIntegrationTest([]string{"integrate", "opencode", "preview", "--model-plan", plan}, runtime)
+		if code != 2 || runtime.calls != 0 {
+			t.Fatal("OpenCode plan accepted")
+		}
+	}
 }
 
 func TestIntegrationCLI_CodexReinstallAcceptsModelPlan(t *testing.T) {
@@ -167,7 +159,7 @@ func TestIntegrationCLI_InvalidProviderArgumentsShowAccurateUsage(t *testing.T) 
 		{
 			name:     "opencode",
 			args:     []string{"integrate", "opencode", "status", "--unknown"},
-			contains: []string{"usage: vgxness integrate opencode <preview|install|status|uninstall|repair-mcp-preview|repair-mcp>", "--old-executable", "--expected-mcp-sha256", "--model-plan", "--model-efficient"},
+			contains: []string{"usage: vgxness integrate opencode <preview|install|status|uninstall|repair-mcp-preview|repair-mcp>", "--old-executable", "--expected-mcp-sha256", "--model-mode", "--agent-model"},
 			absent:   []string{"reinstall"},
 		},
 		{
@@ -191,16 +183,15 @@ func TestIntegrationCLI_InvalidProviderArgumentsShowAccurateUsage(t *testing.T) 
 	}
 }
 
-func TestIntegrationCLI_DeprecatedModelFlagIsAcceptedAndIgnored(t *testing.T) {
+func TestIntegrationCLIModelRequiresExplicitMode(t *testing.T) {
 	for _, action := range []string{"preview", "install"} {
 		runtime := &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent}}
 		code, _, stderr := runIntegrationTest([]string{"integrate", "opencode", action}, runtime)
-		withoutModel := runtime.options
 		testutil.Require(t, code == 0 && runtime.calls == 1 && stderr == "", "action=%s exit=%d calls=%d stderr=%q", action, code, runtime.calls, stderr)
 
 		runtime = &fakeIntegrationRuntime{result: integration.Result{Provider: "opencode", State: integration.StateAbsent}}
 		code, _, stderr = runIntegrationTest([]string{"integrate", "opencode", action, "--model", "legacy/model"}, runtime)
-		testutil.Require(t, code == 0 && runtime.calls == 1 && runtime.options == withoutModel && stderr == "", "compat action=%s exit=%d calls=%d options=%#v stderr=%q", action, code, runtime.calls, runtime.options, stderr)
+		testutil.Require(t, code == 2 && runtime.calls == 0 && strings.Contains(stderr, "invalid model selection"), "compat action=%s exit=%d calls=%d options=%#v stderr=%q", action, code, runtime.calls, runtime.options, stderr)
 	}
 }
 

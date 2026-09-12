@@ -16,6 +16,10 @@ Preview with `vgxness setup pi --preview --pi-release-dir /absolute/new-director
 
 A managed legacy Go package remains intact. Status reports that it needs an update; provisioning a new portable release activates the new managed path. There is no automatic deletion of the old package or memory database.
 
+## Model selection
+
+Pi supports one model for all agents or an explicit model per agent, including the Manager. See [Choose models during installation](model-selection.md). The native `model_resolve` tool takes an empty object and returns the configured role assignments; it no longer selects plans. Settings and worker execution remain native to Pi.
+
 ## Native tools and session state
 
 The extension opens the shared `~/.vgxness/memory.db` directly. An embedding host can select another absolute `storageRoot` through `createPiExtension`; worker missions cannot override workspace, project, mode, or role. Model-facing memory tools keep the existing Go result contract (`ID`, `Content`, `Preview`, and other capitalized entry fields). Only a full Manager can mutate memory. Structured SDD is retired; no SDD tools or worker roles are exposed. Historical records remain preserved in the shared database.

@@ -100,7 +100,7 @@ func TestMultiSetupJourneyRendersProviderReviewAndKeepsCancelledModelEdits(t *te
 	model = updateModel(t, model, keyPress("c"))
 	updated, preview := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated.(Model)
-	if preview == nil || !strings.Contains(model.View().Content, "2 OF 3 · PLAN") {
+	if preview == nil || !strings.Contains(model.View().Content, "2 OF 3 · MODELS") {
 		t.Fatalf("providers did not advance to plan: cmd=%v\n%s", preview, model.View().Content)
 	}
 	model.setupPlan = SetupPlan{Digest: "preview", Ready: true}
@@ -109,7 +109,7 @@ func TestMultiSetupJourneyRendersProviderReviewAndKeepsCancelledModelEdits(t *te
 
 	before := model.setupAssignmentRows[0]
 	model = updateModel(t, model, keyPress("m"))
-	if !strings.Contains(model.View().Content, "MODEL DETAILS") {
+	if !strings.Contains(model.View().Content, "Model:") {
 		t.Fatalf("wide editor did not use two panes:\n%s", model.View().Content)
 	}
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
@@ -156,6 +156,7 @@ func TestMultiSetupKeyboardSelectorsUseVerticalCursors(t *testing.T) {
 
 	model.setupView = setupViewPlan
 	model.setupSelected = "medium"
+	model.modelChoiceProvider = 1 // Codex alone retains plans.
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	if model.setupSelected != "high" {
 		t.Fatalf("plan down selected %q, want high", model.setupSelected)
@@ -185,7 +186,7 @@ func TestAssignmentEditorUsesPanelWidthAndContextualHelp(t *testing.T) {
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 120, Height: 40})
 	model.setupView = setupViewPlan
 	model.seedSetupAssignments(assignmentSetupPlan(3))
-	model = updateModel(t, model, keyPress("m"))
+	model.enterModelEditor()
 
 	if help := model.setupHelp(); !strings.Contains(help, "[↑↓/j/k] row") || strings.Contains(help, "[m] OpenCode models") {
 		t.Fatalf("assignment editor showed route help: %q", help)
@@ -234,7 +235,7 @@ func TestInstallationActionsKeepDistinctDestinations(t *testing.T) {
 	}
 	updated, editor = model.Update(keyPress("m"))
 	model = updated.(Model)
-	if editor == nil || !model.setupModelEditing {
+	if editor != nil || !model.modelChoiceEditing {
 		t.Fatalf("configure did not open model editor from plan: editing=%t cmd=%v", model.setupModelEditing, editor)
 	}
 }

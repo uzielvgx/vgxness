@@ -185,6 +185,13 @@ type Model struct {
 	setupPlan              SetupPlan
 	setupResult            SetupResult
 	setupProviders         []setupflow.Provider
+	modelChoices           [2]modelChoice
+	modelChoiceProvider    int
+	modelChoiceRow         int
+	modelChoiceEditing     bool
+	modelChoiceInput       string
+	codexPlanEdited        bool
+	modelChoiceError       string
 	setupMultiPlan         setupflow.MultiPlan
 	setupMultiResult       setupflow.MultiResult
 	setupViewport          viewport.Model

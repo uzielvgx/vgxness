@@ -121,10 +121,10 @@ test("model resolution uses only trusted scoped runtime candidates and native ef
   const handler: any = (loaded.extensions[0].handlers.get("before_agent_start") ?? [])[0];
   await handler({ type: "before_agent_start", systemPrompt: "base" }, { model, scopedModels: [{ provider: "fixture", id: "family/model" }], modelRegistry: { getAvailable: () => [model] } });
   const resolve: any = [...loaded.extensions[0].tools.values()].map((item: any) => item.definition).find((item: any) => item.name === "model_resolve");
-  const resolved = JSON.parse((await resolve.execute("resolve", { plan: "ultra" })).content[0].text);
-  assert.equal(resolved.roles.research.taskModel, "fixture/family/model");
-  assert.equal(calls[0].operation, "model.resolve");
-  assert.deepEqual(calls[0].payload.catalog, { provider: "fixture", models: [{ provider: "fixture", id: "family/model", name: "Fixture", supportedEfforts: ["medium", "high"] }] });
+  const resolved = JSON.parse((await resolve.execute("resolve", {})).content[0].text);
+  assert.equal(resolved.roles.explore.taskModel, "fixture/family/model");
+  assert.equal(resolved.mode, "single");
+  assert.equal(calls.length, 0); // Explicit selections no longer invoke a plan resolver.
   delete (globalThis as any).__modelOptions;
 });
 

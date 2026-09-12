@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/vgxness/vgxness/internal/agentmodels"
 
 	"github.com/vgxness/vgxness/internal/integration"
 	"github.com/vgxness/vgxness/internal/selfinstall"
@@ -27,16 +28,18 @@ var providerOrder = [...]Provider{ProviderOpenCode, ProviderCodex, ProviderPi}
 // ProviderPlan is the provider-owned preflight result. Shared work is modeled
 // by MultiPlan and must not be repeated by provider implementations.
 type ProviderPlan struct {
-	Provider       Provider
-	Ready          bool
-	Blocker        string
-	Changed        bool
-	Installed      bool
-	ArtifactSHA256 string
-	ArtifactCount  int
-	State          integration.State
-	Integration    integration.Result
-	Handshake      integration.Handshake
+	Provider            Provider
+	Ready               bool
+	Blocker             string
+	Changed             bool
+	Installed           bool
+	ArtifactSHA256      string
+	ArtifactCount       int
+	ModelSettingsSHA256 string
+	Models              *agentmodels.Config
+	State               integration.State
+	Integration         integration.Result
+	Handshake           integration.Handshake
 }
 
 type ProviderResult struct {
