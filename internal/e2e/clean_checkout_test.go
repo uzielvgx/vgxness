@@ -59,8 +59,14 @@ func TestCleanCheckoutSetupAndMemory(t *testing.T) {
 	setupOutput := run(t, environment, workspace, sourceExecutable,
 		"setup", "opencode", "--yes", "--workspace", workspace,
 		"--bin-dir", launcherDirectory, "--data-dir", dataDirectory, "--config-dir", configDirectory,
-		"--model-efficient", "openai/gpt-5.6-luna", "--model-balanced", "anthropic/claude-sonnet", "--model-frontier", "acme/frontier",
-		"--model-efficient-effort", "low", "--model-balanced-effort", "high", "--model-frontier-effort", "ultra",
+		"--model-mode", "per-agent", "--model-effort", "xhigh",
+		"--agent-model", "manager=acme/frontier",
+		"--agent-model", "explore=openai/gpt-5.6-luna",
+		"--agent-model", "general=anthropic/claude-sonnet",
+		"--agent-model", "verifier=acme/checker",
+		"--agent-model", "care-reviewer=acme/reviewer",
+		"--agent-model", "care-specialist=acme/specialist",
+		"--agent-model", "care-challenger=acme/challenger",
 	)
 	for _, expected := range []string{"Paso 1 de 7", "Paso 7 de 7", "configuración completa", "handshake OpenCode=healthy", "Reinicia OpenCode para cargar vgxness-manager"} {
 		if !strings.Contains(setupOutput, expected) {
@@ -148,6 +154,16 @@ func TestCleanCheckoutSetupAndMemory(t *testing.T) {
 		"care-reviewer":   filepath.Join(configDirectory, "agents", "vgxness-care-reviewer.md"),
 		"care-specialist": filepath.Join(configDirectory, "agents", "vgxness-care-specialist.md"),
 		"care-challenger": filepath.Join(configDirectory, "agents", "vgxness-care-challenger.md"),
+	}
+	for role, model := range map[string]string{
+		"explore": "openai/gpt-5.6-luna", "general": "anthropic/claude-sonnet",
+		"verifier": "acme/checker", "care-reviewer": "acme/reviewer",
+		"care-specialist": "acme/specialist", "care-challenger": "acme/challenger",
+	} {
+		data, err := os.ReadFile(rolePaths[role])
+		if err != nil || !bytes.Contains(data, []byte("model: "+model+"\nvariant: xhigh")) {
+			t.Fatalf("installed %s does not retain its selected model and effort: %v", role, err)
+		}
 	}
 	nativeBindings := map[string][]string{
 		"general":  {"artifact: opencode-agent/general; version: 10", "permission:\n  \"*\": allow"},
