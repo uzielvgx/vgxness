@@ -1,6 +1,10 @@
-# Alpha releases
+# Releases and installation
 
-VGXNESS alpha releases are built from pushed, annotated or lightweight tags that match strict SemVer in the form `vMAJOR.MINOR.PATCH`, optionally followed by prerelease and build metadata. Release archives use the same version without the leading `v`.
+VGXNESS releases are built from pushed, annotated or lightweight tags that match strict SemVer in the form `vMAJOR.MINOR.PATCH`, optionally followed by prerelease and build metadata. Release archives use the same version without the leading `v`.
+
+Stable v1 publication is proposed until the exact tag workflow succeeds. The
+release owner publishes the generated Homebrew and Scoop manifests after reading
+back the release checksums. Channel repositories are separate from this source.
 
 ## Artifacts
 
@@ -14,15 +18,16 @@ The configured tag workflow produces the following assets for `<version>`; this 
 - `vgxness_<version>_windows_arm64.zip`
 - `vgxness-pi_<version>_portable.tar.gz`
 - `SHA256SUMS`
+- `vgxness.rb` and `vgxness.json` (stable tags only; Homebrew and Scoop manifests)
 
 Each of the six Go archives expands to one directory named after the archive stem. The portable Pi envelope has the separate layout described below. That directory contains `vgxness` on Linux and macOS or `vgxness.exe` on Windows, plus `LICENSE` and `README.md`.
 
 ## Support matrix
 
-| Platform | Alpha support level | Release evidence |
+| Platform | Support level | Release evidence |
 | --- | --- | --- |
-| `linux/amd64` | Alpha-supported | Native artifact version and self-install/status smoke in the release workflow. |
-| `windows/amd64` | Alpha-supported | Native artifact version and preview/install/status smoke in the release workflow. |
+| `linux/amd64` | Native release-gated | Native artifact version and self-install/status smoke in the release workflow. |
+| `windows/amd64` | Native release-gated | Native artifact version and preview/install/status smoke in the release workflow. |
 | `linux/arm64` | Preview / compile-only | Cross-built archive; no native release smoke. |
 | `windows/arm64` | Preview / compile-only | Cross-built archive; no native release smoke. |
 | `darwin/amd64` | Preview / compile-only | Cross-built archive; no native amd64 release-archive smoke. |
@@ -49,7 +54,7 @@ For a local rehearsal from the repository root:
 commit="$(git rev-parse HEAD)"
 date="$(git show -s --format=%cI "$commit")"
 go run ./cmd/vgxness-release \
-  --version v0.1.0-alpha.1 \
+  --version v1.0.0 \
   --commit "$commit" \
   --date "$date" \
   --output /absolute/empty-or-new/dist
@@ -70,15 +75,15 @@ sha256sum -c SHA256SUMS --ignore-missing
 On macOS, where `sha256sum` is not normally installed:
 
 ```sh
-expected="$(awk '$2 == "vgxness_0.1.0-alpha.1_darwin_arm64.tar.gz" { print $1 }' SHA256SUMS)"
-actual="$(shasum -a 256 vgxness_0.1.0-alpha.1_darwin_arm64.tar.gz | awk '{ print $1 }')"
+expected="$(awk '$2 == "vgxness_1.0.0_darwin_arm64.tar.gz" { print $1 }' SHA256SUMS)"
+actual="$(shasum -a 256 vgxness_1.0.0_darwin_arm64.tar.gz | awk '{ print $1 }')"
 test -n "$expected" && test "$actual" = "$expected"
 ```
 
 In PowerShell:
 
 ```powershell
-$archive = "vgxness_0.1.0-alpha.1_windows_amd64.zip"
+$archive = "vgxness_1.0.0_windows_amd64.zip"
 $expected = ((Get-Content SHA256SUMS | Where-Object { $_ -match "  $([regex]::Escape($archive))$" }) -split "\s+")[0]
 $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
 if (-not $expected -or $actual -ne $expected) { throw "SHA-256 verification failed" }
@@ -87,7 +92,7 @@ if (-not $expected -or $actual -ne $expected) { throw "SHA-256 verification fail
 Before executing a downloaded archive, verify its GitHub Actions provenance attestation as well as its checksum. For example, from the directory containing the archive:
 
 ```sh
-gh attestation verify vgxness_0.1.0-alpha.1_linux_amd64.tar.gz \
+gh attestation verify vgxness_1.0.0_linux_amd64.tar.gz \
   --repo uzielvgx/vgxness
 ```
 
@@ -97,14 +102,14 @@ Release binaries are not code-signed or notarized yet. For artifacts produced by
 
 ### Homebrew on macOS or Linux
 
-Install the release pinned by the official tap:
+After the stable channel is published, install the release pinned by the official tap:
 
 ```sh
 brew install uzielvgx/tap/vgxness
 "$(brew --prefix vgxness)/bin/vgxness" version
 ```
 
-Homebrew selects the matching macOS or Linux ARM64 or amd64 archive and verifies its formula SHA-256 before installation. The formula follows the support levels above; availability through Homebrew does not promote a preview target to alpha-supported.
+Homebrew selects the matching macOS or Linux ARM64 or amd64 archive and verifies its formula SHA-256 before installation. The formula follows the support levels above; availability through Homebrew does not promote a preview target to native release-gated.
 
 Homebrew owns its executable and does not modify OpenCode. Preview and explicitly install the optional managed OpenCode integration with the brewed version:
 
@@ -125,7 +130,7 @@ scoop install vgxness/vgxness
 & "$(scoop prefix vgxness)\vgxness.exe" version
 ```
 
-Scoop selects the matching Windows amd64 or ARM64 ZIP and verifies the downloaded archive against the SHA-256 pinned in the manifest. Windows amd64 is alpha-supported; Windows ARM64 remains preview and compile-only.
+Scoop selects the matching Windows amd64 or ARM64 ZIP and verifies the downloaded archive against the SHA-256 pinned in the manifest. Windows amd64 is native release-gated; Windows ARM64 remains preview and compile-only.
 
 Scoop owns its app directory and `vgxness` shim and does not modify OpenCode. Preview and explicitly install the optional managed OpenCode integration with the Scoop-owned version:
 
@@ -137,6 +142,24 @@ Scoop owns its app directory and `vgxness` shim and does not modify OpenCode. Pr
 The setup wizard creates a separate managed installation and launcher. After `scoop update vgxness`, rerun the preview and approved setup commands to activate the upgraded managed version. Removing the Scoop app does not remove that separate managed installation. The manifest source and complete ownership guidance live in the [official Scoop bucket](https://github.com/uzielvgx/scoop-bucket).
 
 ### Direct archive
+
+With GitHub CLI installed, download a pinned archive into a new directory. This
+example is Linux amd64; choose the archive matching the table above. Authenticate
+`gh` if required by its installation, then verify before extracting:
+
+```sh
+mkdir vgxness-1.0.0-download
+cd vgxness-1.0.0-download
+gh release download v1.0.0 --repo uzielvgx/vgxness --pattern vgxness_1.0.0_linux_amd64.tar.gz --pattern SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify vgxness_1.0.0_linux_amd64.tar.gz --repo uzielvgx/vgxness
+tar -xzf vgxness_1.0.0_linux_amd64.tar.gz
+cd vgxness_1.0.0_linux_amd64
+```
+
+The release can also be downloaded from the GitHub release page; no curl-to-shell
+bootstrap is required. `apt`, `dnf` and `winget` channels are not published.
+
 
 Extract the selected archive, enter its top-level directory, and inspect its metadata:
 
@@ -173,3 +196,18 @@ The configured release distribution contains six Go archives, one portable Pi ar
 The workflow builds this pinned Pi asset before Go assets and appends its validated checksum. Download integrity is the trusted GitHub publisher plus TLS and same-origin checksum validation; it is not an independent signature or automatic attestation verification. Operators may inspect existing GitHub attestations manually.
 
 The inner offline package still contains exactly its tgz, `PROVENANCE.json` and `SHA256SUMS`. Its historical `local source snapshot; unpublished` provenance label describes offline assembly; the outer `RELEASE.json` binds release metadata, while actual publication is a separate observed operation. Acquisition trusts the fixed `uzielvgx/vgxness` GitHub release publisher. It does not verify attestations automatically. No public release is performed by a local rehearsal.
+
+## Maintaining package-manager channels
+
+Stable tag builds run `tools/distribution/generate.py` against the six archive
+SHA-256 values and publish `vgxness.rb` and `vgxness.json` as checksummed assets.
+The release owner copies these exact assets into `Formula/vgxness.rb` in
+`uzielvgx/homebrew-tap` and `bucket/vgxness.json` in `uzielvgx/scoop-bucket` after
+release readback. Each channel checks native installation before promotion.
+There is no automatic cross-repository write token or unpinned update hook.
+
+Homebrew's [formula format](https://docs.brew.sh/Formula-Cookbook) and Scoop's
+[manifest schema](https://github.com/ScoopInstaller/Scoop/blob/master/schema.json)
+define the platform-specific download and hash fields. Both channels own only
+their binary installation. Upgrading the channel does not update a previously
+created VGXNESS managed launcher until explicit setup is run again.

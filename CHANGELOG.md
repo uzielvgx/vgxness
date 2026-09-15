@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v1.0.0 — proposed
+
+- First stable scope for provisioning OpenCode, Codex and independent TypeScript Pi with shared SQLite memory and portable skills.
+- Single-model and per-agent selection for OpenCode/Pi; Codex-only model plans.
+- Current agent definitions, receipt-backed upgrades and proportional CARE review; structured SDD retired.
+- Six platform archives and a portable Pi asset; generated checksum-pinned Homebrew/Scoop manifests.
+- Support limits, migration and distribution gates are recorded in `docs/v1-readiness.md` and `docs/releases/v1.0.0.md`.
+
+### Historical pre-v1 development notes
+
+The following entries describe intermediate states and are not current agent inventories or supported commands.
+
 - Keep one current agent definition per role. Remove historical prompt templates, reconstruction chains and the previous shared registry; use local installation receipts for updates. OpenCode now owns 12 managed artifacts and Codex ten, including the receipt. Older unreceipted installations require the documented bridge.
 
 - Remove the remaining SDD engine and archive command, Pi service and fallback skill, lifecycle worker bindings and routing. Model configuration now lives in `internal/modelplan`; the setup matrix exposes only seven current agents. Immutable migrations and exact predecessor recognition remain for compatibility.

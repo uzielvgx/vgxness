@@ -18,16 +18,20 @@ vgxness setup codex --preview --codex-home /absolute/path/to/home
 vgxness setup all --preview --config-dir /absolute/path/to/opencode --codex-home /absolute/path/to/codex-home --pi-release-dir /absolute/path/to/pi-release
 ```
 
-`vgxness setup opencode` supports `--config-dir` and the model flags. Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explicit OpenCode destinations. Use `--codex-home` for the independent Codex home; it is never inferred from or routed through `--config-dir`. Setup publishes portable skills to OpenCode's discoverable global root; use the lower-level `vgxness skills --skills-dir PATH` lifecycle only for isolated custom roots. Use `--model-plan low|medium|high|ultra` for a homogeneous preset, or set the efficient, balanced, and frontier provider/model slots independently. A mixed-provider setup must include all three `--model-efficient`, `--model-balanced`, and `--model-frontier` references plus all three `--model-efficient-effort`, `--model-balanced-effort`, and `--model-frontier-effort` values. For example:
+`vgxness setup opencode` supports `--config-dir` and the model flags. Use `--workspace`, `--bin-dir`, `--data-dir`, or `--config-dir` to select explicit OpenCode destinations. Use `--codex-home` for the independent Codex home; it is never inferred from or routed through `--config-dir`. Setup publishes portable skills to OpenCode's discoverable global root; use the lower-level `vgxness skills --skills-dir PATH` lifecycle only for isolated custom roots. OpenCode and Pi use explicit single-model or per-agent choices; only Codex accepts `--model-plan low|medium|high|ultra`.
 
 ```sh
-vgxness setup opencode --yes \
-  --model-efficient openai/gpt-5.6-luna --model-efficient-effort low \
-  --model-balanced anthropic/claude-sonnet --model-balanced-effort high \
-  --model-frontier acme/frontier --model-frontier-effort ultra
+vgxness setup opencode --preview --model-mode single --model provider/model
 ```
 
-With no model override flags, planning can retain the installed configuration or default selection. Once any slot reference or effort override is supplied, the public setup command requires all three slot references; if those references use mixed providers, it also requires all three effort values. Fresh selections use per-agent manifest v3; installed v1/v2 model configurations remain readable. Fresh no-flag setup selects `medium` with `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-sol`. Setup validates configuration and managed identities but does not authenticate or probe runtime availability, so custom slots display availability as `unknown`. Restart OpenCode Desktop whenever installed artifacts, a plan, a slot, or an effort changes. `--model` is accepted only as a temporary no-op compatibility flag.
+Replace `provider/model` with a configured model, review the preview, then repeat
+without `--preview` to apply. For seven independent assignments, use
+`--model-mode per-agent` and repeat `--agent-model ROLE=provider/model` for every
+role. See [model selection](model-selection.md) for the full example and TUI.
+With no new selection, installed choices remain. A fresh no-flag OpenCode setup
+uses `openai/gpt-5.6-terra` for all seven roles with provider-default effort.
+Existing v1/v2/v3 manifests remain readable. Setup does not authenticate models;
+custom identifiers remain availability `unknown`. Legacy slot flags are rejected.
 
 ## Readiness
 
@@ -43,7 +47,7 @@ Setup verifies exact bytes and static policy ordering only. It does not run a ne
 
 Install and uninstall rollback is conservative and never overwrites concurrent content. If durable rollback or restoration cannot complete, setup reports an explicit recovery failure and preserves available backups for inspection. An interrupted exact old/new model-plan switch can be resumed; unrelated drift must be repaired first. The shared pack classifies an exact desired/predecessor subset as partial: `install` resumes it and `uninstall` backs up and removes its exact present subset; unknown bytes remain drift. On Windows atomic rename/readback/backups are used, but directory fsync is unavailable and crash durability is therefore weaker.
 
-Restart OpenCode Desktop after setup, an artifact upgrade, or any plan/slot change. Running sessions retain the previously loaded agent files, MCP configuration, and model bindings.
+Restart OpenCode Desktop after setup, an artifact upgrade, or any model selection change. Running sessions retain the previously loaded agent files, MCP configuration, and model bindings.
 
 ## CARE setup boundary
 

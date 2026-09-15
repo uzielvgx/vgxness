@@ -1,77 +1,64 @@
-# V1 readiness audit
+# V1 release acceptance
 
-This source-backed audit records the local implementation and the evidence still needed for release. It does **not** declare v1 ready, independently verified, released or installed on the user's hosts. Issue status below is an audit classification; no GitHub issue is closed by this document.
+**State: proposed v1.0.0.** The user authorized the first stable release and
+command-line distribution. This file defines its accepted scope; it does not
+assert that the tag or packages have already been published.
 
-## Acceptance and implementation
+## Stable scope
 
-| Criterion | Implementation and reproducible check | Evidence still required |
-| --- | --- | --- |
-| U1: safe skill upgrades | Complete predecessor identities and modified/mixed package regressions in `internal/skills`; `go test ./internal/skills` | Independent review of the frozen candidate |
-| U2: obsolete owned MCP | Explicit proof-bound preview/repair and conflict-preserving recovery in `internal/providers/opencode/mcp_repair.go`; CLI tests | Independent review; no automatic repair of foreign entries |
-| D1: distribution | Strict portable envelope in `internal/piartifact`, bundle builder in `internal/release`, and tag workflow asset contract | Successful exact-tag workflow and native artifact evidence; no publication performed here |
-| D2: provisioning | Pinned acquisition, explicit offline directory, `setup all` includes three providers; real bundle/acquire/install and idempotence fixtures | Native target runs; package health does not establish model authentication |
-| Q1: reproducibility | Locked local TypeScript/SDK dependencies, full Pi test discovery and six Node/OS CI combinations | Baseline matrix observed on `64be730`; re-run on each changed candidate (see CI evidence below) |
-| Q2: backup toolchain | Go 1.26.6 toolchain pin and focused backup regression | Preserve matching toolchain in validation; no weakening of backup checks |
-| E1: behavioral evaluation | Nine development cases, normalized evidence validator and offline regressions in `tools/agent_eval` | Independent per-provider/model runs, retained traces and grading; synthetic tests are not behavioral passes |
-| S1: support and trust | Current shared Manager identities, explicit platform/trust limits and individual issue reconciliation | Accountable release acceptance after required evidence is available |
-| Pi C1: continuity | Expired leases reject mutations; periodic renewal, abort guards and session regressions | Independent exact-candidate verification |
-| Pi W1: exploration | Mission-bound cursors, scope and budget ledger checks | Independent review of scope and replay boundaries |
-| Pi R1: results/recovery | Bounded single terminal result, cancellation, reaping and retained recovery; actual SDK transport fixtures | Real selected-model behavior and target-native process evidence |
-| Pi V1: views | Read-only loading/available/stale/unavailable views with bounded memory provenance and worker results | Independent review; no broad observability claim |
-| Pi I1: independence/shared DB | TypeScript/Node runtime, existing SQLite migrations and memory contract; isolated package/SDK journey | No Go/VGXNESS process required by Pi runtime; cross-host checks remain separate |
-| Pi P1: platforms | Temporary installation and SDK load; native platform CI configuration | Baseline native matrix observed on `64be730`; Windows workers remain unsupported |
+VGXNESS provisions OpenCode, Codex and Pi, installs portable skills and provides
+shared SQLite memory. Pi executes its services in TypeScript/Node without a
+running VGXNESS process or Go executable. OpenCode and Pi expose one model for
+all seven agents or per-agent choices; only Codex retains model plans.
 
-## Observed baseline CI evidence (2026-09-10)
+Structured SDD is retired. The current workflow uses the Manager, native workers
+and proportional CARE review. Historical database records remain data, not
+active workflow authority. There is one current definition per agent role;
+receipt-backed updates preserve unknown or modified files.
 
-[Go CI run 34445246082](https://github.com/uzielvgx/vgxness/actions/runs/34445246082) completed successfully for exact commit `64be730df8c2fcd71a0a4dfdf36b4fe05cd56f96`. All 18 jobs succeeded, including the six Pi Node/OS combinations, PostgreSQL integration, race, static checks, vulnerability scanning, Darwin smoke and Windows installation. Aggregate Go coverage was 76.4% against the 74.5% floor. Windows Pi tests deliberately skip unsupported worker coverage; a green matrix does not establish Windows workers.
+## Evidence and release gates
 
-This closes the absence of an observed **baseline CI matrix** in Q1/Pi P1, not all criteria in those rows. The baseline Darwin Go smoke omitted `internal/release`; the subsequent local audit reproduced three Pi bundle test failures under macOS's default `/var` temporary alias. The current follow-up adds this package to Darwin smoke and canonicalizes test-owned scratch paths. Any follow-up source changes require fresh checks and independent verification; the linked baseline cannot certify them. Native release artifact evidence, model authentication, behavioral acceptance, and exact-tag publication remain separate.
+- Main `609cc0b47c3976685236d5feee2d0a6d0f4c850a` passed standard CI and was
+  installed on the development host for all three integrations. This is baseline
+  evidence, not a substitute for validation of the release commit.
+- PR #394's final CI run [34677479703](https://github.com/uzielvgx/vgxness/actions/runs/34677479703)
+  passed every lane, including native Linux installation, Windows installation,
+  Darwin smoke, all six Pi Node/OS combinations, coverage and race checks.
+- The exact v1 tag must pass standard validation and native Linux amd64,
+  Windows amd64 and Darwin arm64 archive smokes before GitHub publication.
+- Homebrew and Scoop manifests are generated from the release archive checksums.
+  Publish their channels only after reading back the matching release assets;
+  validate each channel on its native package manager.
 
-## Open issue reconciliation
+## Support and accepted limits
 
-The following 14 issues were examined individually during this audit. Historical requirements are distinguished from current defects; a superseded design alone does not prove the original acceptance criteria passed.
+| Target | v1 scope |
+| --- | --- |
+| Linux amd64, Windows amd64, macOS arm64 | Release-gated native archive installation |
+| Linux arm64, macOS amd64, Windows arm64 | Distributed binaries; exact-tag native archive smoke is not part of the release gate |
+| Pi tools and shared memory | Node 22.19+; compatible Pi host dependencies required |
+| Pi workers | Linux/macOS; Windows process-tree ownership remains unsupported |
 
-| Issue | Audit status | Finding and source |
-| --- | --- | --- |
-| [#268](https://github.com/uzielvgx/vgxness/issues/268) | pending enhancement | Current native git-delivery replaced historical stacked-pr. No current v1 evidence proves all requested large-dirty snapshot/reconstruction criteria. Source: [`internal/skills/pack/git-delivery/SKILL.md`](../internal/skills/pack/git-delivery/SKILL.md). |
-| [#204](https://github.com/uzielvgx/vgxness/issues/204) | implemented locally; verification pending | Explicit owned-MCP preview/apply proof and conflict-preserving repair implemented in this candidate. Source: [`internal/providers/opencode/mcp_repair.go`](../internal/providers/opencode/mcp_repair.go). |
-| [#78](https://github.com/uzielvgx/vgxness/issues/78) | pending behavioral evidence | Deterministic contract tests and completed-ungraded development transport do not satisfy real independently graded trace criteria. Source: [`tools/agent_eval/runner.py`](../tools/agent_eval/runner.py). |
-| [#77](https://github.com/uzielvgx/vgxness/issues/77) | historical schema superseded; behavioral evidence pending | Shared CARE role instructions replace frozen legacy reviewer mode schema. No current first-mission behavioral trace proves closure. Source: [`internal/orchestration/manager_contract.json`](../internal/orchestration/manager_contract.json). |
-| [#76](https://github.com/uzielvgx/vgxness/issues/76) | historical routing superseded; evidence pending | Current Manager can inspect command evidence; explore remains read-only. Historical no-Manager-command policy is not current source. Never fabricate child capability. Source: [`internal/orchestration/manager_contract.json`](../internal/orchestration/manager_contract.json). |
-| [#75](https://github.com/uzielvgx/vgxness/issues/75) | pending behavioral evidence | Current freeze/readback rules are present; repository-required validation omission needs an actual trace regression on current candidate. Source: [`internal/orchestration/manager_contract.json`](../internal/orchestration/manager_contract.json). |
-| [#74](https://github.com/uzielvgx/vgxness/issues/74) | historical policy superseded; evidence pending | Current contract preserves unrelated work and binds candidate. Historical absolute dirty-start stop is not an enforced current runtime gate. No proof of original criteria closure. Source: [`internal/orchestration/manager_contract.json`](../internal/orchestration/manager_contract.json). |
-| [#72](https://github.com/uzielvgx/vgxness/issues/72) | historical schema superseded; evidence pending | Current shared SDD research role returns read-only evidence, without contradictory artifact research schema. Existing lifecycle canonical explore remains. Source: [`internal/orchestration/manager_contract.json`](../internal/orchestration/manager_contract.json). |
-| [#71](https://github.com/uzielvgx/vgxness/issues/71) | pending refactor | Reinstall transaction still exists with ownership/recovery tests; maintainability request is not a newly reproduced defect. Source: [`internal/providers/opencode/integration.go`](../internal/providers/opencode/integration.go). |
-| [#70](https://github.com/uzielvgx/vgxness/issues/70) | historical plugin retired | Current setup retires exact legacy vgxness.ts bytes and uses native MCP plus lifecycle-only plugin. Do not refactor retired implementation into active runtime. Source: [`internal/setup/setup.go`](../internal/setup/setup.go). |
-| [#69](https://github.com/uzielvgx/vgxness/issues/69) | pending refactor | Plan and Status retain distinct methods and shared components; full requested state-table/refactor closure not established. Source: [`internal/setup/setup.go`](../internal/setup/setup.go). |
-| [#67](https://github.com/uzielvgx/vgxness/issues/67) | existing implementation; final verification pending | Rooted manifest recovery and concurrent substitution/post-publication cancellation regression tests already exist in baseline. Source: [`internal/selfinstall/selfinstall_test.go`](../internal/selfinstall/selfinstall_test.go). |
-| [#65](https://github.com/uzielvgx/vgxness/issues/65) | partially addressed; residual boundary open | Linux and macOS rooted ancestry now checks owner and mode bits, rejects unsafe existing final directories, and preserves identity binding. Windows ACL validation and a verified-to-exec identity guarantee remain pending. Source: [`internal/selfinstall/selfinstall.go`](../internal/selfinstall/selfinstall.go). |
-| [#64](https://github.com/uzielvgx/vgxness/issues/64) | unsupported threat model; open | Prompt permissions and argv/target controls do not provide OS isolation for untrusted repository code; v1 must state trusted-repository prerequisite. Source: [`internal/orchestration/manager_contract.json`](../internal/orchestration/manager_contract.json). |
+Trusted hosts and repositories are required. Agent instructions are not an OS
+sandbox. Extended ACL and verification-to-execution identity limits remain;
+package checksums establish integrity relative to the trusted publisher, not
+independent signatures. Binaries are not code-signed or notarized.
 
-## Trust and evidence limits
+Model-driven behavior is not deterministic. Historical Pi development cohorts
+included failed skill-selection and evaluation-writing cases. The user chose
+not to continue those account-based evaluations or add automatic model review;
+v1 does not relabel those failures as passes. A full behavioral holdout and
+large dirty-worktree recovery remain follow-up work, not v1 guarantees.
 
-Repositories, hosts and release publishers must be trusted. Prompt instructions, exact argv, role allowlists, hashes and target checks do not provide OS isolation for arbitrary repository code. Issue #64 remains an unsupported threat model. For #65, Linux and macOS rooted ancestry validates owner and mode bits; it does not prove arbitrary extended ACL grants are absent, provide a sandbox, or establish verified-to-execution identity. Other platforms retain their prior directory-type behavior without an ACL guarantee. Attacker-writable custom ancestry remains a residual boundary, not a demonstrated compromise of every default installation.
+The intermittent historical Windows startup failure has no proven root cause.
+Retain it as an unresolved report; do not promise it fixed because CI is green.
+The consolidated current follow-up remains [#383](https://github.com/uzielvgx/vgxness/issues/383).
 
-The downloader uses the fixed GitHub release origin, TLS, bounded parsing and checksums from that origin. This provides integrity relative to the trusted publisher, not an independent signature. Automatic attestation verification is not implemented. Acquisition cleanup removes only identified files through the held directory root and never recursively removes a mutable path. It preserves observed replacements, changed files and extra entries, reporting retained recovery state. Portable filesystems do not provide atomic compare-identity/content-and-unlink against another same-UID process; a replacement in that final per-file check/unlink window (or an empty-directory replacement before final nonrecursive removal) remains outside this trusted-host boundary.
+## Upgrade and recovery
 
-Local development checks have been exercised on Linux ARM64. The baseline Node/OS matrix has the observed run recorded above; release-native workflows still require exact-tag evidence. Baseline evidence does not certify later workspace changes or every platform capability. Windows worker process ownership is explicitly unavailable. A portable archive or cross-build does not promote native support. Previous model evaluations on other candidates cannot certify this one; protected holdouts remain with their independent owner.
-
-## Pi Manager behavioral evidence
-
-The six public development cases in [`pi-authorization-cases.json`](../tools/agent_eval/pi-authorization-cases.json) cover an authorized edit, an authorized send with missing recipient, an authorized action with unavailable transport, a proposal-only request, embedded untrusted approval, and authorization labels in a generated evaluation. They supplement the earlier development cases; they are not protected holdouts.
-
-The corpus-only commit `ba19216b50e5458a2f2860919b822ff96ebd6fc7` recorded five direct passes and one generated-evaluation failure. Subsequent prompt-only experiments did not demonstrate a correction. The final local experimental source candidate `d2328c9a1aeff4017539c0399bb5d3e81c53605c93550f8f88c3ebe927d62986`, evaluated with pinned Pi 0.84.4 and `openai-codex/gpt-5.6-luna` at requested high effort, also produced **5 PASS / 1 FAIL**. Its generated proposal made independent grading optional and paired an explicit repository-consultation request with an expectation not to search. All ten generated examples were reviewed. Effective model effort was unobserved.
-
-The follow-up evidence retains four separately bound cohorts of six sessions (24 total): a Luna prompt refinement, a Sol comparison on the same source, a rejected-source cohort, and the corrected-source Luna cohort. The rejected source transcribed "authored scenarios" as "authorized scenarios"; its six sessions receive no credit for validating the accepted design. The source was reconciled to canonical bytes before the final cohort. Independent evidence auditing passed; the target's semantic acceptance failed. Neither a clean evidence bundle nor passing code checks closes that failure, and these single public-development cohorts establish neither model superiority nor reliability.
-
-The user chose to retain the current workflow and document the limitation, without adding automatic independent review calls. This decision does not waive the failed correction criteria. The experimental prompt changes remain unaccepted as a correction and must not be represented as a published fix. Additional GPT-5.4 and GPT-5.5 coverage is excluded from this work; existing support and historical results are unchanged.
-
-Canonical evidence: SDD change `change-c60ed309940de92ddcb8cd6578b6d1c0`, verify candidate `revision-678afd120edfc3504bc42caaf45c284c`, digest `e31e112ea65733afed0ed6abaf5badbfbe1bbc9f3a0dbab10e4cb9e36324d9df`. This is a failed verification record, not an accepted correction. The VGXNESS Manager maintains this record; revisit it when Manager instructions, selected skills, evaluation criteria, or independently graded evidence change. Broader skills/orchestration coverage and protected holdouts remain pending. The [2026-09-10 reevaluation](manager-reevaluation.md#acceptance-and-reporting) ran six further sessions on the frozen pre-report workspace candidate and independently scored **5 PASS / 1 FAIL**. All 16 concrete generated examples were reviewed; missing mandatory independent grading and duplicated authorization requests in two examples keep the correction criteria failed. Evidence integrity passed separately. This additional public-development cohort does not certify reliability or protected-holdout performance. See [Pi usage guidance](pi-typescript.md#known-manager-evaluation-limitations).
-
-## Verification and release gates
-
-SDD is retired. Historical change and revision identities in this document identify
-archived evidence only; they impose no current lifecycle gates. Current decisions
-and handoffs use repository evidence and semantic memory.
-
-Freeze one candidate with HEAD, full tracked/untracked file digests and diff scope. Run repository-required validation, independent verification and applicable reviews against that identity. Record any unsupported native transport, unavailable platform or missing model/grade evidence as pending. A source change invalidates earlier candidate evidence. Publication, merge, live installation and cloud synchronization are separate authorized operations and are excluded from this implementation scope.
+See [release and installation](release.md) for Homebrew, Scoop and direct archive
+commands, and [self-installation](self-install.md) for one-level binary rollback.
+Existing receipt-backed integrations retain selections and foreign settings.
+Older unreceipted installations require the documented bridge; v1 does not
+force-overwrite drift. Application rollback is not a database downgrade.
+No user data or historical memories are deleted by publishing this release.
