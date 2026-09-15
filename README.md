@@ -23,7 +23,7 @@ The read-only `status` and `doctor` commands report storage root, database, and 
 | [Native Memory and Structured Storage](docs/memory.md) | SQLite schema v23 domains, isolation, memory lifecycle, and upgrade migration caveat. |
 | [Synchronization service boundary](docs/sync.md) | Loopback-only daemon operation, HTTPS termination boundary, and runtime configuration. |
 | [Versioned Self-installation](docs/self-install.md) | Permanent launcher, immutable SHA-256 versions, atomic activation, rollback, and safety behavior. |
-| [Alpha releases](docs/release.md) | Release artifacts, support matrix, checksum verification, installation, and release rollback boundaries. |
+| [Releases and installation](docs/release.md) | Release artifacts, support matrix, checksum verification, installation, and release rollback boundaries. |
 | [Guided OpenCode Setup](docs/opencode-setup-wizard.md) | Unified `setup opencode|codex|all` entrypoint, confirmation boundary, verification, status, and recovery behavior. |
 | [OpenCode Integration](docs/opencode-integration.md) | Persistent manager installation, managed identities, storage tools, and health. |
 | [Codex Integration](docs/codex-integration.md) | Standalone Codex agent lifecycle and user-owned `config.toml` contract. |
@@ -62,13 +62,17 @@ For complete definitions and status classifications, read the [Product Blueprint
 
 ## Choose models in Setup
 
-Run `vgxness tui` to open the installation studio. It is focused on previewing and applying managed installation, reinstallation, and configuration changes. Use `h`/`l` to select a preset, `m` to open OpenCode's 13-agent assignment matrix, and `/` there to search locally discovered models; use the arrow keys to select a match before `Enter` assigns it. Use `Tab` for protected backup and recovery actions. `Enter` returns from an edited matrix to a fresh preview; `Esc` cancels the matrix edit. The TUI never applies a plan until the explicit `[a] apply` then `[y] yes` confirmation. Codex uses its supported shared presets; per-agent assignments remain an OpenCode capability.
+Run `vgxness tui` and select the coding hosts to configure. On the Models screen,
+use Tab to switch providers. OpenCode and Pi offer `1` for one model across all
+seven agents or `2` for one per agent, including Manager. Select a row with the
+arrow keys, use `m` to enter its provider/model and `e` to change effort. Codex
+alone uses the low, medium, high and ultra plans.
 
-Setup initially reads the local OpenCode model cache with the exact argv `opencode models --pure`. In the matrix, `r` is an explicit refresh and runs `opencode models --pure --refresh`; a refresh failure keeps the current assignments and cached choices so you can retry. Local discovery proves only that an identifier is present. It does not prove provider authorization, account access, model support, or runtime availability. Non-static discovered identifiers are therefore recorded as `custom` with `unknown` availability.
-
-Review every agent's model, requested effort, source, and availability, plus the preview digest. Press `a`, then `y`, only when that exact preview is correct; no setup files change before `y`. The result reports requested and effective effort, variant, and any degradation reason. Opening or previewing an installed v1/v2 plan does not promote it to v3; editing the matrix does. An installed v3 plan re-enters with the same 13 explicit assignments.
-
-If discovery fails, retry with `r` or keep the retained choices. If preview fails, correct the shown prerequisite and refresh it. If apply fails, follow the displayed recovery guidance and inspect status before retrying; VGXNESS does not silently discard retained installation or recovery evidence.
+Press Enter to preview, then review the exact assignments before applying. Existing
+choices are preserved until edited. A model identifier does not prove account
+access or runtime availability. See [model selection](docs/model-selection.md)
+for CLI examples and the complete screen flow. If setup reports drift or recovery,
+follow its status guidance; unknown settings and files are not overwritten.
 
 ## Installation and releases
 
@@ -80,9 +84,9 @@ Provision that local release with `vgxness setup pi --preview --pi-release-dir /
 
 The provisioned package is discovered through Pi's normal `settings.json` package list; no `pi -e` path or loader override is needed. It runs in Node 22.19.0 or newer, with Pi `^0.84.4` and `typebox` 1.3.7 supplied by the host. It contains no Go sidecar, native addon, or runtime compiler/install script. Its 23 SQL migrations, prompts, and fallback skills travel in the same tarball. This package intentionally has no Node `main` or `exports` entrypoint.
 
-The extension uses the host's selected model for manager work. Set `VGXNESS_PI_CLI` only to enable offline worker RPC; without it, worker execution is unavailable while ordinary extension tools remain local. Worker processes are unavailable on Windows because owned process-tree reaping is not implemented there. Local Linux arm64 validation covers Node 22.19.0 and Node 24. Native macOS and Windows support claims require observed target-native validation. See [portable Pi packaging and health checks](docs/pi-typescript.md).
+The extension activates an explicitly configured Manager model, or uses the host's selected model when no selection is configured. Worker execution uses the native Pi transport on supported hosts; see the Pi guide for its prerequisites. Worker processes are unavailable on Windows because owned process-tree reaping is not implemented there. Local Linux arm64 validation covers Node 22.19.0 and Node 24. Native macOS and Windows support claims require observed target-native validation. See [portable Pi packaging and health checks](docs/pi-typescript.md).
 
-On macOS or Linux, install the published alpha through the official Homebrew tap:
+On macOS or Linux, install the release pinned by the official Homebrew tap:
 
 ```sh
 brew install uzielvgx/tap/vgxness
@@ -99,7 +103,7 @@ scoop install vgxness/vgxness
 
 Scoop verifies the downloaded ZIP against the SHA-256 pinned in the manifest and owns its app directory and shim. It does not modify OpenCode or the separate managed installation. See the [bucket documentation](https://github.com/uzielvgx/scoop-bucket) for setup, updates, support, and uninstall boundaries.
 
-Alpha releases also provide unsigned archives for Linux, macOS, and Windows plus `SHA256SUMS`. Verify the downloaded archive before running it, then use the extracted `vgxness` or `vgxness.exe` binary to preview and perform self-installation. See [Alpha releases](docs/release.md) for acquisition, Homebrew, Scoop, exact artifact names, checksums, and platform support, and [Versioned self-installation](docs/self-install.md) for launcher, status, and rollback behavior. Self-installation does not download releases or edit `PATH`.
+Releases also provide unsigned archives for Linux, macOS, and Windows plus `SHA256SUMS`. Verify the downloaded archive before running it, then use the extracted `vgxness` or `vgxness.exe` binary to preview and perform self-installation. See [Releases and installation](docs/release.md) for acquisition, Homebrew, Scoop, exact artifact names, checksums, and platform support, and [Versioned self-installation](docs/self-install.md) for launcher, status, and rollback behavior. Self-installation does not download releases or edit `PATH`.
 ## Global portable skills
 
 `vgxness skills <preview|install|status|uninstall> [--skills-dir PATH]` manages the portable 46-file, 18-skill `skills-creator`, `git-delivery`, `cross-platform`, `installer-lifecycle`, `agent-evaluation`, `ci-triage`, `security-boundary`, `documentation-strategy`, `product-requirements`, `software-architecture-docs`, `user-documentation`, `api-documentation`, `quality-test-documentation`, `operations-runbooks`, `governance-compliance-docs`, `release-lifecycle-docs`, `end-to-end-testing`, `memory-sync` catalog in `~/.agents/skills` by default (or an isolated absolute destination). Setup retires only exact `vgxness.ts` v1-v10 plugin bytes, provider-owned `vgxness-autonomous-stacked-pr` v1/v2/v3 bytes, and declared `stacked-pr` v3 bytes before publishing `git-delivery`; canonical `git-delivery` bytes at the legacy path and modified, malformed, foreign, unknown, or newer bytes block without removal. Portable skills are shared across hosts, and OpenCode uninstall never removes this global catalog.

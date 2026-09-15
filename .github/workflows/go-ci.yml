@@ -60,6 +60,8 @@ jobs:
           VGXNESS_TEST_POSTGRES_DSN: postgresql://vgxness_test:vgxness_test@localhost:5432/vgxness_test?sslmode=disable
           PI_PROPER_LOCKFILE: ${{ runner.temp }}/vgxness-pi-lockfile/node_modules/proper-lockfile
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Test package manifest generation
+        run: python3 -m unittest discover -s tools/distribution -p 'test_*.py'
       - name: Test agent-evaluation runner offline
         run: make eval-check
       - name: Enforce aggregate coverage floor

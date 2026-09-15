@@ -33,7 +33,7 @@ The OpenCode projection contains 12 managed artifacts with exact identities:
 The model plan contains exactly seven agents. Receipts bind previously installed
 files for updates; older unreceipted agents require the documented bridge.
 Historical prompt renderers and templates are removed from the current tree.
-The shared registry governs routing and evidence; it is not a Go runtime broker. Recall is relevant-context only, and durable memory is assessed under a stable topic without secrets, transcripts, transient status or automatic cloud synchronization. Unknown, foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The bridge handles exact historical storage-plugin retirement. The deprecated singular `--model` flag remains accepted as a no-op; plan and slot flags own model configuration.
+The shared registry governs routing and evidence; it is not a Go runtime broker. Recall is relevant-context only, and durable memory is assessed under a stable topic without secrets, transcripts, transient status or automatic cloud synchronization. Unknown, foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The bridge handles exact historical storage-plugin retirement. OpenCode and Pi accept explicit single-model or per-agent configuration; only Codex retains plans. Legacy slot flags are rejected. See [model selection](model-selection.md).
 
 ## Verification
 

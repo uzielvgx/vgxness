@@ -329,11 +329,11 @@ func readRepositoryFile(t *testing.T, path string) string {
 	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }
 
-func TestUnreleasedChangelogManagedArtifactVersions(t *testing.T) {
+func TestV1ChangelogManagedArtifactVersions(t *testing.T) {
 	changelog := readRepositoryFile(t, "../../CHANGELOG.md")
-	_, unreleased, ok := strings.Cut(changelog, "## Unreleased\n")
+	_, unreleased, ok := strings.Cut(changelog, "## v1.0.0")
 	if !ok {
-		t.Fatal("CHANGELOG missing Unreleased section")
+		t.Fatal("CHANGELOG missing v1.0.0 section")
 	}
 	if nextSection := strings.Index(unreleased, "\n## "); nextSection >= 0 {
 		unreleased = unreleased[:nextSection]
@@ -343,7 +343,7 @@ func TestUnreleasedChangelogManagedArtifactVersions(t *testing.T) {
 		"vgxness-memory-lifecycle.ts",
 	} {
 		if !strings.Contains(unreleased, current) {
-			t.Errorf("Unreleased section missing current managed artifact fact %q", current)
+			t.Errorf("v1.0.0 section missing current managed artifact fact %q", current)
 		}
 	}
 	for _, earlier := range []string{
@@ -356,7 +356,7 @@ func TestUnreleasedChangelogManagedArtifactVersions(t *testing.T) {
 		"`explore` v4",
 	} {
 		if !strings.Contains(unreleased, earlier) {
-			t.Errorf("Unreleased section missing earlier-cycle managed artifact fact %q", earlier)
+			t.Errorf("v1.0.0 section missing earlier-cycle managed artifact fact %q", earlier)
 		}
 	}
 	for _, stale := range []string{
@@ -371,7 +371,7 @@ func TestUnreleasedChangelogManagedArtifactVersions(t *testing.T) {
 	} {
 		for _, line := range strings.Split(unreleased, "\n") {
 			if strings.Contains(line, stale) && !strings.Contains(line, "Earlier in this unreleased cycle") {
-				t.Errorf("Unreleased section presents stale managed artifact fact %q as current", stale)
+				t.Errorf("v1.0.0 section presents stale managed artifact fact %q as current", stale)
 			}
 		}
 	}
