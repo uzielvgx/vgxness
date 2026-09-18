@@ -10,40 +10,40 @@ import (
 func TestCurrentRendererPreservesNativeArtifacts(t *testing.T) {
 	expected := map[modelplan.Plan]map[string]string{
 		"high": {
-			"explore.md":                 "36749ba7f3c605059d7e75d15b9431da5ef424a526d091daa4e1bdaccb8b81ee",
-			"general.md":                 "ba08704659c4fae697b5843d899269c8864cc637b0190abcaeaae1cd1c7d8be2",
-			"vgxness-care-challenger.md": "5d844fac71a57d439ac2d8e4379457448ffdcbaa0112d1c41805c2f8ed423bf6",
-			"vgxness-care-reviewer.md":   "79e6a1c5486e2166371112b4c8fecc58a76dd858f8deb7c3bba8b5d5229d01c1",
-			"vgxness-care-specialist.md": "cd90396b1ee53236e29caf85b1e3a0556056268256fc3f1a747ec598987efa49",
-			"vgxness-manager.md":         "fa63e9ca21f8f73bf9e831c5db18d1e3377bd390aef516d27975fec68afc218f",
-			"vgxness-verifier.md":        "db7017c7bbffb2311b68970ad2156bd1b03f1cfd5e461d5cbaaa272abf3a53ee",
+			"explore.md":                 "275597ab04c80f7ebb056c2859962aec17ba6d53d752eb1e6becccb9f97f0210",
+			"general.md":                 "57be6f7f0fae411eca8d0008404f052b6b12a653c35846342c325231500c42f1",
+			"vgxness-care-challenger.md": "9d482fe430687b890c84c7742142b551166a390bd2eef16b8623220a85fc64c9",
+			"vgxness-care-reviewer.md":   "bf225f49a6705fc9943f03429fe006353bb777e89a9b93edc94e7eca3b98eb69",
+			"vgxness-care-specialist.md": "4db40adef1818933da9bd59c77aa76d799118e99be84268504a344c1b9d9aa2f",
+			"vgxness-manager.md":         "5d284a34a1fb8f0b52dcb30909230ed762493cfe3dff5b33f36019a58f15fc3d",
+			"vgxness-verifier.md":        "31b49fb33fb8526395b4fc2eb2b4d3d79ba8f34d08f51d515a16299a580f4505",
 		},
 		"low": {
-			"explore.md":                 "d0ec97b255631e652cec6a36044b036c9be497dd229828ded484c1e40acac07a",
-			"general.md":                 "b364cc5491d5292c9f285bc27277bb7f27c77b89e25757b8abe0e732ff319a94",
-			"vgxness-care-challenger.md": "0b7f2d8dd57a063c429226754267f513fa260909f8bfcbfbbdf32cd903a44372",
-			"vgxness-care-reviewer.md":   "075b87d835cbc9c30bff160412b0ea7fcd6a282318ac8a1cf7b56299fafee127",
-			"vgxness-care-specialist.md": "76b04295104ad053dc097bb481c0e1c7958c48d5cbd554b511f07782023ea09c",
-			"vgxness-manager.md":         "e7e57cbcf62a3d8b1e26f0449f436d609fdb0702365e78215ba50bd97a9d951e",
-			"vgxness-verifier.md":        "f325b1cba081efee961c02925340719cd6bbbff7f400c5fc4ae15272a2a277d9",
+			"explore.md":                 "afda6dc7c5c99f1490f964f4690d4aa6da7ad5ed805344623748d1a78cdb5e6b",
+			"general.md":                 "908d2589197d667a9b1b3bb5e7360b3d93700c9e2eea741cfeadbaac9d9e4015",
+			"vgxness-care-challenger.md": "94059a6e04110ddb44b1eefad1b486aaef0bcc3265444f56eb216b41906606c6",
+			"vgxness-care-reviewer.md":   "df87b66d88f59b1a80c4f5a92c4c4f9137f8a0983ebadf227e86cc97f4d540c0",
+			"vgxness-care-specialist.md": "8e9eb45f7f48bfba93bd3d0cfcc7c1b8573a9967d67c1fa0d940bf95453500dc",
+			"vgxness-manager.md":         "280e1b1a14871f12f474ce396f29e75d53eb1d57896b41d0030e0612d43e6e93",
+			"vgxness-verifier.md":        "2cad621d3db29eac0eef722aa25c047bf9e063899f226d57fd3c4c10fa0636c4",
 		},
 		"medium": {
-			"explore.md":                 "9455bcfd23515593824c1dda4addffa2b7a31bb195fd0dfca7c9218ed9a67774",
-			"general.md":                 "2a43621736f557df5dff346bf2087c5c2f3f024a14eee1edfc00e1476312a900",
-			"vgxness-care-challenger.md": "ca825c336a2c1d739d3bfad23647f5b8135a45adec86b8728b52e4dd06ca9c3b",
-			"vgxness-care-reviewer.md":   "51e77b1f597d22adc845f4564e5ad43aaffa57da22faf5bf6133ca43f254cb03",
-			"vgxness-care-specialist.md": "80fa426d5e56d0d2700b0726d284d67ec3e6879ab468e4566193446f0ad04766",
-			"vgxness-manager.md":         "abd67a990b63bb25e576d16f6d7aaa738eb582aca3a39bacfda2513b01f59a4a",
-			"vgxness-verifier.md":        "42e01498480359b1b0fc975995fde0e0ff3a1175d2cb283fec4bda7f64dbc484",
+			"explore.md":                 "275fb1c998574e39591f3dffb5e33ddb9384fb34c354b17e216529525a45d470",
+			"general.md":                 "7d1c90bc2c9b25b1d5d19a090af201879b9e2eb9d3e2ad681da78c37045240e9",
+			"vgxness-care-challenger.md": "d82b89a623657b60211cbba83dd9239eaaae6b82e77558bf148324a48b3d0a06",
+			"vgxness-care-reviewer.md":   "212b40afff636ad0aa382b49bb898d9f972ab5686e3b13d33853fcff587156fb",
+			"vgxness-care-specialist.md": "c90178a3eab4839714a87dbb206b6dd5dd228fec586fc845af5d66d248d63863",
+			"vgxness-manager.md":         "2da20af9b96dd8a7352260ac5c6eb4f42db70cf80d920e49e24fc35988789f9c",
+			"vgxness-verifier.md":        "eb7eecf60f8903c2a681aa405110e52a19ee3e8bfb0d149320aa8896bd44b6e3",
 		},
 		"ultra": {
-			"explore.md":                 "1640b50ff491283f56555eb7a0b42e0d769495829c544cfe8b05a1f588bd5cad",
-			"general.md":                 "ba08704659c4fae697b5843d899269c8864cc637b0190abcaeaae1cd1c7d8be2",
-			"vgxness-care-challenger.md": "5d844fac71a57d439ac2d8e4379457448ffdcbaa0112d1c41805c2f8ed423bf6",
-			"vgxness-care-reviewer.md":   "79e6a1c5486e2166371112b4c8fecc58a76dd858f8deb7c3bba8b5d5229d01c1",
-			"vgxness-care-specialist.md": "cd90396b1ee53236e29caf85b1e3a0556056268256fc3f1a747ec598987efa49",
-			"vgxness-manager.md":         "fa63e9ca21f8f73bf9e831c5db18d1e3377bd390aef516d27975fec68afc218f",
-			"vgxness-verifier.md":        "82edcaa78e6fc667c3401c81ef90cd104d484f914ff47be8c576d55f6e353c51",
+			"explore.md":                 "a365d14a4d3459e325943ebc0bb0c6f565bcdd6dac45b94bd058e97dd530b36d",
+			"general.md":                 "57be6f7f0fae411eca8d0008404f052b6b12a653c35846342c325231500c42f1",
+			"vgxness-care-challenger.md": "9d482fe430687b890c84c7742142b551166a390bd2eef16b8623220a85fc64c9",
+			"vgxness-care-reviewer.md":   "bf225f49a6705fc9943f03429fe006353bb777e89a9b93edc94e7eca3b98eb69",
+			"vgxness-care-specialist.md": "4db40adef1818933da9bd59c77aa76d799118e99be84268504a344c1b9d9aa2f",
+			"vgxness-manager.md":         "5d284a34a1fb8f0b52dcb30909230ed762493cfe3dff5b33f36019a58f15fc3d",
+			"vgxness-verifier.md":        "4793bf3d7ac5d0770d9633217e51411af74754b32300ecae874f957b4dfcb7fc",
 		},
 	}
 	for plan, want := range expected {
@@ -58,8 +58,9 @@ func TestCurrentRendererPreservesNativeArtifacts(t *testing.T) {
 		}
 		for name, digest := range want {
 			sum := sha256.Sum256(b.agents[name])
-			if hex.EncodeToString(sum[:]) != digest {
-				t.Fatalf("%s/%s changed native artifact", plan, name)
+			got := hex.EncodeToString(sum[:])
+			if got != digest {
+				t.Errorf("%s/%s changed native artifact: want %s, got %s", plan, name, digest, got)
 			}
 		}
 	}

@@ -10,6 +10,10 @@ The shared registry provides Explore, General, Verifier and three CARE roles. Ge
 
 Freeze one candidate before independent verification and applicable review. Any source change invalidates that candidate's evidence. Delivery follows the applicable git-delivery skill; review never creates authorization. A worker transport success is not a semantic PASS or delivery approval.
 
+The Manager gives CARE roles authorized access to exact source/diff, criteria, evidence, and enough context before the mission; each reviewer first checks inspectability. A summary cannot replace source or bypass permission, and inaccessible required source is INCONCLUSIVE. Coverage links criteria to use scenarios, evidence/assertions, and limits, with pertinent flags/defaults/ambient state and concrete newly reachable dependencies considered proportionately. Reports include outcome, effective coverage, findings, exclusions, and evidence basis; no findings alone does not establish PASS, and missing required evidence blocks PASS.
+
+After a correction, preserve findings and closure history, justify new coverage, and revisit closures, regressions, and reachable paths. A source change invalidates prior candidate evidence; prior findings are context, not approval of a new candidate. Re-evaluate conclusions contradicted by new evidence and classify newly discovered findings as preexisting omission, correction regression, scope change, or new evidence. Continuations are defect, evidence, mission, access, infrastructure, or scope—not retries until PASS or metadata echoes treated as review. Before elevated-risk production work, evaluate relevant capability and identity assumptions. These instructions do not enforce runtime permissions or establish model behavior.
+
 ## Native adapters and continuity
 
 OpenCode Manager62, Codex Manager21 and Pi consume the shared contract. Host transports, authentication and permissions remain distinct. Pi runs in TypeScript/Node independently of the VGXNESS Go executable; Windows workers remain unavailable. Current model configuration retains historical schema compatibility, including inactive slots.
