@@ -1,0 +1,93 @@
+package codex
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/vgxness/vgxness/internal/integration"
+	"github.com/vgxness/vgxness/internal/modelplan"
+)
+
+var bootstrapPackageGolden = map[modelplan.Plan]map[string]string{
+	modelplan.PlanLow: {
+		".agents/plugins/marketplace.json": "217bb8e1a5c3e5199f1f14dda13ea1e132bf4140903c155452e4e2b31e241821", "AGENTS.md": "1590647beeeff1e94c381ee703ddf406a7d6035a24bbc5c79d6791c766ec7fff", "agents/care-challenger.toml": "794825567962bd8495c850a952bfa731a20b014c7f46c244e259a46eea9fb759", "agents/care-reviewer.toml": "620110bd1c9ce280b3ac5860a9c406f37d7ad9ad7f2340382fff615865173ec8", "agents/care-specialist.toml": "c7c27cb77668cd19b8b2f9b927e88e6baa26f33bc2885803f5113989df9fd4a8", "agents/explore.toml": "46cd8a02522f4cfc095f88c0f0565402a7174c341e5a29a41a5dba291b8da9f6", "agents/general.toml": "846146560b80c1d15810050067c7f85b037dfee7376c22cae37dc208e4d42223", "agents/verifier.toml": "434f2c2cb05f5537f4c652e3d2ebc4b15cae47b4f63a63834abeedc7f2af175c", "plugins/vgxness/.codex-plugin/plugin.json": "30602a0173f09c465f3741fd04ad6990688114038eeaada9c35592f24eaaa42b",
+	},
+	modelplan.PlanMedium: {
+		".agents/plugins/marketplace.json": "217bb8e1a5c3e5199f1f14dda13ea1e132bf4140903c155452e4e2b31e241821", "AGENTS.md": "1590647beeeff1e94c381ee703ddf406a7d6035a24bbc5c79d6791c766ec7fff", "agents/care-challenger.toml": "d7923436fe9527420f7bc90a513a343552e961191634e6b1ba6ae673e92b2608", "agents/care-reviewer.toml": "f0632eb161110fada1d0035baa847d76d321e447cf42d74f6d09746c3c507819", "agents/care-specialist.toml": "a660f3fe3ff69453e027f66ef0d349d9cb5b8c3e9a0c6b7180a25032ee8d54ff", "agents/explore.toml": "198cd4e0f2bcac58eda397b0bda138c54920c259c510a08a7b49d75f0f28a7a6", "agents/general.toml": "9e103366de7fed5114706048030c2ceaeb861b6baaee314a6d306e4be8908b29", "agents/verifier.toml": "6d5d0e23f9958aada5e61454ad6b4b8e74ee6ea8b7999654029c43a26b40ac4c", "plugins/vgxness/.codex-plugin/plugin.json": "30602a0173f09c465f3741fd04ad6990688114038eeaada9c35592f24eaaa42b",
+	},
+	modelplan.PlanHigh: {
+		".agents/plugins/marketplace.json": "217bb8e1a5c3e5199f1f14dda13ea1e132bf4140903c155452e4e2b31e241821", "AGENTS.md": "1590647beeeff1e94c381ee703ddf406a7d6035a24bbc5c79d6791c766ec7fff", "agents/care-challenger.toml": "9738dc81d6f89ec943b9d3fb0d2b8f787784e7a03ddf77e2e7c0952140aad53b", "agents/care-reviewer.toml": "ea36f476313d2305c2c1f4b1ad774f36a38d80ac35d028956887dc52c6010cde", "agents/care-specialist.toml": "b6cbe4ee0822f76e0ce575a7b36b8120cf3e7fa5ef3163c8b4336d4c5f46abb8", "agents/explore.toml": "73b293e5e100af0da32c16e2161647b228d20572b8791be36a04d8340b221127", "agents/general.toml": "f388850dd11e3cfa1e370f079cbfd7e82a6ba7b60d56d166fe5d7362f596d4af", "agents/verifier.toml": "8d9e7b0e3c77f352118f5860eae5809e9cab1172a2e5e4562a2dedfd420df143", "plugins/vgxness/.codex-plugin/plugin.json": "30602a0173f09c465f3741fd04ad6990688114038eeaada9c35592f24eaaa42b",
+	},
+	modelplan.PlanUltra: {
+		".agents/plugins/marketplace.json": "217bb8e1a5c3e5199f1f14dda13ea1e132bf4140903c155452e4e2b31e241821", "AGENTS.md": "1590647beeeff1e94c381ee703ddf406a7d6035a24bbc5c79d6791c766ec7fff", "agents/care-challenger.toml": "9738dc81d6f89ec943b9d3fb0d2b8f787784e7a03ddf77e2e7c0952140aad53b", "agents/care-reviewer.toml": "ea36f476313d2305c2c1f4b1ad774f36a38d80ac35d028956887dc52c6010cde", "agents/care-specialist.toml": "b6cbe4ee0822f76e0ce575a7b36b8120cf3e7fa5ef3163c8b4336d4c5f46abb8", "agents/explore.toml": "17f6e99fc6bc702c91f8eca78e0405f9514d0337b2018a819b1e50dc818a6d32", "agents/general.toml": "f388850dd11e3cfa1e370f079cbfd7e82a6ba7b60d56d166fe5d7362f596d4af", "agents/verifier.toml": "35940f330bb199a0209ca0cdf4b498becc75e48b3f1177ad405754210705f3f2", "plugins/vgxness/.codex-plugin/plugin.json": "30602a0173f09c465f3741fd04ad6990688114038eeaada9c35592f24eaaa42b",
+	},
+}
+
+func TestBootstrapContractRecognizesOnlyCompletePreAdaptivePackages(t *testing.T) {
+	for _, plan := range []modelplan.Plan{modelplan.PlanLow, modelplan.PlanMedium, modelplan.PlanHigh, modelplan.PlanUltra} {
+		t.Run(string(plan), func(t *testing.T) {
+			bootstrap, err := renderBootstrapPlan("v0.0.0", plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(bootstrap.Artifacts) != 9 {
+				t.Fatalf("bootstrap artifact count = %d, want 9", len(bootstrap.Artifacts))
+			}
+			for _, artifact := range bootstrap.Artifacts {
+				if got, want := fmt.Sprintf("%x", sha256.Sum256(artifact.Bytes)), bootstrapPackageGolden[plan][artifact.Path]; got != want {
+					t.Fatalf("bootstrap artifact %s/%s = %s, want HEAD golden %s", plan, artifact.Path, got, want)
+				}
+			}
+			rootPath := filepath.Join(t.TempDir(), "codex")
+			writePackage(t, rootPath, bootstrap)
+			root, err := OpenRoot(context.Background(), integration.Options{ConfigDir: rootPath}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			preferred, err := RenderPlan("v0.0.0", modelplan.PlanMedium)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, installed, err := inspectKnown(context.Background(), root, preferred)
+			if err != nil || state.result.State != integration.StateInstalled || !bytes.Equal([]byte(installed.SHA256), []byte(bootstrap.SHA256)) {
+				t.Fatalf("receiptless bootstrap package = %+v, %v", state.result, err)
+			}
+
+			general := filepath.Join(rootPath, "agents", "general.toml")
+			if err := os.WriteFile(general, []byte("modified\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			state, _, err = inspectKnown(context.Background(), root, preferred)
+			if err != nil || state.result.State != integration.StateDrifted {
+				t.Fatalf("modified bootstrap package = %+v, %v", state.result, err)
+			}
+
+			otherPlan := modelplan.PlanLow
+			if plan == otherPlan {
+				otherPlan = modelplan.PlanHigh
+			}
+			other, err := renderBootstrapPlan("v0.0.0", otherPlan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, artifact := range other.Artifacts {
+				if artifact.Path == "agents/general.toml" {
+					if err := os.WriteFile(general, artifact.Bytes, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					break
+				}
+			}
+			state, _, err = inspectKnown(context.Background(), root, preferred)
+			if err != nil || state.result.State != integration.StateDrifted {
+				t.Fatalf("mixed bootstrap package = %+v, %v", state.result, err)
+			}
+		})
+	}
+}

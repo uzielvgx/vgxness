@@ -114,6 +114,11 @@ func knownPackages() ([]Package, error) {
 			return nil, e
 		}
 		packages = append(packages, p)
+		bootstrap, e := renderBootstrapPlan("v0.0.0", plan)
+		if e != nil {
+			return nil, e
+		}
+		packages = append(packages, bootstrap)
 	}
 	return packages, nil
 }

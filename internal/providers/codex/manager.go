@@ -44,5 +44,17 @@ func activeManagerInstructions() string {
 	if e != nil {
 		return ""
 	}
-	return "<!-- managed-by: vgxness; artifact: codex-agent/manager; version: 21; parity: opencode-v62 -->\n\n" + c.RenderManagerSections() + "\n# Native Codex adapter\nUse native delegation with the exact configured agent_type matching the canonical role. Use native skills and configured VGXNESS MCP memory tools. Native sandbox and tool permissions remain authoritative. Missing tools or authentication are unavailable dependencies; capabilities never grant authorization.\nContract identity: " + c.Identity + "; content SHA256: " + orchestration.ManagerContractDigest() + "\n"
+	return managerInstructions(c, orchestration.ManagerContractDigest())
+}
+
+func bootstrapManagerInstructions() (string, error) {
+	c, err := orchestration.LoadPreAdaptiveManagerContract()
+	if err != nil {
+		return "", err
+	}
+	return managerInstructions(c, orchestration.PreAdaptiveManagerContractDigest()), nil
+}
+
+func managerInstructions(c orchestration.ManagerContract, digest string) string {
+	return "<!-- managed-by: vgxness; artifact: codex-agent/manager; version: 21; parity: opencode-v62 -->\n\n" + c.RenderManagerSections() + "\n# Native Codex adapter\nUse native delegation with the exact configured agent_type matching the canonical role. Use native skills and configured VGXNESS MCP memory tools. Native sandbox and tool permissions remain authoritative. Missing tools or authentication are unavailable dependencies; capabilities never grant authorization.\nContract identity: " + c.Identity + "; content SHA256: " + digest + "\n"
 }

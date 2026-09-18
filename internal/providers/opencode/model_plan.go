@@ -464,26 +464,38 @@ func modelPlanBundleForDecodedManifest(data []byte, manifest modelPlanManifest) 
 
 func modelPlanBundleForManifestV3(data []byte, config modelplan.ModelPlanConfigV3) (modelPlanBundle, error) {
 	current, err := buildModelPlanBundleV3(config)
-	if err != nil || !bytes.Equal(current.manifest, data) {
+	if err == nil && bytes.Equal(current.manifest, data) {
+		return current, nil
+	}
+	bootstrap, err := buildBootstrapModelPlanBundleV3(config)
+	if err != nil || !bytes.Equal(bootstrap.manifest, data) {
 		return modelPlanBundle{}, integration.ErrDrift
 	}
-	return current, nil
+	return bootstrap, nil
 }
 
 func modelPlanBundleForManifestV2(data []byte, config modelplan.ModelPlanConfigV2) (modelPlanBundle, error) {
 	current, err := buildModelPlanBundleV2(config)
-	if err != nil || !bytes.Equal(current.manifest, data) {
+	if err == nil && bytes.Equal(current.manifest, data) {
+		return current, nil
+	}
+	bootstrap, err := buildBootstrapModelPlanBundleV2(config)
+	if err != nil || !bytes.Equal(bootstrap.manifest, data) {
 		return modelPlanBundle{}, integration.ErrDrift
 	}
-	return current, nil
+	return bootstrap, nil
 }
 
 func modelPlanBundleForManifest(data []byte, config modelplan.ModelPlanConfig) (modelPlanBundle, error) {
 	current, err := buildModelPlanBundle(config)
-	if err != nil || !bytes.Equal(current.manifest, data) {
+	if err == nil && bytes.Equal(current.manifest, data) {
+		return current, nil
+	}
+	bootstrap, err := buildBootstrapModelPlanBundle(config)
+	if err != nil || !bytes.Equal(bootstrap.manifest, data) {
 		return modelPlanBundle{}, integration.ErrDrift
 	}
-	return current, nil
+	return bootstrap, nil
 }
 
 func assignmentProviderSummary(assignments map[string]modelplan.ManagedAgentModelConfig) string {
