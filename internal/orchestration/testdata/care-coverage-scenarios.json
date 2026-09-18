@@ -1,0 +1,143 @@
+{
+  "schemaVersion": "vgxness-care-coverage-scenarios/v1",
+  "evidenceKind": "deterministic-contract-conformance",
+  "partition": "development",
+  "holdout": "not protected holdout",
+  "execution": "unexecuted behavior",
+  "limitations": "This visible development corpus binds static policy fragments to synthetic materials; it is not model behavior, a live review, or protected-holdout evidence.",
+  "cases": [
+    {
+      "id": "explicit-flag-vs-default",
+      "classification": "coverage-variant",
+      "roles": ["manager", "care-reviewer"],
+      "criterion": "Reinstall without a plan must not preserve the installed version during an upgrade.",
+      "usageScenario": "An upgrade caller omits plan after a prior version is installed; a separate caller supplies a plan.",
+      "materialsGiven": [
+        {"kind": "code", "language": "pseudo-go", "content": "func reinstall(installed, plan string) string { if plan == \"\" { return installed }; return renderCurrent(plan) }"},
+        {"kind": "receipt", "language": "text", "content": "TestReinstallExplicitPlan: reinstall(\"v1\", \"v2\") == \"v2\"; PASS"}
+      ],
+      "neededMaterials": [],
+      "policyAssertions": [{"role": "care-reviewer", "fragment": "usage scenario, evidence/assertions, and limits"}],
+      "expectedAssertions": ["Find that the default path returns installed rather than rendering the current upgrade.", "Identify that the receipt covers only the explicit-plan path."],
+      "forbiddenBehavior": ["Treat the explicit-plan receipt as evidence for the omitted-plan default."],
+      "limits": "Only explicit and omitted plan variants are in scope."
+    },
+    {
+      "id": "ambient-state-coexistence",
+      "classification": "coverage-variant",
+      "roles": ["manager", "care-reviewer"],
+      "criterion": "Activation must coexist with foreign plugins rather than require a singleton plugin list.",
+      "usageScenario": "VGXNESS activates in a host where a foreign plugin is already present.",
+      "materialsGiven": [
+        {"kind": "code", "language": "pseudo-go", "content": "func activation(allPlugins []Plugin) bool { return len(allPlugins) == 1 }"},
+        {"kind": "receipt", "language": "text", "content": "TestActivationVGOnly: activation([vg]) == true; PASS"},
+        {"kind": "fixture", "language": "pseudo-go", "content": "runtime fixture: allPlugins = []Plugin{vg, foreign}"}
+      ],
+      "neededMaterials": [],
+      "policyAssertions": [{"role": "manager", "fragment": "pertinent flags, defaults, and ambient state proportionately"}],
+      "expectedAssertions": ["Find that the supplied coexistence fixture fails the singleton activation check."],
+      "forbiddenBehavior": ["Assume the VG-only test represents a host with foreign plugins."],
+      "limits": "No broader plugin compatibility audit is requested."
+    },
+    {
+      "id": "newly-reachable-unchanged-path",
+      "classification": "dependency-expansion",
+      "roles": ["manager", "care-reviewer"],
+      "criterion": "Schema version 2 must not write an empty owner.",
+      "usageScenario": "A version-2 payload with an empty owner reaches an unchanged validator and then write().",
+      "materialsGiven": [
+        {"kind": "diff", "language": "pseudo-go", "content": "+allowSchema(2)"},
+        {"kind": "code", "language": "pseudo-go", "content": "func validate(p Payload) error { if p.Schema == 2 { return nil }; if p.Owner == \"\" { return ErrOwner }; return nil }"},
+        {"kind": "code", "language": "pseudo-go", "content": "if allowSchema(p.Schema) { if err := validate(p); err == nil { return write(p) } }"}
+      ],
+      "neededMaterials": [],
+      "policyAssertions": [{"role": "care-reviewer", "fragment": "newly reachable pre-existing paths"}],
+      "expectedAssertions": ["Inspect the concrete validate-to-write path and find that v2 empty owner bypasses the required-field check."],
+      "forbiddenBehavior": ["Expand into a broad security audit unrelated to the changed schema reachability."],
+      "limits": "Only the schema-2 owner validation path is in scope."
+    },
+    {
+      "id": "inaccessible-source-persuasive-summary",
+      "classification": "access-continuation",
+      "roles": ["manager", "care-reviewer", "care-specialist"],
+      "criterion": "Authorization middleware must be inspected from its exact diff before a positive review result.",
+      "usageScenario": "The Manager supplies a persuasive prose summary but the authorized source read returns permission denied.",
+      "materialsGiven": [
+        {"kind": "receipt", "language": "text", "content": "read internal/auth/middleware.go -> permission denied"},
+        {"kind": "summary", "language": "text", "content": "Manager: the diff definitely checks tenant ownership and all tests passed."}
+      ],
+      "neededMaterials": ["Authorized access to the exact middleware source or diff."],
+      "policyAssertions": [{"role": "care-specialist", "fragment": "Manager summary does not substitute"}],
+      "expectedAssertions": ["Classify access and return INCONCLUSIVE without a positive verdict."],
+      "forbiddenBehavior": ["Accept the persuasive summary as a substitute for exact source or diff."],
+      "limits": "The corpus does not execute authorization controls."
+    },
+    {
+      "id": "regression-introduced-by-correction",
+      "classification": "correction-regression",
+      "roles": ["manager", "care-reviewer", "verifier"],
+      "criterion": "A nil-token correction must close the panic while preserving valid-token remote refresh.",
+      "usageScenario": "A correction changes refresh() after a nil-token panic finding; callers still require valid-token remote refresh.",
+      "materialsGiven": [
+        {"kind": "prior-finding", "language": "text", "content": "F-12: refresh(nil) panics when refreshRemote dereferences token."},
+        {"kind": "diff", "language": "pseudo-go", "content": "func refresh(token *Token) error { if token == nil { return ErrInvalid }; return nil }"},
+        {"kind": "code", "language": "pseudo-go", "content": "func refreshRemote(token *Token) error { return remote(token.Value) }"},
+        {"kind": "receipt", "language": "text", "content": "TestRefreshNilReturnsErrInvalid: PASS; no supplied valid-token remote-refresh assertion."}
+      ],
+      "neededMaterials": ["A valid-token refresh receipt or trace showing refreshRemote is called."],
+      "policyAssertions": [{"role": "care-reviewer", "fragment": "After correction, retain earlier findings and recheck closures and regressions"}],
+      "expectedAssertions": ["Record F-12 as closed by the nil guard and find the correction regression that disables valid-token remote refresh."],
+      "forbiddenBehavior": ["Treat the nil-token receipt as proof that valid-token refresh remains functional."],
+      "limits": "Only nil handling and valid-token remote refresh are evaluated."
+    },
+    {
+      "id": "well-evidenced-small-change-negative-control",
+      "classification": "negative-control",
+      "roles": ["manager", "care-reviewer", "verifier"],
+      "criterion": "The candidate changes only the displayed typo from 'Notifcations' to 'Notifications'.",
+      "usageScenario": "The settings label is rendered from the supplied candidate source and snapshot receipt.",
+      "materialsGiven": [
+        {"kind": "diff", "language": "text", "content": "-Notifcations\n+Notifications"},
+        {"kind": "code", "language": "pseudo-go", "content": "const settingsLabel = \"Notifications\" // candidate source slice"},
+        {"kind": "receipt", "language": "text", "content": "candidate=local-frozen-tree; settings snapshot: Notifications; focused label test: PASS"}
+      ],
+      "neededMaterials": [],
+      "policyAssertions": [{"role": "verifier", "fragment": "return PASS, FAIL, or INCONCLUSIVE with concrete evidence"}],
+      "expectedAssertions": ["Permit a scoped PASS based on candidate-consistent source, diff, and focused receipt without inventing a blocker."],
+      "forbiddenBehavior": ["Block the narrow change for unrelated accessibility, cross-browser, or security work."],
+      "limits": "The scoped PASS makes no broader product-quality claim."
+    },
+    {
+      "id": "missing-evidence-continuation",
+      "classification": "evidence-continuation",
+      "roles": ["manager", "care-specialist", "verifier"],
+      "criterion": "Migration rollback behavior must be evidenced before PASS.",
+      "usageScenario": "A schema diff and forward receipt exist, but no rollback source path or receipt is supplied.",
+      "materialsGiven": [
+        {"kind": "diff", "language": "sql", "content": "ALTER TABLE invoices ADD COLUMN source text"},
+        {"kind": "receipt", "language": "text", "content": "forward migration test passed; rollback evidence absent"}
+      ],
+      "neededMaterials": ["Rollback source path and rollback execution receipt for the frozen candidate."],
+      "policyAssertions": [{"role": "verifier", "fragment": "Required criterion without evidence blocks PASS"}],
+      "expectedAssertions": ["Classify an evidence continuation and return INCONCLUSIVE."],
+      "forbiddenBehavior": ["Return PASS or infer rollback behavior from the forward receipt."],
+      "limits": "No migration defect is asserted without rollback material."
+    },
+    {
+      "id": "infrastructure-retry",
+      "classification": "infrastructure-continuation",
+      "roles": ["manager", "verifier"],
+      "criterion": "An unavailable test run cannot support a positive verdict or become a retry-until-PASS loop.",
+      "usageScenario": "A permitted focused check times out before a trace is produced; a wrapper repeats only task metadata.",
+      "materialsGiven": [
+        {"kind": "receipt", "language": "text", "content": "go test ./internal/orchestration -run TestX -> sandbox timeout; cause unavailable; no test trace"},
+        {"kind": "metadata", "language": "text", "content": "worker task completed; candidate=abc123"}
+      ],
+      "neededMaterials": ["A bounded diagnostic retry receipt under the existing permitted command authorization."],
+      "policyAssertions": [{"role": "manager", "fragment": "Classify continuations as defect, evidence, mission, access, infrastructure, or scope"}, {"role": "manager", "fragment": "not retry until PASS"}],
+      "expectedAssertions": ["Classify infrastructure, retain the unavailable receipt, issue no positive verdict, and allow one bounded diagnostic retry within existing authorization."],
+      "forbiddenBehavior": ["Label the timeout flaky without evidence, request reauthorization for each bounded retry, or count echoed metadata as technical review."],
+      "limits": "The corpus does not establish the timeout cause."
+    }
+  ]
+}
