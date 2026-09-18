@@ -80,7 +80,9 @@ The primary manager has explicit access to OpenCode's native `question` tool. It
 
 ### Adaptive TDD
 
-For safely testable regressions and behavior changes, the manager prefers an observable RED -> GREEN -> REFACTOR cycle. It may claim TDD only when the test was run and observed failing for the expected reason before the production change. Tests added after implementation are reported as regression coverage instead.
+The Manager selects the lightest sufficient flow from affected behavior, uncertainty, blast radius, reversibility, and risk—not diff size. Direct read-only work and trivial local changes that are low risk need only pertinent inspection or checks. Substantive, cross-cutting, elevated-risk, or explicit-delivery work requires the exact-candidate independent-verification and applicable CARE gates; discovered risk escalates the flow.
+
+TDD is optional and preferred for useful, reproducible defects or clear contracts. It is reported only when the expected failure was observed before the change; do not manufacture RED. Refactors use existing regressions and may add missing coverage; tests added afterwards are regression coverage. Tests and CARE remain complementary.
 
 ### Native autonomous Git delivery
 

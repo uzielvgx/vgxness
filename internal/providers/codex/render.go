@@ -68,7 +68,7 @@ func RenderPlan(version string, plan modelplan.Plan) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	pkg, err := renderPackage(version, selected, plan, false)
+	pkg, err := renderPackageWithManager(version, selected, plan, false, activeManagerInstructions())
 	if err != nil {
 		return Package{}, err
 	}
@@ -81,6 +81,29 @@ func RenderPlan(version string, plan modelplan.Plan) (Package, error) {
 	if err := pkg.Validate(); err != nil {
 		return Package{}, err
 	}
+	return clonePackage(pkg), nil
+}
+
+// renderBootstrapPlan renders only the exact 82c7112a receiptless projection.
+func renderBootstrapPlan(version string, plan modelplan.Plan) (Package, error) {
+	contract, err := orchestration.LoadPreAdaptiveManagerContract()
+	if err != nil {
+		return Package{}, err
+	}
+	selected, err := profilesFromContract(plan, contract)
+	if err != nil {
+		return Package{}, err
+	}
+	manager, err := bootstrapManagerInstructions()
+	if err != nil {
+		return Package{}, err
+	}
+	pkg, err := renderPackageWithManager(version, selected, plan, false, manager)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg.Artifacts = append(pkg.Artifacts, lifecycleArtifacts(pkg.version)...)
+	pkg.SHA256 = aggregateSHA256(pkg.Artifacts)
 	return clonePackage(pkg), nil
 }
 
@@ -110,10 +133,13 @@ func historicalCodexHooksArtifact() Artifact {
 }
 
 func renderPackage(version string, selected []profile, plan modelplan.Plan, legacy bool) (Package, error) {
+	return renderPackageWithManager(version, selected, plan, legacy, activeManagerInstructions())
+}
+
+func renderPackageWithManager(version string, selected []profile, plan modelplan.Plan, legacy bool, manager string) (Package, error) {
 	if !releaseVersion.MatchString(version) {
 		return Package{}, errors.New("version must be a strict v-prefixed SemVer release")
 	}
-	manager := activeManagerInstructions()
 	if manager == "" {
 		return Package{}, integration.ErrInvalid
 	}

@@ -148,6 +148,18 @@ func renderCurrentAgents(assignments map[string]modelplan.OpenCodeRoleAssignment
 	if err != nil {
 		return nil, err
 	}
+	return renderAgentsForContract(assignments, contract, orchestration.ManagerContractDigest())
+}
+
+func renderBootstrapAgents(assignments map[string]modelplan.OpenCodeRoleAssignment) (map[string][]byte, error) {
+	contract, err := orchestration.LoadPreAdaptiveManagerContract()
+	if err != nil {
+		return nil, err
+	}
+	return renderAgentsForContract(assignments, contract, orchestration.PreAdaptiveManagerContractDigest())
+}
+
+func renderAgentsForContract(assignments map[string]modelplan.OpenCodeRoleAssignment, contract orchestration.ManagerContract, digest string) (map[string][]byte, error) {
 	agents := make(map[string][]byte, len(currentNativeHeaders))
 	for name, header := range currentNativeHeaders {
 		assignment, ok := assignments[name]
@@ -168,7 +180,7 @@ func renderCurrentAgents(assignments map[string]modelplan.OpenCodeRoleAssignment
 			variant = "variant: " + string(assignment.Variant) + "\n"
 		}
 		header = strings.NewReplacer("{{model}}", assignment.Model, "{{variant}}", variant).Replace(header)
-		agents[name] = []byte(header + "\n" + currentNativeMarkers[name] + "\n\n" + body + currentNativeAdapter + "\nContract identity: " + contract.Identity + "; content SHA256: " + orchestration.ManagerContractDigest() + "\n")
+		agents[name] = []byte(header + "\n" + currentNativeMarkers[name] + "\n\n" + body + currentNativeAdapter + "\nContract identity: " + contract.Identity + "; content SHA256: " + digest + "\n")
 	}
 	return agents, nil
 }
@@ -190,6 +202,17 @@ func buildModelPlanBundle(c modelplan.ModelPlanConfig) (modelPlanBundle, error) 
 	}
 	return encodeModelPlanBundle(c, p, agents)
 }
+func buildBootstrapModelPlanBundle(c modelplan.ModelPlanConfig) (modelPlanBundle, error) {
+	p, e := modelplan.ResolveOpenCodePlan(c)
+	if e != nil {
+		return modelPlanBundle{}, errors.Join(integration.ErrInvalid, e)
+	}
+	agents, e := renderBootstrapAgents(currentRoleAssignments(p.Roles))
+	if e != nil {
+		return modelPlanBundle{}, errors.Join(integration.ErrInvalid, e)
+	}
+	return encodeModelPlanBundle(c, p, agents)
+}
 func buildModelPlanBundleV2(c modelplan.ModelPlanConfigV2) (modelPlanBundle, error) {
 	p, e := modelplan.ResolveOpenCodePlanV2(c)
 	if e != nil {
@@ -200,6 +223,21 @@ func buildModelPlanBundleV2(c modelplan.ModelPlanConfigV2) (modelPlanBundle, err
 		roles[role] = modelplan.OpenCodeRoleAssignment{Role: role, Model: a.Model, Variant: a.Variant}
 	}
 	agents, e := renderCurrentAgents(currentRoleAssignments(roles))
+	if e != nil {
+		return modelPlanBundle{}, errors.Join(integration.ErrInvalid, e)
+	}
+	return encodeModelPlanBundleV2(c, p, agents)
+}
+func buildBootstrapModelPlanBundleV2(c modelplan.ModelPlanConfigV2) (modelPlanBundle, error) {
+	p, e := modelplan.ResolveOpenCodePlanV2(c)
+	if e != nil {
+		return modelPlanBundle{}, errors.Join(integration.ErrInvalid, e)
+	}
+	roles := map[modelplan.Role]modelplan.OpenCodeRoleAssignment{}
+	for role, a := range p.Roles {
+		roles[role] = modelplan.OpenCodeRoleAssignment{Role: role, Model: a.Model, Variant: a.Variant}
+	}
+	agents, e := renderBootstrapAgents(currentRoleAssignments(roles))
 	if e != nil {
 		return modelPlanBundle{}, errors.Join(integration.ErrInvalid, e)
 	}
@@ -219,6 +257,25 @@ func buildModelPlanBundleV3(c modelplan.ModelPlanConfigV3) (modelPlanBundle, err
 		assignments[strings.TrimPrefix(a.ArtifactKey, "agents/")] = modelplan.OpenCodeRoleAssignment{Role: a.Role, Model: a.Model, RequestedEffort: a.RequestedEffort, Effort: a.Effort, Variant: a.Variant}
 	}
 	agents, e := renderCurrentAgents(assignments)
+	if e != nil {
+		return modelPlanBundle{}, errors.Join(integration.ErrInvalid, e)
+	}
+	return encodeModelPlanBundleV3(c, p, agents)
+}
+func buildBootstrapModelPlanBundleV3(c modelplan.ModelPlanConfigV3) (modelPlanBundle, error) {
+	inventory := ModelAgentInventoryV3()
+	if len(c.Assignments) == 13 {
+		inventory = modelAgentInventoryV3
+	}
+	p, e := modelplan.ResolveOpenCodePlanV3(c, inventory)
+	if e != nil {
+		return modelPlanBundle{}, errors.Join(integration.ErrInvalid, e)
+	}
+	assignments := map[string]modelplan.OpenCodeRoleAssignment{}
+	for _, a := range p.Assignments {
+		assignments[strings.TrimPrefix(a.ArtifactKey, "agents/")] = modelplan.OpenCodeRoleAssignment{Role: a.Role, Model: a.Model, RequestedEffort: a.RequestedEffort, Effort: a.Effort, Variant: a.Variant}
+	}
+	agents, e := renderBootstrapAgents(assignments)
 	if e != nil {
 		return modelPlanBundle{}, errors.Join(integration.ErrInvalid, e)
 	}

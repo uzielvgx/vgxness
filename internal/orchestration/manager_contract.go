@@ -13,6 +13,9 @@ import (
 //go:embed manager_contract.json
 var managerContractBytes []byte
 
+//go:embed manager_contract_82c7112a.json
+var preAdaptiveManagerContractBytes []byte
+
 type ManagerContract struct {
 	SchemaVersion string         `json:"schemaVersion"`
 	Identity      string         `json:"identity"`
@@ -27,10 +30,11 @@ type ContractRole struct {
 	Instructions   string   `json:"instructions,omitempty"`
 }
 
-func ManagerContractJSON() []byte { return append([]byte(nil), managerContractBytes...) }
-func ManagerContractDigest() string {
+func ManagerContractJSON() []byte   { return append([]byte(nil), managerContractBytes...) }
+func ManagerContractDigest() string { return managerContractDigest(managerContractBytes) }
+func managerContractDigest(data []byte) string {
 	var value any
-	if err := json.Unmarshal(managerContractBytes, &value); err != nil {
+	if err := json.Unmarshal(data, &value); err != nil {
 		return ""
 	}
 	var canonical bytes.Buffer
@@ -43,8 +47,22 @@ func ManagerContractDigest() string {
 	return hex.EncodeToString(sum[:])
 }
 func LoadManagerContract() (ManagerContract, error) {
+	return loadManagerContract(managerContractBytes)
+}
+
+// LoadPreAdaptiveManagerContract returns only the exact 82c7112a predecessor
+// used to recognize receiptless Manager62/Codex21 installations.
+func LoadPreAdaptiveManagerContract() (ManagerContract, error) {
+	return loadManagerContract(preAdaptiveManagerContractBytes)
+}
+
+func PreAdaptiveManagerContractDigest() string {
+	return managerContractDigest(preAdaptiveManagerContractBytes)
+}
+
+func loadManagerContract(data []byte) (ManagerContract, error) {
 	var c ManagerContract
-	if err := json.Unmarshal(managerContractBytes, &c); err != nil {
+	if err := json.Unmarshal(data, &c); err != nil {
 		return c, err
 	}
 	if c.SchemaVersion != "vgxness-manager-contract/v1" || c.Identity != ContractIdentity || c.Manager.ID != "manager" || len(c.Roles) != 6 {
