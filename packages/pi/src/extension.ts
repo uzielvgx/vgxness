@@ -2,7 +2,7 @@ import { readSelection, selectedModels, activateManagerModel, supportsEffort, ty
 import { frameReadOutcome } from "./tools/read-outcome.ts";
 import { renderPiManagerPrompt } from "./orchestration/adapter.ts";
 import { createSkillTool } from "./tools/skill.ts";
-import { loadManagerContract, renderManagerPrompt } from "./orchestration/contract.ts";
+import { loadManagerContract } from "./orchestration/contract.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getAgentDir, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { delimiter, dirname, join } from "node:path";
@@ -20,7 +20,6 @@ import { discoverSkillPaths } from "./skills/catalog.ts";
 import { createTaskTool } from "./tools/task.ts";
 import { executePiWorker } from "./workers/runner.ts";
 import { nativeStatusView, nativeWorkersView, nativeMemoryView, readonlySnapshot, loadingView } from "./views.ts";
-import { WorkerResultError } from "./workers/result.ts";
 
 const handoffSchema = Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4096 }) }, { additionalProperties: false });
 type ExtensionApi = { setModel?(model: any): Promise<boolean>; setThinkingLevel?(level: any): void; getThinkingLevel?(): string; registerCommand?(name: string, command: any): void; getCommands?(): any[]; registerTool(tool: unknown): void; on(event: string, handler: (event: any, ctx: any) => unknown): void; appendEntry(type: string, data: unknown): void };

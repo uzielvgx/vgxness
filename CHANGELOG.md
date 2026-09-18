@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- The Models screen scans local model data automatically: `m` opens a searchable provider/model catalog for OpenCode (its local model list) and Pi (its local model store), `i` keeps manual entry, and `e` cycles the efforts each scanned model reports, preserving exact OpenCode variant tokens such as `max`.
+
 ## v1.0.0 — proposed
 
 - First stable scope for provisioning OpenCode, Codex and independent TypeScript Pi with shared SQLite memory and portable skills.

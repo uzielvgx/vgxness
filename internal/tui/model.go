@@ -190,6 +190,9 @@ type Model struct {
 	modelChoiceRow         int
 	modelChoiceEditing     bool
 	modelChoiceInput       string
+	modelChoiceSearching   bool
+	modelChoiceQuery       string
+	modelChoiceResultIndex int
 	codexPlanEdited        bool
 	modelChoiceError       string
 	setupMultiPlan         setupflow.MultiPlan
@@ -252,10 +255,17 @@ type Model struct {
 	setupCatalogErr             error
 	setupCatalogLoading         bool
 	setupCatalogGeneration      int
+	setupCatalogAttempted       bool
 	cancelSetupCatalog          context.CancelFunc
 	setupCatalogQuery           string
 	setupCatalogSearching       bool
 	setupCatalogResultIndex     int
+	piCatalog                   []SetupCatalogModel
+	piCatalogErr                error
+	piCatalogLoading            bool
+	piCatalogGeneration         int
+	piCatalogAttempted          bool
+	cancelPiCatalog             context.CancelFunc
 	setupEditorPlan             SetupPlan
 	setupEditorRequest          SetupRequest
 	setupEditorPreviewed        bool

@@ -57,3 +57,23 @@ func TestModelOnlyUpdatePreservesSettingsAndBindsPreview(t *testing.T) {
 		t.Fatal("stale update changed settings")
 	}
 }
+
+func TestPiRejectsOpenCodeVariants(t *testing.T) {
+	c, err := agentmodels.Single("vendor/model", "off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for role, assignment := range c.Assignments {
+		assignment.Variant = "max"
+		c.Assignments[role] = assignment
+	}
+	if err := validateModelSelection(&c); err == nil {
+		t.Fatal("Pi selection accepted an OpenCode variant token")
+	}
+	if _, _, _, err := modelSettings(t.TempDir(), &c); err == nil {
+		t.Fatal("Pi model settings accepted an OpenCode variant token")
+	}
+	if _, err := Install(context.Background(), Options{Models: &c}); err == nil {
+		t.Fatal("Pi install accepted an OpenCode variant token")
+	}
+}

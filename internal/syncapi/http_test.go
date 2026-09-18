@@ -373,7 +373,7 @@ func TestCapabilitiesSuccess(t *testing.T) {
 func TestCapabilitiesRejectsBeforeAcceptAndBody(t *testing.T) {
 	t.Parallel()
 	auth := &testAuthenticator{}
-	handler := NewHandler(auth)
+	handler := NewSyncServerHandler(auth, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/v1/sync/capabilities", strings.NewReader("x"))
 	request.Header.Set("Accept", "not-checked")
 	recorder := httptest.NewRecorder()
@@ -417,7 +417,7 @@ func TestCapabilitiesValidation(t *testing.T) {
 			request.Header["Authorization"] = test.auth
 			request.Header["Accept"] = test.accept
 			recorder := httptest.NewRecorder()
-			NewHandler(auth).ServeHTTP(recorder, request)
+			NewSyncServerHandler(auth, nil, nil).ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
 				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
 			}
@@ -447,7 +447,7 @@ func TestCapabilitiesAuthenticatorFailuresAndNoSecrets(t *testing.T) {
 			request.Header.Set("Authorization", "Bearer "+testBearer)
 			request.Header.Set("Accept", MediaType)
 			recorder := httptest.NewRecorder()
-			NewHandler(test.auth).ServeHTTP(recorder, request)
+			NewSyncServerHandler(test.auth, nil, nil).ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
 				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
 			}

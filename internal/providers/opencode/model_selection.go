@@ -8,6 +8,8 @@ import (
 
 // ExplicitModels translates user choices without a capability matrix. Unknown
 // models retain unknown availability; setup does not authenticate providers.
+// An explicit variant token wins over the effort-derived default so discovery
+// tokens such as "max" or "none" survive into the rendered agent.
 func ExplicitModels(c agentmodels.Config) (map[string]modelplan.ManagedAgentModelConfig, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
@@ -23,6 +25,9 @@ func ExplicitModels(c agentmodels.Config) (map[string]modelplan.ManagedAgentMode
 			effort = modelplan.EffortLow
 		case "xhigh":
 			effort = modelplan.EffortUltra
+		}
+		if a.Variant != "" {
+			variant = modelplan.OpenCodeVariant(a.Variant)
 		}
 		result[identity.ArtifactKey] = modelplan.ManagedAgentModelConfig{Provider: strings.SplitN(a.Model, "/", 2)[0], Reference: a.Model, RequestedEffort: effort, Variant: variant, VariantSpecified: true, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown}
 	}

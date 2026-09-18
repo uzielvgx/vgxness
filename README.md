@@ -64,9 +64,11 @@ For complete definitions and status classifications, read the [Product Blueprint
 
 Run `vgxness tui` and select the coding hosts to configure. On the Models screen,
 use Tab to switch providers. OpenCode and Pi offer `1` for one model across all
-seven agents or `2` for one per agent, including Manager. Select a row with the
-arrow keys, use `m` to enter its provider/model and `e` to change effort. Codex
-alone uses the low, medium, high and ultra plans.
+seven agents or `2` for one per agent, including Manager. Select an agent with
+the arrow keys, then press `m` to choose from the locally scanned provider/model
+catalog (type to filter, Enter assigns) or `i` to type a reference manually.
+Press `e` to cycle the efforts the scanned model reports. Codex alone uses the
+low, medium, high and ultra plans.
 
 Press Enter to preview, then review the exact assignments before applying. Existing
 choices are preserved until edited. A model identifier does not prove account

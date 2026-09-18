@@ -8,8 +8,6 @@ function withTaskModels(value: ResolvedPlan) {
   return { ...value, roles: Object.fromEntries(Object.entries(value.roles).map(([role, assignment]: [string, ResolvedAssignment]) => [role, { ...assignment, taskModel: `${assignment.model.provider}/${assignment.model.id}` }])) };
 }
 
-const effort = Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("ultra")]);
-const capability = Type.Union([Type.Literal("efficient"), Type.Literal("balanced"), Type.Literal("frontier")]);
 export const modelSchema = Type.Object({ plan: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("ultra")]) }, { additionalProperties: false });
 
 export function createModelTool(host: ToolHost & { modelSelection?: () => ModelSelection; modelCatalog?: () => { provider: string; models: PiModel[] } | undefined }) {

@@ -14,9 +14,9 @@ const matrix: Record<Plan, Record<Role, [
     high: Object.fromEntries(roles.map(r => [r, ["frontier", "high"]])) as any,
     ultra: Object.fromEntries(roles.map(r => [r, ["frontier", "high"]])) as any,
 };
-Object.assign(matrix.low, { research: ["efficient", "low"], tasks: ["efficient", "low"], verification: ["efficient", "low"], manager: ["balanced", "high"], design: ["balanced", "medium"], apply: ["balanced", "low"], "care-specialist": ["balanced", "medium"], "care-challenger": ["balanced", "medium"], implementation: ["balanced", "low"] });
-Object.assign(matrix.medium, { manager: ["frontier", "high"], research: ["efficient", "medium"], proposal: ["balanced", "medium"], spec: ["balanced", "high"], design: ["frontier", "medium"], tasks: ["balanced", "medium"], apply: ["balanced", "medium"], "care-reviewer": ["frontier", "medium"], "care-specialist": ["balanced", "high"], "care-challenger": ["frontier", "medium"], implementation: ["balanced", "medium"], verification: ["efficient", "medium"] });
-Object.assign(matrix.high, { manager: ["frontier", "ultra"], research: ["balanced", "high"], proposal: ["balanced", "high"], spec: ["frontier", "high"], design: ["frontier", "high"], tasks: ["balanced", "high"], apply: ["balanced", "high"], "care-reviewer": ["frontier", "high"], "care-specialist": ["frontier", "high"], "care-challenger": ["frontier", "high"], implementation: ["frontier", "high"], verification: ["balanced", "high"] });
+Object.assign(matrix.low, { research: ["efficient", "low"], verification: ["efficient", "low"], manager: ["balanced", "high"], "care-specialist": ["balanced", "medium"], "care-challenger": ["balanced", "medium"], implementation: ["balanced", "low"] });
+Object.assign(matrix.medium, { manager: ["frontier", "high"], research: ["efficient", "medium"], "care-reviewer": ["frontier", "medium"], "care-specialist": ["balanced", "high"], "care-challenger": ["frontier", "medium"], implementation: ["balanced", "medium"], verification: ["efficient", "medium"] });
+Object.assign(matrix.high, { manager: ["frontier", "ultra"], research: ["balanced", "high"], "care-reviewer": ["frontier", "high"], "care-specialist": ["frontier", "high"], "care-challenger": ["frontier", "high"], implementation: ["frontier", "high"], verification: ["balanced", "high"] });
 for (const role of roles)
     matrix.ultra[role] = ["frontier", role === "manager" ? "ultra" : "high"];
 function validText(v: unknown, max: number) { return typeof v === "string" && v.trim() === v && v.length > 0 && [...v].length <= max && !/[\x00-\x1f\x7f-\x9f]/.test(v); }
@@ -59,5 +59,3 @@ export function resolveModel(payload: unknown): ResolvedPlan {
     }
     return { provider: catalog.provider, plan: plan!, slots, roles: assignments };
 }
-export const dispatchModel = async (_ctx: unknown, operation: string, payload: unknown) => { if (operation !== "resolve")
-    throw new Error("unknown model operation"); return resolveModel(payload); };

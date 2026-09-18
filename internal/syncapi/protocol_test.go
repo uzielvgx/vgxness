@@ -133,22 +133,19 @@ func TestSafeErrorMappingAndResponseSize(t *testing.T) {
 	}
 }
 func TestPullAndResponseProtocolFoundations(t *testing.T) {
-	c := `{"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":0}`
-	p, e := DecodePullRequest([]byte(`{"protocol_version":1,"cursor":` + c + `}`))
-	if e != nil || p.Limit != DefaultPullLimit {
-		t.Fatal("default")
-	}
-	for b, w := range map[string]ErrorCode{`{"protocol_version":2,"cursor":` + c + `}`: ErrorUnsupportedVersion, `{"protocol_version":1,"cursor":` + c + `,"limit":26}`: ErrorLimitExceeded, `{"protocol_version":1,"cursor":{"history_id":"bad","position":0}}`: ErrorCursor} {
-		if _, e := DecodePullRequest([]byte(b)); CodeFor(e) != w {
-			t.Fatal("pull class")
-		}
-	}
 	r, e := DecodePullResponse([]byte(`{"protocol_version":1,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"has_more":false,"future":"ok"}`))
 	if e != nil || r.Position != 1 {
 		t.Fatal("additive")
 	}
 	if _, e := DecodePullResponse([]byte(`{"protocol_version":2,"history_id":"8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91","position":1,"has_more":false}`)); CodeFor(e) != ErrorUnsupportedVersion {
 		t.Fatal("response version")
+	}
+}
+
+func TestValidatePullRequestRejectsUnsupportedVersion(t *testing.T) {
+	request := PullRequest{ProtocolVersion: ProtocolVersion + 1, Cursor: syncservice.Cursor{HistoryID: "8aef6b18-a0ce-4b2f-b2b1-ef935ac0dd91"}}
+	if err := ValidatePullRequest(&request); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("ValidatePullRequest() = %v, want %v", err, ErrUnsupportedVersion)
 	}
 }
 

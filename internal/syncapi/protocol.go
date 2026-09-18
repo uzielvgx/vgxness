@@ -92,17 +92,6 @@ func DecodePushRequest(body []byte) (PushRequest, error) {
 	return request, nil
 }
 
-func DecodePullRequest(body []byte) (PullRequest, error) {
-	var request PullRequest
-	if err := decodeStrict(body, &request); err != nil {
-		return PullRequest{}, err
-	}
-	if err := ValidatePullRequest(&request); err != nil {
-		return PullRequest{}, err
-	}
-	return request, nil
-}
-
 // DecodeDiscoveryResponse decodes a strict, bounded discovery response.
 func DecodeDiscoveryResponse(body []byte) (DiscoveryResponse, error) {
 	var response DiscoveryResponse

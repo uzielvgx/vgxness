@@ -15,18 +15,19 @@ import (
 
 type recordingSetupBackend struct {
 	fakeBackend
-	planRequests   []SetupRequest
-	applyRequests  []SetupRequest
-	plan           SetupPlan
-	result         SetupResult
-	planErr        error
-	applyErr       error
-	catalog        []SetupCatalogModel
-	catalogErr     error
-	catalogCalls   []bool
-	catalogStarted chan struct{}
-	catalogBlock   chan struct{}
-	status         SetupStatus
+	planRequests     []SetupRequest
+	applyRequests    []SetupRequest
+	plan             SetupPlan
+	result           SetupResult
+	planErr          error
+	applyErr         error
+	catalog          []SetupCatalogModel
+	catalogErr       error
+	catalogCalls     []bool
+	catalogProviders []setupflow.Provider
+	catalogStarted   chan struct{}
+	catalogBlock     chan struct{}
+	status           SetupStatus
 }
 
 func (backend *recordingSetupBackend) SetupStatus(context.Context, Request) (SetupStatus, error) {
@@ -108,7 +109,7 @@ func TestMultiSetupJourneyRendersProviderReviewAndKeepsCancelledModelEdits(t *te
 	model.setupPlanLoading, model.setupPreviewed, model.setupPreviewRequest = false, true, model.setupRequest()
 
 	before := model.setupAssignmentRows[0]
-	model = updateModel(t, model, keyPress("m"))
+	model = updateModel(t, model, keyPress("i"))
 	if !strings.Contains(model.View().Content, "Model:") {
 		t.Fatalf("wide editor did not use two panes:\n%s", model.View().Content)
 	}
@@ -235,8 +236,15 @@ func TestInstallationActionsKeepDistinctDestinations(t *testing.T) {
 	}
 	updated, editor = model.Update(keyPress("m"))
 	model = updated.(Model)
+	if editor != nil || !model.modelChoiceSearching {
+		t.Fatalf("configure did not open the scanned model picker from plan: searching=%t cmd=%v", model.modelChoiceSearching, editor)
+	}
+	updated, editor = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	model = updated.(Model)
+	updated, editor = model.Update(keyPress("i"))
+	model = updated.(Model)
 	if editor != nil || !model.modelChoiceEditing {
-		t.Fatalf("configure did not open model editor from plan: editing=%t cmd=%v", model.setupModelEditing, editor)
+		t.Fatalf("configure did not open the manual model editor from plan: editing=%t cmd=%v", model.modelChoiceEditing, editor)
 	}
 }
 
@@ -384,8 +392,9 @@ func TestMultiSetupFailureRendersSanitizedReasonOutcomesAndSharedRecovery(t *tes
 	}
 }
 
-func (backend *recordingSetupBackend) ModelCatalog(ctx context.Context, refresh bool) ([]SetupCatalogModel, error) {
+func (backend *recordingSetupBackend) ModelCatalog(ctx context.Context, provider setupflow.Provider, refresh bool) ([]SetupCatalogModel, error) {
 	backend.catalogCalls = append(backend.catalogCalls, refresh)
+	backend.catalogProviders = append(backend.catalogProviders, provider)
 	if backend.catalogStarted != nil {
 		close(backend.catalogStarted)
 	}
