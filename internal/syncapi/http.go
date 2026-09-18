@@ -78,17 +78,6 @@ type handler struct {
 	observer      FailureObserver
 }
 
-// NewHandler returns the HTTP handler for the implemented sync v1 endpoints.
-func NewHandler(authenticator Authenticator) http.Handler {
-	return NewServerHandler(authenticator, nil)
-}
-
-// NewServerHandler returns a server handler with fixed non-blocking global (64)
-// and per-device (4) concurrency limits.
-func NewServerHandler(authenticator Authenticator, observer FailureObserver) http.Handler {
-	return newHandlerWithLimits(authenticator, nil, observer)
-}
-
 // NewSyncServerHandler returns a v1 sync handler backed by the supplied service.
 func NewSyncServerHandler(authenticator Authenticator, backend SyncBackend, observer FailureObserver) http.Handler {
 	return newHandlerWithBackend(authenticator, nil, backend, observer)

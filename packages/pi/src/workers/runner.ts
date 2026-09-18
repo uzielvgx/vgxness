@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { closeSync, openSync, readSync, unlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { advanceWorkerTargets, bootstrapWorkerMission, readWorkerTarget, validateWorkerArgv, workerTargetLedger, type WorkerMission } from "./mission.ts";
+import { advanceWorkerTargets, readWorkerTarget, validateWorkerArgv, workerTargetLedger, type WorkerMission } from "./mission.ts";
 export { bootstrapWorkerMission } from "./mission.ts";
 import { createExplorerTools } from "./explorer.ts";
 import { StringDecoder } from "node:string_decoder";

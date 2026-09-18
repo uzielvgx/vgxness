@@ -599,10 +599,30 @@ func TestTUISetupVariantsMapBothProfileSchemas(t *testing.T) {
 	testutil.Require(t, plan.ModelEfficientVariant == "xhigh" && plan.ModelBalancedVariant == "max" && plan.ModelVariantsSpecified, "plan=%+v", plan)
 }
 
+func TestTUIBackendCatalogScansPiStoreLocally(t *testing.T) {
+	agentDir := t.TempDir()
+	store := `{"openai-codex":{"models":[
+		{"id":"gpt-5.6-luna","reasoning":true,"thinkingLevelMap":{"xhigh":"xhigh","max":"max","minimal":"low"}},
+		{"id":"plain","reasoning":false,"thinkingLevelMap":{"high":"high"}}
+	]}}`
+	if err := os.WriteFile(filepath.Join(agentDir, "models-store.json"), []byte(store), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
+
+	rows, err := (tuiBackend{}).ModelCatalog(context.Background(), setupflow.ProviderPi, false)
+	testutil.Require(t, err == nil && len(rows) == 2, "rows=%+v err=%v", rows, err)
+	testutil.Require(t, rows[0].Provider == "openai-codex" && rows[0].Reference == "openai-codex/gpt-5.6-luna" && len(rows[0].Variants) == 2 && rows[0].Variants[0] == "minimal" && rows[0].Variants[1] == "xhigh", "rows=%+v", rows)
+	testutil.Require(t, rows[1].Reference == "openai-codex/plain" && len(rows[1].Variants) == 0, "rows=%+v", rows)
+	if _, err := (tuiBackend{}).ModelCatalog(context.Background(), setupflow.ProviderCodex, false); err == nil {
+		t.Fatal("Codex advertised a model catalog")
+	}
+}
+
 func TestTUIBackendCatalogMapsNeutralRowsAndRefreshFlag(t *testing.T) {
 	catalog := &recordingCatalog{snapshot: modelcatalog.Snapshot{Models: []string{"acme/a:b@c+d", "other/nested/model"}, Variants: map[string][]string{"acme/a:b@c+d": {"xhigh", "max"}, "other/nested/model": {}}}}
 	backend := tuiBackend{catalog: catalog}
-	rows, err := backend.ModelCatalog(context.Background(), false)
+	rows, err := backend.ModelCatalog(context.Background(), setupflow.ProviderOpenCode, false)
 	testutil.Require(t, err == nil && !catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 0 && len(rows) == 2 && rows[0].Provider == "acme" && rows[0].Reference == "acme/a:b@c+d" && len(rows[0].Variants) == 2 && rows[0].Variants[0] == "xhigh" && rows[0].Variants[1] == "max" && rows[0].Source == "custom" && rows[0].Availability == "unknown", "rows=%+v err=%v", rows, err)
 	var requestRows [tui.SetupModelAssignmentCount]tui.SetupModelAssignmentRequest
 	for index, identity := range opencode.ModelAgentInventoryV3() {
@@ -611,6 +631,6 @@ func TestTUIBackendCatalogMapsNeutralRowsAndRefreshFlag(t *testing.T) {
 	options, err := tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", ModelAssignments: &requestRows})
 	resolved, err := modelplan.ResolveOpenCodePlanV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: modelplan.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
 	testutil.Require(t, err == nil && resolved.Assignments[0].Variant == modelplan.VariantXHigh && resolved.Assignments[0].Effort == modelplan.EffortUltra && !resolved.Assignments[0].Degradation.Degraded, "resolved=%+v err=%v", resolved, err)
-	rows, err = backend.ModelCatalog(context.Background(), true)
+	rows, err = backend.ModelCatalog(context.Background(), setupflow.ProviderOpenCode, true)
 	testutil.Require(t, err == nil && catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 1 && rows[0].Reference == "acme/a:b@c+d", "refreshed rows=%+v err=%v", rows, err)
 }

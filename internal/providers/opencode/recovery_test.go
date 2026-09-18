@@ -205,175 +205,196 @@ func TestReinstallRollbackNeverOverwritesConcurrentReplacement(t *testing.T) {
 	}
 }
 
-func TestDurableRemovalNeverUnlinksConcurrentReplacement(t *testing.T) {
-	directory := t.TempDir()
-	target := filepath.Join(directory, "target")
-	expected := filepath.Join(directory, "expected")
-	replacement := filepath.Join(directory, "replacement")
-	if err := os.WriteFile(expected, []byte("managed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(expected, target); err != nil {
-		t.Fatal(err)
-	}
-	concurrent := []byte("concurrent replacement")
-	if err := os.WriteFile(replacement, concurrent, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	err := removeSameFileDurablyAtCheckpoint(target, expected, func() error {
-		return os.Rename(replacement, target)
-	})
+func TestInstallRootArtifactPreservesHeldPredecessorWriteAfterQuarantine(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
 	if err != nil {
-		t.Fatalf("removeSameFileDurablyAtCheckpoint() error = %v", err)
-	}
-	data, readErr := os.ReadFile(target)
-	if readErr != nil || !bytes.Equal(data, concurrent) {
-		t.Fatalf("concurrent replacement was removed: %q, %v", data, readErr)
-	}
-}
-
-func TestUpgradeNeverOverwritesConcurrentReplacement(t *testing.T) {
-	directory := t.TempDir()
-	target := filepath.Join(directory, "managed")
-	replacement := filepath.Join(directory, "replacement")
-	prior := []byte("managed predecessor")
-	current := []byte("managed replacement")
-	concurrent := []byte("concurrent user replacement")
-	if err := os.WriteFile(target, prior, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(replacement, concurrent, 0o600); err != nil {
+	defer root.Close()
+	predecessor := []byte("managed predecessor")
+	mutated := []byte("held predecessor rewrite")
+	file, err := root.CreateExclusive("artifact", 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	_, err := upgradeArtifactAtCheckpoint(context.Background(), artifact{path: target, content: current, prior: prior}, func() error {
-		if err := os.Remove(target); err != nil {
-			return err
-		}
-		return os.Rename(replacement, target)
-	})
-	if !errors.Is(err, integration.ErrConflict) {
-		t.Fatalf("upgradeArtifactAtCheckpoint() error = %v, want ErrConflict", err)
-	}
-	data, readErr := os.ReadFile(target)
-	if readErr != nil || !bytes.Equal(data, concurrent) {
-		t.Fatalf("concurrent replacement changed: %q, %v", data, readErr)
-	}
-	anchors, globErr := filepath.Glob(filepath.Join(retainedAnchorRoot(directory), ".vgxness-previous-*.tmp"))
-	if globErr != nil || len(anchors) != 1 {
-		t.Fatalf("predecessor recovery anchor = %v, %v; upgrade error = %v", anchors, globErr, err)
-	}
-	backup, backupErr := os.ReadFile(anchors[0])
-	if backupErr != nil || !bytes.Equal(backup, prior) {
-		t.Fatalf("predecessor recovery anchor changed: %q, %v", backup, backupErr)
-	}
-}
-
-func TestUpgradeRejectsHeldDescriptorRewriteAfterQuarantine(t *testing.T) {
-	directory := t.TempDir()
-	target := filepath.Join(directory, "managed")
-	prior, current, concurrent := []byte("managed predecessor"), []byte("managed replacement"), []byte("concurrent quarantined rewrite")
-	if err := os.WriteFile(target, prior, 0o600); err != nil {
+	if err := writeAndSyncRootFile(file, predecessor); err != nil {
 		t.Fatal(err)
 	}
-	writer, err := openDeleteSharingWriter(target)
+	writer, err := openDeleteSharingWriter(filepath.Join(root.path, "artifact"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer writer.Close()
-	_, err = upgradeArtifactAtStagedCheckpoint(context.Background(), artifact{path: target, content: current, prior: prior}, nil, func() error {
+	root.afterRemoveRename = func(name, _ string) {
+		if name != "artifact" {
+			return
+		}
+		if err := writer.Truncate(0); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := writer.WriteAt(mutated, 0); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := writer.Sync(); err != nil {
+			t.Error(err)
+		}
+	}
+
+	_, err = installRootArtifact(context.Background(), root, "artifact", artifact{content: []byte("managed replacement"), prior: predecessor, upgrade: true})
+	current, readErr := root.ReadRegular("artifact")
+	inventory, inventoryErr := retainedPredecessorInventory(root.path)
+	if err == nil || readErr != nil || !bytes.Equal(current, mutated) || inventoryErr == nil || inventory.evidenceCount == 0 {
+		t.Fatalf("install=%v current=%q read=%v inventory=%+v inventoryErr=%v", err, current, readErr, inventory, inventoryErr)
+	}
+}
+
+func TestInstallRootArtifactRetainsHeldPredecessorWriteAfterPublication(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	predecessor := []byte("managed predecessor")
+	managed := []byte("managed replacement")
+	mutated := []byte("post-publication predecessor rewrite")
+	file, err := root.CreateExclusive("artifact", 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAndSyncRootFile(file, predecessor); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := openDeleteSharingWriter(filepath.Join(root.path, "artifact"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	root.afterPublishLink = func(name string) error {
+		if name != "artifact" {
+			return nil
+		}
 		if err := writer.Truncate(0); err != nil {
 			return err
 		}
-		if _, err := writer.WriteAt(concurrent, 0); err != nil {
+		if _, err := writer.WriteAt(mutated, 0); err != nil {
 			return err
 		}
 		return writer.Sync()
-	})
-	data, readErr := os.ReadFile(target)
-	if !errors.Is(err, integration.ErrConflict) || readErr != nil || !bytes.Equal(data, concurrent) {
-		t.Fatalf("upgrade error=%v data=%q read=%v", err, data, readErr)
+	}
+
+	installed, err := installRootArtifact(context.Background(), root, "artifact", artifact{content: managed, prior: predecessor, upgrade: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.CleanupStaged(installed.staged); err != nil {
+		t.Fatal(err)
+	}
+	current, currentErr := root.ReadRegular("artifact")
+	anchor, anchorErr := root.ReadRegular(installed.backup.name)
+	inventory, inventoryErr := retainedPredecessorInventory(root.path)
+	if currentErr != nil || anchorErr != nil || !bytes.Equal(current, managed) || !bytes.Equal(anchor, mutated) || inventoryErr == nil || inventory.evidenceCount == 0 {
+		t.Fatalf("current=%q currentErr=%v anchor=%q anchorErr=%v inventory=%+v inventoryErr=%v", current, currentErr, anchor, anchorErr, inventory, inventoryErr)
 	}
 }
 
-func TestUpgradeRetainsHeldDescriptorWritesAfterPublication(t *testing.T) {
-	directory := t.TempDir()
-	target := filepath.Join(directory, "managed")
-	prior, current, concurrent := []byte("managed predecessor"), []byte("managed replacement"), []byte("post-publication predecessor write")
-	if err := os.WriteFile(target, prior, 0o600); err != nil {
+func TestRollbackRootInstalledArtifactRetainsHeldPredecessorWriteForRecovery(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := openDeleteSharingWriter(target)
+	defer root.Close()
+	predecessor := []byte("managed predecessor")
+	managed := []byte("managed replacement")
+	mutated := []byte("post-publication predecessor rewrite")
+	file, err := root.CreateExclusive("artifact", 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAndSyncRootFile(file, predecessor); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := openDeleteSharingWriter(filepath.Join(root.path, "artifact"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer writer.Close()
-	installed, err := upgradeArtifactWithCheckpoints(context.Background(), artifact{path: target, content: current, prior: prior, retainedRoot: directory}, nil, nil, func() error {
+	root.afterPublishLink = func(name string) error {
+		if name != "artifact" {
+			return nil
+		}
 		if err := writer.Truncate(0); err != nil {
 			return err
 		}
-		if _, err := writer.WriteAt(concurrent, 0); err != nil {
+		if _, err := writer.WriteAt(mutated, 0); err != nil {
 			return err
 		}
 		return writer.Sync()
-	})
+	}
+
+	installed, err := installRootArtifact(context.Background(), root, "artifact", artifact{content: managed, prior: predecessor, upgrade: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cleanupInstalledArtifact(installed); err != nil {
-		t.Fatal(err)
-	}
-	managed, managedErr := os.ReadFile(target)
-	anchor, anchorErr := os.ReadFile(installed.backup)
-	if managedErr != nil || anchorErr != nil || !bytes.Equal(managed, current) || !bytes.Equal(anchor, concurrent) {
-		t.Fatalf("managed=%q managedErr=%v anchor=%q anchorErr=%v", managed, managedErr, anchor, anchorErr)
+	err = rollbackRootInstalledArtifact(root, installed)
+	_, targetErr := root.Lstat("artifact")
+	anchor, anchorErr := root.ReadRegular(installed.backup.name)
+	inventory, inventoryErr := retainedPredecessorInventory(root.path)
+	if err == nil || !errors.Is(targetErr, os.ErrNotExist) || anchorErr != nil || !bytes.Equal(anchor, mutated) || inventoryErr == nil || inventory.evidenceCount == 0 {
+		t.Fatalf("rollback=%v target=%v anchor=%q anchorErr=%v inventory=%+v inventoryErr=%v", err, targetErr, anchor, anchorErr, inventory, inventoryErr)
 	}
 }
 
-func TestUpgradeRollbackRestoresRetainedConcurrentPredecessor(t *testing.T) {
-	directory := t.TempDir()
-	target := filepath.Join(directory, "managed")
-	prior, current, concurrent := []byte("managed predecessor"), []byte("managed replacement"), []byte("post-publication predecessor write")
-	if err := os.WriteFile(target, prior, 0o600); err != nil {
+func TestRootTransactionCleanupStagedPreservesHeldTemporaryWrite(t *testing.T) {
+	root, err := openRootTransaction(t.TempDir(), false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := openDeleteSharingWriter(target)
+	defer root.Close()
+	managed := []byte("managed staged temporary")
+	mutated := []byte("held temporary rewrite")
+	staged, err := root.StageArtifact("artifact", managed, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingInfo, err := root.Lstat(staged.staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryInfo, err := root.Lstat(staged.temporary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && (stagingInfo.Mode().Perm() != 0o700 || temporaryInfo.Mode().Perm() != 0o600) {
+		t.Fatalf("staging modes=%o/%o", stagingInfo.Mode().Perm(), temporaryInfo.Mode().Perm())
+	}
+	writer, err := openDeleteSharingWriter(filepath.Join(root.path, staged.temporary))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer writer.Close()
-	installed, err := upgradeArtifactWithCheckpoints(context.Background(), artifact{path: target, content: current, prior: prior, retainedRoot: directory}, nil, nil, func() error {
-		if err := writer.Truncate(0); err != nil {
-			return err
+	root.beforeRemoveRename = func(name string) {
+		if name != staged.temporary {
+			return
 		}
-		_, err := writer.WriteAt(concurrent, 0)
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
+		if err := writer.Truncate(0); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := writer.WriteAt(mutated, 0); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := writer.Sync(); err != nil {
+			t.Error(err)
+		}
 	}
-	if err := rollbackInstalledArtifact(installed); err != nil {
-		t.Fatal(err)
-	}
-	restored, restoredErr := os.ReadFile(target)
-	if restoredErr != nil || !bytes.Equal(restored, concurrent) || !sameFile(target, installed.backup) {
-		t.Fatalf("restored=%q err=%v", restored, restoredErr)
-	}
-}
 
-func TestUpgradeRetainsPublishedMarkerBeforeQuarantineFailure(t *testing.T) {
-	directory := t.TempDir()
-	target := filepath.Join(directory, "managed")
-	prior := []byte("managed predecessor")
-	if err := os.WriteFile(target, prior, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := upgradeArtifactAtCheckpoint(context.Background(), artifact{path: target, content: []byte("managed replacement"), prior: prior, retainedRoot: directory}, func() error { return errors.New("stop before quarantine") })
-	inventory, retainedErr := retainedPredecessorInventory(directory)
-	retained := inventory.markers
-	if err == nil || retainedErr != nil || len(retained) != 1 {
-		t.Fatalf("upgrade=%v retained=%+v retainedErr=%v", err, retained, retainedErr)
+	err = root.CleanupStaged(staged)
+	current, readErr := root.ReadRegular(staged.temporary)
+	if !errors.Is(err, integration.ErrRecovery) || readErr != nil || !bytes.Equal(current, mutated) {
+		t.Fatalf("cleanup=%v current=%q read=%v", err, current, readErr)
 	}
 }
 
@@ -987,11 +1008,16 @@ func TestReinstallPendingRejectsUnsafeMarkerFile(t *testing.T) {
 			configDirectory := t.TempDir()
 			service := NewIntegration()
 			options := integration.Options{ConfigDir: configDirectory}
+			root, err := openRootTransaction(configDirectory, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
 			layout, err := service.ManagedLayout(context.Background(), options)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := service.writeReinstallPending(context.Background(), configDirectory, layout); err != nil {
+			if _, err := service.writeReinstallPendingAtRoot(context.Background(), root, layout); err != nil {
 				t.Fatal(err)
 			}
 			markerPath := filepath.Join(configDirectory, reinstallPendingName)
@@ -1010,11 +1036,16 @@ func TestReinstallPendingRejectsUnsafeMarkerFile(t *testing.T) {
 
 func TestClearReinstallPendingPreservesConcurrentReplacement(t *testing.T) {
 	configDirectory := t.TempDir()
+	root, err := openRootTransaction(configDirectory, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
 	markerPath := filepath.Join(configDirectory, reinstallPendingName)
 	if err := os.WriteFile(markerPath, []byte("expected"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	expected, err := os.Lstat(markerPath)
+	expected, err := root.Lstat(reinstallPendingName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1026,41 +1057,12 @@ func TestClearReinstallPendingPreservesConcurrentReplacement(t *testing.T) {
 	if err := os.Rename(temporary, markerPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := clearReinstallPending(configDirectory, reinstallPendingEvidence{info: expected, digest: sha256.Sum256([]byte("expected"))}); !errors.Is(err, integration.ErrRecovery) {
-		t.Fatalf("clearReinstallPending() error = %v, want ErrRecovery", err)
+	if err := clearReinstallPendingAtRoot(root, reinstallPendingEvidence{info: expected, digest: sha256.Sum256([]byte("expected"))}); !errors.Is(err, integration.ErrRecovery) {
+		t.Fatalf("clearReinstallPendingAtRoot() error = %v, want ErrRecovery", err)
 	}
 	data, err := os.ReadFile(markerPath)
 	if err != nil || !bytes.Equal(data, replacement) {
 		t.Fatalf("concurrent marker replacement changed: %q, %v", data, err)
-	}
-}
-
-func TestClearReinstallAnchorPreservesConcurrentReplacement(t *testing.T) {
-	directory := t.TempDir()
-	anchorPath := filepath.Join(directory, "anchor")
-	original := []byte("original predecessor")
-	if err := os.WriteFile(anchorPath, original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Lstat(anchorPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacement := []byte("concurrent anchor replacement")
-	temporary := filepath.Join(directory, "replacement")
-	if err := os.WriteFile(temporary, replacement, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(temporary, anchorPath); err != nil {
-		t.Fatal(err)
-	}
-	err = clearReinstallAnchor(reinstallAnchor{target: filepath.Join(directory, "target"), path: anchorPath, bytes: original, info: info})
-	if !errors.Is(err, integration.ErrRecovery) {
-		t.Fatalf("clearReinstallAnchor() error = %v, want ErrRecovery", err)
-	}
-	current, readErr := os.ReadFile(anchorPath)
-	if readErr != nil || !bytes.Equal(current, replacement) {
-		t.Fatalf("concurrent anchor replacement changed: %q, %v", current, readErr)
 	}
 }
 

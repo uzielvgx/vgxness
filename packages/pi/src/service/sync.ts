@@ -3,7 +3,7 @@ import { validBearer, type CredentialPort } from "../ports/credentials.ts";
 import type { HttpPort } from "../ports/http.ts";
 import { SyncHttpError } from "../ports/http.ts";
 import { nowNs, parseTimestamp } from "../sqlite/codec.ts";
-import { SyncWire, normalizeSyncEndpoint, protocolJSON, parseProtocolJSON, validateMutation, type Mutation, type PullChange } from "./sync-wire.ts";
+import { SyncWire, normalizeSyncEndpoint, parseProtocolJSON, validateMutation, type Mutation, type PullChange } from "./sync-wire.ts";
 import { queueSummary, outboxProjectPredicate, assertMutationProject, stableSyncUUID, syncBytes, observationSnapshot, enqueueMutation, translateMutation } from "./sync-state.ts";
 import { repairProject, reseedProject, rejoinProject } from "./sync-recovery.ts";
 export type ServiceContext = {

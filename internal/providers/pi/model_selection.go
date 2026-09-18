@@ -16,6 +16,24 @@ func settingsDigest(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+// validateModelSelection keeps Pi inside its own effort contract. OpenCode
+// variant tokens never belong in Pi settings, whose runtime rejects them.
+func validateModelSelection(c *agentmodels.Config) error {
+	if c == nil {
+		return nil
+	}
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	for _, assignment := range c.Assignments {
+		if assignment.Variant != "" {
+			return errors.New("Pi selections do not support OpenCode variants")
+		}
+	}
+	return nil
+}
+
 func applyModelSettings(value map[string]json.RawMessage, c agentmodels.Config) {
 	value["vgxnessModels"], _ = json.Marshal(c)
 	manager := c.Assignments["manager"]
@@ -54,7 +72,7 @@ func modelSettings(agent string, requested *agentmodels.Config) (string, *agentm
 		if err := dec.Decode(&c); err != nil {
 			return "", nil, false, err
 		}
-		if err := c.Validate(); err != nil {
+		if err := validateModelSelection(&c); err != nil {
 			return "", nil, false, err
 		}
 		installed = &c
@@ -62,7 +80,7 @@ func modelSettings(agent string, requested *agentmodels.Config) (string, *agentm
 	if requested == nil {
 		return settingsDigest(data), installed, false, nil
 	}
-	if err := requested.Validate(); err != nil {
+	if err := validateModelSelection(requested); err != nil {
 		return "", nil, false, err
 	}
 	before, _ := json.Marshal(value)

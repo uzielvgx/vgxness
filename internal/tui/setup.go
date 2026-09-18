@@ -102,11 +102,12 @@ type SetupCatalogModel struct {
 }
 
 type setupCatalogBackend interface {
-	ModelCatalog(context.Context, bool) ([]SetupCatalogModel, error)
+	ModelCatalog(context.Context, setupflow.Provider, bool) ([]SetupCatalogModel, error)
 }
 
 type setupCatalogLoadedMsg struct {
 	generation int
+	provider   setupflow.Provider
 	rows       []SetupCatalogModel
 	err        error
 }
@@ -227,33 +228,87 @@ func (m *Model) initSetup() {
 	m.resetRecoveryState()
 }
 
+// loadSetupCatalog discovers the OpenCode model catalog used by the model
+// editor and by the OpenCode tab of the Models screen.
 func (m *Model) loadSetupCatalog(refresh bool) tea.Cmd {
+	return m.loadProviderCatalog(setupflow.ProviderOpenCode, refresh)
+}
+
+// loadPiCatalog discovers the Pi model store used by the Pi tab.
+func (m *Model) loadPiCatalog(refresh bool) tea.Cmd {
+	return m.loadProviderCatalog(setupflow.ProviderPi, refresh)
+}
+
+func (m *Model) loadProviderCatalog(provider setupflow.Provider, refresh bool) tea.Cmd {
+	if provider == setupflow.ProviderPi {
+		m.cancelPiCatalogLoad()
+		ctx, cancel := context.WithCancel(m.ctx)
+		m.cancelPiCatalog = cancel
+		m.piCatalogGeneration++
+		m.piCatalogLoading = true
+		m.piCatalogErr = nil
+		return m.setupCatalogCommand(provider, ctx, refresh, m.piCatalogGeneration)
+	}
 	m.cancelSetupCatalogLoad()
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.cancelSetupCatalog = cancel
 	m.setupCatalogGeneration++
 	m.setupCatalogLoading = true
 	m.setupCatalogErr = nil
-	return m.setupCatalogCommand(ctx, refresh, m.setupCatalogGeneration)
+	return m.setupCatalogCommand(provider, ctx, refresh, m.setupCatalogGeneration)
 }
 
-func (m Model) setupCatalogCommand(ctx context.Context, refresh bool, generation int) tea.Cmd {
+// ensureProviderCatalog starts one local discovery per provider so opening the
+// Models screen scans automatically without repeating a completed attempt.
+// A cancelled or never-started scan is retried; a finished attempt is not, and
+// stays retryable through an explicit refresh.
+func (m *Model) ensureProviderCatalog(provider setupflow.Provider) tea.Cmd {
+	switch provider {
+	case setupflow.ProviderOpenCode:
+		if m.setupCatalogLoading || m.setupCatalogAttempted {
+			return nil
+		}
+		return m.loadSetupCatalog(false)
+	case setupflow.ProviderPi:
+		if m.piCatalogLoading || m.piCatalogAttempted {
+			return nil
+		}
+		return m.loadPiCatalog(false)
+	}
+	return nil
+}
+
+func (m Model) setupCatalogCommand(provider setupflow.Provider, ctx context.Context, refresh bool, generation int) tea.Cmd {
 	return func() tea.Msg {
 		backend, ok := m.backend.(setupCatalogBackend)
 		if !ok {
-			return setupCatalogLoadedMsg{generation: generation, err: fmt.Errorf("model catalog unavailable")}
+			return setupCatalogLoadedMsg{provider: provider, generation: generation, err: fmt.Errorf("model catalog unavailable")}
 		}
-		rows, err := backend.ModelCatalog(ctx, refresh)
-		return setupCatalogLoadedMsg{generation: generation, rows: append([]SetupCatalogModel(nil), rows...), err: err}
+		rows, err := backend.ModelCatalog(ctx, provider, refresh)
+		return setupCatalogLoadedMsg{provider: provider, generation: generation, rows: append([]SetupCatalogModel(nil), rows...), err: err}
 	}
 }
 
 func (m *Model) handleSetupCatalogLoaded(msg setupCatalogLoadedMsg) {
+	if msg.provider == setupflow.ProviderPi {
+		if msg.generation != m.piCatalogGeneration {
+			return
+		}
+		m.cancelPiCatalogLoad()
+		m.piCatalogLoading = false
+		m.piCatalogAttempted = true
+		m.piCatalogErr = msg.err
+		if msg.err == nil {
+			m.piCatalog = append([]SetupCatalogModel(nil), msg.rows...)
+		}
+		return
+	}
 	if msg.generation != m.setupCatalogGeneration {
 		return
 	}
 	m.cancelSetupCatalogLoad()
 	m.setupCatalogLoading = false
+	m.setupCatalogAttempted = true
 	m.setupCatalogErr = msg.err
 	if msg.err == nil {
 		m.setupCatalog = append([]SetupCatalogModel(nil), msg.rows...)
@@ -264,6 +319,13 @@ func (m *Model) cancelSetupCatalogLoad() {
 	if m.cancelSetupCatalog != nil {
 		m.cancelSetupCatalog()
 		m.cancelSetupCatalog = nil
+	}
+}
+
+func (m *Model) cancelPiCatalogLoad() {
+	if m.cancelPiCatalog != nil {
+		m.cancelPiCatalog()
+		m.cancelPiCatalog = nil
 	}
 }
 
@@ -343,6 +405,9 @@ func (m *Model) cancelSetupOperation() {
 	m.cancelSetupCatalogLoad()
 	m.setupCatalogGeneration++
 	m.setupCatalogLoading = false
+	m.cancelPiCatalogLoad()
+	m.piCatalogGeneration++
+	m.piCatalogLoading = false
 }
 
 func (m *Model) finishSetupOperation() {
@@ -440,7 +505,7 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	if m.multiSetupEnabled() && m.setupView == setupViewReview && msg.String() == "m" {
 		m.setupView = setupViewPlan
-		return true, nil
+		return true, m.ensureProviderCatalog(m.choiceProvider())
 	}
 	if m.setupModelEditing {
 		return m.updateModelEditorKey(msg)
@@ -489,7 +554,7 @@ func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, nil
 			case "enter":
 				m.setupView = setupViewPlan
-				return true, m.loadSetupPlan()
+				return true, tea.Batch(m.loadSetupPlan(), m.ensureProviderCatalog(m.choiceProvider()))
 			case "esc":
 				m.setupView = setupViewHome
 				return true, nil
@@ -1395,7 +1460,11 @@ func (m Model) multiSetupReviewLines() []string {
 		if row.Models != nil {
 			for _, role := range agentmodels.Roles {
 				a := row.Models.Assignments[role]
-				lines = appendSetupWrapped(lines, "│   ", role+" "+a.Model+" effort="+a.Effort, m.setupViewport.Width()-6)
+				detail := " effort=" + a.Effort
+				if a.Variant != "" {
+					detail = " variant=" + a.Variant
+				}
+				lines = appendSetupWrapped(lines, "│   ", role+" "+a.Model+detail, m.setupViewport.Width()-6)
 			}
 		}
 		if row.Integration.ModelAssignments != nil {
@@ -1442,6 +1511,12 @@ func (m Model) setupHelp() string {
 	if m.setupModelEditing && m.setupCatalogSearching {
 		return "[↑↓] result  [Enter] assign  [Esc] cancel search"
 	}
+	if m.modelChoiceSearching {
+		return "[↑↓] result  [Enter] assign  [Esc] cancel"
+	}
+	if m.modelChoiceEditing {
+		return "Type provider/model  [Enter] save  [Esc] cancel"
+	}
 	if m.setupModelEditing {
 		if m.setupAssignmentsSeeded {
 			help := "[↑↓/j/k] row  [←→] model"
@@ -1471,7 +1546,7 @@ func (m Model) setupHelp() string {
 		case setupViewProviders:
 			return "[↑↓/j/k] focus  [Space] toggle  [o/c/p] toggle  [Enter] choose plan  [Esc] home"
 		case setupViewPlan:
-			return "[Tab] provider  [1] single  [2] per agent  [↑↓] agent/plan  [m] edit model  [e] effort  [Enter] review"
+			return "[Tab] provider  [1] single  [2] per agent  [↑↓] agent/plan  [m] scanned models  [i] type  [e] effort  [Enter] review"
 		}
 		if m.setupApplying {
 			return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"

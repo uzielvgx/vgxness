@@ -233,13 +233,9 @@ func (backend tuiBackend) multiSetup(request tui.MultiSetupRequest) (*setupflow.
 		}
 		if provider == setupflow.ProviderPi {
 			releaseDir := os.Getenv("VGXNESS_PI_RELEASE_DIR")
-			agentDir := os.Getenv("PI_CODING_AGENT_DIR")
-			if agentDir == "" {
-				home, homeErr := os.UserHomeDir()
-				if homeErr != nil {
-					return nil, setupflow.MultiOptions{}, homeErr
-				}
-				agentDir = filepath.Join(home, ".pi", "agent")
+			agentDir, agentErr := piAgentDirectory()
+			if agentErr != nil {
+				return nil, setupflow.MultiOptions{}, agentErr
 			}
 			root := os.Getenv("VGXNESS_PI_MANAGED_ROOT")
 			if root == "" {
@@ -269,16 +265,29 @@ func codexSetupOptions(options integration.Options) (integration.Options, error)
 	return integration.Options{HomeDir: home, ModelPlan: options.ModelPlan}, nil
 }
 
-func (backend tuiBackend) ModelCatalog(ctx context.Context, refresh bool) ([]tui.SetupCatalogModel, error) {
-	if backend.catalog == nil {
+func (backend tuiBackend) ModelCatalog(ctx context.Context, provider setupflow.Provider, refresh bool) ([]tui.SetupCatalogModel, error) {
+	var discovery tuiModelCatalog
+	switch provider {
+	case setupflow.ProviderOpenCode:
+		discovery = backend.catalog
+	case setupflow.ProviderPi:
+		store, err := piModelStore()
+		if err != nil {
+			return nil, err
+		}
+		discovery = store
+	default:
+		return nil, fmt.Errorf("model catalog unavailable")
+	}
+	if discovery == nil {
 		return nil, fmt.Errorf("model catalog unavailable")
 	}
 	var snapshot modelcatalog.Snapshot
 	var err error
 	if refresh {
-		snapshot, err = backend.catalog.Refresh(ctx)
+		snapshot, err = discovery.Refresh(ctx)
 	} else {
-		snapshot, err = backend.catalog.Discover(ctx)
+		snapshot, err = discovery.Discover(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -289,6 +298,26 @@ func (backend tuiBackend) ModelCatalog(ctx context.Context, refresh bool) ([]tui
 		rows[index] = tui.SetupCatalogModel{Provider: provider, Reference: reference, Variants: append([]string{}, snapshot.Variants[reference]...), Source: "custom", Availability: "unknown"}
 	}
 	return rows, nil
+}
+
+func piAgentDirectory() (string, error) {
+	agentDir := os.Getenv("PI_CODING_AGENT_DIR")
+	if agentDir != "" {
+		return agentDir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".pi", "agent"), nil
+}
+
+func piModelStore() (*modelcatalog.PiStore, error) {
+	agentDir, err := piAgentDirectory()
+	if err != nil {
+		return nil, err
+	}
+	return modelcatalog.NewPiStore(filepath.Join(agentDir, "models-store.json")), nil
 }
 
 func (backend tuiBackend) SetupStatus(ctx context.Context, request tui.Request) (tui.SetupStatus, error) {

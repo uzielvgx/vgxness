@@ -1,4 +1,4 @@
-import { loadManagerContract, resolveRole } from "../orchestration/contract.ts";
+import { loadManagerContract } from "../orchestration/contract.ts";
 // Synchronous module initialization rejects a malformed generated resource
 // before task schemas, the runner, or the dispatcher can use its authority.
 const contract = loadManagerContract();

@@ -9,8 +9,9 @@ import (
 var Roles = [...]string{"manager", "explore", "general", "verifier", "care-reviewer", "care-specialist", "care-challenger"}
 
 type Assignment struct {
-	Model  string `json:"model"`
-	Effort string `json:"effort"`
+	Model   string `json:"model"`
+	Effort  string `json:"effort"`
+	Variant string `json:"variant,omitempty"`
 }
 type Config struct {
 	SchemaVersion int                   `json:"schemaVersion"`
@@ -21,7 +22,7 @@ type Config struct {
 func Single(model, effort string) (Config, error) {
 	c := Config{SchemaVersion: 1, Mode: "single", Assignments: map[string]Assignment{}}
 	for _, role := range Roles {
-		c.Assignments[role] = Assignment{model, effort}
+		c.Assignments[role] = Assignment{Model: model, Effort: effort}
 	}
 	return c, c.Validate()
 }
@@ -41,9 +42,27 @@ func (c Config) Validate() error {
 		default:
 			return fmt.Errorf("invalid model effort for %s", role)
 		}
+		// Variant carries the exact discovery token for providers that expose
+		// one. It is optional so Pi selections stay within its own contract.
+		if a.Variant != "" && !validVariant(a.Variant) {
+			return fmt.Errorf("invalid model variant for %s", role)
+		}
 		if c.Mode == "single" && a != c.Assignments["manager"] {
 			return fmt.Errorf("single mode requires identical assignments")
 		}
 	}
 	return nil
+}
+
+func validVariant(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, value := range []byte(value) {
+		if value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '-' || value == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }

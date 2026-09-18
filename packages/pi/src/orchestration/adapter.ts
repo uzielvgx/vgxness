@@ -1,6 +1,4 @@
-import { loadManagerContract, resolveRole, renderManagerPrompt, type ManagerContract } from "./contract.ts";
-export async function nativeCapabilities() { return { workers: process.platform === "win32" ? "unsupported" : "native-sdk-rpc", authentication: "host-configured-only", network: "not-required-for-contract", contract: (await loadManagerContract()).identity }; }
-export async function workerAuthority(role: string, contract?: ManagerContract) { const c=contract??await loadManagerContract(); const found=resolveRole(c,role); if(!found) throw new Error("unsupported worker role"); return found.writeAuthority; }
+import { renderManagerPrompt, type ManagerContract } from "./contract.ts";
 
 export const piNativeInstructions = `# Pi native adapter
 Pi owns conversation, models, authentication, and tool execution. The package runs in TypeScript/Node without a VGXNESS Go process, CLI or MCP. VGXNESS only provisions the ecosystem.

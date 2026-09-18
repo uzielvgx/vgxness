@@ -105,7 +105,7 @@ func reservationOperation(name string) error {
 
 func normalize(options Options) (Options, string, error) {
 	if options.Models != nil {
-		if err := options.Models.Validate(); err != nil {
+		if err := validateModelSelection(options.Models); err != nil {
 			return Options{}, "", err
 		}
 	}

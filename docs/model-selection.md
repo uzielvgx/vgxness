@@ -7,18 +7,29 @@ agent**. Codex alone keeps the `low`, `medium`, `high`, and `ultra` plans.
 Have the target application installed and its providers configured first. Model
 references use `provider/model`; providers can differ between agents. Enter the
 identifier used by that application: OpenCode and Pi may use different provider
-names for the same account. Setup does not authenticate or invoke models.
+names for the same account. Setup scans local model data; it does not
+authenticate, invoke, or probe models.
 
 ## In the installation screen
 
 1. Run `vgxness tui`, choose Install or Configure, then select providers.
-2. On the Models screen, use Tab to move between providers.
+2. On the Models screen, use Tab to move between providers. OpenCode and Pi are
+   scanned automatically from their local model data: OpenCode reads its local
+   model list and Pi reads its local model store. The scan proves that an
+   identifier is configured locally, not that it is authorized or supported.
 3. For OpenCode or Pi, choose `1` for a single model or `2` for per-agent models.
-   Use the arrow keys to select an agent and `m` to enter its model reference.
-   Enter saves the field; Escape cancels that field edit.
-4. For Codex, use the arrow keys to select its plan.
-5. Press Enter to preview, then Enter again to review the exact assignments.
-   Apply only after checking the review. Reopen the affected applications afterward.
+   Use the arrow keys to select an agent. Press `m` to open the scanned catalog,
+   type to filter, and press Enter to assign the highlighted entry. Press `i`
+   to type a provider/model reference manually instead. Press `r` to rescan the
+   provider explicitly.
+4. Press `e` to cycle the efforts that the selected model reports, starting from
+   the provider default. OpenCode offers the variants its local model list
+   reports, including exact tokens such as `max`; Pi offers the efforts its
+   model store accepts.
+5. For Codex, use the arrow keys to select its plan.
+6. Press Enter to preview, then Enter again to review the exact assignments.
+   Apply only after checking the review. Reopen the affected applications
+   afterward.
 
 Unedited installed selections are preserved. Changing to per-agent mode requires
 all seven assignments: `manager`, `explore`, `general`, `verifier`,
@@ -56,8 +67,9 @@ for Pi. `--model-plan` targets Codex only.
 `--model-effort` (or `--pi-model-effort`) optionally applies an effort to the
 selection. The default `off` disables Pi thinking; for OpenCode it leaves the
 variant unspecified, using the provider default. Other values are `minimal`,
-`low`, `medium`, `high`, and `xhigh`. The screen allows changing this per agent
-with `e`. A syntactically valid value does not establish provider support.
+`low`, `medium`, `high`, and `xhigh`. The screen offers the variants each
+scanned OpenCode model reports and the efforts each scanned Pi model accepts.
+A syntactically valid value does not establish provider support.
 
 The old OpenCode slot flags and plan selection are rejected by the unified
 installer. Existing model manifests remain readable so an update can preserve
