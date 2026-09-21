@@ -38,6 +38,22 @@ test("worker skills reject missing names, escapes, links and excess resources", 
   await assert.rejects(snapshotWorkerSkills([{ name: "fixture", resources: ["large"] }], options), /budget/);
   await assert.rejects(snapshotWorkerSkills(Array(9).fill({ name: "fixture" }), options), /limit/);
 });
+test("bounded skill listing filters by selector and never returns bodies", async t => {
+  const options = await fixture(t);
+  const { listManagedSkills } = await import("../src/workers/context.ts");
+  const all = await listManagedSkills(options);
+  assert.equal(all.length, 1);
+  assert.equal(all[0].name, "fixture");
+  assert.equal(all[0].description, "Inspect fixture changes.");
+  assert.ok(!JSON.stringify(all).includes("Read references/check.md"));
+  assert.equal((await listManagedSkills(options, { name: "fixture" })).length, 1);
+  assert.equal((await listManagedSkills(options, { name: "other" })).length, 0);
+  assert.equal((await listManagedSkills(options, { search: "fixture" })).length, 1);
+  assert.equal((await listManagedSkills(options, { search: "nope" })).length, 0);
+  assert.equal((await listManagedSkills(options, { search: "fixture", limit: 1 })).length, 1);
+  assert.equal((await listManagedSkills(options, { limit: 0 })).length, 1);
+});
+
 test("bounded skill reader accepts regular fixtures and rejects root, ancestor, and resource links", async t => {
   const options = await fixture(t);
   const fixtureRoot = join(options.sharedRoot, "fixture");

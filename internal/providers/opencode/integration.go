@@ -1681,7 +1681,7 @@ func renderMemoryLifecyclePlugin(resolved string) []byte {
 	return []byte(`import { spawn } from "node:child_process"
 import { isAbsolute } from "node:path"
 
-// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory-lifecycle; version: 1
+// managed-by: vgxness; artifact: opencode-plugin/vgxness-memory-lifecycle; version: 2
 const VGXNESS_EXECUTABLE = ` + string(quoted) + `
 const MAX_INPUT_BYTES = 64 * 1024
 const MAX_OUTPUT_BYTES = 8 * 1024
@@ -1689,6 +1689,8 @@ const MAX_CONTEXT_BYTES = 4 * 1024
 const MAX_SESSIONS = 128
 const TIMEOUT_MS = 5_000
 const CLEANUP_MS = 1_000
+const MAX_REGISTRY_BYTES = 8 * 1024
+const REGISTRY_TIMEOUT_MS = 5_000
 const identifier = value => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,239}$/.test(String(value ?? "")) ? String(value) : ""
 const bounded = (value, limit) => {
   const text = value, suffix = "\n[truncated by VGXNESS]"
@@ -1699,8 +1701,30 @@ const bounded = (value, limit) => {
 }
 const untrusted = value => bounded(value, MAX_CONTEXT_BYTES).replace(/<\s*\/\s*(UNTRUSTED\s+DATA|VGXNESS\s+LIFECYCLE)\s*>/gi, "<\\/$1>")
 
+// Registry discovery is a startup concern independent of the memory lifecycle.
+// It runs once per plugin construction, uses argv (never a shell), bounds both
+// stdout and stderr to 8 KiB, and never blocks session acquisition or system
+// injection. Failure is explicit and non-fatal.
+const registryInitialization = directory => new Promise((resolve, reject) => {
+  if (!isAbsolute(directory)) return reject(new Error("VGXNESS registry unavailable"))
+  const args = ["skills", "registry", "ensure", "--workspace", directory]
+  const child = spawn(VGXNESS_EXECUTABLE, args, { cwd: directory, shell: false, stdio: ["ignore", "pipe", "pipe"], env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, TMPDIR: process.env.TMPDIR, SystemRoot: process.env.SystemRoot } })
+  let stdoutBytes = 0, stderrBytes = 0, settled = false, timer
+  const release = () => { for (const stream of [child.stdout, child.stderr]) try { stream?.destroy?.() } catch {}; try { child.unref?.() } catch {} }
+  const finish = error => { if (settled) return; settled = true; try { clearTimeout(timer) } catch {}; release(); error ? reject(error) : resolve() }
+  const fail = error => { if (settled) return; try { child.kill("SIGKILL") } catch {}; finish(error) }
+  timer = setTimeout(() => fail(new Error("VGXNESS registry timed out")), REGISTRY_TIMEOUT_MS)
+  try { timer?.unref?.() } catch {}
+  child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8")
+  child.stdout.on("data", chunk => { if (settled) return; const bytes = Buffer.byteLength(chunk); if (stdoutBytes + bytes > MAX_REGISTRY_BYTES) return fail(new Error("VGXNESS registry response exceeded its bound")); stdoutBytes += bytes })
+  child.stderr.on("data", chunk => { stderrBytes += Buffer.byteLength(chunk); if (stderrBytes > MAX_REGISTRY_BYTES) fail(new Error("VGXNESS registry failure exceeded its bound")) })
+  child.on("error", () => fail(new Error("VGXNESS registry unavailable")))
+  child.on("close", code => { if (settled) return; if (code !== 0) return finish(new Error("VGXNESS registry failed")); finish(undefined) })
+})
+
 export const VGXNESSMemoryLifecyclePlugin = async ({ directory }) => {
   const sessions = new Map(); let disposed = false, nextGeneration = 0
+  void registryInitialization(directory).catch(() => { try { console.error("[VGXNESS] skill registry initialization failed") } catch {} })
   const invoke = (operation, payload) => new Promise((resolve, reject) => {
     if ((disposed && operation !== "end") || !isAbsolute(directory)) return reject(new Error("VGXNESS lifecycle unavailable"))
     const input = JSON.stringify({ schemaVersion: 1, operation, workspace: directory, ...payload })

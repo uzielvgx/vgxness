@@ -6,10 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"charm.land/bubbles/v2/help"
-	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/list"
-	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -113,71 +110,19 @@ type setupLoadedMsg struct {
 
 type setupStartMsg struct{}
 
-type keyMap struct {
-	Sections key.Binding
-	Select   key.Binding
-	Back     key.Binding
-	Refresh  key.Binding
-	Help     key.Binding
-	Quit     key.Binding
-}
-
-func newKeyMap() keyMap {
-	return keyMap{
-		Sections: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "sections")),
-		Select:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-		Back:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Refresh:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
-		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	}
-}
-
-func (keys keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{keys.Sections, keys.Back, keys.Refresh, keys.Help, keys.Quit}
-}
-
-func (keys keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{keys.Sections, keys.Select, keys.Back}, {keys.Refresh, keys.Help, keys.Quit}}
-}
-
 type route uint8
 
 const routeSetup route = iota
 
-type focusArea uint8
-
-const (
-	focusContent focusArea = iota
-	focusNavigation
-	focusMemorySearch
-	focusMemoryList
-	focusMemoryDetail
-)
-
-type sectionItem struct {
-	route       route
-	title       string
-	description string
-}
-
-func (item sectionItem) Title() string       { return item.title }
-func (item sectionItem) Description() string { return item.description }
-func (item sectionItem) FilterValue() string { return item.title }
-
 type Model struct {
-	ctx        context.Context
-	loadCtx    context.Context
-	cancelLoad context.CancelFunc
-	backend    Backend
-	options    Options
+	ctx     context.Context
+	backend Backend
+	options Options
 
 	width      int
 	height     int
 	generation int
 	route      route
-	focus      focusArea
-	sections   list.Model
 
 	setup                  SetupStatus
 	setupErr               error
@@ -188,11 +133,14 @@ type Model struct {
 	modelChoices           [2]modelChoice
 	modelChoiceProvider    int
 	modelChoiceRow         int
+	modelChoiceModeChoice  int
 	modelChoiceEditing     bool
-	modelChoiceInput       string
-	modelChoiceSearching   bool
-	modelChoiceQuery       string
-	modelChoiceResultIndex int
+	manualInput            textinput.Model
+	pickerOpen             bool
+	pickerStep             pickerStep
+	pickerProvider         string
+	pickerFilter           textinput.Model
+	pickerIndex            int
 	codexPlanEdited        bool
 	modelChoiceError       string
 	setupMultiPlan         setupflow.MultiPlan
@@ -269,38 +217,17 @@ type Model struct {
 	setupEditorPlan             SetupPlan
 	setupEditorRequest          SetupRequest
 	setupEditorPreviewed        bool
-
-	spinner spinner.Model
-	help    help.Model
-	keys    keyMap
 }
 
 func NewModel(ctx context.Context, backend Backend, options Options) Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	spin := spinner.New()
-	spin.Spinner = spinner.MiniDot
-	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = false
-	delegate.SetHeight(1)
-	delegate.SetSpacing(0)
-	sections := list.New([]list.Item{
-		sectionItem{route: routeSetup, title: "Installation", description: "install, repair, configure"},
-	}, delegate, 24, 1)
-	sections.SetShowTitle(false)
-	sections.SetShowFilter(false)
-	sections.SetShowHelp(false)
-	sections.SetShowPagination(false)
-	sections.SetShowStatusBar(false)
-	sections.DisableQuitKeybindings()
-	loadCtx, cancelLoad := context.WithCancel(ctx)
 	model := Model{
-		ctx: ctx, loadCtx: loadCtx, cancelLoad: cancelLoad,
-		backend: backend, options: options, generation: 1,
-		route: routeSetup, focus: focusContent, sections: sections,
-		setupGeneration: 1,
-		spinner:         spin, help: help.New(), keys: newKeyMap(),
+		ctx: ctx, backend: backend, options: options, generation: 1,
+		route: routeSetup, setupGeneration: 1,
+		manualInput:  newPickerInput("", ""),
+		pickerFilter: newPickerInput("> ", "filter"),
 	}
 	model.initSetup()
 	return model
@@ -324,11 +251,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case setupStartMsg:
 		m.setupLoading = true
-		return m, tea.Batch(m.loadStartupStatus(), m.spinner.Tick)
+		return m, m.loadStartupStatus()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.help.SetWidth(max(1, msg.Width))
 		m.resizeSetup()
+		return m, nil
+	case tea.PasteMsg:
+		switch {
+		case m.pickerOpen:
+			var cmd tea.Cmd
+			m.pickerFilter, cmd = m.pickerFilter.Update(msg)
+			m.pickerIndex = 0
+			return m, cmd
+		case m.modelChoiceEditing:
+			var cmd tea.Cmd
+			m.manualInput, cmd = m.manualInput.Update(msg)
+			return m, cmd
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		if m.setupApplying || m.recoveryOperation.mutating() {
@@ -350,30 +289,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if m.tooSmall() {
-			if key.Matches(msg, m.keys.Quit) {
+			if msg.String() == "q" || msg.String() == "ctrl+c" {
 				m.cancelSetupOperation()
 				m.cancelRecoveryOperation()
 				return m, tea.Quit
 			}
 			return m, nil
 		}
-		if m.focus != focusNavigation {
-			if handled, cmd := m.updateSetupKey(msg); handled {
-				return m, cmd
-			}
+		if handled, cmd := m.updateSetupKey(msg); handled {
+			return m, cmd
 		}
-		if key.Matches(msg, m.keys.Quit) {
+		if msg.String() == "q" {
 			m.cancelSetupOperation()
 			m.cancelRecoveryOperation()
 			return m, tea.Quit
-		}
-		if key.Matches(msg, m.keys.Help) {
-			m.help.ShowAll = !m.help.ShowAll
-			return m, nil
-		}
-		switch {
-		case key.Matches(msg, m.keys.Sections):
-			return m, nil
 		}
 	case setupLoadedMsg:
 		if msg.generation != m.generation || msg.value.statusGeneration != m.setupStatusGeneration {
@@ -406,13 +335,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleRecoveryRestored(msg)
 	case recoveryReinstalledMsg:
 		return m, m.handleRecoveryReinstalled(msg)
-	case spinner.TickMsg:
-		if !m.loading() {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
 	}
 	return m, nil
 }
@@ -441,22 +363,41 @@ func (m Model) render() string {
 	panelWidth := max(1, width-2)
 	body := studioPanel.Width(panelWidth).Render(strings.Join(m.renderSetupRoute(), "\n"))
 	lines = append(lines, strings.Split(body, "\n")...)
-	if !(m.multiSetupEnabled() && m.setupView == setupViewReview) {
+	if !m.pickerOpen && !(m.multiSetupEnabled() && m.setupView == setupViewReview) {
 		lines = append(lines, studioMuted.Render(m.setupHelp()))
 	}
-	return lipgloss.NewStyle().Background(softbricCanvas).Width(width).Render(fit(lines, width, m.height))
+	base := lipgloss.NewStyle().Background(softbricCanvas).Width(width).Render(fit(lines, width, m.height))
+	if m.pickerOpen {
+		return m.overlayPicker(base, width, m.height)
+	}
+	return base
+}
+
+// headerWorkspace keeps the workspace on one header line by trimming the path
+// from the left, which preserves the most specific trailing directories.
+func (m Model) headerWorkspace(maxWidth int) string {
+	path := sanitizeTerminal(m.options.Workspace)
+	runes := []rune(path)
+	if maxWidth < 4 {
+		maxWidth = 4
+	}
+	if len(runes) > maxWidth {
+		path = "…" + string(runes[len(runes)-(maxWidth-1):])
+	}
+	return studioMuted.Render("workspace  ") + path
 }
 
 func (m Model) brandHeader() []string {
-	workspace := studioMuted.Render("workspace  ") + sanitizeTerminal(m.options.Workspace)
-	if m.wide() && m.setupView == setupViewHome {
+	if m.wide() && m.setupView == setupViewHome && !m.setupModelEditing {
+		const prefix = "INSTALLATION STUDIO  ·  LOCAL SETUP CONSOLE   workspace  "
 		return append(softbricBanner(),
-			studioAccent.Render("INSTALLATION STUDIO")+studioMuted.Render("  ·  LOCAL SETUP CONSOLE")+"   "+workspace,
+			studioAccent.Render("INSTALLATION STUDIO")+studioMuted.Render("  ·  LOCAL SETUP CONSOLE")+"   "+m.headerWorkspace(m.width-lipgloss.Width(prefix)),
 		)
 	}
+	const prefix = "Install · reinstall · configure   │   workspace  "
 	return []string{
 		studioAccent.Render("VGXNESS / INSTALLATION STUDIO"),
-		studioCyan.Render("Install · reinstall · configure") + studioMuted.Render("   │   ") + workspace,
+		studioCyan.Render("Install · reinstall · configure") + studioMuted.Render("   │   ") + m.headerWorkspace(m.width-lipgloss.Width(prefix)),
 	}
 }
 
@@ -485,27 +426,6 @@ func softbricBanner() []string {
 	return lines
 }
 
-func (m Model) renderRoute() []string {
-	return m.renderSetupRoute()
-}
-
-func (m Model) loading() bool {
-	return m.setupLoading || m.setupPlanLoading || m.setupApplying || m.recoveryOperation != recoveryOperationIdle
-}
-
-func (m *Model) cancelCurrentLoad() {
-	if m.cancelLoad != nil {
-		m.cancelLoad()
-		m.cancelLoad = nil
-	}
-}
-
-func (m *Model) cancelCompletedLoad() {
-	if !m.loading() {
-		m.cancelCurrentLoad()
-	}
-}
-
 func (m Model) tooSmall() bool {
 	return m.width < minimumWidth || m.height < minimumHeight
 }
@@ -514,17 +434,8 @@ func (m Model) wide() bool {
 	return m.width >= 100
 }
 
-func (m *Model) resizeSections() {
-	width := max(1, m.width-4)
-	if m.wide() {
-		width = 24
-	}
-	m.sections.SetSize(width, 4)
-}
-
 func (m *Model) setRoute(next route) {
 	m.route = next
-	m.sections.Select(int(next))
 	if next == routeSetup {
 		m.setupView = setupViewHome
 		m.setupSelected = defaultSetupPlan
@@ -551,7 +462,6 @@ func (m *Model) setRoute(next route) {
 		m.setupViewport.GotoTop()
 		m.resetRecoveryState()
 	}
-	m.focus = focusContent
 }
 
 func padLine(value string, width int) string {

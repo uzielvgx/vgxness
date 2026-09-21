@@ -17,11 +17,16 @@ authenticate, invoke, or probe models.
    scanned automatically from their local model data: OpenCode reads its local
    model list and Pi reads its local model store. The scan proves that an
    identifier is configured locally, not that it is authorized or supported.
-3. For OpenCode or Pi, choose `1` for a single model or `2` for per-agent models.
-   Use the arrow keys to select an agent. Press `m` to open the scanned catalog,
-   type to filter, and press Enter to assign the highlighted entry. Press `i`
+3. After confirming the hosts, each OpenCode and Pi screen first asks how to
+   assign models: `1` for one model for all agents or `2` for one model per
+   agent (arrow keys and Enter work too). The configuration screen then shows a
+   single row or all seven agents. Use the arrow keys to select an agent, then
+   press `m` to open the model picker: pick a provider first, then a model from
+   that provider. Type to filter either list, use the arrow keys to move, press
+   Enter to choose, and Escape to go back one step or close the picker. Press `i`
    to type a provider/model reference manually instead. Press `r` to rescan the
-   provider explicitly.
+   provider explicitly. An installed selection skips the question and keeps its
+   current mode until you edit it.
 4. Press `e` to cycle the efforts that the selected model reports, starting from
    the provider default. OpenCode offers the variants its local model list
    reports, including exact tokens such as `max`; Pi offers the efforts its

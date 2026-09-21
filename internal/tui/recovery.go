@@ -497,7 +497,7 @@ func (m *Model) moveRecoverySelection(offset int) {
 
 func (m Model) recoveryRouteLines() []string {
 	provider := m.recoveryProvider()
-	lines := []string{strings.ToUpper(string(provider)) + " SETUP  Install  [Backup & Recovery]", "mode  " + strings.ToUpper(m.recoveryMode)}
+	lines := []string{studioAccent.Render("Backup & Recovery") + "  ·  " + strings.ToUpper(string(provider)), "mode  " + strings.ToUpper(m.recoveryMode)}
 	if provider != setupflow.ProviderCodex && m.recoveryMode == RecoveryModeFull {
 		lines = append(lines, "! FULL BACKUP WARNING", "  May contain credentials; local storage is 0700/0600 with no encryption.")
 	}
@@ -553,14 +553,21 @@ func (m Model) recoveryRouteLines() []string {
 	if m.recoveryPlan.Ready {
 		readiness = "✓ READY"
 	}
-	lines = append(lines, "", readiness,
-		"source  "+setupValue(m.recoveryPlan.SourceRoot),
-		"backup  "+setupValue(m.recoveryPlan.BackupRoot),
-		fmt.Sprintf("managed artifacts  %d", m.recoveryPlan.ArtifactCount),
-		"launcher  "+setupValue(m.recoveryPlan.LauncherState),
-		"integration  "+setupValue(m.recoveryPlan.IntegrationState),
-		setupHandshake(m.recoveryPlan.HandshakeOK, m.recoveryPlan.HandshakeStatus),
-	)
+	lines = append(lines, "", readiness)
+	for _, field := range []struct{ label, value string }{
+		{"source", m.recoveryPlan.SourceRoot},
+		{"backup", m.recoveryPlan.BackupRoot},
+		{"launcher", m.recoveryPlan.LauncherState},
+		{"integration", m.recoveryPlan.IntegrationState},
+	} {
+		if field.value != "" {
+			lines = append(lines, field.label+"  "+sanitizeTerminal(field.value))
+		}
+	}
+	lines = append(lines, fmt.Sprintf("managed artifacts  %d", m.recoveryPlan.ArtifactCount))
+	if m.recoveryPlan.HandshakeStatus != "" {
+		lines = append(lines, setupHandshake(m.recoveryPlan.HandshakeOK, m.recoveryPlan.HandshakeStatus))
+	}
 	if m.recoveryPlan.Blocker != "" {
 		lines = append(lines, "Blocker: "+sanitizeTerminal(m.recoveryPlan.Blocker))
 	}
@@ -664,15 +671,15 @@ func (m Model) recoveryHelp() string {
 	if m.recoveryPreview.SnapshotID != "" {
 		return "[j/k] inspect conflicts  [x] restore missing only  [Esc] close preview"
 	}
-	modeHelp := "[h/l] mode  "
-	if m.recoveryProvider() == setupflow.ProviderCodex {
-		modeHelp = "managed-only  "
-	}
-	switchHelp := ""
+	parts := []string{"[r] refresh"}
 	if m.multiSetupEnabled() && m.hasSetupProvider(setupflow.ProviderOpenCode) && m.hasSetupProvider(setupflow.ProviderCodex) {
-		switchHelp = "[o/c] provider  "
+		parts = append(parts, "o/c provider")
 	}
-	return "[Tab] Install  [r] refresh  " + switchHelp + modeHelp + "[j/k] snapshot  [p] preview  controlled writes: [b] backup [i] reinstall"
+	if m.recoveryProvider() != setupflow.ProviderCodex {
+		parts = append(parts, "[h/l] mode")
+	}
+	parts = append(parts, "[j/k] snap", "[p] preview", "[b] backup", "[i] reinstall")
+	return strings.Join(parts, " · ")
 }
 
 func (m Model) recoveryProvider() setupflow.Provider {

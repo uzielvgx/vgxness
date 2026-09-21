@@ -24,6 +24,7 @@ import (
 	"github.com/vgxness/vgxness/internal/providers/pi"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/vgxness/vgxness/internal/skillregistry"
 	"github.com/vgxness/vgxness/internal/skills"
 	"github.com/vgxness/vgxness/internal/tui"
 )
@@ -76,7 +77,7 @@ func runWithMCPAndRuntimes(ctx context.Context, args []string, stdin io.Reader, 
 		return cli.RunVersion(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "skills" {
-		return cli.RunSkills(ctx, args[1:], stdout, stderr, skills.New())
+		return cli.RunSkills(ctx, args[1:], stdout, stderr, skills.New(), skillregistry.New())
 	}
 	if len(args) > 0 && args[0] == "mcp" {
 		if launchMCP == nil {
