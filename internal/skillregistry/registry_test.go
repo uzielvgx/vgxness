@@ -719,6 +719,72 @@ func TestLockReleaseNeverRemovesReplacement(t *testing.T) {
 	}
 }
 
+func TestLockReleaseRemovesOwnLock(t *testing.T) {
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	lock, err := acquireLock(context.Background(), root, "skill-registry.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.release(root)
+	if _, err := os.Stat(filepath.Join(directory, "skill-registry.lock")); !os.IsNotExist(err) {
+		t.Fatalf("a writer must remove the lock it owns: %v", err)
+	}
+}
+
+func TestLockOwnershipRejectsSamePIDSuccessor(t *testing.T) {
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	lock, err := acquireLock(context.Background(), root, "skill-registry.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(directory, "skill-registry.lock")
+	acquired, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitN(strings.TrimSpace(string(acquired)), "\n", 2)
+	if len(lines) != 2 || lines[0] != strconv.Itoa(os.Getpid()) || len(lines[1]) != 32 {
+		t.Fatalf("lock body must be PID plus a 32-hex token: %q", acquired)
+	}
+	if pid, ok := lockPID(acquired); !ok || pid != os.Getpid() {
+		t.Fatalf("token lock PID parse: pid=%d ok=%t", pid, ok)
+	}
+	lock.release(root)
+	// A PID-only successor and a same-PID different-token successor must both
+	// survive release: PID equality is not proof of ownership.
+	for _, successor := range [][]byte{
+		[]byte(strconv.Itoa(os.Getpid())),
+		[]byte(strconv.Itoa(os.Getpid()) + "\n" + strings.Repeat("0", 32)),
+	} {
+		held, err := acquireLock(context.Background(), root, "skill-registry.lock")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(lockPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(lockPath, successor, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		held.release(root)
+		data, err := os.ReadFile(lockPath)
+		if err != nil || string(data) != string(successor) {
+			t.Fatalf("release removed a same-PID successor %q: got %q err=%v", successor, data, err)
+		}
+		_ = os.Remove(lockPath)
+	}
+}
+
 func TestStaleLockRecoveryRequiresProvablyDeadOwner(t *testing.T) {
 	directory := t.TempDir()
 	root, err := os.OpenRoot(directory)

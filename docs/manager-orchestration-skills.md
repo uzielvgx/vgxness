@@ -98,11 +98,21 @@ their current bytes are.
 - Publication is atomic: a temporary file is staged in the destination
   directory, `fsync`ed, and renamed over the destination.
 - Concurrent writers serialize through an exclusive lock file
-  (`skill-registry.lock`). Lock release is identity-aware: a writer removes only
-  the exact lock it created, never a replacement written by another process. A
-  lock is recovered only when it is old, the recorded owner process is provably
-  gone, and the lock identity is unchanged; otherwise the writer waits a bounded
+  (`skill-registry.lock`). Each acquisition records its PID and a random
+  per-acquisition token and keeps an open handle to that exact file. Release
+  removes the lock only when both the file identity and the recorded bytes still
+  match, so a PID-only or same-PID successor, or a path recreated onto a reused
+  inode or Windows FileId, is never removed. A lock is recovered only when it is
+  old, the recorded owner process is provably gone (on Windows via
+  `OpenProcess`/`GetExitCodeProcess`, failing closed on access-denied or unknown
+  results), and the identity is unchanged; otherwise the writer waits a bounded
   interval and reports `ErrBusy` rather than deleting a possibly active lock.
+  Transient Windows delete-pending or sharing-violation contention on the lock
+  path is retried within the same bound; permission and other errors fail closed.
+  The identity-plus-bytes check before removal is not an atomic compare-and-unlink,
+  so a same-user writer that replaces the path inside the final check-to-remove
+  window is outside this cooperative lock's threat model; that residual limit is
+  accepted and documented rather than claimed closed.
 - Cache reads use a rooted directory handle and a bounded regular-file read
   (`O_NOFOLLOW`/`O_NONBLOCK` on Unix), so a symlink, FIFO, or oversized file is
   rejected without unbounded or blocking I/O. A symlinked state directory, cache

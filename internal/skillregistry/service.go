@@ -80,6 +80,9 @@ func (service *Service) Load(ctx context.Context, options Options) (Registry, bo
 // Unlock removes a stale lock only when it is old, the recorded owner process
 // is provably gone, and the lock identity is unchanged. It never removes an
 // active lock and reports false without error when there is nothing to recover.
+// On Windows the owner probe uses OpenProcess/GetExitCodeProcess and fails
+// closed on access-denied or unknown results; legacy PID-only lock files remain
+// recoverable.
 func (service *Service) Unlock(ctx context.Context, options Options) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
