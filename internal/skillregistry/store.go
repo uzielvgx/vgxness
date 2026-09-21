@@ -40,8 +40,13 @@ type rootedFS interface {
 // and never stored or mutated globally, so it cannot race across goroutines.
 type ops struct {
 	contention func(error) bool
-	retryDelay time.Duration
-	maxWait    time.Duration
+	// metadataAmbiguous classifies a lock-metadata observation failure that is
+	// ambiguous rather than a proven permission problem. It is separate from
+	// contention so an access-denied stat can be re-observed without ever
+	// retrying an open, remove, read, or write.
+	metadataAmbiguous func(error) bool
+	retryDelay        time.Duration
+	maxWait           time.Duration
 
 	lockWrite func(*os.File, []byte) (int, error)
 	lockSync  func(*os.File) error
@@ -62,17 +67,18 @@ func realOps() ops {
 	sync := func(file *os.File) error { return file.Sync() }
 	closeFile := func(file *os.File) error { return file.Close() }
 	return ops{
-		contention: retryableContention,
-		retryDelay: lockRetryDelay,
-		maxWait:    maxLockWait,
-		lockWrite:  write,
-		lockSync:   sync,
-		lockClose:  closeFile,
-		tempWrite:  write,
-		tempSync:   sync,
-		tempClose:  closeFile,
-		remove:     func(root rootedFS, name string) error { return root.Remove(name) },
-		rename:     func(root rootedFS, oldname, newname string) error { return root.Rename(oldname, newname) },
+		contention:        retryableContention,
+		metadataAmbiguous: ambiguousLockMetadata,
+		retryDelay:        lockRetryDelay,
+		maxWait:           maxLockWait,
+		lockWrite:         write,
+		lockSync:          sync,
+		lockClose:         closeFile,
+		tempWrite:         write,
+		tempSync:          sync,
+		tempClose:         closeFile,
+		remove:            func(root rootedFS, name string) error { return root.Remove(name) },
+		rename:            func(root rootedFS, oldname, newname string) error { return root.Rename(oldname, newname) },
 	}
 }
 
@@ -84,6 +90,35 @@ func invalid(err error) error {
 		return ErrInvalid
 	}
 	return fmt.Errorf("%w: %w", ErrInvalid, err)
+}
+
+// ambiguousMetadataError marks a lock-metadata observation that is ambiguous (a
+// Windows access-denied on the lock name) rather than a proven permission
+// failure. Only the Lstat observation sites construct it, so acquisition and
+// recovery re-observe on exact operation provenance instead of matching an
+// errno that a wrapped open, remove, read, or write failure could also carry. It
+// preserves the original cause for errors.Is.
+type ambiguousMetadataError struct{ err error }
+
+func (e *ambiguousMetadataError) Error() string { return e.err.Error() }
+func (e *ambiguousMetadataError) Unwrap() error { return e.err }
+
+// ambiguousMetadata marks an ambiguous metadata observation while preserving its
+// cause. It is the only constructor, so provenance cannot be forged by wrapping.
+func ambiguousMetadata(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ambiguousMetadataError{err: err}
+}
+
+// isAmbiguousMetadata reports whether err originated at an ambiguous metadata
+// observation. It deliberately matches the typed provenance rather than an
+// errno, so a permission failure from a remove, open, read, or write is never
+// re-observed as if it were a metadata probe.
+func isAmbiguousMetadata(err error) bool {
+	var target *ambiguousMetadataError
+	return errors.As(err, &target)
 }
 
 // readCache reads the cache as a bounded regular file through a rooted
@@ -292,7 +327,14 @@ func acquireLock(ctx context.Context, root *os.Root, name string) (*fileLock, er
 
 func acquireLockWith(ctx context.Context, root rootedFS, name string, o ops) (*fileLock, error) {
 	deadline := time.Now().Add(o.maxWait)
+	// ambiguous remembers an access-denied metadata observation from the most
+	// recent iteration. It is re-observed within the single deadline above, so
+	// a denial that persists to the deadline is reported as ErrInvalid carrying
+	// its original cause rather than ErrBusy or a silent success. Unknown
+	// failures still fail closed immediately.
+	var ambiguous error
 	for {
+		ambiguous = nil
 		// Boundary: never create or remove anything under an already-cancelled
 		// context.
 		if err := ctx.Err(); err != nil {
@@ -315,7 +357,10 @@ func acquireLockWith(ctx context.Context, root rootedFS, name string, o ops) (*f
 				removed, recoverErr := recoverStaleLockWith(root, name, o)
 				switch {
 				case recoverErr != nil:
-					if !o.contention(recoverErr) {
+					switch {
+					case isAmbiguousMetadata(recoverErr):
+						ambiguous = recoverErr
+					case !o.contention(recoverErr):
 						return nil, recoverErr
 					}
 				case removed:
@@ -325,9 +370,17 @@ func acquireLockWith(ctx context.Context, root rootedFS, name string, o ops) (*f
 				// The lock vanished or is pending deletion: bounded wait below.
 			case o.contention(statErr):
 				// Transient stat contention: bounded wait below.
+			case o.metadataAmbiguous(statErr):
+				// Ambiguous access-denied metadata: re-observe within the bound
+				// without creating or removing anything.
+				ambiguous = ambiguousMetadata(statErr)
 			default:
 				return nil, invalid(statErr)
 			}
+		} else if o.metadataAmbiguous(precheckErr) {
+			// Ambiguous access-denied metadata on the precheck: re-observe
+			// within the bound without mutating anything.
+			ambiguous = ambiguousMetadata(precheckErr)
 		} else if !o.contention(precheckErr) {
 			if errors.Is(precheckErr, ErrInvalid) {
 				return nil, precheckErr
@@ -335,6 +388,9 @@ func acquireLockWith(ctx context.Context, root rootedFS, name string, o ops) (*f
 			return nil, invalid(precheckErr)
 		}
 		if time.Now().After(deadline) {
+			if ambiguous != nil {
+				return nil, invalid(ambiguous)
+			}
 			return nil, ErrBusy
 		}
 		select {
@@ -455,8 +511,39 @@ func openLockHandle(root rootedFS, name string) (*os.File, os.FileInfo, []byte, 
 // owner process is gone, and the lock file identity still matches. Any
 // uncertainty, including a transient stat/remove result, returns false so the
 // caller waits within its own bound instead of deleting a possibly active lock.
-func recoverStaleLock(root rootedFS, name string) (bool, error) {
-	return recoverStaleLockWith(root, name, realOps())
+//
+// It is the recovery entry point used by Service.Unlock. It re-observes an
+// ambiguous access-denied lock-metadata result within the caller's bound, so a
+// transient Windows denial during a concurrent unlink/recreate does not abort
+// recovery, while a denial that persists to the bound is reported as ErrInvalid
+// carrying the OS cause rather than a false success. Cancellation is honored
+// throughout.
+func recoverStaleLock(ctx context.Context, root rootedFS, name string) (bool, error) {
+	return recoverStaleLockBounded(ctx, root, name, realOps())
+}
+
+func recoverStaleLockBounded(ctx context.Context, root rootedFS, name string, o ops) (bool, error) {
+	deadline := time.Now().Add(o.maxWait)
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		recovered, err := recoverStaleLockWith(root, name, o)
+		if err == nil {
+			return recovered, nil
+		}
+		if !isAmbiguousMetadata(err) {
+			return false, err
+		}
+		if time.Now().After(deadline) {
+			return false, invalid(err)
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(o.retryDelay):
+		}
+	}
 }
 
 func recoverStaleLockWith(root rootedFS, name string, o ops) (bool, error) {
@@ -469,6 +556,12 @@ func recoverStaleLockWith(root rootedFS, name string, o ops) (bool, error) {
 			// Transient stat contention is not provably stale; let the caller
 			// keep waiting within its existing bound.
 			return false, nil
+		case o.metadataAmbiguous(err):
+			// An access-denied metadata observation is ambiguous, not proof of
+			// staleness. Mark the exact provenance so the caller re-observes
+			// only this stage; a remove/open/read/write denial never carries
+			// this marker. No mutation happens on this path.
+			return false, ambiguousMetadata(err)
 		default:
 			return false, invalid(err)
 		}

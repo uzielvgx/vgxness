@@ -35,3 +35,34 @@ func TestRetryableContentionClassification(t *testing.T) {
 		}
 	}
 }
+
+// TestAmbiguousLockMetadataClassification locks in the Windows metadata
+// classification: access-denied is ambiguous for a lock-metadata observation,
+// while sharing, delete-pending, missing, and unrelated errors are not, and
+// access-denied stays outside retryableContention so data operations fail
+// closed.
+func TestAmbiguousLockMetadataClassification(t *testing.T) {
+	ambiguous := []error{
+		windows.ERROR_ACCESS_DENIED,
+		fmt.Errorf("wrapped access denied: %w", windows.ERROR_ACCESS_DENIED),
+	}
+	for _, err := range ambiguous {
+		if !ambiguousLockMetadata(err) {
+			t.Fatalf("metadata observation %v must be ambiguous", err)
+		}
+	}
+	for _, err := range []error{
+		windows.ERROR_SHARING_VIOLATION,
+		windows.ERROR_DELETE_PENDING,
+		windows.ERROR_FILE_NOT_FOUND,
+		windows.ERROR_INVALID_PARAMETER,
+		errReadSymlink,
+	} {
+		if ambiguousLockMetadata(err) {
+			t.Fatalf("non-metadata %v must not be ambiguous", err)
+		}
+	}
+	if retryableContention(windows.ERROR_ACCESS_DENIED) {
+		t.Fatal("access-denied must stay outside retryableContention")
+	}
+}

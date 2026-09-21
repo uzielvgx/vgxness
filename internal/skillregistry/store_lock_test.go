@@ -481,3 +481,288 @@ func TestRecoverStaleLockTransientAndUnknown(t *testing.T) {
 		t.Fatalf("unknown recovery stat must fail closed preserving cause: removed=%t err=%v", removed, err)
 	}
 }
+
+// errInjectedDenied stands in for the Windows access-denied metadata class so the
+// bounded re-observation path is deterministic on every platform without
+// claiming the exact Windows root cause.
+var errInjectedDenied = errors.New("injected access-denied metadata")
+
+// ambiguousOps classifies only errInjectedTransient as retryable contention and
+// only errInjectedDenied as an ambiguous metadata observation, with a short
+// bound so exhaustion, re-observation, and cancellation tests stay
+// deterministic. It uses the per-call ops seam, never a mutable global.
+func ambiguousOps() ops {
+	o := realOps()
+	o.contention = func(err error) bool { return errors.Is(err, errInjectedTransient) }
+	o.metadataAmbiguous = func(err error) bool { return errors.Is(err, errInjectedDenied) }
+	o.retryDelay = time.Millisecond
+	o.maxWait = 40 * time.Millisecond
+	return o
+}
+
+func TestAcquireLockAmbiguousMetadataReobservedThenSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "skill-registry.lock")
+	calls := 0
+	root := fakeRoot{
+		lstat: func(string) (os.FileInfo, error) {
+			calls++
+			if calls == 1 {
+				return nil, errInjectedDenied
+			}
+			return nil, fs.ErrNotExist
+		},
+		open: func(name string, flag int, perm os.FileMode) (*os.File, error) {
+			return os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+		},
+	}
+	lock, err := acquireLockWith(context.Background(), root, "skill-registry.lock", ambiguousOps())
+	if err != nil {
+		t.Fatalf("a re-observed metadata denial must not fail the acquisition: %v", err)
+	}
+	if lock == nil || lock.file == nil {
+		t.Fatal("acquisition must return a held lock")
+	}
+	if calls < 2 {
+		t.Fatalf("the denied observation must be re-observed, calls=%d", calls)
+	}
+	_ = lock.file.Close()
+}
+
+func TestAcquireLockPersistentAmbiguousMetadataFailsInvalidNotBusy(t *testing.T) {
+	opened := 0
+	root := fakeRoot{
+		lstat: func(string) (os.FileInfo, error) { return nil, errInjectedDenied },
+		open: func(string, int, os.FileMode) (*os.File, error) {
+			opened++
+			return nil, errInjectedDenied
+		},
+	}
+	_, err := acquireLockWith(context.Background(), root, "skill-registry.lock", ambiguousOps())
+	if !errors.Is(err, ErrInvalid) || !errors.Is(err, errInjectedDenied) {
+		t.Fatalf("a persistent metadata denial must fail closed preserving cause, got %v", err)
+	}
+	if errors.Is(err, ErrBusy) {
+		t.Fatalf("a persistent metadata denial must not be reported as ErrBusy: %v", err)
+	}
+	if opened != 0 {
+		t.Fatalf("no create may follow a denied metadata probe (opened=%d)", opened)
+	}
+}
+
+func TestAcquireLockAmbiguousMetadataWaitsThenCancels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	root := fakeRoot{lstat: func(string) (os.FileInfo, error) { return nil, errInjectedDenied }}
+	mustCancelAfter(t, cancel, 5*time.Millisecond)
+	if _, err := acquireLockWith(ctx, root, "skill-registry.lock", ambiguousOps()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("an ambiguous metadata probe must wait for cancellation, got %v", err)
+	}
+}
+
+func TestAcquireLockAmbiguousPostOpenMetadataFailsInvalid(t *testing.T) {
+	calls := 0
+	root := fakeRoot{
+		lstat: func(string) (os.FileInfo, error) {
+			calls++
+			if calls == 1 {
+				return nil, fs.ErrNotExist
+			}
+			return nil, errInjectedDenied
+		},
+		open: func(string, int, os.FileMode) (*os.File, error) { return nil, fs.ErrExist },
+	}
+	_, err := acquireLockWith(context.Background(), root, "skill-registry.lock", ambiguousOps())
+	if !errors.Is(err, ErrInvalid) || !errors.Is(err, errInjectedDenied) || errors.Is(err, ErrBusy) {
+		t.Fatalf("a persistent post-open metadata denial must be ErrInvalid with cause, got %v", err)
+	}
+}
+
+func TestAcquireLockAmbiguousRecoveryMetadataFailsInvalid(t *testing.T) {
+	calls := 0
+	root := fakeRoot{
+		lstat: func(string) (os.FileInfo, error) {
+			calls++
+			switch calls % 3 {
+			case 1:
+				return nil, fs.ErrNotExist
+			case 2:
+				return regularLockInfo(), nil
+			default:
+				return nil, errInjectedDenied
+			}
+		},
+		open: func(string, int, os.FileMode) (*os.File, error) { return nil, fs.ErrExist },
+	}
+	_, err := acquireLockWith(context.Background(), root, "skill-registry.lock", ambiguousOps())
+	if !errors.Is(err, ErrInvalid) || !errors.Is(err, errInjectedDenied) || errors.Is(err, ErrBusy) {
+		t.Fatalf("a persistent recovery metadata denial must be ErrInvalid with cause, got %v", err)
+	}
+}
+
+func TestAcquireLockAmbiguousMetadataSharesOneDeadline(t *testing.T) {
+	o := ambiguousOps()
+	o.maxWait = 30 * time.Millisecond
+	root := fakeRoot{lstat: func(string) (os.FileInfo, error) { return nil, errInjectedDenied }}
+	start := time.Now()
+	_, err := acquireLockWith(context.Background(), root, "skill-registry.lock", o)
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("exhausted ambiguous metadata must be ErrInvalid, got %v", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("re-observation must share the acquisition deadline, elapsed=%s", elapsed)
+	}
+}
+
+func TestAcquireLockSymlinkMetadataStillRejected(t *testing.T) {
+	opened := 0
+	root := fakeRoot{
+		lstat: func(string) (os.FileInfo, error) {
+			return fakeInfo{mode: os.ModeSymlink | 0o777, mod: time.Now()}, nil
+		},
+		open: func(string, int, os.FileMode) (*os.File, error) {
+			opened++
+			return nil, errors.New("must not open a symlink")
+		},
+	}
+	_, err := acquireLockWith(context.Background(), root, "skill-registry.lock", ambiguousOps())
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a symlink lock path must stay rejected, got %v", err)
+	}
+	if opened != 0 {
+		t.Fatalf("a symlink lock path must not be opened (opened=%d)", opened)
+	}
+}
+
+func TestRecoverStaleLockBoundedPersistentAmbiguousPreservesForeignBytes(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "skill-registry.lock")
+	if err := os.WriteFile(lockPath, []byte("foreign-owner"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := fakeRoot{
+		lstat:  func(string) (os.FileInfo, error) { return nil, errInjectedDenied },
+		remove: func(name string) error { return os.Remove(filepath.Join(dir, name)) },
+	}
+	recovered, err := recoverStaleLockBounded(context.Background(), root, "skill-registry.lock", ambiguousOps())
+	if recovered || !errors.Is(err, ErrInvalid) || !errors.Is(err, errInjectedDenied) {
+		t.Fatalf("a persistent recovery denial must fail closed preserving cause: recovered=%t err=%v", recovered, err)
+	}
+	if data, readErr := os.ReadFile(lockPath); readErr != nil || string(data) != "foreign-owner" {
+		t.Fatalf("a denied probe must not mutate the lock: %q err=%v", data, readErr)
+	}
+}
+
+func TestRecoverStaleLockBoundedAmbiguousThenVanishes(t *testing.T) {
+	calls := 0
+	root := fakeRoot{lstat: func(string) (os.FileInfo, error) {
+		calls++
+		if calls == 1 {
+			return nil, errInjectedDenied
+		}
+		return nil, fs.ErrNotExist
+	}}
+	recovered, err := recoverStaleLockBounded(context.Background(), root, "skill-registry.lock", ambiguousOps())
+	if recovered || err != nil {
+		t.Fatalf("a denial that clears to absence must yield false,nil: recovered=%t err=%v", recovered, err)
+	}
+}
+
+func TestRecoverStaleLockBoundedCancelsWhileProbing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	root := fakeRoot{lstat: func(string) (os.FileInfo, error) { return nil, errInjectedDenied }}
+	mustCancelAfter(t, cancel, 5*time.Millisecond)
+	if _, err := recoverStaleLockBounded(ctx, root, "skill-registry.lock", ambiguousOps()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a recovery probe must honor cancellation, got %v", err)
+	}
+}
+
+// staleLockRoot writes a lock owned by a dead PID with an old mtime and returns
+// its rooted directory handle and on-disk path. It lets the remove-denial
+// regressions reach the mutation stage deterministically on every platform.
+func staleLockRoot(t *testing.T) (*os.Root, string) {
+	t.Helper()
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	lockPath := filepath.Join(dir, "skill-registry.lock")
+	if err := os.WriteFile(lockPath, []byte("1073741824"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * staleLockAge)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	return root, lockPath
+}
+
+// removeDeniedOps classifies errInjectedDenied as the ambiguous metadata class,
+// exactly as the Windows classifier does for access-denied, while making every
+// remove fail with that same sentinel. If the loops re-observed on an errno
+// match rather than on typed metadata provenance, a remove denial would be
+// retried as if it were a metadata probe.
+func removeDeniedOps(removes *int) ops {
+	o := realOps()
+	o.contention = func(err error) bool { return errors.Is(err, errInjectedTransient) }
+	o.metadataAmbiguous = func(err error) bool { return errors.Is(err, errInjectedDenied) }
+	o.retryDelay = time.Millisecond
+	o.maxWait = 40 * time.Millisecond
+	o.remove = func(rootedFS, string) error {
+		*removes++
+		return errInjectedDenied
+	}
+	return o
+}
+
+func TestAcquireLockRemoveDeniedIsNotReobserved(t *testing.T) {
+	root, lockPath := staleLockRoot(t)
+	removes := 0
+	_, err := acquireLockWith(context.Background(), root, "skill-registry.lock", removeDeniedOps(&removes))
+	if !errors.Is(err, ErrInvalid) || !errors.Is(err, errInjectedDenied) {
+		t.Fatalf("a remove denial must fail closed preserving cause, got %v", err)
+	}
+	if errors.Is(err, ErrBusy) {
+		t.Fatalf("a remove denial must not be re-observed as ambiguous metadata: %v", err)
+	}
+	if removes != 1 {
+		t.Fatalf("a remove denial must not be retried, removes=%d", removes)
+	}
+	if _, statErr := os.Stat(lockPath); statErr != nil {
+		t.Fatalf("a denied remove must not delete the lock: %v", statErr)
+	}
+}
+
+func TestRecoverStaleLockBoundedRemoveDeniedIsImmediate(t *testing.T) {
+	root, lockPath := staleLockRoot(t)
+	removes := 0
+	recovered, err := recoverStaleLockBounded(context.Background(), root, "skill-registry.lock", removeDeniedOps(&removes))
+	if recovered || !errors.Is(err, ErrInvalid) || !errors.Is(err, errInjectedDenied) {
+		t.Fatalf("a remove denial must fail closed preserving cause: recovered=%t err=%v", recovered, err)
+	}
+	if removes != 1 {
+		t.Fatalf("a remove denial must not be retried, removes=%d", removes)
+	}
+	if _, statErr := os.Stat(lockPath); statErr != nil {
+		t.Fatalf("a denied remove must not delete the lock: %v", statErr)
+	}
+}
+
+func TestRecoverStaleLockBoundedUnknownRemoveFailsImmediately(t *testing.T) {
+	root, _ := staleLockRoot(t)
+	sentinel := errors.New("injected remove failure")
+	removes := 0
+	o := realOps()
+	o.retryDelay = time.Millisecond
+	o.maxWait = 40 * time.Millisecond
+	o.remove = func(rootedFS, string) error {
+		removes++
+		return sentinel
+	}
+	recovered, err := recoverStaleLockBounded(context.Background(), root, "skill-registry.lock", o)
+	if recovered || !errors.Is(err, ErrInvalid) || !errors.Is(err, sentinel) || removes != 1 {
+		t.Fatalf("an unknown remove failure must fail closed once: recovered=%t removes=%d err=%v", recovered, removes, err)
+	}
+}
