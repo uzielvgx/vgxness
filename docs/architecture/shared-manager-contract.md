@@ -7,6 +7,18 @@ model-plan role identifiers. Provider adapters supply native tool names,
 transport, permissions and model configuration. Each agent has exactly one maintained definition; historical prompt bodies and
 reconstruction chains are removed from the source tree.
 
+Project code exploration is delegated to the Explore role. The Manager retains a
+narrow, explicit operational-inspection authority for local Git queries,
+delivery and candidate state, and reading only the active host configuration
+binding used for registry bootstrap; it is not a general parallel-exploration
+permission and never bypasses a native deny. OpenCode read-only roles declare a
+single scoped `external_directory` grant for the conventional
+`~/.agents/skills/**` root (Explore additionally allows public `webfetch`); the
+full home, provider configuration, and other external paths stay denied, and
+custom roots require an explicit binding. Go and Pi project the same shared
+Manager text; these declarations are configuration evidence, not runtime
+sandbox proof.
+
 Go embeds and validates the registry. Pi loads its generated JSON using
 TypeScript/Node and rejects invalid identity, schema, role definitions and
 content digest. Both implementations hash recursively sorted-key compact JSON

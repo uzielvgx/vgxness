@@ -70,8 +70,15 @@ async function managedSkillEntries(options: Parameters<typeof discoverSkillPaths
   }
   return entries;
 }
-export async function listManagedSkills(options: Parameters<typeof discoverSkillPaths>[0] = {}) {
-  return (await managedSkillEntries(options)).map(({ name, manifest }) => ({ name, sha256: manifest.sha256, description: /^description:\s*([^\n]+)$/m.exec(manifest.content)?.[1]?.trim() ?? "Read SKILL.md for applicability." }));
+export type SkillSelector = { search?: string; name?: string; limit?: number };
+/** Bounded metadata listing: never returns skill bodies and never the full catalog by default. */
+export async function listManagedSkills(options: Parameters<typeof discoverSkillPaths>[0] = {}, selector: SkillSelector = {}) {
+  const entries = (await managedSkillEntries(options)).map(({ name, manifest }) => ({ name, sha256: manifest.sha256, description: /^description:\s*([^\n]+)$/m.exec(manifest.content)?.[1]?.trim() ?? "" }));
+  let matched = entries;
+  if (selector.name !== undefined) matched = matched.filter(entry => entry.name === selector.name);
+  else if (selector.search !== undefined) { const needle = selector.search.toLowerCase(); matched = matched.filter(entry => (entry.name + "\n" + entry.description).toLowerCase().includes(needle)); }
+  const limit = Math.min(Math.max(Number.isInteger(selector.limit) ? selector.limit! : 20, 1), 100);
+  return matched.slice(0, limit);
 }
 /** Host resolves selected managed skills; the model never supplies trusted skill bytes. */
 export async function snapshotWorkerSkills(selections: SkillSelection[], options: Parameters<typeof discoverSkillPaths>[0] = {}): Promise<WorkerSkill[]> {

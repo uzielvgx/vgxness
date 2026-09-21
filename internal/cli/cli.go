@@ -17,6 +17,7 @@ import (
 	"github.com/vgxness/vgxness/internal/secrets"
 	"github.com/vgxness/vgxness/internal/selfinstall"
 	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/vgxness/vgxness/internal/skillregistry"
 	"github.com/vgxness/vgxness/internal/skills"
 )
 
@@ -189,6 +190,16 @@ func failure(err error) (int, string) {
 		return 1, "conflict: self-install target contains unmanaged content"
 	case errors.Is(err, selfinstall.ErrDrift):
 		return 1, "drift: managed self-install differs from its manifest"
+	case errors.Is(err, skillregistry.ErrInvalid):
+		return 2, "invalid: skill registry request is invalid"
+	case errors.Is(err, skillregistry.ErrNotFound):
+		return 1, "not_found: skill registry entry was not found"
+	case errors.Is(err, skillregistry.ErrBusy):
+		return 1, "conflict: skill registry is locked by another writer"
+	case errors.Is(err, skillregistry.ErrAmbiguous):
+		return 1, "conflict: skill registry name is ambiguous; resolve by explicit id or path"
+	case errors.Is(err, skillregistry.ErrStale):
+		return 1, "drift: skill registry entry no longer matches its source"
 	case errors.Is(err, skills.ErrInvalid):
 		return 2, "invalid: skills request is invalid"
 	case errors.Is(err, skills.ErrConflict):

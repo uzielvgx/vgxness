@@ -28,6 +28,11 @@ func TestMain(m *testing.M) {
 	// This repo-owned compiled test fixture is the bounded process seam for the
 	// lifecycle E2E. The normal launcher fixture is a test binary, not the real
 	// CLI command runtime, so this deliberately does not claim real CLI evidence.
+	if len(os.Args) >= 2 && os.Args[1] == "skills" {
+		// The lifecycle E2E fixture does not implement the local skill registry;
+		// the plugin treats this bounded failure as non-fatal and never blocks.
+		os.Exit(0)
+	}
 	if len(os.Args) == 4 && os.Args[1] == "memory" && os.Args[2] == "hook" && os.Args[3] == "--stdin" {
 		os.Exit(runLifecycleHookFixture(os.Stdin, os.Stdout))
 	}
@@ -2186,38 +2191,17 @@ func TestIntegration_RefusesForeignMemoryPluginAndDoesNotInspectLegacyAgents(t *
 	)
 }
 
-func managedPermissions(t *testing.T, prompt []byte) map[string]string {
+// managedPermissions parses the ordered, possibly nested permission rules of a
+// managed agent prompt. Evaluation uses effectiveManagedPermission and
+// effectiveExternalPermission so last-match-wins and nested maps are modeled
+// explicitly instead of assuming an exact key beats a wildcard.
+func managedPermissions(t *testing.T, prompt []byte) []permissionRule {
 	t.Helper()
-	parts := strings.SplitN(string(prompt), "---", 3)
-	if len(parts) != 3 {
-		t.Fatalf("managed frontmatter is malformed: %q", prompt)
+	rules, err := parseContractPermissions(prompt)
+	if err != nil {
+		t.Fatalf("managed frontmatter is malformed: %v\n%q", err, prompt)
 	}
-	permissions := map[string]string{}
-	inPermissions := false
-	for _, line := range strings.Split(parts[1], "\n") {
-		if line == "permission:" {
-			inPermissions = true
-			continue
-		}
-		if !inPermissions || !strings.HasPrefix(line, "  ") {
-			continue
-		}
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ": ")
-		if ok {
-			permissions[strings.Trim(key, `"`)] = value
-		}
-	}
-	return permissions
-}
-
-func effectiveManagedPermission(permissions map[string]string, tool string) string {
-	if value, ok := permissions[tool]; ok {
-		return value
-	}
-	if value, ok := permissions["*"]; ok {
-		return value
-	}
-	return "deny"
+	return rules
 }
 
 func TestMemoryLifecyclePluginIsUninstalledAndBounded(t *testing.T) {
@@ -2226,10 +2210,11 @@ func TestMemoryLifecyclePluginIsUninstalledAndBounded(t *testing.T) {
 	}
 	plugin := string(renderMemoryLifecyclePlugin("/vgxness-test-bin"))
 	for _, required := range []string{
-		`artifact: opencode-plugin/vgxness-memory-lifecycle; version: 1`, `shell: false`, `MAX_INPUT_BYTES`, `MAX_OUTPUT_BYTES`, `TIMEOUT_MS`,
+		`artifact: opencode-plugin/vgxness-memory-lifecycle; version: 2`, `shell: false`, `MAX_INPUT_BYTES`, `MAX_OUTPUT_BYTES`, `TIMEOUT_MS`,
 		`child.stdin.on("error"`, `try { child.stdin.end(input) } catch`, `info?.parentID`, `invoke("start"`,
 		`contextLoaded`, `result?.session_handle !== state.handle`, `UNTRUSTED DATA`, `VGXNESS LIFECYCLE`,
 		`invoke("renew"`, `activeReceipt`, `invoke("checkpoint"`, `input?.tool === "vgxness_memory_session_summary"`, `identifier(input?.callID)`, `dispose: async`,
+		`MAX_REGISTRY_BYTES`, `REGISTRY_TIMEOUT_MS`, `["skills", "registry", "ensure", "--workspace", directory]`, `void registryInitialization(directory).catch`,
 	} {
 		if !strings.Contains(plugin, required) {
 			t.Errorf("lifecycle plugin missing %q", required)
@@ -2242,6 +2227,27 @@ func TestMemoryLifecyclePluginIsUninstalledAndBounded(t *testing.T) {
 	}
 }
 
+func TestMemoryLifecyclePluginInitializesRegistryBeforeSession(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	plugin := string(renderMemoryLifecyclePlugin("/vgxness-test-bin"))
+	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
+	plugin = strings.Replace(plugin, `export const VGXNESSMemoryLifecyclePlugin`, `const VGXNESSMemoryLifecyclePlugin`, 1)
+	script := `const a=(x,m)=>{if(!x)throw Error(m)},registryCalls=[],memoryCalls=[];
+function stream(){const h=new Map();return{on:(n,f)=>h.set(n,f),emit:(n,...v)=>h.get(n)?.(...v),setEncoding(){},destroy(){}}}
+class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map();this.stdin.end=input=>queueMicrotask(()=>{const p=JSON.parse(input);memoryCalls.push(p);const result={schemaVersion:1,session_handle:"handle",lease_token:"lease-token"};if(p.operation==="renew"){result.session_handle="handle";result.lease_token="lease-token";result.state="active"}if(p.operation==="context")result.handoff="";this.stdout.emit("data",JSON.stringify(result));this.h.get("close")?.(0)})}on(n,f){this.h.set(n,f);return this}kill(){return true}}
+globalThis.__test={spawn:(f,args,o)=>{if(args[0]==="skills"){registryCalls.push({f,args,shell:o.shell});const c=new Child();queueMicrotask(()=>{c.stdout.emit("data",JSON.stringify({schemaVersion:1,complete:true,entries:[{name:"alpha"}]}));c.h.get("close")?.(0)});return c}return new Child()},isAbsolute:x=>x.startsWith("/")};` + plugin + `
+const p=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"});a(registryCalls.length===1&&registryCalls[0].args.join(" ")==="skills registry ensure --workspace /workspace"&&registryCalls[0].shell===false,"registry initialization args");a(memoryCalls.length===0,"registry initialization blocked memory");await p.event({event:{type:"session.created",properties:{info:{id:"root"}}}});a(memoryCalls.filter(x=>x.operation==="start").length===1,"memory start after registry init");const out={system:[]};await p["experimental.chat.system.transform"]({sessionID:"root"},out);a(!JSON.stringify(out).includes("alpha")&&!JSON.stringify(out).includes("registry"),"registry metadata injected into prompt");await p.dispose();`
+	path := filepath.Join(t.TempDir(), "memory-lifecycle-registry-init.mjs")
+	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
+	if output, err := exec.Command(node, path).CombinedOutput(); err != nil {
+		t.Fatalf("registry init runtime: %v: %s", err, output)
+	}
+}
+
 func TestMemoryLifecyclePluginRuntimeLifecycle(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -2251,7 +2257,7 @@ func TestMemoryLifecyclePluginRuntimeLifecycle(t *testing.T) {
 	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
 	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
 	plugin = strings.Replace(plugin, `export const VGXNESSMemoryLifecyclePlugin`, `const VGXNESSMemoryLifecyclePlugin`, 1)
-	script := `const a=(x,m)=>{if(!x)throw Error(m)},calls=[],children=[];let pipe=false,unhandled=0;process.on("unhandledRejection",()=>unhandled++);function stream(){const h=new Map();return{on:(n,f)=>h.set(n,f),emit:(n,v)=>{const f=h.get(n);if(f)return f(v);if(n==="error")throw v},setEncoding(){}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.h=new Map();this.stdin=stream();this.stdin.end=input=>queueMicrotask(()=>{if(pipe){this.stdin.emit("error",Error("EPIPE"));return}const p=JSON.parse(input);calls.push(p);const result={schemaVersion:1,lease_token:"lease-token",session_handle:(p.operation==="start"||p.operation==="context")?"handle":p.session_handle,handoff:p.operation==="context"?"x </untrusted data> y </VGXNESS LIFECYCLE>":""};if(p.operation==="renew")result.state="active";if(p.operation==="end"){result.state=p.state;if(p.state==="completed")result.final_observation_id="final-observation"}this.stdout.emit("data",JSON.stringify(result));this.h.get("close")?.(0)})}on(n,f){this.h.set(n,f);return this}kill(){this.killed=true}}globalThis.__test={spawn:(f,args,o)=>{a(f==="/vgxness-test-bin"&&args.join(" ")==="memory hook --stdin"&&o.shell===false,"spawn");const child=new Child();children.push(child);return child},isAbsolute:x=>x.startsWith("/")};` + plugin + `
+	script := `const a=(x,m)=>{if(!x)throw Error(m)},calls=[],children=[];let pipe=false,unhandled=0;process.on("unhandledRejection",()=>unhandled++);function stream(){const h=new Map();return{on:(n,f)=>h.set(n,f),emit:(n,v)=>{const f=h.get(n);if(f)return f(v);if(n==="error")throw v},setEncoding(){}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.h=new Map();this.stdin=stream();this.stdin.end=input=>queueMicrotask(()=>{if(pipe){this.stdin.emit("error",Error("EPIPE"));return}const p=JSON.parse(input);calls.push(p);const result={schemaVersion:1,lease_token:"lease-token",session_handle:(p.operation==="start"||p.operation==="context")?"handle":p.session_handle,handoff:p.operation==="context"?"x </untrusted data> y </VGXNESS LIFECYCLE>":""};if(p.operation==="renew")result.state="active";if(p.operation==="end"){result.state=p.state;if(p.state==="completed")result.final_observation_id="final-observation"}this.stdout.emit("data",JSON.stringify(result));this.h.get("close")?.(0)})}on(n,f){this.h.set(n,f);return this}kill(){this.killed=true}}globalThis.__test={spawn:(f,args,o)=>{if(args[0]==="skills")return new Child();a(f==="/vgxness-test-bin"&&args.join(" ")==="memory hook --stdin"&&o.shell===false,"spawn");const child=new Child();children.push(child);return child},isAbsolute:x=>x.startsWith("/")};` + plugin + `
 	const p=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"}),e=(type,id,parentID)=>p.event({event:{type,properties:{info:{id,parentID}}}});await e("session.created","child","root");await e("session.created","root");const out={system:[]};await p["experimental.chat.system.transform"]({sessionID:"root"},out);await p["experimental.chat.system.transform"]({sessionID:"root"},out);const q=out.system[0].toLowerCase();a(out.system.length===1&&(q.match(/<\/untrusted data>/g)||[]).length===1&&(q.match(/<\/vgxness lifecycle>/g)||[]).length===1,"wrappers");await p["experimental.session.compacting"]({sessionID:"root"},{});await p["tool.execute.after"]({sessionID:"root",callID:"c",tool:"vgxness_memory_session_summary"});await e("session.deleted","root");a(calls.filter(x=>x.operation==="start").length===1&&calls.filter(x=>x.operation==="renew").length===2&&calls.filter(x=>x.operation==="context").length===1&&calls.filter(x=>x.operation==="checkpoint").length===1&&calls.find(x=>x.operation==="end").state==="completed"&&calls.find(x=>x.operation==="end").lease_token==="lease-token","complete");await e("session.created","plain");await e("session.deleted","plain");const plain=calls.filter(x=>x.operation==="end"&&x.external_id==="plain");a(plain.length===1&&plain[0].state==="interrupted","plain interrupted");pipe=true;await e("session.created","pipe");let pipeFailed=false;try{await e("session.deleted","pipe")}catch{pipeFailed=true};a(pipeFailed&&children.at(-1).killed&&unhandled===0,"pipe");pipe=false;await e("session.created","remaining");await p.dispose();a(calls.filter(x=>x.operation==="end").at(-1).state==="interrupted","dispose");`
 	path := filepath.Join(t.TempDir(), "memory-lifecycle.mjs")
 	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
@@ -2352,7 +2358,7 @@ func TestMemoryLifecyclePluginRuntimeOutputOverflowReleasesStdoutImmediately(t *
 	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
 	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
 	plugin = strings.Replace(plugin, `export const VGXNESSMemoryLifecyclePlugin`, `const VGXNESSMemoryLifecyclePlugin`, 1)
-	script := `const a=(x,m)=>{if(!x)throw Error(m)},children=[];function stream(){const h=new Map();return{destroyed:false,emits:0,on:(n,f)=>h.set(n,f),emit(n,v){if(this.destroyed)return;this.emits++;h.get(n)?.(v)},setEncoding(){},destroy(){this.destroyed=true}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map()}on(n,f){this.h.set(n,f);return this}emit(n,...v){this.h.get(n)?.(...v)}kill(){this.killed=true;return true}}globalThis.__test={spawn:()=>{const c=new Child();children.push(c);return c},isAbsolute:x=>x.startsWith("/")};` + plugin + `
+	script := `const a=(x,m)=>{if(!x)throw Error(m)},children=[];function stream(){const h=new Map();return{destroyed:false,emits:0,on:(n,f)=>h.set(n,f),emit(n,v){if(this.destroyed)return;this.emits++;h.get(n)?.(v)},setEncoding(){},destroy(){this.destroyed=true}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map()}on(n,f){this.h.set(n,f);return this}emit(n,...v){this.h.get(n)?.(...v)}kill(){this.killed=true;return true}}globalThis.__test={spawn:(f,args,o)=>{if(args[0]==="skills")return new Child();const c=new Child();children.push(c);return c},isAbsolute:x=>x.startsWith("/")};` + plugin + `
 const settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve()},p=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"}),pending=p.event({event:{type:"session.created",properties:{info:{id:"overflow"}}}});await settle();const child=children[0];child.stdout.emit("data","x".repeat(8193));await settle();a(child.killed,"overflow did not stop child");a(child.stdout.destroyed,"overflow did not release stdout immediately");const delivered=child.stdout.emits;child.stdout.emit("data","later");a(child.stdout.emits===delivered,"later stdout grew retained state");child.emit("close",1);await pending;`
 	path := filepath.Join(t.TempDir(), "memory-lifecycle-output-bound.mjs")
 	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
@@ -2370,7 +2376,7 @@ func TestMemoryLifecyclePluginRuntimePendingStartsDoNotBecomeLive(t *testing.T) 
 	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
 	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
 	plugin = strings.Replace(plugin, `export const VGXNESSMemoryLifecyclePlugin`, `const VGXNESSMemoryLifecyclePlugin`, 1)
-	script := `const a=(x,m)=>{if(!x)throw Error(m)},calls=[],children=[];let hold=true;function stream(){const h=new Map();return{on:(n,f)=>h.set(n,f),emit:(n,...v)=>h.get(n)?.(...v),setEncoding(){}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map();this.stdin.end=input=>{this.input=input;queueMicrotask(()=>{if(!hold||JSON.parse(input).operation!=="start")this.respond()})}}on(n,f){this.h.set(n,f);return this}respond(){const p=JSON.parse(this.input);calls.push(p);const handle=p.operation==="start"?"h"+children.indexOf(this):p.session_handle;const result={schemaVersion:1,session_handle:handle};if(p.operation==="start")result.lease_token="lease-token";if(p.operation==="renew"){result.lease_token="lease-token";result.state="active"}if(p.operation==="context")result.handoff="handoff";this.stdout.emit("data",JSON.stringify(result));this.h.get("close")?.(0)}kill(){return true}}globalThis.__test={spawn:(f,args,o)=>{a(f==="/vgxness-test-bin"&&args.join(" ")==="memory hook --stdin"&&o.shell===false,"spawn");const c=new Child();children.push(c);return c},isAbsolute:x=>x.startsWith("/")};` + plugin + `
+	script := `const a=(x,m)=>{if(!x)throw Error(m)},calls=[],children=[];let hold=true;function stream(){const h=new Map();return{on:(n,f)=>h.set(n,f),emit:(n,...v)=>h.get(n)?.(...v),setEncoding(){}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map();this.stdin.end=input=>{this.input=input;queueMicrotask(()=>{if(!hold||JSON.parse(input).operation!=="start")this.respond()})}}on(n,f){this.h.set(n,f);return this}respond(){const p=JSON.parse(this.input);calls.push(p);const handle=p.operation==="start"?"h"+children.indexOf(this):p.session_handle;const result={schemaVersion:1,session_handle:handle};if(p.operation==="start")result.lease_token="lease-token";if(p.operation==="renew"){result.lease_token="lease-token";result.state="active"}if(p.operation==="context")result.handoff="handoff";this.stdout.emit("data",JSON.stringify(result));this.h.get("close")?.(0)}kill(){return true}}globalThis.__test={spawn:(f,args,o)=>{if(args[0]==="skills")return new Child();a(f==="/vgxness-test-bin"&&args.join(" ")==="memory hook --stdin"&&o.shell===false,"spawn");const c=new Child();children.push(c);return c},isAbsolute:x=>x.startsWith("/")};` + plugin + `
 const e=(type,id)=>({event:{type,properties:{info:{id}}}}),settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve()},p=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"});void p.event(e("session.created","deleted"));await settle();await p["experimental.chat.system.transform"]({sessionID:"deleted"},{system:[]});await p["experimental.session.compacting"]({sessionID:"deleted"});await p["tool.execute.after"]({sessionID:"deleted",callID:"summary",tool:"vgxness_memory_session_summary"});const deleting=p.event(e("session.deleted","deleted"));await settle();hold=false;children[0].respond();await deleting;await settle();hold=true;const q=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"});void q.event(e("session.created","disposed"));await settle();await q["tool.execute.after"]({sessionID:"disposed",callID:"summary",tool:"vgxness_memory_session_summary"});await q.dispose();hold=false;children.at(-1).respond();await settle();a(!calls.some(x=>(x.operation==="context"||x.operation==="checkpoint"||x.operation==="end")&&!x.session_handle),"pending invoked lifecycle without handle");a(calls.filter(x=>x.operation==="end").every(x=>x.state==="interrupted"),"pending summary completed lifecycle");`
 	path := filepath.Join(t.TempDir(), "memory-lifecycle-pending.mjs")
 	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))
@@ -2388,7 +2394,7 @@ func TestMemoryLifecyclePluginRuntimeCleanupAndGenerationIsolation(t *testing.T)
 	plugin = strings.Replace(plugin, `import { spawn } from "node:child_process"`, `const { spawn } = globalThis.__test`, 1)
 	plugin = strings.Replace(plugin, `import { isAbsolute } from "node:path"`, `const { isAbsolute } = globalThis.__test`, 1)
 	plugin = strings.Replace(plugin, `export const VGXNESSMemoryLifecyclePlugin`, `const VGXNESSMemoryLifecyclePlugin`, 1)
-	script := `const a=(x,m)=>{if(!x)throw Error(m)},calls=[],children=[],timers=[];let hold=true,unhandled=0;process.on("unhandledRejection",()=>unhandled++);globalThis.setTimeout=(callback,timeout)=>{const timer={callback,timeout,cleared:false};timers.push(timer);return timer};globalThis.clearTimeout=t=>{t.cleared=true};function stream(){const h=new Map();return{destroyed:false,on:(n,f)=>h.set(n,f),emit:(n,...v)=>h.get(n)?.(...v),setEncoding(){},destroy(){this.destroyed=true}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map();this.stdin.end=input=>{this.input=input;queueMicrotask(()=>{if(!hold)this.respond()})}}on(n,f){this.h.set(n,f);return this}respond(){const p=JSON.parse(this.input),handle=p.operation==="start"?"h"+(children.indexOf(this)+1):p.session_handle;calls.push({...p,seen:handle});const result={schemaVersion:1,session_handle:handle};if(p.operation==="start")result.lease_token="lease-token";if(p.operation==="renew"){result.lease_token="lease-token";result.state="active"}if(p.operation==="context")result.handoff="handoff-"+handle;this.stdout.emit("data",JSON.stringify(result));this.h.get("close")?.(0)}kill(){this.killed=true;return false}unref(){this.unrefed=true}}globalThis.__test={spawn:(f,args,o)=>{a(f==="/vgxness-test-bin"&&args.join(" ")==="memory hook --stdin"&&o.shell===false,"spawn");const c=new Child();children.push(c);return c},isAbsolute:x=>x.startsWith("/")};` + plugin + `
+	script := `const a=(x,m)=>{if(!x)throw Error(m)},calls=[],children=[],timers=[];let hold=true,unhandled=0;process.on("unhandledRejection",()=>unhandled++);globalThis.setTimeout=(callback,timeout)=>{const timer={callback,timeout,cleared:false};timers.push(timer);return timer};globalThis.clearTimeout=t=>{t.cleared=true};function stream(){const h=new Map();return{destroyed:false,on:(n,f)=>h.set(n,f),emit:(n,...v)=>h.get(n)?.(...v),setEncoding(){},destroy(){this.destroyed=true}}}class Child{constructor(){this.stdout=stream();this.stderr=stream();this.stdin=stream();this.h=new Map();this.stdin.end=input=>{this.input=input;queueMicrotask(()=>{if(!hold)this.respond()})}}on(n,f){this.h.set(n,f);return this}respond(){const p=JSON.parse(this.input),handle=p.operation==="start"?"h"+(children.indexOf(this)+1):p.session_handle;calls.push({...p,seen:handle});const result={schemaVersion:1,session_handle:handle};if(p.operation==="start")result.lease_token="lease-token";if(p.operation==="renew"){result.lease_token="lease-token";result.state="active"}if(p.operation==="context")result.handoff="handoff-"+handle;this.stdout.emit("data",JSON.stringify(result));this.h.get("close")?.(0)}kill(){this.killed=true;return false}unref(){this.unrefed=true}}globalThis.__test={spawn:(f,args,o)=>{if(args[0]==="skills")return new Child();a(f==="/vgxness-test-bin"&&args.join(" ")==="memory hook --stdin"&&o.shell===false,"spawn");const c=new Child();children.push(c);return c},isAbsolute:x=>x.startsWith("/")};` + plugin + `
 const p=await VGXNESSMemoryLifecyclePlugin({directory:"/workspace"}),e=(type,id)=>({event:{type,properties:{info:{id}}}}),settle=async()=>{for(let i=0;i<8;i++)await Promise.resolve()};void p.event(e("session.created","same"));await settle();const removing=p.event(e("session.deleted","same"));await settle();hold=false;children[0].respond();await removing;hold=true;void p.event(e("session.created","same"));await settle();children.at(-1).respond();await settle();hold=false;const out={system:[]};await p["experimental.chat.system.transform"]({sessionID:"same"},out);a(out.system.length===1&&out.system[0].includes("handoff-h3")&&!out.system[0].includes("handoff-h1"),"replacement start injected context");a(calls.some(x=>x.operation==="end"&&x.session_handle==="h1"&&x.lease_token==="lease-token"),"stale handle was not ended with its token");hold=true;let cleanupDone=false;void p.event(e("session.created","cleanup")).then(()=>{cleanupDone=true});await settle();const c=children.at(-1),timeout=timers.at(-1);timeout.callback();await settle();a(!cleanupDone&&c.killed&&c.unrefed,"cleanup settled before close or did not unref ineffective kill");const cleanup=timers.at(-1);a(cleanup.timeout===1000,"cleanup bound changed");cleanup.callback();await settle();a(c.stdin.destroyed&&c.stdout.destroyed&&c.stderr.destroyed&&unhandled===0,"cleanup did not release streams or leaked rejection");`
 	path := filepath.Join(t.TempDir(), "memory-lifecycle-cleanup.mjs")
 	testutil.NoError(t, os.WriteFile(path, []byte(script), 0o600))

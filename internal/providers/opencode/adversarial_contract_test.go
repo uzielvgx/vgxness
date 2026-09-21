@@ -258,30 +258,137 @@ func hasContractSymlink(root, relative string) bool {
 	return false
 }
 
-func parseContractPermissions(content []byte) (map[string]string, error) {
+// permissionRule is one ordered entry of a managed frontmatter permission block.
+// Path is empty for a top-level tool rule and holds the nested key path for a
+// map such as external_directory. File order is significant because the
+// documented OpenCode semantics are last-match-wins.
+type permissionRule struct {
+	Path  []string
+	Value string
+}
+
+// parseContractPermissions parses the managed YAML permission block in file
+// order and accepts one level of nesting (for example external_directory). It
+// validates leaf values and rejects malformed or duplicate sibling keys. It is
+// a structural model of the documented rule order; it is not runtime proof that
+// the host enforces the result.
+func parseContractPermissions(content []byte) ([]permissionRule, error) {
 	parts := strings.SplitN(string(content), "---", 3)
 	if len(parts) != 3 {
 		return nil, os.ErrInvalid
 	}
-	result := map[string]string{}
-	active := false
+	var rules []permissionRule
+	parent := ""
+	seen := map[string]bool{}
 	for _, line := range strings.Split(parts[1], "\n") {
-		if line == "permission:" {
-			active = true
-			continue
+		switch {
+		case line == "permission:":
+			parent = ""
+		case strings.HasPrefix(line, "    "):
+			if parent == "" {
+				return nil, os.ErrInvalid
+			}
+			key, value, ok := cutPermissionLeaf(strings.TrimSpace(line))
+			sibling := parent + "\x00" + key
+			if !ok || seen[sibling] {
+				return nil, os.ErrInvalid
+			}
+			seen[sibling] = true
+			rules = append(rules, permissionRule{Path: []string{parent, key}, Value: value})
+		case strings.HasPrefix(line, "  ") && strings.HasSuffix(line, ":"):
+			key := strings.Trim(strings.TrimSuffix(strings.TrimPrefix(line, "  "), ":"), `"`)
+			if key == "" || seen["parent\x00"+key] {
+				return nil, os.ErrInvalid
+			}
+			seen["parent\x00"+key] = true
+			parent = key
+		case strings.HasPrefix(line, "  "):
+			parent = ""
+			key, value, ok := cutPermissionLeaf(strings.TrimSpace(line))
+			if !ok || seen["\x00"+key] {
+				return nil, os.ErrInvalid
+			}
+			seen["\x00"+key] = true
+			rules = append(rules, permissionRule{Path: []string{key}, Value: value})
+		default:
+			// A non-indented line after the permission block ends it.
+			if strings.TrimSpace(line) != "" && len(rules) > 0 {
+				return rules, nil
+			}
 		}
-		if active && !strings.HasPrefix(line, "  ") {
-			break
-		}
-		if !active {
-			continue
-		}
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ": ")
-		key = strings.Trim(key, `"`)
-		if !ok || key == "" || (value != "allow" && value != "ask" && value != "deny") || result[key] != "" {
-			return nil, os.ErrInvalid
-		}
-		result[key] = value
 	}
-	return result, nil
+	return rules, nil
+}
+
+func cutPermissionLeaf(line string) (string, string, bool) {
+	key, value, ok := strings.Cut(line, ": ")
+	key = strings.Trim(key, `"`)
+	if !ok || key == "" || (value != "allow" && value != "ask" && value != "deny") {
+		return "", "", false
+	}
+	return key, value, true
+}
+
+// effectiveManagedPermission applies the documented last-match-wins order for a
+// tool key: a top-level rule matches by exact name or the "*" wildcard, and the
+// last matching rule decides. It returns "" when nothing matched. This models
+// documented rule order, not runtime enforcement.
+func effectiveManagedPermission(rules []permissionRule, tool string) string {
+	result := ""
+	for _, rule := range rules {
+		if len(rule.Path) == 1 && (rule.Path[0] == tool || rule.Path[0] == "*") {
+			result = rule.Value
+		}
+	}
+	return result
+}
+
+// effectiveExternalPermission resolves a nested external_directory value for a
+// path using last-match-wins over the declared patterns. It returns "" when no
+// pattern matched, which the caller must treat as unknown rather than allow.
+func effectiveExternalPermission(rules []permissionRule, value string) string {
+	result := ""
+	for _, rule := range rules {
+		if len(rule.Path) == 2 && rule.Path[0] == "external_directory" && matchPermissionPattern(rule.Path[1], value) {
+			result = rule.Value
+		}
+	}
+	return result
+}
+
+// matchPermissionPattern models the documented glob subset: "**" crosses path
+// separators and "*" stays within one segment. It is a bounded matcher for the
+// managed declarations, not a host filesystem policy engine.
+func matchPermissionPattern(pattern, value string) bool {
+	switch {
+	case pattern == "":
+		return value == ""
+	case strings.HasPrefix(pattern, "**"):
+		rest := strings.TrimPrefix(pattern, "**")
+		if matchPermissionPattern(rest, value) {
+			return true
+		}
+		for index := 0; index <= len(value); index++ {
+			if matchPermissionPattern(rest, value[index:]) {
+				return true
+			}
+		}
+		return false
+	case strings.HasPrefix(pattern, "*"):
+		rest := strings.TrimPrefix(pattern, "*")
+		for index := 0; index <= len(value); index++ {
+			if index > 0 && value[index-1] == '/' {
+				break
+			}
+			if matchPermissionPattern(rest, value[index:]) {
+				return true
+			}
+		}
+		return false
+	default:
+		if value == "" || pattern[0] != value[0] {
+			return false
+		}
+		return matchPermissionPattern(pattern[1:], value[1:])
+	}
 }

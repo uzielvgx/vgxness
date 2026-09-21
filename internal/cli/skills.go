@@ -10,9 +10,16 @@ import (
 	"github.com/vgxness/vgxness/internal/skills"
 )
 
-func RunSkills(ctx context.Context, args []string, stdout, stderr io.Writer, runtime skills.Runtime) int {
+func RunSkills(ctx context.Context, args []string, stdout, stderr io.Writer, runtime skills.Runtime, registries ...RegistryRuntime) int {
+	if len(args) > 0 && args[0] == "registry" {
+		var registry RegistryRuntime
+		if len(registries) > 0 {
+			registry = registries[0]
+		}
+		return RunSkillRegistry(ctx, args[1:], stdout, stderr, registry)
+	}
 	if len(args) == 0 || runtime == nil {
-		fmt.Fprintln(stderr, "usage: vgxness skills <preview|install|status|uninstall> [--skills-dir PATH]")
+		fmt.Fprintln(stderr, "usage: vgxness skills <preview|install|status|uninstall|registry> [--skills-dir PATH]")
 		return 2
 	}
 	command := args[0]

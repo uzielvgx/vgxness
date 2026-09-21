@@ -11,6 +11,8 @@ Delivery labels are evidence-only: IMPLEMENTED requires completed workspace chan
 
 MCP is local stdio for a trusted OpenCode host. It has no caller identity or session authentication: host tool allowlists, operator permissions, user authorization, and task scope are its authorization boundary. No capability token or additional authentication framework is provided.
 
+Manager delegates all project code exploration to the Explore role and keeps only a bounded operational-inspection authority that Explore cannot perform without a shell: local Git queries (status, diff, log, refs, tracking, conflicts), delivery and candidate state, and reading the single active launcher binding used for registry bootstrap. Read-only roles declare a scoped `external_directory` grant for the conventional `~/.agents/skills/**` root, and Explore may `webfetch` public documentation; the full home, provider configuration that can contain secrets, and unrelated external paths stay denied, and custom roots require an explicit binding rather than an invented default. These are declared permissions and documented last-match-wins semantics, not proof of host runtime enforcement.
+
 ## Install and inspect
 
 ```sh
@@ -66,7 +68,7 @@ Engram is not part of this integration.
 
 ## Other native capabilities
 
-The managed `explore` override uses `codegraph_explore` first for structural evidence and falls back narrowly to native reads and search when the index is unavailable, stale, or insufficient. When a project has a healthy `.codegraph` index, the manager and reviewers may also use one bounded query. Exact source, Git diff, and test output remain authoritative.
+The managed `explore` override uses `codegraph_codegraph_explore` first for structural evidence and falls back narrowly to native reads and search when the index is unavailable, stale, or insufficient. When a project has a healthy `.codegraph` index, the manager and reviewers may also use one bounded query. Exact source, Git diff, and test output remain authoritative. A shell is not a read-only guarantee: verifier and CARE checks are contractually non-mutating and run under native permission denials (`edit: deny`, `task: deny`), but that is not a hard sandbox.
 
 ### Adaptive workflow and interaction
 
@@ -90,7 +92,7 @@ For explicitly authorized PR delivery, the Manager loads `git-delivery` and foll
 
 After the exact candidate passes freeze, independent verification, and review, a fresh branch, normal commit, first push, and non-draft `gh pr create` need no second routine approval. Current-task merge authorization may land only PRs created by that task, ordinally, with repository-bound head OID matching and the repository's allowed merge-commit method after exact PR/repository/head/base/OID, predecessor, conflict, and required-check readback. Each slice uses an expected base-tip OID: slice 1 reads it from the freshly fetched original base before checks, and each predecessor merge advances it after a fresh base readback; the PR base and live remote base must equal it before checks and immediately before merge. `no merge` is transitive; `local-only`, `no commit`, `no push`, and `no PR` also forbid merge. Any failure, drift, dirty worktree, host/auth or branch-protection ambiguity stops mutations, except the exact bounded, explicitly reauthorized recovery of a verified unpublished local slice. Existing remote branches and PRs remain read-only and never gain retroactive merge or cleanup authority; only that bounded unpublished local-slice recovery is allowed. After verified merged readback and base containment for every slice, the manager may fast-forward the original base from its verified remote-tracking branch. Unless `no cleanup` is set, it may then delete only exact current-delivery local branches proven merged with no open dependent PR; remote delivery branches are left intact, and unrelated branches and worktrees are never touched.
 
-Manager, managed `general`, and verifier use a single global `allow` permission rule with no contradictory static denials. This grants capability only: user authorization, task scope, role instructions, repository ownership, and external host behavior remain separate constraints. OpenCode permissions do not verify repository hooks, credentials, GitHub availability, branch protection, network success, or command semantics.
+Manager uses a global `allow` rule with no targeted denials. Managed `general` uses global `allow` with targeted memory and SDD denials. The verifier uses global `allow` with the same targeted memory and SDD denials plus explicit `edit: deny` and `task: deny`. Managed `explore` and the three CARE roles use a global `deny` with read-only allowlists; `explore` denies `task` implicitly through its `"*": deny` rule and adds `webfetch`, each CARE role adds an explicit `task: deny`, and all four declare the single scoped `external_directory` grant for `~/.agents/skills/**`. These rules grant capability only: user authorization, task scope, role instructions, repository ownership, and external host behavior remain separate constraints. They are not a hard sandbox, and OpenCode permissions do not verify repository hooks, credentials, GitHub availability, branch protection, network success, or command semantics.
 
 ## Health contract
 

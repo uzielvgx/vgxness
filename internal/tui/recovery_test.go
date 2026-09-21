@@ -34,7 +34,7 @@ func TestCodexOnlyRecoveryUsesManagedProviderFlow(t *testing.T) {
 	model := NewModel(context.Background(), backend, Options{Workspace: "/workspace"})
 	model.route, model.setupView = routeSetup, setupViewRecovery
 	model.setupProviders = []setupflow.Provider{setupflow.ProviderCodex}
-	if lines := strings.Join(model.recoveryRouteLines(), "\n"); !strings.Contains(lines, "CODEX SETUP") || strings.Contains(lines, "FULL BACKUP") {
+	if lines := strings.Join(model.recoveryRouteLines(), "\n"); !strings.Contains(lines, "CODEX") || !strings.Contains(lines, "Backup & Recovery") || strings.Contains(lines, "FULL BACKUP") {
 		t.Fatalf("recovery lines=%s", lines)
 	}
 	updated, command := model.updateRecoveryKey(tea.KeyPressMsg(tea.Key{Code: 'l', Text: "l"}))

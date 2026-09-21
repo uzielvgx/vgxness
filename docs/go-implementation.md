@@ -7,7 +7,7 @@ Current identities are OpenCode Manager62 and Codex Manager21 (parity OpenCode-v
 
 ## Delivered boundaries
 
-Compatibility execution packages and commands are not delivered. There is no Go provider runner, execution adapter, bridge, control plane, Chronicle, Gatekeeper, registry, prompt composer, coordinator, stack engine, worktree writer, delivery-state service, or custom Git/GitHub tool. `internal/orchestration` defines policy and evidence types, but it does not execute the policy or enforce it at runtime. Native delivery policy lives only in the installed manager and skill.
+Compatibility execution packages and commands are not delivered. There is no Go provider runner, execution adapter, bridge, control plane, Chronicle, Gatekeeper, registry broker, prompt composer, coordinator, stack engine, worktree writer, delivery-state service, or custom Git/GitHub tool. `internal/orchestration` defines policy and evidence types, but it does not execute the policy or enforce it at runtime. Native delivery policy lives only in the installed manager and skill. A local Go skill registry (`internal/skillregistry`, exposed as `vgxness skills registry`) does exist: it is a bounded, regenerable discovery-metadata cache published outside the repository and it is not a runtime broker, execution surface, or new transport; see [Manager orchestration skills](manager-orchestration-skills.md).
 
 ## Dependency rules
 
@@ -32,7 +32,7 @@ The OpenCode projection contains 12 managed artifacts with exact identities:
 
 The model plan contains exactly seven agents. Receipts bind previously installed
 files for updates; older unreceipted agents require the documented bridge.
-Historical prompt renderers and templates are removed from the current tree.
+Historical prompt renderers and templates are removed from the current tree; only the exact pre-adaptive manager-contract snapshot and its native byte compatibility are retained for receiptless recognition.
 The shared registry governs routing and evidence; it is not a Go runtime broker. Recall is relevant-context only, and durable memory is assessed under a stable topic without secrets, transcripts, transient status or automatic cloud synchronization. Unknown, foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The bridge handles exact historical storage-plugin retirement. OpenCode and Pi accept explicit single-model or per-agent configuration; only Codex retains plans. Legacy slot flags are rejected. See [model selection](model-selection.md).
 
 ## Verification

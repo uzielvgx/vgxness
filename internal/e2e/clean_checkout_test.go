@@ -167,8 +167,8 @@ func TestCleanCheckoutSetupAndMemory(t *testing.T) {
 	}
 	nativeBindings := map[string][]string{
 		"general":  {"artifact: opencode-agent/general; version: 10", "permission:\n  \"*\": allow"},
-		"explore":  {"artifact: opencode-agent/explore; version: 4", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow"},
-		"verifier": {"artifact: opencode-agent/vgxness-verifier; version: 7", "permission:\n  \"*\": allow"},
+		"explore":  {"artifact: opencode-agent/explore; version: 5", "permission:\n  \"*\": deny", "codegraph_codegraph_explore: allow"},
+		"verifier": {"artifact: opencode-agent/vgxness-verifier; version: 8", "permission:\n  \"*\": allow", "edit: deny", "task: deny"},
 	}
 	for _, role := range contract.Roles {
 		data, readErr := os.ReadFile(rolePaths[role.ID])
@@ -204,7 +204,7 @@ func TestCleanCheckoutSetupAndMemory(t *testing.T) {
 		t.Fatalf("encode canonical installed launcher path: %v", err)
 	}
 	for _, expected := range [][]byte{
-		[]byte("artifact: opencode-plugin/vgxness-memory-lifecycle; version: 1"),
+		[]byte("artifact: opencode-plugin/vgxness-memory-lifecycle; version: 2"),
 		append([]byte("const VGXNESS_EXECUTABLE = "), launcherJSON...),
 		[]byte("env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, TMPDIR: process.env.TMPDIR, SystemRoot: process.env.SystemRoot }"),
 	} {

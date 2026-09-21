@@ -108,6 +108,7 @@ func TestMultiSetupJourneyRendersProviderReviewAndKeepsCancelledModelEdits(t *te
 	model.setupMultiPlan = setupflow.MultiPlan{Digest: "preview", Ready: true, Changed: true, Providers: []setupflow.ProviderPlan{{Provider: setupflow.ProviderOpenCode, Ready: true, Changed: true}, {Provider: setupflow.ProviderCodex, Ready: true, Changed: true}}}
 	model.setupPlanLoading, model.setupPreviewed, model.setupPreviewRequest = false, true, model.setupRequest()
 
+	model = updateModel(t, model, keyPress("1"))
 	before := model.setupAssignmentRows[0]
 	model = updateModel(t, model, keyPress("i"))
 	if !strings.Contains(model.View().Content, "Model:") {
@@ -120,12 +121,12 @@ func TestMultiSetupJourneyRendersProviderReviewAndKeepsCancelledModelEdits(t *te
 	}
 
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if view := model.View().Content; !strings.Contains(view, "┌ REVIEW") {
+	if view := model.View().Content; !strings.Contains(view, "REVIEW") {
 		t.Fatalf("plan did not advance to review:\n%s", view)
 	}
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	compact := model.View().Content
-	if !strings.Contains(compact, "┌ PROVIDERS") || !strings.Contains(compact, "[a] apply reviewed plan") {
+	if !strings.Contains(compact, "PROVIDERS") || !strings.Contains(compact, "[a] apply reviewed plan") {
 		t.Fatalf("compact review is not actionable:\n%s", compact)
 	}
 	assertMaximumWidth(t, compact, 80)
@@ -234,10 +235,11 @@ func TestInstallationActionsKeepDistinctDestinations(t *testing.T) {
 	if preview == nil || model.setupView != setupViewPlan {
 		t.Fatalf("configure did not reach plan selection: view=%v cmd=%v", model.setupView, preview)
 	}
+	model = updateModel(t, model, keyPress("1"))
 	updated, editor = model.Update(keyPress("m"))
 	model = updated.(Model)
-	if editor != nil || !model.modelChoiceSearching {
-		t.Fatalf("configure did not open the scanned model picker from plan: searching=%t cmd=%v", model.modelChoiceSearching, editor)
+	if !model.pickerOpen || model.pickerStep != pickerProviders {
+		t.Fatalf("configure did not open the scanned model picker from plan: open=%t step=%d cmd=%v", model.pickerOpen, model.pickerStep, editor)
 	}
 	updated, editor = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	model = updated.(Model)
@@ -274,8 +276,7 @@ func TestInitSeedsInstalledExactAssignmentsThenUsesMultiPreviewWithoutApply(t *t
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	updated, cmd := model.Update(model.Init()())
 	model = updated.(Model)
-	batch := cmd().(tea.BatchMsg)
-	updated, preview := model.Update(batch[0]())
+	updated, preview := model.Update(cmd())
 	model = updated.(Model)
 	model = runSetupCommands(t, model, preview)
 	if model.setupSelected != "high" || !model.setupAssignmentsExact || model.setupAssignmentRows[0].Reference != installed.ModelAssignments[0].Model {

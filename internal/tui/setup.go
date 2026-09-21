@@ -1139,7 +1139,7 @@ func (m Model) setupRouteLines() []string {
 		return m.recoveryRouteLines()
 	}
 	if m.setupErr != nil {
-		return []string{studioAccent.Render("INSTALLATION STUDIO"), "", "┌ LOCAL STATUS CHECK ─────────────────────────────────────────────────────", "│ ✕ Could not read the local setup status.", "│ " + setupActionableError(m.setupErr), "└ Action: press [r] to retry, or verify the local setup service is available."}
+		return []string{studioAccent.Render("INSTALLATION STUDIO"), "", studioAccent.Render("LOCAL STATUS CHECK"), "✕ Could not read the local setup status.", setupActionableError(m.setupErr), "Action: press [r] to retry, or verify the local setup service is available."}
 	}
 	// The OpenCode editor is available in a composite setup whenever OpenCode is
 	// selected. Check it before the composite home so its controls and any
@@ -1168,9 +1168,9 @@ func (m Model) setupRouteLines() []string {
 	// Give the unplanned home a clear starting point without pushing the
 	// reviewed plan, outcome, or recovery details below a compact terminal.
 	if !m.setupPreviewed && m.setupPlan.Digest == "" && m.setupPlan.SelfInstallState == "" && m.setupPlanErr == nil && m.setupApplyErr == nil && !m.setupSucceeded {
-		lines = append(lines, "", "┌ ACTIONS ────────────────────────────────────────────────────────────────")
+		lines = append(lines, "", studioAccent.Render("ACTIONS"))
 		lines = append(lines, installationActionCards(m.installationAction)...)
-		lines = append(lines, "└ choose [1/2/3], then [Enter] · [m] edits OpenCode model assignments")
+		lines = append(lines, "choose [1/2/3], then [Enter] · [m] edits OpenCode model assignments")
 	}
 	if m.setupErr != nil {
 		return append(lines, "", "✕ CONFIGURATION STATUS UNAVAILABLE", "No plan was loaded. Press [r] to retry the local status check.")
@@ -1311,7 +1311,7 @@ func installationActionCards(selected installationAction) []string {
 		if installationAction(index) == selected {
 			marker = "▸"
 		}
-		lines = append(lines, fmt.Sprintf("│ %s [%d] %-10s %s", marker, index+1, card.title, card.detail))
+		lines = append(lines, fmt.Sprintf("  %s [%d] %-10s %s", marker, index+1, card.title, card.detail))
 	}
 	return lines
 }
@@ -1329,15 +1329,15 @@ func (m Model) multiSetupRouteLines() []string {
 }
 
 func (m Model) multiSetupHomeLines() []string {
-	lines := []string{studioAccent.Render("INSTALLATION STUDIO"), studioMuted.Render("Choose what you need. Nothing changes until the final review."), ""}
+	lines := []string{studioMuted.Render("Choose what you need. Nothing changes until the final review."), ""}
 	cardWidth := max(1, m.setupViewport.Width()-6)
 	for _, card := range []struct {
 		action        installationAction
 		title, detail string
 	}{
-		{actionInstall, "Install", "Select providers, preview a plan, then review before apply."},
-		{actionReinstall, "Reinstall", "Open protected backup and recovery before any replacement."},
-		{actionConfigure, "Configure", "Choose a model for all agents or one per agent. Codex keeps plans."},
+		{actionInstall, "Install", "Pick providers, review a plan, then apply."},
+		{actionReinstall, "Reinstall", "Back up and recover before replacing anything."},
+		{actionConfigure, "Configure", "Choose models for your agents. Codex keeps plans."},
 	} {
 		marker := " "
 		if m.installationAction == card.action {
@@ -1354,7 +1354,7 @@ func (m Model) multiSetupHomeLines() []string {
 }
 
 func (m Model) multiSetupProviderLines() []string {
-	lines := []string{studioAccent.Render("INSTALL · 1 OF 3 · PROVIDERS"), studioMuted.Render("Choose one or more local integrations."), "", "┌ PROVIDERS ───────────────────────────────────────────────────────────────"}
+	lines := []string{studioAccent.Render("INSTALL · 1 OF 3 · PROVIDERS"), studioMuted.Render("Choose one or more local integrations."), "", studioAccent.Render("PROVIDERS")}
 	for index, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi} {
 		selected := " "
 		if m.hasSetupProvider(provider) {
@@ -1364,19 +1364,20 @@ func (m Model) multiSetupProviderLines() []string {
 		if index == m.setupProviderCursor {
 			cursor = "▸"
 		}
-		detail := "Per-agent model assignments available."
+		detail := "per-agent models"
 		if provider == setupflow.ProviderCodex {
-			detail = "Uses managed presets; no custom model persistence."
+			detail = "managed plans"
 		} else if provider == setupflow.ProviderPi {
-			detail = "Set VGXNESS_PI_RELEASE_DIR to a local Pi release; Pi runs tools natively."
+			detail = "local release"
 		}
-		row := fmt.Sprintf("%s %s %-10s %s", cursor, selected, provider, detail)
+		row := fmt.Sprintf("  %s %s %-8s %s", cursor, selected, provider, detail)
 		if index == m.setupProviderCursor {
 			row = studioFocus.Width(max(1, m.setupViewport.Width()-6)).Render(row)
 		}
-		lines = append(lines, "│ "+row)
+		lines = append(lines, row)
 	}
-	return append(lines, "└────────────────────────────────────────────────────────────────────────")
+	lines = append(lines, "", "Pi: set VGXNESS_PI_RELEASE_DIR, or use an offline release directory.")
+	return lines
 }
 
 func setupActionableError(err error) string {
@@ -1393,26 +1394,34 @@ func setupActionableError(err error) string {
 	return truncateSetupRunes(value, 160)
 }
 
+// collapsedModelAssignments summarizes a single-mode selection as one line so
+// the review does not repeat the same assignment for all seven agents.
+func collapsedModelAssignments(config *agentmodels.Config) (string, bool) {
+	if config == nil || config.Mode != "single" {
+		return "", false
+	}
+	manager := config.Assignments["manager"]
+	detail := "effort=" + manager.Effort
+	if manager.Variant != "" {
+		detail = "variant=" + manager.Variant
+	}
+	return "all agents  " + manager.Model + "  " + detail, true
+}
+
 func (m Model) multiSetupReviewLines() []string {
-	providers := ""
+	selected := make([]string, 0, 3)
 	for _, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi} {
-		marker := " "
 		if m.hasSetupProvider(provider) {
-			marker = "✓"
+			selected = append(selected, string(provider))
 		}
-		providers += marker + " " + string(provider) + "  "
 	}
 	lines := []string{
-		studioAccent.Render("INSTALLATION STUDIO · PROVIDER SETUP"),
-		installationActionBar(m.installationAction),
-		studioMuted.Render("01 PROVIDERS") + "   →   " + studioMuted.Render("02 MODELS") + "   →   " + studioMuted.Render("03 REVIEW"),
+		studioMuted.Render("01 PROVIDERS") + "   →   " + studioMuted.Render("02 MODELS") + "   →   " + studioAccent.Render("03 REVIEW"),
 		"",
-		"┌ PROVIDERS ─────────────────────────────────────────────────────────────",
-		"│ " + strings.TrimSpace(providers),
-		"└ model selections are independent for each provider",
+		studioAccent.Render("PROVIDERS") + "  " + strings.Join(selected, " · "),
 	}
 	if m.hasSetupProvider(setupflow.ProviderCodex) {
-		lines = append(lines, "Codex plan: "+sanitizeTerminal(m.setupSelected)+". OpenCode and Pi use explicit model selections.")
+		lines = append(lines, "Codex plan  "+sanitizeTerminal(m.setupSelected))
 	}
 	if m.setupPlanLoading {
 		return append(lines, "", "... Loading verified provider preview...")
@@ -1446,7 +1455,7 @@ func (m Model) multiSetupReviewLines() []string {
 	if plan.Ready && !plan.Changed {
 		state = "✓ NO CHANGES"
 	}
-	lines = append(lines, "", "┌ REVIEW ────────────────────────────────────────────────────────────────", "│ "+state, "│ digest  "+setupValue(plan.Digest))
+	lines = append(lines, "", studioAccent.Render("REVIEW"), "  "+state, "  digest  "+setupValue(plan.Digest))
 	for _, row := range plan.Providers {
 		glyph := "!"
 		if row.Ready {
@@ -1456,24 +1465,28 @@ func (m Model) multiSetupReviewLines() []string {
 		if row.Installed && !row.Changed {
 			status = "installed"
 		}
-		lines = append(lines, "│ "+glyph+" "+string(row.Provider)+"  "+status)
+		lines = append(lines, "  "+glyph+" "+string(row.Provider)+"  "+status)
 		if row.Models != nil {
-			for _, role := range agentmodels.Roles {
-				a := row.Models.Assignments[role]
-				detail := " effort=" + a.Effort
-				if a.Variant != "" {
-					detail = " variant=" + a.Variant
+			if collapsed, ok := collapsedModelAssignments(row.Models); ok {
+				lines = appendSetupWrapped(lines, "    ", collapsed, m.setupViewport.Width()-6)
+			} else {
+				for _, role := range agentmodels.Roles {
+					a := row.Models.Assignments[role]
+					detail := " effort=" + a.Effort
+					if a.Variant != "" {
+						detail = " variant=" + a.Variant
+					}
+					lines = appendSetupWrapped(lines, "    ", role+" "+a.Model+detail, m.setupViewport.Width()-6)
 				}
-				lines = appendSetupWrapped(lines, "│   ", role+" "+a.Model+detail, m.setupViewport.Width()-6)
 			}
 		}
 		if row.Integration.ModelAssignments != nil {
 			for _, a := range row.Integration.ModelAssignments {
-				lines = appendSetupWrapped(lines, "│   ", a.ArtifactKey+" "+a.Model+" variant="+string(a.Variant), m.setupViewport.Width()-6)
+				lines = appendSetupWrapped(lines, "    ", a.ArtifactKey+" "+a.Model+" variant="+string(a.Variant), m.setupViewport.Width()-6)
 			}
 		}
 		if row.Blocker != "" {
-			lines = append(lines, "│   blocker  "+sanitizeTerminal(row.Blocker))
+			lines = append(lines, "    blocker  "+sanitizeTerminal(row.Blocker))
 		}
 	}
 	if plan.Blocker != "" {
@@ -1482,7 +1495,7 @@ func (m Model) multiSetupReviewLines() []string {
 	if m.setupConfirm {
 		lines = append(lines, "", "! CONFIRM MULTI-PROVIDER APPLY", "Apply shared work once, then providers? [y] yes  [n/Esc] cancel")
 	}
-	lines = append(lines, "└ [a] apply reviewed plan · no files change until confirmation")
+	lines = append(lines, "  [a] apply reviewed plan · no files change until confirmation")
 	return lines
 }
 
@@ -1511,42 +1524,45 @@ func (m Model) setupHelp() string {
 	if m.setupModelEditing && m.setupCatalogSearching {
 		return "[↑↓] result  [Enter] assign  [Esc] cancel search"
 	}
-	if m.modelChoiceSearching {
-		return "[↑↓] result  [Enter] assign  [Esc] cancel"
-	}
 	if m.modelChoiceEditing {
 		return "Type provider/model  [Enter] save  [Esc] cancel"
 	}
 	if m.setupModelEditing {
 		if m.setupAssignmentsSeeded {
-			help := "[↑↓/j/k] row  [←→] model"
+			help := "[↑↓/j/k] row · [←→] pick"
 			if len(m.setupVariantsForModel(m.setupAssignmentRows[m.setupModelSlot].Reference)) > 0 {
-				help += "  [[/]] variant"
+				help += " · [[/]] variant"
 			} else if m.knownSetupModel(m.setupAssignmentRows[m.setupModelSlot].Reference) {
-				help += "  provider default"
+				help += " · default"
 			} else {
-				help += "  variant not available"
+				help += " · no variant"
 			}
-			return help + "  [r] refresh  [Enter] preview  [Esc] cancel  [q] quit"
+			return help + " · [Enter] preview · [Esc]/[q] cancel"
 		}
-		help := "[j/k] slot  type/edit ref"
+		help := "[j/k] slot · type ref"
 		if len(m.setupVariantsForModel(m.setupModelRefs[m.setupModelSlot])) > 0 {
-			help += "  [Tab] variant"
+			help += " · [Tab] variant"
 		} else if m.knownSetupModel(m.setupModelRefs[m.setupModelSlot]) {
-			help += "  provider default"
+			help += " · provider default"
 		} else {
-			help += "  variant not available"
+			help += " · variant not available"
 		}
-		return help + "  [Enter] save  [Esc] cancel"
+		return help + " · [Enter] save · [Esc] cancel"
 	}
 	if m.multiSetupEnabled() {
 		switch m.setupView {
 		case setupViewHome:
 			return "[↑↓/j/k] action  [1/2/3] select  [Enter] continue"
 		case setupViewProviders:
-			return "[↑↓/j/k] focus  [Space] toggle  [o/c/p] toggle  [Enter] choose plan  [Esc] home"
+			return "[↑↓] focus · [Space/o/c/p] toggle · [Enter] continue · [Esc] back"
 		case setupViewPlan:
-			return "[Tab] provider  [1] single  [2] per agent  [↑↓] agent/plan  [m] scanned models  [i] type  [e] effort  [Enter] review"
+			if m.choiceProvider() == setupflow.ProviderCodex {
+				return "[Tab] provider · [↑↓] plan · [Enter] review"
+			}
+			if m.modelChoices[modelChoiceIndex(m.choiceProvider())].Mode == "" {
+				return "[↑↓] choose · [Enter] continue · [1/2] select · [Tab] provider · [Esc] back"
+			}
+			return "[Tab] provider · [↑↓] agent · [1/2] mode · [m] catalog · [i] type · [e] effort"
 		}
 		if m.setupApplying {
 			return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"

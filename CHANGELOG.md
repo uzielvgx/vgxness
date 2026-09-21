@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- After confirming the hosts, each OpenCode and Pi screen first asks whether to use one model for all agents or one model per agent, then shows the configuration. Installed selections keep their current mode until edited.
+- The Models screen uses a provider-then-model picker modal (`m`): choose a provider, then a model, with type-to-filter, arrow navigation, Escape to step back or close, and paste support. The shell is leaner: the model filter and manual reference input use `bubbles/textinput`, and the unused list, help and spinner wiring was removed.
 - The Models screen scans local model data automatically: `m` opens a searchable provider/model catalog for OpenCode (its local model list) and Pi (its local model store), `i` keeps manual entry, and `e` cycles the efforts each scanned model reports, preserving exact OpenCode variant tokens such as `max`.
 
 ## v1.0.0 — proposed

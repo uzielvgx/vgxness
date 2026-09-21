@@ -62,13 +62,14 @@ For complete definitions and status classifications, read the [Product Blueprint
 
 ## Choose models in Setup
 
-Run `vgxness tui` and select the coding hosts to configure. On the Models screen,
-use Tab to switch providers. OpenCode and Pi offer `1` for one model across all
-seven agents or `2` for one per agent, including Manager. Select an agent with
-the arrow keys, then press `m` to choose from the locally scanned provider/model
-catalog (type to filter, Enter assigns) or `i` to type a reference manually.
-Press `e` to cycle the efforts the scanned model reports. Codex alone uses the
-low, medium, high and ultra plans.
+Run `vgxness tui` and select the coding hosts to configure. After confirming the
+hosts, each OpenCode and Pi screen first asks whether you want one model for all
+seven agents or one model per agent, then shows the configuration. Select an
+agent with the arrow keys, then press `m` to open the model picker: choose a
+provider, then a model (type to filter, arrow keys to move, Enter to assign,
+Escape to go back or close). Press `i` to type a reference manually. Press `e` to
+cycle the efforts the scanned model reports. Codex alone uses the low, medium,
+high and ultra plans.
 
 Press Enter to preview, then review the exact assignments before applying. Existing
 choices are preserved until edited. A model identifier does not prove account

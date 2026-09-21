@@ -54,7 +54,9 @@ func (m *Model) seedModelChoices(plan setupflow.MultiPlan) {
 		if m.modelChoices[index].Edited {
 			continue
 		}
-		c := modelChoice{Mode: "single"}
+		// Mode stays empty when the provider has no installed selection, so the
+		// Models screen opens with the one-model/per-agent decision first.
+		c := modelChoice{}
 		for i := range c.Rows {
 			c.Rows[i].Effort = "off"
 		}
@@ -71,9 +73,13 @@ func (m *Model) seedModelChoices(plan setupflow.MultiPlan) {
 					}
 				}
 			}
-			for _, row := range c.Rows {
-				if row != c.Rows[0] {
-					c.Mode = "per-agent"
+			if c.Rows[0].Model != "" {
+				c.Mode = "single"
+				for _, row := range c.Rows {
+					if row != c.Rows[0] {
+						c.Mode = "per-agent"
+						break
+					}
 				}
 			}
 		}
@@ -123,21 +129,6 @@ func (m Model) modelChoiceCatalogErr(provider setupflow.Provider) error {
 		return m.piCatalogErr
 	}
 	return m.setupCatalogErr
-}
-
-func (m Model) filteredModelChoiceCatalog(provider setupflow.Provider) []SetupCatalogModel {
-	rows := m.modelChoiceCatalogRows(provider)
-	query := strings.ToLower(strings.TrimSpace(m.modelChoiceQuery))
-	if query == "" {
-		return rows
-	}
-	filtered := make([]SetupCatalogModel, 0, len(rows))
-	for _, row := range rows {
-		if strings.Contains(strings.ToLower(row.Reference), query) || strings.Contains(strings.ToLower(row.Provider), query) {
-			filtered = append(filtered, row)
-		}
-	}
-	return filtered
 }
 
 // modelChoiceVariants returns the scanned efforts for a discovered model.
@@ -245,7 +236,78 @@ func (m *Model) beginModelChoiceManual(provider setupflow.Provider) {
 	index := modelChoiceIndex(provider)
 	row := m.modelChoiceTarget(provider)
 	m.modelChoiceEditing = true
-	m.modelChoiceInput = m.modelChoices[index].Rows[row].Model
+	m.manualInput = newPickerInput("", "provider/model")
+	m.manualInput.SetWidth(max(12, m.width-24))
+	m.manualInput.SetValue(m.modelChoices[index].Rows[row].Model)
+	m.manualInput.CursorEnd()
+	m.manualInput.Focus()
+}
+
+func (m *Model) endModelChoiceManual() {
+	m.modelChoiceEditing = false
+	m.manualInput.Blur()
+}
+
+// updateModelChoiceModeGate handles the first decision for a provider that has
+// no installed selection: one model for all agents, or one model per agent.
+func (m *Model) updateModelChoiceModeGate(msg tea.KeyPressMsg, c *modelChoice) (bool, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		return false, nil
+	case "esc":
+		m.setupView = setupViewProviders
+		return true, nil
+	case "r":
+		return true, tea.Batch(m.loadSetupPlan(), m.refreshProviderCatalog(m.choiceProvider()))
+	case "tab":
+		m.modelChoiceProvider++
+		m.modelChoiceRow = 0
+		return true, m.ensureProviderCatalog(m.choiceProvider())
+	case "up", "k", "left", "down", "j", "right":
+		m.modelChoiceModeChoice = (m.modelChoiceModeChoice + 1) % 2
+		return true, nil
+	case "1":
+		m.modelChoiceModeChoice = 0
+		m.commitModelChoiceMode(c)
+		return true, nil
+	case "2":
+		m.modelChoiceModeChoice = 1
+		m.commitModelChoiceMode(c)
+		return true, nil
+	case "enter":
+		m.commitModelChoiceMode(c)
+		return true, nil
+	}
+	return true, nil
+}
+
+func (m *Model) commitModelChoiceMode(c *modelChoice) {
+	if m.modelChoiceModeChoice == 0 {
+		c.Mode = "single"
+	} else {
+		c.Mode = "per-agent"
+	}
+	for i := range c.Rows {
+		if c.Rows[i].Effort == "" {
+			c.Rows[i].Effort = "off"
+		}
+	}
+	m.modelChoiceRow = 0
+}
+
+func (m Model) modelChoiceModeLines(provider setupflow.Provider, c modelChoice) []string {
+	lines := []string{"", fmt.Sprintf("%s · How should models be assigned?", provider)}
+	for index, option := range []string{"One model for all agents", "One model per agent"} {
+		marker := " "
+		if index == m.modelChoiceModeChoice {
+			marker = "▸"
+		}
+		lines = append(lines, fmt.Sprintf("%s [%d] %s", marker, index+1, option))
+	}
+	if !c.Edited {
+		lines = append(lines, "", "Existing selections are preserved until you edit them.")
+	}
+	return lines
 }
 
 func (m *Model) refreshProviderCatalog(provider setupflow.Provider) tea.Cmd {
@@ -258,101 +320,45 @@ func (m *Model) refreshProviderCatalog(provider setupflow.Provider) tea.Cmd {
 	return nil
 }
 
-func (m *Model) updateModelChoiceSearch(provider setupflow.Provider, msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.modelChoiceSearching, m.modelChoiceQuery, m.modelChoiceResultIndex = false, "", 0
-		return true, nil
-	case "enter":
-		m.selectFilteredModelChoice(provider)
-		return true, nil
-	case "backspace":
-		value := []rune(m.modelChoiceQuery)
-		if len(value) > 0 {
-			m.modelChoiceQuery = string(value[:len(value)-1])
-		}
-		m.modelChoiceResultIndex = 0
-		return true, nil
-	case "down":
-		if count := len(m.filteredModelChoiceCatalog(provider)); count > 0 {
-			m.modelChoiceResultIndex = (m.modelChoiceResultIndex + 1) % count
-		}
-		return true, nil
-	case "up":
-		if count := len(m.filteredModelChoiceCatalog(provider)); count > 0 {
-			m.modelChoiceResultIndex = (m.modelChoiceResultIndex + count - 1) % count
-		}
-		return true, nil
-	}
-	if msg.Text != "" && len(m.modelChoiceQuery)+len(msg.Text) <= 385 {
-		m.modelChoiceQuery += msg.Text
-		m.modelChoiceResultIndex = 0
-	}
-	return true, nil
-}
-
-func (m *Model) selectFilteredModelChoice(provider setupflow.Provider) {
-	matches := m.filteredModelChoiceCatalog(provider)
-	if len(matches) == 0 {
-		return
-	}
-	selected := matches[min(m.modelChoiceResultIndex, len(matches)-1)]
-	index := modelChoiceIndex(provider)
-	row := m.modelChoiceTarget(provider)
-	if m.modelChoices[index].Rows[row].Model != selected.Reference {
-		m.modelChoices[index].Rows[row].Variant = ""
-		m.modelChoices[index].Rows[row].Effort = "off"
-	}
-	m.modelChoices[index].Rows[row].Model = selected.Reference
-	m.modelChoices[index].Edited = true
-	m.modelChoiceSearching, m.modelChoiceQuery, m.modelChoiceResultIndex = false, "", 0
-	m.invalidateModelChoice()
-}
-
 func (m *Model) updateModelChoices(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	provider := m.choiceProvider()
 	index := modelChoiceIndex(provider)
 	c := &m.modelChoices[index]
-	if c.Mode == "" {
-		c.Mode = "single"
-		for i := range c.Rows {
-			c.Rows[i].Effort = "off"
-		}
-	}
-	if m.modelChoiceSearching {
-		return m.updateModelChoiceSearch(provider, msg)
+	if m.pickerOpen {
+		return m.updateModelPicker(msg)
 	}
 	if m.modelChoiceEditing {
 		switch msg.String() {
 		case "esc":
-			m.modelChoiceEditing = false
+			m.endModelChoiceManual()
 		case "enter":
 			row := 0
 			if c.Mode == "per-agent" {
 				row = m.modelChoiceRow
 			}
-			entered := strings.TrimSpace(m.modelChoiceInput)
+			entered := strings.TrimSpace(m.manualInput.Value())
 			if entered != c.Rows[row].Model {
 				c.Rows[row].Variant = ""
 				c.Rows[row].Effort = "off"
 			}
 			c.Rows[row].Model = entered
 			c.Edited = true
-			m.modelChoiceEditing = false
+			m.endModelChoiceManual()
 			m.invalidateModelChoice()
-		case "backspace":
-			r := []rune(m.modelChoiceInput)
-			if len(r) > 0 {
-				m.modelChoiceInput = string(r[:len(r)-1])
-			}
 		default:
-			if msg.Text != "" && len(m.modelChoiceInput)+len(msg.Text) <= 385 {
-				m.modelChoiceInput += msg.Text
-			}
+			var cmd tea.Cmd
+			m.manualInput, cmd = m.manualInput.Update(msg)
+			return true, cmd
 		}
 		return true, nil
 	}
+	if provider != setupflow.ProviderCodex && c.Mode == "" {
+		return m.updateModelChoiceModeGate(msg, c)
+	}
 	switch msg.String() {
+	case "q":
+		// Let the global quit handler close the TUI, as on every other screen.
+		return false, nil
 	case "tab":
 		m.modelChoiceProvider++
 		m.modelChoiceRow = 0
@@ -387,11 +393,7 @@ func (m *Model) updateModelChoices(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, m.loadSetupPlan()
 	case "m", "/":
-		if provider == setupflow.ProviderCodex {
-			return true, nil
-		}
-		m.modelChoiceSearching, m.modelChoiceQuery, m.modelChoiceResultIndex = true, "", 0
-		return true, m.ensureProviderCatalog(provider)
+		return true, m.openModelPicker()
 	case "i":
 		if provider == setupflow.ProviderCodex {
 			return true, nil
@@ -449,21 +451,20 @@ func (m *Model) updateModelChoices(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 func (m Model) multiSetupPlanLines() []string {
 	provider := m.choiceProvider()
-	lines := []string{"INSTALL · 2 OF 3 · MODELS", fmt.Sprintf("Provider: %s  [Tab] next provider", provider), ""}
+	gate := false
+	lines := []string{"INSTALL · 2 OF 3 · MODELS", "Provider: " + string(provider), ""}
 	if provider == setupflow.ProviderCodex {
 		lines = append(lines, "Codex plan: "+m.setupSelected, "[↑↓] low · medium · high · ultra")
 	} else {
 		c := m.modelChoices[modelChoiceIndex(provider)]
-		if m.modelChoiceSearching {
-			lines = append(lines, m.modelChoiceSearchLines(provider)...)
+		if c.Mode == "" {
+			gate = true
+			lines = append(lines, m.modelChoiceModeLines(provider, c)...)
 		} else {
 			mode := c.Mode
-			if mode == "" {
-				mode = "single"
-			}
-			lines = append(lines, "[1] One model for all agents   [2] One model per agent", "Selected: "+mode)
+			lines = append(lines, fmt.Sprintf("Mode: %s   [1] all agents · [2] per agent", mode))
 			if !c.Edited {
-				lines = append(lines, "Existing selections are preserved until you edit them.")
+				lines = append(lines, "Existing selections preserved until edited.")
 			}
 			for i, r := range agentmodels.Roles {
 				if mode == "single" && i > 0 {
@@ -482,17 +483,15 @@ func (m Model) multiSetupPlanLines() []string {
 				}
 				lines = append(lines, fmt.Sprintf("%s %s: %s  %s", marker, r, setupValue(c.Rows[i].Model), value))
 			}
-			lines = append(lines, "[m] Choose scanned model   [i] Type provider/model   [e] Change effort")
 			lines = append(lines, m.modelChoiceCatalogStatus(provider)...)
 			row := m.modelChoiceTarget(provider)
 			if variants := m.modelChoiceVariants(provider, c.Rows[row].Model); len(variants) > 0 {
-				lines = appendSetupWrapped(lines, "allowed variants  ", strings.Join(variants, " · "), m.setupViewport.Width())
+				lines = appendSetupWrapped(lines, "variants  ", strings.Join(variants, " · "), m.setupViewport.Width())
 			}
-			lines = append(lines, "Availability and credentials are checked by the host when used.")
 		}
 	}
 	if m.modelChoiceEditing {
-		lines = append(lines, "Model: "+sanitizeTerminal(m.modelChoiceInput), "[Enter] save  [Esc] cancel")
+		lines = append(lines, "Model: "+m.manualInput.View())
 	}
 	if m.modelChoiceError != "" {
 		lines = append(lines, "Error: "+sanitizeTerminal(m.modelChoiceError))
@@ -500,12 +499,14 @@ func (m Model) multiSetupPlanLines() []string {
 	if m.setupPlanErr != nil {
 		lines = append(lines, "Preview failed: "+setupActionableError(m.setupPlanErr))
 	}
-	if m.setupPlanLoading {
-		lines = append(lines, "Loading preview...")
-	} else if m.setupPreviewed {
-		lines = append(lines, "[Enter] review installation")
-	} else {
-		lines = append(lines, "[Enter] preview selections")
+	if !gate {
+		if m.setupPlanLoading {
+			lines = append(lines, "Loading preview...")
+		} else if m.setupPreviewed {
+			lines = append(lines, "[Enter] review installation")
+		} else {
+			lines = append(lines, "[Enter] preview selections")
+		}
 	}
 	return lines
 }
@@ -514,73 +515,27 @@ func (m Model) modelChoiceCatalogStatus(provider setupflow.Provider) []string {
 	rows := m.modelChoiceCatalogRows(provider)
 	switch {
 	case m.modelChoiceCatalogLoading(provider):
-		return []string{"... Scanning local models for " + string(provider) + "..."}
+		return []string{"... Scanning local models..."}
 	case m.modelChoiceCatalogErr(provider) != nil:
 		if len(rows) > 0 {
-			return []string{fmt.Sprintf("✕ Refresh failed; showing %d previously scanned models. [r] Retry explicit refresh, or [i] type a reference.", len(rows))}
+			return []string{fmt.Sprintf("✕ Refresh failed · %d previously scanned models · [r] retry", len(rows))}
 		}
-		return []string{"✕ Scanned models unavailable. [r] Retry explicit refresh, or [i] type a reference."}
+		return []string{"✕ Scan unavailable · [r] retry · [i] type reference"}
 	case len(rows) == 0:
-		return []string{"! No locally discovered models. [r] Rescan, or [i] type a reference."}
+		return []string{"! No local models · [r] rescan · [i] type reference"}
 	default:
 		providers := map[string]struct{}{}
 		for _, row := range rows {
 			providers[row.Provider] = struct{}{}
 		}
-		return appendSetupWrapped([]string{}, "✓ ", fmt.Sprintf("%d scanned models · %d providers · %s", len(rows), len(providers), setupDiscoveryDisclaimer), m.setupViewport.Width())
-	}
-}
-
-func (m Model) modelChoiceSearchLines(provider setupflow.Provider) []string {
-	lines := []string{"MODEL CATALOG SEARCH · " + string(provider)}
-	rows := m.modelChoiceCatalogRows(provider)
-	if m.modelChoiceCatalogLoading(provider) {
-		lines = append(lines, "... Scanning local models...")
-	} else if m.modelChoiceCatalogErr(provider) != nil {
-		if len(rows) > 0 {
-			lines = append(lines, fmt.Sprintf("✕ Refresh failed; showing %d previously scanned models. [Esc] then [r] to retry.", len(rows)))
-		} else {
-			lines = append(lines, "✕ Scanned models unavailable. [Esc] then [r] to rescan, or [i] to type a reference.")
+		modelLabel := fmt.Sprintf("%d local models", len(rows))
+		if len(rows) == 1 {
+			modelLabel = "1 local model"
 		}
-	}
-	matches := m.filteredModelChoiceCatalog(provider)
-	count := fmt.Sprintf("%d matching local models", len(matches))
-	if len(matches) == 1 {
-		count = "1 matching local model"
-	}
-	lines = append(lines, "Query  "+setupValue(m.modelChoiceQuery)+"  ·  "+count, "")
-	start := max(0, m.modelChoiceResultIndex-3)
-	end := min(len(matches), start+7)
-	for index := start; index < end; index++ {
-		marker := " "
-		if index == m.modelChoiceResultIndex {
-			marker = "▸"
+		providerLabel := fmt.Sprintf("%d providers", len(providers))
+		if len(providers) == 1 {
+			providerLabel = "1 provider"
 		}
-		row := marker + " " + matches[index].Reference
-		if variants := len(matches[index].Variants); variants == 1 {
-			row += "  · 1 effort"
-		} else if variants > 1 {
-			row += fmt.Sprintf("  · %d efforts", variants)
-		} else {
-			row += "  · provider default"
-		}
-		if index == m.modelChoiceResultIndex {
-			row = studioFocus.Width(max(1, m.setupViewport.Width()-6)).Render(row)
-		}
-		lines = append(lines, row)
+		return []string{"✓ " + modelLabel + " · " + providerLabel}
 	}
-	if len(matches) == 0 && !m.modelChoiceCatalogLoading(provider) && m.modelChoiceCatalogErr(provider) == nil {
-		if len(rows) == 0 {
-			lines = append(lines, "No locally discovered models. [Esc] then [r] rescan or [i] type a reference.")
-		} else {
-			lines = append(lines, "No local model matches this query.")
-		}
-	}
-	if len(matches) > 0 && m.modelChoiceResultIndex < len(matches) {
-		if variants := matches[m.modelChoiceResultIndex].Variants; len(variants) > 0 {
-			lines = appendSetupWrapped(lines, "", "efforts  "+strings.Join(variants, " · "), m.setupViewport.Width())
-		}
-	}
-	lines = append(lines, "[↑↓] result  [Enter] assign  [Esc] cancel")
-	return lines
 }
