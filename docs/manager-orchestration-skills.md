@@ -128,6 +128,22 @@ their current bytes are.
   so a same-user writer that replaces the path inside the final check-to-remove
   window is outside this cooperative lock's threat model; that residual limit is
   accepted and documented rather than claimed closed.
+- On Windows every publisher and manual `unlock` also takes a persistent kernel
+  guard before the lock protocol. The guard is a zero-byte file
+  (`.skill-registry.guard`) under the same state directory, created once and
+  never removed or truncated, and is held with an exclusive `LockFileEx`
+  byte-range lock for the entire publication; it is released only after the
+  inner lock is removed and its descriptor is closed. Serializing all new
+  writers at the guard removes the inner lock's unlink/recreate overlap that
+  could surface as an intermittent access-denied open, so the errno classes
+  above are not loosened. The guard wait and the inner lock/recovery wait share
+  one bounded `maxWait` budget rather than adding; exhausting the guard wait
+  reports `ErrBusy`. A foreign non-empty, symlink, or non-regular guard file
+  fails closed and is left unchanged. On platforms without the guard it is a
+  no-op and no file is created. A writer process that predates this guard does
+  not participate: upgrading requires restarting all Windows writers, and no
+  hot-mixed-version guarantee is claimed. Legacy PID-based inner locks remain
+  respected through the existing active-busy and dead-owner recovery logic.
 - Cache reads use a rooted directory handle and a bounded regular-file read
   (`O_NOFOLLOW`/`O_NONBLOCK` on Unix), so a symlink, FIFO, or oversized file is
   rejected without unbounded or blocking I/O. A symlinked state directory, cache
@@ -309,6 +325,10 @@ unavailable), so no such constant was invented.
   only through existing selection APIs.
 - Native prompt and permission denials constrain behavior but are not a hard
   sandbox; a shell is not a read-only guarantee.
+- The Windows kernel guard serializes only writers that take it. A pre-upgrade
+  process, or an unrelated tool writing the state directory, does not
+  participate; restart all Windows writers to participate. The zero-byte guard
+  file is deliberate persistent state and is intentionally left in place.
 - The lock identity check and removal have a small residual TOCTOU window on
   filesystems without atomic replace semantics. The cache document itself stays
   atomic, so a reader always sees a complete prior or next document. Off Unix,

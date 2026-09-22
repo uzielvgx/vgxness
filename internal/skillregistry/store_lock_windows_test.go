@@ -96,6 +96,13 @@ func TestWindowsConcurrentRefreshStress(t *testing.T) {
 					t.Fatalf("concurrent refresh: %v", err)
 				}
 			}
+			// The production publish path must have serialized through the
+			// persistent kernel guard, leaving it present and empty.
+			guardPath := filepath.Join(filepath.Dir(options.CachePath), guardName)
+			info, statErr := os.Stat(guardPath)
+			if statErr != nil || info.Size() != 0 {
+				t.Fatalf("guarded refresh must leave a persistent empty guard: info=%v err=%v", info, statErr)
+			}
 		})
 	}
 }
