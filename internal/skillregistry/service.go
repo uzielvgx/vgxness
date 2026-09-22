@@ -103,7 +103,19 @@ func (service *Service) Unlock(ctx context.Context, options Options) (bool, erro
 		return false, nil
 	}
 	defer root.Close()
-	return recoverStaleLock(ctx, root, "skill-registry.lock")
+	// Manual Unlock takes the same persistent kernel guard as every publisher
+	// before touching the inner lock, so recovery never overlaps a guarded
+	// writer. Exhausting the shared guard wait is reported as ErrBusy rather
+	// than a false no-op, so a wedged guard holder is never hidden. On
+	// non-Windows the guard is a no-op and nothing is created.
+	o := realOps()
+	o.deadline = time.Now().Add(o.maxWait)
+	guard, err := acquireKernelGuardWith(ctx, root, o)
+	if err != nil {
+		return false, err
+	}
+	defer guard.releaseWith(o)
+	return recoverStaleLockBounded(ctx, root, "skill-registry.lock", o)
 }
 
 // Ensure rescans the authorized roots (bounded) and reuses a cache only when it

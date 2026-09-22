@@ -24,6 +24,11 @@ const (
 	maxLockBytes   = 64
 )
 
+// guardName is the persistent Windows kernel-guard file name, created under the
+// same rooted directory as the cache. On platforms without the guard it is
+// never created; tests assert its absence there.
+const guardName = ".skill-registry.guard"
+
 // rootedFS is the subset of *os.Root used for lock and cache publication. It is
 // an interface so per-call tests can inject scripted errors without a mutable
 // package-global failure hook; production always passes a real *os.Root.
@@ -47,6 +52,20 @@ type ops struct {
 	metadataAmbiguous func(error) bool
 	retryDelay        time.Duration
 	maxWait           time.Duration
+	// deadline, when non-zero, is the shared absolute bound for the Windows
+	// kernel guard plus the inner lock/recovery waits, so the two never add up
+	// to a doubled budget. Zero falls back to now+maxWait, which keeps every
+	// existing per-call seam unchanged.
+	deadline time.Time
+
+	// guardLock and guardUnlock are per-call seams for the Windows kernel
+	// guard's exclusive byte-range lock, and guardClose is its descriptor-close
+	// seam. They let tests inject a deterministic non-contention failure or
+	// count closes without a mutable package-global hook. Production leaves
+	// them nil and uses LockFileEx/UnlockFileEx; non-Windows ignores them.
+	guardLock   func(*os.File) error
+	guardUnlock func(*os.File) error
+	guardClose  func(*os.File) error
 
 	lockWrite func(*os.File, []byte) (int, error)
 	lockSync  func(*os.File) error
@@ -249,6 +268,18 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 		return ErrInvalid
 	}
 	defer root.Close()
+	// Windows kernel-guard boundary: every publisher takes the persistent guard
+	// before the inner lock protocol and holds it across the entire publication,
+	// including the inner lock removal and descriptor close, so a second writer
+	// can never overlap the inner lock's unlink/recreate. The guard and the
+	// inner waits share one maxWait budget. On platforms without the guard this
+	// is a no-op that creates nothing.
+	o.deadline = time.Now().Add(o.maxWait)
+	guard, err := acquireKernelGuardWith(ctx, root, o)
+	if err != nil {
+		return err
+	}
+	defer guard.releaseWith(o)
 	lock, err := acquireLockWith(ctx, root, "skill-registry.lock", o)
 	if err != nil {
 		return err
@@ -326,7 +357,10 @@ func acquireLock(ctx context.Context, root *os.Root, name string) (*fileLock, er
 }
 
 func acquireLockWith(ctx context.Context, root rootedFS, name string, o ops) (*fileLock, error) {
-	deadline := time.Now().Add(o.maxWait)
+	deadline := o.deadline
+	if deadline.IsZero() {
+		deadline = time.Now().Add(o.maxWait)
+	}
 	// ambiguous remembers an access-denied metadata observation from the most
 	// recent iteration. It is re-observed within the single deadline above, so
 	// a denial that persists to the deadline is reported as ErrInvalid carrying
@@ -523,7 +557,10 @@ func recoverStaleLock(ctx context.Context, root rootedFS, name string) (bool, er
 }
 
 func recoverStaleLockBounded(ctx context.Context, root rootedFS, name string, o ops) (bool, error) {
-	deadline := time.Now().Add(o.maxWait)
+	deadline := o.deadline
+	if deadline.IsZero() {
+		deadline = time.Now().Add(o.maxWait)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return false, err
