@@ -108,7 +108,22 @@ their current bytes are.
   results), and the identity is unchanged; otherwise the writer waits a bounded
   interval and reports `ErrBusy` rather than deleting a possibly active lock.
   Transient Windows delete-pending or sharing-violation contention on the lock
-  path is retried within the same bound; permission and other errors fail closed.
+  path is retried within the same bound. A Windows `ACCESS_DENIED` from a
+  metadata observation (`Lstat`) of this known lock name is ambiguous: a
+  concurrent unlink/recreate can surface it transiently, for example while the
+  previous holder's unlink is pending, so it is re-observed only within the same
+  bound and is never treated as proof of contention or staleness. No create,
+  remove, read, or write follows an ambiguous or unknown metadata probe until a
+  normal observation and every symlink, owner, age, and identity check pass
+  again. A denial that persists to the bound ends as `ErrInvalid` carrying the
+  original OS cause, not `ErrBusy` and not a silent success; an unknown
+  observation failure fails closed immediately. `ACCESS_DENIED` from an open,
+  remove, read, or write is never retried and fails closed, and
+  `retryableContention` still excludes it. Re-observation keys on the typed
+  metadata-observation provenance, not on an errno match, so a denial from an
+  open, remove, read, or write can never be re-observed as a metadata probe.
+  This bounds the ambiguity; it does not claim the exact NT status or root
+  cause.
   The identity-plus-bytes check before removal is not an atomic compare-and-unlink,
   so a same-user writer that replaces the path inside the final check-to-remove
   window is outside this cooperative lock's threat model; that residual limit is

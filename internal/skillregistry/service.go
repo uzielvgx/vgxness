@@ -103,7 +103,7 @@ func (service *Service) Unlock(ctx context.Context, options Options) (bool, erro
 		return false, nil
 	}
 	defer root.Close()
-	return recoverStaleLock(root, "skill-registry.lock")
+	return recoverStaleLock(ctx, root, "skill-registry.lock")
 }
 
 // Ensure rescans the authorized roots (bounded) and reuses a cache only when it

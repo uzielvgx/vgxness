@@ -800,7 +800,7 @@ func TestStaleLockRecoveryRequiresProvablyDeadOwner(t *testing.T) {
 	if err := os.Chtimes(lockPath, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if recovered, err := recoverStaleLock(root, "skill-registry.lock"); err != nil || !recovered {
+	if recovered, err := recoverStaleLock(context.Background(), root, "skill-registry.lock"); err != nil || !recovered {
 		t.Fatalf("dead-owner stale lock must be recovered: recovered=%t err=%v", recovered, err)
 	}
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
@@ -812,7 +812,7 @@ func TestStaleLockRecoveryRequiresProvablyDeadOwner(t *testing.T) {
 	if err := os.Chtimes(lockPath, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if recovered, err := recoverStaleLock(root, "skill-registry.lock"); err != nil || recovered {
+	if recovered, err := recoverStaleLock(context.Background(), root, "skill-registry.lock"); err != nil || recovered {
 		t.Fatalf("live-owner stale lock must not be recovered: recovered=%t err=%v", recovered, err)
 	}
 }
