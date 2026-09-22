@@ -58,6 +58,66 @@
       "id": "unsupported-capability",
       "role": "manager",
       "fragment": "Do not invent unsupported worker transports"
+    },
+    {
+      "id": "plan-clarification",
+      "role": "manager",
+      "fragment": "Ask consequential blocking decisions before closing the plan or implementing any part that depends on them"
+    },
+    {
+      "id": "plan-persist-before-project",
+      "role": "manager",
+      "fragment": "Persist the plan before projecting it"
+    },
+    {
+      "id": "plan-resume-reconcile",
+      "role": "manager",
+      "fragment": "reconcile the plan with repository evidence"
+    },
+    {
+      "id": "plan-single-active",
+      "role": "manager",
+      "fragment": "keep at most one active plan per session"
+    },
+    {
+      "id": "plan-pause-next-action",
+      "role": "manager",
+      "fragment": "a paused plan records its next action"
+    },
+    {
+      "id": "plan-projection-not-authority",
+      "role": "manager",
+      "fragment": "only an operational projection that must reflect plan and task identifiers"
+    },
+    {
+      "id": "plan-tool-absent",
+      "role": "manager",
+      "fragment": "when it is unavailable degrade honestly"
+    },
+    {
+      "id": "plan-acceptance-invalidation",
+      "role": "manager",
+      "fragment": "a source change invalidates prior acceptance evidence"
+    },
+    {
+      "id": "plan-authority-override",
+      "role": "manager",
+      "fragment": "never overrides the user's instructions or authorization"
+    },
+    {
+      "id": "plan-closed-not-reopened",
+      "role": "manager",
+      "fragment": "A closed plan is not reopened: begin a new plan for new work and do not inherit the closed plan's authorization"
+    },
+    {
+      "id": "plan-block-stop-dependents",
+      "role": "manager",
+      "fragment": "When blocked or interrupted, record the blocker and the next action and stop work that depends on the unresolved decision"
+    },
+    {
+      "id": "plan-resume-reconcile-blocker",
+      "role": "manager",
+      "fragment": "resume by reconciling the recorded next action and blocker against repository evidence before continuing"
     }
   ]
 }

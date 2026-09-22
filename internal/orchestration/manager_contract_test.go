@@ -103,3 +103,58 @@ func TestManagerContractUsesAdaptiveFlowAndTDDPolicy(t *testing.T) {
 		t.Fatal("general policy requires obsolete RED/GREEN reporting")
 	}
 }
+
+func TestManagerEmbedsImplementationPlanRecordSchema(t *testing.T) {
+	c, err := LoadManagerContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"# Implementation plan records",
+		"Create docs/implementations/README.md as the index",
+		"unique, stable <ID-slug> that is never reused",
+		"objective; scope and exclusions; decisions and assumptions",
+		"acceptance criteria with stable AC identifiers",
+		"tasks with a stable ID, state, AC link, dependencies, and the required evidence for completion",
+		"Task states are pending, in_progress, blocked, done, cancelled",
+		"Plan states are pending, active, paused, closed, cancelled",
+		"exactly one plan is active while executing, at most one is active otherwise",
+		"zero are active after closure or with no work",
+		"progress.md records decisions, blockers, and the single next action, and must not duplicate the task table",
+		"validation.md records the exact candidate, each check with result and limits, and the verifier and CARE status",
+		"may use one proportional file instead of the full set",
+		"sufficient on their own: a new project needs only the workspace, not any repository documentation",
+	} {
+		if !strings.Contains(c.Manager.Instructions, fragment) {
+			t.Errorf("manager instructions lack embedded plan-record schema %q", fragment)
+		}
+	}
+}
+
+func TestManagerPlanningResolvesBlockingDecisions(t *testing.T) {
+	c, err := LoadManagerContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"consult the registry index when starting or resuming",
+		"must reflect plan and task identifiers, never authority",
+		"Ask consequential blocking decisions before closing the plan or implementing any part that depends on them",
+		"continue only with independent authorized work",
+		"record minor reversible defaults explicitly rather than treating a blocking decision as an assumption",
+		"Distinguish extending the current plan from opening a new feature plan, do not carry authorization across plans",
+		"separate necessary work from an out-of-scope improvement",
+	} {
+		if !strings.Contains(c.Manager.Instructions, fragment) {
+			t.Errorf("manager planning policy lacks %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{
+		"do not block authorized work on a pending decision",
+		"record an explicit assumption and continue",
+	} {
+		if strings.Contains(c.Manager.Instructions, forbidden) {
+			t.Fatalf("manager planning policy retains the unsafe assumption clause %q", forbidden)
+		}
+	}
+}

@@ -25,7 +25,7 @@ func TestNativeSharedDevelopmentScenarios(t *testing.T) {
 		t.Fatal(e)
 	}
 	text := string(p.agents[managerAgentName])
-	if len(corpus.Cases) != 11 {
+	if len(corpus.Cases) != 23 {
 		t.Fatal("missing scenarios")
 	}
 	for _, scenario := range corpus.Cases {

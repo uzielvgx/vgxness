@@ -17,11 +17,21 @@ test("Pi Manager delegates all exploration and scopes skill loads", () => {
   assert.match(c.manager.instructions, /observed denied only when a real tool error proved it, unavailable when the dependency or transport is absent/);
   assert.doesNotMatch(c.manager.instructions, /without a formal plan, delegation/);
   assert.doesNotMatch(c.manager.instructions, /Load only a relevant managed skill/);
+  assert.match(c.manager.instructions, /Ask consequential blocking decisions before closing the plan/);
+  assert.doesNotMatch(c.manager.instructions, /do not block authorized work on a pending decision/);
+  assert.doesNotMatch(c.manager.instructions, /record an explicit assumption and continue/);
   const prompt = renderPiManagerPrompt(c);
   assert.match(prompt, /not read a skill body on the worker's behalf/);
   assert.doesNotMatch(prompt, /read SKILL.md and only required relative resources/);
   assert.match(prompt, /Registry metadata is an authorized Manager orchestration query, not project exploration/);
   assert.match(prompt, /Pi has no VGXNESS Go process/);
+  assert.match(prompt, /# Implementation plan records/);
+  assert.match(prompt, /Task states are pending, in_progress, blocked, done, cancelled/);
+  assert.match(prompt, /Plan states are pending, active, paused, closed, cancelled/);
+  assert.match(prompt, /exactly one plan is active while executing, at most one is active otherwise/);
+  assert.match(prompt, /keep at most one active plan per session \(zero when there is no work\)/);
+  assert.doesNotMatch(prompt, /exactly one active plan per session/);
+  assert.match(prompt, /sufficient on their own: a new project needs only the workspace/);
 });
 
 // Regression: model aliases and native skill guidance are sourced, not duplicated.
@@ -34,6 +44,6 @@ test("shared model roles and portable policy are complete", () => {
  assert.match(c.manager.instructions,/missing skill/i);
 });
 
-test("Pi projects every shared development scenario without claiming live model equivalence",async()=>{const corpus=JSON.parse(await readFile(new URL("../../../internal/orchestration/testdata/manager-scenarios.json",import.meta.url),"utf8"));assert.equal(corpus.evidenceKind,"deterministic-contract-conformance");assert.equal(corpus.partition,"development");assert.equal(corpus.cases.length,11);const prompt=renderPiManagerPrompt(loadManagerContract());for(const scenario of corpus.cases)assert.ok(prompt.includes(scenario.fragment),scenario.id);});
+test("Pi projects every shared development scenario without claiming live model equivalence",async()=>{const corpus=JSON.parse(await readFile(new URL("../../../internal/orchestration/testdata/manager-scenarios.json",import.meta.url),"utf8"));assert.equal(corpus.evidenceKind,"deterministic-contract-conformance");assert.equal(corpus.partition,"development");assert.equal(corpus.cases.length,23);const prompt=renderPiManagerPrompt(loadManagerContract());for(const scenario of corpus.cases)assert.ok(prompt.includes(scenario.fragment),scenario.id);});
 
 test("Pi projects active CARE policy fragments without claiming model equivalence",async()=>{const corpus=JSON.parse(await readFile(new URL("../../../internal/orchestration/testdata/care-coverage-scenarios.json",import.meta.url),"utf8"));assert.equal(corpus.partition,"development");assert.equal(corpus.holdout,"not protected holdout");assert.equal(corpus.execution,"unexecuted behavior");const prompt=renderPiManagerPrompt(loadManagerContract());for(const scenario of corpus.cases)for(const assertion of scenario.policyAssertions)assert.ok(prompt.includes(assertion.fragment),`${scenario.id}:${assertion.role}`);});

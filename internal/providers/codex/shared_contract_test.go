@@ -64,7 +64,7 @@ func TestNativeSharedDevelopmentScenarios(t *testing.T) {
 			text = string(a.Bytes)
 		}
 	}
-	if len(corpus.Cases) != 11 {
+	if len(corpus.Cases) != 23 {
 		t.Fatal("missing scenarios")
 	}
 	for _, scenario := range corpus.Cases {

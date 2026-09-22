@@ -19,6 +19,28 @@ custom roots require an explicit binding. Go and Pi project the same shared
 Manager text; these declarations are configuration evidence, not runtime
 sandbox proof.
 
+For substantial work the shared contract requires a durable, in-repository
+Markdown plan under `docs/implementations/`, with a stable plan identifier and
+numbered tasks that own canonical status. The index, states and per-plan layout
+documented in `docs/implementations/README.md` make the mechanism usable in a new
+project without assuming this repository's files. A session task view is only an
+operational projection: persist the plan before projecting it, consult the index
+when starting or resuming, reconcile with repository evidence,
+keep at most one active plan per session (zero when there is no work), and
+preserve closed plans as history.
+Resolve discoverable facts by inspection; ask consequential blocking decisions
+before closing the plan or implementing any part that depends on them, continue
+only with independent authorized work, and treat only minor reversible defaults
+as explicit assumptions rather than turning a blocking decision into one. A plan
+never overrides the user's instructions or authorization, stores no secrets or
+raw logs, and grants no new permission. The shared text names no provider tool;
+each adapter supplies the native projection (OpenCode and Pi `todowrite`, Codex a
+native planning tool only when the host exposes one), and when that tool is
+unavailable the work degrades honestly.
+No runtime synchronizer or atomic cross-tool state is promised, and
+implementation is not acceptance: a task completes only with its required
+evidence, and a source change invalidates prior acceptance evidence.
+
 Go embeds and validates the registry. Pi loads its generated JSON using
 TypeScript/Node and rejects invalid identity, schema, role definitions and
 content digest. Both implementations hash recursively sorted-key compact JSON

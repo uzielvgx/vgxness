@@ -21,7 +21,7 @@ func TestSharedManagerDevelopmentScenarios(t *testing.T) {
 	if e = json.Unmarshal(raw, &corpus); e != nil {
 		t.Fatal(e)
 	}
-	if corpus.SchemaVersion != "vgxness-manager-scenarios/v1" || corpus.EvidenceKind != "deterministic-contract-conformance" || corpus.Partition != "development" || len(corpus.Cases) != 11 {
+	if corpus.SchemaVersion != "vgxness-manager-scenarios/v1" || corpus.EvidenceKind != "deterministic-contract-conformance" || corpus.Partition != "development" || len(corpus.Cases) != 23 {
 		t.Fatal("invalid development corpus")
 	}
 	c, e := LoadManagerContract()

@@ -36,6 +36,8 @@ These commands preserve the underlying tools. Missing storage is reported as una
 
 `apply_patch` uses Pi's shared per-file mutation queues and sequential execution mode, coordinating with built-in write/edit. A failed recovery throws `recovery_pending` with `retrySafe=false` and retained recovery paths; it must not be retried as an ordinary patch failure.
 
+`todowrite` replaces the current session todo list and is a session view only. For substantial work the canonical plan is a durable Markdown file under `docs/implementations/`; persist it before projecting, reconcile with repository evidence on resume, and keep at most one active plan per session (zero when there is no work) while preserving closed plans as history. Pi promises no runtime synchronizer or atomic cross-tool state, and when `todowrite` is unavailable the Markdown plan stays authoritative.
+
 ## Foreground sync credentials
 
 For file-backed foreground sync, provide an existing private credential file to `createPiExtension({ credentialFile: "/absolute/private/sync-token" })`, or start Pi with `VGXNESS_PI_CREDENTIAL_FILE` set to that absolute path. The file contains the device's existing `vgx1.<device UUID>.<secret>` bearer, optionally followed by one newline. On Unix it must belong to the current user and have no group or other permission bits, for example mode `0600`.

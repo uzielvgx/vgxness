@@ -80,6 +80,8 @@ Interaction mode is resolved in this order:
 
 The primary manager has explicit access to OpenCode's native `question` tool. It asks one blocking decision at a time, presents the recommended option first, and resumes without repeating the same question. Questions do not grant permission, override a denial, or move terminal and diagnostic work to the user. Review profiles cannot ask questions.
 
+The Manager owns the canonical Markdown plan for substantial work under `docs/implementations/` and may project it into the native `todowrite` tool as a session view; `todowrite` is never the plan authority. Persist before projecting, reconcile with repository evidence on resume, and keep at most one active plan per session (zero when there is no work) while preserving closed plans as history. No runtime synchronizer or atomic cross-tool state is promised; if `todowrite` is unavailable, the Markdown plan stays authoritative and the work degrades honestly.
+
 ### Adaptive TDD
 
 The Manager selects the lightest sufficient flow from affected behavior, uncertainty, blast radius, reversibility, and risk—not diff size. Direct read-only work and trivial local changes that are low risk need only pertinent inspection or checks. Substantive, cross-cutting, elevated-risk, or explicit-delivery work requires the exact-candidate independent-verification and applicable CARE gates; discovered risk escalates the flow.

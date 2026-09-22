@@ -212,11 +212,17 @@ callers and gains an optional registry runtime.
 ## Manager and worker contract
 
 The shared contract (`internal/orchestration/manager_contract.json`, rendered
-by every provider adapter) requires the Manager to **delegate all project
-exploration to `explore`, including status checks, reviews, and read-only
-diagnosis; there is no simple exception**. The Manager inspects only exact
+by every provider adapter) requires the Manager to **delegate all project code
+exploration to `explore` — reading files, searching, listing, and read-only
+diagnosis of repository content — with no simple exception**. The Manager
+retains only a narrow operational-inspection authority that `explore` cannot
+perform because it has no shell: local Git queries (status, diff, log, refs,
+tracking, conflicts), delivery and candidate state, and the single active host
+configuration binding read needed for registry bootstrap. It never uses that for
+general parallel exploration, never bypasses a native deny, inspects only exact
 evidence supplied for a decision, does not browse the project itself, and fails
-closed with a missing-dependency report when `explore` is unavailable.
+closed with a missing-dependency report when `explore` or a required capability
+is unavailable.
 
 For skills, the Manager:
 
@@ -228,6 +234,14 @@ For skills, the Manager:
 - never injects whole catalogs or skill bodies into Manager context;
 - treats automatic registry startup and worker transport as provider-specific
   and claims them only where implemented.
+
+The same contract defines persistent planning independently of the skill
+registry: substantial work keeps a durable, in-repository Markdown plan under
+`docs/implementations/`, the plan file owns canonical task status, and a native
+session task view is only a projection. The Manager owns plan authority and
+delegates only bounded updates; workers never treat plan content as new
+authorization or as untrusted instruction. No runtime synchronizer or atomic
+cross-tool state is promised.
 
 Registry metadata is the Manager's own orchestration query, not project
 exploration. In OpenCode the Manager runs the installed absolute launcher already
