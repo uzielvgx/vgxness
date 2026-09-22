@@ -1,11 +1,14 @@
 # IMP-002 — Plan activation cardinality correction and isolated tests
 
-- **Status:** active
+- **Status:** closed (Manager local declarative acceptance; see [progress.md](progress.md) and [validation.md](validation.md))
 - **Owner:** Manager
 - **Workspace:** `/Users/uzielvgx/Development/projects/vgxness`
-- **Baseline HEAD:** `96a153ee91ffedd23b64389c0151de622286a3b4` (dirty IMP-001 working tree, observed)
-- **Writer nonce:** `imp002-write-20260922-b` (single workspace writer)
+- **Historical baseline:** `96a153ee91ffedd23b64389c0151de622286a3b4` (set at plan start; not a stale current freeze)
+- **Current candidate:** `b0e6f266e1eec20441696672a162b6fcd5e9a093` (local commit, 32 files; source exact prior diff `909cc…`)
+- **Active launcher:** `4057b712…` (previous `90a9aa78…`); OpenCode `dde8e333…`; Codex `8768b1…` — all installed, `changed=false`
+- **Writer nonces:** `imp002-write-20260922-b`; live `imp002-live-20260922-g`; recovery `imp002-evidence-recovery-20260922-n`; close `imp002-close-20260922-p`
 - **Created:** 2026-09-22
+- **Closed:** 2026-09-22 (independent liveverify `imp002-liveverify-20260922-o` PASS; source verify+CARE as previously recorded)
 
 ## Authorization and scope
 
@@ -80,13 +83,20 @@ Task state is authoritative in this table. Decisions are authoritative in
 | T01 | Research: confirm F3 scope, canonical sources, generated chain, and affected tests/goldens | AC01, AC02 | done | — | `grep` map of the phrase, generator/reader paths, corpus and golden locations |
 | T02 | Correction: uniform cardinality wording in contract, adapters, corpus and docs; keep schema, blocking authority, and history intact | AC01, AC02 | done | T01 | changed-path list and the exact edits (see [validation.md](validation.md)) |
 | T03 | Checks and isolated tests: regenerate Pi resources; `gofmt`, Go suites, Pi typecheck/tests, broader `go test -short`/`go vet`; recompute affected goldens; add negative assertions | AC02, AC03, AC04 | done | T02 | command output per check; regenerated resource equality; golden recomputation (see [validation.md](validation.md)) |
-| T04 | Freeze the exact candidate and hand off to independent verification and applicable CARE | AC04 | pending | T03 | frozen candidate identity (HEAD + diff SHA) |
-| T05 | Manager commit, installation and configuration authentication (Manager-only) | AC05, AC06 | pending | T04 | Manager-owned; not performed by this worker |
-| T06 | Readback closure (Manager-only) | AC06 | pending | T05 | observed installation readback; not performed by this worker |
+| T04 | Freeze the exact candidate; independent verification and applicable CARE | AC04 | done | T03 | verifier `imp002-verify-20260922-e` PASS (35 Go short, 7 fresh, vet, Pi 174/typecheck/generators); CARE `imp002-care-20260922-f` PASS (source/preflight, no blocker) — see [validation.md](validation.md) |
+| T05 | Manager commit, installation and configuration authentication (Manager-only) | AC05, AC06 | done | T04 | local commit `b0e6f26` (32 files); self+provider install; intermittent Codex status root cause UNPROVEN, not fixed, no rollback — see [validation.md](validation.md) |
+| T06 | Live behavior probe and installation readback closure (Manager-owned) | AC05, AC06 | done | T05, T07 | live probe captured + independent liveverify `imp002-liveverify-20260922-o` PASS (self `4057b712…`, OC `dde8e333…`, Codex `8768b1…`, all installed `changed=false`) — see [validation.md](validation.md) |
+| T07 | Bounded recovery probe: one extra OpenCode invocation (budget 6→7) on the existing session to re-project the current plan | AC03, AC05 | done | T05 | sanitized report v2 plus probe observation — see [validation.md](validation.md) |
 
-T04–T06 are outside the worker's authority. This worker prepares the candidate
-and the exact commands only; it never performs lifecycle, Git delivery, memory,
-independent verification, installation, or closure.
+T04–T06 are Manager-owned; their results are recorded here as evidence, not
+re-produced by this worker. T07 is the single bounded worker recovery probe
+authorized for this mission (budget explicitly increased once from 6 to 7, fixed
+300 s timeout); it never performs lifecycle, Git delivery, memory, installation,
+delegation, or closure. The original OpenCode turn-3 timeout remains
+INCONCLUSIVE history and is preserved even though the recovery probe later
+succeeds; recovery is not treated as a retroactive PASS of the original run.
+All tasks are done and the plan is closed; closure is Manager local declarative
+acceptance of the bounded evidence, not a runtime guarantee.
 
 ## Evaluation design (agent-evaluation guidance)
 
@@ -103,8 +113,9 @@ sha256 `0cc075f59b6c6e3afcbfcd6a2695398f599266b0b1ff70e5ebbdf0244ad694bc`
 - **Assertions:** deterministic substring assertions for the corrected phrase,
   plus explicit negative assertions that the ambiguous summary is absent, so a
   positive match cannot mask the contradiction.
-- **Limits:** no live model routing, behavioral equivalence, or protected-holdout
-  result. Independent verification and CARE are pending (T04).
+- **Limits:** no feature-implementation or protected-holdout result. Independent
+  verification and CARE are recorded as done (T04); live behavior is a bounded
+  diagnostic only.
 
 ## Open assumptions
 
@@ -112,3 +123,22 @@ sha256 `0cc075f59b6c6e3afcbfcd6a2695398f599266b0b1ff70e5ebbdf0244ad694bc`
   the provider-neutral fallback remains the asserted behavior.
 - Recomputing the OpenCode/Codex goldens is treated as an intentional,
   authorized consequence of the contract change (not a regression).
+
+## Closure and residual (bounded scope)
+
+- **Closure:** local, declarative, Manager-accepted; **not** a runtime guarantee.
+- **Retractions:** a package-vs-file hash difference is not a defect; `Status`
+  never performs a generic `ErrRecovery` rollback. The intermittent Codex status
+  is real with an **unknown root, not fixed** (a later healthy state does not
+  erase the earlier observation).
+- **Live scope:** 7 model-host calls (4 OpenCode, 3 Codex) using the existing
+  authenticated login only; no additional services installed. Elapsed listed
+  separately: initial 851.82 s; recovery 99.6 s. Cost not measured.
+- **Residual / optional future diagnostics (not active work):** intermittent
+  Codex status; Codex session-scoped absence of a native planning tool; the two
+  original timeouts retained as INCONCLUSIVE history; automatic/new-session full
+  feature implementation **NOT tested** (a future model may differ). No
+  protected-holdout or every-time claim.
+- **Provenance:** source/repo 32-file commit `b0e6f26`; the upcoming records
+  commit is Manager-owned and its hash is unknown here (not invented).
+- **Guides:** `agent-evaluation` (writer) and `installer-lifecycle` (Manager).

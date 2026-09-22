@@ -91,7 +91,8 @@ file is self-reported by the writer and is not independent evidence.
 | ID | Title | State | Plan | Progress | Validation |
 | --- | --- | --- | --- | --- | --- |
 | IMP-001 | Persistent Markdown implementation plans tied to native session tracking | closed | [plan.md](IMP-001-persistent-plans/plan.md) | [progress.md](IMP-001-persistent-plans/progress.md) | [validation.md](IMP-001-persistent-plans/validation.md) |
-| IMP-002 | Plan activation cardinality correction and isolated tests | active | [plan.md](IMP-002-plan-activation-tests/plan.md) | [progress.md](IMP-002-plan-activation-tests/progress.md) | [validation.md](IMP-002-plan-activation-tests/validation.md) |
+| IMP-002 | Plan activation cardinality correction and isolated tests | closed | [plan.md](IMP-002-plan-activation-tests/plan.md) | [progress.md](IMP-002-plan-activation-tests/progress.md) | [validation.md](IMP-002-plan-activation-tests/validation.md) |
 
-Active plan: **IMP-002**. IMP-001 is closed history; its optional F-3 wording
-improvement is addressed by IMP-002, and no new plan is created automatically.
+Active plan: **none**. IMP-001 and IMP-002 are closed history; IMP-002 addressed
+IMP-001's optional F-3 wording improvement, and no new plan is created
+automatically.
