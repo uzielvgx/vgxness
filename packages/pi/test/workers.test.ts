@@ -271,3 +271,13 @@ test("SDK task canonicalizes every shared alias before authority checks", async 
  await assert.rejects(tool.execute("invalid",input("unknown")),/launchable|unsupported/);
  host.mode="read-only";await assert.rejects(tool.execute("parent",input("worker","full")),/parent authority/);
 });
+test("RPC stdin EPIPE from a worker that closed its input rejects instead of crashing the host", { skip: process.platform === "win32" ? "Pi worker process ownership unsupported on Windows" : false }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-rpc-epipe-"));
+  const extension = join(root, "worker.ts"), cli = join(root, "fake.mjs");
+  await writeFile(extension, "export default async () => {};\n");
+  await writeFile(cli, "import { closeSync } from \"node:fs\"; closeSync(0); setInterval(() => {}, 1000);\n");
+  const runner = new PiRpcRunner({ cli, extension, cwd: root, profile: join(root, "profile") });
+  t.after(() => runner.stop());
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await assert.rejects(runner.request("get_state", { padding: "x".repeat(262144) }, 2000), /EPIPE/);
+});
