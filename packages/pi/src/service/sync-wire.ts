@@ -147,7 +147,7 @@ export class SyncWire {
     if (response.status !== 200) {
       let code = "";
       if (validBody && Buffer.byteLength(response.body) <= 1 << 20) { try { const v = parseProtocolJSON(response.body); object(v, ["protocol_version", "error"]); if (v.protocol_version === 1 && remoteCodes.includes(v.error)) code = v.error; } catch {} }
-      throw new SyncHttpError(operation, response.status === 401 ? "unauthorized" : response.status === 503 ? "unavailable" : operation === "project_discovery" && response.status === 404 ? "unsupported" : "remote", response.status, code);
+      throw new SyncHttpError(operation, response.status === 401 ? "unauthorized" : response.status === 503 || response.status === 429 ? "unavailable" : operation === "project_discovery" && response.status === 404 ? "unsupported" : "remote", response.status, code);
     }
     try { if (!validBody) fail(); return parseProtocolJSON(response.body); } catch { throw new SyncHttpError(operation, "invalid", response.status); }
   }
@@ -170,7 +170,7 @@ export class SyncWire {
     if (!Array.isArray(items) || !items.length || items.length > 16) fail();
     const canonical = items.map(validateMutation), body = protocolJSON({ protocol_version: 1, items: canonical }); if (Buffer.byteLength(body) > 1 << 20) fail();
     let v: any;
-    for (let attempt = 0; ; attempt++) { try { v = await this.request("push", "POST", "/v1/sync/push", body); break; } catch (error) { if (attempt === 1 || !(error instanceof SyncHttpError) || error.kind !== "unavailable") throw error; } }
+    for (let attempt = 0; ; attempt++) { try { v = await this.request("push", "POST", "/v1/sync/push", body); break; } catch (error) { if (attempt === 1 || !(error instanceof SyncHttpError) || error.kind !== "unavailable" || error.status === 429) throw error; } }
     return this.validated("push", () => {
       object(v, ["protocol_version", "results"]); if (v.protocol_version !== 1 || !Array.isArray(v.results) || v.results.length !== canonical.length) fail();
       const sequences = new Map<string, string>();

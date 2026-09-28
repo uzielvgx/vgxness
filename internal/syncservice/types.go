@@ -173,6 +173,23 @@ const (
 	DispositionRejected           Disposition = "rejected"
 )
 
+// DeviceIdentityRejection reports a rejection caused by the pushing device's
+// enrollment rather than by the mutation itself. The mutation stays valid and
+// must be kept for retry once the device is enrolled again.
+func (r Result) DeviceIdentityRejection() bool {
+	return r.Disposition == DispositionRejected && (r.Code == "revoked" || r.Code == "invalid_device")
+}
+
+// LocallyRetryable returns r with device identity rejections marked
+// retryable. The wire protocol never marks rejections retryable, so clients
+// apply this before recording a push result.
+func (r Result) LocallyRetryable() Result {
+	if r.DeviceIdentityRejection() {
+		r.Retryable = true
+	}
+	return r
+}
+
 func (r Result) Terminal() bool {
 	return r.Disposition == DispositionAccepted || r.Disposition == DispositionPreviouslyAccepted || r.Disposition == DispositionConflict || r.Disposition == DispositionRejected && !r.Retryable
 }

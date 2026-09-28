@@ -131,3 +131,12 @@ test('composite session IDs isolate claims, receipts, backfill and transition cl
     assert.equal((db.prepare("SELECT sync_version FROM sessions WHERE id='same' AND project_id='other'").get() as any).sync_version, 1n);
 });
 test('failed foreground transition returns a serializable public DTO without private database state', async (t) => { const { ctx } = fixture(t); const result = await dispatchSync(ctx, 'rejoin', {}, { credentials: { get: () => `vgx1.${randomUUID()}.${Buffer.alloc(32, 7).toString('base64url')}` }, http: { request: async () => { throw new Error('offline'); } } }); assert.equal(result.status, 'pulling'); assert.deepEqual(Object.keys(result).sort(), ['schemaVersion', 'mode', 'status', 'projects', 'sessions', 'observations', 'queued'].sort()); assert.doesNotThrow(() => JSON.stringify(result)); });
+test('device identity rejections keep the mutation for retry; other rejections are terminal', t => {
+  for (const [code, kept] of [['revoked', true], ['invalid_device', true], ['invalid_input', false]] as const) {
+    const { ctx, db } = fixture(t); backfillSyncProject(ctx, 10); const claimed = claim(ctx, 1)[0];
+    finish(ctx, claimed, { mutation_id: claimed.id, disposition: 'rejected', code });
+    const row = db.prepare('SELECT state,last_error_code FROM sync_outbox WHERE mutation_id=?').get(claimed.id) as any;
+    if (kept) { assert.equal(row?.state, 'retry', code); assert.equal(row?.last_error_code, code); assert.equal(db.prepare('SELECT 1 FROM sync_push_results').get(), undefined); }
+    else assert.equal(row, undefined, code);
+  }
+});

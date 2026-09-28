@@ -1131,3 +1131,45 @@ func TestOpen_MigrationRetryBoundAndCancellation(t *testing.T) {
 	testutil.Require(t, version == 0 && tables == 0, "partial schema version=%d tables=%d", version, tables)
 	testutil.NoError(t, db.Close())
 }
+
+func TestWritableStoreWriteTransactionsTakeWriterLockAtBegin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	first := openPath(t, path)
+	defer first.Close()
+	second := openPath(t, path)
+	defer second.Close()
+
+	tx, err := first.db.BeginTx(context.Background(), nil)
+	testutil.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	conn, err := second.db.Conn(context.Background())
+	testutil.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(context.Background(), `PRAGMA busy_timeout=0`)
+	testutil.NoError(t, err)
+	_, err = conn.ExecContext(context.Background(), `BEGIN IMMEDIATE`)
+	if err == nil {
+		_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+	}
+	testutil.Require(t, err != nil, "a write transaction must hold the writer lock from BEGIN")
+	testutil.NoError(t, conn.Close())
+
+	readTx, err := second.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	testutil.Require(t, err == nil, "read-only transactions must stay deferred: %v", err)
+	_ = readTx.Rollback()
+}
+
+func TestWritableStoreConnectionsKeepForeignKeysAndBusyTimeout(t *testing.T) {
+	store := openTestStore(t)
+	store.db.SetMaxIdleConns(0)
+	var foreignKeys, busyTimeout int
+	testutil.NoError(t, store.db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
+	testutil.NoError(t, store.db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout))
+	testutil.Require(t, foreignKeys == 1 && busyTimeout == 5000, "fresh connection foreign_keys=%d busy_timeout=%d", foreignKeys, busyTimeout)
+}
+
+func TestOpenRejectsQuestionMarkInPath(t *testing.T) {
+	_, err := Open(context.Background(), filepath.Join(t.TempDir(), "memory?.db"), nil)
+	testutil.Require(t, errors.Is(err, ErrInvalid), "err=%v", err)
+}

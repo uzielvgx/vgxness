@@ -1155,6 +1155,7 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 		}
 		blocking := false
 		for index, pushResult := range results {
+			pushResult = pushResult.LocallyRetryable()
 			claim := claims[index]
 			if pushResult.MutationID != claim.Mutation.MutationID {
 				markClaimsRetry(ctx, store, claims[index:], &result)
@@ -1177,7 +1178,10 @@ func runForegroundProjectSync(ctx context.Context, store foregroundProjectStore,
 				result.Pushed++
 				result.PreviouslyAccepted++
 			case syncservice.DispositionRejected:
-				if pushResult.Retryable {
+				if pushResult.DeviceIdentityRejection() {
+					result.Retried++
+					result.Status = memory.SyncStatusUnauthorized
+				} else if pushResult.Retryable {
 					result.Retried++
 					result.Status = memory.SyncStatusPartial
 				} else {
@@ -1390,6 +1394,7 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 		}
 		blocking := false
 		for index, pushResult := range results {
+			pushResult = pushResult.LocallyRetryable()
 			claim := claims[index]
 			if pushResult.MutationID != claim.Mutation.MutationID {
 				markClaimsRetry(ctx, store, claims[index:], &result)
@@ -1413,7 +1418,10 @@ func runForegroundSync(ctx context.Context, store foregroundStore, remote foregr
 				result.Pushed++
 				result.PreviouslyAccepted++
 			case syncservice.DispositionRejected:
-				if pushResult.Retryable {
+				if pushResult.DeviceIdentityRejection() {
+					result.Retried++
+					result.Status = memory.SyncStatusUnauthorized
+				} else if pushResult.Retryable {
 					result.Retried++
 					result.Status = memory.SyncStatusPartial
 				} else {

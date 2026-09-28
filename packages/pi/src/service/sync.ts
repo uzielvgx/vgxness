@@ -171,6 +171,12 @@ export function claim(ctx: ServiceContext, limit: number) {
         return { id: row.mutation_id, token, mutation };
     }));
 }
+// A rejection caused by the device's enrollment leaves the mutation valid; keep
+// it for retry once the device is enrolled again (the wire never marks
+// rejections retryable). Mirrors syncservice.Result.DeviceIdentityRejection.
+export function deviceIdentityRejection(result: { disposition: string; code?: string }): boolean {
+    return result.disposition === 'rejected' && (result.code === 'revoked' || result.code === 'invalid_device');
+}
 export function finish(ctx: ServiceContext, claim: {
     id: string;
     token: string;
@@ -184,7 +190,7 @@ export function finish(ctx: ServiceContext, claim: {
             throw new Error("mismatched sync result");
         const mutation = validateMutation(decode(row.payload));
         assertMutationProject(ctx, mutation);
-        if (result.retryable) {
+        if (result.retryable || deviceIdentityRejection(result)) {
             db.prepare("UPDATE sync_outbox SET state='retry',attempts=attempts+1,next_attempt_at=?,last_error_code=?,updated_at=? WHERE mutation_id=?").run(at + 1000000000n, result.code, at, claim.id);
             db.prepare("UPDATE sync_outbox_claims SET lease_until=? WHERE mutation_id=?").run(at, claim.id);
             return;
@@ -468,6 +474,8 @@ export async function syncProject(ctx: ServiceContext, options: SyncOptions = {}
                     previouslyAccepted++;
                 else if (results[n].disposition === 'conflict')
                     conflicts++;
+                else if (deviceIdentityRejection(results[n]))
+                    retried++;
                 else if (results[n].disposition === 'rejected')
                     rejectedCount++;
             }

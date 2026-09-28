@@ -3054,6 +3054,7 @@ func (s *Store) applySyncPushResult(ctx context.Context, mutationID, claimToken 
 	if !canonicalUUIDPattern.MatchString(mutationID) || !canonicalUUIDPattern.MatchString(claimToken) || result.MutationID != mutationID || !validSyncResult(result) {
 		return fmt.Errorf("%w: invalid sync push result", ErrInvalid)
 	}
+	result = result.LocallyRetryable()
 	if result.Retryable {
 		now := s.now().UTC().Round(0)
 		return s.markSyncOutboxRetry(ctx, mutationID, claimToken, now, result.Code, now, portableProject, localProject, transitionIdentity)

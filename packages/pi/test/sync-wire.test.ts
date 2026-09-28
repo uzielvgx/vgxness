@@ -44,12 +44,13 @@ test("int64 parser and encoder never round or substitute strings", () => {
   for (const bad of ["9223372036854775808", "1e0", "0.1", "01"]) assert.throws(() => parseProtocolJSON(bad));
   assert.throws(() => protocolJSON(9007199254740992));
 });
-test("push retries transport and 503 exactly once; never retries authentication, other statuses or invalid replies", async () => {
+test("push retries transport and 503 exactly once; reports 429 as transient without retrying; never retries authentication, other statuses or invalid replies", async () => {
   for (const mode of ["transport", 503]) {
     let calls = 0; const wire = mock(() => { if (++calls === 1) { if (mode === "transport") throw new Error("private"); return response({ protocol_version: 1, error: "unavailable" }, 503); } return response(accepted()); });
     await wire.push([mutation()]); assert.equal(calls, 2);
   }
-  for (const status of [201, 301, 401, 403, 408, 429, 500, 502, 504]) {
+  { let calls = 0; await assert.rejects(() => mock(() => { calls++; return response({ protocol_version: 1, error: "limit_exceeded" }, 429); }).push([mutation()]), (e: any) => e.status === 429 && e.kind === "unavailable"); assert.equal(calls, 1); }
+  for (const status of [201, 301, 401, 403, 408, 500, 502, 504]) {
     let calls = 0;
     await assert.rejects(() => mock(() => { calls++; return response({ protocol_version: 1, error: "revoked" }, status); }).push([mutation()]), (e: any) => e.status === status && e.kind === (status === 401 ? "unauthorized" : "remote") && e.code === "revoked");
     assert.equal(calls, 1);
