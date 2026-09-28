@@ -47,15 +47,17 @@ func open(ctx context.Context, path string, now func() time.Time, afterConfigure
 	if err := cancelled(ctx); err != nil {
 		return nil, err
 	}
+	// Reject before any filesystem access: '?' separates driver parameters, and
+	// Windows cannot even stat such a path.
+	if strings.Contains(path, "?") {
+		return nil, fmt.Errorf("%w: memory store path must not contain '?'", ErrInvalid)
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
 	path, err := canonicalizeStoragePath(path)
 	if err != nil {
 		return nil, err
-	}
-	if strings.Contains(path, "?") {
-		return nil, fmt.Errorf("%w: memory store path must not contain '?'", ErrInvalid)
 	}
 	parentInfo, err := os.Stat(filepath.Dir(path))
 	if err != nil || !parentInfo.IsDir() {
