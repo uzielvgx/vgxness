@@ -322,8 +322,12 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) (result
 			}
 		}
 		work.Add(1)
-		go func(req Request, requestCtx context.Context, mutates bool, mutationTicket uint64) {
+		go func(req Request, requestCtx context.Context, cancel context.CancelFunc, mutates bool, mutationTicket uint64) {
 			defer work.Done()
+			// Release the request context when the request finishes, not only
+			// on explicit cancellation, so it does not stay registered with the
+			// session context until Serve returns.
+			defer cancel()
 			defer func() { activeMu.Lock(); delete(active, req.ID); activeMu.Unlock() }()
 			dispatched := false
 			if mutates {
@@ -374,7 +378,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) (result
 			// the root context and closing input wakes the reader; defer reaps every
 			// active worker before Serve returns the write error.
 			failOutput(write(record))
-		}(req, requestCtx, mutates, mutationTicket)
+		}(req, requestCtx, cancel, mutates, mutationTicket)
 	}
 }
 

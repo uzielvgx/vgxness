@@ -996,3 +996,43 @@ func TestPlatformProcessLauncherExistsWithoutStarting(t *testing.T) {
 type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestServerReleasesRequestContextWhenRequestCompletes(t *testing.T) {
+	workspace := testWorkspace(t)
+	captured := make(chan context.Context, 1)
+	server, err := NewServer(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}, 4, func(ctx context.Context, request Request) (any, error) {
+		captured <- ctx
+		return map[string]string{"operation": request.Operation}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello, err := json.Marshal(serverHello(Binding{Workspace: workspace, Mode: ReadOnly, Role: "general"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, writer := io.Pipe()
+	var output lockedBuffer
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(context.Background(), reader, &output) }()
+	defer func() { _ = writer.Close(); <-done }()
+	if _, err := writer.Write(append(hello, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(testRecord(t, Request{Type: "request", ID: "one", Operation: "memory.recall", Workspace: workspace, Mode: ReadOnly, Role: "general", Payload: json.RawMessage(`{}`)})); err != nil {
+		t.Fatal(err)
+	}
+	var requestCtx context.Context
+	select {
+	case requestCtx = <-captured:
+	case <-time.After(time.Second):
+		t.Fatal("request was not dispatched")
+	}
+	// The session is still being served; the finished request's context must
+	// already be released.
+	select {
+	case <-requestCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("request context stayed live after the request completed")
+	}
+}
