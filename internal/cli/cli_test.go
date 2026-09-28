@@ -87,3 +87,14 @@ func TestCLI_EscapesDynamicControlCharacters(t *testing.T) {
 		})
 	}
 }
+
+type brokenPipe struct{}
+
+func (brokenPipe) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+func TestCLIReportsLostCommandOutputInsteadOfSuccess(t *testing.T) {
+	f := &fakeInspector{result: inspection.Result{Root: "/tmp/root", Database: "/tmp/root/memory.db", Migration: 1}}
+	var stderr bytes.Buffer
+	code := RunProductRuntime(context.Background(), []string{"status", "--storage-root", "/tmp/root"}, strings.NewReader(""), brokenPipe{}, &stderr, f, nil, nil, nil, nil, nil)
+	testutil.Require(t, code == 1 && strings.Contains(stderr.String(), "io: write command output"), "exit=%d stderr=%q", code, stderr.String())
+}

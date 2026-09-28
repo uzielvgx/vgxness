@@ -11,6 +11,12 @@ import (
 )
 
 func RunSkills(ctx context.Context, args []string, stdout, stderr io.Writer, runtime skills.Runtime, registries ...RegistryRuntime) int {
+	return withCheckedOutput(stdout, stderr, func(out io.Writer) int {
+		return runSkills(ctx, args, out, stderr, runtime, registries...)
+	})
+}
+
+func runSkills(ctx context.Context, args []string, stdout, stderr io.Writer, runtime skills.Runtime, registries ...RegistryRuntime) int {
 	if len(args) > 0 && args[0] == "registry" {
 		var registry RegistryRuntime
 		if len(registries) > 0 {

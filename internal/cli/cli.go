@@ -59,6 +59,12 @@ func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 }
 
 func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, opencodeIntegration, codexIntegration integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime) int {
+	return withCheckedOutput(stdout, stderr, func(out io.Writer) int {
+		return runProductRuntime(ctx, args, stdin, out, stderr, inspector, memories, opencodeIntegration, codexIntegration, installer, setup)
+	})
+}
+
+func runProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, opencodeIntegration, codexIntegration integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime) int {
 	if len(args) > 0 && args[0] == "version" {
 		return RunVersion(args[1:], stdout, stderr)
 	}
@@ -114,6 +120,34 @@ func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdo
 	}
 	fmt.Fprintf(stdout, "storage_root=%s\ndatabase=%s\nmigration=%d\n%s", terminalSafe(result.Root), terminalSafe(result.Database), result.Migration, doctor)
 	return 0
+}
+
+// outputWriter records the first failed write to a command's stdout.
+type outputWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (o *outputWriter) Write(p []byte) (int, error) {
+	n, err := o.w.Write(p)
+	if err != nil && o.err == nil {
+		o.err = err
+	}
+	return n, err
+}
+
+// withCheckedOutput turns a successful exit into a failure when command output
+// could not be written. Callers such as host hooks depend on that output (for
+// example a new session's lease token), so a lost result must not report
+// success.
+func withCheckedOutput(stdout, stderr io.Writer, run func(io.Writer) int) int {
+	out := &outputWriter{w: stdout}
+	code := run(out)
+	if code == 0 && out.err != nil {
+		fmt.Fprintln(stderr, "io: write command output")
+		return 1
+	}
+	return code
 }
 
 // RunVersion renders build metadata without requiring any application services.
