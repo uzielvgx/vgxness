@@ -612,7 +612,7 @@ func TestTUIBackendCatalogScansPiStoreLocally(t *testing.T) {
 
 	rows, err := (tuiBackend{}).ModelCatalog(context.Background(), setupflow.ProviderPi, false)
 	testutil.Require(t, err == nil && len(rows) == 2, "rows=%+v err=%v", rows, err)
-	testutil.Require(t, rows[0].Provider == "openai-codex" && rows[0].Reference == "openai-codex/gpt-5.6-luna" && len(rows[0].Variants) == 2 && rows[0].Variants[0] == "minimal" && rows[0].Variants[1] == "xhigh", "rows=%+v", rows)
+	testutil.Require(t, rows[0].Provider == "openai-codex" && rows[0].Reference == "openai-codex/gpt-5.6-luna" && strings.Join(rows[0].Variants, ",") == "minimal,low,medium,high,xhigh", "rows=%+v", rows)
 	testutil.Require(t, rows[1].Reference == "openai-codex/plain" && len(rows[1].Variants) == 0, "rows=%+v", rows)
 	if _, err := (tuiBackend{}).ModelCatalog(context.Background(), setupflow.ProviderCodex, false); err == nil {
 		t.Fatal("Codex advertised a model catalog")

@@ -45,10 +45,13 @@ func TestPiStoreDiscoverReadsModelsAndSupportedEfforts(t *testing.T) {
 			"openai-codex/gpt-5.6-luna",
 			"openai-codex/plain",
 		},
+		// Pi's thinkingLevelMap is tristate: omitted levels through high keep
+		// the provider default (supported), omitted xhigh is unsupported, and
+		// null disables a level.
 		Variants: map[string][]string{
-			"anthropic/claude":          {"low", "medium", "high"},
-			"openai-codex/gpt-5.5":      {"xhigh"},
-			"openai-codex/gpt-5.6-luna": {"minimal", "xhigh"},
+			"anthropic/claude":          {"minimal", "low", "medium", "high"},
+			"openai-codex/gpt-5.5":      {"minimal", "low", "high", "xhigh"},
+			"openai-codex/gpt-5.6-luna": {"minimal", "low", "medium", "high", "xhigh"},
 			"openai-codex/plain":        {},
 		},
 	}

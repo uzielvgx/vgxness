@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -101,14 +102,14 @@ func realOps() ops {
 	}
 }
 
-// invalid marks an operational failure as ErrInvalid while preserving the
-// underlying OS cause, so errors.Is keeps working for both the sentinel and the
-// original error.
+// invalid marks an operational failure as ErrIO (and, for compatibility,
+// ErrInvalid) while preserving the underlying OS cause, so errors.Is keeps
+// working for the sentinels and the original error.
 func invalid(err error) error {
 	if err == nil {
-		return ErrInvalid
+		return errors.Join(ErrIO, ErrInvalid)
 	}
-	return fmt.Errorf("%w: %w", ErrInvalid, err)
+	return fmt.Errorf("%w: %w: %w", ErrIO, ErrInvalid, err)
 }
 
 // ambiguousMetadataError marks a lock-metadata observation that is ambiguous (a
@@ -255,7 +256,7 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return ErrInvalid
+		return invalid(err)
 	}
 	if err := rejectSymlink(dir); err != nil {
 		return err
@@ -265,7 +266,7 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return ErrInvalid
+		return invalid(err)
 	}
 	defer root.Close()
 	// Windows kernel-guard boundary: every publisher takes the persistent guard
@@ -294,7 +295,7 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	temporary := ".skill-registry-" + strconv.Itoa(os.Getpid()) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ".tmp"
 	file, err := root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return ErrInvalid
+		return invalid(err)
 	}
 	removeTemporary := func() {
 		_ = o.tempClose(file)
@@ -302,15 +303,15 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	}
 	if _, err := o.tempWrite(file, data); err != nil {
 		removeTemporary()
-		return ErrInvalid
+		return invalid(err)
 	}
 	if err := o.tempSync(file); err != nil {
 		removeTemporary()
-		return ErrInvalid
+		return invalid(err)
 	}
 	if err := o.tempClose(file); err != nil {
 		_ = o.remove(root, temporary)
-		return ErrInvalid
+		return invalid(err)
 	}
 	// Staged-publication boundary: the destination is replaced only here, so a
 	// cancellation observed before this point leaves the previous cache intact.
@@ -320,7 +321,7 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	}
 	if err := o.rename(root, temporary, filepath.Base(path)); err != nil {
 		_ = o.remove(root, temporary)
-		return ErrInvalid
+		return invalid(err)
 	}
 	// Best-effort durability of the rename; a directory sync failure is not a
 	// write failure because not all filesystems support it.
@@ -341,6 +342,11 @@ type fileLock struct {
 	content []byte
 	file    *os.File
 }
+
+// heldLocks records the lock contents this process currently holds. A lock
+// carrying this process's PID but absent here was left by an earlier process
+// that got the same PID (common in containers), so it is not live.
+var heldLocks sync.Map
 
 // acquireLock serializes publishers. It never deletes a lock on age alone: it
 // removes a stale lock only when the recorded owner process is provably gone
@@ -447,12 +453,13 @@ func finalizeLockWith(root rootedFS, name string, file *os.File, o ops) (*fileLo
 	}
 	if _, err := o.lockWrite(file, content); err != nil {
 		discardLock(root, name, file, content, o)
-		return nil, ErrInvalid
+		return nil, invalid(err)
 	}
 	if err := o.lockSync(file); err != nil {
 		discardLock(root, name, file, content, o)
-		return nil, ErrInvalid
+		return nil, invalid(err)
 	}
+	heldLocks.Store(string(content), struct{}{})
 	return &fileLock{name: name, content: content, file: file}, nil
 }
 
@@ -614,11 +621,23 @@ func recoverStaleLockWith(root rootedFS, name string, o ops) (bool, error) {
 	}
 	defer file.Close()
 	pid, ok := lockPID(data)
-	if !ok || pid == os.Getpid() {
-		// An unparseable lock, or one owned by a still-live PID, is left alone.
+	switch {
+	case !ok && len(data) == 0:
+		// Created but never written: its creator died between the exclusive
+		// create and the PID write. After staleLockAge it cannot be live.
+	case !ok:
+		// Unrecognized content may belong to another version; leave it.
 		return false, nil
-	}
-	if processAlive(pid) {
+	case pid == os.Getpid():
+		// This process writes only token locks and records each one it holds.
+		// A token lock with this PID that is not recorded was left by an
+		// earlier process that reused the PID (typical for PID 1 in
+		// containers). A legacy PID-only lock cannot be told apart, so it is
+		// still treated as live.
+		if _, held := heldLocks.Load(string(data)); held || !bytes.ContainsRune(data, '\n') {
+			return false, nil
+		}
+	case processAlive(pid):
 		return false, nil
 	}
 	// The held handle pins the identity, so an inode or FileId reused by a
@@ -648,6 +667,7 @@ func (lock *fileLock) releaseWith(root rootedFS, o ops) {
 	if lock == nil || lock.file == nil {
 		return
 	}
+	defer heldLocks.Delete(string(lock.content))
 	defer func() { _ = o.lockClose(lock.file) }()
 	held, err := lock.file.Stat()
 	if err != nil {

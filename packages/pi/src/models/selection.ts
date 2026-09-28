@@ -40,8 +40,15 @@ export function selectedModels(selection: ModelSelection | undefined, context: a
   return validateSelection({ schemaVersion: 1, mode: "single", assignments: Object.fromEntries(agentRoles.map(role => [role, { model: `${model.provider}/${model.id}`, effort: "off" }])) });
 }
 
+// Pi's thinkingLevelMap is tristate (upstream docs/models.md): a string supports
+// the level, null disables it, and an omitted key keeps the provider's default
+// mapping for levels through high while leaving xhigh unsupported. Mirrored by
+// piStoreSupportedEfforts in internal/modelcatalog/pi.go.
 export function supportsEffort(model: any, effort: string) {
-  return effort === "off" || (["minimal", "low", "medium", "high", "xhigh"].includes(effort) && model?.reasoning === true && model.thinkingLevelMap?.[effort] !== null);
+  if (effort === "off") return true;
+  if (!["minimal", "low", "medium", "high", "xhigh"].includes(effort) || model?.reasoning !== true) return false;
+  const level = model.thinkingLevelMap?.[effort];
+  return level === undefined ? effort !== "xhigh" : level !== null;
 }
 export async function activateManagerModel(selection: ModelSelection, registry: any, api: any) {
   const a = selection.assignments.manager, slash = a.model.indexOf("/");

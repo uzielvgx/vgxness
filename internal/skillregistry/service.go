@@ -2,6 +2,7 @@ package skillregistry
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +125,17 @@ func (service *Service) Unlock(ctx context.Context, options Options) (bool, erro
 // freshness window; registry availability never depends on memory or any other
 // subsystem success.
 func (service *Service) Ensure(ctx context.Context, options Options) (Registry, error) {
+	return service.ensure(ctx, options, false)
+}
+
+// ensureForRead is Ensure for queries: the cache only speeds up later reads, so
+// a busy lock or a storage failure while publishing it must not fail a query
+// whose registry was already discovered.
+func (service *Service) ensureForRead(ctx context.Context, options Options) (Registry, error) {
+	return service.ensure(ctx, options, true)
+}
+
+func (service *Service) ensure(ctx context.Context, options Options, tolerateUnpublished bool) (Registry, error) {
 	path, err := options.cachePath()
 	if err != nil {
 		return Registry{}, err
@@ -137,6 +149,9 @@ func (service *Service) Ensure(ctx context.Context, options Options) (Registry, 
 		return cached, nil
 	}
 	if err := publish(ctx, path, discovered); err != nil {
+		if tolerateUnpublished && (errors.Is(err, ErrBusy) || errors.Is(err, ErrIO)) {
+			return discovered, nil
+		}
 		return Registry{}, err
 	}
 	return discovered, nil
@@ -155,7 +170,7 @@ func (service *Service) Search(ctx context.Context, options Options, query strin
 	if limit > MaxSearchLimit {
 		limit = MaxSearchLimit
 	}
-	registry, err := service.Ensure(ctx, options)
+	registry, err := service.ensureForRead(ctx, options)
 	if err != nil {
 		return Registry{}, err
 	}
@@ -196,7 +211,7 @@ func (service *Service) Resolve(ctx context.Context, options Options, id string)
 	if trimmed == "" || len(trimmed) > 512 {
 		return Entry{}, ErrInvalid
 	}
-	registry, err := service.Ensure(ctx, options)
+	registry, err := service.ensureForRead(ctx, options)
 	if err != nil {
 		return Entry{}, err
 	}

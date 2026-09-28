@@ -840,3 +840,66 @@ func TestRevalidateRejectsChangedSource(t *testing.T) {
 		t.Fatalf("changed source must be stale: %v", err)
 	}
 }
+
+func TestStaleLockRecoveryHandlesOrphanedLocks(t *testing.T) {
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	lockPath := filepath.Join(directory, "skill-registry.lock")
+	old := time.Now().Add(-2 * staleLockAge)
+	for name, content := range map[string]string{
+		"empty lock from a creator that died before writing": "",
+		"token lock from an earlier process with this PID":   strconv.Itoa(os.Getpid()) + "\n" + strings.Repeat("ab", 16),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(lockPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(lockPath, old, old); err != nil {
+				t.Fatal(err)
+			}
+			if recovered, err := recoverStaleLock(context.Background(), root, "skill-registry.lock"); err != nil || !recovered {
+				t.Fatalf("orphaned lock must be recovered: recovered=%t err=%v", recovered, err)
+			}
+		})
+	}
+
+	held, err := acquireLockWith(context.Background(), root, "skill-registry.lock", realOps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.releaseWith(root, realOps())
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := recoverStaleLock(context.Background(), root, "skill-registry.lock"); err != nil || recovered {
+		t.Fatalf("a lock this process holds must never be recovered: recovered=%t err=%v", recovered, err)
+	}
+}
+
+func TestSearchAndResolveSucceedWhenCacheCannotBePublished(t *testing.T) {
+	options, workspace, _ := baseOptions(t)
+	writeSkill(t, filepath.Join(workspace, ".agents", "skills"), "alpha", "alpha", "alpha workflow", "body")
+	state := filepath.Dir(options.CachePath)
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A live legacy lock owned by this process keeps every publisher busy.
+	if err := os.WriteFile(filepath.Join(state, "skill-registry.lock"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := New()
+	if _, err := service.Ensure(context.Background(), options); !errors.Is(err, ErrBusy) {
+		t.Fatalf("explicit ensure must still report the busy cache: %v", err)
+	}
+	registry, err := service.Search(context.Background(), options, "alpha", 5)
+	if err != nil || len(registry.Entries) != 1 {
+		t.Fatalf("search failed because the cache could not be published: registry=%+v err=%v", registry, err)
+	}
+	if _, err := service.Resolve(context.Background(), options, registry.Entries[0].ID); err != nil {
+		t.Fatalf("resolve failed because the cache could not be published: %v", err)
+	}
+}

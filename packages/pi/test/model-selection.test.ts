@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentRoles, validateSelection, selectedModels, activateManagerModel } from "../src/models/selection.ts";
+import { agentRoles, validateSelection, selectedModels, activateManagerModel, supportsEffort } from "../src/models/selection.ts";
 import { createModelTool } from "../src/tools/model.ts";
 import { createTaskTool } from "../src/tools/task.ts";
 
@@ -49,4 +49,15 @@ test("persisted selection uses the installer's closed schema and reference gramm
   Object.assign(extra.assignments.manager, { extra: true });
   assert.throws(() => validateSelection(extra));
   assert.throws(() => validateSelection([]));
+});
+test("supportsEffort follows Pi's tristate thinkingLevelMap like the Go catalog", () => {
+  const efforts = ["minimal", "low", "medium", "high", "xhigh"];
+  const supported = (model: any) => efforts.filter((effort) => supportsEffort(model, effort));
+  // Same fixture and expectations as TestPiStoreDiscoverReadsModelsAndSupportedEfforts.
+  assert.deepEqual(supported({ reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high" } }), ["minimal", "low", "medium", "high"]);
+  assert.deepEqual(supported({ reasoning: true, thinkingLevelMap: { xhigh: "xhigh", medium: null } }), ["minimal", "low", "high", "xhigh"]);
+  assert.deepEqual(supported({ reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max", minimal: "low" } }), efforts);
+  assert.deepEqual(supported({ reasoning: false, thinkingLevelMap: { high: "high" } }), []);
+  assert.deepEqual(supported({ reasoning: true }), ["minimal", "low", "medium", "high"]);
+  assert.equal(supportsEffort({ reasoning: false }, "off"), true);
 });
