@@ -224,6 +224,8 @@ func failure(err error) (int, string) {
 		return 1, "conflict: self-install target contains unmanaged content"
 	case errors.Is(err, selfinstall.ErrDrift):
 		return 1, "drift: managed self-install differs from its manifest"
+	case errors.Is(err, skillregistry.ErrIO):
+		return 1, "operational: skill registry storage failed"
 	case errors.Is(err, skillregistry.ErrInvalid):
 		return 2, "invalid: skill registry request is invalid"
 	case errors.Is(err, skillregistry.ErrNotFound):

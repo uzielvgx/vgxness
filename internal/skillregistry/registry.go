@@ -67,6 +67,10 @@ var (
 	ErrBusy      = errors.New("skill registry is locked by another writer")
 	ErrAmbiguous = errors.New("skill registry name is ambiguous")
 	ErrStale     = errors.New("skill registry entry no longer matches its source")
+	// ErrIO marks a storage failure (permissions, full disk, I/O). Such
+	// errors also match ErrInvalid for compatibility; check ErrIO first to
+	// tell an operational failure from an invalid request.
+	ErrIO = errors.New("skill registry storage failed")
 )
 
 // Bounds. They keep discovery and query output small and predictable.

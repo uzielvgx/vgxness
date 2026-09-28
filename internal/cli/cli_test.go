@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"github.com/vgxness/vgxness/internal/skillregistry"
 	"strings"
 	"testing"
 
@@ -97,4 +99,11 @@ func TestCLIReportsLostCommandOutputInsteadOfSuccess(t *testing.T) {
 	var stderr bytes.Buffer
 	code := RunProductRuntime(context.Background(), []string{"status", "--storage-root", "/tmp/root"}, strings.NewReader(""), brokenPipe{}, &stderr, f, nil, nil, nil, nil, nil)
 	testutil.Require(t, code == 1 && strings.Contains(stderr.String(), "io: write command output"), "exit=%d stderr=%q", code, stderr.String())
+}
+
+func TestFailureReportsSkillRegistryStorageAsOperational(t *testing.T) {
+	code, message := failure(fmt.Errorf("%w: %w", skillregistry.ErrIO, skillregistry.ErrInvalid))
+	testutil.Require(t, code == 1 && message == "operational: skill registry storage failed", "code=%d message=%q", code, message)
+	code, message = failure(skillregistry.ErrInvalid)
+	testutil.Require(t, code == 2, "invalid request code=%d message=%q", code, message)
 }

@@ -101,14 +101,14 @@ func realOps() ops {
 	}
 }
 
-// invalid marks an operational failure as ErrInvalid while preserving the
-// underlying OS cause, so errors.Is keeps working for both the sentinel and the
-// original error.
+// invalid marks an operational failure as ErrIO (and, for compatibility,
+// ErrInvalid) while preserving the underlying OS cause, so errors.Is keeps
+// working for the sentinels and the original error.
 func invalid(err error) error {
 	if err == nil {
-		return ErrInvalid
+		return errors.Join(ErrIO, ErrInvalid)
 	}
-	return fmt.Errorf("%w: %w", ErrInvalid, err)
+	return fmt.Errorf("%w: %w: %w", ErrIO, ErrInvalid, err)
 }
 
 // ambiguousMetadataError marks a lock-metadata observation that is ambiguous (a
@@ -255,7 +255,7 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return ErrInvalid
+		return invalid(err)
 	}
 	if err := rejectSymlink(dir); err != nil {
 		return err
@@ -265,7 +265,7 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return ErrInvalid
+		return invalid(err)
 	}
 	defer root.Close()
 	// Windows kernel-guard boundary: every publisher takes the persistent guard
@@ -294,7 +294,7 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	temporary := ".skill-registry-" + strconv.Itoa(os.Getpid()) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ".tmp"
 	file, err := root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return ErrInvalid
+		return invalid(err)
 	}
 	removeTemporary := func() {
 		_ = o.tempClose(file)
@@ -302,15 +302,15 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	}
 	if _, err := o.tempWrite(file, data); err != nil {
 		removeTemporary()
-		return ErrInvalid
+		return invalid(err)
 	}
 	if err := o.tempSync(file); err != nil {
 		removeTemporary()
-		return ErrInvalid
+		return invalid(err)
 	}
 	if err := o.tempClose(file); err != nil {
 		_ = o.remove(root, temporary)
-		return ErrInvalid
+		return invalid(err)
 	}
 	// Staged-publication boundary: the destination is replaced only here, so a
 	// cancellation observed before this point leaves the previous cache intact.
@@ -320,7 +320,7 @@ func publishWith(ctx context.Context, path string, registry Registry, o ops) err
 	}
 	if err := o.rename(root, temporary, filepath.Base(path)); err != nil {
 		_ = o.remove(root, temporary)
-		return ErrInvalid
+		return invalid(err)
 	}
 	// Best-effort durability of the rename; a directory sync failure is not a
 	// write failure because not all filesystems support it.
@@ -447,11 +447,11 @@ func finalizeLockWith(root rootedFS, name string, file *os.File, o ops) (*fileLo
 	}
 	if _, err := o.lockWrite(file, content); err != nil {
 		discardLock(root, name, file, content, o)
-		return nil, ErrInvalid
+		return nil, invalid(err)
 	}
 	if err := o.lockSync(file); err != nil {
 		discardLock(root, name, file, content, o)
-		return nil, ErrInvalid
+		return nil, invalid(err)
 	}
 	return &fileLock{name: name, content: content, file: file}, nil
 }
