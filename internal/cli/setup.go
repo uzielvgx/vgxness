@@ -277,10 +277,6 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	if includesPi(providers) && !piVersionProvided {
 		piReleaseVersion = buildinfo.Version
 	}
-	if !includesOpenCode(providers) && (hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration)) {
-		fmt.Fprintln(stderr, "invalid: model slots apply only to OpenCode")
-		return 2
-	}
 	if !includesOpenCode(providers) && options.Integration.ConfigDir != "" {
 		fmt.Fprintln(stderr, "invalid: --config-dir applies only to OpenCode")
 		return 2
@@ -302,21 +298,6 @@ func runMultiSetup(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	if includesPi(providers) && piRelease != "" && piVersionProvided {
 		fmt.Fprintln(stderr, "invalid: --pi-release-dir and --pi-release-version cannot be combined")
 		return 2
-	}
-	if includesOpenCode(providers) && (hasSetupSlotRef(options.Integration) || hasSetupSlotEffort(options.Integration)) {
-		if options.Integration.ModelEfficient == "" || options.Integration.ModelBalanced == "" || options.Integration.ModelFrontier == "" || !validSetupModelReference(options.Integration.ModelEfficient) || !validSetupModelReference(options.Integration.ModelBalanced) || !validSetupModelReference(options.Integration.ModelFrontier) {
-			fmt.Fprintln(stderr, "invalid: model slots must be valid provider/model references")
-			return 2
-		}
-		mixed := modelProvider(options.Integration.ModelEfficient) != modelProvider(options.Integration.ModelBalanced) || modelProvider(options.Integration.ModelEfficient) != modelProvider(options.Integration.ModelFrontier)
-		if mixed && (options.Integration.ModelEfficientEffort == "" || options.Integration.ModelBalancedEffort == "" || options.Integration.ModelFrontierEffort == "") {
-			fmt.Fprintln(stderr, "invalid: mixed model slots require all refs and efforts")
-			return 2
-		}
-		if !mixed && hasSetupSlotEffort(options.Integration) {
-			fmt.Fprintln(stderr, "invalid: per-slot efforts require mixed providers")
-			return 2
-		}
 	}
 	if runtime == nil || (includesCodex(providers) && codex == nil) {
 		fmt.Fprintln(stderr, "operational: setup runtime is unavailable")

@@ -4,3 +4,7 @@ agent-eval-output/
 tools/agent_eval/__pycache__/
 
 node_modules/
+__pycache__/
+.DS_Store
+.worktrees/
+*.test
