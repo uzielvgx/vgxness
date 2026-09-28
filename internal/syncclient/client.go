@@ -338,6 +338,10 @@ func (client *Client) pushOnce(ctx context.Context, credential string, push sync
 		return nil, false, newRemoteHTTPError(OperationPush, response, ErrorClassAuthentication, ErrUnauthorized)
 	case http.StatusServiceUnavailable:
 		return nil, true, newRemoteHTTPError(OperationPush, response, ErrorClassHTTPStatus, ErrUnavailable)
+	case http.StatusTooManyRequests:
+		// Rate limiting is transient, but an immediate retry would only spend
+		// more of the same quota; report it and let the next sync run retry.
+		return nil, false, newRemoteHTTPError(OperationPush, response, ErrorClassHTTPStatus, ErrUnavailable)
 	default:
 		return nil, false, newRemoteHTTPError(OperationPush, response, ErrorClassHTTPStatus, ErrRemote)
 	}
@@ -398,7 +402,7 @@ func (client *Client) get(ctx context.Context, operation Operation, path string,
 	if response.StatusCode == http.StatusUnauthorized {
 		return newRemoteHTTPError(operation, response, ErrorClassAuthentication, ErrUnauthorized)
 	}
-	if response.StatusCode == http.StatusServiceUnavailable {
+	if transientStatus(response.StatusCode) {
 		return newRemoteHTTPError(operation, response, ErrorClassHTTPStatus, ErrUnavailable)
 	}
 	if response.StatusCode != http.StatusOK {
@@ -489,4 +493,10 @@ func pullMatches(request syncapi.PullRequest, response syncapi.PullResponse) boo
 	}
 	last := response.Changes[len(response.Changes)-1].Sequence
 	return request.ProjectID == "" && response.Position == last || request.ProjectID != "" && response.HasMore && response.Position == last || request.ProjectID != "" && !response.HasMore && response.Position == response.Watermark
+}
+
+// transientStatus reports server responses that ask the client to retry
+// later. Rate limiting is transient, not a protocol incompatibility.
+func transientStatus(status int) bool {
+	return status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests
 }

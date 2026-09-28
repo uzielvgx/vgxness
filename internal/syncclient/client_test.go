@@ -272,7 +272,7 @@ func TestClientRejectsUnsafeResponsesWithoutSecrets(t *testing.T) {
 		nilResponse, nilBody, transport bool
 		want                            error
 	}{
-		{"404", 404, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrDiscoveryUnsupported}, {"401", 401, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnauthorized}, {"503", 503, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnavailable}, {"500", 500, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrRemote}, {"duplicate", 200, http.Header{"Content-Type": []string{mediaType, mediaType}}, secret, false, false, false, ErrRemote}, {"wrong", 200, http.Header{"Content-Type": []string{"text/plain"}}, secret, false, false, false, ErrRemote}, {"duplicate json", 200, http.Header{"Content-Type": []string{mediaType}}, `{"protocol_version":1,"protocol_version":1}`, false, false, false, ErrRemote}, {"unknown", 200, http.Header{"Content-Type": []string{mediaType}}, `{"extra":1}`, false, false, false, ErrRemote}, {"utf8", 200, http.Header{"Content-Type": []string{mediaType}}, string([]byte{0xff}), false, false, false, ErrRemote}, {"nil response", 0, nil, "", true, false, false, ErrRemote}, {"nil body", 200, http.Header{"Content-Type": []string{mediaType}}, "", false, true, false, ErrRemote}, {"transport", 200, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, true, ErrUnavailable},
+		{"404", 404, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrDiscoveryUnsupported}, {"401", 401, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnauthorized}, {"503", 503, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnavailable}, {"429", 429, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrUnavailable}, {"500", 500, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, false, ErrRemote}, {"duplicate", 200, http.Header{"Content-Type": []string{mediaType, mediaType}}, secret, false, false, false, ErrRemote}, {"wrong", 200, http.Header{"Content-Type": []string{"text/plain"}}, secret, false, false, false, ErrRemote}, {"duplicate json", 200, http.Header{"Content-Type": []string{mediaType}}, `{"protocol_version":1,"protocol_version":1}`, false, false, false, ErrRemote}, {"unknown", 200, http.Header{"Content-Type": []string{mediaType}}, `{"extra":1}`, false, false, false, ErrRemote}, {"utf8", 200, http.Header{"Content-Type": []string{mediaType}}, string([]byte{0xff}), false, false, false, ErrRemote}, {"nil response", 0, nil, "", true, false, false, ErrRemote}, {"nil body", 200, http.Header{"Content-Type": []string{mediaType}}, "", false, true, false, ErrRemote}, {"transport", 200, http.Header{"Content-Type": []string{mediaType}}, secret, false, false, true, ErrUnavailable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var reader *closingReader
@@ -583,5 +583,22 @@ func TestGetRejectsNilDecoderWithoutPanic(t *testing.T) {
 	}))
 	if err := client.get(context.Background(), OperationCapabilities, "/v1/sync/capabilities", nil, testCredential, syncapi.MaxBodyBytes, nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestRateLimitedResponsesAreTransientNotIncompatible(t *testing.T) {
+	mutation := syncservice.Mutation{MutationID: uuid.NewString(), RecordID: "project", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "project"}}
+	calls := 0
+	client, _ := New("https://sync.example", testDoer(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: io.NopCloser(strings.NewReader("slow down"))}, nil
+	}))
+	_, err := client.Push(context.Background(), testCredential, []syncservice.Mutation{mutation})
+	if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrRemote) || calls != 1 {
+		t.Fatalf("push error=%v calls=%d", err, calls)
+	}
+	diagnostic, ok := DiagnosticFrom(err)
+	if !ok || diagnostic.HTTPStatus != http.StatusTooManyRequests {
+		t.Fatalf("diagnostic=%+v ok=%v", diagnostic, ok)
 	}
 }
