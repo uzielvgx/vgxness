@@ -28,8 +28,22 @@ func TestNativeHeadersRequireCurrentCodegraphAndVerifierDenials(t *testing.T) {
 		t.Error("verifier header must explicitly deny edit and task")
 	}
 	manager := string(bundle.agents["vgxness-manager.md"])
-	if !strings.Contains(manager, "Delegate all project code exploration to the explore role: reading files, searching, listing, and read-only diagnosis of repository content, with no simple exception.") {
-		t.Error("manager prompt must delegate all project code exploration with no simple exception")
+	for _, want := range []string{
+		"Classify the request as a direct question, a routine operational job, a bounded project read, implementation, or a higher-risk change before acting.",
+		"perform the necessary bounded inspection and execution yourself",
+		"use available native inspection tools",
+		"the explore role stays read-only for a bounded mission carrying an explicit child nonce and testable criteria",
+		"never infer production or reset authorization from a development-scoped request",
+		"Inspect the exact evidence returned by explore, workers, or your own bounded direct inspection before deciding",
+	} {
+		if !strings.Contains(manager, want) {
+			t.Errorf("manager prompt lacks adaptive direct-work policy %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Delegate all project code exploration", "with no simple exception", "does not browse project itself"} {
+		if strings.Contains(manager, forbidden) {
+			t.Errorf("manager prompt retains the removed broad exploration block %q", forbidden)
+		}
 	}
 	if !strings.Contains(manager, "local Git queries (status, diff, log, refs, tracking, conflicts)") {
 		t.Error("manager prompt must retain the bounded operational-inspection authority")
@@ -49,8 +63,11 @@ func TestNativeHeadersRequireCurrentCodegraphAndVerifierDenials(t *testing.T) {
 	if !strings.Contains(manager, "never search PATH") || !strings.Contains(manager, "report the dependency unavailable instead of browsing the repository") {
 		t.Error("manager registry guidance must forbid PATH guessing and silent repo browsing")
 	}
-	if !strings.Contains(manager, "Delegate all project code exploration to explore through the native task tool") {
-		t.Error("adapter must delegate project code exploration explicitly")
+	if !strings.Contains(manager, "Delegate broad or parallel project code exploration to explore through the native task tool when the shared contract calls for it") {
+		t.Error("adapter must delegate broad project code exploration explicitly")
+	}
+	if !strings.Contains(manager, "may itself perform the bounded, necessary inspection and execution the shared contract permits") {
+		t.Error("adapter must permit the bounded direct-work exception")
 	}
 	if strings.Contains(manager, "Delegate all project exploration to explore through the native task tool") {
 		t.Error("adapter retains the old blanket all-exploration delegation")
@@ -69,6 +86,40 @@ func TestNativeHeadersRequireCurrentCodegraphAndVerifierDenials(t *testing.T) {
 	}
 	if !strings.Contains(manager, "Do not infer a denial for another role from these read-only-role restrictions") {
 		t.Error("adapter must warn against inferring denials for other roles")
+	}
+	if !strings.Contains(manager, "keep a durable, in-repository Markdown plan under docs/implementations/") {
+		t.Error("manager prompt lacks the persistent Markdown plan policy")
+	}
+	if !strings.Contains(manager, "native todowrite tool as a session view") {
+		t.Error("OpenCode adapter lacks the todowrite session-view projection")
+	}
+	if !strings.Contains(manager, "keep at most one active plan per session (zero when there is no work)") {
+		t.Error("manager prompt lacks the at-most-one-active-plan policy with the zero-when-idle qualifier")
+	}
+	if strings.Contains(manager, "exactly one active plan per session") {
+		t.Error("manager prompt retains the ambiguous always-one plan summary")
+	}
+	if !strings.Contains(manager, "never promise a runtime synchronizer or atomic cross-tool state") {
+		t.Error("manager prompt lacks the honest-degradation planning limit")
+	}
+	if !strings.Contains(manager, "Ask consequential blocking decisions before closing the plan or implementing any part that depends on them") {
+		t.Error("manager prompt lacks the specific blocking-decision requirement")
+	}
+	if strings.Contains(manager, "do not block authorized work on a pending decision") || strings.Contains(manager, "record an explicit assumption and continue") {
+		t.Error("manager prompt retains the unsafe pending-decision assumption clause")
+	}
+	for _, schema := range []string{
+		"# Implementation plan records",
+		"Task states are pending, in_progress, blocked, done, cancelled",
+		"Plan states are pending, active, paused, closed, cancelled",
+		"exactly one plan is active while executing, at most one is active otherwise",
+		"progress.md records decisions, blockers, and the single next action, and must not duplicate the task table",
+		"validation.md records the exact candidate",
+		"sufficient on their own: a new project needs only the workspace, not any repository documentation",
+	} {
+		if !strings.Contains(manager, schema) {
+			t.Errorf("manager prompt lacks embedded plan-record schema %q", schema)
+		}
 	}
 }
 
@@ -154,40 +205,40 @@ func TestManagedFrontmatterPermissionsModelScopedExternalAccess(t *testing.T) {
 func TestCurrentRendererPreservesNativeArtifacts(t *testing.T) {
 	expected := map[modelplan.Plan]map[string]string{
 		"high": {
-			"explore.md":                 "6c816fd7886dec56228cc57a2b98c5f07674449b76ec15fde693c649a2f4e010",
-			"general.md":                 "7d5448de9b484c60066a92ed39784d42338cd49ec8021fd3c650b42e3fc7181a",
-			"vgxness-care-challenger.md": "fbe13ae57baa4e7cdc6cd16ab7c645a38738b90db70749e784893c15708d2867",
-			"vgxness-care-reviewer.md":   "99f28567776d2751c5f021abd0382cda3bdacd739ca5f34ba2a00c386410f317",
-			"vgxness-care-specialist.md": "1d288746192c667bb407218d011b3b20e32dc3072e4f296ad43d80a628fcc4a1",
-			"vgxness-manager.md":         "571acdfa5a4cc1bfd62d8a0590c027a097370696b3696fa2680bde203a5b12ba",
-			"vgxness-verifier.md":        "2796ea7e3ebf7968fe77e11a0c621574ae69ad1c3342fe620674ab47ae3f42f5",
+			"explore.md":                 "124c4e3e545dd7974a3c168113de7a7158c2ac6b7c0f351abe1bb82e22ceafc4",
+			"general.md":                 "bc194f45dcb0c6c51c3c5cc19cd1a2ba8c998c3f1d7c819d3c637fd0bbaa9ffd",
+			"vgxness-care-challenger.md": "b86347546a7f6e69c264a7d1dac1509e8bff6d609fb0a07f4fba1bc5053d1d7c",
+			"vgxness-care-reviewer.md":   "200325a4ffa83a6eb1f69be910bf729336941b8c996c84c9189be63cfb1419c3",
+			"vgxness-care-specialist.md": "5cedeb98375500faa8e932bd47a3315dc2f7e7712d0a9cd5cf4fb4c67003a7cb",
+			"vgxness-manager.md":         "37f3711f275d23f672db1e2b8a07eff4f42fdb9e00409d566d798b00b319b112",
+			"vgxness-verifier.md":        "4732f2e2b26c414028155b1c9cfabdbc1962691160a153617d8e03be2c165a7e",
 		},
 		"low": {
-			"explore.md":                 "2eb69018dac00689a96a11740d1fc6ebab108bcce122c1290ed365f2b04e7c23",
-			"general.md":                 "4ce0cb5c295c48766a408194a65c0a333140aaeb7a7ace8d628618c0011f2ba4",
-			"vgxness-care-challenger.md": "e2b88eaf711cc3d13917ef2a8aff17f9189203ad213505781c211b1e1ea58eea",
-			"vgxness-care-reviewer.md":   "04038f9d80964258ccb4df88742a73917911aa3b21ec820d0803103f8eace6ee",
-			"vgxness-care-specialist.md": "31c6037686b2125f65a4a345d9228812db5c845d06e330f5f362c4ffd2cb67be",
-			"vgxness-manager.md":         "bb9194d43aa4eedf11155a646b2370c4b538615b8914bf23e46d5c16acf8c3d9",
-			"vgxness-verifier.md":        "cd9a043d15c5b0f2907ac23241b9fc6d1a8af1394840d0a44b6f5c6129af007d",
+			"explore.md":                 "b82c4a20deb379d1b812a358f7b50414fcad0ce927515bb082172747e6301b98",
+			"general.md":                 "0f141c8e8309c06c9a195fb95dc193d1f8e55cdf0f5703ba6067698568209895",
+			"vgxness-care-challenger.md": "880f3b5abd7f999bb96bdd88a3d32a10b5eabf75c778f03c32db60892c461b3b",
+			"vgxness-care-reviewer.md":   "47763e3caad34dedb487c6c58e4f320b520ec7163fc18811e69cfeba65fc5aad",
+			"vgxness-care-specialist.md": "623873f6c266436667dc1bc56a8ae03d985b9be6e2d17833c204daed90bd5870",
+			"vgxness-manager.md":         "fa03bd41d0c24568ffd58654d061fe5780471eb2bac0010faca29763a1294927",
+			"vgxness-verifier.md":        "5ac1b82c721f49124253935e5f18240f4b4f0fe2fb58b3c94668c8aefd24886d",
 		},
 		"medium": {
-			"explore.md":                 "f8d8d455c26ba3bd9b2ba6381dee99193e828d2aed7172ffaa21da993ec16a39",
-			"general.md":                 "b8e419c83ec79891c861ccbc5132cc25d9d0dbdac0d29e3060c46699b8d96a84",
-			"vgxness-care-challenger.md": "8296aab2565259a15fe00ebe39dcfd662e0f9f3d296866c4f64adf2f73797200",
-			"vgxness-care-reviewer.md":   "4e3328ee179975862978944778a345b077bcb9c6cba04d0ab2b324f318098f85",
-			"vgxness-care-specialist.md": "0a6b3ca6be5cc0cb8125864b7026bc8147703ab00253327a11a70f36818f3931",
-			"vgxness-manager.md":         "c7dcd0957f58ea8e72ff5364550083f3386173589cad8b100e454d291698468d",
-			"vgxness-verifier.md":        "35e817af7636dcf8e94035819dfe7690211a5d0a9a2450de9aef8f29e3dc3b95",
+			"explore.md":                 "ca8f5404645068eb54537e9ef1eef509639ba5bee23cdc4bba6df7f112e6dbfc",
+			"general.md":                 "eab8a3aea73cf0597e06cc6a920264caa53e722f2a2eab0c7bd330af4d25e46f",
+			"vgxness-care-challenger.md": "34c121617d905c9504692d13aa2a4f2ef58b07af403347e568aaa9ca2e0055b0",
+			"vgxness-care-reviewer.md":   "f4e745dfbb6432db9558106620130d24726dab94a8496c6733bba0804207c04a",
+			"vgxness-care-specialist.md": "a399d7f6953ddf80b28c7ad3f3c69b93359206073f5aeff13552a001a1be245f",
+			"vgxness-manager.md":         "20831d1b34d41306575940cf305ca3e32544c32ce2fd12ace36c5ec1b22309c3",
+			"vgxness-verifier.md":        "f956a3cc971348dd90ac13c1ed7499474b9c629673f40c68d9bf9f25198b4654",
 		},
 		"ultra": {
-			"explore.md":                 "d78802fe37975d72aafd5b1f126152521880c13557bd643f171162f6ecf7523b",
-			"general.md":                 "7d5448de9b484c60066a92ed39784d42338cd49ec8021fd3c650b42e3fc7181a",
-			"vgxness-care-challenger.md": "fbe13ae57baa4e7cdc6cd16ab7c645a38738b90db70749e784893c15708d2867",
-			"vgxness-care-reviewer.md":   "99f28567776d2751c5f021abd0382cda3bdacd739ca5f34ba2a00c386410f317",
-			"vgxness-care-specialist.md": "1d288746192c667bb407218d011b3b20e32dc3072e4f296ad43d80a628fcc4a1",
-			"vgxness-manager.md":         "571acdfa5a4cc1bfd62d8a0590c027a097370696b3696fa2680bde203a5b12ba",
-			"vgxness-verifier.md":        "d79ab412f80850f81aeda2da345b86300bc5befe73693aaf0068e23be37d31da",
+			"explore.md":                 "a130842bf86ba87455d95a1d1e27d755dbd3e28c0e19fc5e9e923386783707f1",
+			"general.md":                 "bc194f45dcb0c6c51c3c5cc19cd1a2ba8c998c3f1d7c819d3c637fd0bbaa9ffd",
+			"vgxness-care-challenger.md": "b86347546a7f6e69c264a7d1dac1509e8bff6d609fb0a07f4fba1bc5053d1d7c",
+			"vgxness-care-reviewer.md":   "200325a4ffa83a6eb1f69be910bf729336941b8c996c84c9189be63cfb1419c3",
+			"vgxness-care-specialist.md": "5cedeb98375500faa8e932bd47a3315dc2f7e7712d0a9cd5cf4fb4c67003a7cb",
+			"vgxness-manager.md":         "37f3711f275d23f672db1e2b8a07eff4f42fdb9e00409d566d798b00b319b112",
+			"vgxness-verifier.md":        "493dd3f46c13365efe1458f3197efa7d145cd3e11140da558b3686d421e60019",
 		},
 	}
 	for plan, want := range expected {

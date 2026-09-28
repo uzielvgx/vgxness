@@ -148,6 +148,34 @@ func TestManagerUsesSharedOrchestrationContract(t *testing.T) {
 	}
 }
 
+func TestManagerPlanningStaysProviderNeutral(t *testing.T) {
+	pkg, err := Render("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(artifact(t, pkg, "AGENTS.md").Bytes)
+	for _, want := range []string{
+		"keep a durable, in-repository Markdown plan under docs/implementations/",
+		"Ask consequential blocking decisions before closing the plan",
+		"# Implementation plan records",
+		"Task states are pending, in_progress, blocked, done, cancelled",
+		"Plan states are pending, active, paused, closed, cancelled",
+		"exactly one plan is active while executing, at most one is active otherwise",
+		"native planning or task-tracking tool when the host exposes one",
+		"keep at most one active plan per session (zero when there is no work)",
+		"never promise a runtime synchronizer or atomic cross-tool state",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Codex manager lacks planning clause %q", want)
+		}
+	}
+	for _, forbidden := range []string{"todowrite", "OpenCode", "question tool", "exactly one active plan per session", "do not block authorized work on a pending decision", "record an explicit assumption and continue"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("Codex manager contains unavailable or unsafe wording %q", forbidden)
+		}
+	}
+}
+
 func TestPackageValidateRejectsCallerMutationsAndStaleDigests(t *testing.T) {
 	pkg, err := Render("v1.2.3")
 	if err != nil {

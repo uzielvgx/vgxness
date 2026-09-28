@@ -85,10 +85,23 @@ func TestManagerPedagogicalExecutionBriefParity(t *testing.T) {
 	for _, clause := range []string{
 		"Contract identity: vgxness-orchestration/v1",
 		"# Native Codex adapter",
+		"keep a durable, in-repository Markdown plan under docs/implementations/",
+		"Ask consequential blocking decisions before closing the plan",
+		"# Implementation plan records",
+		"Task states are pending, in_progress, blocked, done, cancelled",
+		"exactly one plan is active while executing, at most one is active otherwise",
+		"keep at most one active plan per session (zero when there is no work)",
+		"never promise a runtime synchronizer or atomic cross-tool state",
 	} {
 		if !strings.Contains(codexManager, clause) {
 			t.Errorf("Codex manager lacks pedagogical parity clause %q", clause)
 		}
+	}
+	if strings.Contains(codexManager, "exactly one active plan per session") {
+		t.Error("Codex manager retains the ambiguous always-one plan summary")
+	}
+	if strings.Contains(codexManager, "do not block authorized work on a pending decision") || strings.Contains(codexManager, "record an explicit assumption and continue") {
+		t.Error("Codex manager retains the unsafe pending-decision assumption clause")
 	}
 	if !strings.Contains(codexManager, contract.RenderManagerSections()) {
 		t.Error("Codex manager does not include the shared pedagogical contract")

@@ -35,6 +35,8 @@ files for updates; older unreceipted agents require the documented bridge.
 Historical prompt renderers and templates are removed from the current tree; only the exact pre-adaptive manager-contract snapshot and its native byte compatibility are retained for receiptless recognition.
 The shared registry governs routing and evidence; it is not a Go runtime broker. Recall is relevant-context only, and durable memory is assessed under a stable topic without secrets, transcripts, transient status or automatic cloud synchronization. Unknown, foreign, modified, equal-version drifted, malformed, and newer content is never overwritten. The bridge handles exact historical storage-plugin retirement. OpenCode and Pi accept explicit single-model or per-agent configuration; only Codex retains plans. Legacy slot flags are rejected. See [model selection](model-selection.md).
 
+The shared contract also defines persistent planning: substantial work keeps a durable, in-repository Markdown plan under `docs/implementations/`, the plan file is canonical for task status, and a provider-native session task view is only an operational projection. This is a documentation convention, not a Go runtime service; no synchronizer or atomic cross-tool state is delivered, and the projection is provider-specific.
+
 ## Verification
 
 ## CARE implementation boundary
