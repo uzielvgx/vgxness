@@ -3095,3 +3095,41 @@ func TestIntegration_RecoversWhenOwnedConfigEntriesWereRemoved(t *testing.T) {
 	removed, err := service.Uninstall(context.Background(), options)
 	testutil.Require(t, err == nil && removed.State == integration.StateAbsent, "uninstall with already-removed entries: %+v err=%v", removed, err)
 }
+
+func TestIntegration_KeepsOnlyLatestRetainedCopyPerArtifact(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	path := filepath.Join(configDirectory, defaultAgentConfigName)
+	markers := func() []string {
+		t.Helper()
+		entries, err := os.ReadDir(retainedPredecessorRoot(configDirectory))
+		testutil.NoError(t, err)
+		var names []string
+		for _, entry := range entries {
+			if retainedMarkerName(entry.Name()) {
+				names = append(names, entry.Name())
+			}
+		}
+		return names
+	}
+	var previous []byte
+	for upgrade := 1; upgrade <= 3; upgrade++ {
+		data, err := os.ReadFile(path)
+		testutil.NoError(t, err)
+		data = bytes.Replace(data, []byte("\"mcp\",\n        \"--full\""), []byte(`"mcp"`), 1)
+		testutil.NoError(t, os.WriteFile(path, data, 0o600))
+		previous = data
+		upgraded, err := service.Install(context.Background(), options)
+		testutil.Require(t, err == nil && upgraded.Changed, "upgrade %d: result=%+v err=%v", upgrade, upgraded, err)
+		testutil.Require(t, len(markers()) == 1, "upgrade %d kept %d retained copies: %v", upgrade, len(markers()), markers())
+	}
+	inventory, err := retainedPredecessorInventory(configDirectory)
+	testutil.Require(t, err == nil && len(inventory.markers) == 1, "inventory=%+v err=%v", inventory, err)
+	kept, err := os.ReadFile(inventory.markers[0].Anchor)
+	testutil.Require(t, err == nil && bytes.Equal(kept, previous), "kept copy is not the latest predecessor: %q err=%v", kept, err)
+	status, err := service.Status(context.Background(), options)
+	testutil.Require(t, err == nil && status.State == integration.StateInstalled, "status=%+v err=%v", status, err)
+}

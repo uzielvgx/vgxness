@@ -419,6 +419,15 @@ func (service *Integration) Install(ctx context.Context, options integration.Opt
 		return integration.Result{}, fmt.Errorf("read back OpenCode integration artifacts: %w", integration.ErrDrift)
 	}
 	rollback = false
+	keep := make(map[string]string, len(created))
+	for _, item := range created {
+		if item.retained && item.backup != nil {
+			keep[item.name] = filepath.Base(item.backup.name)
+		}
+	}
+	// Best effort: the install is complete; a pruning failure only leaves
+	// older copies, which are reported as retained evidence.
+	_ = pruneRetainedPredecessors(configDirectory, keep)
 	state.result.State = integration.StateInstalled
 	state.result.Changed = len(created) != 0 || len(retired) != 0
 	state.result.RestartRequired = state.result.Changed
