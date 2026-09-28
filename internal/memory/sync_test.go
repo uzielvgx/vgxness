@@ -5125,3 +5125,30 @@ func specialChange(t *testing.T, sequence, version int64, disposition syncservic
 	change.ChangeHash, _ = syncservice.CanonicalChangeHash(change)
 	return change
 }
+
+func TestDeviceIdentityRejectionKeepsMutationForRetry(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		kept bool
+	}{{"revoked", true}, {"invalid_device", true}, {"invalid_input", false}} {
+		t.Run(tc.code, func(t *testing.T) {
+			store := openTestStore(t)
+			_, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "local edit", State: StateActive, Provenance: Provenance{Producer: "test"}})
+			testutil.NoError(t, err)
+			_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+			testutil.NoError(t, err)
+			claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+			testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
+			id := claims[0].Mutation.MutationID
+			err = store.ApplySyncPushResult(context.Background(), id, claims[0].ClaimToken, syncservice.Result{MutationID: id, Disposition: syncservice.DispositionRejected, Code: tc.code})
+			testutil.NoError(t, err)
+			var state, code string
+			err = store.db.QueryRow(`SELECT state,last_error_code FROM sync_outbox WHERE mutation_id=?`, id).Scan(&state, &code)
+			if tc.kept {
+				testutil.Require(t, err == nil && state == "retry" && code == tc.code, "state=%q code=%q err=%v", state, code, err)
+			} else {
+				testutil.Require(t, errors.Is(err, sql.ErrNoRows), "terminal rejection must leave the outbox: err=%v", err)
+			}
+		})
+	}
+}
