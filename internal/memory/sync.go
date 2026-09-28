@@ -2809,6 +2809,9 @@ func (s *Store) claimDueSyncOutboxForTransition(ctx context.Context, lease time.
 	if err != nil {
 		return nil, writeError(ctx, err)
 	}
+	// Open rows hold the dedicated connection; closing it before them blocks
+	// the single-connection store, so every early return must release them.
+	defer rows.Close()
 	entries := make([]SyncOutboxEntry, 0, limit)
 	for rows.Next() {
 		var id, recordKind, recordID, kind, state, code string
