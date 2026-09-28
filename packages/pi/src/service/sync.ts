@@ -494,8 +494,16 @@ export async function syncProject(ctx: ServiceContext, options: SyncOptions = {}
     }
     catch (error) {
         const result = out(statusFor(error));
-        return error instanceof SyncHttpError ? { ...result, failureOperation: error.operation, ...(error.status ? { failureHttpStatus: error.status } : {}), failureClass: error.kind } : result;
+        if (error instanceof SyncHttpError)
+            return { ...result, failureOperation: error.operation, ...(error.status ? { failureHttpStatus: error.status } : {}), failureClass: error.kind };
+        // Local failures (corrupt outbox, diverged transition, stale claim...)
+        // need explicit action; report their cause instead of a bare status.
+        return { ...result, failureClass: 'local', failureReason: failureReason(error) };
     }
+}
+function failureReason(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.replace(/\s+/g, ' ').slice(0, 200);
 }
 function transitionDTO(ctx: ServiceContext) {
     const p = portableProject(ctx), db = ctx.database.db, row = db.prepare('SELECT mode,status FROM sync_project_transitions WHERE portable_project_id=? AND local_project_id=?').get(p, ctx.project) as any;

@@ -140,3 +140,12 @@ test('device identity rejections keep the mutation for retry; other rejections a
     else assert.equal(row, undefined, code);
   }
 });
+test('local sync failures report their cause instead of a bare unavailable status', async (t) => {
+  const { ctx, db } = fixture(t);
+  db.prepare('DELETE FROM portable_project_identities').run();
+  const result: any = await dispatchSync(ctx, 'sync', {}, { credentials: { get: () => `vgx1.${randomUUID()}.${Buffer.alloc(32, 7).toString('base64url')}` }, http: { request: async () => { throw new Error('network must not be reached'); } } });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.failureClass, 'local');
+  assert.match(result.failureReason, /portable project binding required/);
+  assert.doesNotThrow(() => JSON.stringify(result));
+});
