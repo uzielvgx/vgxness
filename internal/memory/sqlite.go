@@ -54,11 +54,14 @@ func open(ctx context.Context, path string, now func() time.Time, afterConfigure
 	if err != nil {
 		return nil, err
 	}
+	if strings.Contains(path, "?") {
+		return nil, fmt.Errorf("%w: memory store path must not contain '?'", ErrInvalid)
+	}
 	parentInfo, err := os.Stat(filepath.Dir(path))
 	if err != nil || !parentInfo.IsDir() {
 		return nil, fmt.Errorf("open memory store: %w", ErrCorrupt)
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", writableStoreDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open memory store: %w", ErrCorrupt)
 	}
@@ -120,6 +123,16 @@ func open(ctx context.Context, path string, now func() time.Time, afterConfigure
 		return nil, err
 	}
 	return store, nil
+}
+
+// writableStoreDSN applies connection settings to every connection the pool
+// opens, not only the first one: foreign keys and the busy timeout are
+// per-connection, and immediate write transactions take the writer lock at
+// BEGIN so a concurrent process cannot invalidate a read-then-write snapshot.
+// The driver treats the first '?' as the parameter separator, so paths that
+// contain one are rejected by open.
+func writableStoreDSN(path string) string {
+	return path + "?_txlock=immediate&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
 }
 
 func OpenRead(ctx context.Context, path string) (*Store, error) {
