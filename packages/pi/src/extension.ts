@@ -115,10 +115,16 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
     const selection = await readSelection(getAgentDir());
     let sessions: SessionAdapter;
     const host: PiToolHost & { modelCatalog: () => any; mutationGrant: () => import("./session/adapter.ts").MutationGrant } = { workspace, mode, role, storageRoot: options.storageRoot, modelSelection: () => selectedModels(selection, runtimeContext), modelCatalog: () => modelCatalog(runtimeContext), mutationGuard: () => sessions.assertMutation(), mutationSignal: () => sessions.mutationSignal(), mutationGrant: () => sessions.mutationGrant(), backend: () => {
-      if (!startup) startup = (async () => {
-        if (options.backend) return await options.backend();
-        return createNativeDispatcher({ workspace, storageRoot: options.storageRoot, credentialFile: options.credentialFile ?? process.env.VGXNESS_PI_CREDENTIAL_FILE, mode, role });
-      })();
+      if (!startup) {
+        const attempt = (async () => {
+          if (options.backend) return await options.backend();
+          return createNativeDispatcher({ workspace, storageRoot: options.storageRoot, credentialFile: options.credentialFile ?? process.env.VGXNESS_PI_CREDENTIAL_FILE, mode, role });
+        })();
+        startup = attempt;
+        // A failed start (for example a busy database) must not be cached for
+        // the rest of the session; the next call retries it.
+        attempt.catch(() => { if (startup === attempt) startup = undefined; });
+      }
       return startup;
     } };
     sessions = new SessionAdapter(host);
@@ -173,7 +179,7 @@ export function createPiExtension(options: { workspace?: string; storageRoot?: s
     pi.on("session_tree", async () => { await sessions.checkpoint(); });
     pi.on("session_compact", async () => { await sessions.checkpoint(); });
     pi.on("agent_settled", async () => { await sessions.renew(); });
-    pi.on("session_shutdown", async (event) => { let failure: unknown; try { if (event.reason === "reload" || event.reason === "resume") await sessions.detach(); else await sessions.end(event.reason === "quit" ? "completed" : "interrupted"); } catch (error) { failure = error; throw error; } finally { try { await startup?.then((client) => client.close?.()); } catch (closeError) { if (!failure) throw closeError; } finally { startup = undefined; } } });
+    pi.on("session_shutdown", async (event) => { let failure: unknown; try { if (event.reason === "reload" || event.reason === "resume") await sessions.detach(); else await sessions.end(event.reason === "quit" ? "completed" : "interrupted"); } catch (error) { failure = error; throw error; } finally { try { await startup?.then((client) => client.close?.(), () => undefined); } catch (closeError) { if (!failure) throw closeError; } finally { startup = undefined; } } });
   };
 }
 export default createPiExtension();

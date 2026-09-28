@@ -151,3 +151,27 @@ test("session adapter restarts periodic renewal after explicit transient recover
  await new Promise(resolve => setTimeout(resolve, 45)); assert.ok(renewals > recovered, `renewals=${renewals}`);
  await adapter.detach(); const stopped = renewals; await new Promise(resolve => setTimeout(resolve, 35)); assert.equal(renewals, stopped);
 });
+
+test("a failed backend start is retried instead of cached for the session", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "pi-session-retry-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const calls: string[] = [];
+  let starts = 0;
+  const wrapper = join(workspace, "extension.ts");
+  await writeFile(wrapper, `import { createPiExtension } from ${JSON.stringify(join(process.cwd(), "src/extension.ts"))}; export default createPiExtension(globalThis.__piSessionOptions);`);
+  (globalThis as any).__piSessionOptions = { workspace, mode: "full", role: "manager", backend: async () => {
+    if (++starts === 1) throw new Error("database is locked");
+    return { request: async (operation: string) => { calls.push(operation); return { handle: "retry-handle", state: "active", leaseUntil: new Date(Date.now() + 60000).toISOString(), updatedAt: new Date().toISOString() }; } };
+  } };
+  t.after(() => { delete (globalThis as any).__piSessionOptions; });
+  const loaded = await loadExtensions([wrapper], workspace);
+  assert.deepEqual(loaded.errors, []);
+  const handlers = loaded.extensions[0].handlers;
+  const ctx: any = { sessionManager: { getSessionId: () => "retry-session" } };
+  for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start", reason: "new" }, ctx).catch(() => {});
+  assert.deepEqual(calls, []);
+  for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start", reason: "new" }, ctx);
+  assert.equal(starts, 2);
+  assert.ok(calls.includes("memory.session.start"), `calls=${calls}`);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ type: "session_shutdown", reason: "quit" }, ctx);
+});
