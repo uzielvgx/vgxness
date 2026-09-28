@@ -130,8 +130,12 @@ func parsePiStore(data []byte) (Snapshot, error) {
 	}, nil
 }
 
-// piStoreSupportedEfforts mirrors the Pi selection contract: non-off efforts
-// require reasoning and a non-null thinking level; null disables an effort.
+// piStoreSupportedEfforts follows Pi's tristate thinkingLevelMap (upstream
+// docs/models.md) and mirrors supportsEffort in
+// packages/pi/src/models/selection.ts: non-off efforts require reasoning; a
+// string value supports the effort, null disables it, and an omitted key keeps
+// the provider's default mapping for levels through high while leaving xhigh
+// unsupported.
 func piStoreSupportedEfforts(reasoning bool, levels map[string]any) ([]string, error) {
 	efforts := make([]string, 0, len(piStoreEfforts))
 	if !reasoning {
@@ -139,7 +143,13 @@ func piStoreSupportedEfforts(reasoning bool, levels map[string]any) ([]string, e
 	}
 	for _, effort := range piStoreEfforts {
 		value, exists := levels[effort]
-		if !exists || value == nil {
+		if !exists {
+			if effort != "xhigh" {
+				efforts = append(efforts, effort)
+			}
+			continue
+		}
+		if value == nil {
 			continue
 		}
 		if _, ok := value.(string); !ok {
