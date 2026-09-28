@@ -769,9 +769,13 @@ func TestRecoverStaleLockBoundedUnknownRemoveFailsImmediately(t *testing.T) {
 
 func TestPublishStorageFailuresAreOperationalNotInvalidRequests(t *testing.T) {
 	for name, fail := range map[string]func(*ops){
-		"write":  func(o *ops) { o.tempWrite = func(*os.File, []byte) (int, error) { return 0, errors.New("no space left on device") } },
-		"sync":   func(o *ops) { o.tempSync = func(*os.File) error { return errors.New("input/output error") } },
-		"rename": func(o *ops) { o.rename = func(rootedFS, string, string) error { return errors.New("permission denied") } },
+		"write": func(o *ops) {
+			o.tempWrite = func(*os.File, []byte) (int, error) { return 0, errors.New("no space left on device") }
+		},
+		"sync": func(o *ops) { o.tempSync = func(*os.File) error { return errors.New("input/output error") } },
+		"rename": func(o *ops) {
+			o.rename = func(rootedFS, string, string) error { return errors.New("permission denied") }
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()

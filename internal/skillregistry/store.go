@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -342,6 +343,11 @@ type fileLock struct {
 	file    *os.File
 }
 
+// heldLocks records the lock contents this process currently holds. A lock
+// carrying this process's PID but absent here was left by an earlier process
+// that got the same PID (common in containers), so it is not live.
+var heldLocks sync.Map
+
 // acquireLock serializes publishers. It never deletes a lock on age alone: it
 // removes a stale lock only when the recorded owner process is provably gone
 // and the lock identity is unchanged. Otherwise it waits a bounded interval
@@ -453,6 +459,7 @@ func finalizeLockWith(root rootedFS, name string, file *os.File, o ops) (*fileLo
 		discardLock(root, name, file, content, o)
 		return nil, invalid(err)
 	}
+	heldLocks.Store(string(content), struct{}{})
 	return &fileLock{name: name, content: content, file: file}, nil
 }
 
@@ -614,11 +621,23 @@ func recoverStaleLockWith(root rootedFS, name string, o ops) (bool, error) {
 	}
 	defer file.Close()
 	pid, ok := lockPID(data)
-	if !ok || pid == os.Getpid() {
-		// An unparseable lock, or one owned by a still-live PID, is left alone.
+	switch {
+	case !ok && len(data) == 0:
+		// Created but never written: its creator died between the exclusive
+		// create and the PID write. After staleLockAge it cannot be live.
+	case !ok:
+		// Unrecognized content may belong to another version; leave it.
 		return false, nil
-	}
-	if processAlive(pid) {
+	case pid == os.Getpid():
+		// This process writes only token locks and records each one it holds.
+		// A token lock with this PID that is not recorded was left by an
+		// earlier process that reused the PID (typical for PID 1 in
+		// containers). A legacy PID-only lock cannot be told apart, so it is
+		// still treated as live.
+		if _, held := heldLocks.Load(string(data)); held || !bytes.ContainsRune(data, '\n') {
+			return false, nil
+		}
+	case processAlive(pid):
 		return false, nil
 	}
 	// The held handle pins the identity, so an inode or FileId reused by a
@@ -648,6 +667,7 @@ func (lock *fileLock) releaseWith(root rootedFS, o ops) {
 	if lock == nil || lock.file == nil {
 		return
 	}
+	defer heldLocks.Delete(string(lock.content))
 	defer func() { _ = o.lockClose(lock.file) }()
 	held, err := lock.file.Stat()
 	if err != nil {
