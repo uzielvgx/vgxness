@@ -3059,6 +3059,43 @@ func TestIntegrationExposesCanonicalAssignmentRowsForEveryModelSchema(t *testing
 	}
 }
 
+func TestIntegration_RecoversWhenOwnedConfigEntriesWereRemoved(t *testing.T) {
+	configDirectory := filepath.Join(t.TempDir(), "opencode")
+	configPath := filepath.Join(configDirectory, defaultAgentConfigName)
+	service := NewIntegration()
+	options := integration.Options{ConfigDir: configDirectory}
+	_, err := service.Install(context.Background(), options)
+	testutil.NoError(t, err)
+	removeOwnedEntries := func() {
+		t.Helper()
+		data, err := os.ReadFile(configPath)
+		testutil.NoError(t, err)
+		var config map[string]any
+		testutil.NoError(t, json.Unmarshal(data, &config))
+		delete(config, "mcp")
+		delete(config, "permission")
+		data, err = json.Marshal(config)
+		testutil.NoError(t, err)
+		testutil.NoError(t, os.WriteFile(configPath, data, 0o600))
+	}
+
+	// A user (or an install interrupted after its state write) left the state
+	// claiming ownership of entries that are no longer in opencode.json.
+	removeOwnedEntries()
+	status, err := service.Status(context.Background(), options)
+	testutil.Require(t, err == nil && status.State != integration.StateDrifted, "missing owned entries wedged status: %+v err=%v", status, err)
+	reinstalled, err := service.Install(context.Background(), options)
+	testutil.Require(t, err == nil && reinstalled.State == integration.StateInstalled, "install did not re-adopt missing entries: %+v err=%v", reinstalled, err)
+	data, err := os.ReadFile(configPath)
+	testutil.NoError(t, err)
+	testutil.Require(t, bytes.Contains(data, []byte(`"vgxness"`)) && bytes.Contains(data, []byte(`"vgxness_*"`)), "entries not restored: %s", data)
+
+	// An uninstall interrupted after rewriting opencode.json must be retryable.
+	removeOwnedEntries()
+	removed, err := service.Uninstall(context.Background(), options)
+	testutil.Require(t, err == nil && removed.State == integration.StateAbsent, "uninstall with already-removed entries: %+v err=%v", removed, err)
+}
+
 func TestIntegration_KeepsOnlyLatestRetainedCopyPerArtifact(t *testing.T) {
 	configDirectory := filepath.Join(t.TempDir(), "opencode")
 	service := NewIntegration()

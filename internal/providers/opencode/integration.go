@@ -1269,7 +1269,12 @@ func applyManagedMCP(values map[string]json.RawMessage, state *defaultAgentState
 		return err
 	}
 	if state.MCPOwned {
-		if !present || (!sameJSONValue(entry, managed) && !sameJSONValue(entry, managedReadOnlyMCPConfig(executable))) {
+		if !present {
+			// The owned entry was removed by hand or by an interrupted
+			// install/uninstall; install re-adds it instead of wedging.
+			return addManagedMCP(values, managed)
+		}
+		if !sameJSONValue(entry, managed) && !sameJSONValue(entry, managedReadOnlyMCPConfig(executable)) {
 			return integration.ErrDrift
 		}
 		if !sameJSONValue(entry, managed) {
@@ -1295,6 +1300,14 @@ func applyManagedMCP(values map[string]json.RawMessage, state *defaultAgentState
 	if present {
 		return integration.ErrConflict
 	}
+	if err := addManagedMCP(values, managed); err != nil {
+		return err
+	}
+	state.MCPOwned = true
+	return nil
+}
+
+func addManagedMCP(values map[string]json.RawMessage, managed json.RawMessage) error {
 	servers := map[string]json.RawMessage{}
 	if raw, ok := values["mcp"]; ok && json.Unmarshal(raw, &servers) != nil {
 		return integration.ErrInvalid
@@ -1305,7 +1318,6 @@ func applyManagedMCP(values map[string]json.RawMessage, state *defaultAgentState
 		return err
 	}
 	values["mcp"] = raw
-	state.MCPOwned = true
 	return nil
 }
 
@@ -1325,7 +1337,10 @@ func applyManagedPermission(values map[string]json.RawMessage, state *defaultAge
 	}
 	managed := json.RawMessage(`"deny"`)
 	if state.PermissionOwned {
-		if !present || !sameJSONValue(rule, managed) {
+		if !present {
+			return addManagedPermission(values, managed)
+		}
+		if !sameJSONValue(rule, managed) {
 			return integration.ErrDrift
 		}
 		return nil
@@ -1342,6 +1357,14 @@ func applyManagedPermission(values map[string]json.RawMessage, state *defaultAge
 	if present {
 		return integration.ErrConflict
 	}
+	if err := addManagedPermission(values, managed); err != nil {
+		return err
+	}
+	state.PermissionOwned = true
+	return nil
+}
+
+func addManagedPermission(values map[string]json.RawMessage, managed json.RawMessage) error {
 	rules := map[string]json.RawMessage{}
 	if raw, ok := values["permission"]; ok && json.Unmarshal(raw, &rules) != nil {
 		return integration.ErrConflict
@@ -1352,7 +1375,6 @@ func applyManagedPermission(values map[string]json.RawMessage, state *defaultAge
 		return err
 	}
 	values["permission"] = raw
-	state.PermissionOwned = true
 	return nil
 }
 
@@ -1407,7 +1429,11 @@ func withoutManagedMCP(values map[string]json.RawMessage, state defaultAgentStat
 		if err != nil {
 			return err
 		}
-		if !present || (!sameJSONValue(entry, managed) && !sameJSONValue(entry, managedReadOnlyMCPConfig(executable))) {
+		if !present {
+			// Already removed (by hand or by an interrupted uninstall).
+			return nil
+		}
+		if !sameJSONValue(entry, managed) && !sameJSONValue(entry, managedReadOnlyMCPConfig(executable)) {
 			return integration.ErrDrift
 		}
 		servers := map[string]json.RawMessage{}
@@ -1439,7 +1465,10 @@ func withoutManagedPermission(values map[string]json.RawMessage, state defaultAg
 	}
 	managed := json.RawMessage(`"deny"`)
 	if state.PermissionOwned {
-		if !present || !sameJSONValue(rule, managed) {
+		if !present {
+			return nil
+		}
+		if !sameJSONValue(rule, managed) {
 			return integration.ErrDrift
 		}
 		rules := map[string]json.RawMessage{}
