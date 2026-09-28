@@ -212,17 +212,34 @@ callers and gains an optional registry runtime.
 ## Manager and worker contract
 
 The shared contract (`internal/orchestration/manager_contract.json`, rendered
-by every provider adapter) requires the Manager to **delegate all project code
-exploration to `explore` — reading files, searching, listing, and read-only
-diagnosis of repository content — with no simple exception**. The Manager
-retains only a narrow operational-inspection authority that `explore` cannot
-perform because it has no shell: local Git queries (status, diff, log, refs,
-tracking, conflicts), delivery and candidate state, and the single active host
+by every provider adapter) classifies each request — direct question, routine
+operational job, bounded project read, implementation, or higher-risk change —
+and lets the Manager perform the **necessary bounded inspection and execution
+itself** for a simple, low-risk, authorized task, using available native
+inspection tools (an indexed Codegraph query first when the target is indexed,
+with a plain document or configuration read as the fallback). A trivial routine
+task does **not** require `explore` delegation, a subagent, a formal Markdown
+plan or task list, a skill load, or CARE; an unavailable capability is reported,
+never invented. The Manager chooses delegation to the read-only `explore` role
+for broad or multi-symbol scope, worthwhile parallel exploration, high
+uncertainty, cross-cutting or higher-risk work, or independent review; delegation
+is a choice, never a permission elevation, and a delegated exploration mission
+carries an explicit child nonce and testable criteria. The Manager also retains
+a narrow operational-inspection authority that `explore` cannot perform because
+it has no shell: local Git queries (status, diff, log, refs, tracking,
+conflicts), delivery and candidate state, and the single active host
 configuration binding read needed for registry bootstrap. It never uses that for
-general parallel exploration, never bypasses a native deny, inspects only exact
-evidence supplied for a decision, does not browse the project itself, and fails
-closed with a missing-dependency report when `explore` or a required capability
-is unavailable.
+general parallel exploration, never bypasses a native deny (including through
+Python or another interpreter), inspects the exact evidence supplied by
+`explore`, workers, or its own bounded direct inspection for a decision, does not
+duplicate already-completed work, and fails closed with a missing-dependency
+report when a required capability is unavailable. Before a potentially
+destructive local operation such as a development database reset, the Manager
+establishes the exact workspace, environment, and database target and the
+documented reset command; a known, explicitly authorized development target is
+executed with the pertinent check, while an ambiguous, shared, or production
+target — or an irreversible action without consent — stops dependent work and
+asks one consequential question.
 
 For skills, the Manager:
 

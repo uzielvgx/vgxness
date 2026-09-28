@@ -7,11 +7,26 @@ model-plan role identifiers. Provider adapters supply native tool names,
 transport, permissions and model configuration. Each agent has exactly one maintained definition; historical prompt bodies and
 reconstruction chains are removed from the source tree.
 
-Project code exploration is delegated to the Explore role. The Manager retains a
+Project code exploration is delegated to the read-only Explore role when the
+work is broad or multi-symbol, independently parallelizable, uncertain,
+cross-cutting or higher risk, or needs independent review; delegation is a
+choice, never a permission elevation, and a delegated mission carries an explicit
+child nonce and testable criteria. For a simple, low-risk, authorized task the
+Manager may itself perform the necessary bounded inspection and execution, using
+available native inspection tools and preferring an indexed Codegraph query with
+a plain document or configuration read as the fallback; a trivial routine task
+needs no formal plan, task list, skill load, or CARE. The Manager also retains a
 narrow, explicit operational-inspection authority for local Git queries,
 delivery and candidate state, and reading only the active host configuration
 binding used for registry bootstrap; it is not a general parallel-exploration
-permission and never bypasses a native deny. OpenCode read-only roles declare a
+permission, never bypasses a native deny (including through Python or another
+interpreter), and reports an unavailable capability rather than inventing one.
+Before a potentially destructive local operation the Manager establishes the
+exact workspace, environment, and database target and the documented reset
+command; a known, explicitly authorized development target is executed with the
+pertinent check, ambiguous, shared, or production targets stop dependent work and
+ask one consequential question, and production or reset authorization is never
+inferred from a development-scoped request. OpenCode read-only roles declare a
 single scoped `external_directory` grant for the conventional
 `~/.agents/skills/**` root (Explore additionally allows public `webfetch`); the
 full home, provider configuration, and other external paths stay denied, and
@@ -19,7 +34,9 @@ custom roots require an explicit binding. Go and Pi project the same shared
 Manager text; these declarations are configuration evidence, not runtime
 sandbox proof.
 
-For substantial work the shared contract requires a durable, in-repository
+A formal Markdown plan is required only for substantial work: a simple,
+low-risk, bounded task needs no plan or task list. For substantial work the
+shared contract requires a durable, in-repository
 Markdown plan under `docs/implementations/`, with a stable plan identifier and
 numbered tasks that own canonical status. The index, states and per-plan layout
 documented in `docs/implementations/README.md` make the mechanism usable in a new

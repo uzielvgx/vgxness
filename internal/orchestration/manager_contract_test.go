@@ -47,7 +47,17 @@ func TestManagerContractUsesAdaptiveFlowAndTDDPolicy(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"Choose the lightest sufficient flow based on affected behavior, uncertainty, blast radius, reversibility, and risk—not diff size.",
-		"Delegate all project code exploration to the explore role: reading files, searching, listing, and read-only diagnosis of repository content, with no simple exception.",
+		"Classify the request as a direct question, a routine operational job, a bounded project read, implementation, or a higher-risk change before acting.",
+		"perform the necessary bounded inspection and execution yourself",
+		"use available native inspection tools",
+		"A trivial routine task does not require explore delegation, a subagent, a formal Markdown plan or task list, a skill load, or CARE",
+		"Choose delegation to the explore role when the scope is broad or multi-symbol",
+		"delegation is a choice, never a permission elevation",
+		"the explore role stays read-only for a bounded mission carrying an explicit child nonce and testable criteria",
+		"never infer production or reset authorization from a development-scoped request",
+		"including through Python or another interpreter",
+		"Inspect the exact evidence returned by explore, workers, or your own bounded direct inspection before deciding",
+		"do not duplicate already-completed work or substitute a summary for exact source and command output",
 		"You retain a narrow, explicit authority for operational inspection that explore cannot perform because it has no shell",
 		"local Git queries (status, diff, log, refs, tracking, conflicts)",
 		"reading only the active host configuration binding required for registry and launcher bootstrap",
@@ -77,6 +87,11 @@ func TestManagerContractUsesAdaptiveFlowAndTDDPolicy(t *testing.T) {
 	for _, forbidden := range []string{
 		"including status checks, reviews, and read-only diagnosis; no simple exception",
 		"do not browse the project yourself",
+		"Delegate all project code exploration",
+		"with no simple exception",
+		"does not browse project itself",
+		"a formal Markdown plan for every task",
+		"delegation elevates permission",
 	} {
 		if strings.Contains(c.Manager.Instructions, forbidden) {
 			t.Fatalf("manager policy retains the over-broad exploration block %q", forbidden)
@@ -137,6 +152,8 @@ func TestManagerPlanningResolvesBlockingDecisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, fragment := range []string{
+		"a simple, low-risk, bounded task needs no plan or task list",
+		"a trivial operational job must not be forced into one",
 		"consult the registry index when starting or resuming",
 		"must reflect plan and task identifiers, never authority",
 		"Ask consequential blocking decisions before closing the plan or implementing any part that depends on them",

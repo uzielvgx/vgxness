@@ -118,6 +118,86 @@
       "id": "plan-resume-reconcile-blocker",
       "role": "manager",
       "fragment": "resume by reconciling the recorded next action and blocker against repository evidence before continuing"
+    },
+    {
+      "id": "adaptive-direct-read",
+      "role": "manager",
+      "fragment": "perform the necessary bounded inspection and execution yourself"
+    },
+    {
+      "id": "adaptive-start-dev-no-plan",
+      "role": "manager",
+      "fragment": "A trivial routine task does not require explore delegation, a subagent, a formal Markdown plan or task list, a skill load, or CARE"
+    },
+    {
+      "id": "adaptive-capability-honest",
+      "role": "manager",
+      "fragment": "use available native inspection tools"
+    },
+    {
+      "id": "adaptive-dev-reset-scope-stop",
+      "role": "manager",
+      "fragment": "never infer production or reset authorization from a development-scoped request"
+    },
+    {
+      "id": "adaptive-delegation-chosen",
+      "role": "manager",
+      "fragment": "Choose delegation to the explore role when the scope is broad or multi-symbol"
+    },
+    {
+      "id": "adaptive-delegation-not-escalation",
+      "role": "manager",
+      "fragment": "delegation is a choice, never a permission elevation"
+    },
+    {
+      "id": "adaptive-explore-readonly-bounded",
+      "role": "manager",
+      "fragment": "the explore role stays read-only for a bounded mission carrying an explicit child nonce and testable criteria"
+    },
+    {
+      "id": "adaptive-no-denied-bypass",
+      "role": "manager",
+      "fragment": "including through Python or another interpreter"
+    },
+    {
+      "id": "adaptive-direct-evidence",
+      "role": "manager",
+      "fragment": "your own bounded direct inspection"
+    },
+    {
+      "id": "adaptive-plan-gate-trivial",
+      "role": "manager",
+      "fragment": "a trivial operational job must not be forced into one"
+    },
+    {
+      "id": "negative-no-blanket-exploration",
+      "role": "manager",
+      "fragment": "Delegate all project code exploration",
+      "expect": "absent"
+    },
+    {
+      "id": "negative-no-simple-exception",
+      "role": "manager",
+      "fragment": "with no simple exception",
+      "expect": "absent"
+    },
+    {
+      "id": "negative-no-manager-browse-ban",
+      "role": "manager",
+      "fragment": "does not browse project itself",
+      "expect": "absent"
+    },
+    {
+      "id": "negative-no-blanket-plan",
+      "role": "manager",
+      "fragment": "a formal Markdown plan for every task",
+      "expect": "absent"
+    },
+    {
+      "id": "negative-no-delegation-escalation",
+      "role": "manager",
+      "fragment": "delegation elevates permission",
+      "expect": "absent"
     }
   ]
 }

@@ -16,12 +16,12 @@ func TestSharedManagerDevelopmentScenarios(t *testing.T) {
 		SchemaVersion string
 		EvidenceKind  string
 		Partition     string
-		Cases         []struct{ ID, Role, Fragment string }
+		Cases         []struct{ ID, Role, Fragment, Expect string }
 	}
 	if e = json.Unmarshal(raw, &corpus); e != nil {
 		t.Fatal(e)
 	}
-	if corpus.SchemaVersion != "vgxness-manager-scenarios/v1" || corpus.EvidenceKind != "deterministic-contract-conformance" || corpus.Partition != "development" || len(corpus.Cases) != 23 {
+	if corpus.SchemaVersion != "vgxness-manager-scenarios/v1" || corpus.EvidenceKind != "deterministic-contract-conformance" || corpus.Partition != "development" || len(corpus.Cases) != 38 {
 		t.Fatal("invalid development corpus")
 	}
 	c, e := LoadManagerContract()
@@ -35,8 +35,17 @@ func TestSharedManagerDevelopmentScenarios(t *testing.T) {
 			t.Fatal("invalid scenario")
 		}
 		seen[scenario.ID] = true
-		if !strings.Contains(r.Instructions, scenario.Fragment) {
-			t.Errorf("%s policy absent from %s", scenario.ID, scenario.Role)
+		switch scenario.Expect {
+		case "absent":
+			if strings.Contains(r.Instructions, scenario.Fragment) {
+				t.Errorf("%s forbidden policy present in %s", scenario.ID, scenario.Role)
+			}
+		case "", "present":
+			if !strings.Contains(r.Instructions, scenario.Fragment) {
+				t.Errorf("%s policy absent from %s", scenario.ID, scenario.Role)
+			}
+		default:
+			t.Fatalf("invalid expectation for %s", scenario.ID)
 		}
 	}
 }

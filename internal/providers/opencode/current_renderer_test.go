@@ -28,8 +28,22 @@ func TestNativeHeadersRequireCurrentCodegraphAndVerifierDenials(t *testing.T) {
 		t.Error("verifier header must explicitly deny edit and task")
 	}
 	manager := string(bundle.agents["vgxness-manager.md"])
-	if !strings.Contains(manager, "Delegate all project code exploration to the explore role: reading files, searching, listing, and read-only diagnosis of repository content, with no simple exception.") {
-		t.Error("manager prompt must delegate all project code exploration with no simple exception")
+	for _, want := range []string{
+		"Classify the request as a direct question, a routine operational job, a bounded project read, implementation, or a higher-risk change before acting.",
+		"perform the necessary bounded inspection and execution yourself",
+		"use available native inspection tools",
+		"the explore role stays read-only for a bounded mission carrying an explicit child nonce and testable criteria",
+		"never infer production or reset authorization from a development-scoped request",
+		"Inspect the exact evidence returned by explore, workers, or your own bounded direct inspection before deciding",
+	} {
+		if !strings.Contains(manager, want) {
+			t.Errorf("manager prompt lacks adaptive direct-work policy %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Delegate all project code exploration", "with no simple exception", "does not browse project itself"} {
+		if strings.Contains(manager, forbidden) {
+			t.Errorf("manager prompt retains the removed broad exploration block %q", forbidden)
+		}
 	}
 	if !strings.Contains(manager, "local Git queries (status, diff, log, refs, tracking, conflicts)") {
 		t.Error("manager prompt must retain the bounded operational-inspection authority")
@@ -49,8 +63,11 @@ func TestNativeHeadersRequireCurrentCodegraphAndVerifierDenials(t *testing.T) {
 	if !strings.Contains(manager, "never search PATH") || !strings.Contains(manager, "report the dependency unavailable instead of browsing the repository") {
 		t.Error("manager registry guidance must forbid PATH guessing and silent repo browsing")
 	}
-	if !strings.Contains(manager, "Delegate all project code exploration to explore through the native task tool") {
-		t.Error("adapter must delegate project code exploration explicitly")
+	if !strings.Contains(manager, "Delegate broad or parallel project code exploration to explore through the native task tool when the shared contract calls for it") {
+		t.Error("adapter must delegate broad project code exploration explicitly")
+	}
+	if !strings.Contains(manager, "may itself perform the bounded, necessary inspection and execution the shared contract permits") {
+		t.Error("adapter must permit the bounded direct-work exception")
 	}
 	if strings.Contains(manager, "Delegate all project exploration to explore through the native task tool") {
 		t.Error("adapter retains the old blanket all-exploration delegation")
@@ -188,40 +205,40 @@ func TestManagedFrontmatterPermissionsModelScopedExternalAccess(t *testing.T) {
 func TestCurrentRendererPreservesNativeArtifacts(t *testing.T) {
 	expected := map[modelplan.Plan]map[string]string{
 		"high": {
-			"explore.md":                 "9c3921056a34bb833494d739c3d6749f306591eeadd4e834c5579126a8c07695",
-			"general.md":                 "c2d79a5cd5d3cffdd3ac581e1e02cbef0e5fb46c020a87066377809ce714e559",
-			"vgxness-care-challenger.md": "f8f65e0f0f1dc034c1d315b11a227f86e8bc8684d6b731e0dbc0616821eace99",
-			"vgxness-care-reviewer.md":   "881b9949c747289010698d026ebb334cbcece9c5038b7b303a4976df5e43d7e6",
-			"vgxness-care-specialist.md": "1fa75e10daa4c7859a394f622a3a27da15cd51d7cd651581c9daf8137d9c4fc6",
-			"vgxness-manager.md":         "710e4ca0f2248c998ab687a9696c3e3de6cb99ff4d48678a8ae6e8ead1427bbf",
-			"vgxness-verifier.md":        "1de68ce285b71f8180412fc44021a546c5db02a6eeed561872f5e50e7ef656c0",
+			"explore.md":                 "124c4e3e545dd7974a3c168113de7a7158c2ac6b7c0f351abe1bb82e22ceafc4",
+			"general.md":                 "bc194f45dcb0c6c51c3c5cc19cd1a2ba8c998c3f1d7c819d3c637fd0bbaa9ffd",
+			"vgxness-care-challenger.md": "b86347546a7f6e69c264a7d1dac1509e8bff6d609fb0a07f4fba1bc5053d1d7c",
+			"vgxness-care-reviewer.md":   "200325a4ffa83a6eb1f69be910bf729336941b8c996c84c9189be63cfb1419c3",
+			"vgxness-care-specialist.md": "5cedeb98375500faa8e932bd47a3315dc2f7e7712d0a9cd5cf4fb4c67003a7cb",
+			"vgxness-manager.md":         "37f3711f275d23f672db1e2b8a07eff4f42fdb9e00409d566d798b00b319b112",
+			"vgxness-verifier.md":        "4732f2e2b26c414028155b1c9cfabdbc1962691160a153617d8e03be2c165a7e",
 		},
 		"low": {
-			"explore.md":                 "e63f4ae8939bb16dc257a7d2cc534febb858835c6af069ce47c68f88eadf8bf1",
-			"general.md":                 "3d4166c20a637263cdc2b2c4639c6d85128017d0576b12f25ff910e973f73324",
-			"vgxness-care-challenger.md": "f10a9223ba470872ba861b488477056a3a4619d6d55b5a6c00e21f715677b3ce",
-			"vgxness-care-reviewer.md":   "d654ed2a69a242aad2ee8dca8005e8cf56e8753a8f215a2d75d02fa0bac799ec",
-			"vgxness-care-specialist.md": "703ee286f7c78a7b80739550c10ae2a834cdae544c3bd691398d0c2324938a7a",
-			"vgxness-manager.md":         "3ebfa01cea5b67ab01101df37e45b7ffbdd56854f7ed6f075f1e136548b27fce",
-			"vgxness-verifier.md":        "3f6ee703e645e8adaeccef19d1ab7a76ac4ba33fb2a3ee2e93c62ee6137f54e0",
+			"explore.md":                 "b82c4a20deb379d1b812a358f7b50414fcad0ce927515bb082172747e6301b98",
+			"general.md":                 "0f141c8e8309c06c9a195fb95dc193d1f8e55cdf0f5703ba6067698568209895",
+			"vgxness-care-challenger.md": "880f3b5abd7f999bb96bdd88a3d32a10b5eabf75c778f03c32db60892c461b3b",
+			"vgxness-care-reviewer.md":   "47763e3caad34dedb487c6c58e4f320b520ec7163fc18811e69cfeba65fc5aad",
+			"vgxness-care-specialist.md": "623873f6c266436667dc1bc56a8ae03d985b9be6e2d17833c204daed90bd5870",
+			"vgxness-manager.md":         "fa03bd41d0c24568ffd58654d061fe5780471eb2bac0010faca29763a1294927",
+			"vgxness-verifier.md":        "5ac1b82c721f49124253935e5f18240f4b4f0fe2fb58b3c94668c8aefd24886d",
 		},
 		"medium": {
-			"explore.md":                 "f0e220837d0c6915cabf40a4ef442a4721bfde494cd4ba3dd0266e1d60e3e31a",
-			"general.md":                 "970f6fbd79f69ef7dd502ece81c81a29c1a3ffda906a7377f44f3aa9b47aa03f",
-			"vgxness-care-challenger.md": "b5a02d7f586483820e5e37722b217633006bce529afa2bec2e0e28af7dce9968",
-			"vgxness-care-reviewer.md":   "5141cfefe9a375d80f09c6a5771d48d18ee8a8fbeef709b67a16c55b507e91a0",
-			"vgxness-care-specialist.md": "790680d45e9db0b688758de2d1064f4066ec48a1fda93657901cefae2e99d7ed",
-			"vgxness-manager.md":         "fbf11b15b13ce4c8021e27097aef61caa540e0635a7edd9cb506dbd22b2979e3",
-			"vgxness-verifier.md":        "2f98e254b546dd15812e2ad33cac738aa1c7c0e0895135bef73affa343b247bf",
+			"explore.md":                 "ca8f5404645068eb54537e9ef1eef509639ba5bee23cdc4bba6df7f112e6dbfc",
+			"general.md":                 "eab8a3aea73cf0597e06cc6a920264caa53e722f2a2eab0c7bd330af4d25e46f",
+			"vgxness-care-challenger.md": "34c121617d905c9504692d13aa2a4f2ef58b07af403347e568aaa9ca2e0055b0",
+			"vgxness-care-reviewer.md":   "f4e745dfbb6432db9558106620130d24726dab94a8496c6733bba0804207c04a",
+			"vgxness-care-specialist.md": "a399d7f6953ddf80b28c7ad3f3c69b93359206073f5aeff13552a001a1be245f",
+			"vgxness-manager.md":         "20831d1b34d41306575940cf305ca3e32544c32ce2fd12ace36c5ec1b22309c3",
+			"vgxness-verifier.md":        "f956a3cc971348dd90ac13c1ed7499474b9c629673f40c68d9bf9f25198b4654",
 		},
 		"ultra": {
-			"explore.md":                 "898ad1e8b419a3206aafb50a70a0a75bbc235d1b3d4406f3490a28b228bb786e",
-			"general.md":                 "c2d79a5cd5d3cffdd3ac581e1e02cbef0e5fb46c020a87066377809ce714e559",
-			"vgxness-care-challenger.md": "f8f65e0f0f1dc034c1d315b11a227f86e8bc8684d6b731e0dbc0616821eace99",
-			"vgxness-care-reviewer.md":   "881b9949c747289010698d026ebb334cbcece9c5038b7b303a4976df5e43d7e6",
-			"vgxness-care-specialist.md": "1fa75e10daa4c7859a394f622a3a27da15cd51d7cd651581c9daf8137d9c4fc6",
-			"vgxness-manager.md":         "710e4ca0f2248c998ab687a9696c3e3de6cb99ff4d48678a8ae6e8ead1427bbf",
-			"vgxness-verifier.md":        "e4513fd3b4f67ebd3ee14b1174bc428e2f6cf866bf00e04b08114fee01ed36ec",
+			"explore.md":                 "a130842bf86ba87455d95a1d1e27d755dbd3e28c0e19fc5e9e923386783707f1",
+			"general.md":                 "bc194f45dcb0c6c51c3c5cc19cd1a2ba8c998c3f1d7c819d3c637fd0bbaa9ffd",
+			"vgxness-care-challenger.md": "b86347546a7f6e69c264a7d1dac1509e8bff6d609fb0a07f4fba1bc5053d1d7c",
+			"vgxness-care-reviewer.md":   "200325a4ffa83a6eb1f69be910bf729336941b8c996c84c9189be63cfb1419c3",
+			"vgxness-care-specialist.md": "5cedeb98375500faa8e932bd47a3315dc2f7e7712d0a9cd5cf4fb4c67003a7cb",
+			"vgxness-manager.md":         "37f3711f275d23f672db1e2b8a07eff4f42fdb9e00409d566d798b00b319b112",
+			"vgxness-verifier.md":        "493dd3f46c13365efe1458f3197efa7d145cd3e11140da558b3686d421e60019",
 		},
 	}
 	for plan, want := range expected {
