@@ -262,3 +262,68 @@ func prepareRetainedPredecessorDirectories(root string) error {
 	}
 	return nil
 }
+
+// pruneRetainedPredecessors keeps one retained copy per artifact: for every
+// target this install just retained (keep maps its root-relative target to the
+// new anchor's base name), older verified copies of that same target are
+// removed. It runs only on a fully valid inventory without publication
+// aliases, verifies each copy against its marker digest before deleting it,
+// and leaves every other entry untouched. The anchor is removed first, then
+// the marker's publication aliases, then the marker; an interruption in
+// between is reported as retained evidence.
+func pruneRetainedPredecessors(root string, keep map[string]string) error {
+	if len(keep) == 0 {
+		return nil
+	}
+	inventory, err := retainedPredecessorInventory(root)
+	if err != nil || inventory.evidenceCount != len(inventory.markers) {
+		return err
+	}
+	directory := retainedPredecessorRoot(root)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	var aliases []string
+	for _, entry := range entries {
+		if retainedMarkerAliasName(entry.Name()) {
+			aliases = append(aliases, filepath.Join(directory, entry.Name()))
+		}
+	}
+	kept := make(map[string]bool, len(keep))
+	for _, marker := range inventory.markers {
+		target, err := filepath.Rel(marker.Root, marker.Target)
+		if err == nil && keep[target] == filepath.Base(marker.Anchor) {
+			kept[target] = true
+		}
+	}
+	for _, marker := range inventory.markers {
+		target, err := filepath.Rel(marker.Root, marker.Target)
+		if err != nil || !kept[target] || keep[target] == filepath.Base(marker.Anchor) {
+			continue
+		}
+		anchor, err := readRegularFile(marker.Anchor)
+		if err != nil || artifactSHA256(anchor) != marker.SHA256 {
+			return fmt.Errorf("retained predecessor changed before pruning")
+		}
+		markerPath := filepath.Join(directory, marker.Operation+".json")
+		markerInfo, err := os.Lstat(markerPath)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(marker.Anchor); err != nil {
+			return err
+		}
+		for _, alias := range aliases {
+			if info, err := os.Lstat(alias); err == nil && os.SameFile(info, markerInfo) {
+				if err := os.Remove(alias); err != nil {
+					return err
+				}
+			}
+		}
+		if err := os.Remove(markerPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
