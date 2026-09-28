@@ -195,3 +195,79 @@ func TestObserveDoesNotAddMemorySyncSurface(t *testing.T) {
 		t.Fatalf("status err=%v sync events=%d", err, events)
 	}
 }
+
+type repairHookRuntime struct {
+	hookRuntime
+	proofs []MCPRepairProof
+}
+
+func (r *repairHookRuntime) ManagedLayout(context.Context, Options) (ManagedLayout, error) {
+	return ManagedLayout{}, nil
+}
+func (r *repairHookRuntime) ReinstallPending(context.Context, Options) (bool, error) {
+	return false, nil
+}
+func (r *repairHookRuntime) Reinstall(context.Context, Options) (Result, error) { return r.result, nil }
+func (r *repairHookRuntime) InstallProtected(context.Context, Options, SourceIdentity) (Result, error) {
+	return r.result, nil
+}
+func (r *repairHookRuntime) ReinstallProtected(context.Context, Options, SourceIdentity) (Result, error) {
+	return r.result, nil
+}
+func (r *repairHookRuntime) PreviewMCPRepair(_ context.Context, _ Options, proof MCPRepairProof) (Result, error) {
+	r.proofs = append(r.proofs, proof)
+	return r.result, nil
+}
+func (r *repairHookRuntime) RepairMCP(_ context.Context, _ Options, proof MCPRepairProof) (Result, error) {
+	r.proofs = append(r.proofs, proof)
+	return r.result, nil
+}
+
+type plainRepairRuntime struct {
+	hookRuntime
+	calls int
+}
+
+func (r *plainRepairRuntime) PreviewMCPRepair(context.Context, Options, MCPRepairProof) (Result, error) {
+	r.calls++
+	return r.result, nil
+}
+func (r *plainRepairRuntime) RepairMCP(context.Context, Options, MCPRepairProof) (Result, error) {
+	r.calls++
+	return r.result, nil
+}
+
+func TestObserveKeepsMCPRepairReachable(t *testing.T) {
+	base := &repairHookRuntime{hookRuntime: hookRuntime{result: Result{Provider: "opencode", State: StateInstalled}}}
+	observed := Observe(base, hooks.New())
+	if _, ok := observed.(ProtectedRuntime); !ok {
+		t.Fatal("observed runtime lost protected capability")
+	}
+	repair, ok := observed.(MCPRepairRuntime)
+	if !ok {
+		t.Fatal("observed runtime lost MCP repair capability")
+	}
+	proof := MCPRepairProof{OldExecutable: "/old/vgxness", ExpectedEntrySHA256: strings.Repeat("a", 64)}
+	if _, err := repair.PreviewMCPRepair(context.Background(), Options{}, proof); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repair.RepairMCP(context.Background(), Options{}, proof); err != nil {
+		t.Fatal(err)
+	}
+	if len(base.proofs) != 2 || base.proofs[0] != proof || base.proofs[1] != proof {
+		t.Fatalf("proofs=%+v", base.proofs)
+	}
+
+	plain := &plainRepairRuntime{}
+	observedPlain := Observe(plain, hooks.New())
+	if _, ok := observedPlain.(ManagedRuntime); ok {
+		t.Fatal("observed plain runtime gained managed capability")
+	}
+	plainRepair, ok := observedPlain.(MCPRepairRuntime)
+	if !ok {
+		t.Fatal("observed plain runtime lost MCP repair capability")
+	}
+	if _, err := plainRepair.RepairMCP(context.Background(), Options{}, MCPRepairProof{}); err != nil || plain.calls != 1 {
+		t.Fatalf("calls=%d err=%v", plain.calls, err)
+	}
+}

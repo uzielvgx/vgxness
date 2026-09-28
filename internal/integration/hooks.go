@@ -7,17 +7,57 @@ import (
 )
 
 // Observe adds best-effort lifecycle observation without changing runtime results.
+// Every optional capability of runtime remains reachable through the wrapper.
 func Observe(runtime Runtime, emitter hooks.Emitter) Runtime {
 	if emitter == nil || runtime == nil {
 		return runtime
 	}
+	repair, repairable := runtime.(MCPRepairRuntime)
 	if managed, ok := runtime.(ManagedRuntime); ok {
 		if protected, ok := managed.(ProtectedRuntime); ok {
-			return observedProtected{ProtectedRuntime: protected, emitter: emitter}
+			observed := observedProtected{ProtectedRuntime: protected, emitter: emitter}
+			if repairable {
+				return observedProtectedRepair{observed, mcpRepairForwarder{repair}}
+			}
+			return observed
 		}
-		return observedManaged{ManagedRuntime: managed, emitter: emitter}
+		observed := observedManaged{ManagedRuntime: managed, emitter: emitter}
+		if repairable {
+			return observedManagedRepair{observed, mcpRepairForwarder{repair}}
+		}
+		return observed
 	}
-	return observedRuntime{Runtime: runtime, emitter: emitter}
+	observed := observedRuntime{Runtime: runtime, emitter: emitter}
+	if repairable {
+		return observedRuntimeRepair{observed, mcpRepairForwarder{repair}}
+	}
+	return observed
+}
+
+// mcpRepairForwarder keeps the explicit MCP repair route reachable when a
+// runtime is wrapped for observation. Repair emits no lifecycle hook.
+type mcpRepairForwarder struct{ repair MCPRepairRuntime }
+
+func (f mcpRepairForwarder) PreviewMCPRepair(ctx context.Context, o Options, proof MCPRepairProof) (Result, error) {
+	return f.repair.PreviewMCPRepair(ctx, o, proof)
+}
+func (f mcpRepairForwarder) RepairMCP(ctx context.Context, o Options, proof MCPRepairProof) (Result, error) {
+	return f.repair.RepairMCP(ctx, o, proof)
+}
+
+type observedProtectedRepair struct {
+	observedProtected
+	mcpRepairForwarder
+}
+
+type observedManagedRepair struct {
+	observedManaged
+	mcpRepairForwarder
+}
+
+type observedRuntimeRepair struct {
+	observedRuntime
+	mcpRepairForwarder
 }
 
 type observedProtected struct {
