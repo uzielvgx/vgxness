@@ -1140,3 +1140,30 @@ func writeSource(t *testing.T, root, name, content string) string {
 	}
 	return path
 }
+
+func TestLifecycleLeavesNoManifestBackupsOrRecoveryArchives(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	first := New(Config{SourceExecutable: writeSource(t, root, "source-v1", "vgxness-v1")})
+	second := New(Config{SourceExecutable: writeSource(t, root, "source-v2", "vgxness-v2")})
+	for _, step := range []struct {
+		name string
+		run  func() (Result, error)
+	}{
+		{"install", func() (Result, error) { return first.Install(context.Background(), options) }},
+		{"update", func() (Result, error) { return second.Install(context.Background(), options) }},
+		{"reinstall", func() (Result, error) { return second.Install(context.Background(), options) }},
+		{"rollback", func() (Result, error) { return second.Rollback(context.Background(), options) }},
+		{"update again", func() (Result, error) { return second.Install(context.Background(), options) }},
+	} {
+		if _, err := step.run(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if backups := backupNames(t, options.BinDir); len(backups) != 0 {
+			t.Fatalf("%s left manifest backups on PATH: %v", step.name, backups)
+		}
+		if archives := recoveryArchiveNames(t, options.DataDir); len(archives) != 0 {
+			t.Fatalf("%s left recovery archives: %v", step.name, archives)
+		}
+	}
+}

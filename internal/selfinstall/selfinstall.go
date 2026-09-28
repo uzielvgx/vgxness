@@ -266,7 +266,7 @@ func (service *Service) Install(ctx context.Context, options Options) (Result, e
 		return Result{}, err
 	}
 	defer lock.release()
-	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks()); err != nil {
+	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks(), false); err != nil {
 		return result, err
 	}
 	current := initial
@@ -355,7 +355,7 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	}
 	defer lock.release()
 	current := initial
-	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks()); err != nil {
+	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks(), false); err != nil {
 		return result, err
 	}
 	if !anchorsStillNamed(anchors, initial.paths) {
@@ -1033,11 +1033,15 @@ func (service *Service) finishManifestPublishRoot(ctx context.Context, anchors i
 	if err := syncRoot(anchors.bin); err != nil {
 		return fmt.Errorf("%w: manifest published; sync failed: %v", ErrRecovery, err)
 	}
-	_, err := recoverManifestRoot(anchors, target, service.recoveryHooks())
+	_, err := recoverManifestRoot(anchors, target, service.recoveryHooks(), true)
 	return err
 }
 
-func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHooks) (Result, error) {
+// recoverManifestRoot completes or verifies a journaled manifest publication.
+// completedInProcess is true only when the publishing call itself finishes the
+// journal; then the verified predecessor and archived journal are removed.
+// Recovery of an interrupted publication keeps both as evidence.
+func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHooks, completedInProcess bool) (Result, error) {
 	data, journalInfo, err := readStableRegularRootWithExpected(anchors.data, ".manifest-recovery.json", 256<<10, nil, hooks.afterReadSample)
 	if errors.Is(err, os.ErrNotExist) {
 		return Result{}, nil
@@ -1138,6 +1142,17 @@ func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHoo
 		if backupErr == nil && !bytes.Equal(previous, recovery.Expected) || backupErr != nil && !errors.Is(backupErr, os.ErrNotExist) {
 			return result, errors.Join(ErrRecovery, ErrConflict)
 		}
+		if backupErr == nil && completedInProcess {
+			// The predecessor is verified and superseded. Recovery tolerates a
+			// missing backup, so removing it before archiving the journal is
+			// safe; otherwise every update leaves a file on the user's PATH.
+			if err := anchors.bin.Remove(backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return result, fmt.Errorf("%w: remove verified manifest predecessor: %v", ErrRecovery, err)
+			}
+			if err := syncRoot(anchors.bin); err != nil {
+				return result, fmt.Errorf("%w: sync manifest predecessor removal: %v", ErrRecovery, err)
+			}
+		}
 	}
 	if err := publishRootDirectoryNoReplace(anchors.data, ".manifest-recovery.json", archive); err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -1169,6 +1184,12 @@ func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHoo
 		if err := hooks.afterArchive(); err != nil {
 			return result, fmt.Errorf("%w: recovery evidence archived: %v", ErrRecovery, err)
 		}
+	}
+	// The archived journal is verified and no longer needed for recovery.
+	// Failing to remove it only leaves a stale file behind, so the completed
+	// publication is still reported as successful.
+	if completedInProcess {
+		_ = anchors.data.Remove(archive)
 	}
 	return Result{}, nil
 }
