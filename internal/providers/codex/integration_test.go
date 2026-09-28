@@ -1043,3 +1043,27 @@ func require(t *testing.T, ok bool) {
 		t.Fatal("requirement failed")
 	}
 }
+
+func TestReinstallCancelledAfterRemovingPreviousRestoresIt(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "codex")
+	service := NewIntegration()
+	mustInstall(t, service, integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanMedium})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service.checkpoint = func(point, _ string) error {
+		if point == "previous-removed" {
+			cancel() // The previous package is gone; the replacement has not started.
+		}
+		return nil
+	}
+	_, err := service.Reinstall(ctx, integration.Options{ConfigDir: root, ModelPlan: modelplan.PlanUltra})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("reinstall error=%v, want cancellation", err)
+	}
+	service.checkpoint = nil
+	status, err := service.Status(context.Background(), integration.Options{ConfigDir: root})
+	if err != nil || status.State != integration.StateInstalled || status.ModelPlan != modelplan.PlanMedium {
+		t.Fatalf("previous package was not restored: status=%+v err=%v", status, err)
+	}
+}
