@@ -47,15 +47,17 @@ func TestCAREDocumentationContract(t *testing.T) {
 	}
 
 	themes := map[string][]string{
-		"docs/care.md":                  {"Manager62", "Manager21", "exact frozen candidate", "care-reviewer", "care-specialist", "care-challenger", "PASS, FAIL, or INCONCLUSIVE", "independent verification and applicable review", "no current fixed-lens aliases"},
-		"docs/care-evaluation.md":       {"Direct covers no-tool conversation, writing, and planning", "Assisted covers bounded exact reads and evidence work", "authorized actions", "ordinary engineering", "assured high-risk work", "positive routing", "negative non-activation", "ambiguous requests", "adversarial", "coexistence", "critical cases"},
-		"docs/orchestration-flow.md":    {"Avoid duplicate missions and a fixed reviewer-count matrix."},
-		"docs/opencode-integration.md":  {"12 managed artifacts", "seven agents", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "installation receipt", "same frozen candidate", "repair-mcp-preview", "--expected-mcp-sha256"},
-		"docs/codex-integration.md":     {"six delegated profiles", "Manager v21", "OpenCode v62", "care-reviewer", "care-specialist", "care-challenger", "same frozen candidate"},
-		"docs/opencode-setup-wizard.md": {"12 provider artifacts", "seven agents", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "installation receipt", "same frozen candidate"},
-		"docs/go-implementation.md":     {"12 managed artifacts", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "Manager21", "installation receipt", "Receipt-backed prior installations", "six delegated profiles", "not a Go provider runtime or a new schema/transport surface"},
-		"docs/self-install.md":          {"exact receipt-backed local files"},
-		"docs/legacy-compatibility.md":  {"no current fixed-lens aliases"},
+		"docs/care.md":                                 {"Manager62", "Manager21", "exact frozen candidate", "care-reviewer", "care-specialist", "care-challenger", "PASS, FAIL, or INCONCLUSIVE", "independent verification and applicable review", "no current fixed-lens aliases"},
+		"docs/care-evaluation.md":                      {"Direct covers no-tool conversation, writing, and planning", "Assisted covers bounded exact reads and evidence work", "authorized actions", "ordinary engineering", "assured high-risk work", "positive routing", "negative non-activation", "ambiguous requests", "adversarial", "coexistence", "critical cases"},
+		"docs/orchestration-flow.md":                   {"Avoid duplicate missions and a fixed reviewer-count matrix.", "keep at most one active plan per session (zero when there is no work)"},
+		"docs/architecture/shared-manager-contract.md": {"keep at most one active plan per session (zero when there is no work)", "No runtime synchronizer or atomic cross-tool state is promised"},
+		"docs/implementations/README.md":               {"stable identifier allocated once and never reused", "At most one plan is active per session; zero are active"},
+		"docs/opencode-integration.md":                 {"12 managed artifacts", "seven agents", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "installation receipt", "same frozen candidate", "repair-mcp-preview", "--expected-mcp-sha256"},
+		"docs/codex-integration.md":                    {"six delegated profiles", "Manager v21", "OpenCode v62", "care-reviewer", "care-specialist", "care-challenger", "same frozen candidate"},
+		"docs/opencode-setup-wizard.md":                {"12 provider artifacts", "seven agents", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "installation receipt", "same frozen candidate"},
+		"docs/go-implementation.md":                    {"12 managed artifacts", "plugins/vgxness-memory-lifecycle.ts", "no `opencode.json` plugin entry", "Manager62", "Manager21", "installation receipt", "Receipt-backed prior installations", "six delegated profiles", "not a Go provider runtime or a new schema/transport surface"},
+		"docs/self-install.md":                         {"exact receipt-backed local files"},
+		"docs/legacy-compatibility.md":                 {"no current fixed-lens aliases"},
 	}
 	for doc, phrases := range themes {
 		body, err := os.ReadFile(filepath.Join(root, doc))

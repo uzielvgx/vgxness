@@ -47,7 +47,17 @@ func TestManagerContractUsesAdaptiveFlowAndTDDPolicy(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"Choose the lightest sufficient flow based on affected behavior, uncertainty, blast radius, reversibility, and risk—not diff size.",
-		"Delegate all project code exploration to the explore role: reading files, searching, listing, and read-only diagnosis of repository content, with no simple exception.",
+		"Classify the request as a direct question, a routine operational job, a bounded project read, implementation, or a higher-risk change before acting.",
+		"perform the necessary bounded inspection and execution yourself",
+		"use available native inspection tools",
+		"A trivial routine task does not require explore delegation, a subagent, a formal Markdown plan or task list, a skill load, or CARE",
+		"Choose delegation to the explore role when the scope is broad or multi-symbol",
+		"delegation is a choice, never a permission elevation",
+		"the explore role stays read-only for a bounded mission carrying an explicit child nonce and testable criteria",
+		"never infer production or reset authorization from a development-scoped request",
+		"including through Python or another interpreter",
+		"Inspect the exact evidence returned by explore, workers, or your own bounded direct inspection before deciding",
+		"do not duplicate already-completed work or substitute a summary for exact source and command output",
 		"You retain a narrow, explicit authority for operational inspection that explore cannot perform because it has no shell",
 		"local Git queries (status, diff, log, refs, tracking, conflicts)",
 		"reading only the active host configuration binding required for registry and launcher bootstrap",
@@ -77,6 +87,11 @@ func TestManagerContractUsesAdaptiveFlowAndTDDPolicy(t *testing.T) {
 	for _, forbidden := range []string{
 		"including status checks, reviews, and read-only diagnosis; no simple exception",
 		"do not browse the project yourself",
+		"Delegate all project code exploration",
+		"with no simple exception",
+		"does not browse project itself",
+		"a formal Markdown plan for every task",
+		"delegation elevates permission",
 	} {
 		if strings.Contains(c.Manager.Instructions, forbidden) {
 			t.Fatalf("manager policy retains the over-broad exploration block %q", forbidden)
@@ -101,5 +116,62 @@ func TestManagerContractUsesAdaptiveFlowAndTDDPolicy(t *testing.T) {
 	}
 	if strings.Contains(general.Instructions, "report changed paths, RED/GREEN evidence") {
 		t.Fatal("general policy requires obsolete RED/GREEN reporting")
+	}
+}
+
+func TestManagerEmbedsImplementationPlanRecordSchema(t *testing.T) {
+	c, err := LoadManagerContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"# Implementation plan records",
+		"Create docs/implementations/README.md as the index",
+		"unique, stable <ID-slug> that is never reused",
+		"objective; scope and exclusions; decisions and assumptions",
+		"acceptance criteria with stable AC identifiers",
+		"tasks with a stable ID, state, AC link, dependencies, and the required evidence for completion",
+		"Task states are pending, in_progress, blocked, done, cancelled",
+		"Plan states are pending, active, paused, closed, cancelled",
+		"exactly one plan is active while executing, at most one is active otherwise",
+		"zero are active after closure or with no work",
+		"progress.md records decisions, blockers, and the single next action, and must not duplicate the task table",
+		"validation.md records the exact candidate, each check with result and limits, and the verifier and CARE status",
+		"may use one proportional file instead of the full set",
+		"sufficient on their own: a new project needs only the workspace, not any repository documentation",
+	} {
+		if !strings.Contains(c.Manager.Instructions, fragment) {
+			t.Errorf("manager instructions lack embedded plan-record schema %q", fragment)
+		}
+	}
+}
+
+func TestManagerPlanningResolvesBlockingDecisions(t *testing.T) {
+	c, err := LoadManagerContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"a simple, low-risk, bounded task needs no plan or task list",
+		"a trivial operational job must not be forced into one",
+		"consult the registry index when starting or resuming",
+		"must reflect plan and task identifiers, never authority",
+		"Ask consequential blocking decisions before closing the plan or implementing any part that depends on them",
+		"continue only with independent authorized work",
+		"record minor reversible defaults explicitly rather than treating a blocking decision as an assumption",
+		"Distinguish extending the current plan from opening a new feature plan, do not carry authorization across plans",
+		"separate necessary work from an out-of-scope improvement",
+	} {
+		if !strings.Contains(c.Manager.Instructions, fragment) {
+			t.Errorf("manager planning policy lacks %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{
+		"do not block authorized work on a pending decision",
+		"record an explicit assumption and continue",
+	} {
+		if strings.Contains(c.Manager.Instructions, forbidden) {
+			t.Fatalf("manager planning policy retains the unsafe assumption clause %q", forbidden)
+		}
 	}
 }

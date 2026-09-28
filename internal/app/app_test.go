@@ -634,3 +634,13 @@ func TestTUIBackendCatalogMapsNeutralRowsAndRefreshFlag(t *testing.T) {
 	rows, err = backend.ModelCatalog(context.Background(), setupflow.ProviderOpenCode, true)
 	testutil.Require(t, err == nil && catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 1 && rows[0].Reference == "acme/a:b@c+d", "refreshed rows=%+v err=%v", rows, err)
 }
+
+func TestObservedOpenCodeRuntimeKeepsMCPRepairRoute(t *testing.T) {
+	observed := integration.Observe(opencode.NewIntegration(), hooks.New())
+	if _, ok := observed.(integration.MCPRepairRuntime); !ok {
+		t.Fatal("observed OpenCode runtime must keep the repair-mcp route reachable")
+	}
+	if _, ok := observed.(integration.ManagedRuntime); !ok {
+		t.Fatal("observed OpenCode runtime must keep managed reinstall reachable")
+	}
+}

@@ -78,6 +78,8 @@ After install or repair, restart Codex so it reloads the managed profiles. On Wi
 
 An opt-in, networked manager collaborative-route matrix is excluded from normal CI. It uses the existing authenticated Codex configuration, `--ephemeral`, `approval_policy="never"`, and a disposable fixture containing the candidate-rendered `AGENTS.md`; it does not install or edit managed configuration, though Codex may use its normal authentication and runtime state. Before any model call it byte-verifies the six ambient `~/.codex/agents` profiles against candidate-rendered artifacts. The matrix covers Explore, General's one owned fixture write, Verifier, and the three CARE roles. The public Codex JSON stream proves a collaboration tool call, not its selected `agent_type`; exact role selection and sandboxes for all six profiles are static generated-artifact evidence. Runtime checks the collaboration event, absence (case-insensitively) of `full-history forked agents inherit` and `omit agent_type`, a deterministic role marker, and fixture boundaries.
 
+For substantial work the Manager keeps the canonical Markdown plan under `docs/implementations/` and projects it into a native planning or task-tracking tool only when the host exposes one; no tool name is assumed. The persisted plan stays authoritative, and no runtime synchronizer or atomic cross-tool state is promised. A task completes only with its required evidence, and a source change invalidates prior acceptance evidence.
+
 ```sh
 VGXNESS_CODEX_E2E=1 go test -tags='e2e codex_e2e' -run '^TestCodexDelegationRuntime$' ./internal/e2e
 ```

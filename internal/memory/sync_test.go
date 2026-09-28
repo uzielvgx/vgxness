@@ -5152,3 +5152,29 @@ func TestDeviceIdentityRejectionKeepsMutationForRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestClaimDueSyncOutboxReleasesConnectionOnCorruptEntry(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	_, err := store.Save(context.Background(), Observation{Project: "project", Scope: ScopeProject, Type: "learning", Content: "corrupt", State: StateActive, Provenance: Provenance{Producer: "test"}})
+	testutil.NoError(t, err)
+	_, err = store.BackfillSyncProject(context.Background(), "project", 100)
+	testutil.NoError(t, err)
+	_, err = store.db.Exec(`UPDATE sync_outbox SET payload='{}'`)
+	testutil.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		_, claimErr := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+		done <- claimErr
+	}()
+	select {
+	case err = <-done:
+		testutil.Require(t, errors.Is(err, ErrCorrupt), "claim error=%v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("claim blocked on a corrupt outbox entry")
+	}
+	var outbox int
+	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
+	testutil.Require(t, outbox > 0, "outbox=%d", outbox)
+}
