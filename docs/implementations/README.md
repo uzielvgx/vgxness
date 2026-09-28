@@ -92,7 +92,24 @@ file is self-reported by the writer and is not independent evidence.
 | --- | --- | --- | --- | --- | --- |
 | IMP-001 | Persistent Markdown implementation plans tied to native session tracking | closed | [plan.md](IMP-001-persistent-plans/plan.md) | [progress.md](IMP-001-persistent-plans/progress.md) | [validation.md](IMP-001-persistent-plans/validation.md) |
 | IMP-002 | Plan activation cardinality correction and isolated tests | closed | [plan.md](IMP-002-plan-activation-tests/plan.md) | [progress.md](IMP-002-plan-activation-tests/progress.md) | [validation.md](IMP-002-plan-activation-tests/validation.md) |
+| IMP-003 | VGXNESS Pi integration update (offline candidate from exact source) | closed | [plan.md](IMP-003-pi-integration-update/plan.md) | [progress.md](IMP-003-pi-integration-update/progress.md) | [validation.md](IMP-003-pi-integration-update/validation.md) |
+| IMP-004 | Child→parent progress communication (Pi-native background-first POC gate) | cancelled | [plan.md](IMP-004-child-parent-progress/plan.md) | [progress.md](IMP-004-child-parent-progress/progress.md) | [validation.md](IMP-004-child-parent-progress/validation.md) |
+| IMP-005 | Manager adaptive direct work (bounded self-inspection exception) | closed | [plan.md](IMP-005-adaptive-direct-work/plan.md) | [progress.md](IMP-005-adaptive-direct-work/progress.md) | [validation.md](IMP-005-adaptive-direct-work/validation.md) |
 
-Active plan: **none**. IMP-001 and IMP-002 are closed history; IMP-002 addressed
-IMP-001's optional F-3 wording improvement, and no new plan is created
-automatically.
+Active plan: **none**. IMP-001 and IMP-002 are closed history. IMP-003 is
+**closed** and its installed Pi Markdown/TODO integration is preserved. **IMP-004
+is `cancelled`** at the user's explicit request (discard-only scope): the
+child→parent progress objective is abandoned, **no IMP-004 feature is installed
+or accepted**, and its plan/progress/validation/research files remain as
+archival history.
+
+**IMP-005** is **`closed`** locally: T01–T08 are recorded in its
+`plan.md`/`progress.md`/`validation.md`, with independent verification (nonce
+`imp005-verify-d`) and CARE (nonce `imp005-care-e`) on the accepted source
+candidate and correction rechecks (`imp005-verify-correction-g`,
+`imp005-care-correction-h`). Local document closure is **not** delivery or
+installation; the writer performed no install, Git delivery, or memory action.
+The running agent still serves the previously installed prompt contract
+(`a890…76ce`), and no runtime change is promised. No next action is required for
+the local slice; install is optional and only with future explicit
+authorization.
