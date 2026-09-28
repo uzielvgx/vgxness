@@ -23,6 +23,7 @@ type fakeInstaller struct {
 	statusErr      error
 	rollbackErr    error
 	rollbackCtxErr error
+	revert         selfinstall.UpdateRevert
 	calls          []string
 	orderedEvents  *[]string
 }
@@ -49,6 +50,10 @@ func (fake *fakeInstaller) Rollback(ctx context.Context, _ selfinstall.Options) 
 	fake.calls = append(fake.calls, "self-rollback")
 	fake.rollbackCtxErr = ctx.Err()
 	return fake.rollbackResult, fake.rollbackErr
+}
+func (fake *fakeInstaller) RevertUpdate(ctx context.Context, options selfinstall.Options, revert selfinstall.UpdateRevert) (selfinstall.Result, error) {
+	fake.revert = revert
+	return fake.Rollback(ctx, options)
 }
 func (*fakeInstaller) GCPreview(context.Context, selfinstall.Options) (selfinstall.GCResult, error) {
 	return selfinstall.GCResult{}, errors.New("unexpected self GC preview")
@@ -949,6 +954,39 @@ func TestApplyRollsBackManagedUpdateWhenIntegrationFails(t *testing.T) {
 	result, err := applyConfirmed(t, service, Options{Workspace: "/workspace"})
 	if !errors.Is(err, integration.ErrConflict) || result.SelfInstall.ActiveSHA256 != oldDigest || result.Plan.SelfInstall.ActiveSHA256 != oldDigest || !strings.Contains(result.Recovery, "revirtió") || !strings.Contains(strings.Join(installer.calls, ","), "self-rollback") {
 		t.Fatalf("result=%#v err=%v calls=%v", result, err, installer.calls)
+	}
+}
+
+func TestApplyRevertKeepsRollbackTargetFromBeforeUpdate(t *testing.T) {
+	olderDigest, oldDigest, newDigest := strings.Repeat("c", 64), strings.Repeat("a", 64), strings.Repeat("b", 64)
+	installer := &fakeInstaller{
+		previewResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: oldDigest, PreviousSHA256: olderDigest, RollbackAvailable: true, UpdateAvailable: true},
+		installResult:  selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: newDigest, PreviousSHA256: oldDigest, RollbackAvailable: true, Changed: true},
+		rollbackResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: oldDigest, PreviousSHA256: olderDigest, RollbackAvailable: true, Changed: true},
+	}
+	managed := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, installErr: integration.ErrConflict}
+	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	if _, err := applyConfirmed(t, service, Options{Workspace: "/workspace"}); !errors.Is(err, integration.ErrConflict) {
+		t.Fatalf("err=%v", err)
+	}
+	want := selfinstall.UpdateRevert{Active: newDigest, Previous: oldDigest, RestorePrevious: olderDigest}
+	if installer.revert != want {
+		t.Fatalf("revert=%+v, want %+v", installer.revert, want)
+	}
+}
+
+func TestApplyReportsRevertFailureCause(t *testing.T) {
+	oldDigest, newDigest := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	installer := &fakeInstaller{
+		previewResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: oldDigest, UpdateAvailable: true},
+		installResult: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/stable/vgxness", ActiveSHA256: newDigest, PreviousSHA256: oldDigest, RollbackAvailable: true, Changed: true},
+		rollbackErr:   selfinstall.ErrConflict,
+	}
+	managed := &fakeIntegration{previewResult: integration.Result{State: integration.StateAbsent}, installErr: integration.ErrConflict}
+	service := New(installer, &fakeIntegration{}, func(string) (integration.Runtime, error) { return managed, nil }, &fakeProber{result: integration.Handshake{OK: true, Status: integration.HandshakeHealthy}})
+	result, _ := applyConfirmed(t, service, Options{Workspace: "/workspace"})
+	if !strings.Contains(result.Recovery, selfinstall.ErrConflict.Error()) {
+		t.Fatalf("recovery message lost the revert cause: %q", result.Recovery)
 	}
 }
 

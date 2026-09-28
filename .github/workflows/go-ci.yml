@@ -212,6 +212,8 @@ jobs:
         run: go mod download
       - name: Hermetic clean-checkout E2E
         run: go test -tags=e2e -count=1 -run '^TestCleanCheckoutSetupAndMemory$' ./internal/e2e
+      - name: Docker backup script recovers from interrupted runs
+        run: go test -tags=e2e -count=1 -run '^TestDockerBackupRecoversFromInterruptedRuns$' ./internal/e2e
 
   fuzz-launcher-manifest:
     runs-on: ubuntu-24.04

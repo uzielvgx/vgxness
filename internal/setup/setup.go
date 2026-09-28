@@ -621,9 +621,12 @@ func (service *Service) recoverBinary(ctx context.Context, options Options, plan
 	}
 	recoveryContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	rolledBack, err := service.installer.Rollback(recoveryContext, options.SelfInstall)
+	// Undo exactly this update: restore the replaced version and keep the
+	// rollback target it had, so self gc cannot delete that version.
+	revert := selfinstall.UpdateRevert{Active: installed.ActiveSHA256, Previous: installed.PreviousSHA256, RestorePrevious: plan.SelfInstall.PreviousSHA256}
+	rolledBack, err := service.installer.RevertUpdate(recoveryContext, options.SelfInstall, revert)
 	if err != nil {
-		result.Recovery = "No fue posible restaurar la versión anterior automáticamente. Ejecuta `vgxness self status` antes de reintentar."
+		result.Recovery = fmt.Sprintf("No fue posible restaurar la versión anterior automáticamente (%v). Ejecuta `vgxness self status` antes de reintentar.", err)
 		return
 	}
 	result.SelfInstall = rolledBack

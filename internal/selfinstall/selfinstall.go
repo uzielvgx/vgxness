@@ -64,6 +64,7 @@ type Runtime interface {
 	Install(context.Context, Options) (Result, error)
 	Status(context.Context, Options) (Result, error)
 	Rollback(context.Context, Options) (Result, error)
+	RevertUpdate(context.Context, Options, UpdateRevert) (Result, error)
 	GCPreview(context.Context, Options) (GCResult, error)
 	GCApply(context.Context, Options, string) (GCResult, error)
 	GCRecover(context.Context, Options) (GCResult, error)
@@ -266,7 +267,7 @@ func (service *Service) Install(ctx context.Context, options Options) (Result, e
 		return Result{}, err
 	}
 	defer lock.release()
-	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks()); err != nil {
+	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks(), false); err != nil {
 		return result, err
 	}
 	current := initial
@@ -329,7 +330,30 @@ func (service *Service) Install(ctx context.Context, options Options) (Result, e
 	return result, nil
 }
 
+// UpdateRevert undoes one update exactly: it applies only while the manifest
+// still records Active with Previous as its predecessor, and restores Previous
+// as active with RestorePrevious as its predecessor again.
+type UpdateRevert struct {
+	Active          string
+	Previous        string
+	RestorePrevious string
+}
+
 func (service *Service) Rollback(ctx context.Context, options Options) (Result, error) {
+	return service.rollback(ctx, options, nil)
+}
+
+// RevertUpdate undoes an update made by the caller, keeping the rollback
+// target that existed before it. Rollback would clear that target and let
+// self gc delete the version the user could previously roll back to.
+func (service *Service) RevertUpdate(ctx context.Context, options Options, revert UpdateRevert) (Result, error) {
+	if !validDigest(revert.Active) || !validDigest(revert.Previous) || revert.RestorePrevious != "" && !validDigest(revert.RestorePrevious) {
+		return Result{}, ErrInvalid
+	}
+	return service.rollback(ctx, options, &revert)
+}
+
+func (service *Service) rollback(ctx context.Context, options Options, revert *UpdateRevert) (Result, error) {
 	initial, err := service.inspect(ctx, options)
 	if err != nil {
 		return Result{}, err
@@ -339,6 +363,9 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	}
 	if initial.result.State != StateInstalled || initial.result.PreviousSHA256 == "" {
 		return Result{}, ErrNoRollback
+	}
+	if revert != nil && !revert.matches(initial.result) {
+		return Result{}, ErrConflict
 	}
 	anchors, err := openAnchors(initial.paths)
 	if err != nil {
@@ -355,7 +382,7 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	}
 	defer lock.release()
 	current := initial
-	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks()); err != nil {
+	if result, err := recoverManifestRoot(anchors, initial.paths, service.recoveryHooks(), false); err != nil {
 		return result, err
 	}
 	if !anchorsStillNamed(anchors, initial.paths) {
@@ -371,6 +398,17 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	if current.result.State != StateInstalled || current.result.PreviousSHA256 == "" {
 		return Result{}, ErrNoRollback
 	}
+	if revert != nil && !revert.matches(current.result) {
+		return Result{}, ErrConflict
+	}
+	restorePrevious := ""
+	if revert != nil && revert.RestorePrevious != "" {
+		// Keep the earlier rollback target only while its version is intact.
+		digest, err := fileSHA256Root(anchors.data, filepath.Join("versions", revert.RestorePrevious, executableName()))
+		if err == nil && digest == revert.RestorePrevious {
+			restorePrevious = revert.RestorePrevious
+		}
+	}
 	previousPath := launcher.VersionPath(current.paths.dataDir, current.result.PreviousSHA256)
 	previousDigest, err := fileSHA256Root(anchors.data, filepath.Join("versions", current.result.PreviousSHA256, executableName()))
 	if err != nil || previousDigest != current.result.PreviousSHA256 {
@@ -379,7 +417,7 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	manifest := current.manifest
 	manifest.ActivePath = previousPath
 	manifest.ActiveSHA256 = previousDigest
-	manifest.PreviousSHA256 = ""
+	manifest.PreviousSHA256 = restorePrevious
 	manifest.UpdatedAt = service.now().UTC().Format(time.RFC3339Nano)
 	if !anchorsStillNamed(anchors, current.paths) {
 		return Result{}, ErrDrift
@@ -388,12 +426,16 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 		return recoveryResult(current.result, err)
 	}
 	result := current.result
-	result.ActiveSHA256, result.PreviousSHA256, result.RollbackAvailable, result.UpdateAvailable, result.Changed = previousDigest, "", false, false, true
+	result.ActiveSHA256, result.PreviousSHA256, result.RollbackAvailable, result.UpdateAvailable, result.Changed = previousDigest, restorePrevious, restorePrevious != "", false, true
 	if !anchorsStillNamed(anchors, current.paths) {
 		result.State = StateDrifted
 		return result, ErrDrift
 	}
 	return result, nil
+}
+
+func (revert UpdateRevert) matches(current Result) bool {
+	return current.ActiveSHA256 == revert.Active && current.PreviousSHA256 == revert.Previous
 }
 
 func (service *Service) inspect(ctx context.Context, options Options) (inspection, error) {
@@ -1033,11 +1075,15 @@ func (service *Service) finishManifestPublishRoot(ctx context.Context, anchors i
 	if err := syncRoot(anchors.bin); err != nil {
 		return fmt.Errorf("%w: manifest published; sync failed: %v", ErrRecovery, err)
 	}
-	_, err := recoverManifestRoot(anchors, target, service.recoveryHooks())
+	_, err := recoverManifestRoot(anchors, target, service.recoveryHooks(), true)
 	return err
 }
 
-func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHooks) (Result, error) {
+// recoverManifestRoot completes or verifies a journaled manifest publication.
+// completedInProcess is true only when the publishing call itself finishes the
+// journal; then the verified predecessor and archived journal are removed.
+// Recovery of an interrupted publication keeps both as evidence.
+func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHooks, completedInProcess bool) (Result, error) {
 	data, journalInfo, err := readStableRegularRootWithExpected(anchors.data, ".manifest-recovery.json", 256<<10, nil, hooks.afterReadSample)
 	if errors.Is(err, os.ErrNotExist) {
 		return Result{}, nil
@@ -1138,6 +1184,17 @@ func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHoo
 		if backupErr == nil && !bytes.Equal(previous, recovery.Expected) || backupErr != nil && !errors.Is(backupErr, os.ErrNotExist) {
 			return result, errors.Join(ErrRecovery, ErrConflict)
 		}
+		if backupErr == nil && completedInProcess {
+			// The predecessor is verified and superseded. Recovery tolerates a
+			// missing backup, so removing it before archiving the journal is
+			// safe; otherwise every update leaves a file on the user's PATH.
+			if err := anchors.bin.Remove(backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return result, fmt.Errorf("%w: remove verified manifest predecessor: %v", ErrRecovery, err)
+			}
+			if err := syncRoot(anchors.bin); err != nil {
+				return result, fmt.Errorf("%w: sync manifest predecessor removal: %v", ErrRecovery, err)
+			}
+		}
 	}
 	if err := publishRootDirectoryNoReplace(anchors.data, ".manifest-recovery.json", archive); err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -1170,6 +1227,12 @@ func recoverManifestRoot(anchors installAnchors, target paths, hooks recoveryHoo
 			return result, fmt.Errorf("%w: recovery evidence archived: %v", ErrRecovery, err)
 		}
 	}
+	// The archived journal is verified and no longer needed for recovery.
+	// Failing to remove it only leaves a stale file behind, so the completed
+	// publication is still reported as successful.
+	if completedInProcess {
+		_ = anchors.data.Remove(archive)
+	}
 	return Result{}, nil
 }
 
@@ -1180,5 +1243,15 @@ func validRecoveryBackup(name string) bool {
 		return false
 	}
 	_, err := hex.DecodeString(suffix)
+	return err == nil
+}
+
+// validDigest accepts only lowercase SHA-256 hex, the form used for version
+// directory names.
+func validDigest(value string) bool {
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
 	return err == nil
 }

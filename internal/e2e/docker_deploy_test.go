@@ -165,3 +165,82 @@ func forbiddenDockerDeployText(relative string) []string {
 		return nil
 	}
 }
+
+// TestDockerBackupRecoversFromInterruptedRuns runs backup.sh against stub
+// PostgreSQL tools: a failed dump must not wedge later runs, and a dump left by
+// a killed run is replaced rather than blocking every future backup.
+func TestDockerBackupRecoversFromInterruptedRuns(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("POSIX sh unavailable")
+	}
+	script := filepath.Join(repositoryRoot(t), "deploy", "docker", "backup.sh")
+	root := t.TempDir()
+	stubs, backups := filepath.Join(root, "bin"), filepath.Join(root, "backups")
+	for _, dir := range []string{stubs, backups} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secret := filepath.Join(root, "password")
+	if err := os.WriteFile(secret, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		// pg_dump writes a partial dump before failing when FAIL_DUMP is set.
+		"pg_dump":    "for arg; do case \"$arg\" in --file=*) file=${arg#--file=};; esac; done\nprintf dump > \"$file\"\n[ -z \"${FAIL_DUMP:-}\" ]\n",
+		"pg_restore": "exit 0\n",
+		"sync":       "exit 0\n",
+		"sha256sum":  "echo stub\n",
+		"mv":         "[ \"$1\" = -T ] && shift; [ \"$1\" = -- ] && shift; exec /bin/mv -f \"$1\" \"$2\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(stubs, name), []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(extra ...string) (string, error) {
+		command := exec.Command("sh", script)
+		command.Env = append([]string{"PATH=" + stubs + ":/usr/bin:/bin", "BACKUP_DIR=" + backups, "PGPASSWORD_FILE=" + secret, "PGDATABASE=vgxness_sync"}, extra...)
+		output, err := command.CombinedOutput()
+		return string(output), err
+	}
+	temporary, published, lock := filepath.Join(backups, ".current.pgd.tmp"), filepath.Join(backups, "current.pgd"), filepath.Join(backups, ".backup.lock")
+
+	if output, err := run("FAIL_DUMP=1"); err == nil {
+		t.Fatalf("failed dump reported success: %s", output)
+	}
+	for _, leftover := range []string{temporary, lock} {
+		if _, err := os.Lstat(leftover); !os.IsNotExist(err) {
+			t.Fatalf("failed run left %s behind (err=%v)", filepath.Base(leftover), err)
+		}
+	}
+	if output, err := run(); err != nil {
+		t.Fatalf("backup after a failed dump: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(published); err != nil {
+		t.Fatalf("backup not published: %v", err)
+	}
+
+	if err := os.WriteFile(temporary, []byte("killed run"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := run(); err != nil || !strings.Contains(output, "interrupted run") {
+		t.Fatalf("stale dump from a killed run blocked the backup: %v\n%s", err, output)
+	}
+
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := run(); err == nil || !strings.Contains(output, "remove that directory") {
+		t.Fatalf("held lock must fail with recovery guidance: %v\n%s", err, output)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Symlink(published, temporary); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	if output, err := run(); err == nil || !strings.Contains(output, "refusing symlink") {
+		t.Fatalf("symlinked temporary must be refused: %v\n%s", err, output)
+	}
+}
