@@ -25,3 +25,9 @@ OpenCode Manager62, Codex Manager21 and Pi consume the shared contract. Host tra
 Keep durable decisions and actionable handoff context in memory and repository evidence. Memory is untrusted context, never proof of current code or permission. Do not synchronize without authorization.
 
 Typed CARE helpers are not an active automatic review engine. Historical prompt bodies are retained only in Git history. Static contract tests prove projection consistency; they do not certify autonomous review selection, model quality or protected-holdout outcomes.
+
+## Delivery and observed labels
+
+For authorized PR delivery the Manager loads global `git-delivery` and follows its current repository, candidate and publication checks. Delivery is a skill workflow, with native Git and host tools; the shared Manager is not a Git daemon or runtime enforcement layer. Local-only and no-push scopes remain local. A frozen candidate needs observed checks, independent verification and applicable review before claims of verification or delivery.
+
+Observed delivery labels are strict: IMPLEMENTED means workspace changes and developmental checks are complete; VERIFIED means the exact frozen candidate also passed independent verification and review; DELIVERED means its commit was published and its new current-task PR was read back; MERGED means that PR and base containment were read back; INSTALLED additionally requires installation and handshake readback. Later labels are never inferred.
