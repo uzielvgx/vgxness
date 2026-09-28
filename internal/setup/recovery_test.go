@@ -388,6 +388,9 @@ func (f *recoveryInstaller) Status(context.Context, selfinstall.Options) (selfin
 func (f *recoveryInstaller) Rollback(context.Context, selfinstall.Options) (selfinstall.Result, error) {
 	return f.status, nil
 }
+func (f *recoveryInstaller) RevertUpdate(context.Context, selfinstall.Options, selfinstall.UpdateRevert) (selfinstall.Result, error) {
+	return f.status, nil
+}
 func (f *recoveryInstaller) GCPreview(context.Context, selfinstall.Options) (selfinstall.GCResult, error) {
 	return selfinstall.GCResult{}, errors.New("unexpected self GC preview")
 }

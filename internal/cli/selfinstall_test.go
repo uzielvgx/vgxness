@@ -34,6 +34,11 @@ func (fake *fakeSelfInstaller) GCRecover(_ context.Context, options selfinstall.
 	return fake.gc, fake.err
 }
 
+func (fake *fakeSelfInstaller) RevertUpdate(_ context.Context, options selfinstall.Options, _ selfinstall.UpdateRevert) (selfinstall.Result, error) {
+	fake.action, fake.options = "revert-update", options
+	return fake.result, fake.err
+}
+
 func (fake *fakeSelfInstaller) Preview(_ context.Context, options selfinstall.Options) (selfinstall.Result, error) {
 	fake.action, fake.options = "preview", options
 	return fake.result, fake.err

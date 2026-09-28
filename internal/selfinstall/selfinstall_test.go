@@ -1167,3 +1167,39 @@ func TestLifecycleLeavesNoManifestBackupsOrRecoveryArchives(t *testing.T) {
 		}
 	}
 }
+
+func TestRevertUpdateRestoresPreviousRollbackTarget(t *testing.T) {
+	root := t.TempDir()
+	options := Options{BinDir: filepath.Join(root, "bin"), DataDir: filepath.Join(root, "data")}
+	v1 := New(Config{SourceExecutable: writeSource(t, root, "source-v1", "vgxness-v1")})
+	v2 := New(Config{SourceExecutable: writeSource(t, root, "source-v2", "vgxness-v2")})
+	v3 := New(Config{SourceExecutable: writeSource(t, root, "source-v3", "vgxness-v3")})
+	if _, err := v1.Install(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	before, err := v2.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := v3.Install(context.Background(), options)
+	if err != nil || updated.PreviousSHA256 != before.ActiveSHA256 {
+		t.Fatalf("update=%#v err=%v", updated, err)
+	}
+
+	stale := UpdateRevert{Active: before.ActiveSHA256, Previous: before.PreviousSHA256}
+	if _, err := v3.RevertUpdate(context.Background(), options, stale); !errors.Is(err, ErrConflict) {
+		t.Fatalf("revert of a state that is no longer current: err=%v", err)
+	}
+	if _, err := v3.RevertUpdate(context.Background(), options, UpdateRevert{Active: "../x", Previous: before.ActiveSHA256}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid digest: err=%v", err)
+	}
+
+	reverted, err := v3.RevertUpdate(context.Background(), options, UpdateRevert{Active: updated.ActiveSHA256, Previous: updated.PreviousSHA256, RestorePrevious: before.PreviousSHA256})
+	if err != nil || reverted.ActiveSHA256 != before.ActiveSHA256 || reverted.PreviousSHA256 != before.PreviousSHA256 || !reverted.RollbackAvailable {
+		t.Fatalf("reverted=%#v err=%v, want active=%s previous=%s", reverted, err, before.ActiveSHA256, before.PreviousSHA256)
+	}
+	status, err := v3.Status(context.Background(), options)
+	if err != nil || status.ActiveSHA256 != before.ActiveSHA256 || status.PreviousSHA256 != before.PreviousSHA256 {
+		t.Fatalf("status=%#v err=%v", status, err)
+	}
+}

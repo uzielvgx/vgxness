@@ -64,6 +64,7 @@ type Runtime interface {
 	Install(context.Context, Options) (Result, error)
 	Status(context.Context, Options) (Result, error)
 	Rollback(context.Context, Options) (Result, error)
+	RevertUpdate(context.Context, Options, UpdateRevert) (Result, error)
 	GCPreview(context.Context, Options) (GCResult, error)
 	GCApply(context.Context, Options, string) (GCResult, error)
 	GCRecover(context.Context, Options) (GCResult, error)
@@ -329,7 +330,30 @@ func (service *Service) Install(ctx context.Context, options Options) (Result, e
 	return result, nil
 }
 
+// UpdateRevert undoes one update exactly: it applies only while the manifest
+// still records Active with Previous as its predecessor, and restores Previous
+// as active with RestorePrevious as its predecessor again.
+type UpdateRevert struct {
+	Active          string
+	Previous        string
+	RestorePrevious string
+}
+
 func (service *Service) Rollback(ctx context.Context, options Options) (Result, error) {
+	return service.rollback(ctx, options, nil)
+}
+
+// RevertUpdate undoes an update made by the caller, keeping the rollback
+// target that existed before it. Rollback would clear that target and let
+// self gc delete the version the user could previously roll back to.
+func (service *Service) RevertUpdate(ctx context.Context, options Options, revert UpdateRevert) (Result, error) {
+	if !validDigest(revert.Active) || !validDigest(revert.Previous) || revert.RestorePrevious != "" && !validDigest(revert.RestorePrevious) {
+		return Result{}, ErrInvalid
+	}
+	return service.rollback(ctx, options, &revert)
+}
+
+func (service *Service) rollback(ctx context.Context, options Options, revert *UpdateRevert) (Result, error) {
 	initial, err := service.inspect(ctx, options)
 	if err != nil {
 		return Result{}, err
@@ -339,6 +363,9 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	}
 	if initial.result.State != StateInstalled || initial.result.PreviousSHA256 == "" {
 		return Result{}, ErrNoRollback
+	}
+	if revert != nil && !revert.matches(initial.result) {
+		return Result{}, ErrConflict
 	}
 	anchors, err := openAnchors(initial.paths)
 	if err != nil {
@@ -371,6 +398,17 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	if current.result.State != StateInstalled || current.result.PreviousSHA256 == "" {
 		return Result{}, ErrNoRollback
 	}
+	if revert != nil && !revert.matches(current.result) {
+		return Result{}, ErrConflict
+	}
+	restorePrevious := ""
+	if revert != nil && revert.RestorePrevious != "" {
+		// Keep the earlier rollback target only while its version is intact.
+		digest, err := fileSHA256Root(anchors.data, filepath.Join("versions", revert.RestorePrevious, executableName()))
+		if err == nil && digest == revert.RestorePrevious {
+			restorePrevious = revert.RestorePrevious
+		}
+	}
 	previousPath := launcher.VersionPath(current.paths.dataDir, current.result.PreviousSHA256)
 	previousDigest, err := fileSHA256Root(anchors.data, filepath.Join("versions", current.result.PreviousSHA256, executableName()))
 	if err != nil || previousDigest != current.result.PreviousSHA256 {
@@ -379,7 +417,7 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 	manifest := current.manifest
 	manifest.ActivePath = previousPath
 	manifest.ActiveSHA256 = previousDigest
-	manifest.PreviousSHA256 = ""
+	manifest.PreviousSHA256 = restorePrevious
 	manifest.UpdatedAt = service.now().UTC().Format(time.RFC3339Nano)
 	if !anchorsStillNamed(anchors, current.paths) {
 		return Result{}, ErrDrift
@@ -388,12 +426,16 @@ func (service *Service) Rollback(ctx context.Context, options Options) (Result, 
 		return recoveryResult(current.result, err)
 	}
 	result := current.result
-	result.ActiveSHA256, result.PreviousSHA256, result.RollbackAvailable, result.UpdateAvailable, result.Changed = previousDigest, "", false, false, true
+	result.ActiveSHA256, result.PreviousSHA256, result.RollbackAvailable, result.UpdateAvailable, result.Changed = previousDigest, restorePrevious, restorePrevious != "", false, true
 	if !anchorsStillNamed(anchors, current.paths) {
 		result.State = StateDrifted
 		return result, ErrDrift
 	}
 	return result, nil
+}
+
+func (revert UpdateRevert) matches(current Result) bool {
+	return current.ActiveSHA256 == revert.Active && current.PreviousSHA256 == revert.Previous
 }
 
 func (service *Service) inspect(ctx context.Context, options Options) (inspection, error) {
@@ -1201,5 +1243,15 @@ func validRecoveryBackup(name string) bool {
 		return false
 	}
 	_, err := hex.DecodeString(suffix)
+	return err == nil
+}
+
+// validDigest accepts only lowercase SHA-256 hex, the form used for version
+// directory names.
+func validDigest(value string) bool {
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
 	return err == nil
 }
