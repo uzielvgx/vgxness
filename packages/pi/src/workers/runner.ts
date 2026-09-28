@@ -91,6 +91,8 @@ export class PiRpcRunner {
     }));
     const authPipe: any = this.#child.stdio?.[3]; authPipe?.on("error", () => {}); authPipe?.end(auth);
     this.#lifetime = this.#child.stdio?.[4]; this.#lifetime?.on("error", () => {});
+    // EPIPE from a dead worker is emitted asynchronously; unhandled, it would crash the host.
+    this.#child.stdin?.on("error", (error) => { this.#dead = true; this.#fail(error); });
     this.#child.stderr?.on("data", () => {});
     this.#child.once("error", (error) => this.#fail(error));
     this.#child.stdout?.on("data", (data) => {
@@ -295,6 +297,7 @@ export async function runWorkerCheck(mission: WorkerMission, argv: string[], sig
     };
     child.stdout!.on("data", append);
     child.stderr!.on("data", append);
+    child.stdin?.on("error", () => {});
     child.once("error", (error) => { resolveExit(); finish(error); });
     child.once("exit", (code) => {
       resolveExit();
