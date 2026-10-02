@@ -67,3 +67,15 @@ the implemented copy module by module. Why: a console that shows invented
 counters or links to flows that do not exist breaks trust in every other
 number on the screen. The missing features are listed as backlog in plan
 `docs/plans/claude-only.md` (task 19); each needs its own plan.
+
+## D-005 · Drop the legacy database import and the syncd recovery verifier (2026-10-02)
+Status: active
+Context: a dead-code audit after the claude-only plan found `Store.ImportLegacy`
+(merged a retired project-local `memory.db` into `~/.vgxness/`) and
+`syncpg.VerifyRecovery` (post-migration integrity check) with no command,
+hook or server path calling them. Decision: remove both, with their tests;
+the `legacy_imports` table and every migration stay untouched. Why: no
+supported install still has a project-local database, and the verifier was
+only an oracle in tests. Alternatives discarded: exposing a `memory import`
+command or wiring the verifier into `vgxness-syncd`/`doctor`; either one is a
+new feature and would need its own plan.
