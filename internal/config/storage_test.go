@@ -17,7 +17,7 @@ func TestResolveStorageRoot_ProjectOverrideWins(t *testing.T) {
 	testutil.NoError(t, err)
 	explicit, err = filepath.EvalSymlinks(explicit)
 	testutil.NoError(t, err)
-	testutil.Require(t, paths.Root == explicit && paths.Database == filepath.Join(explicit, "memory.db") && paths.LegacyDatabase == "", "unexpected paths: %+v", paths)
+	testutil.Require(t, paths.Root == explicit && paths.Database == filepath.Join(explicit, "memory.db"), "unexpected paths: %+v", paths)
 }
 
 func TestPrepare_DefaultUsesUnifiedDatabaseAndProjectOperationalRoot(t *testing.T) {
@@ -29,7 +29,6 @@ func TestPrepare_DefaultUsesUnifiedDatabaseAndProjectOperationalRoot(t *testing.
 	testutil.NoError(t, err)
 	testutil.Require(t, filepath.Dir(paths.Root) == filepath.Join(home, ".vgxness", "projects"), "unexpected project root: %+v", paths)
 	testutil.Require(t, paths.Database == filepath.Join(home, ".vgxness", "memory.db"), "database is not unified: %+v", paths)
-	testutil.Require(t, paths.LegacyDatabase == filepath.Join(paths.Root, "memory.db"), "legacy path missing: %+v", paths)
 }
 
 func TestPrepare_DefaultUsesExistingWorkspaceCaseOnCaseInsensitiveFilesystem(t *testing.T) {
