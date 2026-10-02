@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/uzielvgx/vgxness/internal/testutil"
 )
@@ -39,6 +40,8 @@ func TestCountActiveIgnoresOtherProjectsAndForgottenEntries(t *testing.T) {
 func TestSessionHandoffsListCompletedSummariesNewestFirst(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
+	clock := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { clock = clock.Add(time.Minute); return clock }
 	complete := func(external, summary string) ProviderSession {
 		t.Helper()
 		started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "claude-code", ExternalID: external})
@@ -73,4 +76,21 @@ func TestUserVersionReportsTheMigrationHead(t *testing.T) {
 	store := openTestStore(t)
 	version, err := store.UserVersion(context.Background())
 	testutil.Require(t, err == nil && version == SchemaVersion(), "version=%d head=%d err=%v", version, SchemaVersion(), err)
+}
+
+func TestTypeCountsOrderByUse(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	service := NewMemoryService(store, "test", nil)
+	for _, request := range []Remember{
+		{Title: "a", Content: "one", Type: "decision", Project: "p"},
+		{Title: "b", Content: "two", Type: "decision", Project: "p"},
+		{Title: "c", Content: "three", Type: "bugfix", Project: "p"},
+		{Title: "d", Content: "four", Type: "bugfix", Project: "q"},
+	} {
+		_, err := service.Remember(ctx, request)
+		testutil.NoError(t, err)
+	}
+	counts, err := store.TypeCounts(ctx, "p")
+	testutil.Require(t, err == nil && len(counts) == 2 && counts[0] == (TypeCount{Type: "decision", Count: 2}) && counts[1] == (TypeCount{Type: "bugfix", Count: 1}), "counts=%+v err=%v", counts, err)
 }

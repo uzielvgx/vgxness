@@ -79,3 +79,37 @@ func (s *Store) UserVersion(ctx context.Context) (int, error) {
 	}
 	return version, nil
 }
+
+// TypeCount is how many active memories of one type a project has.
+type TypeCount struct {
+	Type  string
+	Count int
+}
+
+// TypeCounts lists the types of a project's active memories, most used
+// first. It never writes.
+func (s *Store) TypeCounts(ctx context.Context, project string) ([]TypeCount, error) {
+	if err := cancelled(ctx); err != nil {
+		return nil, err
+	}
+	if !validText(project, 256, false) {
+		return nil, fmt.Errorf("%w: project", ErrInvalid)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT o.type, COUNT(*) FROM observations o WHERE o.project_id=? AND o.scope=? AND o.state=? AND NOT EXISTS(SELECT 1 FROM sync_tombstones t WHERE t.record_kind='observation' AND t.record_id=o.id) GROUP BY o.type ORDER BY COUNT(*) DESC, o.type ASC`, project, ScopeProject, StateActive)
+	if err != nil {
+		return nil, writeError(ctx, err)
+	}
+	defer rows.Close()
+	var counts []TypeCount
+	for rows.Next() {
+		var item TypeCount
+		if err := rows.Scan(&item.Type, &item.Count); err != nil {
+			return nil, fmt.Errorf("%w: read type counts", ErrCorrupt)
+		}
+		counts = append(counts, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, writeError(ctx, err)
+	}
+	return counts, nil
+}

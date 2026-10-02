@@ -18,6 +18,7 @@ type route uint8
 const (
 	routeHome route = iota
 	routeMemory
+	routeHandoffs
 	routeSetup
 	routeSync
 	routeDoctor
@@ -74,7 +75,11 @@ func (m Model) open(to route) page {
 	switch to {
 	case routeDoctor:
 		return newDoctorPage(env)
-	case routeMemory, routeSetup, routeSync:
+	case routeMemory:
+		return newMemoryPage(env, false)
+	case routeHandoffs:
+		return newMemoryPage(env, true)
+	case routeSetup, routeSync:
 		return newPendingPage(env, to)
 	default:
 		return newHomePage(env)

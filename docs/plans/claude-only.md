@@ -351,8 +351,22 @@ and all code that exists only to serve them.
     minimum, plugin absent, 376 memories, sync configured). Artboards
     updated: Inicio estado/avisos/primer uso, Diagnóstico normal/crítico.
     Memoria, Setup and Sync open a placeholder until their slices land.
-  - [ ] 17c. Memoria (buscar, sin resultados, primer uso, detalle, confirmar
+  - [x] 17c. Memoria (buscar, sin resultados, primer uso, detalle, confirmar
     olvidar, handoffs).
+    *Result (2026-10-02):* `internal/tui/memory.go` (debounced full-text
+    search with `bubbles/textinput`, empty query lists recent, `[Tab]`
+    cycles the project's real types, preview, detail with scroll and
+    references, forget behind a compositor Confirm where only `[y]`
+    confirms, handoffs list and detail); backend `SearchMemories`,
+    `GetMemory`, `ForgetMemory` (the console's only write, through a
+    separate write-capable runtime) and `Handoffs`; store `TypeCounts`.
+    The search box owns the keyboard while focused (`q`, `h`, `r` are
+    typed); `Esc` leaves it and the list keys apply. Inicio now treats a
+    machine with memories but no plugin as complete (it was hiding
+    Memoria behind the first-use screen; found rendering this machine's
+    376 memories). Verified: view and interaction tests at 120×35 and
+    80×24; frames rendered against the real database (search, preview,
+    detail). Artboards updated: all six Memoria screens.
   - [ ] 17d. Setup del plugin (prerrequisitos, permisos, confirmar,
     aplicando, resultado, error).
   - [ ] 17e. Sync (estado, configurar, en progreso, error).

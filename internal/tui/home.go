@@ -42,8 +42,10 @@ func (p *homePage) load() tea.Cmd {
 	}
 }
 
+// firstUse is a machine with neither the plugin nor any memory yet; with
+// memories already stored, Inicio stays complete and flags the plugin.
 func (p *homePage) firstUse() bool {
-	return !p.loading && p.err == nil && !p.data.Plugin.Installed
+	return !p.loading && p.err == nil && !p.data.Plugin.Installed && p.data.Storage.Memories == 0 && len(p.data.Handoffs) == 0
 }
 
 func (p *homePage) cards() []card {
@@ -54,7 +56,9 @@ func (p *homePage) cards() []card {
 		}
 	}
 	setup := "instalar o actualizar"
-	if p.pluginOutdated() {
+	if !p.data.Plugin.Installed {
+		setup = "instalar"
+	} else if p.pluginOutdated() {
 		setup = "actualizar a " + version(p.data.Plugin.Offered)
 	}
 	sync := "estado y credencial"
@@ -81,7 +85,7 @@ func (p *homePage) Update(msg tea.Msg) (page, tea.Cmd) {
 	case overviewMsg:
 		p.loading, p.data, p.err = false, msg.value, msg.err
 		p.selected = min(p.selected, len(p.cards())-1)
-		if p.pluginOutdated() || (!p.firstUse() && !p.data.Plugin.Enabled) {
+		if !p.firstUse() && (p.pluginOutdated() || !p.data.Plugin.Installed || !p.data.Plugin.Enabled) {
 			p.selected = 1
 		}
 		return p, nil
@@ -93,7 +97,7 @@ func (p *homePage) Update(msg tea.Msg) (page, tea.Cmd) {
 			return p, p.load()
 		case "h":
 			if !p.firstUse() {
-				return p, navigate(routeMemory)
+				return p, navigate(routeHandoffs)
 			}
 		case "left", "shift+tab":
 			p.selected = (p.selected + len(targets) - 1) % len(targets)

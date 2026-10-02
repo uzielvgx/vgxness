@@ -26,8 +26,11 @@ const claudeTimeout = 10 * time.Second
 // Every read is non-mutating: the memory database is opened read-only and
 // Claude Code is only queried.
 type consoleBackend struct {
-	workspace  string
-	memory     appruntime.Memory
+	workspace string
+	memory    appruntime.Memory
+	// writer is the write-capable runtime, used only to forget a memory
+	// after the user confirms it in the console.
+	writer     appruntime.Memory
 	claude     claudecli.Client
 	health     func(context.Context, string) (int, error)
 	executable func() (string, error)
@@ -38,6 +41,7 @@ func newConsoleBackend(workspace string) consoleBackend {
 	return consoleBackend{
 		workspace:  workspace,
 		memory:     appruntime.NewMemory("console", true),
+		writer:     appruntime.NewMemory("console", false),
 		claude:     claudecli.New(nil),
 		health:     memory.HealthFile,
 		executable: os.Executable,
@@ -180,4 +184,102 @@ func (b consoleBackend) syncState(ctx context.Context) tui.SyncState {
 		return tui.SyncState{Err: err}
 	}
 	return tui.SyncState{Configured: status.Configured, Enabled: status.Enabled, Credential: string(status.Credential)}
+}
+
+// memoryLimit is the store's per-query cap.
+const memoryLimit = 50
+
+// project resolves the workspace's project without creating anything; it
+// returns os.ErrNotExist while the database does not exist yet.
+func (b consoleBackend) project(ctx context.Context) (string, error) {
+	paths, err := config.PathsFor(b.options())
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(paths.Database); err != nil {
+		return "", err
+	}
+	return b.memory.ResolveProject(ctx, b.options(), b.workspace)
+}
+
+func (b consoleBackend) SearchMemories(ctx context.Context, query tui.MemoryQuery) (tui.MemoryResults, error) {
+	project, err := b.project(ctx)
+	if errors.Is(err, os.ErrNotExist) {
+		// No database yet: the project has no memories.
+		return tui.MemoryResults{}, nil
+	}
+	if err != nil {
+		return tui.MemoryResults{}, err
+	}
+	var results tui.MemoryResults
+	if results.Total, err = b.memory.CountActive(ctx, b.options(), project); err != nil {
+		return results, err
+	}
+	counts, err := b.memory.TypeCounts(ctx, b.options(), project)
+	if err != nil {
+		return results, err
+	}
+	for _, count := range counts {
+		results.Types = append(results.Types, tui.TypeCount{Type: count.Type, Count: count.Count})
+	}
+	var entries []memory.Entry
+	if query.Text == "" {
+		entries, err = b.memory.Recent(ctx, b.options(), memory.Recent{Project: project, Scope: memory.ScopeProject, Limit: memoryLimit})
+	} else {
+		entries, err = b.memory.Recall(ctx, b.options(), memory.Recall{Query: query.Text, Project: project, Scope: memory.ScopeProject, Type: query.Type, Limit: memoryLimit, MatchAny: true})
+	}
+	if err != nil {
+		return results, err
+	}
+	for _, entry := range entries {
+		if query.Type != "" && entry.Type != query.Type {
+			continue
+		}
+		results.Items = append(results.Items, memoryItem(entry))
+	}
+	return results, nil
+}
+
+func (b consoleBackend) GetMemory(ctx context.Context, id string) (tui.MemoryItem, error) {
+	project, err := b.project(ctx)
+	if err != nil {
+		return tui.MemoryItem{}, err
+	}
+	entry, err := b.memory.Get(ctx, b.options(), memory.Lookup{ID: id, Project: project, Scope: memory.ScopeProject})
+	if err != nil {
+		return tui.MemoryItem{}, err
+	}
+	return memoryItem(entry), nil
+}
+
+func (b consoleBackend) ForgetMemory(ctx context.Context, id string) error {
+	project, err := b.project(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = b.writer.Forget(ctx, b.options(), memory.Forget{ID: id, Project: project, Scope: memory.ScopeProject})
+	return err
+}
+
+func (b consoleBackend) Handoffs(ctx context.Context, limit int) ([]tui.Handoff, error) {
+	project, err := b.project(ctx)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	items, err := b.memory.SessionHandoffs(ctx, b.options(), project, limit)
+	if err != nil {
+		return nil, err
+	}
+	handoffs := make([]tui.Handoff, len(items))
+	for index, item := range items {
+		handoffs[index] = tui.Handoff{Handle: item.Handle, Summary: item.Summary, Started: item.StartedAt, Completed: item.CompletedAt}
+	}
+	return handoffs, nil
+}
+
+func memoryItem(entry memory.Entry) tui.MemoryItem {
+	return tui.MemoryItem{ID: entry.ID, Title: entry.Title, Type: entry.Type, Topic: entry.TopicKey, Producer: entry.Producer, Preview: entry.Preview, Content: entry.Content, References: entry.References, Created: entry.CreatedAt, Updated: entry.UpdatedAt}
 }

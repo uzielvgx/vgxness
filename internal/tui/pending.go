@@ -25,8 +25,6 @@ func (p *pendingPage) Update(msg tea.Msg) (page, tea.Cmd) {
 
 func (p *pendingPage) Section() string {
 	switch p.to {
-	case routeMemory:
-		return "memoria del proyecto"
 	case routeSetup:
 		return "setup del plugin"
 	default:

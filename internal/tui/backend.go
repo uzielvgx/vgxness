@@ -11,6 +11,37 @@ import (
 type Backend interface {
 	Overview(context.Context) (Overview, error)
 	Diagnose(context.Context) (Diagnosis, error)
+
+	// SearchMemories runs a full-text search, or lists the most recent
+	// memories when the query text is empty.
+	SearchMemories(context.Context, MemoryQuery) (MemoryResults, error)
+	GetMemory(ctx context.Context, id string) (MemoryItem, error)
+	// ForgetMemory archives one memory; it is the console's only memory write.
+	ForgetMemory(ctx context.Context, id string) error
+	Handoffs(ctx context.Context, limit int) ([]Handoff, error)
+}
+
+type MemoryQuery struct {
+	Text, Type string
+}
+
+type MemoryResults struct {
+	Items []MemoryItem
+	// Total is every active memory of the project; Types counts them by type.
+	Total int
+	Types []TypeCount
+}
+
+type TypeCount struct {
+	Type  string
+	Count int
+}
+
+type MemoryItem struct {
+	ID, Title, Type, Topic, Producer string
+	Preview, Content                 string
+	References                       []string
+	Created, Updated                 time.Time
 }
 
 // Overview is the state shown on Inicio.

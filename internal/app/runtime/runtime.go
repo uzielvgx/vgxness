@@ -1569,3 +1569,13 @@ func (runtime Memory) SchemaVersion(ctx context.Context, opts config.Options) (i
 	defer store.Close()
 	return store.UserVersion(ctx)
 }
+
+// TypeCounts reads how many active memories of each type a project has.
+func (runtime Memory) TypeCounts(ctx context.Context, opts config.Options, project string) ([]memory.TypeCount, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return store.TypeCounts(ctx, project)
+}

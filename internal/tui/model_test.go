@@ -18,6 +18,61 @@ type fakeBackend struct {
 	overview  Overview
 	diagnosis Diagnosis
 	err       error
+	memory    *fakeMemory
+}
+
+// fakeMemory is a mutable memory store shared by the copies of fakeBackend
+// the console holds.
+type fakeMemory struct {
+	items    []MemoryItem
+	types    []TypeCount
+	handoffs []Handoff
+	queries  []MemoryQuery
+	forgot   []string
+	err      error
+}
+
+func (f fakeBackend) SearchMemories(_ context.Context, query MemoryQuery) (MemoryResults, error) {
+	if f.memory == nil {
+		return MemoryResults{}, nil
+	}
+	f.memory.queries = append(f.memory.queries, query)
+	var items []MemoryItem
+	for _, item := range f.memory.items {
+		text := strings.ToLower(query.Text)
+		if (query.Type == "" || item.Type == query.Type) && (text == "" || strings.Contains(strings.ToLower(item.Title+" "+item.Content), text)) {
+			items = append(items, item)
+		}
+	}
+	return MemoryResults{Items: items, Total: len(f.memory.items), Types: f.memory.types}, f.memory.err
+}
+
+func (f fakeBackend) GetMemory(_ context.Context, id string) (MemoryItem, error) {
+	for _, item := range f.memory.items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return MemoryItem{}, errors.New("not found")
+}
+
+func (f fakeBackend) ForgetMemory(_ context.Context, id string) error {
+	f.memory.forgot = append(f.memory.forgot, id)
+	kept := f.memory.items[:0]
+	for _, item := range f.memory.items {
+		if item.ID != id {
+			kept = append(kept, item)
+		}
+	}
+	f.memory.items = kept
+	return nil
+}
+
+func (f fakeBackend) Handoffs(context.Context, int) ([]Handoff, error) {
+	if f.memory == nil {
+		return nil, nil
+	}
+	return f.memory.handoffs, nil
 }
 
 func (f fakeBackend) Overview(context.Context) (Overview, error) { return f.overview, f.err }
@@ -58,7 +113,9 @@ func drive(t *testing.T, m Model, msgs ...tea.Msg) (Model, []tea.Msg) {
 		for _, out := range run(cmd) {
 			produced = append(produced, out)
 			switch out.(type) {
-			case overviewMsg, diagnosisMsg, navigateMsg:
+			case overviewMsg, diagnosisMsg, navigateMsg, memorySearchMsg, memoryDetailMsg, memoryForgotMsg, handoffsMsg:
+				queue = append(queue, out)
+			case searchTickMsg:
 				queue = append(queue, out)
 			}
 		}
@@ -335,5 +392,19 @@ func TestRunRequiresInteractiveTerminals(t *testing.T) {
 	code := Run(context.Background(), strings.NewReader(""), &bytes.Buffer{}, &stderr, fakeBackend{}, Options{})
 	if code != 2 || !strings.Contains(stderr.String(), "interactive terminals") {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestHomeWithMemoriesButNoPluginStaysCompleteAndPointsToSetup(t *testing.T) {
+	overview := healthyOverview()
+	overview.Plugin = Plugin{}
+	m := start(t, fakeBackend{overview: overview}, 120, 35)
+	screen := plain(m)
+	assertContains(t, screen, "✕ plugin", "no instalado", "[1] Memoria", "[2] Setup del plugin", "instalar", "ÚLTIMO HANDOFF")
+	if strings.Contains(screen, "Bienvenido.") {
+		t.Fatal("a machine with memories is not a first use")
+	}
+	if home := m.page.(*homePage); home.selected != 1 {
+		t.Fatalf("missing plugin should preselect Setup, got card %d", home.selected)
 	}
 }
