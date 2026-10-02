@@ -2,7 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## Sin publicar
+
+- VGXNESS pasa a ser un producto solo para Claude Code. El ecosistema de agentes se entrega como plugin (`plugins/vgxness/`, con el marketplace en `.claude-plugin/marketplace.json`): servidor MCP de memoria, política del Manager y handoff entre sesiones por hook `SessionStart`, subagentes `vgxness:explore`, `vgxness:general`, `vgxness:verifier` y `vgxness:reviewer` (los tres roles CARE se fusionan en `reviewer`), y la skill `/vgxness:git-delivery`.
+- El binario gana `vgxness claude-code hook <evento>` (adaptador de hooks que falla cerrado) y `vgxness claude-code setup` (imprime las reglas de permisos recomendadas). `vgxness mcp` acepta `--workspace` y resuelve el workspace desde `CLAUDE_PROJECT_DIR`; el servidor anuncia instrucciones y describe cuándo usar cada herramienta; `memory_forget` exige confirmación del usuario.
+- Se eliminan los proveedores OpenCode, Codex y Pi, el instalador con recibos y recuperación, la selección de modelos, la autoinstalación y el launcher, el catálogo de skills portables y su registro, el contrato de orquestación y las evaluaciones CARE, el runner de evaluación en Python y el paquete TypeScript de Pi. `vgxness tui` queda como cascarón hasta que se reconstruya como consola.
+- El módulo pasa a `github.com/uzielvgx/vgxness`. Las releases se generan con GoReleaser (archivos por plataforma, `SHA256SUMS`, cask de Homebrew y manifiesto de Scoop); el pipeline anterior de artefactos y autoinstalación desaparece.
+- La documentación de usuario se reescribe en español: `README.md`, `docs/claude-code.md`, `docs/memory.md`, `docs/sync.md` y `docs/diagnostics.md`. La documentación de los subsistemas eliminados se retira.
+
+## Unreleased (historial anterior, en inglés)
 
 - After confirming the hosts, each OpenCode and Pi screen first asks whether to use one model for all agents or one model per agent, then shows the configuration. Installed selections keep their current mode until edited.
 - The Models screen uses a provider-then-model picker modal (`m`): choose a provider, then a model, with type-to-filter, arrow navigation, Escape to step back or close, and paste support. The shell is leaner: the model filter and manual reference input use `bubbles/textinput`, and the unused list, help and spinner wiring was removed.

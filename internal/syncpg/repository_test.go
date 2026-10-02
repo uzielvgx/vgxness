@@ -17,8 +17,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/vgxness/vgxness/internal/syncapi"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/syncapi"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 )
 
 func TestRepositoryValidatesArguments(t *testing.T) {

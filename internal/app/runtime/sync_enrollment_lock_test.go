@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/secrets"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/secrets"
 )
 
 func TestSyncEnrollmentCredentialRefsAreStableSlots(t *testing.T) {

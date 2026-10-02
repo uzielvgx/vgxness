@@ -78,7 +78,7 @@ func TestDockerDeployPackageContract(t *testing.T) {
 		t.Error("backup lock must be acquired before checking the fixed temporary path")
 	}
 	makefile, err := os.ReadFile(filepath.Join(repository, "Makefile"))
-	if err != nil || !strings.Contains(string(makefile), "TestDockerDeployPackageContract") {
+	if err != nil || !strings.Contains(string(makefile), "go test -tags=e2e -count=1 ./internal/e2e") {
 		t.Error("Makefile verify target does not select the Docker deployment contract")
 	}
 }

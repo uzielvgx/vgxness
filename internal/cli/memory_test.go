@@ -3,17 +3,15 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 type fakeMemoryRuntime struct {
@@ -230,7 +228,7 @@ func (f *fakeMemoryRuntime) SaveProviderSessionDraft(_ context.Context, _ config
 
 func runMemoryTest(args []string, input string, runtime MemoryRuntime) (int, string, string) {
 	var out, stderr bytes.Buffer
-	code := RunProductRuntime(context.Background(), args, strings.NewReader(input), &out, &stderr, &fakeInspector{}, runtime, nil, nil, nil, nil)
+	code := RunProductRuntime(context.Background(), args, strings.NewReader(input), &out, &stderr, &fakeInspector{}, runtime)
 	return code, out.String(), stderr.String()
 }
 
@@ -421,56 +419,4 @@ func TestMemoryCLI_SyncConfigureAndStatusAreStrictAndTokenFree(t *testing.T) {
 	runtime = &fakeMemoryRuntime{}
 	code, out, stderr = runMemoryTest([]string{"memory", "sync", "status", "--json"}, bearer, runtime)
 	testutil.Require(t, code == 0 && stderr == "" && strings.Contains(out, `"configured":false`) && !strings.Contains(out, bearer), "status: code=%d calls=%d out=%q stderr=%q", code, runtime.calls, out, stderr)
-}
-
-func TestMemoryCLI_HookLifecycleIsVersionedStrictAndPrivate(t *testing.T) {
-	workspace := t.TempDir()
-	workspaceJSON, err := json.Marshal(workspace)
-	testutil.NoError(t, err)
-	storageRoot := filepath.Join(t.TempDir(), "memory")
-	runtime := &fakeMemoryRuntime{project: "project-1"}
-	call := func(input string) (int, string, string) {
-		return runMemoryTest([]string{"memory", "hook", "--stdin", "--storage-root", storageRoot, "--project-local"}, input, runtime)
-	}
-	start := `{"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"secret-run"}`
-	code, out, stderr := call(start)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && runtime.opts.StorageRoot == storageRoot && runtime.opts.ProjectLocal && runtime.start == (memory.ProviderSessionStart{Project: "project-1", Provider: "openai", ExternalID: "secret-run"}) && strings.Contains(out, `"schemaVersion":1`) && strings.Contains(out, `"session_handle":"ps-test"`) && !strings.Contains(out, "secret-run"), "start=%d %q %q opts=%+v request=%+v", code, out, stderr, runtime.opts, runtime.start)
-	code, out, stderr = call(`{"schemaVersion":1,"operation":"checkpoint","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","lease_token":"lease-test"}`)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.checkpoint == "ps-test" && strings.Contains(out, `"checkpointed":true`), "checkpoint=%d %q %q", code, out, stderr)
-	code, out, stderr = call(`{"schemaVersion":1,"operation":"end","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","lease_token":"lease-test","external_id":"secret-run","state":"completed","summary":"safe"}`)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.ended == (memory.ProviderSessionEnd{Project: "project-1", Handle: "ps-test", LeaseToken: "lease-test", ExternalID: "secret-run", State: memory.ProviderSessionCompleted, Summary: "safe"}) && strings.Contains(out, `"state":"completed"`) && !strings.Contains(out, "secret-run") && !strings.Contains(out, "safe"), "end=%d %q %q request=%+v", code, out, stderr, runtime.ended)
-	for _, input := range []string{`{"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, `{"schemaVersion":2,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, `{"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x","unknown":true}`, `{"schemaVersion":1,"schemaVersion":1,"operation":"start","workspace":` + string(workspaceJSON) + `,"provider":"openai","external_id":"x"}`, start + ` {}`} {
-		before := runtime.calls
-		code, out, _ = call(input)
-		testutil.Require(t, code == 2 && out == "" && runtime.calls == before, "invalid hook=%d %q calls=%d", code, out, runtime.calls)
-	}
-}
-
-func TestMemoryCLI_HookContextAndSummaryAreStrictAndPrivate(t *testing.T) {
-	workspace := t.TempDir()
-	workspaceJSON, err := json.Marshal(workspace)
-	testutil.NoError(t, err)
-	updated := "2026-08-27T12:34:56.123456789Z"
-	runtime := &fakeMemoryRuntime{project: "project-1", context: memory.ProviderSessionContext{Handoff: "untrusted prior handoff"}, draft: memory.ProviderSessionDraft{Project: "project-1", Handle: "ps-test"}}
-	call := func(input string) (int, string, string) {
-		return runMemoryTest([]string{"memory", "hook", "--stdin"}, input, runtime)
-	}
-	code, out, stderr := call(`{"schemaVersion":1,"operation":"context","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test"}`)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 2 && strings.Contains(out, `"handoff":"untrusted prior handoff"`) && !strings.Contains(out, "external") && !strings.Contains(out, "provider") && !strings.Contains(out, "draft"), "context=%d %q %q", code, out, stderr)
-	code, out, stderr = call(`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"pending draft","expected_updated_at":"` + updated + `"}`)
-	testutil.Require(t, code == 0 && stderr == "" && runtime.calls == 4 && runtime.draftSave.Project == "project-1" && runtime.draftSave.Summary == "pending draft" && runtime.draftSave.ExpectedUpdatedAt.Format(time.RFC3339Nano) == updated && strings.Contains(out, `"session_handle":"ps-test"`) && strings.Contains(out, `"updated_at"`) && !strings.Contains(out, "pending draft") && !strings.Contains(out, "external") && !strings.Contains(out, "provider"), "summary=%d %q %q request=%+v", code, out, stderr, runtime.draftSave)
-	runtime.err = memory.ErrConflict
-	code, out, _ = call(`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"stale","expected_updated_at":"` + updated + `"}`)
-	testutil.Require(t, code == 1 && out == "", "stale summary=%d %q", code, out)
-	runtime.err = nil
-	for _, input := range []string{
-		`{"schemaVersion":1,"operation":"context","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"x"}`,
-		`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"x","expected_updated_at":"not-a-time"}`,
-		`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"x","external_id":"x"}`,
-		`{"schemaVersion":1,"operation":"summary","workspace":` + string(workspaceJSON) + `,"session_handle":"ps-test","summary":"x"} {}`,
-	} {
-		before := runtime.calls
-		code, out, _ = call(input)
-		testutil.Require(t, code == 2 && out == "" && runtime.calls == before, "invalid hook=%d %q calls=%d", code, out, runtime.calls)
-	}
 }

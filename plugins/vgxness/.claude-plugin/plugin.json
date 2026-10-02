@@ -1,0 +1,11 @@
+{
+  "name": "vgxness",
+  "displayName": "VGXNESS",
+  "version": "0.1.0",
+  "description": "Durable SQLite/FTS5 project memory over MCP, cloud sync, and a Manager/worker orchestration policy",
+  "author": { "name": "Uziel Vega", "url": "https://github.com/uzielvgx" },
+  "homepage": "https://github.com/uzielvgx/vgxness",
+  "repository": "https://github.com/uzielvgx/vgxness",
+  "license": "MIT",
+  "keywords": ["memory", "mcp", "orchestration"]
+}

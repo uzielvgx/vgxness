@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vgxness/vgxness/internal/syncapi"
-	"github.com/vgxness/vgxness/internal/syncservice"
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/syncapi"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 func TestSyncMigrationPreservesExistingMemory(t *testing.T) {

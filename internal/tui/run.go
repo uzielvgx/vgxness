@@ -30,8 +30,7 @@ func Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, backend
 		tea.WithOutput(stdout),
 		tea.WithoutSignalHandler(),
 	)
-	_, err := program.Run()
-	if err != nil {
+	if _, err := program.Run(); err != nil {
 		if ctx.Err() != nil {
 			return 130
 		}

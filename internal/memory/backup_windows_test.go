@@ -11,7 +11,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 	"golang.org/x/sys/windows"
 )
 

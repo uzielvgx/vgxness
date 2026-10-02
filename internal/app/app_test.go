@@ -3,423 +3,19 @@ package app
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
+	goruntime "runtime"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/vgxness/vgxness/internal/cli"
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/hooks"
-	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/launcher"
-	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/modelcatalog"
-	"github.com/vgxness/vgxness/internal/modelplan"
-	"github.com/vgxness/vgxness/internal/providers/codex"
-	"github.com/vgxness/vgxness/internal/providers/opencode"
-	"github.com/vgxness/vgxness/internal/selfinstall"
-	setupflow "github.com/vgxness/vgxness/internal/setup"
-	"github.com/vgxness/vgxness/internal/skills"
-	"github.com/vgxness/vgxness/internal/testutil"
-	"github.com/vgxness/vgxness/internal/tui"
+	"github.com/uzielvgx/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/tui"
 )
 
-func TestTUIBackendCodexRecoveryUsesSeparateManagedRoot(t *testing.T) {
-	home, workspace, backup := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "backups")
-	t.Setenv("HOME", home)
-	// os.UserHomeDir reads USERPROFILE on Windows.
-	t.Setenv("USERPROFILE", home)
-	runtime := codex.NewIntegrationWithRunner(testutil.NewCodexRunner())
-	if _, err := runtime.Install(context.Background(), integration.Options{HomeDir: home}); err != nil {
-		t.Fatal(err)
-	}
-	backend := tuiBackend{codex: runtime}
-	plan, err := backend.PlanRecovery(context.Background(), tui.RecoveryPlanRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
-	if err != nil || plan.Mode != "managed" || plan.SourceRoot != "managed Codex configuration" || plan.BackupRoot != backup {
-		t.Fatalf("plan=%+v err=%v", plan, err)
-	}
-	created, err := backend.CreateBackup(context.Background(), tui.CreateBackupRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
-	if err != nil || created.Snapshot.SnapshotID == "" {
-		t.Fatalf("created=%+v err=%v", created, err)
-	}
-	listed, err := backend.ListBackups(context.Background(), tui.BackupListRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup})
-	if err != nil || len(listed.Snapshots) != 1 {
-		t.Fatalf("listed=%+v err=%v", listed, err)
-	}
-	layout, err := runtime.ManagedLayout(context.Background(), integration.Options{HomeDir: home})
-	if err != nil || os.Remove(filepath.Join(layout.Root, layout.Artifacts[0].RelativePath)) != nil {
-		t.Fatal("remove managed artifact")
-	}
-	preview, err := backend.PreviewRestore(context.Background(), tui.RestorePreviewRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, SnapshotID: created.Snapshot.SnapshotID})
-	if err != nil || len(preview.Missing) == 0 {
-		t.Fatalf("preview=%+v err=%v", preview, err)
-	}
-	if _, err := backend.RestoreBackup(context.Background(), tui.RestoreRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, SnapshotID: created.Snapshot.SnapshotID, PreviewSHA256: preview.PreviewSHA256}); err != nil {
-		t.Fatal(err)
-	}
-	protected, err := backend.ProtectedReinstall(context.Background(), tui.ProtectedReinstallRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
-	if err != nil || !protected.SnapshotVerified || protected.SnapshotID == "" {
-		t.Fatalf("protected=%+v err=%v", protected, err)
-	}
-	failing := tuiBackend{codex: failingProtectedRuntime{runtime}}
-	retained, err := failing.ProtectedReinstall(context.Background(), tui.ProtectedReinstallRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "managed"})
-	if err == nil || !retained.SnapshotVerified || retained.SnapshotID == "" {
-		t.Fatalf("retained=%+v err=%v", retained, err)
-	}
-	listed, err = backend.ListBackups(context.Background(), tui.BackupListRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup})
-	if err != nil || len(listed.Snapshots) != 3 {
-		t.Fatalf("retained list=%+v err=%v", listed, err)
-	}
-	if _, err := backend.CreateBackup(context.Background(), tui.CreateBackupRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, BackupRoot: backup, Mode: "full"}); err == nil {
-		t.Fatal("full accepted")
-	}
-	if _, err := backend.ListBackups(context.Background(), tui.BackupListRequest{Provider: "unknown", Workspace: workspace, BackupRoot: backup}); err == nil {
-		t.Fatal("unknown provider accepted")
-	}
-	if _, err := backend.ListBackups(context.Background(), tui.BackupListRequest{Provider: setupflow.ProviderCodex, BackupRoot: backup}); err == nil {
-		t.Fatal("empty workspace accepted")
-	}
-	if _, err := (tuiBackend{}).PlanRecovery(context.Background(), tui.RecoveryPlanRequest{Provider: setupflow.ProviderCodex, Workspace: workspace, Mode: "managed"}); err == nil {
-		t.Fatal("nil runtime accepted")
-	}
-}
-
-type failingProtectedRuntime struct{ integration.ProtectedRuntime }
-
-func (failingProtectedRuntime) ReinstallProtected(context.Context, integration.Options, integration.SourceIdentity) (integration.Result, error) {
-	return integration.Result{}, errors.New("mutation failed")
-}
-
-func TestAppHooksVersionClosesInjectedDispatcher(t *testing.T) {
-	d := hooks.New()
-	var out, errOut bytes.Buffer
-	code := runWithMCPAndRuntimes(context.Background(), []string{"version"}, strings.NewReader(""), &out, &errOut, tui.Run, cli.RunMCP, appRuntimes{dispatcher: d})
-	if code != 0 || out.Len() == 0 {
-		t.Fatalf("version code=%d output=%q", code, out.String())
-	}
-	if err := d.Register("after", func(context.Context, hooks.Event) error { return nil }, hooks.NameMemorySaved); !errors.Is(err, hooks.ErrClosed) {
-		t.Fatalf("dispatcher remains open: %v", err)
-	}
-}
-
-func TestAppHooksCLIMemorySaveEmitsAndCloses(t *testing.T) {
-	d := hooks.New()
-	var events []hooks.Event
-	if err := d.Register("test", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameMemorySaved); err != nil {
-		t.Fatal(err)
-	}
-	var out, errOut bytes.Buffer
-	root := t.TempDir()
-	code := runWithMCPAndRuntimes(context.Background(), []string{"memory", "save", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"title":"T","content":"hook token","project":"p"}`), &out, &errOut, tui.Run, cli.RunMCP, appRuntimes{dispatcher: d})
-	if code != 0 || len(events) != 1 || events[0].Name() != hooks.NameMemorySaved || out.Len() == 0 || strings.Contains(errOut.String(), "hook") {
-		t.Fatalf("code=%d events=%d output=%q err=%q", code, len(events), out.String(), errOut.String())
-	}
-	if err := d.Register("after", func(context.Context, hooks.Event) error { return nil }, hooks.NameMemorySaved); !errors.Is(err, hooks.ErrClosed) {
-		t.Fatal("dispatcher remains open")
-	}
-}
-
-func TestAppHooksIntegrationStatusEmitsAndCloses(t *testing.T) {
-	d := hooks.New()
-	var events []hooks.Event
-	if err := d.Register("test", func(_ context.Context, event hooks.Event) error { events = append(events, event); return nil }, hooks.NameIntegrationStatusCompleted); err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	codex := &recordingMultiIntegration{status: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: strings.Repeat("a", 64), ArtifactCount: 1}}
-	var out, errOut bytes.Buffer
-	code := runWithMCPAndRuntimes(context.Background(), []string{"integrate", "codex", "status", "--config-dir", dir}, strings.NewReader(""), &out, &errOut, tui.Run, cli.RunMCP, appRuntimes{codex: codex, dispatcher: d})
-	if code != 0 || !strings.Contains(out.String(), "installed") || len(events) != 1 || events[0].Name() != hooks.NameIntegrationStatusCompleted || codex.statusOptions.ConfigDir != dir {
-		t.Fatalf("code=%d output=%q events=%d options=%+v", code, out.String(), len(events), codex.statusOptions)
-	}
-	if err := d.Register("after", func(context.Context, hooks.Event) error { return nil }, hooks.NameIntegrationStatusCompleted); !errors.Is(err, hooks.ErrClosed) {
-		t.Fatal("dispatcher remains open")
-	}
-}
-
-func managedLauncherForTest(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	source, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := launcher.FileSHA256(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dataDir := filepath.Join(root, "data")
-	activePath := launcher.VersionPath(dataDir, digest)
-	launcherPath := filepath.Join(root, "bin", "vgxness")
-	for _, path := range []string{filepath.Dir(activePath), filepath.Dir(launcherPath)} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(activePath, data, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(activePath, launcherPath); err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := json.Marshal(launcher.Manifest{SchemaVersion: launcher.SchemaVersion, ManagedBy: launcher.ManagedBy, LauncherPath: launcherPath, LauncherSHA256: digest, DataDir: dataDir, ActivePath: activePath, ActiveSHA256: digest, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(launcher.SidecarPath(launcherPath), append(manifest, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return launcherPath
-}
-
-type recordingTUIMemoryRuntime struct {
-	recall     memory.Recall
-	lookup     memory.Lookup
-	references []string
-}
-
-type recordingTUISetupRuntime struct {
-	planOptions  setupflow.Options
-	applyOptions setupflow.Options
-	plan         setupflow.Plan
-	result       setupflow.Result
-}
-
-type recordingShared struct{ applies int }
-
-func (shared *recordingShared) Plan(context.Context) (setupflow.SharedPlan, error) {
-	return setupflow.SharedPlan{Ready: true}, nil
-}
-func (shared *recordingShared) Status(context.Context) (setupflow.SharedPlan, error) {
-	return setupflow.SharedPlan{Ready: true}, nil
-}
-func (shared *recordingShared) Apply(context.Context, setupflow.SharedPlan) (setupflow.SharedResult, error) {
-	shared.applies++
-	return setupflow.SharedResult{Verified: true}, nil
-}
-func (shared *recordingShared) Finalize(context.Context, setupflow.SharedPlan, setupflow.SharedResult) (setupflow.SharedResult, error) {
-	shared.applies++
-	return setupflow.SharedResult{Verified: true}, nil
-}
-
-type recordingMultiSetupRuntime struct {
-	recordingTUISetupRuntime
-	shared   *recordingShared
-	openCode integration.Runtime
-}
-
-func (runtime *recordingMultiSetupRuntime) Shared(setupflow.Options) setupflow.SharedRuntime {
-	return runtime.shared
-}
-
-func (runtime *recordingMultiSetupRuntime) OpenCodeProvider(options setupflow.Options, _ setupflow.PreviewIntegrationFactory) setupflow.ProviderRuntime {
-	return setupflow.NewIntegrationProvider(setupflow.ProviderOpenCode, runtime.openCode, options.Integration)
-}
-
-type recordingMultiIntegration struct {
-	provider                                      string
-	preview                                       integration.Result
-	install                                       integration.Result
-	status                                        integration.Result
-	installErr                                    error
-	previewOptions, installOptions, statusOptions integration.Options
-}
-
-func (runtime *recordingMultiIntegration) Preview(_ context.Context, options integration.Options) (integration.Result, error) {
-	runtime.previewOptions = options
-	return runtime.preview, nil
-}
-func (runtime *recordingMultiIntegration) Install(_ context.Context, options integration.Options) (integration.Result, error) {
-	runtime.installOptions = options
-	return runtime.install, runtime.installErr
-}
-func (runtime *recordingMultiIntegration) Status(_ context.Context, options integration.Options) (integration.Result, error) {
-	runtime.statusOptions = options
-	return runtime.status, nil
-}
-func (*recordingMultiIntegration) Uninstall(context.Context, integration.Options) (integration.Result, error) {
-	return integration.Result{}, nil
-}
-
-type recordingCatalog struct {
-	refresh   bool
-	discovers int
-	refreshes int
-	snapshot  modelcatalog.Snapshot
-}
-
-func (catalog *recordingCatalog) Discover(context.Context) (modelcatalog.Snapshot, error) {
-	catalog.refresh = false
-	catalog.discovers++
-	return catalog.snapshot, nil
-}
-
-func (catalog *recordingCatalog) Refresh(context.Context) (modelcatalog.Snapshot, error) {
-	catalog.refresh = true
-	catalog.refreshes++
-	return catalog.snapshot, nil
-}
-
-func (runtime *recordingTUISetupRuntime) Status(context.Context, setupflow.Options) (setupflow.Plan, error) {
-	return runtime.plan, nil
-}
-
-func (runtime *recordingTUISetupRuntime) Plan(_ context.Context, options setupflow.Options) (setupflow.Plan, error) {
-	runtime.planOptions = options
-	return runtime.plan, nil
-}
-
-func (runtime *recordingTUISetupRuntime) Apply(_ context.Context, options setupflow.Options) (setupflow.Result, error) {
-	runtime.applyOptions = options
-	return runtime.result, nil
-}
-
-func (*recordingTUIMemoryRuntime) ResolveProject(context.Context, config.Options, string) (string, error) {
-	return "project-1", nil
-}
-
-func (*recordingTUIMemoryRuntime) Recent(context.Context, config.Options, memory.Recent) ([]memory.Entry, error) {
-	return nil, nil
-}
-
-func (runtime *recordingTUIMemoryRuntime) Recall(_ context.Context, _ config.Options, request memory.Recall) ([]memory.Entry, error) {
-	runtime.recall = request
-	return []memory.Entry{{ID: "obs-1", Title: "Decision", Preview: "bounded preview", Type: "architecture", State: memory.StateActive}}, nil
-}
-
-func (runtime *recordingTUIMemoryRuntime) Get(_ context.Context, _ config.Options, request memory.Lookup) (memory.Entry, error) {
-	runtime.lookup = request
-	runtime.references = []string{"obs-prior"}
-	return memory.Entry{
-		ID: request.ID, Title: "Decision", Content: "Full durable content",
-		Project: request.Project, Scope: request.Scope, Type: "architecture",
-		State: memory.StateActive, References: runtime.references,
-	}, nil
-}
-
-func TestTUIBackendMultiSetupPlansSelectionsAndPreservesProviderOptions(t *testing.T) {
-	shared := &recordingShared{}
-	openCode := &recordingMultiIntegration{preview: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "open", ArtifactCount: 1}, install: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "open", ArtifactCount: 1}, status: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "open", ArtifactCount: 1}}
-	setup := &recordingMultiSetupRuntime{shared: shared, openCode: openCode}
-	codex := &recordingMultiIntegration{preview: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex", ArtifactCount: 2}, install: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "codex", ArtifactCount: 2}, status: integration.Result{Provider: "codex", State: integration.StateInstalled, ArtifactSHA256: "codex", ArtifactCount: 2}}
-	backend := tuiBackend{setup: setup, opencode: openCode, codex: codex}
-	request := tui.MultiSetupRequest{Setup: tui.SetupRequest{Workspace: t.TempDir(), Plan: "high", ModelEfficient: "openai/fast"}, Providers: []setupflow.Provider{setupflow.ProviderCodex, setupflow.ProviderOpenCode}}
-	for _, providers := range [][]setupflow.Provider{{setupflow.ProviderOpenCode}, {setupflow.ProviderCodex}, request.Providers} {
-		plan, err := backend.PlanMultiSetup(context.Background(), tui.MultiSetupRequest{Setup: request.Setup, Providers: providers})
-		if err != nil || len(plan.Providers) != len(providers) {
-			t.Fatalf("providers=%v plan=%#v err=%v", providers, plan, err)
-		}
-	}
-	plan, err := backend.PlanMultiSetup(context.Background(), request)
-	if err != nil || len(plan.Providers) != 2 || plan.Providers[0].Provider != setupflow.ProviderOpenCode || plan.Providers[1].Provider != setupflow.ProviderCodex {
-		t.Fatalf("plan=%#v err=%v", plan, err)
-	}
-	if openCode.previewOptions.ModelEfficient != "openai/fast" || codex.previewOptions.ModelPlan != modelplan.PlanHigh || codex.previewOptions.ConfigDir != "" || codex.previewOptions.HomeDir == "" || codex.previewOptions.ModelEfficient != "" {
-		t.Fatalf("opencode=%#v codex=%#v", openCode.previewOptions, codex.previewOptions)
-	}
-	result, err := backend.ApplyMultiSetup(context.Background(), tui.MultiSetupRequest{Setup: request.Setup, Providers: request.Providers, ExpectedPlanDigest: plan.Digest})
-	if err != nil || shared.applies != 2 || len(result.Providers) != 2 || !result.Providers[0].Verified || !result.Providers[1].Verified {
-		t.Fatalf("result=%#v err=%v shared=%d", result, err, shared.applies)
-	}
-}
-
-func TestTUIBackendMultiSetupReturnsPartialProviderResult(t *testing.T) {
-	openCode := &recordingMultiIntegration{preview: integration.Result{Provider: "opencode", State: integration.StateAbsent, ArtifactSHA256: "open", ArtifactCount: 1}, install: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "open", ArtifactCount: 1}, status: integration.Result{Provider: "opencode", State: integration.StateInstalled, ArtifactSHA256: "open", ArtifactCount: 1}}
-	setup := &recordingMultiSetupRuntime{shared: &recordingShared{}, openCode: openCode}
-	codex := &recordingMultiIntegration{preview: integration.Result{Provider: "codex", State: integration.StateAbsent, ArtifactSHA256: "codex", ArtifactCount: 1}, installErr: context.Canceled}
-	backend := tuiBackend{setup: setup, opencode: openCode, codex: codex}
-	request := tui.MultiSetupRequest{Setup: tui.SetupRequest{Workspace: t.TempDir(), Plan: "medium"}, Providers: []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex}}
-	plan, err := backend.PlanMultiSetup(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := backend.ApplyMultiSetup(context.Background(), tui.MultiSetupRequest{Setup: request.Setup, Providers: request.Providers, ExpectedPlanDigest: plan.Digest})
-	if err == nil || len(result.Providers) != 2 || !result.Providers[0].Verified || result.Providers[1].Verified {
-		t.Fatalf("result=%#v err=%v", result, err)
-	}
-}
-
-func TestMemoryRuntime_ReadAbsentStorageOperationalAndNonMutating(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "absent")
-	var out, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"memory", "search", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"query":"token","project":"p","scope":"project"}`), &out, &stderr)
-	_, err := os.Stat(root)
-	testutil.Require(t, code == 1 && out.Len() == 0 && os.IsNotExist(err), "exit=%d out=%q stat=%v", code, out.String(), err)
-}
-
-func TestMemoryRuntime_SaveCloseAndOfflineRestart(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "store")
-	var out, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"memory", "save", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"title":"T","content":"restart token","project":"p"}`), &out, &stderr)
-	testutil.Require(t, code == 0, "save exit=%d stderr=%q", code, stderr.String())
-	out.Reset()
-	code = Run(context.Background(), []string{"memory", "search", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"query":"restart","project":"p","scope":"project"}`), &out, &stderr)
-	testutil.Require(t, code == 0 && strings.Contains(out.String(), "T"), "restart exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
-}
-
-func TestOpenCodeIntegrationRuntime_InstallStatusAndRecoverableUninstall(t *testing.T) {
-	integrationRuntime, err := opencode.NewManagedIntegration(managedLauncherForTest(t))
-	testutil.NoError(t, err)
-	configDirectory := filepath.Join(t.TempDir(), "opencode")
-	var out, stderr bytes.Buffer
-	run := func(args []string) int {
-		return runWithMCPAndRuntimes(context.Background(), args, strings.NewReader(""), &out, &stderr, tui.Run, cli.RunMCP, appRuntimes{opencode: integrationRuntime})
-	}
-	code := run([]string{"integrate", "opencode", "install", "--model-mode", "single", "--model", "openai/gpt-5.6-sol", "--config-dir", configDirectory})
-	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=installed") && stderr.Len() == 0, "install exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
-	out.Reset()
-	code = run([]string{"integrate", "opencode", "status", "--config-dir", configDirectory})
-	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=installed") && strings.Contains(out.String(), "changed=false"), "status exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
-	out.Reset()
-	code = run([]string{"integrate", "opencode", "uninstall", "--config-dir", configDirectory})
-	testutil.Require(t, code == 0 && strings.Contains(out.String(), "state=absent") && strings.Contains(out.String(), "backup="), "uninstall exit=%d out=%q stderr=%q", code, out.String(), stderr.String())
-}
-
-func TestCodexIntegrationRuntime_PreservesConfigToml(t *testing.T) {
-	configDirectory := filepath.Join(t.TempDir(), "codex")
-	config := []byte("model = \"user-owned\"\n[mcp_servers.user]\ncommand = \"user-tool\"\n")
-	if err := os.Mkdir(configDirectory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(configDirectory, "config.toml"), config, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out, stderr bytes.Buffer
-	runtime := codex.NewIntegrationWithRunner(testutil.NewCodexRunner())
-	run := func(args []string) int {
-		return runWithMCPAndRuntimes(context.Background(), args, strings.NewReader(""), &out, &stderr, tui.Run, cli.RunMCP, appRuntimes{codex: runtime})
-	}
-	for _, action := range []string{"install", "status", "reinstall", "uninstall"} {
-		out.Reset()
-		stderr.Reset()
-		code := run([]string{"integrate", "codex", action, "--config-dir", configDirectory})
-		wantState := "state=installed"
-		if action == "uninstall" {
-			wantState = "state=absent"
-		}
-		testutil.Require(t, code == 0 && stderr.Len() == 0 && strings.Contains(out.String(), wantState), "%s exit=%d out=%q stderr=%q", action, code, out.String(), stderr.String())
-		got, err := os.ReadFile(filepath.Join(configDirectory, "config.toml"))
-		if action == "uninstall" {
-			testutil.Require(t, err == nil && bytes.Equal(got, config), "%s config=%q err=%v", action, got, err)
-			continue
-		}
-		value := string(got)
-		testutil.Require(t, err == nil && bytes.HasPrefix(got, config) && strings.Count(value, "[marketplaces.vgxness]") == 1 && strings.Count(value, `[plugins."vgxness@vgxness"]`) == 1 && strings.Contains(value, "enabled = true"), "%s config=%q err=%v", action, got, err)
-	}
-}
-
 func TestVersionUsesLightweightPathWithoutWorkingDirectory(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if goruntime.GOOS == "windows" {
 		t.Skip("Windows prevents removing the active working directory")
 	}
 	original, err := os.Getwd()
@@ -442,205 +38,61 @@ func TestVersionUsesLightweightPathWithoutWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestRunDispatchesExplicitTUI(t *testing.T) {
-	called := 0
-	launcher := func(_ context.Context, _ io.Reader, _ io.Writer, _ io.Writer, backend tui.Backend, options tui.Options) int {
-		called++
-		if backend == nil || options.Workspace == "" {
-			t.Fatalf("invalid TUI launch: backend=%v options=%+v", backend, options)
+func TestRunDispatchesMCPWithWorkingDirectoryAsWorkspace(t *testing.T) {
+	var gotArgs []string
+	var gotWorkspace string
+	code := run(context.Background(), []string{"mcp", "--full"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, nil, func(_ context.Context, args []string, _ io.Reader, _, _ io.Writer, workspace string) int {
+		gotArgs, gotWorkspace = args, workspace
+		return 7
+	})
+	wd, _ := os.Getwd()
+	testutil.Require(t, code == 7 && len(gotArgs) == 1 && gotArgs[0] == "--full" && gotWorkspace == wd, "code=%d args=%v workspace=%q", code, gotArgs, gotWorkspace)
+	var stderr bytes.Buffer
+	code = run(context.Background(), []string{"mcp"}, strings.NewReader(""), &bytes.Buffer{}, &stderr, nil, nil)
+	testutil.Require(t, code == 1 && strings.Contains(stderr.String(), "operational:"), "code=%d stderr=%q", code, stderr.String())
+}
+
+func TestRunRejectsRetiredCommands(t *testing.T) {
+	for _, command := range []string{"setup", "integrate", "self", "skills", "sdd", "agent"} {
+		var out, stderr bytes.Buffer
+		code := Run(context.Background(), []string{command}, strings.NewReader(""), &out, &stderr)
+		testutil.Require(t, code == 2 && out.Len() == 0 && strings.HasPrefix(stderr.String(), "usage: vgxness "), "%s code=%d out=%q stderr=%q", command, code, out.String(), stderr.String())
+	}
+}
+
+func TestMemoryRuntime_ReadAbsentStorageOperationalAndNonMutating(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "absent")
+	var out, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"memory", "search", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"query":"x","project":"p","scope":"project"}`), &out, &stderr)
+	_, statErr := os.Stat(root)
+	testutil.Require(t, code == 1 && out.Len() == 0 && os.IsNotExist(statErr), "code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+}
+
+func TestMemoryRuntime_SaveCloseAndOfflineRestart(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	var out, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"memory", "save", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"content":"durable fact","project":"p"}`), &out, &stderr)
+	testutil.Require(t, code == 0, "save code=%d stderr=%q", code, stderr.String())
+	out.Reset()
+	code = Run(context.Background(), []string{"memory", "search", "--stdin", "--storage-root", root}, strings.NewReader(`{"schemaVersion":1,"query":"durable","project":"p","scope":"project"}`), &out, &stderr)
+	testutil.Require(t, code == 0 && strings.Contains(out.String(), "durable fact"), "search code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+}
+
+func TestRunDispatchesConsoleWithWorkingDirectory(t *testing.T) {
+	var got tui.Options
+	code := run(context.Background(), []string{"tui"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, func(_ context.Context, _ io.Reader, _, _ io.Writer, backend tui.Backend, options tui.Options) int {
+		if backend == nil {
+			t.Fatal("console launched without a backend")
 		}
-		return 23
-	}
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"tui"}, bytes.NewReader(nil), &stdout, &stderr, launcher)
-	if code != 23 || called != 1 || stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("code=%d called=%d stdout=%q stderr=%q", code, called, stdout.String(), stderr.String())
-	}
-}
-
-func TestRunRejectsTUIArgumentsWithoutLaunching(t *testing.T) {
-	called := 0
-	launcher := func(context.Context, io.Reader, io.Writer, io.Writer, tui.Backend, tui.Options) int {
-		called++
+		got = options
 		return 0
-	}
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"tui", "--unknown"}, bytes.NewReader(nil), &stdout, &stderr, launcher)
-	if code != 2 || called != 0 || stdout.Len() != 0 || stderr.String() != "usage: vgxness tui\n" {
-		t.Fatalf("code=%d called=%d stdout=%q stderr=%q", code, called, stdout.String(), stderr.String())
-	}
-}
-
-func TestRunDispatchesMCPWithoutInitializingTUI(t *testing.T) {
-	tuiCalls, mcpCalls := 0, 0
-	launcher := func(context.Context, io.Reader, io.Writer, io.Writer, tui.Backend, tui.Options) int {
-		tuiCalls++
-		return 0
-	}
-	launchMCP := func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int {
-		mcpCalls++
-		return 29
-	}
-	var stdout, stderr bytes.Buffer
-	code := runWithMCP(context.Background(), []string{"mcp"}, bytes.NewReader(nil), &stdout, &stderr, launcher, launchMCP)
-	if code != 29 || mcpCalls != 1 || tuiCalls != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("code=%d mcpCalls=%d tuiCalls=%d stdout=%q stderr=%q", code, mcpCalls, tuiCalls, stdout.String(), stderr.String())
-	}
-}
-
-func TestTUIBackendSetupPlanAndApplyMapOptionsAndResults(t *testing.T) {
-	steps := []setupflow.Step{{Number: 1, Title: "Check", Explanation: "Read only"}, {Number: 2, Title: "Install", Mutates: true}}
-	plan := setupflow.Plan{
-		Provider: "opencode", Steps: steps, Ready: true,
-		SelfInstall: selfinstall.Result{State: selfinstall.StateAbsent, LauncherPath: "/bin/vgxness", Changed: true, UpdateAvailable: true, RollbackAvailable: true, ActiveSHA256: "active", PreviousSHA256: "previous"},
-		Integration: integration.Result{
-			State: integration.StatePartial, Path: "/config/manager.md", ArtifactCount: 17,
-			ModelPlan: modelplan.PlanHigh, ModelProvider: "acme", ModelEfficient: "acme/fast",
-			ModelBalanced: "acme/balanced", ModelFrontier: "acme/frontier", ModelEfficientEffort: modelplan.EffortLow, ModelBalancedEffort: modelplan.EffortHigh, ModelFrontierEffort: modelplan.EffortUltra, ModelFrontierSource: modelplan.ModelSlotCustom, ModelFrontierAvailability: modelplan.ModelSlotUnknown, Changed: true, RestartRequired: true,
-		},
-		Handshake: integration.Handshake{OK: true, Status: integration.HandshakeHealthy},
-		Skills:    skills.Result{State: skills.StateInstalled, Changed: true, UpdateNeeded: true},
-	}
-	runtime := &recordingTUISetupRuntime{plan: plan, result: setupflow.Result{
-		Plan: plan, SelfInstall: selfinstall.Result{State: selfinstall.StateInstalled, LauncherPath: "/bin/vgxness", UpdateAvailable: true, RollbackAvailable: true, ActiveSHA256: "active", PreviousSHA256: "previous"},
-		Integration: integration.Result{State: integration.StateInstalled, Path: "/config/manager.md", ArtifactCount: 17, RestartRequired: true},
-		Handshake:   integration.Handshake{OK: true, Status: integration.HandshakeHealthy}, Changed: true, Recovery: "safe recovery",
-	}}
-	backend := tuiBackend{setup: runtime}
-
-	for _, selected := range []string{"low", "medium", "high"} {
-		preview, err := backend.PlanSetup(context.Background(), tui.SetupRequest{Workspace: "workspace/../project", Plan: selected})
-		testutil.Require(t, err == nil && preview.Ready && preview.ModelPlan == "high" && len(preview.Steps) == 2, "preview=%+v err=%v", preview, err)
-		expectedWorkspace, _ := filepath.Abs("project")
-		testutil.Require(t, runtime.planOptions.Workspace == filepath.Clean(expectedWorkspace) && runtime.planOptions.Integration.ModelPlan == modelplan.Plan(selected), "selected=%s options=%+v", selected, runtime.planOptions)
-	}
-	preview, _ := backend.PlanSetup(context.Background(), tui.SetupRequest{Workspace: "/workspace", Plan: "high", ModelEfficient: "openai/fast", ModelBalanced: "anthropic/balanced", ModelFrontier: "acme/frontier", ModelEfficientEffort: "low", ModelBalancedEffort: "high", ModelFrontierEffort: "ultra"})
-	testutil.Require(t, runtime.planOptions.Integration.ModelEfficient == "openai/fast" && runtime.planOptions.Integration.ModelBalanced == "anthropic/balanced" && runtime.planOptions.Integration.ModelFrontier == "acme/frontier" && runtime.planOptions.Integration.ModelEfficientEffort == modelplan.EffortLow && runtime.planOptions.Integration.ModelBalancedEffort == modelplan.EffortHigh && runtime.planOptions.Integration.ModelFrontierEffort == modelplan.EffortUltra, "exact profile options=%+v", runtime.planOptions)
-	preview.Steps[0].Title = "changed"
-	testutil.Require(t, runtime.plan.Steps[0].Title == "Check", "preview steps alias setupflow plan: %+v", runtime.plan.Steps)
-
-	applyWorkspace := filepath.Join(t.TempDir(), "workspace")
-	result, err := backend.ApplySetup(context.Background(), tui.SetupRequest{Workspace: applyWorkspace, Plan: "low", ExpectedPlanDigest: "confirmed-digest"})
-	testutil.Require(t, err == nil && result.Changed && result.SelfInstallState == "installed" && result.IntegrationState == "installed" && result.ArtifactCount == 17 && result.HandshakeOK && result.RestartRequired && result.Recovery == "safe recovery", "result=%+v err=%v", result, err)
-	testutil.Require(t, runtime.applyOptions.Workspace == filepath.Clean(applyWorkspace) && runtime.applyOptions.Integration.ModelPlan == modelplan.PlanLow && runtime.applyOptions.ExpectedPlanDigest == "confirmed-digest", "apply options=%+v", runtime.applyOptions)
-	result.Plan.Steps[0].Title = "changed"
-	testutil.Require(t, runtime.result.Plan.Steps[0].Title == "Check", "result steps alias setupflow result: %+v", runtime.result.Plan.Steps)
-	testutil.Require(t, preview.SelfInstallChanged && preview.IntegrationChanged && preview.IntegrationRestartRequired && preview.SkillsChanged && preview.SkillsUpdateNeeded, "preview change signals=%+v", preview)
-	testutil.Require(t, preview.ModelFrontierSource == "custom" && preview.ModelFrontierAvailability == "unknown", "frontier mapping=%+v", preview)
-	testutil.Require(t, preview.SelfInstallUpdateAvailable && preview.SelfInstallRollbackAvailable && preview.SelfInstallActiveSHA256 == "active" && preview.SelfInstallPreviousSHA256 == "previous", "preview self-install fields=%+v", preview)
-	testutil.Require(t, result.SelfInstallUpdateAvailable && result.SelfInstallRollbackAvailable && result.SelfInstallActiveSHA256 == "active" && result.SelfInstallPreviousSHA256 == "previous", "result self-install fields=%+v", result)
-	testutil.Require(t,
-		result.Plan.ModelEfficient == "acme/fast" && result.Plan.ModelBalanced == "acme/balanced" && result.Plan.ModelFrontier == "acme/frontier" && result.Plan.ModelEfficientEffort == "low" && result.Plan.ModelBalancedEffort == "high" && result.Plan.ModelFrontierEffort == "ultra" &&
-			result.Plan.ModelFrontierSource == "custom" && result.Plan.ModelFrontierAvailability == "unknown",
-		"result plan lost model slots=%+v", result.Plan)
-}
-
-func TestTUISetupAssignmentTransportIsComparableValidatedAndCopied(t *testing.T) {
-	var requestRows [tui.SetupModelAssignmentCount]tui.SetupModelAssignmentRequest
-	for index, identity := range opencode.ModelAgentInventoryV3() {
-		requestRows[index] = tui.SetupModelAssignmentRequest{
-			ArtifactKey: identity.ArtifactKey, Provider: "acme", Reference: "acme/model",
-			RequestedEffort: "medium", Source: "custom", Availability: "unknown",
-		}
-	}
-	request := tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelAssignments: &requestRows}
-	_ = map[tui.SetupRequest]bool{request: true}
-	options, err := tuiSetupOptions(request)
-	testutil.Require(t, err == nil && options.Integration.ModelAssignments != nil && len(*options.Integration.ModelAssignments) == integration.ModelAssignmentCount, "options=%+v err=%v", options, err)
-	resolved, resolveErr := modelplan.ResolveOpenCodePlanV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: modelplan.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
-	first := (*options.Integration.ModelAssignments)[requestRows[0].ArtifactKey]
-	testutil.Require(t, resolveErr == nil && first.Variant == "" && !first.VariantSpecified && resolved.Assignments[0].Variant == modelplan.VariantMedium, "legacy variant changed config=%+v resolved=%+v err=%v", first, resolved.Assignments[0], resolveErr)
-	firstKey := requestRows[0].ArtifactKey
-	requestRows[0].Reference = "mutated/request"
-	testutil.Require(t, (*options.Integration.ModelAssignments)[firstKey].Reference == "acme/model", "request aliases integration map: %+v", *options.Integration.ModelAssignments)
-	assignment := (*options.Integration.ModelAssignments)[firstKey]
-	assignment.Reference = "mutated/options"
-	(*options.Integration.ModelAssignments)[firstKey] = assignment
-	testutil.Require(t, requestRows[0].Reference == "mutated/request", "integration map aliases request rows: %+v", requestRows[0])
-
-	duplicate := requestRows
-	duplicate[1].ArtifactKey = duplicate[0].ArtifactKey
-	_, err = tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelAssignments: &duplicate})
-	testutil.Require(t, err != nil, "duplicate assignments accepted")
-	empty := requestRows
-	empty[0].ArtifactKey = ""
-	_, err = tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelAssignments: &empty})
-	testutil.Require(t, err != nil, "incomplete assignments accepted")
-	invalid := requestRows
-	invalid[0].Reference = "acme/model?query"
-	_, err = tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", ModelAssignments: &invalid})
-	testutil.Require(t, err != nil, "invalid reference accepted")
-	runtime := &recordingTUISetupRuntime{}
-	_, err = (tuiBackend{setup: runtime}).ApplySetup(context.Background(), tui.SetupRequest{Workspace: "/workspace", ModelAssignments: &invalid})
-	testutil.Require(t, err != nil && runtime.applyOptions == (setupflow.Options{}), "invalid assignment reached apply: options=%+v err=%v", runtime.applyOptions, err)
-}
-
-func TestTUISetupPlanAssignmentRowsAreMappedAndCopied(t *testing.T) {
-	var rows [integration.ModelAssignmentCount]modelplan.OpenCodeAgentAssignmentV3
-	rows[0] = modelplan.OpenCodeAgentAssignmentV3{
-		ArtifactKey: "agents/vgxness-manager.md", Role: modelplan.RoleManager, Class: modelplan.ManagedAgentClassCore,
-		Provider: "acme", Model: "acme/frontier", RequestedEffort: modelplan.EffortUltra, Effort: modelplan.EffortHigh,
-		Variant: modelplan.VariantHigh, Degradation: modelplan.Degradation{Degraded: true, Reason: "bounded"}, Source: modelplan.ModelSlotCustom, Availability: modelplan.ModelSlotUnknown,
-	}
-	source := setupflow.Plan{Integration: integration.Result{ModelSchemaVersion: 3, ModelAssignments: &rows}}
-	plan := tuiSetupPlan(source)
-	testutil.Require(t, plan.ModelSchemaVersion == 3 && plan.ModelAssignments != nil, "plan=%+v", plan)
-	row := plan.ModelAssignments[0]
-	testutil.Require(t, row.ArtifactKey == rows[0].ArtifactKey && row.Role == string(rows[0].Role) && row.Class == string(rows[0].Class) && row.Provider == rows[0].Provider && row.Model == rows[0].Model && row.RequestedEffort == string(rows[0].RequestedEffort) && row.Effort == string(rows[0].Effort) && row.Variant == string(rows[0].Variant) && row.Degraded && row.DegradationReason == "bounded" && row.Source == string(rows[0].Source) && row.Availability == string(rows[0].Availability), "row=%+v", row)
-	plan.ModelAssignments[0].Model = "mutated/tui"
-	testutil.Require(t, rows[0].Model == "acme/frontier", "TUI plan aliases integration rows: %+v", rows[0])
-}
-
-func TestTUISetupVariantsMapBothProfileSchemas(t *testing.T) {
-	request := tui.SetupRequest{Workspace: "/workspace", Plan: "medium", ModelEfficientVariant: "xhigh", ModelBalancedVariant: "max", ModelFrontierVariant: "", ModelVariantsSpecified: true}
-	options, err := tuiSetupOptions(request)
-	testutil.Require(t, err == nil && options.Integration.ModelVariantsSpecified && options.Integration.ModelEfficientVariant == "xhigh" && options.Integration.ModelBalancedVariant == "max" && options.Integration.ModelFrontierVariant == "", "options=%+v err=%v", options, err)
-	plan := tuiSetupPlan(setupflow.Plan{Integration: integration.Result{ModelSchemaVersion: 2, ModelEfficient: "acme/fast", ModelBalanced: "acme/balanced", ModelFrontier: "acme/default", ModelEfficientVariant: "xhigh", ModelBalancedVariant: "max", ModelVariantsSpecified: true}})
-	testutil.Require(t, plan.ModelEfficientVariant == "xhigh" && plan.ModelBalancedVariant == "max" && plan.ModelVariantsSpecified, "plan=%+v", plan)
-}
-
-func TestTUIBackendCatalogScansPiStoreLocally(t *testing.T) {
-	agentDir := t.TempDir()
-	store := `{"openai-codex":{"models":[
-		{"id":"gpt-5.6-luna","reasoning":true,"thinkingLevelMap":{"xhigh":"xhigh","max":"max","minimal":"low"}},
-		{"id":"plain","reasoning":false,"thinkingLevelMap":{"high":"high"}}
-	]}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "models-store.json"), []byte(store), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
-
-	rows, err := (tuiBackend{}).ModelCatalog(context.Background(), setupflow.ProviderPi, false)
-	testutil.Require(t, err == nil && len(rows) == 2, "rows=%+v err=%v", rows, err)
-	testutil.Require(t, rows[0].Provider == "openai-codex" && rows[0].Reference == "openai-codex/gpt-5.6-luna" && strings.Join(rows[0].Variants, ",") == "minimal,low,medium,high,xhigh", "rows=%+v", rows)
-	testutil.Require(t, rows[1].Reference == "openai-codex/plain" && len(rows[1].Variants) == 0, "rows=%+v", rows)
-	if _, err := (tuiBackend{}).ModelCatalog(context.Background(), setupflow.ProviderCodex, false); err == nil {
-		t.Fatal("Codex advertised a model catalog")
-	}
-}
-
-func TestTUIBackendCatalogMapsNeutralRowsAndRefreshFlag(t *testing.T) {
-	catalog := &recordingCatalog{snapshot: modelcatalog.Snapshot{Models: []string{"acme/a:b@c+d", "other/nested/model"}, Variants: map[string][]string{"acme/a:b@c+d": {"xhigh", "max"}, "other/nested/model": {}}}}
-	backend := tuiBackend{catalog: catalog}
-	rows, err := backend.ModelCatalog(context.Background(), setupflow.ProviderOpenCode, false)
-	testutil.Require(t, err == nil && !catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 0 && len(rows) == 2 && rows[0].Provider == "acme" && rows[0].Reference == "acme/a:b@c+d" && len(rows[0].Variants) == 2 && rows[0].Variants[0] == "xhigh" && rows[0].Variants[1] == "max" && rows[0].Source == "custom" && rows[0].Availability == "unknown", "rows=%+v err=%v", rows, err)
-	var requestRows [tui.SetupModelAssignmentCount]tui.SetupModelAssignmentRequest
-	for index, identity := range opencode.ModelAgentInventoryV3() {
-		requestRows[index] = tui.SetupModelAssignmentRequest{ArtifactKey: identity.ArtifactKey, Provider: rows[0].Provider, Reference: rows[0].Reference, RequestedEffort: "ultra", Source: rows[0].Source, Availability: rows[0].Availability}
-	}
-	options, err := tuiSetupOptions(tui.SetupRequest{Workspace: "/workspace", ModelAssignments: &requestRows})
-	resolved, err := modelplan.ResolveOpenCodePlanV3(modelplan.ModelPlanConfigV3{SchemaVersion: 3, Provider: "acme", Assignments: *options.Integration.ModelAssignments, Provenance: modelplan.ModelPlanCLI}, opencode.ModelAgentInventoryV3())
-	testutil.Require(t, err == nil && resolved.Assignments[0].Variant == modelplan.VariantXHigh && resolved.Assignments[0].Effort == modelplan.EffortUltra && !resolved.Assignments[0].Degradation.Degraded, "resolved=%+v err=%v", resolved, err)
-	rows, err = backend.ModelCatalog(context.Background(), setupflow.ProviderOpenCode, true)
-	testutil.Require(t, err == nil && catalog.refresh && catalog.discovers == 1 && catalog.refreshes == 1 && rows[0].Reference == "acme/a:b@c+d", "refreshed rows=%+v err=%v", rows, err)
-}
-
-func TestObservedOpenCodeRuntimeKeepsMCPRepairRoute(t *testing.T) {
-	observed := integration.Observe(opencode.NewIntegration(), hooks.New())
-	if _, ok := observed.(integration.MCPRepairRuntime); !ok {
-		t.Fatal("observed OpenCode runtime must keep the repair-mcp route reachable")
-	}
-	if _, ok := observed.(integration.ManagedRuntime); !ok {
-		t.Fatal("observed OpenCode runtime must keep managed reinstall reachable")
-	}
+	}, nil)
+	wd, _ := os.Getwd()
+	testutil.Require(t, code == 0 && got.Workspace == wd, "code=%d options=%+v", code, got)
+	var stderr bytes.Buffer
+	code = run(context.Background(), []string{"tui", "extra"}, strings.NewReader(""), &bytes.Buffer{}, &stderr, nil, nil)
+	testutil.Require(t, code == 2 && strings.HasPrefix(stderr.String(), "usage: vgxness tui"), "code=%d stderr=%q", code, stderr.String())
+	stderr.Reset()
+	code = Run(context.Background(), []string{"tui"}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
+	testutil.Require(t, code == 2 && strings.Contains(stderr.String(), "interactive terminals"), "code=%d stderr=%q", code, stderr.String())
 }

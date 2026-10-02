@@ -8,17 +8,12 @@ import (
 	"io"
 	"strings"
 
-	"github.com/vgxness/vgxness/internal/buildinfo"
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/inspection"
-	"github.com/vgxness/vgxness/internal/integration"
-	"github.com/vgxness/vgxness/internal/mcp"
-	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/secrets"
-	"github.com/vgxness/vgxness/internal/selfinstall"
-	setupflow "github.com/vgxness/vgxness/internal/setup"
-	"github.com/vgxness/vgxness/internal/skillregistry"
-	"github.com/vgxness/vgxness/internal/skills"
+	"github.com/uzielvgx/vgxness/internal/buildinfo"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/inspection"
+	"github.com/uzielvgx/vgxness/internal/mcp"
+	"github.com/uzielvgx/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/secrets"
 )
 
 type Inspector interface {
@@ -39,13 +34,16 @@ func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	flags.SetOutput(io.Discard)
 	var opts config.Options
 	var full bool
+	var explicitWorkspace string
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "use project-local storage")
 	flags.BoolVar(&full, "full", false, "enable explicitly requested local memory mutations")
+	flags.StringVar(&explicitWorkspace, "workspace", "", "absolute workspace to bind (defaults to CLAUDE_PROJECT_DIR, then the current directory)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || launch == nil {
-		fmt.Fprintln(stderr, "usage: vgxness mcp [--storage-root <path>] [--project-local] [--full]")
+		fmt.Fprintln(stderr, "usage: vgxness mcp [--workspace <path>] [--storage-root <path>] [--project-local] [--full]")
 		return 2
 	}
+	workspace = resolveWorkspace(explicitWorkspace, workspace)
 	opts.ProjectDir = workspace
 	if err := launch(ctx, workspace, opts, full); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -58,49 +56,36 @@ func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	return 0
 }
 
-func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, opencodeIntegration, codexIntegration integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime) int {
+func RunProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime) int {
 	return withCheckedOutput(stdout, stderr, func(out io.Writer) int {
-		return runProductRuntime(ctx, args, stdin, out, stderr, inspector, memories, opencodeIntegration, codexIntegration, installer, setup)
+		return runProductRuntime(ctx, args, stdin, out, stderr, inspector, memories)
 	})
 }
 
-func runProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime, opencodeIntegration, codexIntegration integration.Runtime, installer selfinstall.Runtime, setup setupflow.Runtime) int {
+func runProductRuntime(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, inspector Inspector, memories MemoryRuntime) int {
 	if len(args) > 0 && args[0] == "version" {
 		return RunVersion(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "memory" {
 		return runMemory(ctx, args[1:], stdin, stdout, stderr, memories)
 	}
-	if len(args) > 0 && args[0] == "integrate" {
-		return runIntegration(ctx, args[1:], stdout, stderr, opencodeIntegration, codexIntegration)
-	}
-	if len(args) > 0 && args[0] == "self" {
-		return runSelfInstall(ctx, args[1:], stdout, stderr, installer)
-	}
-	if len(args) > 0 && args[0] == "setup" {
-		return runSetup(ctx, args[1:], stdin, stdout, stderr, setup, codexIntegration)
+	if len(args) > 0 && args[0] == "claude-code" {
+		return runClaudeCode(ctx, args[1:], stdin, stdout, stderr, memories)
 	}
 	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") {
-		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|tui|memory|integrate|self|skills|setup>")
+		fmt.Fprintln(stderr, "usage: vgxness <version|status|doctor|memory|mcp|claude-code|tui>")
 		return 2
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var opts config.Options
-	var all bool
-	if command == "doctor" {
-		flags.BoolVar(&all, "all", false, "inspect storage, managed setup and available provider runtime evidence")
-	}
 	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
 	flags.StringVar(&opts.ProjectDir, "workspace", "", "absolute workspace")
 	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "use project-local storage")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "invalid command arguments")
 		return 2
-	}
-	if all {
-		return runDoctorAll(ctx, stdout, stderr, opts, inspector, setup, codexIntegration)
 	}
 	var result inspection.Result
 	var err error
@@ -186,18 +171,6 @@ func terminalSafe(value string) string {
 
 func failure(err error) (int, string) {
 	switch {
-	case errors.Is(err, selfinstall.ErrNoInstallation):
-		return 1, "not_found: no managed self-installation is available"
-	case errors.Is(err, selfinstall.ErrStaleGCPlan):
-		return 1, "conflict: self-install garbage-collection plan is stale; rerun `vgxness self gc preview`"
-	case errors.Is(err, selfinstall.ErrGCRecovery):
-		return 1, "recovery: self-install garbage collection is incomplete; run `vgxness self gc recover` without deleting retained evidence"
-	case errors.Is(err, integration.ErrRecovery):
-		return 1, "recovery: integration rollback failed; inspect managed artifacts and backups"
-	case errors.Is(err, skills.ErrRecovery):
-		return 1, "recovery: skills rollback failed; inspect managed artifacts and backups"
-	case errors.Is(err, selfinstall.ErrRecovery):
-		return 1, "recovery: self-install activation is incomplete; run `vgxness self status` and retry `vgxness self install` without deleting retained evidence"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return 130, "cancelled: operation cancelled"
 	case errors.Is(err, memory.ErrInvalid):
@@ -212,44 +185,6 @@ func failure(err error) (int, string) {
 		return 1, "operational: memory storage failed"
 	case errors.Is(err, inspection.ErrCorrupt):
 		return 1, "corrupt: storage inspection failed"
-	case errors.Is(err, integration.ErrInvalid):
-		return 2, "invalid: integration request is invalid"
-	case errors.Is(err, integration.ErrConflict):
-		return 1, "conflict: integration artifact already exists"
-	case errors.Is(err, integration.ErrDrift):
-		return 1, "drift: integration artifact differs from the managed version"
-	case errors.Is(err, selfinstall.ErrInvalid):
-		return 2, "invalid: self-install request is invalid"
-	case errors.Is(err, selfinstall.ErrConflict):
-		return 1, "conflict: self-install target contains unmanaged content"
-	case errors.Is(err, selfinstall.ErrDrift):
-		return 1, "drift: managed self-install differs from its manifest"
-	case errors.Is(err, skillregistry.ErrIO):
-		return 1, "operational: skill registry storage failed"
-	case errors.Is(err, skillregistry.ErrInvalid):
-		return 2, "invalid: skill registry request is invalid"
-	case errors.Is(err, skillregistry.ErrNotFound):
-		return 1, "not_found: skill registry entry was not found"
-	case errors.Is(err, skillregistry.ErrBusy):
-		return 1, "conflict: skill registry is locked by another writer"
-	case errors.Is(err, skillregistry.ErrAmbiguous):
-		return 1, "conflict: skill registry name is ambiguous; resolve by explicit id or path"
-	case errors.Is(err, skillregistry.ErrStale):
-		return 1, "drift: skill registry entry no longer matches its source"
-	case errors.Is(err, skills.ErrInvalid):
-		return 2, "invalid: skills request is invalid"
-	case errors.Is(err, skills.ErrConflict):
-		return 1, "conflict: skills target contains unmanaged content"
-	case errors.Is(err, skills.ErrDrift):
-		return 1, "drift: managed skills content differs from its bundle"
-	case errors.Is(err, selfinstall.ErrNoRollback):
-		return 1, "not_found: no previous managed version is available"
-	case errors.Is(err, setupflow.ErrInvalid):
-		return 2, "invalid: setup request is invalid"
-	case errors.Is(err, setupflow.ErrPrerequisite):
-		return 1, "unavailable: setup prerequisites are not ready"
-	case errors.Is(err, setupflow.ErrVerification):
-		return 1, "operational: setup verification failed"
 	case errors.Is(err, config.ErrInvalid):
 		return 2, "invalid: storage configuration is invalid"
 	default:

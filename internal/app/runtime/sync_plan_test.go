@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 )
 
 const (

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/buildinfo"
+	"github.com/uzielvgx/vgxness/internal/buildinfo"
 )
 
 func TestCLI_VersionDispatchesWithoutInspector(t *testing.T) {

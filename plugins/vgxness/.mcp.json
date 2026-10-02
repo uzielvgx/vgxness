@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "vgxness",
+      "args": ["mcp", "--full", "--workspace", "${CLAUDE_PROJECT_DIR}"],
+      "env": { "VGXNESS_CLIENT": "claude-code" }
+    }
+  }
+}

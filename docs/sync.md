@@ -1,181 +1,184 @@
-# Synchronization service boundary
+# Frontera del servicio de sincronización
 
-`vgxness-syncd` is the optional PostgreSQL-backed synchronization service. Its
-HTTP listener is intentionally limited to a literal loopback address and
-defaults to `127.0.0.1:8787`.
+`vgxness-syncd` es el servicio opcional de sincronización respaldado por
+PostgreSQL. Su listener HTTP está limitado a propósito a una dirección loopback
+literal y por defecto escucha en `127.0.0.1:8787`.
 
-The service accepts bearer-authenticated synchronization requests. It does not
-terminate TLS and must never be exposed directly on an untrusted network. A
-remote deployment requires a TLS terminator or reverse proxy that accepts HTTPS
-and forwards requests to the daemon through loopback on the same trusted host.
-The application-side synchronization client continues to require an `https`
-endpoint and does not follow credential-bearing redirects.
+El servicio acepta peticiones de sincronización autenticadas con bearer. No
+termina TLS y nunca debe exponerse directamente en una red no confiable. Un
+despliegue remoto necesita un terminador TLS o un reverse proxy que acepte
+HTTPS y reenvíe al demonio por loopback en el mismo host confiable. El cliente
+de sincronización de la aplicación sigue exigiendo un endpoint `https` y no
+sigue redirecciones que lleven credenciales.
 
-## Runtime configuration
+## Configuración en tiempo de ejecución
 
-The daemon reads `VGXNESS_SYNC_POSTGRES_DSN` or the mutually exclusive
-`VGXNESS_SYNC_POSTGRES_DSN_FILE`, plus `VGXNESS_SYNC_OWNER_ID`, when starting
-the service or managing device credentials. The file setting must name an
-absolute, bounded, regular non-symlink file; exactly one final LF or CRLF is removed.
-Keep the database connection string out of command arguments, logs, checked-in
-files, and proxy configuration. Missing or malformed configuration fails
-closed.
+El demonio lee `VGXNESS_SYNC_POSTGRES_DSN` o, de forma mutuamente excluyente,
+`VGXNESS_SYNC_POSTGRES_DSN_FILE`, más `VGXNESS_SYNC_OWNER_ID`, al iniciar el
+servicio o al gestionar credenciales de dispositivo. El archivo debe ser una
+ruta absoluta a un archivo regular, acotado y sin symlink; se elimina
+exactamente un LF o CRLF final. Mantén la cadena de conexión fuera de los
+argumentos de comandos, de los logs, de archivos versionados y de la
+configuración del proxy. Una configuración ausente o malformada falla cerrado.
 
-Optional admission-limit settings are
-`VGXNESS_SYNC_AUTH_GLOBAL_PER_MINUTE`,
-`VGXNESS_SYNC_AUTH_DEVICE_PER_MINUTE`, and
-`VGXNESS_SYNC_AUTH_DEVICE_STATES`. When unset, they default respectively to
-120, 60, and 256. Each value must be a positive base-10 integer; malformed,
-zero, or negative values fail daemon startup before database setup or listener
-creation. The admission window is fixed at one minute.
+Los límites de admisión opcionales son `VGXNESS_SYNC_AUTH_GLOBAL_PER_MINUTE`,
+`VGXNESS_SYNC_AUTH_DEVICE_PER_MINUTE` y `VGXNESS_SYNC_AUTH_DEVICE_STATES`. Sin
+definir, valen 120, 60 y 256 respectivamente. Cada valor debe ser un entero
+positivo en base 10; un valor malformado, cero o negativo aborta el arranque
+antes de preparar la base de datos o crear el listener. La ventana de admisión
+es fija: un minuto.
 
-## Admission and audit bounds
+## Límites de admisión y auditoría
 
-Before PostgreSQL authentication, the daemon applies the configured admission
-limits; their defaults admit at most 120 valid bearer attempts per minute
-across the process and at most 60 per minute for each syntactically declared
-device UUID. Excess attempts receive the normal
-`429 limit_exceeded` response and do not reach PostgreSQL. The UUID fairness
-state is capped at 256 entries and is process-local, so deployments with
-multiple daemon processes enforce the bound independently. These settings are not a
-distributed rate limiter: a multi-process deployment needs independently operated
-upstream admission control if it requires a fleet-wide limit.
+Antes de autenticar contra PostgreSQL, el demonio aplica los límites de
+admisión configurados: por defecto admite como máximo 120 intentos válidos de
+bearer por minuto en todo el proceso y 60 por minuto por cada UUID de
+dispositivo declarado sintácticamente. Los intentos excedentes reciben la
+respuesta normal `429 limit_exceeded` y no llegan a PostgreSQL. El estado de
+equidad por UUID se limita a 256 entradas y es local al proceso, así que un
+despliegue con varios procesos aplica el límite de forma independiente. Esto no
+es un rate limit distribuido: un despliegue multiproceso necesita un control de
+admisión upstream propio si requiere un límite para toda la flota.
 
-Failed-authentication audit evidence converges toward a 30-day retained window
-and 10,000 events for the configured owner. Cleanup runs only in a failed
-authentication audit transaction, is cancellation-aware, and deletes at most
-250 expired or over-cap records per audit write; a pre-existing excess can
-therefore persist briefly while subsequent failures converge it. It does not
-create background goroutines.
+La evidencia de auditoría de autenticaciones fallidas converge a una ventana de
+30 días y 10.000 eventos para el propietario configurado. La limpieza corre solo
+dentro de una transacción de auditoría de fallo, respeta la cancelación y borra
+como máximo 250 registros vencidos o excedentes por escritura; un exceso previo
+puede persistir brevemente mientras los siguientes fallos lo convergen. No crea
+goroutines en segundo plano.
 
-Start the local listener with:
+Arranca el listener local con:
 
 ```sh
 vgxness-syncd serve
 ```
 
-An explicit `--listen` value must remain a literal loopback IP with a non-zero
-port. Hostnames, wildcard addresses, public or private non-loopback addresses,
-and port zero are rejected before configuration or credentials are read.
-The sole exception is `serve --container-network --listen 0.0.0.0:8787`, which
-is intended for a private Docker network and does not itself enforce Docker
-network isolation. `GET /healthz` is an unauthenticated, bounded liveness
-response for container health checks; it does not disclose database state.
-The retired `--development-allow-insecure-non-loopback` flag rejects `true`;
-explicit `false` remains a no-op only so existing launch commands can migrate.
+Un `--listen` explícito debe seguir siendo una IP loopback literal con puerto
+distinto de cero. Nombres de host, comodines, direcciones públicas o privadas no
+loopback y el puerto cero se rechazan antes de leer configuración o
+credenciales. La única excepción es `serve --container-network --listen
+0.0.0.0:8787`, pensada para una red privada de Docker; no impone por sí misma el
+aislamiento de esa red. `GET /healthz` es una respuesta de liveness acotada y
+sin autenticación para health checks de contenedores; no revela estado de la
+base de datos. El flag retirado `--development-allow-insecure-non-loopback`
+rechaza `true`; `false` explícito sigue siendo un no-op solo para que los
+comandos de arranque existentes puedan migrar.
 
-## Local browser administration
+## Administración local desde el navegador
 
-Run `vgxness-syncd admin` in an interactive terminal on the database host. The
-command binds a random literal-loopback port and prints that run's admin URL and
-ephemeral operator secret to terminal output. Open the exact printed URL, enter
-the secret, and keep the terminal private. The console uses no session cookie;
-its browser actions are POST-only and every response is `no-store`.
+Ejecuta `vgxness-syncd admin` en una terminal interactiva en el host de la base
+de datos. El comando enlaza un puerto loopback literal aleatorio e imprime la
+URL de administración y el secreto efímero de operador de esa corrida. Abre
+exactamente la URL impresa, introduce el secreto y mantén la terminal privada.
+La consola no usa cookie de sesión; sus acciones son solo POST y toda respuesta
+es `no-store`.
 
-Each POST accepts exactly one `Origin` matching the configured HTTP authority,
-regardless of Fetch Metadata. When `Origin` is absent or exactly `null`, the
-compatibility fallback accepts either all three routing headers absent or single
-exact `same-origin`, `navigate`, and `document` values. If any of those three
-headers is present, all three must be present and exact; partial, empty,
-duplicate, `cross-site`, `none`, or otherwise mismatched metadata is rejected.
-Empty, wrong, and duplicate `Origin` values are always rejected.
+Cada POST acepta exactamente un `Origin` que coincida con la autoridad HTTP
+configurada, con independencia de Fetch Metadata. Cuando `Origin` está ausente
+o es exactamente `null`, el fallback de compatibilidad acepta que las tres
+cabeceras de enrutamiento estén ausentes o que `Sec-Fetch-Site`,
+`Sec-Fetch-Mode` y `Sec-Fetch-Dest` valgan exactamente `same-origin`,
+`navigate` y `document`. Si cualquiera de las tres está presente, deben estar
+las tres y ser exactas; metadatos parciales, vacíos, duplicados, `cross-site`,
+`none` o discordantes se rechazan. Un `Origin` vacío, incorrecto o duplicado se
+rechaza siempre. `Sec-Fetch-User` puede estar presente, pero se ignora porque
+no establece el origen de la petición.
 
-Here, no routing metadata means all three of `Sec-Fetch-Site`,
-`Sec-Fetch-Mode`, and `Sec-Fetch-Dest` are absent. `Sec-Fetch-User` may be
-present, but it is ignored because it does not establish the request source.
+El caso sin metadatos de enrutamiento cubre el comportamiento observado de
+Chrome al enviar formularios POST sobre un origen HTTP de Tailscale: `Origin:
+null` con las tres cabeceras ausentes. Esta puerta de origen no es
+autenticación. Cada POST aceptado sigue exigiendo su secreto de operador de alta
+entropía o su sesión en el cuerpo del formulario codificado en URL, y la consola
+no lee cookies. Una página de otro origen aún puede provocar una petición o un
+fallo no autenticado, así que esto no es inmunidad amplia a CSRF: la
+confidencialidad de la credencial del cuerpo y el aislamiento del listener
+siguen siendo necesarios.
 
-The no-routing-metadata case supports observed real Chrome form POST behavior
-on an HTTP Tailscale origin: `Origin: null` with all three routing headers
-absent. This source gate is not authentication. Every accepted admin POST still
-requires its high-entropy operator secret or session in the exact URL-encoded
-form body, and the console does not read cookies. A cross-origin page may still
-cause a request or an unauthenticated failure, so this is not a claim of broad
-CSRF immunity; confidentiality of the body credential and listener isolation
-remain required.
+El panel puede emitir una credencial de dispositivo con nombre e iniciar la
+revocación de un dispositivo activo. La emisión muestra el bearer nuevo
+exactamente una vez, en la respuesta inmediata. Cópialo directamente a la
+entrada estándar de `vgxness memory sync configure`; no lo pongas en una URL,
+argumento de shell, log, nota, extensión ni almacenamiento del navegador. Salir
+de la página o recargarla pierde la visualización. La revocación usa una página
+de confirmación de un solo uso, de corta vida, que muestra el UUID canónico del
+dispositivo antes del POST final. Volver al panel tras cualquiera de las dos
+acciones requiere POST; un GET nunca emite ni revoca. Tras emitir, verifica que
+el dispositivo aparece activo en el panel antes de usar su bearer: la entrega
+puede completarse aunque el acuse del commit sea ambiguo, así que el panel es la
+fuente de verdad.
 
-The dashboard can issue a named device credential and begin revocation of an
-active device. Issuance displays the new bearer exactly once in the immediate
-response. Copy it directly into `vgxness memory sync configure` standard input;
-do not put it in a URL, shell argument, log, note, browser extension, or browser
-storage. Leaving or refreshing the one-time page loses the display. Revocation
-uses a separate, short-lived one-time confirmation page that shows the canonical
-device UUID before the final POST. Returning to the dashboard after either
-completed action requires POST; a GET never issues or revokes a device.
-After issuance, verify that the device appears active on the dashboard before
-using its bearer. Delivery can complete when commit acknowledgement is
-ambiguous, so the dashboard is the source of truth.
-
-For administration across SSH, first run the command on the remote host and
-note its printed `127.0.0.1:PORT`. In a second terminal, forward the **same**
-port so the browser's exact Host and Origin continue to match:
+Para administrar por SSH, primero ejecuta el comando en el host remoto y anota
+el `127.0.0.1:PORT` impreso. En una segunda terminal, reenvía el **mismo**
+puerto para que Host y Origin del navegador sigan coincidiendo:
 
 ```sh
 ssh -N -L 127.0.0.1:PORT:127.0.0.1:PORT operator@sync-host
 ```
 
-Then open `http://127.0.0.1:PORT/` locally and use the operator secret from the
-remote interactive terminal. Replace both `PORT` values with the one printed by
-that admin run. Do not expose or reverse-proxy this admin listener.
+Luego abre `http://127.0.0.1:PORT/` en local y usa el secreto de operador de la
+terminal remota. Sustituye ambos `PORT` por el impreso en esa corrida. No
+expongas ni hagas reverse proxy de este listener.
 
-Loopback and a random port narrow exposure but are not a complete browser
-isolation boundary. A service worker previously registered for the exact reused
-loopback origin can initiate console actions or read an in-browser bearer. This
-task accepts that residual risk; the console does not claim to eliminate it.
-Use a dedicated browser context where practical, close the page promptly, and
-stop the admin process when the operation is complete.
+Loopback y un puerto aleatorio reducen la exposición, pero no son una frontera
+completa de aislamiento del navegador. Un service worker registrado antes para
+exactamente el mismo origen loopback puede iniciar acciones de consola o leer
+un bearer en el navegador. Ese riesgo residual se acepta; la consola no afirma
+eliminarlo. Usa un contexto de navegador dedicado cuando sea práctico, cierra la
+página pronto y detén el proceso de administración al terminar.
 
-### Persistent Tailscale dashboard in Docker
+### Panel persistente por Tailscale en Docker
 
-The Docker deployment can enable a persistent dashboard in the existing
-`vgxness-syncd serve` process. Its integrated settings form one fail-closed
-configuration:
+El despliegue en Docker puede habilitar un panel persistente dentro del mismo
+proceso `vgxness-syncd serve`. Sus ajustes integrados forman una configuración
+que falla cerrada:
 
-- `VGXNESS_SYNC_ADMIN_LISTEN` must be exactly `0.0.0.0:8788` and is accepted
-  only with `serve --container-network`.
-- `VGXNESS_SYNC_ADMIN_AUTHORITY` must be an exact canonical IP authority with a
-  nonzero canonical port and an address in Tailscale IPv4 `100.64.0.0/10` or
-  IPv6 `fd7a:115c:a1e0::/48`.
-- `VGXNESS_SYNC_ADMIN_SECRET_FILE` must be an absolute, bounded, regular
-  non-symlink file containing one 32-through-4096-byte payload after removal of
-  an optional final LF or CRLF. The 4098-byte raw allowance only permits a
-  maximum payload plus CRLF; larger payloads and multiple newlines fail.
-  Mode `0600` or production `0640` is accepted; group write/execute and every
-  other-user permission are rejected.
-- `VGXNESS_SYNC_ADMIN_SECRET` is forbidden; the login secret is file-only.
+- `VGXNESS_SYNC_ADMIN_LISTEN` debe ser exactamente `0.0.0.0:8788` y solo se
+  acepta con `serve --container-network`.
+- `VGXNESS_SYNC_ADMIN_AUTHORITY` debe ser una autoridad IP canónica exacta con
+  puerto canónico distinto de cero y una dirección en el rango IPv4
+  `100.64.0.0/10` o IPv6 `fd7a:115c:a1e0::/48` de Tailscale.
+- `VGXNESS_SYNC_ADMIN_SECRET_FILE` debe ser un archivo regular, absoluto,
+  acotado y sin symlink con un payload de 32 a 4.096 bytes tras quitar un LF o
+  CRLF final opcional. El margen bruto de 4.098 bytes solo permite el payload
+  máximo más CRLF; payloads mayores o varios saltos de línea fallan. Se acepta
+  modo `0600` o `0640` en producción; escritura o ejecución de grupo y cualquier
+  permiso de otros usuarios se rechazan.
+- `VGXNESS_SYNC_ADMIN_SECRET` está prohibido; el secreto de inicio de sesión
+  solo va en archivo.
 
-When every integrated setting is absent, `serve` runs only the sync API. Any
-partial or invalid integrated setting aborts startup. Both listeners are set up
-and bound before either begins serving. Cancellation shuts both down, and an
-unexpected failure of either terminates `serve`. Both handlers share the same
-repository and connection pool. The separate `vgxness-syncd admin` command
-remains ephemeral, terminal-gated, random-port, and loopback-only.
-The persistent integrated mode is Docker/Linux-only and fails closed on Windows;
-this does not remove standalone admin support.
+Cuando ningún ajuste integrado está presente, `serve` corre solo la API de
+sync. Cualquier ajuste parcial o inválido aborta el arranque. Ambos listeners se
+preparan y enlazan antes de que cualquiera empiece a servir. La cancelación
+apaga los dos y un fallo inesperado de cualquiera termina `serve`. Ambos
+handlers comparten repositorio y pool de conexiones. El comando separado
+`vgxness-syncd admin` sigue siendo efímero, exclusivo de terminal, de puerto
+aleatorio y solo loopback. El modo integrado persistente es solo Docker/Linux y
+falla cerrado en Windows; esto no retira el soporte del admin independiente.
 
-In the reviewed Compose deployment, the host publishes only
-`${VGXNESS_TAILSCALE_IP}:8788:8788`; the sync API has no host publication and
-continues through NPM on the Docker network. Open exactly
-`http://${VGXNESS_TAILSCALE_IP}:8788/` from a tailnet peer and enter the value
-read from the protected secret file. Never bind the host side to `0.0.0.0`, use
-a public/LAN address, or add an NPM/public proxy route for the dashboard.
-Tailscale encrypts the tailnet hop; the application still requires its login
-secret. Container-network peers remain a residual trust zone but cannot log in
-without that secret.
+En el despliegue Compose revisado, el host publica únicamente
+`${VGXNESS_TAILSCALE_IP}:8788:8788`; la API de sync no tiene publicación en el
+host y sigue pasando por NPM en la red de Docker. Abre exactamente
+`http://${VGXNESS_TAILSCALE_IP}:8788/` desde un peer de la tailnet e introduce
+el valor leído del archivo de secreto protegido. Nunca enlaces el lado del host
+a `0.0.0.0`, uses una dirección pública o de LAN, ni agregues una ruta de
+proxy NPM o pública para el panel. Tailscale cifra el salto de la tailnet; la
+aplicación sigue exigiendo su secreto. Los peers de la red del contenedor son
+una zona de confianza residual, pero no pueden iniciar sesión sin ese secreto.
 
-The dashboard follows the `serve` process/container lifecycle. Restarting,
-updating, or rolling back interrupts it and invalidates its in-memory session;
-preserve the protected secret mapping and exact Tailscale authority, then log in
-again through the same URL. See the Docker runbook for secret creation,
-readability checks, update/rollback verification, and exposure warnings.
-Secret replacement, removal, and permission changes are read only at process
-startup and require a controlled container restart. Until that restart, the
-previously loaded secret remains active even if the backing file changes.
+El panel sigue el ciclo de vida del proceso o contenedor de `serve`. Reiniciar,
+actualizar o revertir lo interrumpe e invalida su sesión en memoria; conserva el
+mapeo del secreto protegido y la autoridad Tailscale exacta, y vuelve a iniciar
+sesión por la misma URL. Consulta el runbook de Docker para crear el secreto,
+comprobar su legibilidad, verificar actualizaciones y reversiones, y las
+advertencias de exposición. El reemplazo, la eliminación o el cambio de permisos
+del secreto se leen solo al arrancar el proceso y requieren un reinicio
+controlado del contenedor; hasta entonces el secreto cargado sigue activo
+aunque el archivo cambie.
 
-## Local enrollment and status
+## Enrolamiento local y estado
 
-Enroll a local client without putting a bearer in command arguments,
-environment variables, or the SQLite database. Supply the bearer only on
-standard input:
+Enrola un cliente local sin poner el bearer en argumentos, variables de entorno
+ni en la base SQLite. Entrégalo solo por la entrada estándar:
 
 ```sh
 vgxness memory sync configure \
@@ -183,87 +186,104 @@ vgxness memory sync configure \
   --device-id 550e8400-e29b-41d4-a716-446655440000
 ```
 
-The command reads the bearer from standard input; enter or pipe it directly
-without placing it in an environment variable or command argument.
+El comando lee el bearer de stdin; escríbelo o entúbalo directamente, sin
+pasarlo por una variable de entorno ni un argumento.
 
-On Linux and macOS, an explicitly requested current-user-owned credential file
-may be used instead of the desktop keyring:
-
-```sh
-vgxness memory sync configure --credential-file /absolute/private/bearer --endpoint https://sync.example.test --device-id 550e8400-e29b-41d4-a716-446655440000
-vgxness memory sync status --credential-file /absolute/private/bearer
-vgxness memory sync --credential-file /absolute/private/bearer
-```
-
-The file must be an absolute regular file, not a symlink (nor beneath a
-symlink), owned by the current user, with no group or other permissions, and
-contain one bearer line with an optional final LF or CRLF. The path and bearer
-are never persisted. Each later `status` or `sync` invocation must explicitly
-provide the file again. Credential files are unsupported on Windows; omit the
-flag there to use the default keyring. Same-user filesystem races cannot be
-made atomically host-enforced, so the command rechecks the opened descriptor
-and fails closed when its identity or metadata changes.
-
-For pre-existing local data, queue records before the first remote sync with a
-workspace-scoped, local-only operation:
+En Linux y macOS puede usarse, de forma explícita, un archivo de credencial
+propiedad del usuario actual en lugar del keyring del escritorio:
 
 ```sh
-vgxness memory sync backfill --workspace /absolute/workspace --limit 100 --json
-vgxness memory sync --credential-file /absolute/private/bearer
+vgxness memory sync configure --credential-file /ruta/absoluta/privada/bearer --endpoint https://sync.example.test --device-id 550e8400-e29b-41d4-a716-446655440000
+vgxness memory sync status --credential-file /ruta/absoluta/privada/bearer
+vgxness memory sync --credential-file /ruta/absoluta/privada/bearer
 ```
 
-Backfill sends no network request and reads no credential. It deterministically
-queues only unsynced records for that resolved project, preserves observation
-content, timestamps, and versions, skips tombstoned records, detects queue
-identity collisions, and is safe to run again. If an existing create contains
-an older but valid record snapshot, backfill replaces only its payload while
-preserving its mutation and queue identity, and only while that exact row is
-still pending with zero attempts and has no claim history. Active or expired
-claims, retries, attempts, malformed or identity-changed payloads, and
-concurrently changed rows fail closed. `--limit` defaults to 100 and accepts 1
-through 1000; JSON reports `remaining=true` when another invocation is needed.
+El archivo debe ser regular y absoluto, no un symlink (ni estar bajo uno),
+propiedad del usuario actual, sin permisos de grupo ni de otros, y contener una
+sola línea con el bearer y un LF o CRLF final opcional. Ni la ruta ni el bearer
+se persisten: cada `status` o `sync` posterior debe volver a indicar el
+archivo. Los archivos de credencial no están soportados en Windows; omite el
+flag ahí para usar el keyring. Las carreras del sistema de archivos entre
+procesos del mismo usuario no pueden impedirse atómicamente, así que el comando
+vuelve a comprobar el descriptor abierto y falla cerrado si su identidad o
+metadatos cambian.
 
-After a project-scoped push completes, project pull maps portable identities
-back to local identities before consulting the durable push receipt. An exact
-accepted or previously accepted create/update echo for a project, session, or
-observation is already materialized: the local record and version are preserved
-while the project inbox and cursor advance in the same transaction. Mutation
-hash, record identity and kind, mutation kind, base and canonical versions,
-sequence, and disposition must all match the receipt. Missing or mismatched
-receipts and foreign creates still fail closed; matching conflict dispositions
-continue through conflict materialization, and active reseed/rejoin transitions
-retain their snapshot-specific handling.
+Para datos locales previos, encola los registros antes de la primera
+sincronización remota con una operación local acotada al workspace:
 
-## First-device reseed and device rejoin
+```sh
+vgxness memory sync backfill --workspace /ruta/absoluta/workspace --limit 100 --json
+vgxness memory sync --credential-file /ruta/absoluta/privada/bearer
+```
 
-Reset the cloud first. On the Mac/source device, run `vgxness memory sync reseed --workspace /absolute/workspace --confirm-cloud-empty [--json]`; it proceeds only when the cloud is exactly empty. On every subsequent Linux or Windows device, run `vgxness memory sync rejoin --workspace /absolute/workspace --confirm-merge [--json]`. Both commands require the strict project marker/binding, apply only to that project, and never run `git pull`. The confirmation is mode-specific and exact. Retries resume the durable transition; a pending intent blocks that project only. The older `repair-project` command remains a narrow local recovery for an accepted missing-project repair, not the first-device workflow.
+`backfill` no envía peticiones de red ni lee credenciales. Encola de forma
+determinista solo los registros no sincronizados de ese proyecto, conserva
+contenido, marcas de tiempo y versiones de las observaciones, omite registros
+con tombstone, detecta colisiones de identidad en la cola y puede repetirse sin
+riesgo. Si un `create` existente contiene una instantánea válida pero anterior,
+el backfill reemplaza solo su payload conservando la identidad de la mutación y
+de la cola, y solo mientras esa fila siga pendiente con cero intentos y sin
+historial de claims. Claims activos o vencidos, reintentos, intentos, payloads
+malformados o con identidad cambiada y filas modificadas concurrentemente fallan
+cerrado. `--limit` vale 100 por defecto y acepta de 1 a 1.000; el JSON informa
+`remaining=true` cuando hace falta otra invocación.
 
-`memory sync configure` validates the HTTPS endpoint, device ID, and bearer
-locally. A context-cancellable cross-process lock serializes enrollment. It derives two
-deterministic keyring slots from canonical local storage identity, stores the
-bearer only in the inactive slot, then transactionally switches the SQLite
-profile. Keyring and SQLite are not one atomic transaction: failed persistence
-removes that inactive slot and leaves the prior active credential unchanged.
-Schema v12 records only the opposite deterministic slot as a recovery marker;
-on the next enrollment it compensates or completes cleanup. Cleanup failure
-leaves the marker and blocks further enrollment rather than guessing. Legacy
-credential references are never made markers or auto-deleted; migration leaves
-them retained. No step contacts the remote service.
+Tras completar un push por proyecto, el pull por proyecto mapea las
+identidades portables a identidades locales antes de consultar el recibo
+durable del push. Un eco exacto, aceptado o previamente aceptado, de
+`create`/`update` de proyecto, sesión u observación ya está materializado: el
+registro local y su versión se conservan mientras el inbox y el cursor del
+proyecto avanzan en la misma transacción. Hash de mutación, identidad y tipo del
+registro, tipo de mutación, versiones base y canónica, secuencia y disposición
+deben coincidir con el recibo. Recibos ausentes o discordantes y `create`
+foráneos siguen fallando cerrado; las disposiciones de conflicto coincidentes
+pasan por la materialización de conflictos, y las transiciones activas de
+`reseed`/`rejoin` conservan su manejo de instantánea.
 
-`vgxness memory sync status [--json]` is also local and read-only. It reports
-whether a profile is configured and whether its keyring credential is
-available, missing, unavailable, or invalid; it never prints the bearer or the
-recovery marker, and it never contacts the remote service.
+## Reseed del primer dispositivo y rejoin
 
-## Remote deployment boundary
+Primero reinicia la nube. En el dispositivo origen (Mac), ejecuta `vgxness
+memory sync reseed --workspace /ruta/absoluta/workspace --confirm-cloud-empty
+[--json]`; solo procede cuando la nube está exactamente vacía. En cada
+dispositivo Linux o Windows posterior, ejecuta `vgxness memory sync rejoin
+--workspace /ruta/absoluta/workspace --confirm-merge [--json]`. Ambos comandos
+exigen el marcador y la vinculación estrictos del proyecto, aplican solo a ese
+proyecto y nunca ejecutan `git pull`. La confirmación es específica de cada modo
+y exacta. Los reintentos reanudan la transición durable; una intención pendiente
+bloquea solo ese proyecto. El comando anterior `repair-project` sigue siendo
+una recuperación local estrecha para una reparación aceptada de proyecto
+ausente, no el flujo de primer dispositivo.
 
-For remote synchronization, the deployment owner is responsible for TLS
-certificate lifecycle, proxy access controls, request-size preservation,
-timeouts, logging redaction, and forwarding only to the loopback listener.
-VGXNESS does not currently provide native TLS termination in `vgxness-syncd`.
+`memory sync configure` valida localmente el endpoint HTTPS, el ID de
+dispositivo y el bearer. Un lock entre procesos, cancelable por contexto,
+serializa el enrolamiento. Deriva dos slots deterministas de keyring a partir de
+la identidad canónica del almacenamiento local, guarda el bearer solo en el slot
+inactivo y luego cambia el perfil SQLite en una transacción. Keyring y SQLite no
+son una sola transacción atómica: si la persistencia falla, se elimina ese slot
+inactivo y la credencial activa anterior queda intacta. El schema registra solo
+el slot determinista opuesto como marcador de recuperación; en el siguiente
+enrolamiento compensa o completa la limpieza. Si la limpieza falla, el marcador
+se queda y bloquea nuevos enrolamientos en lugar de adivinar. Las referencias de
+credencial heredadas nunca se convierten en marcadores ni se borran solas.
+Ningún paso contacta al servicio remoto.
 
-For a declarative Ubuntu 24.04 single-host example, see the
-[Ubuntu 24.04 single-VPS deployment package](../deploy/ubuntu/README.md).
-For an additive Docker path behind an existing Nginx Proxy Manager, see the
-[Docker deployment package](../deploy/docker/README.md). Neither package is
-evidence of an observed VPS deployment.
+`vgxness memory sync status [--json]` también es local y de solo lectura.
+Informa si hay un perfil configurado y si su credencial en el keyring está
+disponible, ausente, no disponible o inválida; nunca imprime el bearer ni el
+marcador de recuperación, y nunca contacta al servicio remoto.
+
+## Frontera del despliegue remoto
+
+Para sincronización remota, el responsable del despliegue se encarga del ciclo
+de vida del certificado TLS, los controles de acceso del proxy, la preservación
+del tamaño de las peticiones, los timeouts, la redacción de logs y de reenviar
+únicamente al listener loopback. VGXNESS no ofrece terminación TLS nativa en
+`vgxness-syncd`.
+
+Para un ejemplo declarativo en un solo host Ubuntu 24.04, consulta el
+[paquete de despliegue para Ubuntu 24.04](../deploy/ubuntu/README.md). Para una
+ruta aditiva en Docker detrás de un Nginx Proxy Manager existente, consulta el
+[paquete de despliegue en Docker](../deploy/docker/README.md). Ninguno de los dos
+es evidencia de un despliegue observado en un VPS. El diseño de identidad
+portable y del sync por proyecto está en
+[project-scoped-memory-sync](architecture/project-scoped-memory-sync.md).

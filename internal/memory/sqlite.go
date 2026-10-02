@@ -17,7 +17,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/vgxness/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/config"
 	_ "modernc.org/sqlite"
 )
 

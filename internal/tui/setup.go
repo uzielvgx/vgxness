@@ -3,2018 +3,629 @@ package tui
 import (
 	"context"
 	"fmt"
-	"github.com/vgxness/vgxness/internal/agentmodels"
-	"reflect"
 	"strings"
+	"time"
 
-	"charm.land/bubbles/v2/viewport"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/vgxness/vgxness/internal/modelcatalog"
-	setupflow "github.com/vgxness/vgxness/internal/setup"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/uzielvgx/vgxness/internal/claudecli"
 )
+
+// Setup del plugin: artboards tui-setup-prerrequisitos, -permisos,
+// -confirmar, -aplicando, -resultado and -error.
+
+type setupPhase uint8
 
 const (
-	defaultSetupPlan          = "medium"
-	SetupModelAssignmentCount = 7
-	setupDiscoveryDisclaimer  = "Local discovery proves identifier presence only; not authorization or support."
+	phasePrereq setupPhase = iota
+	phasePermissions
+	phaseReview
+	phaseApplying
+	phaseResult
+	phaseFailed
 )
 
-var setupPlans = [...]string{"low", "medium", "high", "ultra"}
+// What the plugin installs. TestPluginContentsMatchTheRepository keeps these
+// in step with plugins/vgxness.
+var (
+	pluginAgents = []string{"explore", "general", "verifier", "reviewer"}
+	pluginHooks  = []string{"SessionStart", "PreCompact", "SessionEnd", "SubagentStart"}
+	pluginSkills = []string{"git-delivery"}
+)
 
-type installationAction uint8
+const pluginMCPServer = "memory"
+
+// setupTick refreshes the elapsed time while a step runs.
+var setupTick = time.Second
+
+type setupStateMsg struct {
+	value SetupState
+	err   error
+}
+
+type setupStepMsg struct {
+	run    int
+	index  int
+	output string
+	err    error
+	took   time.Duration
+}
+
+type setupTickMsg struct{ run int }
+
+type stepStatus uint8
 
 const (
-	actionInstall installationAction = iota
-	actionReinstall
-	actionConfigure
+	stepPending stepStatus = iota
+	stepRunning
+	stepDone
+	stepFailed
 )
 
-func (action installationAction) label() string {
-	return [...]string{"Install", "Reinstall", "Configure"}[action]
+type planStep struct {
+	kind    SetupStep
+	label   string
+	command string
+	effect  string
+	mutates bool
+	status  stepStatus
+	output  string
+	err     error
 }
 
-type SetupRequest struct {
-	OpenCodeModels         *agentmodels.Config
-	PiModels               *agentmodels.Config
-	Workspace              string
-	Plan                   string
-	ModelEfficient         string
-	ModelBalanced          string
-	ModelFrontier          string
-	ModelEfficientEffort   string
-	ModelBalancedEffort    string
-	ModelFrontierEffort    string
-	ModelEfficientVariant  string
-	ModelBalancedVariant   string
-	ModelFrontierVariant   string
-	ModelVariantsSpecified bool
-	ModelAssignments       *[SetupModelAssignmentCount]SetupModelAssignmentRequest
-	ExpectedPlanDigest     string
+type setupPage struct {
+	env     environment
+	phase   setupPhase
+	state   SetupState
+	err     error
+	loading bool
+	plan    []planStep
+	log     []string
+	run     int
+	cancel  context.CancelFunc
+	started time.Time
+	now     func() time.Time
+	copied  string
 }
 
-// MultiSetupRequest is the optional composite setup contract owned by the TUI.
-type MultiSetupRequest struct {
-	Setup              SetupRequest
-	Providers          []setupflow.Provider
-	ExpectedPlanDigest string
-	Verified           []setupflow.ProviderResult
+func newSetupPage(env environment) *setupPage {
+	return &setupPage{env: env, loading: true, now: time.Now}
 }
 
-type MultiSetupBackend interface {
-	PlanMultiSetup(context.Context, MultiSetupRequest) (setupflow.MultiPlan, error)
-	ApplyMultiSetup(context.Context, MultiSetupRequest) (setupflow.MultiResult, error)
-}
+func (p *setupPage) Init() tea.Cmd { return p.load() }
 
-type SetupModelAssignmentRequest struct {
-	ArtifactKey      string
-	Provider         string
-	Reference        string
-	RequestedEffort  string
-	Variant          string
-	VariantSpecified bool
-	Source           string
-	Availability     string
-}
-
-type SetupModelAssignment struct {
-	ArtifactKey       string
-	Role              string
-	Class             string
-	Provider          string
-	Model             string
-	RequestedEffort   string
-	Effort            string
-	Variant           string
-	VariantSpecified  bool
-	Degraded          bool
-	DegradationReason string
-	Source            string
-	Availability      string
-}
-
-type SetupCatalogModel struct {
-	Provider     string
-	Reference    string
-	Variants     []string
-	Source       string
-	Availability string
-}
-
-type setupCatalogBackend interface {
-	ModelCatalog(context.Context, setupflow.Provider, bool) ([]SetupCatalogModel, error)
-}
-
-type setupCatalogLoadedMsg struct {
-	generation int
-	provider   setupflow.Provider
-	rows       []SetupCatalogModel
-	err        error
-}
-
-type setupAgentIdentity struct{ ArtifactKey, Name, Role, Class string }
-
-var setupAgentRows = [SetupModelAssignmentCount]setupAgentIdentity{
-	{"agents/vgxness-manager.md", "manager", "manager", "core"},
-	{"agents/explore.md", "explore", "research", "core"},
-	{"agents/general.md", "general", "implementation", "core"},
-	{"agents/vgxness-verifier.md", "verifier", "verification", "core"},
-	{"agents/vgxness-care-reviewer.md", "CARE reviewer", "review", "review"},
-	{"agents/vgxness-care-specialist.md", "CARE specialist", "review", "review"},
-	{"agents/vgxness-care-challenger.md", "CARE challenger", "review", "review"},
-}
-
-type SetupStep struct {
-	Number      int
-	Title       string
-	Explanation string
-	Mutates     bool
-}
-
-type SetupPlan struct {
-	Digest                       string
-	Provider                     string
-	Steps                        []SetupStep
-	SelfInstallState             string
-	SelfInstallPath              string
-	SelfInstallUpdateAvailable   bool
-	SelfInstallRollbackAvailable bool
-	SelfInstallActiveSHA256      string
-	SelfInstallPreviousSHA256    string
-	SelfInstallChanged           bool
-	IntegrationState             string
-	IntegrationPath              string
-	IntegrationChanged           bool
-	IntegrationRestartRequired   bool
-	SkillsState                  string
-	SkillsPath                   string
-	SkillsFileCount              int
-	SkillsChanged                bool
-	SkillsUpdateNeeded           bool
-	ArtifactCount                int
-	ModelSchemaVersion           int
-	ModelAssignments             *[SetupModelAssignmentCount]SetupModelAssignment
-	ModelPlan                    string
-	ModelProvider                string
-	ModelEfficient               string
-	ModelBalanced                string
-	ModelFrontier                string
-	ModelEfficientEffort         string
-	ModelBalancedEffort          string
-	ModelFrontierEffort          string
-	ModelEfficientVariant        string
-	ModelBalancedVariant         string
-	ModelFrontierVariant         string
-	ModelVariantsSpecified       bool
-	ModelEfficientSource         string
-	ModelBalancedSource          string
-	ModelFrontierSource          string
-	ModelEfficientAvailability   string
-	ModelBalancedAvailability    string
-	ModelFrontierAvailability    string
-	HandshakeOK                  bool
-	HandshakeStatus              string
-	Ready                        bool
-	Blocker                      string
-}
-
-type SetupResult struct {
-	Plan                         SetupPlan
-	SelfInstallState             string
-	SelfInstallPath              string
-	SelfInstallUpdateAvailable   bool
-	SelfInstallRollbackAvailable bool
-	SelfInstallActiveSHA256      string
-	SelfInstallPreviousSHA256    string
-	IntegrationState             string
-	IntegrationPath              string
-	SkillsState                  string
-	SkillsPath                   string
-	SkillsFileCount              int
-	ArtifactCount                int
-	HandshakeOK                  bool
-	HandshakeStatus              string
-	Recovery                     string
-	Changed                      bool
-	RestartRequired              bool
-}
-
-type setupPlanLoadedMsg struct {
-	generation int
-	request    SetupRequest
-	value      SetupPlan
-	err        error
-	multi      *setupflow.MultiPlan
-}
-
-type setupAppliedMsg struct {
-	generation int
-	value      SetupResult
-	err        error
-	multi      *setupflow.MultiResult
-}
-
-func (m *Model) initSetup() {
-	preview := viewport.New(viewport.WithWidth(80), viewport.WithHeight(16))
-	preview.SoftWrap = true
-	preview.FillHeight = false
-	m.setupViewport = preview
-	m.setupSelected = defaultSetupPlan
-	m.setupProviderCursor = 0
-	m.setupView = setupViewHome
-	if _, ok := m.backend.(MultiSetupBackend); ok {
-		m.setupProviders = []setupflow.Provider{setupflow.ProviderOpenCode}
-	}
-	m.resetRecoveryState()
-}
-
-// loadSetupCatalog discovers the OpenCode model catalog used by the model
-// editor and by the OpenCode tab of the Models screen.
-func (m *Model) loadSetupCatalog(refresh bool) tea.Cmd {
-	return m.loadProviderCatalog(setupflow.ProviderOpenCode, refresh)
-}
-
-// loadPiCatalog discovers the Pi model store used by the Pi tab.
-func (m *Model) loadPiCatalog(refresh bool) tea.Cmd {
-	return m.loadProviderCatalog(setupflow.ProviderPi, refresh)
-}
-
-func (m *Model) loadProviderCatalog(provider setupflow.Provider, refresh bool) tea.Cmd {
-	if provider == setupflow.ProviderPi {
-		m.cancelPiCatalogLoad()
-		ctx, cancel := context.WithCancel(m.ctx)
-		m.cancelPiCatalog = cancel
-		m.piCatalogGeneration++
-		m.piCatalogLoading = true
-		m.piCatalogErr = nil
-		return m.setupCatalogCommand(provider, ctx, refresh, m.piCatalogGeneration)
-	}
-	m.cancelSetupCatalogLoad()
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.cancelSetupCatalog = cancel
-	m.setupCatalogGeneration++
-	m.setupCatalogLoading = true
-	m.setupCatalogErr = nil
-	return m.setupCatalogCommand(provider, ctx, refresh, m.setupCatalogGeneration)
-}
-
-// ensureProviderCatalog starts one local discovery per provider so opening the
-// Models screen scans automatically without repeating a completed attempt.
-// A cancelled or never-started scan is retried; a finished attempt is not, and
-// stays retryable through an explicit refresh.
-func (m *Model) ensureProviderCatalog(provider setupflow.Provider) tea.Cmd {
-	switch provider {
-	case setupflow.ProviderOpenCode:
-		if m.setupCatalogLoading || m.setupCatalogAttempted {
-			return nil
-		}
-		return m.loadSetupCatalog(false)
-	case setupflow.ProviderPi:
-		if m.piCatalogLoading || m.piCatalogAttempted {
-			return nil
-		}
-		return m.loadPiCatalog(false)
-	}
-	return nil
-}
-
-func (m Model) setupCatalogCommand(provider setupflow.Provider, ctx context.Context, refresh bool, generation int) tea.Cmd {
+func (p *setupPage) load() tea.Cmd {
+	env := p.env
 	return func() tea.Msg {
-		backend, ok := m.backend.(setupCatalogBackend)
-		if !ok {
-			return setupCatalogLoadedMsg{provider: provider, generation: generation, err: fmt.Errorf("model catalog unavailable")}
-		}
-		rows, err := backend.ModelCatalog(ctx, provider, refresh)
-		return setupCatalogLoadedMsg{provider: provider, generation: generation, rows: append([]SetupCatalogModel(nil), rows...), err: err}
+		value, err := env.backend.SetupState(env.ctx)
+		return setupStateMsg{value: value, err: err}
 	}
 }
 
-func (m *Model) handleSetupCatalogLoaded(msg setupCatalogLoadedMsg) {
-	if msg.provider == setupflow.ProviderPi {
-		if msg.generation != m.piCatalogGeneration {
-			return
-		}
-		m.cancelPiCatalogLoad()
-		m.piCatalogLoading = false
-		m.piCatalogAttempted = true
-		m.piCatalogErr = msg.err
-		if msg.err == nil {
-			m.piCatalog = append([]SetupCatalogModel(nil), msg.rows...)
-		}
-		return
-	}
-	if msg.generation != m.setupCatalogGeneration {
-		return
-	}
-	m.cancelSetupCatalogLoad()
-	m.setupCatalogLoading = false
-	m.setupCatalogAttempted = true
-	m.setupCatalogErr = msg.err
-	if msg.err == nil {
-		m.setupCatalog = append([]SetupCatalogModel(nil), msg.rows...)
-	}
+func (p *setupPage) outdated() bool {
+	plugin := p.state.Plugin
+	return plugin.Installed && plugin.Offered != "" && newer(plugin.Offered, plugin.Version)
 }
 
-func (m *Model) cancelSetupCatalogLoad() {
-	if m.cancelSetupCatalog != nil {
-		m.cancelSetupCatalog()
-		m.cancelSetupCatalog = nil
+// buildPlan lists the steps the current state needs, mutating ones first.
+func (p *setupPage) buildPlan() []planStep {
+	var plan []planStep
+	if !p.state.Plugin.MarketplaceAdded {
+		plan = append(plan, planStep{kind: StepAddMarketplace, label: "Agregar marketplace " + claudecli.MarketplaceRepo, command: "claude plugin marketplace add " + claudecli.MarketplaceRepo, effect: "modifica ~/.claude/plugins", mutates: true})
 	}
+	switch {
+	case !p.state.Plugin.Installed:
+		plan = append(plan, planStep{kind: StepInstallPlugin, label: "Instalar plugin " + claudecli.PluginID, command: "claude plugin install " + claudecli.PluginID, effect: "modifica ~/.claude/plugins", mutates: true})
+	case p.outdated():
+		plan = append(plan, planStep{kind: StepUpdatePlugin, label: "Actualizar plugin a " + version(p.state.Plugin.Offered), command: "claude plugin update " + claudecli.PluginID, effect: "modifica ~/.claude/plugins", mutates: true})
+	}
+	return append(plan,
+		planStep{kind: StepVerifyPlugin, label: "Verificar plugin habilitado", command: "claude plugin list --json", effect: "solo lectura"},
+		planStep{kind: StepVerifyMCP, label: "Verificar servidor MCP «" + pluginMCPServer + "»", command: "claude mcp list", effect: "solo lectura"},
+	)
 }
 
-func (m *Model) cancelPiCatalogLoad() {
-	if m.cancelPiCatalog != nil {
-		m.cancelPiCatalog()
-		m.cancelPiCatalog = nil
-	}
-}
-
-func (m *Model) loadSetupPlan() tea.Cmd {
-	ctx, generation := m.startSetupOperation()
-	m.setupPlanLoading = true
-	m.setupConfirm = false
-	m.setupCancelAsked = false
-	m.setupSucceeded = false
-	m.setupPreviewed = false
-	m.setupApplyErr = nil
-	m.setupPlanErr = nil
-	m.setupViewport.GotoTop()
-	request := m.setupRequest()
-	multiRequest := m.multiSetupRequest()
-	return func() tea.Msg {
-		if backend, ok := m.backend.(MultiSetupBackend); ok {
-			value, err := backend.PlanMultiSetup(ctx, multiRequest)
-			return setupPlanLoadedMsg{generation: generation, request: request, multi: &value, err: err}
-		}
-		if m.backend == nil {
-			return setupPlanLoadedMsg{generation: generation, request: request, err: fmt.Errorf("setup backend unavailable")}
-		}
-		value, err := m.backend.PlanSetup(ctx, request)
-		return setupPlanLoadedMsg{generation: generation, request: request, value: value, err: err}
-	}
-}
-
-func (m *Model) applySetup() tea.Cmd {
-	ctx, generation := m.startSetupOperation()
-	m.setupStatusGeneration++
-	m.setupConfirm = false
-	m.setupApplying = true
-	m.setupCancelAsked = false
-	m.setupSucceeded = false
-	m.setupApplyErr = nil
-	m.setupResult = SetupResult{}
-	m.setupViewport.GotoTop()
-	request := m.setupRequest()
-	request.ExpectedPlanDigest = m.setupPlan.Digest
-	multiRequest := m.multiSetupRequest()
-	multiRequest.ExpectedPlanDigest = m.setupMultiPlan.Digest
-	return func() tea.Msg {
-		if backend, ok := m.backend.(MultiSetupBackend); ok {
-			value, err := backend.ApplyMultiSetup(ctx, multiRequest)
-			return setupAppliedMsg{generation: generation, multi: &value, err: err}
-		}
-		if m.backend == nil {
-			return setupAppliedMsg{generation: generation, err: fmt.Errorf("setup backend unavailable")}
-		}
-		value, err := m.backend.ApplySetup(ctx, request)
-		return setupAppliedMsg{generation: generation, value: value, err: err}
-	}
-}
-
-func (m *Model) startSetupOperation() (context.Context, int) {
-	if m.cancelSetup != nil {
-		m.cancelSetup()
-	}
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.cancelSetup = cancel
-	m.setupGeneration++
-	return ctx, m.setupGeneration
-}
-
-func (m *Model) cancelSetupOperation() {
-	if m.cancelSetup != nil {
-		m.cancelSetup()
-		m.cancelSetup = nil
-	}
-	m.setupGeneration++
-	m.setupPlanLoading = false
-	m.setupApplying = false
-	m.setupCancelAsked = false
-	m.setupConfirm = false
-	m.setupPreviewed = false
-	m.cancelSetupCatalogLoad()
-	m.setupCatalogGeneration++
-	m.setupCatalogLoading = false
-	m.cancelPiCatalogLoad()
-	m.piCatalogGeneration++
-	m.piCatalogLoading = false
-}
-
-func (m *Model) finishSetupOperation() {
-	if m.cancelSetup != nil {
-		m.cancelSetup()
-		m.cancelSetup = nil
-	}
-}
-
-func (m *Model) handleSetupPlanLoaded(msg setupPlanLoadedMsg) {
-	if msg.generation != m.setupGeneration || !setupRequestsEqual(msg.request, m.setupRequest()) {
-		return
-	}
-	m.finishSetupOperation()
-	m.setupPlanLoading, m.setupLoading = false, false
-	m.setupPlanErr = msg.err
-	if msg.err == nil {
-		if msg.multi != nil {
-			m.setupMultiPlan = *msg.multi
-			m.seedModelChoices(*msg.multi)
-			m.setupPlan = SetupPlan{Digest: msg.multi.Digest, Ready: msg.multi.Ready, Blocker: msg.multi.Blocker, ModelPlan: m.setupSelected}
-			m.setupPreviewRequest, m.setupPreviewed = m.setupRequest(), true
-			m.setupViewport.GotoTop()
-			return
-		}
-		m.setupPlan = cloneSetupPlan(msg.value)
-		m.setupPreviewRequest = msg.request
-		m.setupPreviewed = true
-		if !m.setupOverrides {
-			m.setupModelRefs = [3]string{msg.value.ModelEfficient, msg.value.ModelBalanced, msg.value.ModelFrontier}
-			m.setupModelEfforts = [3]string{msg.value.ModelEfficientEffort, msg.value.ModelBalancedEffort, msg.value.ModelFrontierEffort}
-			m.setupModelVariants = [3]string{msg.value.ModelEfficientVariant, msg.value.ModelBalancedVariant, msg.value.ModelFrontierVariant}
-		}
-		if !m.setupAssignmentsExact {
-			m.seedSetupAssignments(msg.value)
-		}
-		m.setupPreviewRequest = m.setupRequest()
-	}
-	m.setupViewport.GotoTop()
-}
-
-func (m *Model) handleSetupApplied(msg setupAppliedMsg) {
-	if msg.generation != m.setupGeneration {
-		return
-	}
-	m.finishSetupOperation()
-	m.setupApplying = false
-	m.setupResult = cloneSetupResult(msg.value)
-	if msg.multi != nil {
-		m.setupMultiResult = *msg.multi
-		m.setupApplyErr = msg.err
-		m.setupSucceeded = msg.err == nil
-		m.setupCancelAsked = false
-		m.setupViewport.GotoTop()
-		return
-	}
-	m.setupApplyErr = msg.err
-	m.setupSucceeded = msg.err == nil
-	m.setupCancelAsked = false
-	if msg.err == nil {
-		m.setup = cloneSetupStatus(SetupStatus{
-			Provider: msg.value.Plan.Provider, Ready: true,
-			SelfInstallState: msg.value.SelfInstallState, SelfInstallPath: msg.value.SelfInstallPath,
-			IntegrationState: msg.value.IntegrationState, IntegrationPath: msg.value.IntegrationPath,
-			ArtifactCount: msg.value.ArtifactCount,
-			HandshakeOK:   msg.value.HandshakeOK, HandshakeStatus: msg.value.HandshakeStatus,
-			ModelPlan:          msg.value.Plan.ModelPlan,
-			ModelSchemaVersion: msg.value.Plan.ModelSchemaVersion, ModelAssignments: msg.value.Plan.ModelAssignments,
-		})
-		m.setupErr = nil
-		m.setupLoading = false
-	}
-	m.setupViewport.GotoTop()
-}
-
-func (m *Model) updateSetupKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if m.setupView == setupViewRecovery {
-		return m.updateRecoveryKey(msg)
-	}
-	if m.setupConfirm {
-		switch msg.String() {
-		case "y":
-			if m.setupApplyAllowed() {
-				return true, m.applySetup()
-			}
-			m.setupConfirm = false
-			return true, nil
-		case "n", "esc":
-			m.setupConfirm = false
-			return true, nil
-		case "j", "k":
-		default:
-			return true, nil
-		}
-	}
-	if m.multiSetupEnabled() && m.setupView == setupViewReview && msg.String() == "m" {
-		m.setupView = setupViewPlan
-		return true, m.ensureProviderCatalog(m.choiceProvider())
-	}
-	if m.setupModelEditing {
-		return m.updateModelEditorKey(msg)
-	}
-	if m.multiSetupEnabled() {
-		switch m.setupView {
-		case setupViewHome:
-			switch msg.String() {
-			case "up", "k":
-				m.installationAction = (m.installationAction + 2) % 3
-				return true, nil
-			case "down", "j":
-				m.installationAction = (m.installationAction + 1) % 3
-				return true, nil
-			case "1", "2", "3":
-				m.installationAction = installationAction(msg.String()[0] - '1')
-				return true, nil
-			case "enter":
-				if m.installationAction == actionReinstall {
-					m.setupView = setupViewRecovery
-					m.resetRecoveryState()
-					return true, m.loadRecovery()
-				}
-				m.setupView = setupViewProviders
-				return true, nil
-			}
-		case setupViewProviders:
-			switch msg.String() {
-			case "up", "k":
-				m.setupProviderCursor = (m.setupProviderCursor + 2) % 3
-				return true, nil
-			case "down", "j":
-				m.setupProviderCursor = (m.setupProviderCursor + 1) % 3
-				return true, nil
-			case "space", " ":
-				m.toggleSetupProvider(setupProviderAt(m.setupProviderCursor))
-				return true, nil
-			case "o", "c", "p":
-				provider := setupflow.ProviderOpenCode
-				if msg.String() == "c" {
-					provider = setupflow.ProviderCodex
-				} else if msg.String() == "p" {
-					provider = setupflow.ProviderPi
-				}
-				m.toggleSetupProvider(provider)
-				return true, nil
-			case "enter":
-				m.setupView = setupViewPlan
-				return true, tea.Batch(m.loadSetupPlan(), m.ensureProviderCatalog(m.choiceProvider()))
-			case "esc":
-				m.setupView = setupViewHome
-				return true, nil
-			}
-		case setupViewPlan:
-			return m.updateModelChoices(msg)
-		case setupViewReview:
-			if msg.String() == "esc" {
-				m.setupView = setupViewPlan
-				return true, nil
-			}
-		}
-	}
-
-	switch msg.String() {
-	case "1":
-		m.installationAction = actionInstall
-		return true, nil
-	case "2":
-		m.installationAction = actionReinstall
-		return true, nil
-	case "3":
-		m.installationAction = actionConfigure
-		return true, nil
-	case "enter":
-		switch m.installationAction {
-		case actionReinstall:
-			m.setupView = setupViewRecovery
-			m.resetRecoveryState()
-			return true, m.loadRecovery()
-		case actionConfigure:
-			return m.enterModelEditor()
-		}
-		return true, nil
-	case "o", "c", "p":
-		if m.multiSetupEnabled() {
-			provider := setupflow.ProviderOpenCode
-			if msg.String() == "c" {
-				provider = setupflow.ProviderCodex
-			} else if msg.String() == "p" {
-				provider = setupflow.ProviderPi
-			}
-			m.toggleSetupProvider(provider)
-			return true, m.loadSetupPlan()
-		}
-	case "tab":
-		m.cancelSetupOperation()
-		m.setupView = setupViewRecovery
-		m.resetRecoveryState()
-		return true, m.loadRecovery()
-	case "left", "h":
-		return true, m.selectSetupPlan(-1)
-	case "right", "l":
-		return true, m.selectSetupPlan(1)
-	case "a":
-		if m.setupApplyAllowed() {
-			m.setupConfirm = true
-		}
-		return true, nil
-	case "m":
-		return m.enterModelEditor()
-	case "r":
-		if m.setupErr != nil {
-			m.setupLoading = true
-			return true, m.loadStartupStatus()
-		}
-		return true, m.loadSetupPlan()
-	case "esc":
-		return true, nil
-	case "j", "k", "up", "down", "pgup", "pgdown", "home", "end":
-		m.setupViewport.SetContent(strings.Join(m.setupRouteLines(), "\n"))
-		var cmd tea.Cmd
-		m.setupViewport, cmd = m.setupViewport.Update(msg)
-		return true, cmd
-	}
-	return false, nil
-}
-
-func (m *Model) enterModelEditor() (bool, tea.Cmd) {
-	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
-		return true, nil
-	}
-	m.setupModelEditing, m.setupModelSlot = true, 0
-	m.setupAssignmentEntryRows, m.setupAssignmentsEntry = m.setupAssignmentRows, m.setupAssignmentsExact
-	m.setupAssignmentsEntryEdited = m.setupAssignmentsEdited
-	m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupModelEntryVars, m.setupEntryOverrides = m.setupModelRefs, m.setupModelEfforts, m.setupModelVariants, m.setupOverrides
-	m.setupEditorPlan, m.setupEditorRequest, m.setupEditorPreviewed = cloneSetupPlan(m.setupPlan), cloneSetupRequest(m.setupPreviewRequest), m.setupPreviewed
-	return true, m.loadSetupCatalog(false)
-}
-
-func (m Model) multiSetupEnabled() bool { _, ok := m.backend.(MultiSetupBackend); return ok }
-func setupProviderAt(index int) setupflow.Provider {
-	return [...]setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi}[index%3]
-}
-
-func (m Model) hasSetupProvider(provider setupflow.Provider) bool {
-	for _, value := range m.setupProviders {
-		if value == provider {
-			return true
-		}
-	}
-	return false
-}
-func (m *Model) toggleSetupProvider(provider setupflow.Provider) {
-	m.setupConfirm, m.setupSucceeded, m.setupApplyErr = false, false, nil
-	m.setupResult, m.setupMultiResult = SetupResult{}, setupflow.MultiResult{}
-	if m.hasSetupProvider(provider) {
-		if len(m.setupProviders) == 1 {
-			return
-		}
-		for index, value := range m.setupProviders {
-			if value == provider {
-				m.setupProviders = append(m.setupProviders[:index], m.setupProviders[index+1:]...)
-				if m.hasSetupProvider(setupflow.ProviderCodex) && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
-					m.recoveryMode = RecoveryModeManaged
-				}
-				return
-			}
-		}
-	}
-	m.setupProviders = append(m.setupProviders, provider)
-	if m.hasSetupProvider(setupflow.ProviderCodex) && !m.hasSetupProvider(setupflow.ProviderOpenCode) {
-		m.recoveryMode = RecoveryModeManaged
-	}
-}
-func (m Model) multiSetupRequest() MultiSetupRequest {
-	verified := make([]setupflow.ProviderResult, 0, len(m.setupMultiResult.Providers))
-	for _, outcome := range m.setupMultiResult.Providers {
-		if outcome.Verified {
-			verified = append(verified, outcome)
-		}
-	}
-	return MultiSetupRequest{Setup: m.setupRequest(), Providers: append([]setupflow.Provider(nil), m.setupProviders...), Verified: verified}
-}
-
-func (m Model) setupApplyAllowed() bool {
-	if m.multiSetupEnabled() {
-		return !m.setupPlanLoading && m.setupPreviewed && m.setupMultiPlan.Digest != "" && setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) && m.setupPlanErr == nil && m.setupApplyErr == nil && !m.setupSucceeded && m.setupMultiPlan.Ready && m.setupMultiPlan.Blocker == "" && (m.setupMultiPlan.Changed || m.multiSetupHasUnverifiedProvider()) && (!m.hasSetupProvider(setupflow.ProviderOpenCode) || !m.modelProfileChanged() || m.modelEditorError() == "")
-	}
-	if m.setupPlanLoading || !m.setupPreviewed || m.setupPlan.Digest == "" || !setupRequestsEqual(m.setupPreviewRequest, m.setupRequest()) || m.setupPlanErr != nil || m.setupApplyErr != nil || m.setupSucceeded || !m.setupPlan.Ready || ((m.setupOverrides || m.setupAssignmentsExact || m.setupAssignmentsSeeded && m.setupCatalogAvailable()) && m.modelEditorError() != "") {
-		return false
-	}
-	action := classifySetup(m.setupPlan)
-	return action == "initial install" || action == "reinstall/update"
-}
-
-func (m Model) multiSetupHasUnverifiedProvider() bool {
-	verified := make(map[setupflow.Provider]bool, len(m.setupMultiResult.Providers))
-	for _, outcome := range m.setupMultiResult.Providers {
-		if outcome.Verified {
-			verified[outcome.Provider] = true
-		}
-	}
-	for _, provider := range m.setupMultiPlan.Providers {
-		if !verified[provider.Provider] {
+func (p *setupPage) mutating() bool {
+	for _, step := range p.plan {
+		if step.mutates {
 			return true
 		}
 	}
 	return false
 }
 
-func (m Model) setupRequest() SetupRequest {
-	request := SetupRequest{Workspace: m.options.Workspace, Plan: m.setupSelected}
-	if m.multiSetupEnabled() && !m.codexPlanEdited {
-		request.Plan = ""
+func (p *setupPage) commands() []string {
+	var commands []string
+	for _, step := range p.buildPlan() {
+		if step.mutates {
+			commands = append(commands, step.command)
+		}
 	}
-	request.OpenCodeModels = m.modelChoices[0].config()
-	request.PiModels = m.modelChoices[1].config()
-	if m.setupAssignmentsExact {
-		rows := m.setupAssignmentRows
-		request.ModelAssignments = &rows
-		return request
-	}
-	if m.setupOverrides {
-		request.ModelEfficient, request.ModelBalanced, request.ModelFrontier = m.setupModelRefs[0], m.setupModelRefs[1], m.setupModelRefs[2]
-		request.ModelEfficientEffort, request.ModelBalancedEffort, request.ModelFrontierEffort = m.setupModelEfforts[0], m.setupModelEfforts[1], m.setupModelEfforts[2]
-		request.ModelEfficientVariant, request.ModelBalancedVariant, request.ModelFrontierVariant = m.setupModelVariants[0], m.setupModelVariants[1], m.setupModelVariants[2]
-		request.ModelVariantsSpecified = true
-	}
-	return request
+	return commands
 }
 
-func (m *Model) updateModelEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if m.setupAssignmentsSeeded {
-		return m.updateAssignmentEditorKey(msg)
-	}
-	switch msg.String() {
-	case "esc":
-		m.setupModelRefs, m.setupModelEfforts, m.setupModelVariants, m.setupOverrides = m.setupModelEntryRefs, m.setupModelEntryEfforts, m.setupModelEntryVars, m.setupEntryOverrides
-		m.setupModelEditing = false
-		return true, nil
-	case "enter":
-		if m.modelEditorError() == "" {
-			m.setupModelEditing = false
-			m.setupOverrides = true
-			return true, m.loadSetupPlan()
-		}
-		return true, nil
-	case "up", "k":
-		m.setupModelSlot = (m.setupModelSlot + 2) % 3
-		return true, nil
-	case "down", "j":
-		m.setupModelSlot = (m.setupModelSlot + 1) % 3
-		return true, nil
-	case "tab", "right", "l":
-		m.setupModelVariants[m.setupModelSlot] = nextSetupVariant(m.setupModelVariants[m.setupModelSlot], m.setupVariantsForModel(m.setupModelRefs[m.setupModelSlot]))
-		return true, nil
-	case "backspace":
-		value := []rune(m.setupModelRefs[m.setupModelSlot])
-		if len(value) > 0 {
-			m.setupModelRefs[m.setupModelSlot] = string(value[:len(value)-1])
-		}
-		m.ensureModelVariant(m.setupModelSlot)
-		return true, nil
-	}
-	if msg.Text != "" {
-		m.setupModelRefs[m.setupModelSlot] += msg.Text
-		m.ensureModelVariant(m.setupModelSlot)
-		return true, nil
-	}
-	return true, nil
+func (p *setupPage) canContinue() bool {
+	return !p.loading && p.err == nil && p.state.Claude.Version != ""
 }
 
-func (m *Model) updateAssignmentEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if m.setupCatalogSearching {
-		switch msg.String() {
+func (p *setupPage) Update(msg tea.Msg) (page, tea.Cmd) {
+	switch msg := msg.(type) {
+	case setupStateMsg:
+		p.loading, p.state, p.err = false, msg.value, msg.err
+		return p, nil
+	case setupTickMsg:
+		if msg.run == p.run && p.phase == phaseApplying {
+			return p, p.tick()
+		}
+		return p, nil
+	case setupStepMsg:
+		return p.stepFinished(msg)
+	case tea.KeyPressMsg:
+		return p.updateKeys(msg)
+	}
+	return p, nil
+}
+
+func (p *setupPage) updateKeys(msg tea.KeyPressMsg) (page, tea.Cmd) {
+	text := msg.String()
+	switch p.phase {
+	case phasePrereq:
+		switch text {
 		case "esc":
-			m.setupCatalogSearching, m.setupCatalogQuery, m.setupCatalogResultIndex = false, "", 0
-			return true, nil
+			return p, navigate(routeHome)
 		case "enter":
-			m.selectFilteredCatalogModel()
-			m.setupCatalogSearching, m.setupCatalogQuery, m.setupCatalogResultIndex = false, "", 0
-			return true, nil
-		case "backspace":
-			value := []rune(m.setupCatalogQuery)
-			if len(value) > 0 {
-				m.setupCatalogQuery = string(value[:len(value)-1])
+			if p.canContinue() {
+				p.phase, p.copied = phasePermissions, ""
 			}
-			return true, nil
-		case "down":
-			if count := len(m.filteredSetupCatalog()); count > 0 {
-				m.setupCatalogResultIndex = (m.setupCatalogResultIndex + 1) % count
+		case "r":
+			p.loading = true
+			return p, p.load()
+		case "c":
+			if commands := p.commands(); len(commands) > 0 {
+				p.copied = "Comandos copiados al portapapeles."
+				return p, tea.SetClipboard(strings.Join(commands, "\n"))
 			}
-			return true, nil
-		case "up":
-			if count := len(m.filteredSetupCatalog()); count > 0 {
-				m.setupCatalogResultIndex = (m.setupCatalogResultIndex + count - 1) % count
+		}
+	case phasePermissions:
+		switch text {
+		case "esc":
+			p.phase, p.copied = phasePrereq, ""
+		case "enter":
+			p.phase, p.copied, p.plan = phaseReview, "", p.buildPlan()
+		case "c":
+			p.copied = "JSON copiado al portapapeles."
+			return p, tea.SetClipboard(claudecli.PermissionJSON())
+		}
+	case phaseReview:
+		switch text {
+		case "esc":
+			p.phase = phasePermissions
+		case "a":
+			return p, p.apply(0)
+		}
+	case phaseApplying:
+		if text == "ctrl+c" && p.cancel != nil {
+			p.cancel()
+		}
+	case phaseResult:
+		if text == "enter" || text == "esc" {
+			return p, navigate(routeHome)
+		}
+	case phaseFailed:
+		switch text {
+		case "esc":
+			p.phase, p.plan, p.loading = phasePrereq, nil, true
+			return p, p.load()
+		case "r":
+			for index := range p.plan {
+				if p.plan[index].status == stepFailed {
+					return p, p.apply(index)
+				}
 			}
-			return true, nil
+		case "c":
+			p.copied = "Detalle copiado al portapapeles."
+			return p, tea.SetClipboard(strings.Join(p.log, "\n"))
 		}
-		if msg.Text != "" {
-			m.setupCatalogQuery += msg.Text
-			m.setupCatalogResultIndex = 0
-		}
-		return true, nil
 	}
-	switch msg.String() {
-	case "esc":
-		m.setupAssignmentRows, m.setupAssignmentsExact, m.setupAssignmentsEdited = m.setupAssignmentEntryRows, m.setupAssignmentsEntry, m.setupAssignmentsEntryEdited
-		m.setupModelEditing = false
-		m.restoreSetupEditorPreview()
-		return true, nil
-	case "enter":
-		if m.modelEditorError() == "" {
-			m.setupModelEditing = false
-			return true, m.loadSetupPlan()
-		}
-	case "up", "k":
-		m.setupModelSlot = (m.setupModelSlot + SetupModelAssignmentCount - 1) % SetupModelAssignmentCount
-	case "down", "j":
-		m.setupModelSlot = (m.setupModelSlot + 1) % SetupModelAssignmentCount
-	case "left", "h":
-		m.selectCatalogModel(-1)
-	case "right", "l":
-		m.selectCatalogModel(1)
-	case "[":
-		m.selectAssignmentVariant(-1)
-	case "]":
-		m.selectAssignmentVariant(1)
-	case "r":
-		return true, m.loadSetupCatalog(true)
-	case "/":
-		m.setupCatalogSearching, m.setupCatalogQuery, m.setupCatalogResultIndex = true, "", 0
-		return true, nil
-	case "q":
-		return false, nil
-	}
-	return true, nil
+	return p, nil
 }
 
-func (m *Model) selectCatalogModel(offset int) {
-	if len(m.setupCatalog) == 0 {
-		return
+// apply runs the plan from index on, one step at a time, under a context
+// Ctrl+C cancels. Steps already done keep their result.
+func (p *setupPage) apply(from int) tea.Cmd {
+	ctx, cancel := context.WithCancel(p.env.ctx)
+	p.run++
+	p.phase, p.cancel, p.started, p.copied = phaseApplying, cancel, p.now(), ""
+	for index := from; index < len(p.plan); index++ {
+		p.plan[index].status, p.plan[index].output, p.plan[index].err = stepPending, "", nil
 	}
-	current := m.setupAssignmentRows[m.setupModelSlot].Reference
-	index := 0
-	for candidate, row := range m.setupCatalog {
-		if row.Reference == current {
-			index = candidate
-			break
-		}
-	}
-	index = (index + offset + len(m.setupCatalog)) % len(m.setupCatalog)
-	selected := m.setupCatalog[index]
-	row := &m.setupAssignmentRows[m.setupModelSlot]
-	row.Provider, row.Reference = selected.Provider, selected.Reference
-	row.Source, row.Availability = selected.Source, selected.Availability
-	variants := m.setupVariantsForModel(row.Reference)
-	row.VariantSpecified = true
-	if len(variants) == 0 {
-		row.Variant = ""
-	} else if !supportsSetupVariant(variants, row.Variant) {
-		row.Variant = variants[0]
-	}
-	m.markAssignmentEdit()
+	return tea.Batch(p.runStep(ctx, from), p.tick())
 }
 
-func (m *Model) selectFilteredCatalogModel() {
-	matches := m.filteredSetupCatalog()
-	if len(matches) > 0 {
-		selected := matches[min(m.setupCatalogResultIndex, len(matches)-1)]
-		row := &m.setupAssignmentRows[m.setupModelSlot]
-		row.Provider, row.Reference = selected.Provider, selected.Reference
-		row.Source, row.Availability = selected.Source, selected.Availability
-		variants := m.setupVariantsForModel(row.Reference)
-		row.VariantSpecified = true
-		if len(variants) == 0 {
-			row.Variant = ""
-		} else if !supportsSetupVariant(variants, row.Variant) {
-			row.Variant = variants[0]
+func (p *setupPage) runStep(ctx context.Context, index int) tea.Cmd {
+	p.plan[index].status = stepRunning
+	p.log = append(p.log, p.now().Format("15:04:05")+" $ "+p.plan[index].command)
+	backend, kind, run, started := p.env.backend, p.plan[index].kind, p.run, p.now()
+	return func() tea.Msg {
+		output, err := backend.RunSetupStep(ctx, kind)
+		if ctx.Err() != nil && err == nil {
+			err = ctx.Err()
 		}
-		m.markAssignmentEdit()
+		return setupStepMsg{run: run, index: index, output: output, err: err, took: time.Since(started)}
 	}
 }
 
-func (m Model) filteredSetupCatalog() []SetupCatalogModel {
-	query := strings.ToLower(strings.TrimSpace(m.setupCatalogQuery))
-	if query == "" {
-		return append([]SetupCatalogModel(nil), m.setupCatalog...)
+func (p *setupPage) tick() tea.Cmd {
+	run := p.run
+	return tea.Tick(setupTick, func(time.Time) tea.Msg { return setupTickMsg{run: run} })
+}
+
+func (p *setupPage) stepFinished(msg setupStepMsg) (page, tea.Cmd) {
+	if msg.run != p.run || msg.index >= len(p.plan) {
+		return p, nil
 	}
-	filtered := make([]SetupCatalogModel, 0, len(m.setupCatalog))
-	for _, row := range m.setupCatalog {
-		if strings.Contains(strings.ToLower(row.Reference), query) || strings.Contains(strings.ToLower(row.Provider), query) {
-			filtered = append(filtered, row)
+	step := &p.plan[msg.index]
+	step.output, step.err = msg.output, msg.err
+	stamp := p.now().Format("15:04:05")
+	for _, line := range strings.Split(strings.TrimSpace(msg.output), "\n") {
+		if line != "" {
+			p.log = append(p.log, stamp+" "+sanitizeTerminal(line))
 		}
 	}
-	return filtered
+	if msg.err != nil {
+		step.status = stepFailed
+		p.log = append(p.log, stamp+" ✕ "+sanitizeTerminal(msg.err.Error()))
+		p.phase, p.cancel = phaseFailed, nil
+		return p, nil
+	}
+	step.status = stepDone
+	if next := msg.index + 1; next < len(p.plan) {
+		ctx, cancel := context.WithCancel(p.env.ctx)
+		p.cancel = cancel
+		return p, p.runStep(ctx, next)
+	}
+	p.phase, p.cancel = phaseResult, nil
+	return p, p.load()
 }
 
-func (m *Model) selectAssignmentVariant(offset int) {
-	row := &m.setupAssignmentRows[m.setupModelSlot]
-	next := cycleSetupVariant(row.Variant, m.setupVariantsForModel(row.Reference), offset)
-	if next == row.Variant {
-		return
-	}
-	row.Variant, row.VariantSpecified = next, true
-	m.markAssignmentEdit()
-}
-
-func (m *Model) markAssignmentEdit() {
-	m.setupAssignmentsExact = true
-	m.setupAssignmentsEdited = true
-	m.setupPreviewed = false
-	m.setupConfirm = false
-	m.setupPlan.Digest = ""
-}
-
-func (m *Model) resetSetupAssignments() {
-	m.setupAssignmentRows = [SetupModelAssignmentCount]SetupModelAssignmentRequest{}
-	m.setupAssignmentEntryRows = [SetupModelAssignmentCount]SetupModelAssignmentRequest{}
-	m.setupAssignmentsSeeded, m.setupAssignmentsExact, m.setupAssignmentsEntry = false, false, false
-	m.setupAssignmentsEdited, m.setupAssignmentsEntryEdited = false, false
-	m.setupEditorPlan, m.setupEditorRequest, m.setupEditorPreviewed = SetupPlan{}, SetupRequest{}, false
-}
-
-func (m *Model) seedSetupAssignments(plan SetupPlan) {
-	// Setup status is a readback of provider-owned artifacts. Its role/class
-	// annotations may be absent or evolve, while artifact keys are the stable
-	// contract used by the setup request. Normalize by those keys so an installed
-	// schema-v3 plan remains an exact request on the first preview.
-	ordered, ok := setupAssignmentsByArtifactKey(plan.ModelAssignments)
-	if !ok {
-		return
-	}
-	var rows [SetupModelAssignmentCount]SetupModelAssignmentRequest
-	for index, assignment := range ordered {
-		variant := assignment.Variant
-		if plan.ModelSchemaVersion < 3 && !assignment.VariantSpecified {
-			variant = ""
-		}
-		rows[index] = SetupModelAssignmentRequest{
-			ArtifactKey: assignment.ArtifactKey, Provider: assignment.Provider, Reference: assignment.Model,
-			RequestedEffort: assignment.RequestedEffort, Variant: variant, VariantSpecified: assignment.VariantSpecified, Source: assignment.Source, Availability: assignment.Availability,
-		}
-	}
-	m.setupAssignmentRows = rows
-	m.setupAssignmentsSeeded = true
-	m.setupAssignmentsExact = plan.ModelSchemaVersion >= 3
-}
-
-func setupAssignmentsByArtifactKey(rows *[SetupModelAssignmentCount]SetupModelAssignment) ([SetupModelAssignmentCount]SetupModelAssignment, bool) {
-	if rows == nil {
-		return [SetupModelAssignmentCount]SetupModelAssignment{}, false
-	}
-	byKey := make(map[string]SetupModelAssignment, SetupModelAssignmentCount)
-	for _, row := range rows {
-		if row.ArtifactKey == "" {
-			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
-		}
-		if _, duplicate := byKey[row.ArtifactKey]; duplicate {
-			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
-		}
-		byKey[row.ArtifactKey] = row
-	}
-	var ordered [SetupModelAssignmentCount]SetupModelAssignment
-	for index, identity := range setupAgentRows {
-		row, ok := byKey[identity.ArtifactKey]
-		if !ok {
-			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
-		}
-		ordered[index] = row
-	}
-	return ordered, len(byKey) == SetupModelAssignmentCount
-}
-
-func (m *Model) restoreSetupEditorPreview() {
-	if setupRequestsEqual(m.setupEditorRequest, m.setupRequest()) {
-		m.setupPlan, m.setupPreviewRequest, m.setupPreviewed = cloneSetupPlan(m.setupEditorPlan), cloneSetupRequest(m.setupEditorRequest), m.setupEditorPreviewed
-	}
-}
-
-func (m *Model) ensureModelVariant(index int) {
-	variants := m.setupVariantsForModel(m.setupModelRefs[index])
-	if len(variants) == 0 {
-		m.setupModelVariants[index] = ""
-		return
-	}
-	if !supportsSetupVariant(variants, m.setupModelVariants[index]) {
-		m.setupModelVariants[index] = variants[0]
-	}
-}
-
-func nextSetupVariant(value string, supported []string) string {
-	return cycleSetupVariant(value, supported, 1)
-}
-
-func cycleSetupVariant(value string, supported []string, offset int) string {
-	if len(supported) == 0 {
-		return value
-	}
-	for index, effort := range supported {
-		if value == effort {
-			return supported[(index+offset+len(supported))%len(supported)]
-		}
-	}
-	if offset < 0 {
-		return supported[len(supported)-1]
-	}
-	return supported[0]
-}
-
-func supportsSetupVariant(supported []string, variant string) bool {
-	for _, candidate := range supported {
-		if candidate == variant {
-			return true
-		}
-	}
-	return false
-}
-
-func (m Model) setupVariantsForModel(reference string) []string {
-	for _, row := range m.setupCatalog {
-		if row.Reference == reference {
-			return append([]string(nil), row.Variants...)
-		}
-	}
+func (p *setupPage) Section() string { return "setup del plugin" }
+func (p *setupPage) Captures() bool  { return false }
+func (p *setupPage) Busy() bool      { return p.phase == phaseApplying }
+func (p *setupPage) Modal(int) []string {
 	return nil
 }
 
-func (m Model) knownSetupModel(reference string) bool {
-	for _, row := range m.setupCatalog {
-		if row.Reference == reference {
-			return true
+func (p *setupPage) Keys() []key.Binding {
+	esc := binding([]string{"esc"}, "Esc", "volver")
+	quit := binding([]string{"q"}, "q", "salir")
+	switch p.phase {
+	case phasePrereq:
+		keys := []key.Binding{}
+		if p.canContinue() {
+			keys = append(keys, binding([]string{"enter"}, "Enter", "continuar"))
 		}
+		if len(p.commands()) > 0 {
+			keys = append(keys, binding([]string{"c"}, "c", "copiar comandos"))
+		}
+		return append(keys, binding([]string{"r"}, "r", "revisar de nuevo"), esc, quit)
+	case phasePermissions:
+		return []key.Binding{binding([]string{"enter"}, "Enter", "continuar"), binding([]string{"c"}, "c", "copiar JSON"), esc, quit}
+	case phaseReview:
+		return []key.Binding{binding([]string{"a"}, "a", "aplicar"), esc, quit}
+	case phaseApplying:
+		return []key.Binding{binding([]string{"ctrl+c"}, "Ctrl+C", "cancelar")}
+	case phaseResult:
+		return []key.Binding{binding([]string{"enter"}, "Enter", "volver al inicio"), quit}
+	default:
+		return []key.Binding{binding([]string{"r"}, "r", "reintentar"), binding([]string{"c"}, "c", "copiar detalle"), esc, quit}
 	}
-	return false
 }
 
-func (m Model) setupCatalogAvailable() bool {
-	return m.setupCatalogGeneration != 0 && !m.setupCatalogLoading && (m.setupCatalogErr == nil || len(m.setupCatalog) != 0)
+func (p *setupPage) Body(width, height int) []string {
+	// Below 100 columns the rail would leave the content too narrow; the
+	// panel header still says which step this is.
+	contentWidth := width
+	var rail []string
+	if width >= stackBelow {
+		rail = panel(stepperWidth, height, false, sectionLabel("Pasos"), "", renderStepper(p.steps(), p.currentStep(), wrapText("Nada se ejecuta hasta el paso 4, y solo con tu confirmación.", stepperWidth-4)))
+		contentWidth = width - stepperWidth - 1
+	}
+	inner := contentWidth - 4
+	var label, aside string
+	var body []string
+	switch p.phase {
+	case phasePrereq:
+		label, aside, body = sectionLabel("Prerrequisitos"), styleMuted.Render("· paso 1 de 4"), p.prereqLines(inner)
+	case phasePermissions:
+		label, aside, body = sectionLabel("Permisos recomendados"), styleMuted.Render("· paso 2 de 4"), p.permissionLines(inner)
+	case phaseReview:
+		label, aside, body = sectionLabel("Revisar y aplicar"), styleMuted.Render("· paso 3 de 4"), p.reviewLines(inner)
+	case phaseResult:
+		label, body = outcome(stateOK, p.verb(true)+" completa"), p.resultLines(inner)
+	case phaseFailed:
+		label, aside, body = outcome(stateError, p.verb(true)+" interrumpida"), styleMuted.Render(fmt.Sprintf("· paso %d/%d", p.failedIndex()+1, len(p.plan))), p.progressLines(inner, height-4)
+	default:
+		label, aside, body = sectionLabel(p.verb(false)+" plugin"), styleMuted.Render(fmt.Sprintf("· paso 4 de 4 · %d/%d", p.doneCount(), len(p.plan))), p.progressLines(inner, height-4)
+	}
+	content := panel(contentWidth, height, true, label, aside, body)
+	if rail == nil {
+		return content
+	}
+	return joinColumns(1, rail, content)
 }
 
-func setupModelProvider(reference string) string {
-	provider, _, _ := strings.Cut(reference, "/")
-	return provider
-}
-func (m Model) modelProfileChanged() bool {
-	return m.setupOverrides || m.setupAssignmentsEdited
-}
-func (m Model) modelEditorError() string {
-	if m.setupAssignmentsSeeded {
-		for index, row := range m.setupAssignmentRows {
-			if row.ArtifactKey != setupAgentRows[index].ArtifactKey || !validSetupModelReference(row.Reference) || row.Provider != setupModelProvider(row.Reference) || !m.knownSetupModel(row.Reference) {
-				return "Every agent needs a discovered provider/model and variant."
-			}
-			variants := m.setupVariantsForModel(row.Reference)
-			if len(variants) > 0 && row.Variant != "" && !supportsSetupVariant(variants, row.Variant) || len(variants) == 0 && row.Variant != "" {
-				return "Known models require a discovered variant or provider default."
-			}
-		}
-		return ""
-	}
-	for _, ref := range m.setupModelRefs {
-		if !validSetupModelReference(ref) {
-			return "Each slot needs a provider/model reference."
+// verb names the operation: install when the plugin was missing, update when
+// it was outdated, verify when nothing needed to change.
+func (p *setupPage) verb(noun bool) string {
+	kind := "verify"
+	for _, step := range p.plan {
+		switch step.kind {
+		case StepInstallPlugin:
+			kind = "install"
+		case StepUpdatePlugin:
+			kind = "update"
 		}
 	}
-	for index, ref := range m.setupModelRefs {
-		if !m.knownSetupModel(ref) {
-			return "Model variant metadata is not available."
-		}
-		variants := m.setupVariantsForModel(ref)
-		if len(variants) > 0 && !supportsSetupVariant(variants, m.setupModelVariants[index]) || len(variants) == 0 && m.setupModelVariants[index] != "" {
-			return "Known models require a discovered variant or provider default."
-		}
+	switch {
+	case kind == "install" && noun:
+		return "Instalación"
+	case kind == "install":
+		return "Instalando"
+	case kind == "update" && noun:
+		return "Actualización"
+	case kind == "update":
+		return "Actualizando"
+	case noun:
+		return "Verificación"
+	default:
+		return "Verificando"
 	}
-	return ""
 }
 
-func validSetupModelReference(reference string) bool {
-	_, valid := modelcatalog.ValidReference(reference)
-	return valid
+func (p *setupPage) steps() []step {
+	steps := make([]step, len(setupTitles))
+	current := p.currentStep()
+	for index, title := range setupTitles {
+		steps[index] = step{title: title, state: statePending}
+		switch {
+		case index < current || p.phase == phaseResult:
+			steps[index].state = stateOK
+		case index == 3 && p.phase == phaseFailed:
+			steps[index].state = stateError
+		}
+	}
+	return steps
 }
 
-func (m *Model) selectSetupPlan(offset int) tea.Cmd {
-	if m.multiSetupEnabled() && !m.hasSetupProvider(setupflow.ProviderCodex) {
-		return nil
+var setupTitles = []string{"Prerrequisitos", "Permisos", "Revisar y aplicar", "Aplicar"}
+
+func (p *setupPage) currentStep() int {
+	switch p.phase {
+	case phasePrereq:
+		return 0
+	case phasePermissions:
+		return 1
+	case phaseReview:
+		return 2
+	case phaseResult:
+		return len(setupTitles)
+	default:
+		return 3
 	}
-	if m.setupAssignmentsExact && !m.multiSetupEnabled() {
-		return nil
-	}
-	index := setupPlanIndex(m.setupSelected)
-	next := max(0, min(len(setupPlans)-1, index+offset))
-	if next == index {
-		return nil
-	}
-	m.setupSelected = setupPlans[next]
-	if m.multiSetupEnabled() {
-		m.codexPlanEdited = true
-	}
-	return m.loadSetupPlan()
 }
 
-func setupPlanIndex(value string) int {
-	for index, plan := range setupPlans {
-		if value == plan {
+func (p *setupPage) prereqLines(width int) []string {
+	if p.loading {
+		return []string{stateBusy.glyph() + " " + styleMuted.Render("Revisando Claude Code, el marketplace y el plugin…")}
+	}
+	if p.err != nil {
+		return []string{stateError.glyph() + " " + styleStrong.Render("No se pudo revisar el estado."), styleMuted.Render("Acción: repite con [r].")}
+	}
+	state := p.state
+	onPath := pathBinaryCheck(state.PathBinary)
+	marketplace := checkRow{state: stateOK, name: "marketplace", value: "agregado", detail: claudecli.MarketplaceRepo}
+	if !state.Plugin.MarketplaceAdded {
+		marketplace = checkRow{state: stateError, name: "marketplace", value: "no agregado", detail: claudecli.MarketplaceRepo}
+	}
+	plugin := checkRow{state: stateOK, name: "plugin", value: version(state.Plugin.Version), detail: claudecli.PluginID + " · al día"}
+	switch {
+	case !state.Plugin.Installed:
+		plugin = checkRow{state: stateError, name: "plugin", value: "no instalado", detail: claudecli.PluginID}
+		if state.Plugin.Offered != "" {
+			plugin.detail += " · marketplace " + version(state.Plugin.Offered)
+		}
+	case p.outdated():
+		plugin = checkRow{state: stateWarn, name: "plugin", value: version(state.Plugin.Version), detail: version(state.Plugin.Offered) + " disponible"}
+	case !state.Plugin.Enabled:
+		plugin = checkRow{state: stateWarn, name: "plugin", value: version(state.Plugin.Version), detail: "deshabilitado", action: "claude plugin enable " + claudecli.PluginID}
+	}
+	claude := claudeCheck(Overview{Claude: state.Claude})
+	rows := []checkRow{onPath, claude, marketplace, plugin, {state: stateNeutral, name: "permisos", value: "pendiente", detail: "se recomiendan en el paso 2"}}
+	lines := renderChecks(rows, 17, 15, width)
+	lines = append(lines, "", sectionLabel("Comandos que se ejecutarán"))
+	if commands := p.commands(); len(commands) > 0 {
+		for _, command := range commands {
+			lines = append(lines, "  "+styleAccent.Render(command))
+		}
+		lines = append(lines, "")
+		lines = append(lines, styledWrap("Puedes copiarlos con [c] y correrlos tú; revisa de nuevo con [r].", width, styleMuted)...)
+	} else {
+		lines = append(lines, styleMuted.Render("Ninguno: el plugin ya está instalado y al día; el paso 4 solo verifica."))
+	}
+	lines = append(lines, "", sectionLabel("Qué instala el plugin"),
+		styleMuted.Render("agentes      ")+styleInk.Render("vgxness:"+strings.Join(pluginAgents, " · ")),
+		styleMuted.Render("hooks        ")+styleInk.Render(strings.Join(pluginHooks, " · ")),
+		styleMuted.Render("servidor MCP ")+styleInk.Render(pluginMCPServer+" · vgxness mcp --full"),
+		styleMuted.Render("skills       ")+styleInk.Render(strings.Join(pluginSkills, " · ")+" (solo bajo petición)"),
+	)
+	lines = append(lines, styledWrap("No escribe en el repositorio ni en ~/.claude/settings.json.", width, styleMuted)...)
+	if p.copied != "" {
+		lines = append(lines, "", stateOK.glyph()+" "+styleMuted.Render(p.copied))
+	}
+	if state.Claude.Version == "" {
+		lines = append([]string{stateError.glyph() + " " + styleStrong.Render("Sin Claude Code no se puede continuar."), ""}, lines...)
+	}
+	return lines
+}
+
+func (p *setupPage) permissionLines(width int) []string {
+	lines := styledWrap("El plugin no puede traer reglas de permisos. Agrega esto a ~/.claude/settings.json:", width, styleInk)
+	lines = append(lines, "")
+	for _, line := range strings.Split(claudecli.PermissionJSON(), "\n") {
+		lines = append(lines, styleAccent.Render(ansi.Truncate(line, width, "…")))
+	}
+	lines = append(lines, "", stateInfo.glyph()+" "+styleInk.Render("Leer y guardar no preguntan; actualizar y olvidar"), "  "+styleInk.Render("piden confirmación cada vez."))
+	lines = append(lines, styledWrap("Si lo omites, Claude Code preguntará por cada herramienta. También lo imprime vgxness claude-code setup.", width, styleMuted)...)
+	if p.copied != "" {
+		lines = append(lines, "", stateOK.glyph()+" "+styleMuted.Render(p.copied))
+	}
+	return lines
+}
+
+func (p *setupPage) reviewLines(width int) []string {
+	lines := []string{sectionLabel("Plan")}
+	labelWidth := min(44, width-24)
+	for index, step := range p.plan {
+		lines = append(lines, styleInk.Render(fmt.Sprintf("%d. ", index+1))+padRight(styleInk.Render(ansi.Truncate(step.label, labelWidth, "…")), labelWidth)+" "+styleMuted.Render(step.effect))
+	}
+	lines = append(lines, "")
+	lines = append(lines, styledWrap("No se toca el repositorio ni ~/.claude/settings.json. La memoria sigue en ~/.vgxness.", width, styleMuted)...)
+	if p.mutating() {
+		lines = append(lines, "", stateWarn.glyph()+" "+styleInk.Render("Al terminar hay que reiniciar Claude Code."))
+	}
+	return lines
+}
+
+func (p *setupPage) doneCount() int {
+	done := 0
+	for _, step := range p.plan {
+		if step.status == stepDone {
+			done++
+		}
+	}
+	return done
+}
+
+func (p *setupPage) failedIndex() int {
+	for index, step := range p.plan {
+		if step.status == stepFailed {
 			return index
 		}
 	}
-	return 1
+	return len(p.plan) - 1
 }
 
-func validSetupPlan(value string) bool {
-	return value == "low" || value == "medium" || value == "high" || value == "ultra"
-}
-
-func (m *Model) resizeSetup() {
-	m.setupViewport.SetWidth(max(1, m.width))
-	m.setupViewport.SetHeight(max(3, m.height-6))
-}
-
-func (m Model) renderSetupRoute() []string {
-	preview := m.setupViewport
-	offset := preview.YOffset()
-	preview.SetContent(strings.Join(m.setupRouteLines(), "\n"))
-	preview.SetYOffset(offset)
-	return strings.Split(strings.TrimRight(preview.View(), "\n"), "\n")
-}
-
-func (m Model) setupRouteLines() []string {
-	if m.setupView == setupViewRecovery {
-		return m.recoveryRouteLines()
+func (p *setupPage) bar(width int) string {
+	ratio := 0.0
+	if len(p.plan) > 0 {
+		ratio = float64(p.doneCount()) / float64(len(p.plan))
 	}
-	if m.setupErr != nil {
-		return []string{studioAccent.Render("INSTALLATION STUDIO"), "", studioAccent.Render("LOCAL STATUS CHECK"), "✕ Could not read the local setup status.", setupActionableError(m.setupErr), "Action: press [r] to retry, or verify the local setup service is available."}
+	bar := progress.New(progress.WithColors(colorAccent, colorAccentStrong), progress.WithFillCharacters('█', '░'), progress.WithoutPercentage(), progress.WithWidth(min(40, width-16)))
+	bar.EmptyColor = colorPanelRaised
+	tail := fmt.Sprintf("  %3d %%  ", int(ratio*100))
+	switch p.phase {
+	case phaseFailed:
+		tail += "detenido"
+	case phaseApplying:
+		tail += fmt.Sprintf("%d s", int(p.now().Sub(p.started).Seconds()))
 	}
-	// The OpenCode editor is available in a composite setup whenever OpenCode is
-	// selected. Check it before the composite home so its controls and any
-	// validation errors cannot be hidden by the multi-provider early return.
-	if m.setupModelEditing {
-		if m.multiSetupEnabled() {
-			lines := []string{studioAccent.Render("OPENCODE MODEL EDITOR"), studioMuted.Render("OpenCode assignments · Codex uses its managed presets.")}
-			if m.setupAssignmentsSeeded {
-				return append(lines, m.modelAssignmentLines()...)
+	return bar.ViewAs(ratio) + styleMuted.Render(tail)
+}
+
+func (p *setupPage) stepRows(width int) []string {
+	var lines []string
+	for _, step := range p.plan {
+		glyph, status := statePending.glyph(), ""
+		switch step.status {
+		case stepRunning:
+			glyph, status = stateBusy.glyph(), "…"
+		case stepDone:
+			glyph, status = stateOK.glyph(), "listo"
+		case stepFailed:
+			glyph, status = stateError.glyph(), "error"
+		}
+		lines = append(lines, glyph+" "+padRight(styleInk.Render(ansi.Truncate(step.label, 34, "…")), 35)+padRight(styleMuted.Render(status), 7)+styleMuted.Render(ansi.Truncate(step.command, max(width-45, 8), "…")))
+		if step.status == stepFailed && step.err != nil {
+			for _, part := range wrapText(sanitizeTerminal(step.err.Error()), max(width-45, 20)) {
+				lines = append(lines, strings.Repeat(" ", 44)+styleMuted.Render(part))
 			}
-			return append(lines, m.modelEditorLines()...)
-		}
-		if m.setupAssignmentsSeeded {
-			return append([]string{studioAccent.Render("OPENCODE SETUP"), installationActionBar(m.installationAction)}, m.modelAssignmentLines()...)
-		}
-		return append([]string{studioAccent.Render("OPENCODE SETUP"), installationActionBar(m.installationAction)}, m.modelEditorLines()...)
-	}
-	if m.multiSetupEnabled() {
-		return m.multiSetupRouteLines()
-	}
-	header := "selected plan  " + sanitizeTerminal(m.setupSelected)
-	if m.setupAssignmentsExact {
-		header = "per-agent assignments"
-	}
-	lines := []string{studioAccent.Render("OPENCODE SETUP"), installationActionBar(m.installationAction), studioMuted.Render(header)}
-	// Give the unplanned home a clear starting point without pushing the
-	// reviewed plan, outcome, or recovery details below a compact terminal.
-	if !m.setupPreviewed && m.setupPlan.Digest == "" && m.setupPlan.SelfInstallState == "" && m.setupPlanErr == nil && m.setupApplyErr == nil && !m.setupSucceeded {
-		lines = append(lines, "", studioAccent.Render("ACTIONS"))
-		lines = append(lines, installationActionCards(m.installationAction)...)
-		lines = append(lines, "choose [1/2/3], then [Enter] · [m] edits OpenCode model assignments")
-	}
-	if m.setupErr != nil {
-		return append(lines, "", "✕ CONFIGURATION STATUS UNAVAILABLE", "No plan was loaded. Press [r] to retry the local status check.")
-	}
-	switch {
-	case m.setupApplying:
-		lines = append(lines, "", "APPLYING SETUP · VERIFIED PLAN", "Waiting for the setup service; step progress is unavailable.")
-		if m.setupCancelAsked {
-			lines = append(lines, "! Cancellation requested. Waiting for setup recovery...")
-		}
-		return lines
-	case m.setupSucceeded:
-		result := m.setupResult
-		outcome := setupResultOutcome(result)
-		lines = append(lines,
-			"✓ "+strings.ToUpper(outcome)+" COMPLETE",
-			"changed  "+map[bool]string{true: "yes", false: "no"}[result.Changed],
-			"launcher  "+setupValue(result.SelfInstallState)+"  "+setupValue(result.SelfInstallPath),
-			"integration  "+setupValue(result.IntegrationState)+"  "+setupValue(result.IntegrationPath),
-			"shared skills  "+setupValue(result.SkillsState)+"  "+setupValue(result.SkillsPath),
-			fmt.Sprintf("artifacts  %d", result.ArtifactCount),
-			setupHandshake(result.HandshakeOK, result.HandshakeStatus),
-		)
-		lines = append(lines, setupSelfInstallDetails(result.SelfInstallUpdateAvailable, result.SelfInstallRollbackAvailable, result.SelfInstallActiveSHA256, result.SelfInstallPreviousSHA256)...)
-		lines = append(lines, setupPlanModelProfile(result.Plan, m.setupViewport.Width())...)
-		if result.RestartRequired {
-			target := "selected model plan"
-			if m.setupAssignmentsExact {
-				target = "per-agent assignments"
-			}
-			lines = append(lines, "! Restart OpenCode to load the "+target+".")
-		} else {
-			lines = append(lines, "Restart OpenCode if it is already running.")
-		}
-		return lines
-	case m.setupApplyErr != nil:
-		lines = append(lines, "✕ SETUP FAILED")
-		if setupResultHasKnownState(m.setupResult) {
-			lines = append(lines,
-				"launcher  "+setupValue(m.setupResult.SelfInstallState)+"  "+setupValue(m.setupResult.SelfInstallPath),
-				"integration  "+setupValue(m.setupResult.IntegrationState)+"  "+setupValue(m.setupResult.IntegrationPath),
-				"shared skills  "+setupValue(m.setupResult.SkillsState)+"  "+setupValue(m.setupResult.SkillsPath),
-			)
-			lines = append(lines, setupSelfInstallDetails(m.setupResult.SelfInstallUpdateAvailable, m.setupResult.SelfInstallRollbackAvailable, m.setupResult.SelfInstallActiveSHA256, m.setupResult.SelfInstallPreviousSHA256)...)
-		}
-		if m.setupResult.Recovery != "" {
-			lines = append(lines, "Recovery: "+sanitizeTerminal(m.setupResult.Recovery), "Action: inspect and refresh before retry.")
-		} else if setupResultHasKnownState(m.setupResult) {
-			lines = append(lines, "! The operation may be partial or unverified.", "Action: inspect and refresh before retry.")
-		} else {
-			lines = append(lines, "Action: refresh the preflight before retrying.")
-		}
-		return lines
-	case m.setupPlanLoading:
-		return append(lines, "", "... Loading verified setup preview...")
-	case m.setupPlanErr != nil:
-		return append(lines, "✕ SETUP PREVIEW UNAVAILABLE", "Action: check local setup prerequisites, then press r to retry.")
-	}
-
-	plan := m.setupPlan
-	action := classifySetup(plan)
-	readiness := "! BLOCKED / RECOVERY"
-	if action == "initial install" || action == "reinstall/update" {
-		readiness = "✓ READY TO APPLY: " + strings.ToUpper(action)
-	}
-	if action == "no changes" {
-		readiness = "✓ NO CHANGES NEEDED"
-	}
-	lines = append(lines,
-		readiness,
-		"action  "+action,
-		"digest  "+setupValue(plan.Digest),
-		"launcher  "+setupValue(plan.SelfInstallState)+"  "+setupValue(plan.SelfInstallPath),
-		"integration  "+setupValue(plan.IntegrationState)+"  "+setupValue(plan.IntegrationPath),
-		"shared skills  "+setupValue(plan.SkillsState)+"  "+setupValue(plan.SkillsPath),
-		fmt.Sprintf("artifacts  %d", plan.ArtifactCount),
-		"model efficient  "+setupValue(plan.ModelEfficient),
-		"model balanced   "+setupValue(plan.ModelBalanced),
-		"model frontier   "+setupValue(plan.ModelFrontier),
-		setupHandshake(plan.HandshakeOK, plan.HandshakeStatus),
-	)
-	if err := m.modelEditorError(); err != "" && (m.setupModelEditing || m.setupOverrides) {
-		lines = append(lines, "✕ Model profile: "+err)
-	}
-	lines = append(lines, setupSelfInstallDetails(plan.SelfInstallUpdateAvailable, plan.SelfInstallRollbackAvailable, plan.SelfInstallActiveSHA256, plan.SelfInstallPreviousSHA256)...)
-	if plan.Blocker != "" {
-		lines = append(lines, "Blocker: "+sanitizeTerminal(plan.Blocker))
-	}
-	if action == "no changes" {
-		lines = append(lines, "no changes detected by preflight", "Apply is disabled. Press r to refresh the preflight.")
-	}
-	if m.setupConfirm {
-		lines = append(lines, "", "! CONFIRM "+strings.ToUpper(action), "No files change before y.")
-		if m.setupAssignmentsExact {
-			lines = append(lines, setupAssignmentRequestProfile(m.setupAssignmentRows, m.setupViewport.Width())...)
-		} else if m.modelProfileChanged() {
-			lines = append(lines, "! Discovery proves identifier presence only; no remote probe was made.")
-			lines = append(lines, m.modelProfileSummary()...)
-		}
-		lines = append(lines, fmt.Sprintf("Apply this verified %d-step plan? [y] yes  [n/Esc] cancel", len(plan.Steps)))
-	}
-	lines = append(lines, "", fmt.Sprintf("%d-STEP PLAN (%d artifacts)", len(plan.Steps), plan.ArtifactCount))
-	for _, step := range plan.Steps {
-		marker := "check"
-		if step.Mutates {
-			marker = "write"
-		}
-		lines = append(lines, fmt.Sprintf("%d. %s  [%s]", step.Number, sanitizeTerminal(step.Title), marker))
-		if m.wide() && step.Explanation != "" {
-			lines = append(lines, "   "+sanitizeTerminal(step.Explanation))
 		}
 	}
 	return lines
 }
 
-func installationActionBar(selected installationAction) string {
-	parts := make([]string, 0, 3)
-	for _, action := range []installationAction{actionInstall, actionReinstall, actionConfigure} {
-		label := fmt.Sprintf("[%d] %s", action+1, action.label())
-		if action == selected {
-			parts = append(parts, studioCyan.Render("▸ "+label))
-		} else {
-			parts = append(parts, studioMuted.Render("  "+label))
+func (p *setupPage) progressLines(width, height int) []string {
+	lines := []string{p.bar(width), ""}
+	lines = append(lines, p.stepRows(width)...)
+	lines = append(lines, "")
+	if p.phase == phaseFailed {
+		lines = append(lines, styledWrap(p.failureAction(), width, styleMuted)...)
+		if p.copied != "" {
+			lines = append(lines, stateOK.glyph()+" "+styleMuted.Render(p.copied))
 		}
+	} else {
+		lines = append(lines, styledWrap("Solo [Ctrl+C] cancela mientras se aplica; lo ya instalado se conserva.", width, styleMuted)...)
 	}
-	return strings.Join(parts, "   ")
-}
-
-func installationActionCards(selected installationAction) []string {
-	cards := []struct{ title, detail string }{
-		{"Install", "preview and apply the local provider setup"},
-		{"Reinstall", "repair or restore from the protected recovery flow"},
-		{"Configure", "review OpenCode model assignments before a new preview"},
+	lines = append(lines, "", sectionLabel("Registro"))
+	room := max(height-len(lines)-2, 1)
+	log := p.log
+	if len(log) > room {
+		log = log[len(log)-room:]
 	}
-	lines := make([]string, 0, len(cards))
-	for index, card := range cards {
-		marker := " "
-		if installationAction(index) == selected {
-			marker = "▸"
-		}
-		lines = append(lines, fmt.Sprintf("  %s [%d] %-10s %s", marker, index+1, card.title, card.detail))
+	for _, line := range log {
+		lines = append(lines, styleMuted.Render(ansi.Truncate(line, width, "…")))
 	}
 	return lines
 }
 
-func (m Model) multiSetupRouteLines() []string {
-	switch m.setupView {
-	case setupViewHome:
-		return m.multiSetupHomeLines()
-	case setupViewProviders:
-		return m.multiSetupProviderLines()
-	case setupViewPlan:
-		return m.multiSetupPlanLines()
+func (p *setupPage) failureAction() string {
+	step := p.plan[p.failedIndex()]
+	if step.err == context.Canceled {
+		return "Cancelaste la aplicación. Lo ya hecho se conserva; reintenta con [r]."
 	}
-	return m.multiSetupReviewLines()
-}
-
-func (m Model) multiSetupHomeLines() []string {
-	lines := []string{studioMuted.Render("Choose what you need. Nothing changes until the final review."), ""}
-	cardWidth := max(1, m.setupViewport.Width()-6)
-	for _, card := range []struct {
-		action        installationAction
-		title, detail string
-	}{
-		{actionInstall, "Install", "Pick providers, review a plan, then apply."},
-		{actionReinstall, "Reinstall", "Back up and recover before replacing anything."},
-		{actionConfigure, "Configure", "Choose models for your agents. Codex keeps plans."},
-	} {
-		marker := " "
-		if m.installationAction == card.action {
-			marker = "▸"
-		}
-		style := studioCard.Width(cardWidth)
-		if m.installationAction == card.action {
-			style = style.Foreground(softbricCanvas).Background(softbricAqua).BorderForeground(softbricAqua)
-		}
-		cardView := style.Render(fmt.Sprintf("%s [%d] %s\n  %s", marker, card.action+1, card.title, card.detail))
-		lines = append(lines, strings.Split(cardView, "\n")...)
-	}
-	return lines
-}
-
-func (m Model) multiSetupProviderLines() []string {
-	lines := []string{studioAccent.Render("INSTALL · 1 OF 3 · PROVIDERS"), studioMuted.Render("Choose one or more local integrations."), "", studioAccent.Render("PROVIDERS")}
-	for index, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi} {
-		selected := " "
-		if m.hasSetupProvider(provider) {
-			selected = "✓"
-		}
-		cursor := " "
-		if index == m.setupProviderCursor {
-			cursor = "▸"
-		}
-		detail := "per-agent models"
-		if provider == setupflow.ProviderCodex {
-			detail = "managed plans"
-		} else if provider == setupflow.ProviderPi {
-			detail = "local release"
-		}
-		row := fmt.Sprintf("  %s %s %-8s %s", cursor, selected, provider, detail)
-		if index == m.setupProviderCursor {
-			row = studioFocus.Width(max(1, m.setupViewport.Width()-6)).Render(row)
-		}
-		lines = append(lines, row)
-	}
-	lines = append(lines, "", "Pi: set VGXNESS_PI_RELEASE_DIR, or use an offline release directory.")
-	return lines
-}
-
-func setupActionableError(err error) string {
-	if err == nil {
-		return "-"
-	}
-	value := sanitizeTerminal(err.Error())
-	lower := strings.ToLower(value)
-	for _, sensitive := range []string{"secret", "token", "password", "credential", "authorization"} {
-		if strings.Contains(lower, sensitive) {
-			return "Local operation failed; details were withheld."
-		}
-	}
-	return truncateSetupRunes(value, 160)
-}
-
-// collapsedModelAssignments summarizes a single-mode selection as one line so
-// the review does not repeat the same assignment for all seven agents.
-func collapsedModelAssignments(config *agentmodels.Config) (string, bool) {
-	if config == nil || config.Mode != "single" {
-		return "", false
-	}
-	manager := config.Assignments["manager"]
-	detail := "effort=" + manager.Effort
-	if manager.Variant != "" {
-		detail = "variant=" + manager.Variant
-	}
-	return "all agents  " + manager.Model + "  " + detail, true
-}
-
-func (m Model) multiSetupReviewLines() []string {
-	selected := make([]string, 0, 3)
-	for _, provider := range []setupflow.Provider{setupflow.ProviderOpenCode, setupflow.ProviderCodex, setupflow.ProviderPi} {
-		if m.hasSetupProvider(provider) {
-			selected = append(selected, string(provider))
-		}
-	}
-	lines := []string{
-		studioMuted.Render("01 PROVIDERS") + "   →   " + studioMuted.Render("02 MODELS") + "   →   " + studioAccent.Render("03 REVIEW"),
-		"",
-		studioAccent.Render("PROVIDERS") + "  " + strings.Join(selected, " · "),
-	}
-	if m.hasSetupProvider(setupflow.ProviderCodex) {
-		lines = append(lines, "Codex plan  "+sanitizeTerminal(m.setupSelected))
-	}
-	if m.setupPlanLoading {
-		return append(lines, "", "... Loading verified provider preview...")
-	}
-	if m.setupApplying {
-		return append(lines, "", "... Applying shared work then providers in order...")
-	}
-	if m.setupApplyErr != nil {
-		lines = append(lines, "✕ SETUP PARTIAL/FAILED")
-		lines = append(lines, "Reason: "+sanitizeTerminal(m.setupApplyErr.Error()))
-		for _, row := range m.setupMultiResult.Providers {
-			lines = append(lines, providerOutcomeLine(row))
-		}
-		if m.setupMultiResult.Shared.Recovery != "" {
-			lines = append(lines, "Recovery: "+sanitizeTerminal(m.setupMultiResult.Shared.Recovery))
-		}
-		return append(lines, "Action: [r] replan/retry; verified unchanged providers are skipped.")
-	}
-	if m.setupSucceeded {
-		lines = append(lines, "✓ SETUP COMPLETE")
-		for _, row := range m.setupMultiResult.Providers {
-			lines = append(lines, providerOutcomeLine(row))
-		}
-		return lines
-	}
-	plan := m.setupMultiPlan
-	state := "! BLOCKED"
-	if plan.Ready {
-		state = "✓ READY TO APPLY"
-	}
-	if plan.Ready && !plan.Changed {
-		state = "✓ NO CHANGES"
-	}
-	lines = append(lines, "", studioAccent.Render("REVIEW"), "  "+state, "  digest  "+setupValue(plan.Digest))
-	for _, row := range plan.Providers {
-		glyph := "!"
-		if row.Ready {
-			glyph = "✓"
-		}
-		status := "needs install"
-		if row.Installed && !row.Changed {
-			status = "installed"
-		}
-		lines = append(lines, "  "+glyph+" "+string(row.Provider)+"  "+status)
-		if row.Models != nil {
-			if collapsed, ok := collapsedModelAssignments(row.Models); ok {
-				lines = appendSetupWrapped(lines, "    ", collapsed, m.setupViewport.Width()-6)
-			} else {
-				for _, role := range agentmodels.Roles {
-					a := row.Models.Assignments[role]
-					detail := " effort=" + a.Effort
-					if a.Variant != "" {
-						detail = " variant=" + a.Variant
-					}
-					lines = appendSetupWrapped(lines, "    ", role+" "+a.Model+detail, m.setupViewport.Width()-6)
-				}
-			}
-		}
-		if row.Integration.ModelAssignments != nil {
-			for _, a := range row.Integration.ModelAssignments {
-				lines = appendSetupWrapped(lines, "    ", a.ArtifactKey+" "+a.Model+" variant="+string(a.Variant), m.setupViewport.Width()-6)
-			}
-		}
-		if row.Blocker != "" {
-			lines = append(lines, "    blocker  "+sanitizeTerminal(row.Blocker))
-		}
-	}
-	if plan.Blocker != "" {
-		lines = append(lines, "Blocker: "+sanitizeTerminal(plan.Blocker))
-	}
-	if m.setupConfirm {
-		lines = append(lines, "", "! CONFIRM MULTI-PROVIDER APPLY", "Apply shared work once, then providers? [y] yes  [n/Esc] cancel")
-	}
-	lines = append(lines, "  [a] apply reviewed plan · no files change until confirmation")
-	return lines
-}
-
-func providerOutcomeLine(row setupflow.ProviderResult) string {
-	glyph := "✕"
-	if row.Verified {
-		glyph = "✓"
-	}
-	if row.Skipped {
-		glyph = "✓"
-	}
-	value := "unverified"
-	if row.Verified {
-		value = "verified"
-	}
-	if row.Skipped {
-		value = "verified unchanged; skipped"
-	}
-	return glyph + " " + string(row.Provider) + "  " + value
-}
-
-func (m Model) setupHelp() string {
-	if m.setupView == setupViewRecovery {
-		return m.recoveryHelp()
-	}
-	if m.setupModelEditing && m.setupCatalogSearching {
-		return "[↑↓] result  [Enter] assign  [Esc] cancel search"
-	}
-	if m.modelChoiceEditing {
-		return "Type provider/model  [Enter] save  [Esc] cancel"
-	}
-	if m.setupModelEditing {
-		if m.setupAssignmentsSeeded {
-			help := "[↑↓/j/k] row · [←→] pick"
-			if len(m.setupVariantsForModel(m.setupAssignmentRows[m.setupModelSlot].Reference)) > 0 {
-				help += " · [[/]] variant"
-			} else if m.knownSetupModel(m.setupAssignmentRows[m.setupModelSlot].Reference) {
-				help += " · default"
-			} else {
-				help += " · no variant"
-			}
-			return help + " · [Enter] preview · [Esc]/[q] cancel"
-		}
-		help := "[j/k] slot · type ref"
-		if len(m.setupVariantsForModel(m.setupModelRefs[m.setupModelSlot])) > 0 {
-			help += " · [Tab] variant"
-		} else if m.knownSetupModel(m.setupModelRefs[m.setupModelSlot]) {
-			help += " · provider default"
-		} else {
-			help += " · variant not available"
-		}
-		return help + " · [Enter] save · [Esc] cancel"
-	}
-	if m.multiSetupEnabled() {
-		switch m.setupView {
-		case setupViewHome:
-			return "[↑↓/j/k] action  [1/2/3] select  [Enter] continue"
-		case setupViewProviders:
-			return "[↑↓] focus · [Space/o/c/p] toggle · [Enter] continue · [Esc] back"
-		case setupViewPlan:
-			if m.choiceProvider() == setupflow.ProviderCodex {
-				return "[Tab] provider · [↑↓] plan · [Enter] review"
-			}
-			if m.modelChoices[modelChoiceIndex(m.choiceProvider())].Mode == "" {
-				return "[↑↓] choose · [Enter] continue · [1/2] select · [Tab] provider · [Esc] back"
-			}
-			return "[Tab] provider · [↑↓] agent · [1/2] mode · [m] catalog · [i] type · [e] effort"
-		}
-		if m.setupApplying {
-			return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
-		}
-		if m.setupConfirm {
-			return "[y] apply  [n/Esc] cancel  No write occurs until y"
-		}
-		help := "[o] OpenCode  [c] Codex  [p] Pi  [h/l] shared plan  [r] refresh"
-		if m.hasSetupProvider(setupflow.ProviderOpenCode) {
-			help += "  [m] model profile  [Tab] Recovery"
-		} else {
-			help += "  [Tab] verification/retry"
-		}
-		if m.setupApplyAllowed() {
-			help += "  [a] apply"
-		}
-		return help
-	}
-	switch {
-	case m.setupApplying:
-		return "Applying: navigation and quit locked  [ctrl+c] emergency cancel"
-	case m.setupConfirm:
-		return "[j/k] scroll  [y] apply  [n/Esc] cancel  No write occurs until y"
-	case m.setupSucceeded:
-		return "[j/k] scroll  [r] reload preview  [Esc] Overview  [q] quit"
-	case m.setupApplyErr != nil:
-		return "[r] inspect/refresh  [Esc] Overview"
+	switch step.kind {
+	case StepAddMarketplace:
+		return "Acción: revisa tu conexión y que el repositorio " + claudecli.MarketplaceRepo + " sea accesible, y reintenta con [r]."
+	case StepInstallPlugin, StepUpdatePlugin:
+		return "Acción: ejecuta  claude plugin marketplace update " + claudecli.MarketplaceName + "  y reintenta con [r]. Nada más cambió en tu equipo."
+	case StepVerifyMCP:
+		return "Acción: comprueba que vgxness esté en el PATH (vgxness version) y reintenta con [r]."
 	default:
-		if m.setupAssignmentsExact {
-			help := "[m] edit assignments  [Tab] Recovery  [r] refresh preflight"
-			if m.setupApplyAllowed() {
-				help += "  [a] apply"
-			}
-			return help + "  [j/k] scroll"
-		}
-		if classifySetup(m.setupPlan) == "blocked/recovery" {
-			return "[Tab] Recovery  [r] refresh preflight  [Esc] Overview"
-		}
-		if classifySetup(m.setupPlan) == "no changes" {
-			return "[r] refresh preflight  [Tab] Backup & Recovery  [Esc] Overview"
-		}
-		return "[m] model profile  [Tab] Recovery  [h/l] plan  [a] apply  [j/k] scroll"
+		return "Acción: revisa el registro y reintenta con [r]."
 	}
 }
 
-func (m Model) modelAssignmentLines() []string {
-	if m.setupCatalogSearching {
-		matches := m.filteredSetupCatalog()
-		count := fmt.Sprintf("%d matching local models", len(matches))
-		if len(matches) == 1 {
-			count = "1 matching local model"
-		}
-		lines := []string{"MODEL CATALOG SEARCH", "Query  " + setupValue(m.setupCatalogQuery) + "  ·  " + count, ""}
-		start := max(0, m.setupCatalogResultIndex-3)
-		end := min(len(matches), start+7)
-		for index := start; index < end; index++ {
-			marker := " "
-			if index == m.setupCatalogResultIndex {
-				marker = "▸"
-			}
-			row := marker + " " + matches[index].Reference
-			if index == m.setupCatalogResultIndex {
-				row = studioFocus.Width(max(1, m.setupViewport.Width()-6)).Render(row)
-			}
-			lines = append(lines, row)
-		}
-		if len(matches) == 0 {
-			lines = append(lines, "No local model matches this query.")
-		}
-		return lines
-	}
-	if m.wide() {
-		return m.wideModelAssignmentLines()
-	}
-	lines := []string{"AGENT ASSIGNMENT MATRIX · 7 agents", "agent                  class/role          provider/model · variant"}
-	for index, identity := range setupAgentRows {
-		marker := " "
-		if index == m.setupModelSlot {
-			marker = "▸"
-		}
-		row := m.setupAssignmentRows[index]
-		reference := setupValue(row.Reference)
-		variant := truncateSetupRunes(setupValue(row.Variant), 12)
-		maxReference := max(12, m.setupViewport.Width()-48-lipgloss.Width(variant))
-		reference = truncateSetupRunes(reference, maxReference)
-		lines = append(lines, fmt.Sprintf("%s %-22s %-19s %s · %s", marker, identity.Name, identity.Class+"/"+identity.Role, reference, variant))
-	}
-	switch {
-	case m.setupCatalogLoading:
-		lines = append(lines, "... Loading local model catalog...")
-	case m.setupCatalogErr != nil:
-		lines = append(lines, "✕ Model catalog unavailable. [r] Retry explicit refresh.")
-	case len(m.setupCatalog) == 0:
-		lines = append(lines, "! No locally cached models. [r] Refresh explicitly.")
-	default:
-		lines = appendSetupWrapped(lines, "", fmt.Sprintf("✓ %d catalog models · %s", len(m.setupCatalog), setupDiscoveryDisclaimer), m.setupViewport.Width())
-	}
-	if m.setupCatalogSearching {
-		matches := m.filteredSetupCatalog()
-		lines = append(lines, "", "Catalog search  "+setupValue(m.setupCatalogQuery)+"  [Enter] choose first  [Esc] cancel")
-		for index, row := range matches {
-			if index == 5 {
-				break
-			}
-			lines = append(lines, "  "+row.Reference)
-		}
-		if len(matches) == 0 {
-			lines = append(lines, "  No local model matches.")
+func (p *setupPage) resultLines(width int) []string {
+	lines := []string{p.bar(width), ""}
+	plugin := p.state.Plugin
+	pluginVersion := version(plugin.Version)
+	mcp := ""
+	for _, step := range p.plan {
+		if step.kind == StepVerifyMCP {
+			mcp = step.output
 		}
 	}
-	lines = append(lines, "allowed variants  "+m.setupVariantAvailability(m.setupAssignmentRows[m.setupModelSlot].Reference))
-	if err := m.modelEditorError(); err != "" {
-		lines = append(lines, "✕ "+err)
+	agents := len(pluginAgents)
+	if plugin.Agents > 0 {
+		agents = plugin.Agents
 	}
+	rows := []checkRow{
+		{state: stateOK, name: "plugin", value: pluginVersion, detail: claudecli.PluginID},
+		{state: stateOK, name: "servidor MCP", value: pluginMCPServer, detail: "conectado"},
+		{state: stateOK, name: "agentes", value: itoa(agents), detail: strings.Join(pluginAgents, " · ")},
+		{state: stateOK, name: "hooks", value: itoa(len(pluginHooks)), detail: strings.Join(pluginHooks, " · ")},
+	}
+	lines = append(lines, renderChecks(rows, 17, 10, width)...)
+	if mcp != "" {
+		lines = append(lines, "", styleMuted.Render(ansi.Truncate(mcp, width, "…")))
+	}
+	lines = append(lines, "")
+	if p.mutating() {
+		lines = append(lines, stateWarn.glyph()+" "+styleInk.Render("Reinicia Claude Code para cargar el plugin."))
+	}
+	lines = append(lines, styledWrap("La próxima sesión en este proyecto recibirá la política del Manager y el último handoff.", width, styleMuted)...)
 	return lines
-}
-
-func (m Model) wideModelAssignmentLines() []string {
-	selected := m.setupAssignmentRows[m.setupModelSlot]
-	identity := setupAgentRows[m.setupModelSlot]
-	width := max(60, m.setupViewport.Width()-6)
-	leftWidth := max(26, (width-3)/2)
-	rightWidth := max(26, width-3-leftWidth)
-	border := "┌" + strings.Repeat("─", leftWidth) + "┬" + strings.Repeat("─", rightWidth) + "┐"
-	bottom := "└" + strings.Repeat("─", leftWidth) + "┴" + strings.Repeat("─", rightWidth) + "┘"
-	row := func(left, right string) string {
-		return "│" + padLine(left, leftWidth) + "│" + padLine(right, rightWidth) + "│"
-	}
-	lines := []string{
-		"AGENT ASSIGNMENT MATRIX · OpenCode",
-		border,
-		row(" AGENTS", " MODEL DETAILS"),
-	}
-	for index, agent := range setupAgentRows {
-		marker := " "
-		if index == m.setupModelSlot {
-			marker = "▸"
-		}
-		right := ""
-		switch index {
-		case 0:
-			right = "agent       " + identity.Name
-		case 1:
-			right = "role        " + identity.Class + "/" + identity.Role
-		case 2:
-			right = "model       " + setupValue(selected.Reference)
-		case 3:
-			right = "variant     " + setupValue(selected.Variant)
-		case 4:
-			right = "available   " + m.setupVariantAvailability(selected.Reference)
-		case 6:
-			if len(m.setupCatalog) > 0 {
-				right = fmt.Sprintf("catalog     %d local models · [/] search", len(m.setupCatalog))
-			} else {
-				right = "catalog     loading or unavailable"
-			}
-		case 8:
-			right = "Choose a catalog model or variant."
-		}
-		lines = append(lines, row(" "+marker+" "+agent.Name+" · "+agent.Class, " "+right))
-	}
-	lines = append(lines, bottom)
-	if m.setupCatalogLoading {
-		lines = append(lines, "... Loading local model catalog...")
-	} else if m.setupCatalogErr != nil {
-		lines = append(lines, "✕ Model catalog unavailable. [r] Retry explicit refresh.")
-	}
-	if err := m.modelEditorError(); err != "" {
-		lines = append(lines, "✕ "+err)
-	}
-	return lines
-}
-
-func truncateSetupRunes(value string, maximum int) string {
-	runes := []rune(value)
-	if len(runes) <= maximum {
-		return value
-	}
-	return string(runes[:maximum-1]) + "…"
-}
-
-func (m Model) modelEditorLines() []string {
-	lines := []string{"MODEL PROFILE EDITOR", "Refs are local inputs; custom availability is unknown (no remote probe)."}
-	for index, name := range []string{"efficient", "balanced", "frontier"} {
-		marker := " "
-		if index == m.setupModelSlot {
-			marker = "▸"
-		}
-		availability := m.setupPlan.ModelEfficientAvailability
-		if index == 1 {
-			availability = m.setupPlan.ModelBalancedAvailability
-		}
-		if index == 2 {
-			availability = m.setupPlan.ModelFrontierAvailability
-		}
-		if m.modelProfileChanged() {
-			availability = "unknown"
-		}
-		lines = append(lines, fmt.Sprintf("%s %-9s %s  variant=%s  allowed=%s  availability=%s", marker, name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelVariants[index]), m.setupVariantAvailability(m.setupModelRefs[index]), setupValue(availability)))
-	}
-	if err := m.modelEditorError(); err != "" {
-		lines = append(lines, "✕ "+err)
-	}
-	return append(lines, "", "Enter previews valid inputs; Esc restores entry values.")
-}
-
-func (m Model) setupVariantAvailability(reference string) string {
-	supported := m.setupVariantsForModel(reference)
-	if len(supported) > 0 {
-		return strings.Join(supported, ", ")
-	}
-	if m.knownSetupModel(reference) {
-		return "provider default"
-	}
-	return "not available"
-}
-
-func (m Model) modelProfileSummary() []string {
-	lines := []string{"Model profile:"}
-	for index, name := range []string{"efficient", "balanced", "frontier"} {
-		lines = append(lines, fmt.Sprintf("  %s=%s variant=%s", name, setupValue(m.setupModelRefs[index]), setupValue(m.setupModelVariants[index])))
-	}
-	return lines
-}
-
-func setupPreviewRequest(request SetupRequest) SetupRequest {
-	request.ExpectedPlanDigest = ""
-	return request
-}
-
-func setupRequestsEqual(left, right SetupRequest) bool {
-	return reflect.DeepEqual(setupPreviewRequest(left), setupPreviewRequest(right))
-}
-
-func setupPlanModelProfile(plan SetupPlan, width int) []string {
-	if plan.ModelAssignments != nil {
-		lines := []string{"EXACT AGENT ASSIGNMENTS"}
-		ordered, ok := orderedSetupAssignments(plan.ModelAssignments)
-		if plan.ModelSchemaVersion < 3 {
-			ordered, ok = canonicalSetupAssignments(plan.ModelAssignments)
-		}
-		if !ok {
-			return append(lines, "! Invalid agent identity set; exact profile not applied.")
-		}
-		for index, row := range ordered {
-			name := setupAgentRows[index].Name
-			for _, identity := range setupAgentRows {
-				if identity.ArtifactKey == row.ArtifactKey {
-					name = identity.Name
-					break
-				}
-			}
-			lines = appendSetupAssignmentProfile(lines, name, row.Model, []string{
-				"requested=" + row.RequestedEffort, "effective=" + row.Effort, "variant=" + row.Variant,
-				"source=" + row.Source, "availability=" + row.Availability,
-			}, width)
-			if row.Degraded {
-				lines = appendSetupWrapped(lines, "    degraded=", row.DegradationReason, width)
-			}
-		}
-		lines = appendSetupWrapped(lines, "", setupDiscoveryDisclaimer, width)
-		return lines
-	}
-	if plan.ModelEfficient == "" && plan.ModelBalanced == "" && plan.ModelFrontier == "" {
-		return nil
-	}
-	return []string{
-		"model efficient  " + setupValue(plan.ModelEfficient) + "  variant=" + setupValue(plan.ModelEfficientVariant) + "  source=" + setupValue(plan.ModelEfficientSource) + "  availability=" + setupValue(plan.ModelEfficientAvailability),
-		"model balanced   " + setupValue(plan.ModelBalanced) + "  variant=" + setupValue(plan.ModelBalancedVariant) + "  source=" + setupValue(plan.ModelBalancedSource) + "  availability=" + setupValue(plan.ModelBalancedAvailability),
-		"model frontier   " + setupValue(plan.ModelFrontier) + "  variant=" + setupValue(plan.ModelFrontierVariant) + "  source=" + setupValue(plan.ModelFrontierSource) + "  availability=" + setupValue(plan.ModelFrontierAvailability),
-	}
-}
-
-func setupAssignmentRequestProfile(rows [SetupModelAssignmentCount]SetupModelAssignmentRequest, width int) []string {
-	lines := []string{"EXACT AGENT ASSIGNMENTS"}
-	for index, row := range rows {
-		lines = appendSetupAssignmentProfile(lines, setupAgentRows[index].Name, row.Reference, []string{
-			"variant=" + row.Variant, "source=" + row.Source, "availability=" + row.Availability,
-		}, width)
-	}
-	lines = appendSetupWrapped(lines, "", setupDiscoveryDisclaimer, width)
-	return lines
-}
-
-func appendSetupAssignmentProfile(lines []string, name, reference string, details []string, width int) []string {
-	name, reference = sanitizeTerminal(name), sanitizeTerminal(reference)
-	line := "  " + name + "  model=" + reference
-	width = max(20, width)
-	if lipgloss.Width(line) <= width {
-		return appendSetupDetails(append(lines, line), details, width)
-	}
-	lines = append(lines, "  "+name)
-	lines = appendSetupWrapped(lines, "    model=", reference, width)
-	return appendSetupDetails(lines, details, width)
-}
-
-func appendSetupDetails(lines, details []string, width int) []string {
-	line := "    "
-	for _, detail := range details {
-		detail = sanitizeTerminal(detail)
-		if lipgloss.Width(line)+1+lipgloss.Width(detail) > width && strings.TrimSpace(line) != "" {
-			lines = append(lines, line)
-			line = "    " + detail
-			continue
-		}
-		if strings.TrimSpace(line) != "" {
-			line += " "
-		}
-		line += detail
-	}
-	if strings.TrimSpace(line) != "" {
-		lines = append(lines, line)
-	}
-	return lines
-}
-
-func appendSetupWrapped(lines []string, prefix, value string, width int) []string {
-	wrapped := lipgloss.Wrap(prefix+sanitizeTerminal(value), max(20, width), "")
-	return append(lines, strings.Split(wrapped, "\n")...)
-}
-
-func orderedSetupAssignments(rows *[SetupModelAssignmentCount]SetupModelAssignment) ([SetupModelAssignmentCount]SetupModelAssignment, bool) {
-	if rows == nil {
-		return [SetupModelAssignmentCount]SetupModelAssignment{}, false
-	}
-	seen := make(map[string]struct{}, SetupModelAssignmentCount)
-	for _, row := range rows {
-		valid := false
-		for _, identity := range setupAgentRows {
-			if row.ArtifactKey == identity.ArtifactKey && row.Role == identity.Role && row.Class == identity.Class {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
-		}
-		if _, duplicate := seen[row.ArtifactKey]; duplicate {
-			return [SetupModelAssignmentCount]SetupModelAssignment{}, false
-		}
-		seen[row.ArtifactKey] = struct{}{}
-	}
-	return *rows, len(seen) == SetupModelAssignmentCount
-}
-
-// canonicalSetupAssignments is retained for schema v1/v2 editor compatibility.
-// Schema v3 displays the provider-returned order through orderedSetupAssignments.
-func canonicalSetupAssignments(rows *[SetupModelAssignmentCount]SetupModelAssignment) ([SetupModelAssignmentCount]SetupModelAssignment, bool) {
-	returned, ok := orderedSetupAssignments(rows)
-	if !ok {
-		return returned, false
-	}
-	var canonical [SetupModelAssignmentCount]SetupModelAssignment
-	for _, row := range returned {
-		for index, identity := range setupAgentRows {
-			if row.ArtifactKey == identity.ArtifactKey {
-				canonical[index] = row
-				break
-			}
-		}
-	}
-	return canonical, true
-}
-
-func setupResultHasKnownState(result SetupResult) bool {
-	return result.SelfInstallState != "" || result.SelfInstallPath != "" || result.IntegrationState != "" || result.IntegrationPath != "" || result.SkillsState != "" || result.SkillsPath != "" || result.SelfInstallActiveSHA256 != "" || result.SelfInstallPreviousSHA256 != "" || result.SelfInstallRollbackAvailable
-}
-
-func classifySetup(plan SetupPlan) string {
-	if !plan.Ready || plan.Blocker != "" || plan.SelfInstallState == "drifted" || plan.SelfInstallState == "recovery_pending" || plan.IntegrationState == "drifted" || plan.SkillsState == "drifted" || plan.SkillsState == "conflict" {
-		return "blocked/recovery"
-	}
-	if !plan.HandshakeOK {
-		return "blocked/recovery"
-	}
-	if plan.SelfInstallState == "absent" {
-		return "initial install"
-	}
-	if plan.SelfInstallState == "installed" && plan.IntegrationState == "installed" && plan.SkillsState == "installed" && !plan.SelfInstallChanged && !plan.SelfInstallUpdateAvailable && !plan.IntegrationChanged && !plan.IntegrationRestartRequired && !plan.SkillsChanged && !plan.SkillsUpdateNeeded {
-		return "no changes"
-	}
-	return "reinstall/update"
-}
-
-func setupResultOutcome(result SetupResult) string {
-	if !result.Changed {
-		return "no changes"
-	}
-	if result.Plan.SelfInstallState == "absent" {
-		return "initial install"
-	}
-	return "reinstalled/updated"
-}
-
-func setupSelfInstallDetails(update, rollback bool, activeSHA, previousSHA string) []string {
-	if !update && !rollback && activeSHA == "" && previousSHA == "" {
-		return nil
-	}
-	lines := []string{"self update  " + map[bool]string{true: "yes", false: "no"}[update]}
-	if activeSHA != "" {
-		lines = append(lines, "active SHA  "+setupValue(activeSHA))
-	}
-	if previousSHA != "" {
-		lines = append(lines, "previous SHA  "+setupValue(previousSHA))
-	}
-	lines = append(lines, "rollback  "+map[bool]string{true: "available", false: "unavailable"}[rollback])
-	return lines
-}
-
-func setupValue(value string) string {
-	if value == "" {
-		return "-"
-	}
-	return sanitizeTerminal(value)
-}
-
-func setupHandshake(ok bool, status string) string {
-	marker := "✕"
-	if ok {
-		marker = "✓"
-	}
-	return marker + " OpenCode handshake  " + setupValue(status)
-}
-
-func cloneSetupPlan(value SetupPlan) SetupPlan {
-	value.Steps = append([]SetupStep(nil), value.Steps...)
-	if value.ModelAssignments != nil {
-		assignments := *value.ModelAssignments
-		value.ModelAssignments = &assignments
-	}
-	return value
-}
-
-func cloneSetupStatus(value SetupStatus) SetupStatus {
-	if value.ModelAssignments != nil {
-		assignments := *value.ModelAssignments
-		value.ModelAssignments = &assignments
-	}
-	return value
-}
-
-func cloneSetupRequest(value SetupRequest) SetupRequest {
-	value.OpenCodeModels = cloneModelChoice(value.OpenCodeModels)
-	value.PiModels = cloneModelChoice(value.PiModels)
-	if value.ModelAssignments != nil {
-		rows := *value.ModelAssignments
-		value.ModelAssignments = &rows
-	}
-	return value
-}
-
-func cloneSetupResult(value SetupResult) SetupResult {
-	value.Plan = cloneSetupPlan(value.Plan)
-	return value
 }

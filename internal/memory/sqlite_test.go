@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 var fixedTime = time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)

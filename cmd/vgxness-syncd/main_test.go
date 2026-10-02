@@ -18,9 +18,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/vgxness/vgxness/internal/syncapi"
-	"github.com/vgxness/vgxness/internal/syncpg"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/syncapi"
+	"github.com/uzielvgx/vgxness/internal/syncpg"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 )
 
 const (

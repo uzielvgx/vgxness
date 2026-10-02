@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/syncservice"
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 func TestSchemaV10CumulativeIdentity(t *testing.T) {

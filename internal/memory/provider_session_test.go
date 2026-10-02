@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 func TestProviderSessionRejectsBlankInputsWithoutResidue(t *testing.T) {

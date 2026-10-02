@@ -1,0 +1,56 @@
+{
+  "description": "VGXNESS: Manager policy and same-project handoff at session start, session lease lifecycle, worker contract for VGXNESS subagents",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vgxness",
+            "args": ["claude-code", "hook", "session-start", "--policy", "${CLAUDE_PLUGIN_ROOT}/policy/manager.md"],
+            "timeout": 5,
+            "statusMessage": "Loading VGXNESS context"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vgxness",
+            "args": ["claude-code", "hook", "pre-compact"],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vgxness",
+            "args": ["claude-code", "hook", "session-end"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "^vgxness:",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vgxness",
+            "args": ["claude-code", "hook", "subagent-start", "--policy", "${CLAUDE_PLUGIN_ROOT}/policy/worker.md"],
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/vgxness/vgxness/internal/syncapi"
+	"github.com/uzielvgx/vgxness/internal/syncapi"
 )
 
 const (

@@ -1,0 +1,83 @@
+version: 2
+
+project_name: vgxness
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: vgxness
+    main: ./cmd/vgxness
+    binary: vgxness
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X github.com/uzielvgx/vgxness/internal/buildinfo.Version={{ .Tag }}
+      - -X github.com/uzielvgx/vgxness/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/uzielvgx/vgxness/internal/buildinfo.Date={{ .CommitDate }}
+
+archives:
+  - id: vgxness
+    ids: [vgxness]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+changelog:
+  use: github-native
+
+release:
+  github:
+    owner: uzielvgx
+    name: vgxness
+  prerelease: auto
+  mode: replace
+
+homebrew_casks:
+  - name: vgxness
+    ids: [vgxness]
+    repository:
+      owner: uzielvgx
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/uzielvgx/vgxness
+    description: Durable project memory and orchestration policy for Claude Code
+    license: MIT
+    skip_upload: auto
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/vgxness"]
+          end
+
+scoops:
+  - name: vgxness
+    ids: [vgxness]
+    repository:
+      owner: uzielvgx
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: bucket
+    homepage: https://github.com/uzielvgx/vgxness
+    description: Durable project memory and orchestration policy for Claude Code
+    license: MIT
+    skip_upload: auto

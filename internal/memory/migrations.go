@@ -277,3 +277,6 @@ func migrationError(ctx context.Context, operation string, cause error) error {
 	}
 	return fmt.Errorf("%w: %s%s", ErrMigration, operation, sqliteDiagnostic(cause))
 }
+
+// SchemaVersion is the migration head this binary writes and expects.
+func SchemaVersion() int { return migrations[len(migrations)-1].version }

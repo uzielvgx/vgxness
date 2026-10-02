@@ -1,1 +1,0 @@
-ALTER TABLE observations ADD COLUMN title TEXT NOT NULL DEFAULT '';
