@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 func TestProjectIDMarker_StrictAndIdempotent(t *testing.T) {

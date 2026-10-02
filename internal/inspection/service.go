@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vgxness/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/config"
 )
 
 type Service struct {

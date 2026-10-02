@@ -3,8 +3,8 @@ package runtime
 import (
 	"context"
 
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/memory"
 )
 
 // AutoSyncProjectResult records a schema-v1 recommendation and the selected

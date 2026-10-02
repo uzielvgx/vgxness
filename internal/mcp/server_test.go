@@ -10,8 +10,8 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/memory"
 )
 
 func TestServerProtocolDiscoveryListAndCall(t *testing.T) {
@@ -751,4 +751,43 @@ func schemaHasType(value any, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestServerAdvertisesBoundedInstructionsAndForgetRequiresUserInteraction(t *testing.T) {
+	if n := len(serverInstructions); n == 0 || n > maxInstructionsChars {
+		t.Fatalf("instructions length = %d, want 1..%d", n, maxInstructionsChars)
+	}
+	for _, want := range []string{"memory_search", "memory_save", "memory_update", "memory_session_summary", "memory_forget", "Never stored"} {
+		if !strings.Contains(serverInstructions, want) {
+			t.Fatalf("instructions lack %q", want)
+		}
+	}
+	server, err := newFullWithReader(context.Background(), "/workspace", &fakeReader{project: "project-1"})
+	if err != nil {
+		t.Fatalf("newFullWithReader() error = %v", err)
+	}
+	clientTransport, serverTransport := sdk.NewInMemoryTransports()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	if got := session.InitializeResult().Instructions; got != serverInstructions {
+		t.Fatalf("instructions = %q", got)
+	}
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	for _, tool := range tools.Tools {
+		if n := len(tool.Description); n == 0 || n > maxInstructionsChars {
+			t.Fatalf("%s description length = %d", tool.Name, n)
+		}
+		requires, _ := tool.Meta["anthropic/requiresUserInteraction"].(bool)
+		if requires != (tool.Name == "memory_forget") {
+			t.Fatalf("%s requiresUserInteraction = %v", tool.Name, requires)
+		}
+	}
 }

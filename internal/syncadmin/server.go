@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/vgxness/vgxness/internal/syncpg"
+	"github.com/uzielvgx/vgxness/internal/syncpg"
 )
 
 const (

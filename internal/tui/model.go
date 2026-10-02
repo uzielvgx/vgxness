@@ -1,3 +1,7 @@
+// Package tui is the VGXNESS console. This is its shell: the program loop,
+// brand header, terminal-size guard and text helpers. The console modules
+// (Inicio, Setup del plugin, Memoria, Sync, Doctor) are rebuilt from the
+// design canvas in plan task 17; until then the shell shows a placeholder.
 package tui
 
 import (
@@ -6,12 +10,9 @@ import (
 	"strings"
 	"unicode"
 
-	"charm.land/bubbles/v2/textinput"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	setupflow "github.com/vgxness/vgxness/internal/setup"
 )
 
 const (
@@ -21,320 +22,44 @@ const (
 
 var (
 	softbricCanvas   = lipgloss.Color("#071522")
-	softbricInk      = lipgloss.Color("#102231")
 	softbricDelivery = lipgloss.Color("#005F5C")
 	softbricBric     = lipgloss.Color("#008B87")
 	softbricAqua     = lipgloss.Color("#4DD4D4")
-	softbricPaper    = lipgloss.Color("#F5F7F8")
 
 	studioAccent = lipgloss.NewStyle().Foreground(softbricAqua).Bold(true)
-	studioCyan   = lipgloss.NewStyle().Foreground(softbricAqua)
-	studioMuted  = lipgloss.NewStyle().Foreground(softbricAqua)
-	studioPanel  = lipgloss.NewStyle().
-			Foreground(softbricPaper).
-			Background(softbricInk).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(softbricDelivery).
-			Padding(0, 1)
-	studioCard = lipgloss.NewStyle().
-			Foreground(softbricPaper).
-			Background(softbricInk).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(softbricDelivery).
-			Padding(0, 1)
-	studioFocus = lipgloss.NewStyle().
-			Foreground(softbricCanvas).
-			Background(softbricAqua).
-			Bold(true)
+	studioMuted  = lipgloss.NewStyle().Foreground(softbricDelivery)
 )
-
-type Request struct {
-	Workspace string
-}
-
-type Inspection struct {
-	Root      string
-	Database  string
-	Migration int
-}
-
-type SetupStatus struct {
-	Provider         string
-	Ready            bool
-	Blocker          string
-	SelfInstallState string
-	SelfInstallPath  string
-	IntegrationState string
-	IntegrationPath  string
-	SkillsState      string
-	SkillsPath       string
-	SkillsFileCount  int
-	ArtifactCount    int
-	HandshakeOK      bool
-	HandshakeStatus  string
-	ModelPlan        string
-
-	ModelSchemaVersion int
-	ModelAssignments   *[SetupModelAssignmentCount]SetupModelAssignment
-	statusGeneration   int
-}
-
-type Backend interface {
-	SetupStatus(context.Context, Request) (SetupStatus, error)
-	PlanSetup(context.Context, SetupRequest) (SetupPlan, error)
-	ApplySetup(context.Context, SetupRequest) (SetupResult, error)
-	PlanRecovery(context.Context, RecoveryPlanRequest) (RecoveryPlan, error)
-	ListBackups(context.Context, BackupListRequest) (BackupListResult, error)
-	CreateBackup(context.Context, CreateBackupRequest) (BackupResult, error)
-	PreviewRestore(context.Context, RestorePreviewRequest) (RestorePreview, error)
-	RestoreBackup(context.Context, RestoreRequest) (RestoreResult, error)
-	ProtectedReinstall(context.Context, ProtectedReinstallRequest) (ProtectedReinstallResult, error)
-}
 
 type Options struct {
 	Workspace string
 }
 
-type inspectionLoadedMsg struct {
-	generation int
-	value      Inspection
-	err        error
-}
-
-type setupLoadedMsg struct {
-	generation int
-	value      SetupStatus
-	err        error
-	startup    bool
-}
-
-type setupStartMsg struct{}
-
-type route uint8
-
-const routeSetup route = iota
-
 type Model struct {
 	ctx     context.Context
-	backend Backend
 	options Options
-
-	width      int
-	height     int
-	generation int
-	route      route
-
-	setup                  SetupStatus
-	setupErr               error
-	setupLoading           bool
-	setupPlan              SetupPlan
-	setupResult            SetupResult
-	setupProviders         []setupflow.Provider
-	modelChoices           [2]modelChoice
-	modelChoiceProvider    int
-	modelChoiceRow         int
-	modelChoiceModeChoice  int
-	modelChoiceEditing     bool
-	manualInput            textinput.Model
-	pickerOpen             bool
-	pickerStep             pickerStep
-	pickerProvider         string
-	pickerFilter           textinput.Model
-	pickerIndex            int
-	codexPlanEdited        bool
-	modelChoiceError       string
-	setupMultiPlan         setupflow.MultiPlan
-	setupMultiResult       setupflow.MultiResult
-	setupViewport          viewport.Model
-	setupSelected          string
-	setupProviderCursor    int
-	installationAction     installationAction
-	setupPlanErr           error
-	setupApplyErr          error
-	setupPlanLoading       bool
-	setupConfirm           bool
-	setupApplying          bool
-	setupCancelAsked       bool
-	setupSucceeded         bool
-	setupGeneration        int
-	setupStatusGeneration  int
-	cancelSetup            context.CancelFunc
-	setupView              setupView
-	setupModelEditing      bool
-	setupModelSlot         int
-	setupModelRefs         [3]string
-	setupModelEfforts      [3]string
-	setupModelVariants     [3]string
-	setupModelEntryRefs    [3]string
-	setupModelEntryEfforts [3]string
-	setupModelEntryVars    [3]string
-	setupOverrides         bool
-	setupEntryOverrides    bool
-	setupPreviewRequest    SetupRequest
-	setupPreviewed         bool
-	recoveryMode           string
-	recoveryPlan           RecoveryPlan
-	recoveryBackups        []BackupSummary
-	recoveryPreview        RestorePreview
-	recoveryBackup         BackupResult
-	recoveryRestore        RestoreResult
-	recoveryReinstall      ProtectedReinstallResult
-	recoveryOperation      recoveryOperation
-	recoveryConfirm        recoveryConfirmation
-	recoveryFailure        recoveryFailure
-	recoverySnapshotIndex  int
-	recoveryConflictIndex  int
-	recoveryGeneration     int
-	recoveryCancelAsked    bool
-	recoveryRefreshPending bool
-	recoveryRefreshWarning bool
-	cancelRecovery         context.CancelFunc
-
-	recoverySelectedProvider setupflow.Provider
-
-	setupAssignmentRows         [SetupModelAssignmentCount]SetupModelAssignmentRequest
-	setupAssignmentEntryRows    [SetupModelAssignmentCount]SetupModelAssignmentRequest
-	setupAssignmentsSeeded      bool
-	setupAssignmentsExact       bool
-	setupAssignmentsEntry       bool
-	setupAssignmentsEdited      bool
-	setupAssignmentsEntryEdited bool
-	setupCatalog                []SetupCatalogModel
-	setupCatalogErr             error
-	setupCatalogLoading         bool
-	setupCatalogGeneration      int
-	setupCatalogAttempted       bool
-	cancelSetupCatalog          context.CancelFunc
-	setupCatalogQuery           string
-	setupCatalogSearching       bool
-	setupCatalogResultIndex     int
-	piCatalog                   []SetupCatalogModel
-	piCatalogErr                error
-	piCatalogLoading            bool
-	piCatalogGeneration         int
-	piCatalogAttempted          bool
-	cancelPiCatalog             context.CancelFunc
-	setupEditorPlan             SetupPlan
-	setupEditorRequest          SetupRequest
-	setupEditorPreviewed        bool
+	width   int
+	height  int
 }
 
-func NewModel(ctx context.Context, backend Backend, options Options) Model {
+func NewModel(ctx context.Context, options Options) Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	model := Model{
-		ctx: ctx, backend: backend, options: options, generation: 1,
-		route: routeSetup, setupGeneration: 1,
-		manualInput:  newPickerInput("", ""),
-		pickerFilter: newPickerInput("> ", "filter"),
-	}
-	model.initSetup()
-	return model
+	return Model{ctx: ctx, options: options}
 }
 
-func (m Model) Init() tea.Cmd {
-	return func() tea.Msg { return setupStartMsg{} }
-}
-
-func (m Model) loadStartupStatus() tea.Cmd {
-	return func() tea.Msg {
-		if m.backend == nil {
-			return setupLoadedMsg{generation: m.generation, startup: true, err: fmt.Errorf("setup backend unavailable")}
-		}
-		value, err := m.backend.SetupStatus(m.ctx, Request{Workspace: m.options.Workspace})
-		return setupLoadedMsg{generation: m.generation, value: value, err: err, startup: true}
-	}
-}
+func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case setupStartMsg:
-		m.setupLoading = true
-		return m, m.loadStartupStatus()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.resizeSetup()
-		return m, nil
-	case tea.PasteMsg:
-		switch {
-		case m.pickerOpen:
-			var cmd tea.Cmd
-			m.pickerFilter, cmd = m.pickerFilter.Update(msg)
-			m.pickerIndex = 0
-			return m, cmd
-		case m.modelChoiceEditing:
-			var cmd tea.Cmd
-			m.manualInput, cmd = m.manualInput.Update(msg)
-			return m, cmd
-		}
 		return m, nil
 	case tea.KeyPressMsg:
-		if m.setupApplying || m.recoveryOperation.mutating() {
-			if msg.String() == "ctrl+c" && m.cancelSetup != nil {
-				if m.setupApplying {
-					m.cancelSetup()
-					m.setupCancelAsked = true
-				}
-			}
-			if msg.String() == "ctrl+c" && m.cancelRecovery != nil && m.recoveryOperation.mutating() {
-				m.cancelRecovery()
-				m.recoveryCancelAsked = true
-			}
-			return m, nil
-		}
-		if msg.String() == "ctrl+c" {
-			m.cancelSetupOperation()
-			m.cancelRecoveryOperation()
+		switch msg.String() {
+		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
 		}
-		if m.tooSmall() {
-			if msg.String() == "q" || msg.String() == "ctrl+c" {
-				m.cancelSetupOperation()
-				m.cancelRecoveryOperation()
-				return m, tea.Quit
-			}
-			return m, nil
-		}
-		if handled, cmd := m.updateSetupKey(msg); handled {
-			return m, cmd
-		}
-		if msg.String() == "q" {
-			m.cancelSetupOperation()
-			m.cancelRecoveryOperation()
-			return m, tea.Quit
-		}
-	case setupLoadedMsg:
-		if msg.generation != m.generation || msg.value.statusGeneration != m.setupStatusGeneration {
-			return m, nil
-		}
-		m.setup, m.setupErr, m.setupLoading = cloneSetupStatus(msg.value), msg.err, false
-		if msg.startup && msg.err == nil {
-			m.setRoute(routeSetup)
-			return m, m.loadSetupCatalog(false)
-		}
-		return m, nil
-	case setupPlanLoadedMsg:
-		m.handleSetupPlanLoaded(msg)
-		return m, nil
-	case setupAppliedMsg:
-		m.handleSetupApplied(msg)
-		return m, nil
-	case setupCatalogLoadedMsg:
-		m.handleSetupCatalogLoaded(msg)
-		return m, nil
-	case recoveryLoadedMsg:
-		m.handleRecoveryLoaded(msg)
-		return m, nil
-	case recoveryBackupCreatedMsg:
-		return m, m.handleRecoveryBackupCreated(msg)
-	case recoveryPreviewLoadedMsg:
-		m.handleRecoveryPreviewLoaded(msg)
-		return m, nil
-	case recoveryRestoredMsg:
-		return m, m.handleRecoveryRestored(msg)
-	case recoveryReinstalledMsg:
-		return m, m.handleRecoveryReinstalled(msg)
 	}
 	return m, nil
 }
@@ -342,7 +67,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	view := tea.NewView(m.render())
 	view.AltScreen = true
-	view.WindowTitle = "VGXNESS Console"
+	view.WindowTitle = "VGXNESS"
 	return view
 }
 
@@ -350,27 +75,16 @@ func (m Model) render() string {
 	width := max(1, m.width)
 	if m.tooSmall() {
 		lines := []string{
-			"VGXNESS / INSTALLATION STUDIO",
+			"VGXNESS",
 			strings.Repeat("─", width),
-			"! Resize required",
-			fmt.Sprintf("  Need at least %dx%d; current terminal is %dx%d.", minimumWidth, minimumHeight, m.width, m.height),
-			"  [q] quit",
+			"! Terminal demasiado pequeña",
+			fmt.Sprintf("  Se necesita al menos %d×%d; la terminal actual es %d×%d.", minimumWidth, minimumHeight, m.width, m.height),
+			"  [q] salir",
 		}
 		return fit(lines, width, m.height)
 	}
-
-	lines := m.brandHeader()
-	panelWidth := max(1, width-2)
-	body := studioPanel.Width(panelWidth).Render(strings.Join(m.renderSetupRoute(), "\n"))
-	lines = append(lines, strings.Split(body, "\n")...)
-	if !m.pickerOpen && !(m.multiSetupEnabled() && m.setupView == setupViewReview) {
-		lines = append(lines, studioMuted.Render(m.setupHelp()))
-	}
-	base := lipgloss.NewStyle().Background(softbricCanvas).Width(width).Render(fit(lines, width, m.height))
-	if m.pickerOpen {
-		return m.overlayPicker(base, width, m.height)
-	}
-	return base
+	lines := append(m.brandHeader(), "", studioMuted.Render("La consola está en construcción. [q] salir"))
+	return lipgloss.NewStyle().Background(softbricCanvas).Width(width).Render(fit(lines, width, m.height))
 }
 
 // headerWorkspace keeps the workspace on one header line by trimming the path
@@ -388,17 +102,12 @@ func (m Model) headerWorkspace(maxWidth int) string {
 }
 
 func (m Model) brandHeader() []string {
-	if m.wide() && m.setupView == setupViewHome && !m.setupModelEditing {
-		const prefix = "INSTALLATION STUDIO  ·  LOCAL SETUP CONSOLE   workspace  "
-		return append(softbricBanner(),
-			studioAccent.Render("INSTALLATION STUDIO")+studioMuted.Render("  ·  LOCAL SETUP CONSOLE")+"   "+m.headerWorkspace(m.width-lipgloss.Width(prefix)),
-		)
+	const prefix = "CONSOLA   workspace  "
+	title := studioAccent.Render("CONSOLA") + "   " + m.headerWorkspace(m.width-lipgloss.Width(prefix))
+	if m.wide() {
+		return append(softbricBanner(), title)
 	}
-	const prefix = "Install · reinstall · configure   │   workspace  "
-	return []string{
-		studioAccent.Render("VGXNESS / INSTALLATION STUDIO"),
-		studioCyan.Render("Install · reinstall · configure") + studioMuted.Render("   │   ") + m.headerWorkspace(m.width-lipgloss.Width(prefix)),
-	}
+	return []string{studioAccent.Render("VGXNESS"), title}
 }
 
 func softbricBanner() []string {
@@ -432,36 +141,6 @@ func (m Model) tooSmall() bool {
 
 func (m Model) wide() bool {
 	return m.width >= 100
-}
-
-func (m *Model) setRoute(next route) {
-	m.route = next
-	if next == routeSetup {
-		m.setupView = setupViewHome
-		m.setupSelected = defaultSetupPlan
-		if validSetupPlan(m.setup.ModelPlan) {
-			m.setupSelected = m.setup.ModelPlan
-		}
-		m.setupPlan = SetupPlan{}
-		m.setupResult = SetupResult{}
-		m.setupMultiPlan = setupflow.MultiPlan{}
-		m.setupMultiResult = setupflow.MultiResult{}
-		m.setupPlanErr = nil
-		m.setupApplyErr = nil
-		m.setupSucceeded = false
-		m.setupConfirm = false
-		m.setupModelEditing = false
-		m.setupOverrides = false
-		m.setupModelRefs = [3]string{}
-		m.setupModelEfforts = [3]string{}
-		m.setupModelVariants = [3]string{}
-		m.setupPreviewRequest = SetupRequest{}
-		m.setupPreviewed = false
-		m.resetSetupAssignments()
-		m.seedSetupAssignments(SetupPlan{ModelSchemaVersion: m.setup.ModelSchemaVersion, ModelAssignments: m.setup.ModelAssignments})
-		m.setupViewport.GotoTop()
-		m.resetRecoveryState()
-	}
 }
 
 func padLine(value string, width int) string {
@@ -518,6 +197,6 @@ func sanitizeTerminal(value string) string {
 }
 
 func isBidiControl(r rune) bool {
-	return r == '\u061c' || r == '\u200e' || r == '\u200f' ||
-		r >= '\u202a' && r <= '\u202e' || r >= '\u2066' && r <= '\u2069'
+	return r == '؜' || r == '‎' || r == '‏' ||
+		r >= '‪' && r <= '‮' || r >= '⁦' && r <= '⁩'
 }

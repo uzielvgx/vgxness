@@ -11,10 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/memory"
 )
 
 type MemoryRuntime interface {
@@ -60,9 +59,6 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		return 2
 	}
 	verb := args[0]
-	if verb == "hook" {
-		return runMemoryHook(ctx, args[1:], stdin, stdout, stderr, runtime)
-	}
 	if verb == "project" {
 		return runMemoryProjectInit(ctx, args[1:], stdout, stderr, runtime)
 	}
@@ -238,178 +234,6 @@ func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	}
 	_, _ = io.Copy(stdout, &output)
 	return 0
-}
-
-// runMemoryHook is a host-only, single-document lifecycle adapter. It emits no
-// external identity, draft text, or provider hash.
-func runMemoryHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
-	flags := flag.NewFlagSet("memory hook", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	var fromStdin bool
-	var opts config.Options
-	flags.BoolVar(&fromStdin, "stdin", false, "read JSON from stdin")
-	flags.StringVar(&opts.StorageRoot, "storage-root", "", "storage root")
-	flags.BoolVar(&opts.ProjectLocal, "project-local", false, "project-local storage")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || !fromStdin {
-		return memoryFailure(stderr, memory.ErrInvalid)
-	}
-	data, err := memoryInputBytes("", true, stdin)
-	if err != nil {
-		return memoryFailure(stderr, memory.ErrInvalid)
-	}
-	var raw map[string]json.RawMessage
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		return memoryFailure(stderr, memory.ErrInvalid)
-	}
-	raw = map[string]json.RawMessage{}
-	for decoder.More() {
-		token, err := decoder.Token()
-		key, ok := token.(string)
-		if err != nil || !ok || raw[key] != nil {
-			return memoryFailure(stderr, memory.ErrInvalid)
-		}
-		var value json.RawMessage
-		if decoder.Decode(&value) != nil {
-			return memoryFailure(stderr, memory.ErrInvalid)
-		}
-		raw[key] = value
-	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') || decoder.Decode(&struct{}{}) != io.EOF {
-		return memoryFailure(stderr, memory.ErrInvalid)
-	}
-	allowed := map[string]bool{"schemaVersion": true, "operation": true, "workspace": true, "provider": true, "external_id": true, "session_handle": true, "lease_token": true, "state": true, "summary": true, "expected_updated_at": true}
-	for key := range raw {
-		if !allowed[key] {
-			return memoryFailure(stderr, memory.ErrInvalid)
-		}
-	}
-	var input struct {
-		SchemaVersion     int                         `json:"schemaVersion"`
-		Operation         string                      `json:"operation"`
-		Workspace         string                      `json:"workspace"`
-		Provider          string                      `json:"provider"`
-		ExternalID        string                      `json:"external_id"`
-		SessionHandle     string                      `json:"session_handle"`
-		State             memory.ProviderSessionState `json:"state"`
-		Summary           string                      `json:"summary"`
-		ExpectedUpdatedAt string                      `json:"expected_updated_at"`
-		LeaseToken        string                      `json:"lease_token"`
-	}
-	if json.Unmarshal(data, &input) != nil || input.SchemaVersion != 1 || input.Workspace == "" || !filepath.IsAbs(input.Workspace) {
-		return memoryFailure(stderr, memory.ErrInvalid)
-	}
-	resolveProject := func() (string, error) {
-		return runtime.ResolveProject(ctx, opts, filepath.Clean(input.Workspace))
-	}
-	var result any
-	switch input.Operation {
-	case "start":
-		if !hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "provider", "external_id") || input.Provider == "" || input.ExternalID == "" {
-			return memoryFailure(stderr, memory.ErrInvalid)
-		}
-		project, resolveErr := resolveProject()
-		if resolveErr != nil {
-			return memoryFailure(stderr, resolveErr)
-		}
-		result, err = runtime.StartProviderSession(ctx, opts, memory.ProviderSessionStart{Project: project, Provider: input.Provider, ExternalID: input.ExternalID})
-	case "checkpoint", "renew":
-		if !hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "lease_token") || input.SessionHandle == "" || input.LeaseToken == "" {
-			return memoryFailure(stderr, memory.ErrInvalid)
-		}
-		project, resolveErr := resolveProject()
-		if resolveErr != nil {
-			return memoryFailure(stderr, resolveErr)
-		}
-		if input.Operation == "checkpoint" {
-			result, err = runtime.MarkProviderSessionCheckpoint(ctx, opts, project, input.SessionHandle, input.LeaseToken)
-		} else {
-			result, err = runtime.RenewProviderSession(ctx, opts, project, input.SessionHandle, input.LeaseToken)
-		}
-	case "end":
-		if !(hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "lease_token", "external_id", "state") || hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "lease_token", "external_id", "state", "summary")) || input.SessionHandle == "" || input.LeaseToken == "" || input.ExternalID == "" || (input.State != memory.ProviderSessionCompleted && input.State != memory.ProviderSessionInterrupted && input.State != memory.ProviderSessionCancelled) {
-			return memoryFailure(stderr, memory.ErrInvalid)
-		}
-		project, resolveErr := resolveProject()
-		if resolveErr != nil {
-			return memoryFailure(stderr, resolveErr)
-		}
-		result, err = runtime.EndProviderSession(ctx, opts, memory.ProviderSessionEnd{Project: project, Handle: input.SessionHandle, LeaseToken: input.LeaseToken, ExternalID: input.ExternalID, State: input.State, Summary: input.Summary})
-	case "context":
-		if !hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle") || input.SessionHandle == "" {
-			return memoryFailure(stderr, memory.ErrInvalid)
-		}
-		project, resolveErr := resolveProject()
-		if resolveErr != nil {
-			return memoryFailure(stderr, resolveErr)
-		}
-		result, err = runtime.ProviderSessionContext(ctx, opts, project, input.SessionHandle)
-	case "summary":
-		if !(hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "summary") || hookFieldsMatch(raw, "schemaVersion", "operation", "workspace", "session_handle", "summary", "expected_updated_at")) || input.SessionHandle == "" || input.Summary == "" {
-			return memoryFailure(stderr, memory.ErrInvalid)
-		}
-		var expected time.Time
-		if raw["expected_updated_at"] != nil {
-			expected, err = time.Parse(time.RFC3339Nano, input.ExpectedUpdatedAt)
-			if err != nil || expected.IsZero() {
-				return memoryFailure(stderr, memory.ErrInvalid)
-			}
-		}
-		project, resolveErr := resolveProject()
-		if resolveErr != nil {
-			return memoryFailure(stderr, resolveErr)
-		}
-		result, err = runtime.SaveProviderSessionDraft(ctx, opts, memory.ProviderSessionDraftSave{Project: project, Handle: input.SessionHandle, Summary: input.Summary, ExpectedUpdatedAt: expected})
-	default:
-		return memoryFailure(stderr, memory.ErrInvalid)
-	}
-	if err != nil {
-		return memoryFailure(stderr, err)
-	}
-	switch value := result.(type) {
-	case memory.ProviderSession:
-		_ = json.NewEncoder(stdout).Encode(struct {
-			SchemaVersion      int                         `json:"schemaVersion"`
-			State              memory.ProviderSessionState `json:"state"`
-			Handle             string                      `json:"session_handle"`
-			Checkpointed       bool                        `json:"checkpointed"`
-			FinalObservationID string                      `json:"final_observation_id,omitempty"`
-			CreatedAt          time.Time                   `json:"created_at"`
-			UpdatedAt          time.Time                   `json:"updated_at"`
-			CompletedAt        *time.Time                  `json:"completed_at,omitempty"`
-			LeaseToken         string                      `json:"lease_token,omitempty"`
-			LeaseUntil         *time.Time                  `json:"lease_until,omitempty"`
-			DraftPresent       bool                        `json:"draft_present,omitempty"`
-		}{1, value.State, value.Handle, value.Checkpointed, value.FinalObservationID, value.CreatedAt, value.UpdatedAt, value.CompletedAt, value.LeaseToken, value.LeaseUntil, value.DraftPresent})
-	case memory.ProviderSessionContext:
-		_ = json.NewEncoder(stdout).Encode(struct {
-			SchemaVersion int                         `json:"schemaVersion"`
-			Handle        string                      `json:"session_handle"`
-			State         memory.ProviderSessionState `json:"state"`
-			Handoff       string                      `json:"handoff,omitempty"`
-		}{1, value.Session.Handle, value.Session.State, value.Handoff})
-	case memory.ProviderSessionDraft:
-		_ = json.NewEncoder(stdout).Encode(struct {
-			SchemaVersion int       `json:"schemaVersion"`
-			Handle        string    `json:"session_handle"`
-			UpdatedAt     time.Time `json:"updated_at"`
-		}{1, value.Handle, value.UpdatedAt})
-	default:
-		return memoryFailure(stderr, memory.ErrInvalid)
-	}
-	return 0
-}
-
-func hookFieldsMatch(raw map[string]json.RawMessage, names ...string) bool {
-	if len(raw) != len(names) {
-		return false
-	}
-	for _, name := range names {
-		if raw[name] == nil {
-			return false
-		}
-	}
-	return true
 }
 
 func runMemoryProjectInit(ctx context.Context, args []string, stdout, stderr io.Writer, runtime MemoryRuntime) int {

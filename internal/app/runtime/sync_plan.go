@@ -3,8 +3,8 @@ package runtime
 import (
 	"regexp"
 
-	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 )
 
 // SyncPlanAction identifies the sole recommendation produced by PlanSyncProject.

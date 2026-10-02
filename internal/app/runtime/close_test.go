@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/memory"
 )
 
 func TestWithStoreJoinsWritableCloseFailure(t *testing.T) {

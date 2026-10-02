@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vgxness/vgxness/internal/syncapi"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/syncapi"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 )
 
 // SyncProjectTopology is the complete local metadata snapshot used to plan a
@@ -3180,26 +3180,6 @@ func completeProjectRepair(ctx context.Context, tx *sql.Tx, mutationID string, r
 		return fmt.Errorf("%w: project sync repair", ErrConflict)
 	}
 	return nil
-}
-
-func (s *Store) validateRetryClaim(ctx context.Context, mutationID, claimToken string, now time.Time) error {
-	nowNanos, ok := syncUnixNano(now.UTC().Round(0))
-	if !ok {
-		return fmt.Errorf("%w: invalid clock", ErrCorrupt)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return writeError(ctx, err)
-	}
-	defer tx.Rollback()
-	_, found, err := syncOutboxForResult(ctx, tx, mutationID)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return fmt.Errorf("%w: sync outbox claim", ErrNotFound)
-	}
-	return claimMatches(ctx, tx, mutationID, claimToken, nowNanos)
 }
 
 func validSyncResult(result syncservice.Result) bool {

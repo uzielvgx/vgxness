@@ -13,7 +13,7 @@ type fileDescriptor interface {
 	Fd() uintptr
 }
 
-func Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, backend Backend, options Options) int {
+func Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, options Options) int {
 	input, inputOK := stdin.(fileDescriptor)
 	output, outputOK := stdout.(fileDescriptor)
 	if !inputOK || !outputOK || !term.IsTerminal(input.Fd()) || !term.IsTerminal(output.Fd()) {
@@ -24,14 +24,13 @@ func Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, backend
 		ctx = context.Background()
 	}
 	program := tea.NewProgram(
-		NewModel(ctx, backend, options),
+		NewModel(ctx, options),
 		tea.WithContext(ctx),
 		tea.WithInput(stdin),
 		tea.WithOutput(stdout),
 		tea.WithoutSignalHandler(),
 	)
-	_, err := program.Run()
-	if err != nil {
+	if _, err := program.Run(); err != nil {
 		if ctx.Err() != nil {
 			return 130
 		}

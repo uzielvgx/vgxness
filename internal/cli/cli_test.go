@@ -4,15 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"github.com/vgxness/vgxness/internal/skillregistry"
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/inspection"
-	"github.com/vgxness/vgxness/internal/secrets"
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/inspection"
+	"github.com/uzielvgx/vgxness/internal/secrets"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 type fakeInspector struct {
@@ -27,7 +25,7 @@ func TestFailureClassifiesUnsupportedCredentialFiles(t *testing.T) {
 }
 
 func runBasicCLI(ctx context.Context, args []string, stdout, stderr *bytes.Buffer, inspector Inspector) int {
-	return RunProductRuntime(ctx, args, strings.NewReader(""), stdout, stderr, inspector, nil, nil, nil, nil, nil)
+	return RunProductRuntime(ctx, args, strings.NewReader(""), stdout, stderr, inspector, nil)
 }
 
 func (f *fakeInspector) Status(context.Context, config.Options) (inspection.Result, error) {
@@ -59,7 +57,7 @@ func TestCLI_RejectsUnsupportedExportDuringWriteWithoutMutation(t *testing.T) {
 }
 
 func TestCLI_RejectsV1NonGoalCommands(t *testing.T) {
-	for _, command := range []string{"tui", "agent", "backup", "restore", "sync", "bridge", "delivery", "edit", "maintenance", "orchestrate"} {
+	for _, command := range []string{"tui", "setup", "integrate", "self", "skills", "agent", "backup", "restore", "sync", "bridge", "delivery", "edit", "maintenance", "orchestrate"} {
 		var stderr bytes.Buffer
 		code := runBasicCLI(context.Background(), []string{command}, &bytes.Buffer{}, &stderr, &fakeInspector{})
 		testutil.Require(t, code == 2 && strings.HasPrefix(stderr.String(), "usage: vgxness "), "%s exit=%d stderr=%q", command, code, stderr.String())
@@ -97,13 +95,6 @@ func (brokenPipe) Write([]byte) (int, error) { return 0, errors.New("broken pipe
 func TestCLIReportsLostCommandOutputInsteadOfSuccess(t *testing.T) {
 	f := &fakeInspector{result: inspection.Result{Root: "/tmp/root", Database: "/tmp/root/memory.db", Migration: 1}}
 	var stderr bytes.Buffer
-	code := RunProductRuntime(context.Background(), []string{"status", "--storage-root", "/tmp/root"}, strings.NewReader(""), brokenPipe{}, &stderr, f, nil, nil, nil, nil, nil)
+	code := RunProductRuntime(context.Background(), []string{"status", "--storage-root", "/tmp/root"}, strings.NewReader(""), brokenPipe{}, &stderr, f, nil)
 	testutil.Require(t, code == 1 && strings.Contains(stderr.String(), "io: write command output"), "exit=%d stderr=%q", code, stderr.String())
-}
-
-func TestFailureReportsSkillRegistryStorageAsOperational(t *testing.T) {
-	code, message := failure(fmt.Errorf("%w: %w", skillregistry.ErrIO, skillregistry.ErrInvalid))
-	testutil.Require(t, code == 1 && message == "operational: skill registry storage failed", "code=%d message=%q", code, message)
-	code, message = failure(skillregistry.ErrInvalid)
-	testutil.Require(t, code == 2, "invalid request code=%d message=%q", code, message)
 }

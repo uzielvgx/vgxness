@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/config"
 )
 
 func TestRunMCPDispatchesOnceWithWorkspaceAndConfig(t *testing.T) {
@@ -34,7 +34,6 @@ func TestRunMCPRejectsArgumentsAndReportsStartupFailureToStderr(t *testing.T) {
 		code int
 	}{
 		{args: []string{"extra"}, code: 2},
-		{args: []string{"--workspace", "/other"}, code: 2},
 		{args: []string{"--full=invalid"}, code: 2},
 		{args: []string{"--full", "extra"}, code: 2},
 		{err: errors.New("unavailable"), code: 1},
@@ -66,5 +65,33 @@ func TestRunMCPFullIsExplicit(t *testing.T) {
 		if code != 0 || got != tc.full {
 			t.Fatalf("args=%v code=%d full=%v", tc.args, code, got)
 		}
+	}
+}
+
+func TestRunMCPResolvesWorkspaceFromFlagThenEnvThenCwd(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  string
+		want string
+	}{
+		{name: "cwd", want: "/cwd"},
+		{name: "env", env: "/project", want: "/project"},
+		{name: "blank env falls through", env: "  ", want: "/cwd"},
+		{name: "flag beats env", args: []string{"--workspace", "/explicit"}, env: "/project", want: "/explicit"},
+		{name: "blank flag falls through", args: []string{"--workspace", " "}, env: "/project", want: "/project"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(projectDirEnv, tc.env)
+			var gotWorkspace string
+			var gotOptions config.Options
+			code := runMCP(context.Background(), tc.args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, "/cwd", func(_ context.Context, workspace string, options config.Options, _ bool) error {
+				gotWorkspace, gotOptions = workspace, options
+				return nil
+			})
+			if code != 0 || gotWorkspace != tc.want || gotOptions.ProjectDir != tc.want {
+				t.Fatalf("code=%d workspace=%q projectDir=%q want=%q", code, gotWorkspace, gotOptions.ProjectDir, tc.want)
+			}
+		})
 	}
 }

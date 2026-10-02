@@ -15,13 +15,13 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	appruntime "github.com/vgxness/vgxness/internal/app/runtime"
-	"github.com/vgxness/vgxness/internal/cli"
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/secrets"
-	"github.com/vgxness/vgxness/internal/syncapi"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	appruntime "github.com/uzielvgx/vgxness/internal/app/runtime"
+	"github.com/uzielvgx/vgxness/internal/cli"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/secrets"
+	"github.com/uzielvgx/vgxness/internal/syncapi"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 )
 
 const journeyDeviceID = "550e8400-e29b-41d4-a716-446655440010"
@@ -79,7 +79,7 @@ func TestExplicitMemorySyncJourney(t *testing.T) {
 		journeyRequireStatic(t, err == nil, "project B observation setup failed")
 		run := func(args []string) (int, string, string) {
 			var out, stderr bytes.Buffer
-			code := cli.RunProductRuntime(ctx, args, strings.NewReader(""), &out, &stderr, nil, runtime, nil, nil, nil, nil)
+			code := cli.RunProductRuntime(ctx, args, strings.NewReader(""), &out, &stderr, nil, runtime)
 			journeyRequireSafeOutput(t, out.String()+stderr.String(), journeyBearer(journeyDeviceID), server.URL, root, "A-only-observation", "B-only-observation")
 			return code, out.String(), stderr.String()
 		}

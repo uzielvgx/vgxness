@@ -12,13 +12,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/vgxness/vgxness/internal/config"
-	"github.com/vgxness/vgxness/internal/hooks"
-	"github.com/vgxness/vgxness/internal/memory"
-	"github.com/vgxness/vgxness/internal/secrets"
-	"github.com/vgxness/vgxness/internal/syncapi"
-	"github.com/vgxness/vgxness/internal/syncclient"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/config"
+	"github.com/uzielvgx/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/secrets"
+	"github.com/uzielvgx/vgxness/internal/syncapi"
+	"github.com/uzielvgx/vgxness/internal/syncclient"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 )
 
 const (
@@ -41,7 +40,6 @@ type Memory struct {
 	closeStore             func(*memory.Store) error
 	afterSyncCredentialPut func() error
 	afterSyncProfileCommit func() error
-	hooks                  hooks.Emitter
 }
 
 type syncEnrollmentFailure struct{ cause error }
@@ -54,13 +52,8 @@ func (failure syncEnrollmentFailure) Unwrap() error { return failure.cause }
 
 // NewMemory creates a memory runtime with the supplied producer and access mode.
 func NewMemory(producer string, readOnly bool) Memory {
-	return NewMemoryWithHooks(producer, readOnly, nil)
-}
-
-// NewMemoryWithHooks adds best-effort lifecycle observation to a memory runtime.
-func NewMemoryWithHooks(producer string, readOnly bool, emitter hooks.Emitter) Memory {
 	store := secrets.System()
-	return Memory{producer: producer, readOnly: readOnly, transport: http.DefaultTransport, credential: store.Get, putSecret: store.Put, deleteSecret: store.Delete, hooks: emitter}
+	return Memory{producer: producer, readOnly: readOnly, transport: http.DefaultTransport, credential: store.Get, putSecret: store.Put, deleteSecret: store.Delete}
 }
 
 func (runtime Memory) Remember(ctx context.Context, opts config.Options, request memory.Remember) (memory.Entry, error) {
@@ -68,9 +61,6 @@ func (runtime Memory) Remember(ctx context.Context, opts config.Options, request
 		return memory.Entry{}, memory.ErrInvalid
 	}
 	entry, err := memory.NewMemoryService(storeRuntime{opts}, runtime.producerName(), nil).Remember(ctx, request)
-	if err == nil {
-		runtime.emitMemory(ctx, false, entry)
-	}
 	return entry, err
 }
 
@@ -151,27 +141,7 @@ func (runtime Memory) Forget(ctx context.Context, opts config.Options, request m
 	entry, err := withWritableStore(ctx, opts, func(store *memory.Store) (memory.Entry, error) {
 		return memory.NewMemoryService(store, runtime.producerName(), nil).Forget(ctx, request)
 	})
-	if err == nil {
-		runtime.emitMemory(ctx, true, entry)
-	}
 	return entry, err
-}
-
-func (runtime Memory) emitMemory(ctx context.Context, forgotten bool, entry memory.Entry) {
-	if runtime.hooks == nil {
-		return
-	}
-	defer func() { recover() }()
-	var draft hooks.Draft
-	var err error
-	if forgotten {
-		draft, err = hooks.NewMemoryForgotten(entry.Project, entry.ID, string(entry.Scope), entry.Type, string(entry.State), entry.CreatedAt, entry.UpdatedAt)
-	} else {
-		draft, err = hooks.NewMemorySaved(entry.Project, entry.ID, string(entry.Scope), entry.Type, string(entry.State), entry.CreatedAt, entry.UpdatedAt)
-	}
-	if err == nil {
-		runtime.hooks.Emit(ctx, draft)
-	}
 }
 
 func (runtime Memory) ResolveProject(ctx context.Context, opts config.Options, workspace string) (string, error) {
@@ -240,29 +210,7 @@ func (runtime Memory) Sync(ctx context.Context, opts config.Options) (memory.Syn
 	if result.Mode == "" {
 		result.Mode = memory.SyncModeProjectBidirectional
 	}
-	if err == nil {
-		runtime.emitMemorySync(ctx, opts.ProjectDir, result)
-	}
 	return result, err
-}
-
-func (runtime Memory) emitMemorySync(ctx context.Context, canonicalWorkspace string, result memory.SyncResult) {
-	if runtime.hooks == nil {
-		return
-	}
-	canonicalWorkspace, err := canonicalInvocationWorkspace(canonicalWorkspace)
-	if err != nil {
-		return
-	}
-	projectID, err := memory.StableProjectID(canonicalWorkspace)
-	if err != nil {
-		return
-	}
-	defer func() { recover() }()
-	draft, err := hooks.NewMemorySyncCompleted(projectID, string(result.Status), int64(result.Pushed), int64(result.PreviouslyAccepted), int64(result.Rejected), int64(result.Retried), int64(result.Conflicts), int64(result.Batches))
-	if err == nil {
-		runtime.hooks.Emit(ctx, draft)
-	}
 }
 
 func canonicalInvocationWorkspace(workspace string) (string, error) {

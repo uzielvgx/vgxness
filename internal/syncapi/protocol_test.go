@@ -3,7 +3,7 @@ package syncapi
 import (
 	"encoding/json"
 	"errors"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 	"math"
 	"strings"
 	"testing"

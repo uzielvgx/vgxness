@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 func TestResolveStorageRoot_ProjectOverrideWins(t *testing.T) {

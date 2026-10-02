@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/vgxness/vgxness/internal/syncservice"
+	"github.com/uzielvgx/vgxness/internal/syncservice"
 )
 
 func TestHandlerHealthzIsUnauthenticatedAndBounded(t *testing.T) {

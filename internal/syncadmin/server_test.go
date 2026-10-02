@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/vgxness/vgxness/internal/syncpg"
+	"github.com/uzielvgx/vgxness/internal/syncpg"
 )
 
 const testOperatorSecret, testAuthority = "operator-secret-that-must-not-be-reflected", "127.0.0.1:8788"

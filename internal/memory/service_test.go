@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/testutil"
+	"github.com/uzielvgx/vgxness/internal/testutil"
 )
 
 type fakeMemoryStore struct {

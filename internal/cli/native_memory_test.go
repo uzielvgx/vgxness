@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vgxness/vgxness/internal/memory"
+	"github.com/uzielvgx/vgxness/internal/memory"
 )
 
 func TestMemoryCLIForgetUsesStrictVersionedBoundary(t *testing.T) {

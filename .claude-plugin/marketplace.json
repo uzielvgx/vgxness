@@ -1,0 +1,6 @@
+{
+  "name": "vgxness",
+  "description": "VGXNESS durable project memory and orchestration policy for Claude Code",
+  "owner": { "name": "Uziel Vega", "url": "https://github.com/uzielvgx" },
+  "plugins": [{ "name": "vgxness", "source": "./plugins/vgxness", "category": "productivity" }]
+}
