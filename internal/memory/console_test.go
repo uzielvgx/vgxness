@@ -94,3 +94,18 @@ func TestTypeCountsOrderByUse(t *testing.T) {
 	counts, err := store.TypeCounts(ctx, "p")
 	testutil.Require(t, err == nil && len(counts) == 2 && counts[0] == (TypeCount{Type: "decision", Count: 2}) && counts[1] == (TypeCount{Type: "bugfix", Count: 1}), "counts=%+v err=%v", counts, err)
 }
+
+func TestSyncSummaryReportsBindingAndPendingMutations(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	workspace := t.TempDir()
+	summary, err := store.SyncSummary(ctx, workspace)
+	testutil.Require(t, err == nil && summary.PortableID == "" && summary.Pending == 0 && summary.LastPull.IsZero(), "fresh summary=%+v err=%v", summary, err)
+	enableSync(t, store)
+	project, err := store.ResolveProject(ctx, workspace)
+	testutil.NoError(t, err)
+	_, err = NewMemoryService(store, "test", nil).Remember(ctx, Remember{Title: "a", Content: "queued fact", Project: project})
+	testutil.NoError(t, err)
+	summary, err = store.SyncSummary(ctx, workspace)
+	testutil.Require(t, err == nil && summary.Pending > 0 && summary.PortableID == "", "unbound summary=%+v err=%v", summary, err)
+}

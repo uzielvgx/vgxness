@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -112,4 +113,44 @@ func (s *Store) TypeCounts(ctx context.Context, project string) ([]TypeCount, er
 		return nil, writeError(ctx, err)
 	}
 	return counts, nil
+}
+
+// SyncSummary is the local sync state of one workspace.
+type SyncSummary struct {
+	// PortableID is empty until `memory project init` binds the workspace.
+	PortableID string
+	// Pending counts outbox mutations of every project on this device.
+	Pending int
+	// LastPull is when this project's history cursor last advanced.
+	LastPull time.Time
+}
+
+// SyncSummary reads a workspace's sync binding, the device outbox size and
+// the project's last pull. It never writes.
+func (s *Store) SyncSummary(ctx context.Context, workspace string) (SyncSummary, error) {
+	if err := cancelled(ctx); err != nil {
+		return SyncSummary{}, err
+	}
+	var summary SyncSummary
+	id, found, err := s.PortableProjectID(ctx, workspace)
+	if err != nil {
+		return SyncSummary{}, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_outbox`).Scan(&summary.Pending); err != nil {
+		return SyncSummary{}, writeError(ctx, err)
+	}
+	if !found {
+		return summary, nil
+	}
+	summary.PortableID = id
+	var updated int64
+	err = s.db.QueryRowContext(ctx, `SELECT updated_at FROM sync_project_cursor WHERE portable_project_id=?`, id).Scan(&updated)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return SyncSummary{}, writeError(ctx, err)
+	default:
+		summary.LastPull = time.Unix(0, updated).UTC()
+	}
+	return summary, nil
 }

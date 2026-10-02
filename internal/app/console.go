@@ -383,3 +383,50 @@ func commandOutput(out []byte, err error) (string, error) {
 	}
 	return text, err
 }
+
+// syncTimeout bounds one foreground sync from the console.
+const syncTimeout = 5 * time.Minute
+
+func (b consoleBackend) SyncOverview(ctx context.Context) (tui.SyncOverview, error) {
+	state := b.syncState(ctx)
+	overview := tui.SyncOverview{Configured: state.Configured, Enabled: state.Enabled, Credential: state.Credential}
+	if state.Err != nil {
+		return overview, state.Err
+	}
+	if !state.Configured {
+		return overview, nil
+	}
+	if profile, found, err := b.memory.SyncProfile(ctx, b.options()); err != nil {
+		return overview, err
+	} else if found {
+		overview.Endpoint, overview.DeviceID = profile.Endpoint, profile.DeviceID
+	}
+	summary, err := b.memory.SyncSummary(ctx, b.options(), b.workspace)
+	if err != nil {
+		return overview, err
+	}
+	overview.PortableID, overview.Pending, overview.LastPull = summary.PortableID, summary.Pending, summary.LastPull
+	return overview, nil
+}
+
+func (b consoleBackend) ConfigureSync(ctx context.Context, endpoint, deviceID, bearer string) error {
+	_, err := b.writer.ConfigureSync(ctx, b.options(), strings.TrimSpace(endpoint), strings.TrimSpace(deviceID), strings.TrimSpace(bearer))
+	return err
+}
+
+func (b consoleBackend) SyncNow(ctx context.Context) (tui.SyncOutcome, error) {
+	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
+	defer cancel()
+	workspace, err := filepath.Abs(b.workspace)
+	if err != nil {
+		return tui.SyncOutcome{}, err
+	}
+	started := b.now()
+	result, err := b.writer.Sync(ctx, config.Options{ProjectDir: workspace})
+	return tui.SyncOutcome{
+		Status: string(result.Status), Pushed: result.Pushed, PreviouslyAccepted: result.PreviouslyAccepted, Rejected: result.Rejected,
+		Retried: result.Retried, Conflicts: result.Conflicts, Batches: result.Batches,
+		FailureOperation: result.FailureOperation, FailureClass: result.FailureClass, HTTPStatus: result.FailureHTTPStatus,
+		Took: b.now().Sub(started),
+	}, err
+}

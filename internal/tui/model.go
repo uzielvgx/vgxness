@@ -82,7 +82,7 @@ func (m Model) open(to route) page {
 	case routeSetup:
 		return newSetupPage(env)
 	case routeSync:
-		return newPendingPage(env, to)
+		return newSyncPage(env)
 	default:
 		return newHomePage(env)
 	}

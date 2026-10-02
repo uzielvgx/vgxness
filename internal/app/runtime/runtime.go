@@ -1579,3 +1579,23 @@ func (runtime Memory) TypeCounts(ctx context.Context, opts config.Options, proje
 	defer store.Close()
 	return store.TypeCounts(ctx, project)
 }
+
+// SyncSummary reads a workspace's local sync binding and backlog.
+func (runtime Memory) SyncSummary(ctx context.Context, opts config.Options, workspace string) (memory.SyncSummary, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return memory.SyncSummary{}, err
+	}
+	defer store.Close()
+	return store.SyncSummary(ctx, workspace)
+}
+
+// SyncProfile reads the configured sync endpoint and device, if any.
+func (runtime Memory) SyncProfile(ctx context.Context, opts config.Options) (memory.SyncProfile, bool, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return memory.SyncProfile{}, false, err
+	}
+	defer store.Close()
+	return store.GetSyncProfile(ctx)
+}

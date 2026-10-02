@@ -24,6 +24,33 @@ type Backend interface {
 	// through the claude CLI and returns its output for the setup log.
 	SetupState(context.Context) (SetupState, error)
 	RunSetupStep(context.Context, SetupStep) (string, error)
+
+	SyncOverview(context.Context) (SyncOverview, error)
+	// ConfigureSync stores the endpoint and device in the profile and the
+	// bearer in the keyring, as `memory sync configure` does.
+	ConfigureSync(ctx context.Context, endpoint, deviceID, bearer string) error
+	// SyncNow runs one foreground project sync.
+	SyncNow(context.Context) (SyncOutcome, error)
+}
+
+type SyncOverview struct {
+	Configured, Enabled bool
+	Endpoint, DeviceID  string
+	Credential          string
+	// PortableID is empty while the workspace has no project identity
+	// marker; project sync needs one.
+	PortableID string
+	// Pending counts unsent changes of every project on this device.
+	Pending  int
+	LastPull time.Time
+}
+
+type SyncOutcome struct {
+	Status                                                            string
+	Pushed, PreviouslyAccepted, Rejected, Retried, Conflicts, Batches int
+	FailureOperation, FailureClass                                    string
+	HTTPStatus                                                        int
+	Took                                                              time.Duration
 }
 
 type SetupState struct {

@@ -321,7 +321,7 @@ and all code that exists only to serve them.
   runbooks whose section headings are pinned by the deploy contract tests;
   translating them is a separate task if wanted), `docs/decisions.md`,
   `CLAUDE.md` and the plan/research files (project convention).
-- [ ] 17. Rebuild `vgxness tui` as the console from the canvas (decision 14):
+- [x] 17. Rebuild `vgxness tui` as the console from the canvas (decision 14):
   Inicio (estado, avisos, primer uso, terminal pequeña), Setup del plugin
   (prerrequisitos, permisos, confirmar, aplicando, resultado, error), Memoria
   (buscar, vacío, primer uso, detalle, confirmar olvidar, handoffs), Sync
@@ -387,7 +387,22 @@ and all code that exists only to serve them.
     plugin, missing Claude Code, plugin contents vs `plugins/vgxness`;
     real-backend frames up to the review step (nothing applied). Artboards
     updated: all six Setup screens and both Diagnóstico screens.
-  - [ ] 17e. Sync (estado, configurar, en progreso, error).
+  - [x] 17e. Sync (estado, configurar, en progreso, error).
+    *Result (2026-10-02):* `internal/tui/sync.go`: status from the real
+    profile (credential, device, project binding, device outbox, last
+    pull of the project cursor), a configure form (HTTPS endpoint, device
+    ID, masked bearer → `ConfigureSync`, the same path as `memory sync
+    configure`; the bearer is never shown) instead of the canvas'
+    pairing code, a foreground project sync under a context Ctrl+C
+    cancels, and failures explained per sync status with the technical
+    detail copyable. An unbound workspace gets the exact `memory project
+    init` command to copy; the console does not write the marker into the
+    repository itself. Store `SyncSummary`, runtime `SyncProfile`.
+    Verified: tests for status, run, failures by status, configure
+    validation and secrecy, unbound project; a frame with this machine's
+    real profile (nothing synced or saved). Artboards updated: the four
+    Sync screens (login retitled "Sync · configurar"). The placeholder
+    page is gone: every module of the canvas is implemented.
 - [ ] 16. End-to-end check on a clean machine state: install the binary, add
   the marketplace, install the plugin, save and recall memory across two
   fresh Claude Code sessions, delegate to `vgxness:explore` and

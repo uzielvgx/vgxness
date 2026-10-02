@@ -20,6 +20,41 @@ type fakeBackend struct {
 	err       error
 	memory    *fakeMemory
 	setup     *fakeSetup
+	sync      *fakeSync
+}
+
+// fakeSync stands in for the sync profile, keyring and server.
+type fakeSync struct {
+	overview   SyncOverview
+	outcome    SyncOutcome
+	err        error
+	configured [][3]string
+	syncs      int
+}
+
+func (f fakeBackend) SyncOverview(context.Context) (SyncOverview, error) {
+	if f.sync == nil {
+		return SyncOverview{}, nil
+	}
+	return f.sync.overview, nil
+}
+
+func (f fakeBackend) ConfigureSync(_ context.Context, endpoint, deviceID, bearer string) error {
+	f.sync.configured = append(f.sync.configured, [3]string{endpoint, deviceID, bearer})
+	f.sync.overview.Configured, f.sync.overview.Enabled, f.sync.overview.Credential = true, true, "available"
+	f.sync.overview.Endpoint, f.sync.overview.DeviceID = endpoint, deviceID
+	return nil
+}
+
+func (f fakeBackend) SyncNow(ctx context.Context) (SyncOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return SyncOutcome{}, err
+	}
+	f.sync.syncs++
+	if f.sync.err == nil && f.sync.outcome.Status == "synced" {
+		f.sync.overview.Pending, f.sync.overview.LastPull = 0, testNow
+	}
+	return f.sync.outcome, f.sync.err
 }
 
 // fakeSetup records the setup steps run and can fail one of them.
@@ -152,7 +187,7 @@ func drive(t *testing.T, m Model, msgs ...tea.Msg) (Model, []tea.Msg) {
 		for _, out := range run(cmd) {
 			produced = append(produced, out)
 			switch out.(type) {
-			case overviewMsg, diagnosisMsg, navigateMsg, memorySearchMsg, memoryDetailMsg, memoryForgotMsg, handoffsMsg, setupStateMsg, setupStepMsg:
+			case overviewMsg, diagnosisMsg, navigateMsg, memorySearchMsg, memoryDetailMsg, memoryForgotMsg, handoffsMsg, setupStateMsg, setupStepMsg, syncOverviewMsg, syncConfiguredMsg, syncDoneMsg:
 				queue = append(queue, out)
 			case searchTickMsg:
 				queue = append(queue, out)
