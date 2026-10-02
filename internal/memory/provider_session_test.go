@@ -29,10 +29,6 @@ func TestProviderSessionCompletedSummaryIsSanitizedAndSynced(t *testing.T) {
 	ctx := context.Background()
 	started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: " OpenAI ", ExternalID: "remote-run"})
 	testutil.NoError(t, err)
-	marked, err := store.MarkProviderSessionCheckpoint(ctx, "p", started.Handle, started.LeaseToken)
-	testutil.Require(t, err == nil && marked.Checkpointed, "checkpoint=%+v err=%v", marked, err)
-	_, err = store.MarkProviderSessionCheckpoint(ctx, "other", started.Handle, started.LeaseToken)
-	testutil.Require(t, errors.Is(err, ErrNotFound), "cross-project checkpoint=%v", err)
 	closed, err := store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: started.Handle, LeaseToken: started.LeaseToken, ExternalID: "remote-run", State: ProviderSessionCompleted, Summary: "durable handoff"})
 	testutil.Require(t, err == nil && closed.State == ProviderSessionCompleted && closed.FinalObservationID != "", "close=%+v err=%v", closed, err)
 	item, err := store.Get(ctx, closed.FinalObservationID, "p", ScopeProject)
@@ -271,8 +267,6 @@ func TestProviderSessionLeaseTakeoverFencesPriorOwnerAndReconcilesExpiredRows(t 
 	testutil.NoError(t, err)
 	takeover, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "same"})
 	testutil.Require(t, err == nil && takeover.Handle == first.Handle && takeover.LeaseToken != first.LeaseToken && takeover.DraftPresent && takeover.LeaseUntil != nil && takeover.LeaseUntil.Equal(takeover.UpdatedAt.Add(providerSessionLeaseTTL)), "takeover=%+v err=%v", takeover, err)
-	_, err = store.RenewProviderSession(ctx, "p", first.Handle, first.LeaseToken)
-	testutil.Require(t, errors.Is(err, ErrConflict), "stale renew=%v", err)
 	_, err = store.EndProviderSession(ctx, ProviderSessionEnd{Project: "p", Handle: first.Handle, ExternalID: "same", LeaseToken: first.LeaseToken, State: ProviderSessionInterrupted})
 	testutil.Require(t, errors.Is(err, ErrConflict), "stale end=%v", err)
 	expired, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "expired"})
@@ -330,21 +324,6 @@ func TestProviderSessionReconciliationExpiresSameExternalOtherProvider(t *testin
 	testutil.NoError(t, store.db.QueryRow(`SELECT state FROM local_provider_sessions WHERE handle=?`, prior.Handle).Scan(&state))
 	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM local_provider_session_drafts WHERE handle=?`, prior.Handle).Scan(&drafts))
 	testutil.Require(t, current.Provider == "opencode" && state == string(ProviderSessionInterrupted) && drafts == 0, "current=%+v state=%s drafts=%d", current, state, drafts)
-}
-
-func TestProviderSessionCurrentTokenRenewAndCheckpointExtendLease(t *testing.T) {
-	store := openTestStore(t)
-	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	store.now = func() time.Time { return now }
-	ctx := context.Background()
-	started, err := store.StartProviderSession(ctx, ProviderSessionStart{Project: "p", Provider: "opencode", ExternalID: "current"})
-	testutil.NoError(t, err)
-	now = now.Add(time.Hour)
-	checkpointed, err := store.MarkProviderSessionCheckpoint(ctx, "p", started.Handle, started.LeaseToken)
-	testutil.Require(t, err == nil && checkpointed.Checkpointed && checkpointed.LeaseUntil != nil && checkpointed.LeaseUntil.Equal(now.Add(providerSessionLeaseTTL)), "checkpoint=%+v err=%v", checkpointed, err)
-	now = now.Add(time.Hour)
-	renewed, err := store.RenewProviderSession(ctx, "p", started.Handle, started.LeaseToken)
-	testutil.Require(t, err == nil && renewed.LeaseUntil != nil && renewed.LeaseUntil.Equal(now.Add(providerSessionLeaseTTL)) && renewed.LeaseUntil.After(*checkpointed.LeaseUntil), "renewed=%+v checkpoint=%+v err=%v", renewed, checkpointed, err)
 }
 
 func TestProviderSessionReconciliationIsBoundedAndLeavesNoObservationResidue(t *testing.T) {

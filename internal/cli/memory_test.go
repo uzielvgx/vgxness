@@ -36,7 +36,6 @@ type fakeMemoryRuntime struct {
 	transitionWorkspace string
 	transitionMode      memory.SyncProjectTransitionMode
 	start               memory.ProviderSessionStart
-	checkpoint          string
 	ended               memory.ProviderSessionEnd
 	context             memory.ProviderSessionContext
 	draft               memory.ProviderSessionDraft
@@ -197,15 +196,6 @@ func (f *fakeMemoryRuntime) StartProviderSession(_ context.Context, _ config.Opt
 	f.calls++
 	f.start = request
 	return memory.ProviderSession{Project: request.Project, Handle: "ps-test", State: memory.ProviderSessionActive, LeaseToken: "lease-test"}, f.err
-}
-func (f *fakeMemoryRuntime) MarkProviderSessionCheckpoint(_ context.Context, _ config.Options, project, handle, _ string) (memory.ProviderSession, error) {
-	f.calls++
-	f.checkpoint = handle
-	return memory.ProviderSession{Project: project, Handle: handle, State: memory.ProviderSessionActive, Checkpointed: true}, f.err
-}
-func (f *fakeMemoryRuntime) RenewProviderSession(_ context.Context, _ config.Options, project, handle, _ string) (memory.ProviderSession, error) {
-	f.calls++
-	return memory.ProviderSession{Project: project, Handle: handle, State: memory.ProviderSessionActive, LeaseToken: "lease-test"}, f.err
 }
 func (f *fakeMemoryRuntime) EndProviderSession(_ context.Context, _ config.Options, request memory.ProviderSessionEnd) (memory.ProviderSession, error) {
 	f.calls++
