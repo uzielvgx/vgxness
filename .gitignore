@@ -1,7 +1,5 @@
 .atl/
 .codegraph/
-agent-eval-output/
-tools/agent_eval/__pycache__/
 
 node_modules/
 __pycache__/
