@@ -1,112 +1,115 @@
-# Native memory and structured storage
+# Memoria nativa y almacenamiento
 
-VGXNESS storage is an in-process Go subsystem backed by one owned SQLite/FTS5
-database. Semantic memory exposes `Remember`, `Recall`, `Recent`, `Get`, and
-`Forget`. It requires no daemon, second binary, embeddings, or network service.
-Historical SDD tables remain inert for database compatibility; there is no SDD
-service, tool, or archive command.
+El almacenamiento de VGXNESS es un subsistema en Go dentro del mismo proceso,
+respaldado por una sola base de datos SQLite/FTS5 propia. La memoria semántica
+expone `Remember`, `Recall`, `Recent`, `Get` y `Forget`. No necesita demonio,
+segundo binario, embeddings ni servicio de red. Las tablas históricas de SDD
+siguen existiendo, inertes, por compatibilidad de la base de datos; no hay
+servicio, herramienta ni comando de archivo para ellas.
 
-## Strict boundary, flexible core
+## Frontera estricta, núcleo flexible
 
-JSON is a trust-boundary format, not an internal service contract. The CLI keeps
-schema version 1, rejects unknown and duplicate fields, accepts at most 64 KiB,
-and rejects conflicting flag/payload sources. After decoding, adapters construct
-native Go values (`memory.Remember`, `memory.Recall`, `memory.Recent`,
-`memory.Lookup`, and `memory.Forget`). Internal application calls use those
-values directly. MCP `memory_search` accepts optional `match_mode`: omitted or
-`all` keeps all-term matching, while `any` enables any-term matching. Invalid
-values fail before recall. Managed OpenCode and Codex managers search with `all`
-first and retry with `any` only when the first results are insufficient. The CLI
-continues to expose its native `matchAny` field.
+JSON es un formato de frontera de confianza, no un contrato interno. La CLI
+mantiene la versión de schema 1 del payload, rechaza campos desconocidos y
+duplicados, acepta como máximo 64 KiB y rechaza fuentes en conflicto entre
+flags y payload. Tras decodificar, los adaptadores construyen valores nativos
+(`memory.Remember`, `memory.Recall`, `memory.Recent`, `memory.Lookup`,
+`memory.Forget`) y las llamadas internas usan esos valores directamente.
 
-`memory recent` resolves the canonical project from `--workspace`. It returns
-active project-scope observations by default, ordered by most recently updated
-with an ID tiebreak. Results use the same bounded preview shape as search and do
-not expose full content.
+`memory_search` en MCP acepta `match_mode` opcional: omitido o `all` exige
+todos los términos; `any` acepta cualquiera. Un valor inválido falla antes de
+consultar. La CLI conserva su campo nativo `matchAny`.
 
-`Forget` is a lifecycle operation: it atomically marks the observation archived
-and removes its FTS row. The observation row and relationships remain available
-to `Get` for durable history and persisted-data compatibility, while normal
-`Recall` cannot return forgotten content.
+`memory recent` resuelve el proyecto canónico desde `--workspace`. Devuelve las
+observaciones activas de alcance proyecto, ordenadas por actualización más
+reciente con desempate por ID, con la misma vista previa acotada que la búsqueda
+y sin el contenido completo.
 
-## Schema v23 domains
+`Forget` es una operación de ciclo de vida: marca la observación como archivada
+y elimina su fila FTS en una sola transacción. La fila y sus relaciones siguen
+disponibles para `Get` como historia durable; `Recall` ya no la devuelve.
 
-**Implemented:** SQLite schema v23 stores semantic observations, references,
-sessions, and FTS rows. Published migrations and historical SDD tables are
-preserved to open existing databases without deleting user history. No runtime
-reads or writes those archived lifecycle records; they are not semantic memories
-and do not appear in recall or memory synchronization.
+## Dominios del schema v23
 
-Sync enrollment uses a bounded durable previous-credential reference marker to
-finish interrupted keyring cleanup on the next enrollment; it never stores a
-bearer in SQLite.
+El schema v23 de SQLite guarda observaciones semánticas, referencias, sesiones
+y filas FTS. Las migraciones publicadas y las tablas históricas se conservan
+para abrir bases existentes sin borrar historia; ningún código en ejecución las
+lee ni escribe, y no aparecen en recall ni en sincronización.
 
-An explicit Linux/macOS `memory sync --credential-file /absolute/private/file`
-mode is available for headless use. The file is revalidated on every use and is
-never stored; see [sync enrollment](sync.md#local-enrollment-and-status) for
-ownership, permissions, and Windows limitations. For existing project data,
-run `memory sync backfill --workspace /absolute/workspace` before the first
-sync. Backfill is local-only, bounded, and idempotent.
+**Sesiones de proveedor y handoff.** Cada sesión de Claude Code abre una sesión
+local de proveedor con un lease opaco de 24 horas. `Start` toma la misma
+identidad externa de forma atómica, rota el token del lease y preserva el
+handle y el borrador local. Antes de iniciar, se interrumpen como máximo 128
+sesiones del mismo proyecto vencidas o sin lease y se eliminan sus borradores.
+`Checkpoint` y el cierre terminal requieren el token actual; las transiciones
+terminales limpian el lease. Los leases son locales: no se sincronizan ni se
+exponen por MCP. El cierre con estado `completed` convierte el borrador
+(`memory_session_summary`) en una observación de tipo `summary`, que es lo que
+la siguiente sesión recibe como handoff acotado (4.096 caracteres) y marcado
+como datos no confiables.
 
-Schema v23 retains durable project transition snapshots and one per-project backup intent. Active local-only provider sessions have an opaque 24-hour lease. Start atomically takes over the same external identity, rotates its lease token, and preserves the handle and local draft. Before start, at most 128 expired or legacy-unleased same-project sessions are interrupted and their drafts removed. Checkpoint and terminal end require the current token; terminal transitions clear the lease. Leases are local-only and never synchronized or exposed through MCP. A host end operation remains the sole finalizer and requires the committed completion receipt.
+**Enrolamiento de sync.** Usa un marcador durable y acotado de la credencial
+anterior para terminar la limpieza del keyring en el siguiente enrolamiento;
+nunca guarda un bearer en SQLite. En Linux y macOS existe el modo explícito
+`memory sync --credential-file /ruta/absoluta/privada` para uso sin escritorio;
+el archivo se revalida en cada uso y no se persiste (ver
+[sync](sync.md#enrolamiento-local-y-estado)). Para datos previos, ejecuta
+`memory sync backfill --workspace /ruta/absoluta` antes de la primera
+sincronización; es local, acotado e idempotente.
 
-Foreground sync is explicitly project-scoped: use `memory sync --workspace
-/absolute/workspace`. The workspace must already have a valid
-`.vgxness/project-id` marker and matching local portable binding created by
-`memory project init`; otherwise sync fails closed before any remote call. This
-mode pushes only that project's project, session, and observation mutations,
-then pulls only that portable project's history using its separate project
-cursor. It never bootstraps, resolves global conflicts, or reads or advances
-the owner-global cursor. Its result mode is `project_bidirectional`.
+**Sync en primer plano por proyecto.** `memory sync --workspace
+/ruta/absoluta` exige que el workspace tenga un marcador `.vgxness/project-id`
+válido y la vinculación portable local creada por `memory project init`; si no,
+falla cerrado antes de cualquier llamada remota. Empuja solo las mutaciones de
+proyecto, sesión y observación de ese proyecto y trae solo su historia con un
+cursor propio. Nunca hace bootstrap, no resuelve conflictos globales ni toca el
+cursor global del propietario. Su modo de resultado es `project_bidirectional`.
 
-The default database is `~/.vgxness/memory.db`. Explicit `--storage-root` and
-`--project-local` modes use isolated databases. The OpenCode integration exposes
-both domains through the [MCP and lifecycle-adapter integration](opencode-integration.md); MCP
-has no scheduler, delegation, edit, or
-execution authority.
+La base por defecto es `~/.vgxness/memory.db`. `--storage-root` y
+`--project-local` usan bases aisladas. MCP no tiene autoridad de planificación,
+delegación, edición ni ejecución: solo expone la memoria.
 
-## Upgrade migration caveat
+## Actualización y migraciones
 
-**Implemented:** A read-only database open cannot migrate an older supported schema to v23.
-Immediately after upgrading the binary, `status`, `doctor`, `setup opencode --status`, or
-another read operation may therefore report a migration/storage failure. Do not delete or
-recreate the database; the existing data is the migration source and remains authoritative.
+Una apertura de solo lectura no puede migrar un schema anterior a v23. Justo
+después de actualizar el binario, `status`, `doctor` u otra lectura pueden
+reportar un fallo de migración o almacenamiento. No borres ni recrees la base:
+los datos existentes son la fuente de la migración.
 
-For a safe upgrade, first stop or quiesce other local writers and preserve an offline copy of
-the database using the operator's normal backup procedure. Then run one intended write-capable
-memory or SDD operation. The migrator obtains SQLite write ownership with `BEGIN IMMEDIATE`,
-applies every missing forward migration and its `PRAGMA user_version` update in a transaction,
-and rolls that transaction back on an error. It retries a transient SQLite busy/locked error
-within the operation context; it does not downgrade a database whose schema is newer than the
-binary supports. On success, rerun the read-only command to confirm the reported migration.
+Para actualizar con seguridad, detén otros escritores locales y conserva una
+copia fuera de línea con tu procedimiento normal de respaldo. Luego ejecuta una
+operación de memoria con escritura. El migrador toma la propiedad de escritura
+con `BEGIN IMMEDIATE`, aplica todas las migraciones pendientes y su `PRAGMA
+user_version` en una transacción, y la revierte ante cualquier error. Reintenta
+un error transitorio de SQLite ocupado o bloqueado dentro del contexto de la
+operación; no degrada una base cuyo schema sea más nuevo que el binario. Al
+terminar, repite el comando de lectura para confirmar la migración reportada.
 
-If the writer reports a migration failure or remains pending, preserve the database and its
-error output, ensure no competing process still holds the file and that the storage location is
-writable, then retry the same intentional write after correcting that local condition. Do not
-reset `user_version`, replay SQL manually, or replace the database with an empty file. Escalate
-with the preserved copy if the failure persists.
+Si el escritor reporta un fallo o queda pendiente, conserva la base y la salida
+del error, asegúrate de que ningún otro proceso tenga el archivo y de que la
+ubicación sea escribible, y reintenta la misma escritura. No reinicies
+`user_version`, no reproduzcas SQL a mano ni reemplaces la base por un archivo
+vacío. Si persiste, escala con la copia preservada.
 
-### Doctor scope
+### Alcance de doctor
 
-`doctor` deliberately has the same local inspection scope as `status`: it resolves the selected
-storage paths and asks the configured storage health check for the schema version. It has no
-local evidence for proxy TLS, private-network membership, remote endpoint reachability, or
-fleet-wide admission limits, so it emits no guesses about those settings and makes no network
-calls. Those deployment boundaries are documented in [sync](sync.md).
+`doctor` tiene el mismo alcance local que `status`: resuelve las rutas de
+almacenamiento seleccionadas y pregunta la versión del schema a la comprobación
+de salud configurada. No tiene evidencia local sobre TLS del proxy, pertenencia
+a red privada, alcance del endpoint remoto ni límites de admisión del
+despliegue, así que no adivina nada sobre eso y no hace llamadas de red. Esas
+fronteras están en [sync](sync.md).
 
-Older project-level `memory.db` files are a separate compatibility case. The
-transactional, idempotent importer remains in the Go memory package, but normal
-startup and memory operations do not invoke it automatically. Preserve those
-files until a supported migration route is selected; do not treat their current
-inactivity as permission to delete them.
+Los `memory.db` antiguos a nivel de proyecto son un caso aparte: el importador
+transaccional e idempotente sigue en el paquete de memoria, pero ni el arranque
+ni las operaciones normales lo invocan. Conserva esos archivos hasta que se
+elija una ruta de migración; que hoy no se usen no es permiso para borrarlos.
 
-## Runtime boundary
+## Identidad de proyecto en sync
 
-Engram is not part of the active architecture. Startup, `vgxness status`,
-OpenCode setup, and normal memory operations do not install, probe, invoke,
-import, require, or synchronize it. OpenCode setup instead owns the exact auto-discovered lifecycle plugin, which has no config plugin entry and handles bounded provider-session lifecycle only. The owned `MemoryStore` is the sole
-persistent semantic-memory authority.
-
-## Project sync identity
-
-During outbound project-scoped push, ordinary mappings send deterministic portable record IDs while retaining local memory IDs and outbox bytes unchanged. Adopted mappings take precedence and resend their exact inbound wire ID. The schema records that adoption provenance; project-scoped pull materializes supported project history, while reference-before-target translation and `resolve` transport remain unsupported.
+Durante el push por proyecto, los mapeos ordinarios envían IDs portables
+deterministas y conservan sin cambios los IDs locales y los bytes del outbox.
+Los mapeos adoptados tienen prioridad y reenvían su ID de entrada exacto. El
+schema registra esa procedencia; el pull por proyecto materializa la historia
+soportada, mientras que la traducción referencia-antes-que-objetivo y el
+transporte `resolve` siguen sin soporte.

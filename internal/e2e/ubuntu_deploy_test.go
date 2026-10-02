@@ -97,7 +97,7 @@ func TestUbuntuDeployPackageContract(t *testing.T) {
 		"systemctl is-active vgxness-syncd", "%{http_code}", "http://127.0.0.1:8787/v1/sync/capabilities", "systemctl enable --now vgxness-syncd-backup.timer")
 	assertExcludesOutsideSection(t, filepath.Join(repository, "deploy", "ubuntu", "README.md"), "## Legacy Caddy retirement (upgrade only)", "\n## Backup and restore", "Caddy")
 	makefile, err := os.ReadFile(filepath.Join(repository, "Makefile"))
-	if err != nil || !strings.Contains(string(makefile), "TestCleanCheckoutSetupAndMemory|TestUbuntuDeployPackageContract") {
+	if err != nil || !strings.Contains(string(makefile), "go test -tags=e2e -count=1 ./internal/e2e") {
 		t.Error("Makefile verify target does not select the Ubuntu deployment contract")
 	}
 	if _, err := os.Stat(filepath.Join(repository, "deploy", "ubuntu", "Caddyfile.example")); !errors.Is(err, os.ErrNotExist) {
@@ -124,7 +124,7 @@ func TestUbuntuDeployPackageContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(docs), "[Ubuntu 24.04 single-VPS deployment package](../deploy/ubuntu/README.md)") {
+	if !strings.Contains(string(docs), "](../deploy/ubuntu/README.md)") {
 		t.Error("docs/sync.md does not link the Ubuntu deployment package")
 	}
 }

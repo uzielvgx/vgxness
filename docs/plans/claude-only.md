@@ -299,7 +299,7 @@ and all code that exists only to serve them.
   cases for handoff injection, explore read-only and single writer); keep
   the syncd deploy e2e tests; pin the Claude Code version.
   *Verify:* CI passes on the PR.
-- [ ] 15. Documentation: rewrite `README.md` for the Claude-only product
+- [x] 15. Documentation: rewrite `README.md` for the Claude-only product
   (install binary, add marketplace, install plugin, permission snippet,
   sync, minimum Claude Code version, auto-memory coexistence and the
   opt-out snippet), delete docs for removed subsystems, keep and update
@@ -308,6 +308,19 @@ and all code that exists only to serve them.
   changelog entry too.
   *Verify:* every remaining doc link resolves; no mention of OpenCode,
   Codex or Pi outside the changelog.
+  *Result (2026-10-02):* Spanish `README.md`, new `docs/claude-code.md`
+  (plugin layout, MCP, hooks, roles, permissions, CI, limits), rewritten
+  `docs/memory.md`, `docs/diagnostics.md` and a full translation of
+  `docs/sync.md`; `CHANGELOG.md` opens with a Spanish "Sin publicar" entry
+  and keeps the English history below. Deleted 24 docs plus
+  `docs/implementations/`, `docs/releases/` and four architecture notes;
+  `docs/architecture/project-scoped-memory-sync.md` stays (sync design,
+  English). Relative links verified by script; `go test -tags=e2e` passes
+  with the README/docs contract tests. Left in English on purpose:
+  `deploy/docker/README.md` and `deploy/ubuntu/README.md` (operator
+  runbooks whose section headings are pinned by the deploy contract tests;
+  translating them is a separate task if wanted), `docs/decisions.md`,
+  `CLAUDE.md` and the plan/research files (project convention).
 - [ ] 17. Rebuild `vgxness tui` as the console from the canvas (decision 14):
   Inicio (estado, avisos, primer uso, terminal pequeña), Setup del plugin
   (prerrequisitos, permisos, confirmar, aplicando, resultado, error), Memoria
