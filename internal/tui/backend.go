@@ -19,7 +19,37 @@ type Backend interface {
 	// ForgetMemory archives one memory; it is the console's only memory write.
 	ForgetMemory(ctx context.Context, id string) error
 	Handoffs(ctx context.Context, limit int) ([]Handoff, error)
+
+	// SetupState reads what plugin setup needs; RunSetupStep runs one step
+	// through the claude CLI and returns its output for the setup log.
+	SetupState(context.Context) (SetupState, error)
+	RunSetupStep(context.Context, SetupStep) (string, error)
 }
+
+type SetupState struct {
+	PathBinary PathBinary
+	Claude     Claude
+	Plugin     Plugin
+}
+
+// PathBinary is the vgxness executable Claude Code will launch for the MCP
+// server and hooks, which may differ from the one running the console.
+type PathBinary struct {
+	Path, Version string
+	// SupportsPlugin is false for an older build without the
+	// `claude-code` commands the plugin's hooks call.
+	SupportsPlugin bool
+}
+
+type SetupStep uint8
+
+const (
+	StepAddMarketplace SetupStep = iota
+	StepInstallPlugin
+	StepUpdatePlugin
+	StepVerifyPlugin
+	StepVerifyMCP
+)
 
 type MemoryQuery struct {
 	Text, Type string
@@ -104,6 +134,7 @@ type Handoff struct {
 // sense on demand.
 type Diagnosis struct {
 	Overview
+	PathBinary   PathBinary
 	RootWritable error
 	// PolicyChars is the size of the installed plugin's Manager policy, the
 	// text the SessionStart hook injects.

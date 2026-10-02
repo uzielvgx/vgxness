@@ -79,7 +79,9 @@ func (m Model) open(to route) page {
 		return newMemoryPage(env, false)
 	case routeHandoffs:
 		return newMemoryPage(env, true)
-	case routeSetup, routeSync:
+	case routeSetup:
+		return newSetupPage(env)
+	case routeSync:
 		return newPendingPage(env, to)
 	default:
 		return newHomePage(env)

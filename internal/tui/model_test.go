@@ -19,6 +19,42 @@ type fakeBackend struct {
 	diagnosis Diagnosis
 	err       error
 	memory    *fakeMemory
+	setup     *fakeSetup
+}
+
+// fakeSetup records the setup steps run and can fail one of them.
+type fakeSetup struct {
+	state SetupState
+	fail  map[SetupStep]error
+	ran   []SetupStep
+}
+
+func (f fakeBackend) SetupState(context.Context) (SetupState, error) {
+	if f.setup == nil {
+		return SetupState{}, nil
+	}
+	return f.setup.state, nil
+}
+
+func (f fakeBackend) RunSetupStep(ctx context.Context, step SetupStep) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	f.setup.ran = append(f.setup.ran, step)
+	if err := f.setup.fail[step]; err != nil {
+		return "Error: plugin vgxness not found in marketplace vgxness", err
+	}
+	switch step {
+	case StepAddMarketplace:
+		f.setup.state.Plugin.MarketplaceAdded = true
+		return "Added marketplace vgxness", nil
+	case StepInstallPlugin, StepUpdatePlugin:
+		f.setup.state.Plugin.Installed, f.setup.state.Plugin.Enabled, f.setup.state.Plugin.Version = true, true, "0.2.0"
+		return "Installed vgxness@vgxness 0.2.0", nil
+	case StepVerifyMCP:
+		return "plugin:vgxness:memory: vgxness mcp --full - ✔ Connected", nil
+	}
+	return "vgxness@vgxness 0.2.0 enabled (user)", nil
 }
 
 // fakeMemory is a mutable memory store shared by the copies of fakeBackend
@@ -80,6 +116,9 @@ func (f fakeBackend) Diagnose(context.Context) (Diagnosis, error) {
 	if f.diagnosis.At.IsZero() {
 		f.diagnosis.Overview, f.diagnosis.At = f.overview, testNow
 	}
+	if f.diagnosis.PathBinary.Path == "" {
+		f.diagnosis.PathBinary = PathBinary{Path: "/usr/local/bin/vgxness", Version: "v0.9.0", SupportsPlugin: true}
+	}
 	return f.diagnosis, f.err
 }
 
@@ -113,7 +152,7 @@ func drive(t *testing.T, m Model, msgs ...tea.Msg) (Model, []tea.Msg) {
 		for _, out := range run(cmd) {
 			produced = append(produced, out)
 			switch out.(type) {
-			case overviewMsg, diagnosisMsg, navigateMsg, memorySearchMsg, memoryDetailMsg, memoryForgotMsg, handoffsMsg:
+			case overviewMsg, diagnosisMsg, navigateMsg, memorySearchMsg, memoryDetailMsg, memoryForgotMsg, handoffsMsg, setupStateMsg, setupStepMsg:
 				queue = append(queue, out)
 			case searchTickMsg:
 				queue = append(queue, out)
@@ -246,7 +285,7 @@ func TestHomeFirstUseOffersOnlyInstallAndDiagnosis(t *testing.T) {
 		}
 	}
 	m, out := drive(t, m, press("enter"))
-	if _, ok := m.page.(*pendingPage); !ok || len(out) == 0 {
+	if _, ok := m.page.(*setupPage); !ok || len(out) == 0 {
 		t.Fatalf("Enter on [1] did not open Setup: page=%T out=%v", m.page, out)
 	}
 }
@@ -292,7 +331,7 @@ func TestDoctorHealthyListsEverySectionAndSummary(t *testing.T) {
 		"ALMACENAMIENTO", "escribible", "✓ memory.db", "íntegra", "✓ esquema", "v23", "sin migraciones pendientes",
 		"PLUGIN", "✓ vgxness", "✓ Claude Code", "✓ plugin",
 		"HOOKS Y MCP", "✓ SessionStart", "política 4 986 chars (tope 10 000)", "✓ servidor MCP", "memory · 8 tools · instructions 1 362",
-		"RESUMEN", "8 comprobaciones · 0.8 s", "ACCIONES SUGERIDAS", "Nada que corregir.",
+		"✓ vgxness en PATH", "RESUMEN", "9 comprobaciones · 0.8 s", "ACCIONES SUGERIDAS", "Nada que corregir.",
 		"[r] repetir · [c] copiar informe · [Esc] volver",
 	)
 	assertFits(t, m)

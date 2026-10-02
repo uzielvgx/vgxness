@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -34,6 +37,7 @@ type consoleBackend struct {
 	claude     claudecli.Client
 	health     func(context.Context, string) (int, error)
 	executable func() (string, error)
+	lookPath   func(string) (string, error)
 	now        func() time.Time
 }
 
@@ -45,6 +49,7 @@ func newConsoleBackend(workspace string) consoleBackend {
 		claude:     claudecli.New(nil),
 		health:     memory.HealthFile,
 		executable: os.Executable,
+		lookPath:   exec.LookPath,
 		now:        time.Now,
 	}
 }
@@ -86,6 +91,7 @@ func (b consoleBackend) Diagnose(ctx context.Context) (tui.Diagnosis, error) {
 	}
 	diagnosis := tui.Diagnosis{
 		Overview:        overview,
+		PathBinary:      b.pathBinary(ctx),
 		RootWritable:    writableDirectory(filepath.Dir(overview.Storage.Database)),
 		MCPInstructions: utf8.RuneCountInString(mcp.Instructions()),
 		MCPTools:        len(mcp.FullToolNames),
@@ -282,4 +288,98 @@ func (b consoleBackend) Handoffs(ctx context.Context, limit int) ([]tui.Handoff,
 
 func memoryItem(entry memory.Entry) tui.MemoryItem {
 	return tui.MemoryItem{ID: entry.ID, Title: entry.Title, Type: entry.Type, Topic: entry.TopicKey, Producer: entry.Producer, Preview: entry.Preview, Content: entry.Content, References: entry.References, Created: entry.CreatedAt, Updated: entry.UpdatedAt}
+}
+
+// setupTimeout bounds one plugin setup step; installs clone a repository.
+const setupTimeout = 3 * time.Minute
+
+func (b consoleBackend) SetupState(ctx context.Context) (tui.SetupState, error) {
+	if err := ctx.Err(); err != nil {
+		return tui.SetupState{}, err
+	}
+	var state tui.SetupState
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() { defer group.Done(); state.Claude = b.claudeState(ctx) }()
+	go func() { defer group.Done(); state.Plugin = b.pluginState(ctx) }()
+	state.PathBinary = b.pathBinary(ctx)
+	group.Wait()
+	return state, ctx.Err()
+}
+
+// pathBinary inspects the vgxness that PATH resolves to, the one Claude Code
+// launches. Both probes are read-only commands.
+func (b consoleBackend) pathBinary(ctx context.Context) tui.PathBinary {
+	path, err := b.lookPath("vgxness")
+	if err != nil {
+		return tui.PathBinary{}
+	}
+	found := tui.PathBinary{Path: path}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		found.Path = resolved
+	}
+	ctx, cancel := context.WithTimeout(ctx, claudeTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, path, "version").Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if value, ok := strings.CutPrefix(line, "version="); ok {
+				found.Version = strings.TrimSpace(value)
+			}
+		}
+	}
+	found.SupportsPlugin = exec.CommandContext(ctx, path, "claude-code", "setup").Run() == nil
+	return found
+}
+
+func (b consoleBackend) RunSetupStep(ctx context.Context, step tui.SetupStep) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, setupTimeout)
+	defer cancel()
+	switch step {
+	case tui.StepAddMarketplace:
+		return commandOutput(b.claude.AddMarketplace(ctx))
+	case tui.StepInstallPlugin:
+		return commandOutput(b.claude.InstallPlugin(ctx))
+	case tui.StepUpdatePlugin:
+		return commandOutput(b.claude.UpdatePlugin(ctx))
+	case tui.StepVerifyPlugin:
+		plugins, err := b.claude.Plugins(ctx)
+		if err != nil {
+			return "", err
+		}
+		plugin, found := claudecli.FindPlugin(plugins)
+		switch {
+		case !found:
+			return "", fmt.Errorf("%s does not appear in claude plugin list", claudecli.PluginID)
+		case !plugin.Enabled:
+			return "", fmt.Errorf("%s is installed but disabled", claudecli.PluginID)
+		}
+		return fmt.Sprintf("%s %s enabled (%s)", plugin.ID, plugin.Version, plugin.Scope), nil
+	case tui.StepVerifyMCP:
+		out, err := b.claude.ListMCP(ctx)
+		if err != nil {
+			return commandOutput(out, err)
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(strings.ToLower(line), "vgxness") {
+				if strings.Contains(line, "Connected") {
+					return strings.TrimSpace(line), nil
+				}
+				return strings.TrimSpace(line), fmt.Errorf("the vgxness memory server is not connected")
+			}
+		}
+		return string(out), fmt.Errorf("the vgxness memory server does not appear in claude mcp list")
+	default:
+		return "", fmt.Errorf("unknown setup step %d", step)
+	}
+}
+
+// commandOutput joins a command's stdout with the stderr an exit error
+// carries, so the setup log shows what the command printed.
+func commandOutput(out []byte, err error) (string, error) {
+	text := strings.TrimSpace(string(out))
+	var exitErr *claudecli.ExitError
+	if errors.As(err, &exitErr) && exitErr.Stderr != "" {
+		text = strings.TrimSpace(text + "\n" + exitErr.Stderr)
+	}
+	return text, err
 }

@@ -367,8 +367,26 @@ and all code that exists only to serve them.
     376 memories). Verified: view and interaction tests at 120×35 and
     80×24; frames rendered against the real database (search, preview,
     detail). Artboards updated: all six Memoria screens.
-  - [ ] 17d. Setup del plugin (prerrequisitos, permisos, confirmar,
+  - [x] 17d. Setup del plugin (prerrequisitos, permisos, confirmar,
     aplicando, resultado, error).
+    *Result (2026-10-02):* `internal/tui/setup.go`: four-step wizard with
+    the Stepper rail (dropped below 100 columns), a plan derived from real
+    state (marketplace add / install / update only when needed, then
+    plugin and MCP verification), one step at a time under a context
+    Ctrl+C cancels (the only key while a step mutates), progress bar,
+    log, result and failure with retry from the failed step. Backend
+    `SetupState` and `RunSetupStep` over the claude CLI. The permission
+    rules moved to `claudecli.PermissionRules` so `vgxness claude-code
+    setup` and the console print the same JSON. New check found on this
+    machine: the `vgxness` on PATH (`~/.local/bin`) is an older build
+    without `claude-code`, so the plugin's hooks would fail; Setup and
+    Diagnóstico now probe `vgxness claude-code setup` (read-only) and
+    flag it. The "test session" step of the canvas (`claude --bare -p`)
+    is not implemented: it needs an API key. Verified: tests for the
+    whole flow, failure and retry, cancellation, up-to-date and outdated
+    plugin, missing Claude Code, plugin contents vs `plugins/vgxness`;
+    real-backend frames up to the review step (nothing applied). Artboards
+    updated: all six Setup screens and both Diagnóstico screens.
   - [ ] 17e. Sync (estado, configurar, en progreso, error).
 - [ ] 16. End-to-end check on a clean machine state: install the binary, add
   the marketplace, install the plugin, save and recall memory across two

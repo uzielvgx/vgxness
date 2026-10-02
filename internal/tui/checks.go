@@ -172,7 +172,7 @@ func diagnosisSections(d Diagnosis) []diagnosisSection {
 
 	return []diagnosisSection{
 		{label: "Almacenamiento", rows: []checkRow{root, database, schema}},
-		{label: "Plugin", rows: []checkRow{binaryCheck(d.Overview), claudeCheck(d.Overview), pluginCheck(d.Overview, true)}},
+		{label: "Plugin", rows: []checkRow{binaryCheck(d.Overview), pathBinaryCheck(d.PathBinary), claudeCheck(d.Overview), pluginCheck(d.Overview, true)}},
 		{label: "Hooks y MCP", rows: []checkRow{policy, server}},
 	}
 }
@@ -184,3 +184,15 @@ const (
 )
 
 func itoa(n int) string { return thousands(n) }
+
+// pathBinaryCheck reports the vgxness Claude Code will launch.
+func pathBinaryCheck(found PathBinary) checkRow {
+	switch {
+	case found.Path == "":
+		return checkRow{state: stateError, name: "vgxness en PATH", value: "no encontrado", detail: "el plugin lo necesita para la memoria", action: "instálalo con brew install uzielvgx/tap/vgxness"}
+	case !found.SupportsPlugin:
+		return checkRow{state: stateError, name: "vgxness en PATH", value: version(found.Version), detail: displayPath(found.Path, 30) + " · versión anterior al plugin", action: "actualízalo: brew upgrade vgxness o go install github.com/uzielvgx/vgxness/cmd/vgxness@latest"}
+	default:
+		return checkRow{state: stateOK, name: "vgxness en PATH", value: version(found.Version), detail: displayPath(found.Path, 30)}
+	}
+}

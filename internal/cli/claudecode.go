@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/uzielvgx/vgxness/internal/claudecli"
 	"github.com/uzielvgx/vgxness/internal/config"
 	"github.com/uzielvgx/vgxness/internal/memory"
 )
@@ -49,29 +50,9 @@ type claudeHookSpecific struct {
 	AdditionalContext string `json:"additionalContext"`
 }
 
-// claudePermissionRules is what `vgxness claude-code setup` prints: a plugin
-// cannot ship permission rules, so the user adds these to settings.json.
-var claudePermissionRules = map[string]map[string][]string{
-	"permissions": {
-		"allow": {
-			"mcp__plugin_vgxness_memory__memory_search",
-			"mcp__plugin_vgxness_memory__memory_recent",
-			"mcp__plugin_vgxness_memory__memory_get",
-			"mcp__plugin_vgxness_memory__memory_context",
-			"mcp__plugin_vgxness_memory__memory_save",
-			"mcp__plugin_vgxness_memory__memory_session_summary",
-		},
-		"ask": {
-			"mcp__plugin_vgxness_memory__memory_update",
-			"mcp__plugin_vgxness_memory__memory_forget",
-		},
-	},
-}
-
 func runClaudeCode(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, memories MemoryRuntime) int {
 	if len(args) > 0 && args[0] == "setup" && len(args) == 1 {
-		encoded, _ := json.MarshalIndent(claudePermissionRules, "", "  ")
-		fmt.Fprintln(stdout, string(encoded))
+		fmt.Fprintln(stdout, claudecli.PermissionJSON())
 		return 0
 	}
 	if len(args) < 2 || args[0] != "hook" {

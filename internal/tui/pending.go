@@ -23,14 +23,7 @@ func (p *pendingPage) Update(msg tea.Msg) (page, tea.Cmd) {
 	return p, nil
 }
 
-func (p *pendingPage) Section() string {
-	switch p.to {
-	case routeSetup:
-		return "setup del plugin"
-	default:
-		return "sync entre equipos"
-	}
-}
+func (p *pendingPage) Section() string { return "sync entre equipos" }
 
 func (p *pendingPage) Keys() []key.Binding {
 	return []key.Binding{binding([]string{"esc"}, "Esc", "volver"), binding([]string{"q"}, "q", "salir")}

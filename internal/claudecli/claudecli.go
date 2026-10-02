@@ -221,3 +221,26 @@ func parse(version string) ([3]int, bool) {
 	}
 	return parsed, true
 }
+
+// toolPrefix is how Claude Code names the plugin's MCP tools.
+const toolPrefix = "mcp__plugin_vgxness_memory__"
+
+// PermissionRules is the settings.json block the plugin cannot ship itself:
+// reads and saves are allowed, updates and forgetting ask every time.
+func PermissionRules() map[string]map[string][]string {
+	allow := []string{"memory_search", "memory_recent", "memory_get", "memory_context", "memory_save", "memory_session_summary"}
+	ask := []string{"memory_update", "memory_forget"}
+	for index := range allow {
+		allow[index] = toolPrefix + allow[index]
+	}
+	for index := range ask {
+		ask[index] = toolPrefix + ask[index]
+	}
+	return map[string]map[string][]string{"permissions": {"allow": allow, "ask": ask}}
+}
+
+// PermissionJSON renders PermissionRules as indented JSON.
+func PermissionJSON() string {
+	encoded, _ := json.MarshalIndent(PermissionRules(), "", "  ")
+	return string(encoded)
+}
