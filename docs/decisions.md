@@ -33,3 +33,18 @@ paths and identifiers stay English. Why: brand continuity with Softbric at
 zero cost, WCAG AA inside the terminal, and one source for both the TUI and
 the docs. Alternatives discarded: a light "clear paper" console (fights most
 terminal themes) and a generic look unrelated to Softbric.
+
+## D-003 · Console layout patterns mapped to Charm v2 (2026-10-02)
+Status: active
+Context: the first canvas pass left most of the 120×35 screen empty and the
+ASCII banner used double-line glyphs that many fonts render as outlines.
+Decision: every console screen composes Header + one or two side-by-side
+panels (main + 45-column side panel) + optional fixed ActionCards row +
+KeyHelp; multi-step flows add a 28-column Stepper rail; the banner is generated
+from a 5×7 bitmap into half blocks (`▀ ▄ █`, 4 rows); modals are Lip Gloss compositor layers; progress is
+`bubbles/progress` with a `Blend1D(accent, accent-strong)` gradient; logs
+scroll in a `viewport`. The full mapping lives in `DESIGN.md` ("Mapa a Bubble
+Tea v2…") and in the design system README. Why: these are real capabilities
+of the pinned libraries (bubbletea v2.0.8, bubbles v2.1.1, lipgloss v2.0.5),
+so the design and the Go code can match one to one; single-panel screens
+wasted space and read as unfinished.
