@@ -221,9 +221,11 @@ jobs:
           context="$(printf '{"session_id":"ci","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$project" \
             | CLAUDE_PROJECT_DIR="$project" vgxness claude-code hook session-start --policy plugins/vgxness/policy/manager.md)"
           printf '%s' "$context" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart" and (.hookSpecificOutput.additionalContext | length) > 1000' > /dev/null
-          printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n' \
-            | CLAUDE_PROJECT_DIR="$project" vgxness mcp --full --workspace "$project" \
-            | head -n 1 | jq -e '.result.instructions | length > 100' > /dev/null
+          # Keep stdin open like Claude Code does: closing it right after the
+          # request ends the session before the server answers.
+          { printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n'; sleep 3; } \
+            | CLAUDE_PROJECT_DIR="$project" vgxness mcp --full --workspace "$project" > initialize.jsonl
+          head -n 1 initialize.jsonl | jq -e '.result.instructions | length > 100' > /dev/null
       - name: Headless plugin load smoke (needs ANTHROPIC_API_KEY)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

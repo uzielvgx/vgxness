@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -14,24 +15,27 @@ import (
 )
 
 func TestVersionUsesLightweightPathWithoutWorkingDirectory(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "gone")
-	if err := os.Mkdir(missing, 0o755); err != nil {
-		t.Fatal(err)
+	if goruntime.GOOS == "windows" {
+		t.Skip("Windows prevents removing the active working directory")
 	}
 	original, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chdir(missing); err != nil {
+	directory := t.TempDir()
+	if err := os.Chdir(directory); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = os.Chdir(original) }()
-	if err := os.Remove(missing); err != nil {
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	if err := os.Remove(directory); err != nil {
 		t.Fatal(err)
 	}
-	var out, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"version"}, strings.NewReader(""), &out, &stderr)
-	testutil.Require(t, code == 0 && strings.Contains(out.String(), "version=") && stderr.Len() == 0, "code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"version"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 || !strings.HasPrefix(stdout.String(), "version=dev\ncommit=unknown\ndate=unknown\n") || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
 }
 
 func TestRunDispatchesMCPWithWorkingDirectoryAsWorkspace(t *testing.T) {
