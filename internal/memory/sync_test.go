@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/uzielvgx/vgxness/internal/syncapi"
 	"github.com/uzielvgx/vgxness/internal/syncservice"
 	"github.com/uzielvgx/vgxness/internal/testutil"
 )
@@ -1464,14 +1463,8 @@ func TestPendingProjectRepairBlocksEveryPullApplyAndGlobalPreflight(t *testing.T
 	testutil.NoError(t, err)
 	history := "550e8400-e29b-41d4-a716-446655440312"
 	ordinary := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440313", "remote"))}}
-	conflictMutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "remote", nil)
-	conflictMutation.MutationID = "550e8400-e29b-41d4-a716-446655440314"
-	conflict := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440315", conflictMutation)
 	for name, apply := range map[string]func() error{
 		"ordinary": func() error { return store.ApplyPulledPage(context.Background(), ordinary, nil) },
-		"own conflict": func() error {
-			return store.applyOwnConflictPage(context.Background(), syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{conflict}}, conflictMutation.MutationID)
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := apply()
@@ -1484,26 +1477,12 @@ func TestPendingProjectRepairBlocksEveryPullApplyAndGlobalPreflight(t *testing.T
 			testutil.Require(t, errors.Is(err, ErrSyncProjectRepairPending) && remote == 0 && inbox == 0 && cursor == 0 && conflicts == 0 && receipts == 1, "err=%v rows=%d/%d/%d/%d/%d", err, remote, inbox, cursor, conflicts, receipts)
 		})
 	}
-	remote := &bootstrapFake{}
-	for name, call := range map[string]func() error{
-		"bootstrap": func() error { return store.BootstrapSync(context.Background(), remote) },
-		"own bootstrap": func() error {
-			return store.BootstrapOwnConflict(context.Background(), remote, conflictMutation.MutationID)
-		},
-		"resolution pull": func() error { return store.PullConflictResolutions(context.Background(), remote) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			beforeDiscover, beforePull := remote.discovers, remote.pulls
-			err := call()
-			testutil.Require(t, errors.Is(err, ErrSyncProjectRepairPending) && remote.discovers == beforeDiscover && remote.pulls == beforePull, "err=%v calls=%d/%d", err, remote.discovers, remote.pulls)
-		})
-	}
 }
 
 func TestApplySyncPushResultAllowsOtherProjectDuringPendingRepair(t *testing.T) {
 	store, project, portable, _ := seededProjectRepair(t, 1, 1)
 	dependent := enqueueOtherRepairIndependent(t, store)
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == dependent, "claims=%+v err=%v", claims, err)
 	_, err = store.RepairBoundProjectCreate(context.Background(), portable, project, true)
 	testutil.NoError(t, err)
@@ -1518,7 +1497,7 @@ func TestApplySyncPushResultAllowsOtherProjectDuringPendingRepair(t *testing.T) 
 func TestRetryAllowsOtherProjectAndExactRepair(t *testing.T) {
 	store, project, portable, _ := seededProjectRepair(t, 1, 1)
 	dependent := enqueueOtherRepairIndependent(t, store)
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == dependent, "claims=%+v err=%v", claims, err)
 	_, err = store.RepairBoundProjectCreate(context.Background(), portable, project, true)
 	testutil.NoError(t, err)
@@ -1539,7 +1518,7 @@ func TestRetryAllowsOtherProjectAndExactRepair(t *testing.T) {
 func TestPendingRepairGloballyClaimsOnlyLedgerQualifiedRepairAndBlocksRenewal(t *testing.T) {
 	store, project, portable, _ := seededProjectRepair(t, 1, 1)
 	enqueueOtherRepairIndependent(t, store)
-	preclaimed, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	preclaimed, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(preclaimed) == 1 && preclaimed[0].Mutation.RecordID == "other-session", "claims=%+v err=%v", preclaimed, err)
 	_, err = store.RepairBoundProjectCreate(context.Background(), portable, project, true)
 	testutil.NoError(t, err)
@@ -1550,7 +1529,7 @@ func TestPendingRepairGloballyClaimsOnlyLedgerQualifiedRepairAndBlocksRenewal(t 
 	_, err = store.enqueueSyncOutbox(context.Background(), tx, syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440307", RecordID: "other-session-2", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, BaseVersion: 0, Session: &syncservice.Session{ID: "other-session-2", ProjectID: "other"}})
 	testutil.NoError(t, err)
 	testutil.NoError(t, tx.Commit())
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == project, "global claims=%+v err=%v", claims, err)
 	other, err := store.ClaimDueSyncOutboxForProject(context.Background(), time.Minute, 1, "other")
 	testutil.Require(t, err == nil && len(other) == 1 && other[0].Mutation.RecordID == "other-session-2", "other claims=%+v err=%v", other, err)
@@ -1565,7 +1544,7 @@ func TestPendingRepairGloballyClaimsOnlyLedgerQualifiedRepairAndBlocksRenewal(t 
 	_, err = store.enqueueSyncOutbox(context.Background(), tx, syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440309", RecordID: "other-session-3", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "other-session-3", ProjectID: "other"}})
 	testutil.NoError(t, err)
 	testutil.NoError(t, tx.Commit())
-	claims, err = store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err = store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 0, "corrupt-ledger claims=%+v err=%v", claims, err)
 }
 
@@ -1596,7 +1575,7 @@ func TestPendingRepairBlocksSameProjectClaimActions(t *testing.T) {
 func TestRepairBoundProjectCreateRejectsActiveNonRepairClaim(t *testing.T) {
 	store, project, portable, _ := seededProjectRepair(t, 1, 1)
 	dependent := enqueueRepairDependent(t, store, project)
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == dependent, "claims=%+v err=%v", claims, err)
 	result, err := store.RepairBoundProjectCreate(context.Background(), portable, project, true)
 	var repairs, outbox int
@@ -1973,7 +1952,7 @@ func TestApplySyncPushResultCompletesClaimAndRebasesLatest(t *testing.T) {
 	latest := syncMutation("550e8400-e29b-41d4-a716-446655440071", "project")
 	enqueueMutation(t, store, first)
 	enqueueMutation(t, store, latest)
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
 	seq := int64(1)
 	result := syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &seq, Version: 1}
@@ -1994,39 +1973,6 @@ func TestApplySyncPushResultCompletesClaimAndRebasesLatest(t *testing.T) {
 	testutil.NoError(t, store.ApplySyncPushResult(context.Background(), first.MutationID, claims[0].ClaimToken, result))
 }
 
-func TestPendingOwnConflictReceiptsAreBoundedAndSkipMaterialized(t *testing.T) {
-	store := openTestStore(t)
-	store.now = func() time.Time { return fixedTime }
-	_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,1)`, fixedTime.UnixNano(), fixedTime.UnixNano())
-	testutil.NoError(t, err)
-	first := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
-	first.MutationID = "550e8400-e29b-41d4-a716-4466554400a1"
-	later := first
-	later.MutationID = "550e8400-e29b-41d4-a716-4466554400a2"
-	enqueueMutation(t, store, first)
-	enqueueMutation(t, store, later)
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
-	testutil.NoError(t, err)
-	_, err = store.db.Exec(`UPDATE observations SET sync_version=2 WHERE id='record'`)
-	testutil.NoError(t, err)
-	sequence := int64(1)
-	testutil.NoError(t, store.ApplySyncPushResult(context.Background(), first.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionConflict, Sequence: &sequence, Version: 2}))
-	ids, err := store.PendingOwnConflictReceipts(context.Background())
-	testutil.Require(t, err == nil && len(ids) == 1 && ids[0] == first.MutationID, "ids=%v err=%v", ids, err)
-	_, err = store.db.Exec(`INSERT INTO sync_conflicts(conflict_id,history_id,created_seq,record_kind,record_id,canonical_version,competing_version_id,status,resolved_seq,payload_version,snapshot,created_at,updated_at) VALUES('550e8400-e29b-41d4-a716-4466554400a3','550e8400-e29b-41d4-a716-4466554400a4',1,'observation','record',2,?,'unresolved',NULL,1,X'7B7D',?,?)`, first.MutationID, fixedTime.UnixNano(), fixedTime.UnixNano())
-	testutil.NoError(t, err)
-	ids, err = store.PendingOwnConflictReceipts(context.Background())
-	testutil.Require(t, err == nil && len(ids) == 0, "materialized ids=%v err=%v", ids, err)
-	_, err = store.db.Exec(`UPDATE sync_conflicts SET status='resolved',resolved_seq=2`)
-	testutil.NoError(t, err)
-	ids, err = store.PendingOwnConflictReceipts(context.Background())
-	testutil.Require(t, err == nil && len(ids) == 0, "resolved ids=%v err=%v", ids, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err = store.PendingOwnConflictReceipts(ctx)
-	testutil.Require(t, errors.Is(err, context.Canceled), "cancellation err=%v", err)
-}
-
 func TestApplySyncPushResultRetriesWithAdvancingClock(t *testing.T) {
 	store := openTestStore(t)
 	store.now = func() time.Time { return fixedTime }
@@ -2036,7 +1982,7 @@ func TestApplySyncPushResultRetriesWithAdvancingClock(t *testing.T) {
 	}())
 	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440081", "project")
 	enqueueMutation(t, store, mutation)
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
 
 	now := fixedTime
@@ -2065,14 +2011,14 @@ func TestSyncOutboxClaimRetryApplyContract(t *testing.T) {
 	mutation := syncMutation("550e8400-e29b-41d4-a716-4466554400d1", "project")
 	enqueueMutation(t, store, mutation)
 
-	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].State == SyncOutboxPending && claims[0].Attempts == 0 && claims[0].LastErrorCode == "", "pending claims=%+v err=%v", claims, err)
 	first := claims[0]
 	next := now.Add(time.Second)
 	testutil.NoError(t, store.MarkSyncOutboxRetry(ctx, mutation.MutationID, first.ClaimToken, next, "transport"))
 
 	now = next
-	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err = store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].State == SyncOutboxRetry && claims[0].Attempts == 1 && claims[0].LastErrorCode == "transport" && claims[0].FirstClaimToken == first.FirstClaimToken && claims[0].ClaimToken != first.ClaimToken, "retry claims=%+v err=%v", claims, err)
 	retry := claims[0]
 	testutil.Require(t, errors.Is(store.MarkSyncOutboxRetry(ctx, mutation.MutationID, first.ClaimToken, now.Add(time.Second), "transport"), ErrNotFound), "stale claim retry accepted")
@@ -2097,12 +2043,12 @@ func TestApplySyncPushResultRebasesArchivedCreateAsArchive(t *testing.T) {
 	_, err := store.Forget(ctx, item.ID, item.Project, item.Scope)
 	testutil.NoError(t, err)
 
-	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordKind == syncservice.RecordKindProject, "project claim=%+v err=%v", claims, err)
 	projectSequence := int64(1)
 	testutil.NoError(t, store.ApplySyncPushResult(ctx, claims[0].Mutation.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: claims[0].Mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &projectSequence, Version: 1}))
 
-	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err = store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordKind == syncservice.RecordKindObservation && claims[0].Mutation.RecordID == item.ID && claims[0].Mutation.Kind == syncservice.MutationCreate, "observation claim=%+v err=%v", claims, err)
 	observationSequence := int64(2)
 	testutil.NoError(t, store.ApplySyncPushResult(ctx, claims[0].Mutation.MutationID, claims[0].ClaimToken, syncservice.Result{MutationID: claims[0].Mutation.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &observationSequence, Version: 1}))
@@ -2129,7 +2075,7 @@ func TestApplySyncPushResultReceiptCollisionsAndEnqueueIDCollision(t *testing.T)
 	}())
 	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440073", "project")
 	enqueueMutation(t, store, mutation)
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
 	hash, err := syncMutationHash(mutation)
 	testutil.NoError(t, err)
@@ -2156,14 +2102,14 @@ func TestOwnPulledReceiptsAdvanceWithoutOverwriteAndMaterializeConflict(t *testi
 		}())
 		first := syncMutation("550e8400-e29b-41d4-a716-446655440076", "project")
 		enqueueMutation(t, store, first)
-		claim, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+		claim, err := store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 		testutil.Require(t, err == nil && len(claim) == 1, "claim=%+v err=%v", claim, err)
 		seq := int64(1)
 		testutil.NoError(t, store.ApplySyncPushResult(ctx, first.MutationID, claim[0].ClaimToken, syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &seq, Version: 1}))
 		testutil.NoError(t, store.ApplyPulledChange(ctx, history, pulledChange(t, 1, 1, first)))
 		tombstone := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440077", RecordID: "record", RecordKind: syncservice.RecordKindObservation, Kind: syncservice.MutationTombstone, BaseVersion: 1, Tombstone: &syncservice.Tombstone{DeletedAt: fixedTime}}
 		enqueueMutation(t, store, tombstone)
-		claim, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+		claim, err = store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 		testutil.Require(t, err == nil && len(claim) == 1, "claim=%+v err=%v", claim, err)
 		seq = 2
 		testutil.NoError(t, store.ApplySyncPushResult(ctx, tombstone.MutationID, claim[0].ClaimToken, syncservice.Result{MutationID: tombstone.MutationID, Disposition: syncservice.DispositionAccepted, Sequence: &seq, Version: 2}))
@@ -2185,7 +2131,7 @@ func TestOwnPulledReceiptsAdvanceWithoutOverwriteAndMaterializeConflict(t *testi
 		later.MutationID = "550e8400-e29b-41d4-a716-446655440079"
 		enqueueMutation(t, store, first)
 		enqueueMutation(t, store, later)
-		claim, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+		claim, err := store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 		testutil.Require(t, err == nil && len(claim) == 1, "claim=%+v err=%v", claim, err)
 		_, err = store.db.Exec(`UPDATE observations SET sync_version=2 WHERE id='record'`)
 		testutil.NoError(t, err)
@@ -2199,173 +2145,6 @@ func TestOwnPulledReceiptsAdvanceWithoutOverwriteAndMaterializeConflict(t *testi
 		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE mutation_id=?`, later.MutationID).Scan(&pending))
 		testutil.Require(t, state == string(StateNeedsReview) && pending == 1, "state=%q pending=%d", state, pending)
 	})
-}
-
-func TestBootstrapOwnConflictMaterializesAndBlocksLaterWorkUntilResolved(t *testing.T) {
-	ctx := context.Background()
-	history := "550e8400-e29b-41d4-a716-446655440081"
-	store := openTestStore(t)
-	store.now = func() time.Time { return fixedTime }
-	testutil.NoError(t, func() error {
-		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,1)`, fixedTime.UnixNano(), fixedTime.UnixNano())
-		return err
-	}())
-	first := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
-	first.MutationID = "550e8400-e29b-41d4-a716-446655440082"
-	later := first
-	later.MutationID = "550e8400-e29b-41d4-a716-446655440083"
-	later.Observation.Content = "later"
-	enqueueMutation(t, store, first)
-	enqueueMutation(t, store, later)
-	claim, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
-	testutil.Require(t, err == nil && len(claim) == 1, "claim=%+v err=%v", claim, err)
-	testutil.NoError(t, func() error {
-		_, err := store.db.Exec(`UPDATE observations SET sync_version=2 WHERE id='record'`)
-		return err
-	}())
-	sequence := int64(1)
-	testutil.NoError(t, store.ApplySyncPushResult(ctx, first.MutationID, claim[0].ClaimToken, syncservice.Result{MutationID: first.MutationID, Disposition: syncservice.DispositionConflict, Sequence: &sequence, Version: 2}))
-	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
-	testutil.Require(t, err == nil && len(claims) == 0, "pre-bootstrap claims=%+v err=%v", claims, err)
-	conflict := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440084", first)
-	discovery := syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
-	remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{conflict}}}}
-	testutil.Require(t, errors.Is(store.BootstrapSync(ctx, remote), ErrConflict) && remote.discovers == 0, "ordinary bootstrap calls=%d", remote.discovers)
-	testutil.NoError(t, store.BootstrapOwnConflict(ctx, remote, first.MutationID))
-	var conflicts, inbox, cursor, outbox int
-	var base int64
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&conflicts))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.NoError(t, store.db.QueryRow(`SELECT base_version FROM sync_outbox WHERE mutation_id=?`, later.MutationID).Scan(&base))
-	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
-	testutil.Require(t, err == nil && len(claims) == 0, "unresolved claims=%+v err=%v", claims, err)
-	testutil.Require(t, conflicts == 1 && inbox == 1 && cursor == 1 && outbox == 1 && base == 2, "rows=%d/%d/%d/%d base=%d", conflicts, inbox, cursor, outbox, base)
-	winner := pulledObservationMutation("record", syncservice.MutationResolve, 2, syncservice.LifecycleActive, "winner", nil)
-	winner.Observation, winner.Resolution = nil, &syncservice.Resolution{ConflictIDs: []string{conflict.ConflictID}, Observation: pulledObservationMutation("record", syncservice.MutationUpdate, 2, syncservice.LifecycleActive, "winner", nil).Observation}
-	resolution := specialChange(t, 2, 3, syncservice.ChangeDispositionAccepted, "", winner)
-	testutil.NoError(t, store.PullConflictResolutions(ctx, &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{resolution}}}}))
-	var phase string
-	var payload []byte
-	var checkpoint BootstrapCheckpoint
-	testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
-	testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-	testutil.Require(t, phase == "complete" && checkpoint.Position == 2 && checkpoint.Watermark == 2, "checkpoint=%q/%+v", phase, checkpoint)
-	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
-	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.MutationID == later.MutationID, "resolved claims=%+v err=%v", claims, err)
-}
-
-func TestPullConflictResolutionsPrefixAndFailureSafety(t *testing.T) {
-	setup := func(t *testing.T) (*Store, string, string, syncservice.Mutation) {
-		t.Helper()
-		store := openTestStore(t)
-		store.now = func() time.Time { return fixedTime }
-		history, conflictID := "550e8400-e29b-41d4-a716-4466554400b1", "550e8400-e29b-41d4-a716-4466554400b2"
-		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2)`, fixedTime.UnixNano(), fixedTime.UnixNano())
-		testutil.NoError(t, err)
-		_, err = store.db.Exec(`INSERT INTO sync_conflicts(conflict_id,history_id,created_seq,record_kind,record_id,canonical_version,competing_version_id,status,resolved_seq,payload_version,snapshot,created_at,updated_at) VALUES(?,?,1,'observation','record',2,'550e8400-e29b-41d4-a716-4466554400b3','unresolved',NULL,1,X'7B7D',?,?)`, conflictID, history, fixedTime.UnixNano(), fixedTime.UnixNano())
-		testutil.NoError(t, err)
-		winner := pulledObservationMutation("record", syncservice.MutationResolve, 2, syncservice.LifecycleActive, "winner", nil)
-		winner.Observation, winner.Resolution = nil, &syncservice.Resolution{ConflictIDs: []string{conflictID}, Observation: pulledObservationMutation("record", syncservice.MutationUpdate, 2, syncservice.LifecycleActive, "winner", nil).Observation}
-		return store, history, conflictID, winner
-	}
-	page := func(history string, position, watermark int64, changes ...syncservice.Change) syncservice.PullPage {
-		return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: position, Watermark: watermark}, HasMore: position < watermark, Changes: changes}
-	}
-	t.Run("safe prefix resumes without skipping", func(t *testing.T) {
-		store, history, conflictID, winner := setup(t)
-		block := syncMutation("550e8400-e29b-41d4-a716-4466554400b4", "blocked")
-		enqueueMutation(t, store, block)
-		prefix := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-4466554400b5", "prefix"))
-		blocked := pulledChange(t, 2, 1, block)
-		remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{page(history, 2, 3, prefix, blocked)}}
-		err := store.PullConflictResolutions(context.Background(), remote)
-		var cursor, inbox, unresolved, outbox int
-		var phase string
-		var checkpoint BootstrapCheckpoint
-		var payload []byte
-		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&unresolved))
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox WHERE mutation_id=?`, block.MutationID).Scan(&outbox))
-		testutil.NoError(t, store.db.QueryRow(`SELECT checkpoint FROM sync_bootstrap`).Scan(&payload))
-		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-		testutil.Require(t, errors.Is(err, ErrConflict) && cursor == 1 && inbox == 1 && unresolved == 1 && outbox == 1 && checkpoint.Position == 1 && checkpoint.Watermark == 3, "err=%v rows=%d/%d/%d/%d checkpoint=%+v", err, cursor, inbox, unresolved, outbox, checkpoint)
-		regression := pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-4466554400bc", "regression"))
-		err = store.PullConflictResolutions(context.Background(), &bootstrapFake{discovery: remote.discovery, pages: []syncservice.PullPage{page(history, 2, 2, regression)}})
-		testutil.Require(t, errors.Is(err, ErrConflict), "watermark regression error=%v", err)
-		var projects int
-		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&projects))
-		testutil.NoError(t, store.db.QueryRow(`SELECT checkpoint FROM sync_bootstrap`).Scan(&payload))
-		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-		testutil.Require(t, cursor == 1 && inbox == 1 && projects == 2 && checkpoint.Position == 1 && checkpoint.Watermark == 3, "regression cursor=%d inbox=%d projects=%d checkpoint=%+v", cursor, inbox, projects, checkpoint)
-		testutil.NoError(t, func() error {
-			_, err := store.db.Exec(`DELETE FROM sync_outbox WHERE mutation_id=?`, block.MutationID)
-			return err
-		}())
-		resolve := specialChange(t, 3, 3, syncservice.ChangeDispositionAccepted, "", winner)
-		remote = &bootstrapFake{discovery: remote.discovery, pages: []syncservice.PullPage{page(history, 3, 4, blocked, resolve)}}
-		testutil.NoError(t, store.PullConflictResolutions(context.Background(), remote))
-		testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
-		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-		testutil.Require(t, remote.cursors[0].HistoryID == history && remote.cursors[0].Position == 1 && phase == "observations" && checkpoint.Position == 3 && checkpoint.Watermark == 4 && conflictID != "", "cursor=%+v checkpoint=%q/%+v", remote.cursors, phase, checkpoint)
-	})
-	t.Run("complete checkpoint advances to observations prefix", func(t *testing.T) {
-		store, history, _, _ := setup(t)
-		initial := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-4466554400b9", "initial"))
-		testutil.NoError(t, store.ApplyPulledPage(context.Background(), page(history, 1, 1, initial), &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 1, Phase: "complete"}))
-		block := syncMutation("550e8400-e29b-41d4-a716-4466554400ba", "blocked")
-		enqueueMutation(t, store, block)
-		prefix := pulledChange(t, 2, 1, syncMutation("550e8400-e29b-41d4-a716-4466554400bb", "prefix"))
-		err := store.PullConflictResolutions(context.Background(), &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{page(history, 3, 3, prefix, pulledChange(t, 3, 1, block))}})
-		var cursor int64
-		var phase string
-		var payload []byte
-		var checkpoint BootstrapCheckpoint
-		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
-		testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
-		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-		testutil.Require(t, errors.Is(err, ErrConflict) && cursor == 2 && phase == "observations" && checkpoint.Position == 2 && checkpoint.Watermark == 3, "err=%v cursor=%d checkpoint=%q/%+v", err, cursor, phase, checkpoint)
-	})
-	for name, prepare := range map[string]func(*Store, syncservice.Mutation) (syncservice.PullPage, context.Context){
-		"blocker before resolution": func(store *Store, winner syncservice.Mutation) (syncservice.PullPage, context.Context) {
-			block := syncMutation("550e8400-e29b-41d4-a716-4466554400b6", "blocked")
-			enqueueMutation(t, store, block)
-			return page("550e8400-e29b-41d4-a716-4466554400b1", 2, 2, pulledChange(t, 1, 1, block), specialChange(t, 2, 3, syncservice.ChangeDispositionAccepted, "", winner)), context.Background()
-		},
-		"invalid resolution rolls back": func(store *Store, winner syncservice.Mutation) (syncservice.PullPage, context.Context) {
-			later := pulledObservationMutation("record", syncservice.MutationUpdate, 2, syncservice.LifecycleActive, "later", nil)
-			later.MutationID = "550e8400-e29b-41d4-a716-4466554400b8"
-			enqueueMutation(t, store, later)
-			winner.Resolution.ConflictIDs = []string{"550e8400-e29b-41d4-a716-4466554400b7"}
-			return page("550e8400-e29b-41d4-a716-4466554400b1", 1, 1, specialChange(t, 1, 3, syncservice.ChangeDispositionAccepted, "", winner)), context.Background()
-		},
-		"cancellation rolls back": func(_ *Store, winner syncservice.Mutation) (syncservice.PullPage, context.Context) {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-			return page("550e8400-e29b-41d4-a716-4466554400b1", 1, 1, specialChange(t, 1, 3, syncservice.ChangeDispositionAccepted, "", winner)), ctx
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			store, history, _, winner := setup(t)
-			pulled, ctx := prepare(store, winner)
-			err := store.PullConflictResolutions(ctx, &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{pulled}})
-			var conflicts, inbox, cursor, checkpoint int
-			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&conflicts))
-			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
-			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_bootstrap`).Scan(&checkpoint))
-			testutil.Require(t, (errors.Is(err, ErrConflict) || errors.Is(err, context.Canceled)) && conflicts == 1 && inbox == 0 && cursor == 0 && checkpoint == 0, "err=%v rows=%d/%d/%d/%d", err, conflicts, inbox, cursor, checkpoint)
-			if name == "invalid resolution rolls back" {
-				var base int64
-				testutil.NoError(t, store.db.QueryRow(`SELECT base_version FROM sync_outbox WHERE mutation_id='550e8400-e29b-41d4-a716-4466554400b8'`).Scan(&base))
-				testutil.Require(t, base == 2, "rebased outbox base=%d", base)
-			}
-		})
-	}
 }
 
 func TestRebasePendingConflictOutboxConvertsArchivedCreateToArchive(t *testing.T) {
@@ -2384,231 +2163,6 @@ func TestRebasePendingConflictOutboxConvertsArchivedCreateToArchive(t *testing.T
 	var rebased syncservice.Mutation
 	testutil.NoError(t, json.Unmarshal(payload, &rebased))
 	testutil.Require(t, kind == string(syncservice.MutationArchive) && rebased.Kind == syncservice.MutationArchive && rebased.BaseVersion == 2, "rebased=%q/%+v", kind, rebased)
-}
-
-func insertConflictReceipt(t *testing.T, store *Store, mutation syncservice.Mutation, sequence, version int64, hash []byte) {
-	t.Helper()
-	if hash == nil {
-		var err error
-		hash, err = syncMutationHash(mutation)
-		testutil.NoError(t, err)
-	}
-	_, err := store.db.Exec(`INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at) VALUES(?,'conflict',0,'',?,?,?,?,?,?,?,?)`, mutation.MutationID, sequence, version, mutation.RecordKind, mutation.RecordID, mutation.Kind, mutation.BaseVersion, hash, fixedTime.UnixNano())
-	testutil.NoError(t, err)
-}
-
-func TestBootstrapOwnConflictFailsClosedOnReceiptMismatchOrAbsentTarget(t *testing.T) {
-	ctx := context.Background()
-	history := "550e8400-e29b-41d4-a716-446655440088"
-	for name, mutate := range map[string]func(*syncservice.Change, *Store){
-		"forged hash": func(_ *syncservice.Change, store *Store) {
-			_, err := store.db.Exec(`UPDATE sync_push_results SET mutation_hash=zeroblob(32)`)
-			testutil.NoError(t, err)
-		},
-		"wrong sequence": func(_ *syncservice.Change, store *Store) {
-			_, err := store.db.Exec(`UPDATE sync_push_results SET sequence=2`)
-			testutil.NoError(t, err)
-		},
-		"wrong record": func(_ *syncservice.Change, store *Store) {
-			_, err := store.db.Exec(`UPDATE sync_push_results SET record_id='other'`)
-			testutil.NoError(t, err)
-		},
-		"wrong version": func(_ *syncservice.Change, store *Store) {
-			_, err := store.db.Exec(`UPDATE sync_push_results SET canonical_version=3`)
-			testutil.NoError(t, err)
-		},
-		"wrong disposition": func(_ *syncservice.Change, store *Store) {
-			_, err := store.db.Exec(`UPDATE sync_push_results SET disposition='accepted'`)
-			testutil.NoError(t, err)
-		},
-		"target absent": func(change *syncservice.Change, _ *Store) {
-			change.Mutation.MutationID = "550e8400-e29b-41d4-a716-446655440089"
-			change.ChangeHash, _ = syncservice.CanonicalChangeHash(*change)
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			store := openTestStore(t)
-			store.now = func() time.Time { return fixedTime }
-			testutil.NoError(t, func() error {
-				_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2)`, fixedTime.UnixNano(), fixedTime.UnixNano())
-				return err
-			}())
-			mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
-			mutation.MutationID = "550e8400-e29b-41d4-a716-446655440090"
-			insertConflictReceipt(t, store, mutation, 1, 2, nil)
-			change := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440091", mutation)
-			mutate(&change, store)
-			remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{change}}}}
-			err := store.BootstrapOwnConflict(ctx, remote, mutation.MutationID)
-			var inbox, cursor, conflicts int
-			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
-			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
-			testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0 && conflicts == 0, "err=%v rows=%d/%d/%d", err, inbox, cursor, conflicts)
-		})
-	}
-}
-
-func TestBootstrapOwnConflictRejectsUnrelatedPendingBeforeTargetWithoutWrites(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t)
-	target := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
-	target.MutationID = "550e8400-e29b-41d4-a716-446655440092"
-	insertConflictReceipt(t, store, target, 2, 2, nil)
-	pending := syncMutation("550e8400-e29b-41d4-a716-446655440093", "other")
-	enqueueMutation(t, store, pending)
-	first := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440094", "other"))
-	conflict := specialChange(t, 2, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440095", target)
-	history := "550e8400-e29b-41d4-a716-446655440096"
-	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{first, conflict}}}}
-	err := store.BootstrapOwnConflict(ctx, remote, target.MutationID)
-	var inbox, cursor, conflicts, outbox int
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
-	testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0 && conflicts == 0 && outbox == 1, "err=%v rows=%d/%d/%d/%d", err, inbox, cursor, conflicts, outbox)
-}
-
-func TestBootstrapOwnConflictApplyFailureRollsBackConflictCursorAndRebase(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t)
-	store.now = func() time.Time { return fixedTime }
-	testutil.NoError(t, func() error {
-		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2); CREATE TRIGGER fail_conflict BEFORE INSERT ON sync_conflicts BEGIN SELECT RAISE(ABORT, 'test'); END`, fixedTime.UnixNano(), fixedTime.UnixNano())
-		return err
-	}())
-	first := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "first", nil)
-	first.MutationID = "550e8400-e29b-41d4-a716-446655440097"
-	later := first
-	later.MutationID = "550e8400-e29b-41d4-a716-446655440098"
-	enqueueMutation(t, store, later)
-	insertConflictReceipt(t, store, first, 1, 2, nil)
-	conflict := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440099", first)
-	history := "550e8400-e29b-41d4-a716-446655440100"
-	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{conflict}}}}
-	err := store.BootstrapOwnConflict(ctx, remote, first.MutationID)
-	var inbox, cursor, conflicts int
-	var base int64
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
-	testutil.NoError(t, store.db.QueryRow(`SELECT base_version FROM sync_outbox WHERE mutation_id=?`, later.MutationID).Scan(&base))
-	testutil.Require(t, errors.Is(err, ErrCorrupt) && inbox == 0 && cursor == 0 && conflicts == 0 && base == 1, "err=%v rows=%d/%d/%d base=%d", err, inbox, cursor, conflicts, base)
-}
-
-func TestBootstrapOwnConflictCancellationBeforeApplyLeavesNoDurableState(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store := openTestStore(t)
-	mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
-	mutation.MutationID = "550e8400-e29b-41d4-a716-446655440101"
-	insertConflictReceipt(t, store, mutation, 1, 2, nil)
-	change := specialChange(t, 1, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440102", mutation)
-	history := "550e8400-e29b-41d4-a716-446655440103"
-	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}, Changes: []syncservice.Change{change}}}, pullProbe: func() error { cancel(); return nil }}
-	err := store.BootstrapOwnConflict(ctx, remote, mutation.MutationID)
-	var inbox, cursor, conflicts int
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
-	testutil.Require(t, errors.Is(err, context.Canceled) && inbox == 0 && cursor == 0 && conflicts == 0, "err=%v rows=%d/%d/%d", err, inbox, cursor, conflicts)
-}
-
-func TestBootstrapOwnConflictResumesAndUpsertsExistingCheckpoint(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t)
-	store.now = func() time.Time { return fixedTime }
-	history := "550e8400-e29b-41d4-a716-446655440104"
-	project := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440105", "project"))
-	first := syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, HasMore: true, Changes: []syncservice.Change{project}}
-	testutil.NoError(t, store.ApplyPulledPage(ctx, first, &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 2, Phase: "projects"}))
-	testutil.NoError(t, func() error {
-		_, err := store.db.Exec(`INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2)`, fixedTime.UnixNano(), fixedTime.UnixNano())
-		return err
-	}())
-	mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
-	mutation.MutationID = "550e8400-e29b-41d4-a716-446655440106"
-	insertConflictReceipt(t, store, mutation, 2, 2, nil)
-	conflict := specialChange(t, 2, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440107", mutation)
-	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{conflict}}}}
-	testutil.NoError(t, store.BootstrapOwnConflict(ctx, remote, mutation.MutationID))
-	var phase string
-	var checkpoint BootstrapCheckpoint
-	var payload []byte
-	testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
-	testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-	testutil.Require(t, phase == "complete" && checkpoint.Position == 2 && checkpoint.Watermark == 2 && remote.cursors[0] == (syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}), "phase=%q checkpoint=%+v cursor=%+v", phase, checkpoint, remote.cursors)
-}
-
-func TestBootstrapOwnConflictRejectsMissingAndNonConflictReceiptsBeforeNetwork(t *testing.T) {
-	ctx := context.Background()
-	discovery := syncservice.Discovery{ProtocolVersion: 1, HistoryID: "550e8400-e29b-41d4-a716-446655440085", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
-	for name, setup := range map[string]func(*Store){
-		"missing": func(*Store) {},
-		"non-conflict": func(store *Store) {
-			_, err := store.db.Exec(`INSERT INTO sync_push_results(mutation_id,disposition,retryable,code,sequence,canonical_version,record_kind,record_id,mutation_kind,base_version,mutation_hash,completed_at) VALUES(?,'accepted',0,'',1,1,'project','record','create',0,zeroblob(32),?)`, "550e8400-e29b-41d4-a716-446655440086", fixedTime.UnixNano())
-			testutil.NoError(t, err)
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			store := openTestStore(t)
-			setup(store)
-			remote := &bootstrapFake{discovery: discovery}
-			err := store.BootstrapOwnConflict(ctx, remote, "550e8400-e29b-41d4-a716-446655440086")
-			testutil.Require(t, errors.Is(err, ErrNotFound) || errors.Is(err, ErrConflict), "err=%v", err)
-			testutil.Require(t, remote.discovers == 0 && remote.pulls == 0, "network calls=%d/%d", remote.discovers, remote.pulls)
-		})
-	}
-}
-
-func TestBootstrapOwnConflictRejectsEmptyEOFAtTargetWithoutWrites(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t)
-	mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
-	mutation.MutationID = "550e8400-e29b-41d4-a716-446655440108"
-	insertConflictReceipt(t, store, mutation, 1, 2, nil)
-	history := "550e8400-e29b-41d4-a716-446655440109"
-	remote := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 1}}}}
-	err := store.BootstrapOwnConflict(ctx, remote, mutation.MutationID)
-	var inbox, cursor, checkpoint, conflicts int
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_bootstrap`).Scan(&checkpoint))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts`).Scan(&conflicts))
-	testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0 && checkpoint == 0 && conflicts == 0, "err=%v rows=%d/%d/%d/%d", err, inbox, cursor, checkpoint, conflicts)
-}
-
-func TestBootstrapOwnConflictCheckpointsPrefixBeforeTargetAndResumes(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t)
-	store.now = func() time.Time { return fixedTime }
-	testutil.NoError(t, func() error {
-		_, err := store.db.Exec(`INSERT INTO projects(id,sync_version) VALUES('project',1); INSERT INTO observations(id,project_id,scope,type,content,producer,state,created_at,updated_at,sync_version) VALUES('record','project','project','learning','local','test','active',?,?,2)`, fixedTime.UnixNano(), fixedTime.UnixNano())
-		return err
-	}())
-	history := "550e8400-e29b-41d4-a716-446655440110"
-	target := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "target", nil)
-	target.MutationID = "550e8400-e29b-41d4-a716-446655440111"
-	insertConflictReceipt(t, store, target, 2, 2, nil)
-	prefix := pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440112", "prefix-project"))
-	conflict := specialChange(t, 2, 2, syncservice.ChangeDispositionConflict, "550e8400-e29b-41d4-a716-446655440113", target)
-	discovery := syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
-	interrupted := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}, HasMore: true, Changes: []syncservice.Change{prefix}}}, errAt: 2}
-	testutil.Require(t, interrupted != nil && store.BootstrapOwnConflict(ctx, interrupted, target.MutationID) != nil, "bootstrap unexpectedly completed")
-	var checkpoint BootstrapCheckpoint
-	var phase string
-	var payload []byte
-	testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
-	testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-	testutil.Require(t, phase == "observations" && checkpoint.Position == 1 && checkpoint.Watermark == 2, "checkpoint=%q/%+v", phase, checkpoint)
-	resume := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history, Position: 2, Watermark: 2}, Changes: []syncservice.Change{conflict}}}}
-	testutil.NoError(t, store.BootstrapOwnConflict(ctx, resume, target.MutationID))
-	var inbox, cursor, conflicts int
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-	testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
-	testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_conflicts WHERE status='unresolved'`).Scan(&conflicts))
-	testutil.Require(t, resume.cursors[0] == (syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}) && inbox == 2 && cursor == 2 && conflicts == 1, "cursor=%+v rows=%d/%d/%d", resume.cursors, inbox, cursor, conflicts)
 }
 
 func TestRebasePendingConflictOutboxHonorsClaimLease(t *testing.T) {
@@ -2732,12 +2286,12 @@ func TestClaimDueSyncOutboxLeasesOldestAndRotatesExpiredToken(t *testing.T) {
 	second := syncMutation("550e8400-e29b-41d4-a716-446655440027", "project")
 	enqueueMutation(t, store, first)
 	enqueueMutation(t, store, second)
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.MutationID == first.MutationID && canonicalUUIDPattern.MatchString(claims[0].ClaimToken), "claims=%+v err=%v", claims, err)
-	again, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	again, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(again) == 0, "active lease=%+v err=%v", again, err)
 	now = fixedTime.Add(time.Minute)
-	rotated, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	rotated, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 16, "")
 	firstPayload, _ := json.Marshal(claims[0].Mutation)
 	rotatedPayload, _ := json.Marshal(rotated[0].Mutation)
 	testutil.Require(t, err == nil && len(rotated) == 1 && string(rotatedPayload) == string(firstPayload) && rotated[0].ClaimToken != claims[0].ClaimToken && rotated[0].FirstClaimToken == claims[0].ClaimToken && rotated[0].FirstClaimedAt.Equal(fixedTime), "rotated=%+v err=%v", rotated, err)
@@ -2773,19 +2327,19 @@ func TestClaimDueSyncOutboxRequiresAcknowledgedObservationPrerequisitesAcrossBat
 		mutation.MutationID = fmt.Sprintf("550e8400-e29b-41d4-a716-%012d", count-index)
 		enqueueMutation(t, store, mutation)
 	}
-	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	claims, err := store.claimDueSyncOutbox(ctx, time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == "observation-00", "initial claims=%+v err=%v", claims, err)
-	blocked, err := concurrent.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	blocked, err := concurrent.claimDueSyncOutbox(ctx, time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(blocked) == 0, "unacknowledged concurrent claims=%+v err=%v", blocked, err)
 	_, err = store.db.Exec(`UPDATE observations SET sync_version=1 WHERE id='observation-00'`)
 	testutil.NoError(t, err)
-	claims, err = concurrent.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	claims, err = concurrent.claimDueSyncOutbox(ctx, time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == "observation-01", "acknowledged claims=%+v err=%v", claims, err)
-	blocked, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	blocked, err = store.claimDueSyncOutbox(ctx, time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(blocked) == 0, "second unacknowledged claims=%+v err=%v", blocked, err)
 	_, err = store.db.Exec(`UPDATE observations SET sync_version=1 WHERE id='observation-01'`)
 	testutil.NoError(t, err)
-	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 16)
+	claims, err = store.claimDueSyncOutbox(ctx, time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(claims) == 1 && claims[0].Mutation.RecordID == "observation-02", "second acknowledged claims=%+v err=%v", claims, err)
 }
 
@@ -2812,7 +2366,7 @@ func TestClaimDueSyncOutboxFailsClosedForInvalidObservationPrerequisites(t *test
 			mutation := pulledObservationMutation("dependent", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "dependent", []string{tc.ref})
 			mutation.MutationID = "550e8400-e29b-41d4-a716-446655440099"
 			enqueueMutation(t, store, mutation)
-			claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+			claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 16, "")
 			var outbox, leases int
 			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox`).Scan(&outbox))
 			testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_outbox_claims`).Scan(&leases))
@@ -3140,7 +2694,7 @@ func TestApplyProjectPulledPageAdmitsOwnProjectCreateEchoOnly(t *testing.T) {
 	testutil.NoError(t, err)
 	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-44665544035d", RecordID: "local", RecordKind: syncservice.RecordKindProject, Kind: syncservice.MutationCreate, Project: &syncservice.Project{ID: "local"}}
 	enqueueMutation(t, store, mutation)
-	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
 	translated, err := store.TranslateSyncMutations(ctx, portable, "local", []syncservice.Mutation{claims[0].Mutation})
 	testutil.NoError(t, err)
@@ -3182,7 +2736,7 @@ func setupAcceptedProjectObservationEcho(t *testing.T) acceptedProjectObservatio
 	create := pulledObservationMutation("record", syncservice.MutationCreate, 0, syncservice.LifecycleActive, "created", nil)
 	create.MutationID = "550e8400-e29b-41d4-a716-446655440372"
 	enqueueMutation(t, store, create)
-	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "create claims=%+v err=%v", claims, err)
 	translatedCreate, err := store.TranslateSyncMutations(ctx, portable, "project", []syncservice.Mutation{claims[0].Mutation})
 	testutil.Require(t, err == nil, "translate create: %v", err)
@@ -3195,7 +2749,7 @@ func setupAcceptedProjectObservationEcho(t *testing.T) acceptedProjectObservatio
 	update := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "updated", nil)
 	update.MutationID = "550e8400-e29b-41d4-a716-446655440373"
 	enqueueMutation(t, store, update)
-	claims, err = store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err = store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "update claims=%+v err=%v", claims, err)
 	translatedUpdate, err := store.TranslateSyncMutations(ctx, portable, "project", []syncservice.Mutation{claims[0].Mutation})
 	testutil.Require(t, err == nil, "translate update: %v", err)
@@ -3291,7 +2845,7 @@ func TestApplyProjectPulledPageOwnObservationConflictStillMaterializes(t *testin
 	mutation := pulledObservationMutation("record", syncservice.MutationUpdate, 1, syncservice.LifecycleActive, "remote", nil)
 	mutation.MutationID = "550e8400-e29b-41d4-a716-44665544037a"
 	enqueueMutation(t, store, mutation)
-	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
 	translated, err := store.TranslateSyncMutations(ctx, portable, "project", []syncservice.Mutation{claims[0].Mutation})
 	testutil.NoError(t, err)
@@ -3325,7 +2879,7 @@ func TestApplyProjectPulledPageRecognizesAcceptedOwnSessionCreateEcho(t *testing
 	testutil.NoError(t, err)
 	mutation := syncservice.Mutation{MutationID: "550e8400-e29b-41d4-a716-446655440377", RecordID: "session", RecordKind: syncservice.RecordKindSession, Kind: syncservice.MutationCreate, Session: &syncservice.Session{ID: "session", ProjectID: "project"}}
 	enqueueMutation(t, store, mutation)
-	claims, err := store.ClaimDueSyncOutbox(ctx, time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(ctx, time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
 	translated, err := store.TranslateSyncMutations(ctx, portable, "project", []syncservice.Mutation{claims[0].Mutation})
 	testutil.NoError(t, err)
@@ -3701,9 +3255,9 @@ func TestClaimDueSyncOutboxCannotBePreemptedByCallerClock(t *testing.T) {
 	}())
 	mutation := syncMutation("550e8400-e29b-41d4-a716-446655440025", "project")
 	enqueueMutation(t, store, mutation)
-	claimed, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claimed, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claimed) == 1, "claimed=%+v err=%v", claimed, err)
-	preempted, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	preempted, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(preempted) == 0, "caller advanced lease=%+v err=%v", preempted, err)
 }
 
@@ -3721,10 +3275,10 @@ func TestSyncOutboxClaimRenewRetryAndBoundsFailClosed(t *testing.T) {
 		lease time.Duration
 		limit int
 	}{{0, 1}, {25 * time.Hour, 1}, {time.Minute, 0}, {time.Minute, 17}} {
-		_, err := store.ClaimDueSyncOutbox(context.Background(), request.lease, request.limit)
+		_, err := store.claimDueSyncOutbox(context.Background(), request.lease, request.limit, "")
 		testutil.Require(t, errors.Is(err, ErrInvalid), "request=%+v err=%v", request, err)
 	}
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
 	claim := claims[0]
 	now = fixedTime.Add(30 * time.Second)
@@ -3767,7 +3321,7 @@ func TestClaimDueSyncOutboxFuturePredecessorAndConcurrentHandles(t *testing.T) {
 		_, err := first.db.Exec(`UPDATE sync_outbox SET next_attempt_at=? WHERE mutation_id=?`, fixedTime.Add(time.Minute).UnixNano(), older.MutationID)
 		return err
 	}())
-	claims, err := first.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+	claims, err := first.claimDueSyncOutbox(context.Background(), time.Minute, 16, "")
 	testutil.Require(t, err == nil && len(claims) == 0, "future predecessor claims=%+v err=%v", claims, err)
 	testutil.NoError(t, func() error {
 		_, err := first.db.Exec(`UPDATE sync_outbox SET next_attempt_at=? WHERE mutation_id=?`, fixedTime.UnixNano(), older.MutationID)
@@ -3779,7 +3333,7 @@ func TestClaimDueSyncOutboxFuturePredecessorAndConcurrentHandles(t *testing.T) {
 	for _, store := range []*Store{first, second} {
 		go func(store *Store) {
 			<-start
-			got, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+			got, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 			results <- got
 			errs <- err
 		}(store)
@@ -3807,13 +3361,13 @@ func TestClaimDueSyncOutboxSkipsConflictAndInconsistentBaseVersion(t *testing.T)
 		_, err := store.db.Exec(`UPDATE projects SET sync_version=1 WHERE id='project'`)
 		return err
 	}())
-	claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 0, "inconsistent base claims=%+v err=%v", claims, err)
 	testutil.NoError(t, func() error {
 		_, err := store.db.Exec(`UPDATE projects SET sync_version=0 WHERE id='project'; INSERT INTO sync_conflicts(conflict_id,history_id,created_seq,record_kind,record_id,canonical_version,competing_version_id,status,resolved_seq,payload_version,snapshot,created_at,updated_at) VALUES('550e8400-e29b-41d4-a716-446655440039','550e8400-e29b-41d4-a716-446655440040',1,'project','project',1,'550e8400-e29b-41d4-a716-446655440041','unresolved',NULL,1,X'7B7D',?,?)`, fixedTime.UnixNano(), fixedTime.UnixNano())
 		return err
 	}())
-	claims, err = store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+	claims, err = store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 	testutil.Require(t, err == nil && len(claims) == 0, "conflicted claims=%+v err=%v", claims, err)
 }
 
@@ -4898,199 +4452,6 @@ func TestApplyPulledPageCorruptionInvalidatesCache(t *testing.T) {
 	testutil.Require(t, errors.Is(err, ErrCorrupt) && !store.syncInbox.known, "err=%v cache=%+v", err, store.syncInbox)
 }
 
-type bootstrapFake struct {
-	discovery syncservice.Discovery
-	pages     []syncservice.PullPage
-	errAt     int
-	probe     func() error
-	pullProbe func() error
-	discovers int
-	pulls     int
-	cursors   []syncservice.Cursor
-	limits    []int
-}
-
-func (r *bootstrapFake) Discover(context.Context) (syncservice.Discovery, error) {
-	r.discovers++
-	if r.probe != nil {
-		if err := r.probe(); err != nil {
-			return syncservice.Discovery{}, err
-		}
-	}
-	return r.discovery, nil
-}
-
-func (r *bootstrapFake) Pull(_ context.Context, cursor syncservice.Cursor, limit int) (syncservice.PullPage, error) {
-	r.pulls++
-	r.cursors = append(r.cursors, cursor)
-	r.limits = append(r.limits, limit)
-	if r.pullProbe != nil {
-		if err := r.pullProbe(); err != nil {
-			return syncservice.PullPage{}, err
-		}
-	}
-	if r.probe != nil {
-		if err := r.probe(); err != nil {
-			return syncservice.PullPage{}, err
-		}
-	}
-	if limit < 1 || limit > syncapi.MaxPullLimit || r.errAt == r.pulls || r.pulls > len(r.pages) {
-		return syncservice.PullPage{}, errors.New("interrupted")
-	}
-	page := r.pages[r.pulls-1]
-	_ = cursor
-	return page, nil
-}
-
-func TestBootstrapSync(t *testing.T) {
-	ctx := context.Background()
-	history := "550e8400-e29b-41d4-a716-446655440240"
-	discovery := syncservice.Discovery{ProtocolVersion: 1, HistoryID: history, Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}
-	page := func(sequence, watermark int64, id string) syncservice.PullPage {
-		return syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: sequence, Watermark: watermark}, HasMore: sequence < watermark, Changes: []syncservice.Change{pulledChange(t, sequence, 1, syncMutation("550e8400-e29b-41d4-a716-44665544024"+id, "project-"+id))}}
-	}
-	t.Run("empty zero completes and releases local access", func(t *testing.T) {
-		store := openTestStore(t)
-		remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history}}}, probe: func() error {
-			_, err := store.ConfigureSyncProfile(ctx, SyncProfile{Endpoint: "https://sync.example.test", DeviceID: "550e8400-e29b-41d4-a716-446655440000", CredentialRef: "secret://keychain/sync"})
-			return err
-		}}
-		testutil.NoError(t, store.BootstrapSync(ctx, remote))
-		var phase string
-		var cursor int
-		testutil.NoError(t, store.db.QueryRow(`SELECT phase FROM sync_bootstrap`).Scan(&phase))
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
-		testutil.Require(t, phase == "complete" && cursor == 0 && remote.discovers == 1 && remote.pulls == 1 && remote.cursors[0] == (syncservice.Cursor{HistoryID: history}) && remote.limits[0] == syncapi.DefaultPullLimit, "phase=%q cursor=%d calls=%d/%d pull=%+v/%d", phase, cursor, remote.discovers, remote.pulls, remote.cursors, remote.limits)
-	})
-	t.Run("freezes pages, resumes after interruption, and completes", func(t *testing.T) {
-		store := openTestStore(t)
-		first, second := page(1, 2, "1"), page(2, 2, "2")
-		remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{first, second}, errAt: 2}
-		testutil.Require(t, store.BootstrapSync(ctx, remote) != nil, "interruption succeeded")
-		resume := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{second}}
-		testutil.NoError(t, store.BootstrapSync(ctx, resume))
-		var checkpoint BootstrapCheckpoint
-		var phase string
-		var payload []byte
-		testutil.NoError(t, store.db.QueryRow(`SELECT checkpoint FROM sync_bootstrap`).Scan(&payload))
-		testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-		testutil.NoError(t, store.db.QueryRow(`SELECT phase FROM sync_bootstrap`).Scan(&phase))
-		testutil.Require(t, checkpoint.Position == 2 && checkpoint.Watermark == 2 && phase == "complete" && len(remote.cursors) == 2 && remote.cursors[0] == (syncservice.Cursor{HistoryID: history}) && remote.cursors[1] == (syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}) && resume.pulls == 1 && resume.cursors[0] == (syncservice.Cursor{HistoryID: history, Position: 1, Watermark: 2}), "checkpoint=%+v/%q pulls=%+v/%+v", checkpoint, phase, remote.cursors, resume.cursors)
-	})
-	t.Run("complete is idempotent and mismatches fail closed", func(t *testing.T) {
-		store := openTestStore(t)
-		remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{{Cursor: syncservice.Cursor{HistoryID: history}}}}
-		testutil.NoError(t, store.BootstrapSync(ctx, remote))
-		testutil.NoError(t, store.BootstrapSync(ctx, remote))
-		wrong := &bootstrapFake{discovery: syncservice.Discovery{ProtocolVersion: 1, HistoryID: "550e8400-e29b-41d4-a716-446655440241", Capabilities: []syncservice.Capability{syncservice.CapabilityBootstrapDiscovery}}}
-		err := store.BootstrapSync(ctx, wrong)
-		testutil.Require(t, remote.pulls == 1 && errors.Is(err, ErrConflict) && wrong.pulls == 0, "calls=%d/%d err=%v", remote.pulls, wrong.pulls, err)
-	})
-	t.Run("outbox and closed stores fail before discovery", func(t *testing.T) {
-		store := openTestStore(t)
-		enqueueMutation(t, store, syncMutation("550e8400-e29b-41d4-a716-446655440242", "pending"))
-		remote := &bootstrapFake{discovery: discovery}
-		testutil.Require(t, errors.Is(store.BootstrapSync(ctx, remote), ErrConflict) && remote.discovers == 0, "outbox calls=%d", remote.discovers)
-		closed := openTestStore(t)
-		testutil.NoError(t, closed.Close())
-		testutil.Require(t, closed.BootstrapSync(ctx, remote) != nil && remote.discovers == 0, "closed calls=%d", remote.discovers)
-	})
-	t.Run("read-only store fails before discovery", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "memory.db")
-		writable := openPath(t, path)
-		testutil.NoError(t, writable.Close())
-		readOnly, err := OpenRead(ctx, path)
-		testutil.NoError(t, err)
-		defer readOnly.Close()
-		remote := &bootstrapFake{discovery: discovery}
-		testutil.Require(t, errors.Is(readOnly.BootstrapSync(ctx, remote), ErrConflict) && remote.discovers == 0 && remote.pulls == 0, "calls=%d/%d", remote.discovers, remote.pulls)
-	})
-	t.Run("more than one request limit completes", func(t *testing.T) {
-		store := openTestStore(t)
-		pages := make([]syncservice.PullPage, 0, syncapi.MaxPullLimit+1)
-		for sequence := int64(1); sequence <= int64(syncapi.MaxPullLimit+1); sequence++ {
-			mutation := syncMutation(fmt.Sprintf("550e8400-e29b-41d4-a716-%012d", 300+sequence), fmt.Sprintf("project-%d", sequence))
-			pages = append(pages, syncservice.PullPage{Cursor: syncservice.Cursor{HistoryID: history, Position: sequence, Watermark: int64(syncapi.MaxPullLimit + 1)}, HasMore: sequence < int64(syncapi.MaxPullLimit+1), Changes: []syncservice.Change{pulledChange(t, sequence, 1, mutation)}})
-		}
-		remote := &bootstrapFake{discovery: discovery, pages: pages}
-		testutil.NoError(t, store.BootstrapSync(ctx, remote))
-		var position int
-		var phase string
-		testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&position))
-		testutil.NoError(t, store.db.QueryRow(`SELECT phase FROM sync_bootstrap`).Scan(&phase))
-		testutil.Require(t, remote.pulls == len(pages) && position == len(pages) && phase == "complete", "pulls=%d position=%d phase=%q", remote.pulls, position, phase)
-	})
-	t.Run("outbox injected after pull rolls back the page", func(t *testing.T) {
-		store := openTestStore(t)
-		remote := &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{page(1, 1, "6")}, pullProbe: func() error {
-			enqueueMutation(t, store, syncMutation("550e8400-e29b-41d4-a716-446655440246", "raced"))
-			return nil
-		}}
-		err := store.BootstrapSync(ctx, remote)
-		var inbox, cursor, checkpoint int
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_cursor`).Scan(&cursor))
-		testutil.NoError(t, store.db.QueryRow(`SELECT count(*) FROM sync_bootstrap`).Scan(&checkpoint))
-		testutil.Require(t, errors.Is(err, ErrConflict) && inbox == 0 && cursor == 0 && checkpoint == 0, "err=%v rows=%d/%d/%d", err, inbox, cursor, checkpoint)
-	})
-	t.Run("cursor without checkpoint and corrupt checkpoint fail before discovery", func(t *testing.T) {
-		store := openTestStore(t)
-		testutil.NoError(t, store.ApplyPulledChange(ctx, history, pulledChange(t, 1, 1, syncMutation("550e8400-e29b-41d4-a716-446655440247", "project"))))
-		remote := &bootstrapFake{discovery: discovery}
-		testutil.Require(t, errors.Is(store.BootstrapSync(ctx, remote), ErrConflict) && remote.discovers == 0, "cursor calls=%d", remote.discovers)
-		store = openTestStore(t)
-		testutil.NoError(t, store.ApplyPulledPage(ctx, page(1, 1, "8"), &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 1, Phase: "complete"}))
-		_, err := store.db.Exec(`UPDATE sync_bootstrap SET checkpoint=X'7B7D'`)
-		testutil.NoError(t, err)
-		remote = &bootstrapFake{discovery: discovery}
-		testutil.Require(t, errors.Is(store.BootstrapSync(ctx, remote), ErrCorrupt) && remote.discovers == 0, "corrupt calls=%d", remote.discovers)
-	})
-	t.Run("two handles converge without a fork", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "memory.db")
-		first, second := openPath(t, path), openPath(t, path)
-		defer first.Close()
-		defer second.Close()
-		page := page(1, 1, "9")
-		errs := make(chan error, 2)
-		go func() {
-			errs <- first.BootstrapSync(ctx, &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{page}})
-		}()
-		go func() {
-			errs <- second.BootstrapSync(ctx, &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{page}})
-		}()
-		for range 2 {
-			err := <-errs
-			testutil.Require(t, err == nil || errors.Is(err, ErrConflict), "two-handle error=%v", err)
-		}
-		var inbox, cursor int
-		testutil.NoError(t, first.db.QueryRow(`SELECT count(*) FROM sync_inbox`).Scan(&inbox))
-		testutil.NoError(t, first.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&cursor))
-		testutil.Require(t, inbox == 1 && cursor == 1, "inbox=%d cursor=%d", inbox, cursor)
-	})
-	for name, mutate := range map[string]func(*syncservice.PullPage){
-		"changed watermark": func(p *syncservice.PullPage) { p.Cursor.Watermark = 3; p.HasMore = true },
-		"changed history":   func(p *syncservice.PullPage) { p.Cursor.HistoryID = "550e8400-e29b-41d4-a716-446655440243" },
-		"nonprogress":       func(p *syncservice.PullPage) { p.Changes = nil; p.Cursor.Position = 1; p.HasMore = true },
-	} {
-		t.Run(name, func(t *testing.T) {
-			store := openTestStore(t)
-			first := page(1, 2, "4")
-			testutil.NoError(t, store.ApplyPulledPage(ctx, first, &BootstrapCheckpoint{HistoryID: history, Position: 1, Watermark: 2, Phase: "observations"}))
-			bad := page(2, 2, "5")
-			mutate(&bad)
-			err := store.BootstrapSync(ctx, &bootstrapFake{discovery: discovery, pages: []syncservice.PullPage{bad}})
-			var position int64
-			var phase string
-			var payload []byte
-			testutil.NoError(t, store.db.QueryRow(`SELECT position FROM sync_cursor`).Scan(&position))
-			testutil.NoError(t, store.db.QueryRow(`SELECT phase,checkpoint FROM sync_bootstrap`).Scan(&phase, &payload))
-			var checkpoint BootstrapCheckpoint
-			testutil.NoError(t, json.Unmarshal(payload, &checkpoint))
-			testutil.Require(t, (errors.Is(err, ErrInvalid) || errors.Is(err, ErrConflict)) && position == 1 && phase == "observations" && checkpoint.Position == 1 && checkpoint.Watermark == 2, "err=%v cursor=%d checkpoint=%q/%+v", err, position, phase, checkpoint)
-		})
-	}
-}
-
 func TestApplyPulledPageCannotRetrofitBootstrapCheckpoint(t *testing.T) {
 	store := openTestStore(t)
 	history := "550e8400-e29b-41d4-a716-446655440248"
@@ -5137,7 +4498,7 @@ func TestDeviceIdentityRejectionKeepsMutationForRetry(t *testing.T) {
 			testutil.NoError(t, err)
 			_, err = store.BackfillSyncProject(context.Background(), "project", 100)
 			testutil.NoError(t, err)
-			claims, err := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 1)
+			claims, err := store.claimDueSyncOutbox(context.Background(), time.Minute, 1, "")
 			testutil.Require(t, err == nil && len(claims) == 1, "claims=%+v err=%v", claims, err)
 			id := claims[0].Mutation.MutationID
 			err = store.ApplySyncPushResult(context.Background(), id, claims[0].ClaimToken, syncservice.Result{MutationID: id, Disposition: syncservice.DispositionRejected, Code: tc.code})
@@ -5165,7 +4526,7 @@ func TestClaimDueSyncOutboxReleasesConnectionOnCorruptEntry(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, claimErr := store.ClaimDueSyncOutbox(context.Background(), time.Minute, 16)
+		_, claimErr := store.claimDueSyncOutbox(context.Background(), time.Minute, 16, "")
 		done <- claimErr
 	}()
 	select {
