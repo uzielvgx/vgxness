@@ -85,6 +85,26 @@ func (runtime Memory) ProviderSessionContext(ctx context.Context, opts config.Op
 	return store.ProviderSessionContext(ctx, project, handle)
 }
 
+// CountActive reads how many active memories a project has; it never writes.
+func (runtime Memory) CountActive(ctx context.Context, opts config.Options, project string) (int, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return 0, err
+	}
+	defer store.Close()
+	return store.CountActive(ctx, project)
+}
+
+// SessionHandoffs reads the newest completed session handoffs of a project.
+func (runtime Memory) SessionHandoffs(ctx context.Context, opts config.Options, project string, limit int) ([]memory.SessionHandoff, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return store.SessionHandoffs(ctx, project, limit)
+}
+
 func (runtime Memory) SaveProviderSessionDraft(ctx context.Context, opts config.Options, request memory.ProviderSessionDraftSave) (memory.ProviderSessionDraft, error) {
 	if runtime.readOnly {
 		return memory.ProviderSessionDraft{}, memory.ErrInvalid
@@ -1537,4 +1557,15 @@ func withStore[T any](open func() (*memory.Store, error), operation func(*memory
 	}
 	defer func() { resultErr = errors.Join(resultErr, close(store)) }()
 	return operation(store)
+}
+
+// SchemaVersion reads the database's recorded schema version without
+// validating or migrating it.
+func (runtime Memory) SchemaVersion(ctx context.Context, opts config.Options) (int, error) {
+	store, err := openStoreRead(ctx, opts)
+	if err != nil {
+		return 0, err
+	}
+	defer store.Close()
+	return store.UserVersion(ctx)
 }

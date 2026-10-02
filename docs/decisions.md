@@ -48,3 +48,22 @@ Tea v2…") and in the design system README. Why: these are real capabilities
 of the pinned libraries (bubbletea v2.0.8, bubbles v2.1.1, lipgloss v2.0.5),
 so the design and the Go code can match one to one; single-panel screens
 wasted space and read as unfinished.
+
+## D-004 · The console shows only data the product really has (2026-10-02)
+Status: active
+Context: the canvas artboards use mockup copy that assumes features the
+backend does not have: a device-pairing login and device list for sync, a
+local sync daemon and sync history, memory tags, usage counters and related
+memories, an activity log, a `memory restore` command, a `memory add`
+command, and permission rules naming a non-existent `handoff_get` tool.
+Decision: `vgxness tui` implements every module, screen and state of the
+canvas with its layout and style, but each field comes from real data; a
+field without a source is dropped, and a flow without a backend is replaced
+by the real one (sync sign-in = endpoint + device ID + bearer on stdin, as
+`memory sync configure` does; permissions = `vgxness claude-code setup`).
+Claude Code state comes from `claude --version`, `claude plugin list --json`
+and `claude plugin marketplace list --json`. The artboards are updated to
+the implemented copy module by module. Why: a console that shows invented
+counters or links to flows that do not exist breaks trust in every other
+number on the screen. The missing features are listed as backlog in plan
+`docs/plans/claude-only.md` (task 19); each needs its own plan.

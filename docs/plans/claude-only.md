@@ -330,6 +330,32 @@ and all code that exists only to serve them.
   artboard. Spanish copy per the `ui-copy-es` skill.
   *Verify:* table-driven view tests per screen and state; manual run at
   80×24 and 120×36; screens match the artboards.
+  Split into five slices (decision D-004: only real data; each slice
+  updates its artboards to the implemented copy):
+  - [x] 17a. Shell: theme tokens from `DESIGN.md`, half-block banner,
+    Header, Panel, KeyHelp (`bubbles/help`), ActionCards, Stepper, Confirm
+    modal (compositor), TooSmall at 80×24, router, `Backend` interface;
+    `internal/claudecli` (version, plugin and marketplace JSON, install
+    commands behind a runner interface).
+  - [x] 17b. Inicio (sano, avisos, primer uso, terminal pequeña) and Doctor
+    (diagnóstico, crítico).
+    *Result 17a+17b (2026-10-02):* `internal/tui` (theme, banner from the
+    canvas bitmap, box/panel/cards/stepper/KeyHelp, compositor modals,
+    router, `Backend`), `internal/claudecli`, `internal/app/console.go`
+    (read-only backend), store reads `CountActive`, `SessionHandoffs`,
+    `UserVersion`. Panels repaint their fill after every nested reset
+    (lipgloss v2 resets the outer background). Verified: table-driven
+    view tests per state at 120×35 and 80×24 (fit, copy, keys,
+    navigation, clipboard, focus dimming); one frame rendered with the
+    real backend on this machine (detected Claude Code 2.1.283 below the
+    minimum, plugin absent, 376 memories, sync configured). Artboards
+    updated: Inicio estado/avisos/primer uso, Diagnóstico normal/crítico.
+    Memoria, Setup and Sync open a placeholder until their slices land.
+  - [ ] 17c. Memoria (buscar, sin resultados, primer uso, detalle, confirmar
+    olvidar, handoffs).
+  - [ ] 17d. Setup del plugin (prerrequisitos, permisos, confirmar,
+    aplicando, resultado, error).
+  - [ ] 17e. Sync (estado, configurar, en progreso, error).
 - [ ] 16. End-to-end check on a clean machine state: install the binary, add
   the marketplace, install the plugin, save and recall memory across two
   fresh Claude Code sessions, delegate to `vgxness:explore` and
@@ -343,3 +369,8 @@ and all code that exists only to serve them.
   design system https://claude.ai/artifact/5tnRiD2UwvqtFj58kyiKPf, tokens in
   `DESIGN.md`. Task 17 was added after the design session; tasks 16 and 17
   are listed in execution order (17 runs before 16).
+- [ ] 19. Backlog from D-004, not scheduled (each needs its own plan if
+  wanted): device pairing and a client-side device list for sync, a local
+  periodic sync runner and sync history, memory tags, usage counters and
+  related memories, an activity log, `vgxness memory restore`, a short
+  `vgxness memory add` command, hook timing in `doctor`.

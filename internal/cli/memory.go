@@ -54,7 +54,7 @@ type memoryInput struct {
 }
 
 func runMemory(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, runtime MemoryRuntime) int {
-	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync" && args[0] != "project" && args[0] != "hook") || runtime == nil {
+	if len(args) == 0 || (args[0] != "save" && args[0] != "search" && args[0] != "recent" && args[0] != "get" && args[0] != "forget" && args[0] != "sync" && args[0] != "project") || runtime == nil {
 		fmt.Fprintln(stderr, "invalid: unsupported memory operation")
 		return 2
 	}

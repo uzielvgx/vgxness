@@ -13,3 +13,10 @@ Reading: before non-trivial work on this project, and whenever the user refers t
 Writing: after a decision, a discovered constraint, a non-obvious root cause, or a completed milestone, memory_save stores it with a short title, a stable topic, and self-contained content that stays true across sessions. memory_update replaces an entry whose fact changed instead of creating a duplicate. memory_session_summary stores the handoff for the next session when substantial work wraps up: what was done, what remains, the next observable milestone. memory_forget archives an entry and is used only on the user's explicit request.
 
 Never stored: secrets, credentials, raw transcripts, logs, or transient status.`
+
+// Instructions returns the server instructions the host model receives.
+func Instructions() string { return serverInstructions }
+
+// FullToolNames lists the tools `vgxness mcp --full` exposes, in the order
+// they are registered.
+var FullToolNames = []string{"memory_recent", "memory_search", "memory_context", "memory_get", "memory_save", "memory_session_summary", "memory_update", "memory_forget"}

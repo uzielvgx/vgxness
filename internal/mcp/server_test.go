@@ -231,7 +231,7 @@ func TestFullServerExposesExactToolAndMutationInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newFullWithReader() error = %v", err)
 	}
-	want := []string{"memory_recent", "memory_search", "memory_context", "memory_get", "memory_save", "memory_forget", "memory_session_summary", "memory_update"}
+	want := append([]string(nil), FullToolNames...)
 	sort.Strings(want)
 	names := discoveredNames(t, server)
 	if !sameStrings(names, want) {

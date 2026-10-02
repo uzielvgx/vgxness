@@ -76,7 +76,10 @@ func TestMemoryRuntime_SaveCloseAndOfflineRestart(t *testing.T) {
 
 func TestRunDispatchesConsoleWithWorkingDirectory(t *testing.T) {
 	var got tui.Options
-	code := run(context.Background(), []string{"tui"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, func(_ context.Context, _ io.Reader, _, _ io.Writer, options tui.Options) int {
+	code := run(context.Background(), []string{"tui"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, func(_ context.Context, _ io.Reader, _, _ io.Writer, backend tui.Backend, options tui.Options) int {
+		if backend == nil {
+			t.Fatal("console launched without a backend")
+		}
 		got = options
 		return 0
 	}, nil)

@@ -16,7 +16,7 @@ import (
 )
 
 type mcpLauncher func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int
-type tuiLauncher func(context.Context, io.Reader, io.Writer, io.Writer, tui.Options) int
+type tuiLauncher func(context.Context, io.Reader, io.Writer, io.Writer, tui.Backend, tui.Options) int
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return run(ctx, args, stdin, stdout, stderr, tui.Run, cli.RunMCP)
@@ -35,7 +35,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			fmt.Fprintln(stderr, "operational: console is unavailable")
 			return 1
 		}
-		return launchTUI(ctx, stdin, stdout, stderr, tui.Options{Workspace: mustWorkspace()})
+		workspace := mustWorkspace()
+		return launchTUI(ctx, stdin, stdout, stderr, newConsoleBackend(workspace), tui.Options{Workspace: workspace})
 	}
 	if len(args) > 0 && args[0] == "mcp" {
 		if launchMCP == nil {
