@@ -23,7 +23,6 @@ var (
 )
 
 const maxLimit = 50
-const maxJSONInteger = 9_007_199_254_740_991
 
 // Server is an MCP server bound to one canonical workspace.
 type Server struct {

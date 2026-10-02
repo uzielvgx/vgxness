@@ -22,9 +22,8 @@ type Options struct {
 }
 
 type Paths struct {
-	Root           string
-	Database       string
-	LegacyDatabase string
+	Root     string
+	Database string
 }
 
 func Prepare(ctx context.Context, opts Options) (Paths, error) {
@@ -88,7 +87,6 @@ func PathsFor(opts Options) (Paths, error) {
 
 func pathsForRoot(opts Options, root string) (Paths, error) {
 	database := filepath.Join(root, "memory.db")
-	legacy := ""
 	if opts.StorageRoot == "" && !opts.ProjectLocal {
 		home := opts.HomeDir
 		var err error
@@ -99,14 +97,10 @@ func pathsForRoot(opts Options, root string) (Paths, error) {
 			}
 		}
 		database = filepath.Join(filepath.Dir(filepath.Dir(root)), "memory.db")
-		if database != filepath.Join(root, "memory.db") {
-			legacy = filepath.Join(root, "memory.db")
-		}
 	}
 	return Paths{
-		Root:           root,
-		Database:       database,
-		LegacyDatabase: legacy,
+		Root:     root,
+		Database: database,
 	}, nil
 }
 

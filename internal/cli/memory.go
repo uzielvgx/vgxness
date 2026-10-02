@@ -31,8 +31,6 @@ type MemoryRuntime interface {
 	RepairSyncProject(context.Context, config.Options, string, bool) (memory.SyncProjectRepairResult, error)
 	TransitionSyncProject(context.Context, config.Options, string, memory.SyncProjectTransitionMode) (memory.SyncProjectTransitionResult, error)
 	StartProviderSession(context.Context, config.Options, memory.ProviderSessionStart) (memory.ProviderSession, error)
-	MarkProviderSessionCheckpoint(context.Context, config.Options, string, string, string) (memory.ProviderSession, error)
-	RenewProviderSession(context.Context, config.Options, string, string, string) (memory.ProviderSession, error)
 	EndProviderSession(context.Context, config.Options, memory.ProviderSessionEnd) (memory.ProviderSession, error)
 	ProviderSessionContext(context.Context, config.Options, string, string) (memory.ProviderSessionContext, error)
 	SaveProviderSessionDraft(context.Context, config.Options, memory.ProviderSessionDraftSave) (memory.ProviderSessionDraft, error)

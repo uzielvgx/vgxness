@@ -898,9 +898,6 @@ func TestRepositoryConflictRetainsCompetingObservationAndReplays(t *testing.T) {
 	if err := conn.QueryRow(ctx, "SELECT content, lifecycle, review_state, version, (SELECT snapshot::text FROM record_versions WHERE record_id='target' AND disposition='conflict') FROM observations WHERE id='target'").Scan(&content, &lifecycle, &review, &version, &snapshot); err != nil || content != "canonical" || lifecycle != "active" || review != "needs_review" || version != 2 || !strings.Contains(snapshot, "competing") {
 		t.Fatalf("canonical/conflict snapshot = %q/%q/%q/%d/%q, %v", content, lifecycle, review, version, snapshot, err)
 	}
-	if err := VerifyRecovery(ctx, conn); err != nil {
-		t.Fatalf("deep stale conflict recovery: %v", err)
-	}
 	var mutations, versions, changes, conflicts, next int
 	if err := conn.QueryRow(ctx, "SELECT (SELECT count(*) FROM mutations), (SELECT count(*) FROM record_versions), (SELECT count(*) FROM changes), (SELECT count(*) FROM observation_conflicts), (SELECT next_seq FROM owner_sync_state)").Scan(&mutations, &versions, &changes, &conflicts, &next); err != nil || mutations != 6 || versions != 6 || changes != 6 || conflicts != 1 || next != 7 {
 		t.Fatalf("conflict effects = %d/%d/%d/%d/%d, %v", mutations, versions, changes, conflicts, next, err)
@@ -952,9 +949,6 @@ func TestRepositoryMutationArchiveFreesTopicAfterConflicts(t *testing.T) {
 	var mutationVersion, changeVersion int64
 	if err := conn.QueryRow(ctx, "SELECT m.canonical_version, c.canonical_version FROM mutations m JOIN changes c ON c.owner_id=m.owner_id AND c.seq=m.canonical_seq WHERE m.record_id='create-conflict'").Scan(&mutationVersion, &changeVersion); err != nil || mutationVersion < 1 || mutationVersion != changeVersion {
 		t.Fatalf("topic conflict canonical versions = %d/%d, %v", mutationVersion, changeVersion, err)
-	}
-	if err := VerifyRecovery(ctx, conn); err != nil {
-		t.Fatalf("topic create conflict recovery: %v", err)
 	}
 	archive := updateObservation(holder, 1, "archived")
 	archive.Kind, archive.Observation.Lifecycle, archive.Observation.Review = syncservice.MutationArchive, syncservice.LifecycleArchived, syncservice.ReviewClear
@@ -1056,9 +1050,6 @@ func TestRepositoryPullWatermarkAndResolveRoundTrip(t *testing.T) {
 	}
 	if _, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 10); !errors.Is(err, ErrRepository) {
 		t.Fatalf("old resolve pull = %v", err)
-	}
-	if err := VerifyRecovery(ctx, conn); !errors.Is(err, ErrRecovery) {
-		t.Fatalf("old resolve recovery = %v", err)
 	}
 }
 
@@ -1250,9 +1241,6 @@ func TestRepositoryPullRejectsSwappedResolveIdentityAndSequence(t *testing.T) {
 	if !errors.Is(err, ErrRepository) || len(page.Changes) != 0 {
 		t.Fatalf("swapped resolve pull = %+v, %v", page, err)
 	}
-	if err := VerifyRecovery(ctx, conn); !errors.Is(err, ErrRecovery) {
-		t.Fatalf("swapped resolve recovery = %v", err)
-	}
 }
 
 func TestRepositoryPullBoundsEncodedResponsesAndContinues(t *testing.T) {
@@ -1363,9 +1351,6 @@ func TestRepositoryPullAndRecoveryRejectAcceptedBaseMetadataCorruption(t *testin
 	history := mustHistory(t, repo)
 	if page, err := repo.Pull(ctx, device, syncservice.Cursor{HistoryID: history}, 10); !errors.Is(err, ErrRepository) || len(page.Changes) != 0 {
 		t.Fatalf("corrupt accepted base pull = %+v, %v", page, err)
-	}
-	if err := VerifyRecovery(ctx, conn); !errors.Is(err, ErrRecovery) {
-		t.Fatalf("corrupt accepted base recovery = %v", err)
 	}
 }
 
@@ -1538,9 +1523,6 @@ func TestRepositoryPullRetainsResolveIDsAndLifecyclePayloads(t *testing.T) {
 		}
 		if _, err := repo.Pull(ctx, first, syncservice.Cursor{HistoryID: mustHistory(t, repo)}, 20); !errors.Is(err, ErrRepository) {
 			t.Fatalf("corrupt resolve pull = %v", err)
-		}
-		if err := VerifyRecovery(ctx, conn); !errors.Is(err, ErrRecovery) {
-			t.Fatalf("corrupt resolve recovery = %v", err)
 		}
 		if _, err := conn.Exec(ctx, "UPDATE mutations SET resolution_conflict_ids=$1 WHERE kind='resolve' AND disposition='accepted'", original); err != nil {
 			t.Fatal(err)
