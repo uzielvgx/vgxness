@@ -179,3 +179,13 @@ func TestMigrateRefusesUnrecoverableV1ResolveAtomically(t *testing.T) {
 		t.Fatalf("failed upgrade changed v1 state: %d/%d/%d", column, ledger, resolves)
 	}
 }
+
+func TestMigrateIgnoresTemporaryLedgerShadow(t *testing.T) {
+	ctx, conn := context.Background(), testConn(t)
+	if _, err := conn.Exec(ctx, "CREATE TEMP TABLE sync_schema_migrations(version bigint)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatalf("Migrate() with temporary ledger shadow: %v", err)
+	}
+}
